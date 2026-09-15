@@ -1,0 +1,17 @@
+{
+  "name": "hivem1nd",
+  "version": "0.1.0",
+  "description": "One mind for every coding agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/txmska742/HIVEM1ND"
+  },
+  "scripts": {
+    "lint": "markdownlint-cli2"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "0.23.2",
+    "markdownlint-rule-relative-links": "5.1.2"
+  }
+}
