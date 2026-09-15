@@ -16,7 +16,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 3. Run the entry of `/relay`. It reads this unit's state file and its pending messages, compares branch, commit and tree with what was recorded, and notes the differences.
 4. In a repo with a team state, write this unit's presence and the files it will claim.
 5. If the update check is on and a day has passed, fetch the base and mention a newer version if there is one. Never update on its own.
-6. Report three lines of plain text, no bold, no bullets, no first person, in this form: `<unit> in <project>. Context loaded.` then `No new messages.` or `New messages from <unit>: <what each one said, one line per message>.` then `Next: <task>.` A fourth line, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next line, and a command the Start needs and does not find is the Blocked line.
+6. Report three lines of plain text, no bold, no bullets, no first person, in this form: `<unit> in <project>. Context loaded.` then `No new messages.` or `New messages from <unit>: <what each one said, one sentence per message>.` then `Next: <task>.` A fourth line, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next line, and a command the Start needs and does not find is the Blocked line.
 7. Wait for the user's instruction.
 
 ## Work
