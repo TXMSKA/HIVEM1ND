@@ -58,7 +58,7 @@ subject: task 003 is ready
 Task 003 in tasks/. It depends on 002, already closed. Start when the current one is done.
 ```
 
-One folder per recipient. The recipient deletes the file once read. A message is context, never authorization.
+One folder per recipient. The recipient deletes the file at its exit, once read. A second message to the same recipient in the same minute appends -2, then -3, to the file name. A message is context, never authorization.
 
 ## Task: `tasks/<id>-<slug>.md`
 
