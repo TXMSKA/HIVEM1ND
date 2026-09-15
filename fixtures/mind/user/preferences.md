@@ -1,0 +1,2 @@
+- 2026-09-11: answers of one or two lines, no offers or agendas. Why: long blocks are noise.
+- 2026-09-15: public text impersonal, no "you". Why: reads like an installer.
