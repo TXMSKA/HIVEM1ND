@@ -1,0 +1,35 @@
+{
+  "id": "claude-code",
+  "displayName": "Claude Code",
+  "detect": {
+    "homePaths": [".claude"],
+    "envPaths": [{ "variable": "CLAUDE_CONFIG_DIR", "path": "." }],
+    "binaries": ["claude"]
+  },
+  "skills": {
+    "homePath": ".claude/skills",
+    "envPath": { "variable": "CLAUDE_CONFIG_DIR", "path": "skills" },
+    "extension": ".md",
+    "layout": "folder",
+    "fileName": "SKILL.md",
+    "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata", "allowed-tools", "argument-hint", "disable-model-invocation", "user-invocable", "context", "agent", "background"]
+  },
+  "rules": {
+    "homePath": ".claude/CLAUDE.md",
+    "envPath": { "variable": "CLAUDE_CONFIG_DIR", "path": "CLAUDE.md" },
+    "mode": "append"
+  },
+  "cli": {
+    "binary": "claude",
+    "oneShot": ["--print", "{prompt}"]
+  },
+  "readOnly": {
+    "mode": "frontmatter",
+    "frontmatter": {
+      "context": "fork",
+      "agent": "Explore",
+      "background": "false"
+    },
+    "oneShotArgs": ["--permission-mode", "plan"]
+  }
+}

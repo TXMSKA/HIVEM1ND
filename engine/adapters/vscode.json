@@ -1,0 +1,25 @@
+{
+  "id": "vscode",
+  "displayName": "Visual Studio Code",
+  "detect": {
+    "homePaths": [".vscode"],
+    "envPaths": [{ "variable": "APPDATA", "path": "Code/User" }],
+    "binaries": ["code"]
+  },
+  "skills": {
+    "homePath": ".agents/skills",
+    "extension": ".md",
+    "layout": "folder",
+    "fileName": "SKILL.md",
+    "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata", "argument-hint", "user-invocable", "disable-model-invocation", "context"]
+  },
+  "rules": null,
+  "cli": {
+    "binary": "code",
+    "oneShot": ["chat", "--mode", "agent", "{prompt}"]
+  },
+  "readOnly": {
+    "mode": "prompt",
+    "oneShotArgs": ["chat", "--mode", "ask"]
+  }
+}

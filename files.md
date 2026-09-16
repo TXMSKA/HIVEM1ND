@@ -11,6 +11,7 @@ user/
   routes.md                   environments, projects and other minds, names only
   machines/<host>.md          one per machine
   knowledge/                  private modules, same format as the base ones
+  protocols/<name>.md         user-defined protocols, one file per protocol
   state/ inbox/ tasks/ log/   executive roles (overseer, technician, genesis)
   envs/<env>/
     state/ inbox/ tasks/ log/
@@ -135,6 +136,8 @@ Names only. `Minds` lists other minds this one can read, when there are any.
 ```markdown
 machine: LAPTOP
 mind: D:\mind
+language: en
+preferences-first: yes
 update-check: daily
 last-check: 2026-09-15
 setup: done
@@ -153,7 +156,11 @@ setup: done
 - corpo
 ```
 
-`setup` is `done` or the number of the next step, so any front resumes. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them.
+`setup` is `done` or the number of the next step, so any front resumes. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them.
+
+While `setup` is a number, a temporary `## Setup Draft` section contains a fenced JSON block with the answers collected so far. Every front preserves it when resuming. The section is removed when `setup: done`; completed settings remain in the header and the Agents, Paths and Excluded sections.
+
+The `## Managed Files` section contains a fenced JSON object mapping installed absolute file paths to their SHA-256 content hashes. Setup and updates replace a managed file automatically only while its content still matches the recorded hash. An unowned or locally modified file requires a keep-or-replace choice. Paths and hashes stay private in the machine record.
 
 ## Preferences: `preferences.md`
 
@@ -163,6 +170,37 @@ setup: done
 ```
 
 One line per preference, with the date and the reason. The global file applies everywhere; a project file applies to that project and overrides the global one.
+
+## Protocol: `protocols/<name>.md`
+
+```markdown
+name: nightly-build
+purpose: Build and smoke test the app before the team starts.
+trigger: schedule, weekdays 07:00
+repeat: every 1 day
+inputs: repo C:\Users\me\GitHub\myapp, branch main
+stop: three failures in a row
+report: pass or fail per step, and the final build path
+
+## Steps
+
+1. Pull the latest commit on main.
+   Task: `git pull origin main` in the repo path.
+   Time: 2 minutes; abort the run if it does not finish in time.
+   Result: `git log -1` shows a commit dated today.
+
+2. Build.
+   Task: `npm run build` in the repo path.
+   Time: 10 minutes; abort the run if it does not finish in time.
+   Result: `dist/` exists and the command exits 0.
+
+3. Smoke test.
+   Task: open the app and check the login screen loads.
+   Time: 5 minutes.
+   Result: the login screen is visible in the browser.
+```
+
+`name` is the file's own name in kebab-case. `trigger` is manual, a schedule or a condition. `repeat` is `once`, a count, `every <interval>` or `until <condition>`. `stop` lists the conditions that end the run besides a failed step. Each step's Task names the exact action, path, command or tool that performs it; Time is a duration, a deadline or a schedule, plus what happens when it is exceeded; Result is the outcome that proves the step is done, checkable by reading a file, an output or a state, never a vague "done". Steps run strictly in order; a run stops at the first step whose Result is not met and reports it against what was expected.
 
 ## Team config: `.hivem1nd/config.md`
 

@@ -1,16 +1,58 @@
 {
   "name": "hivem1nd",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "One mind for every coding agent.",
   "license": "MIT",
+  "author": "TXMSKA",
+  "type": "module",
+  "main": "gui/electron.mjs",
+  "bin": {
+    "hivem1nd": "cli/index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "cli/",
+    "engine/",
+    "gui/",
+    "roles/",
+    "commands/",
+    "features/",
+    "knowledge/",
+    "migrations/",
+    "fixtures/",
+    "assets/",
+    "rules.md",
+    "files.md",
+    "uninstall.cmd",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/txmska742/HIVEM1ND"
   },
   "scripts": {
-    "lint": "markdownlint-cli2"
+    "lint": "markdownlint-cli2",
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "dev": "node cli/index.mjs init --gui",
+    "pack:win": "electron-builder --win --x64 --dir --publish never",
+    "dist:win": "npm run pack:win && node scripts/zip-win.mjs"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.8.1"
+  },
+  "overrides": {
+    "smol-toml": "1.8.0"
   },
   "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.16.1",
     "markdownlint-cli2": "0.23.2",
     "markdownlint-rule-relative-links": "5.1.2"
   }

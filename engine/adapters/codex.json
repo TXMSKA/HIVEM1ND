@@ -1,0 +1,29 @@
+{
+  "id": "codex",
+  "displayName": "Codex",
+  "detect": {
+    "homePaths": [".codex", ".agents"],
+    "envPaths": [{ "variable": "CODEX_HOME", "path": "." }],
+    "binaries": ["codex"]
+  },
+  "skills": {
+    "homePath": ".agents/skills",
+    "extension": ".md",
+    "layout": "folder",
+    "fileName": "SKILL.md",
+    "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata"]
+  },
+  "rules": {
+    "homePath": ".codex/AGENTS.md",
+    "envPath": { "variable": "CODEX_HOME", "path": "AGENTS.md" },
+    "mode": "append"
+  },
+  "cli": {
+    "binary": "codex",
+    "oneShot": ["exec", "{prompt}"]
+  },
+  "readOnly": {
+    "mode": "prompt",
+    "oneShotArgs": ["--sandbox", "read-only"]
+  }
+}

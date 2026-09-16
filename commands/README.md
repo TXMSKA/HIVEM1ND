@@ -1,1 +1,1 @@
-Relay, evolve, task, msg, absorb, pylon, swarm.
+Relay, task, msg and absorb operate on the mind's Markdown records. Evolve updates the base and attached agents, pylon configures team state, and swarm reports units, tasks and messages through the shared engine. Uninstall removes what was installed on this machine, through the shared engine's dry run and kept-file reporting, and protocol runs a strict sequence of steps for a routine or a loop.

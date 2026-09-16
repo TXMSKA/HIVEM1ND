@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>HIVEM1ND setup</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="nav-panel" aria-label="HIVEM1ND setup progress">
+        <div class="brand-lockup">
+          <p class="brand-name">HIVEM1ND</p>
+        </div>
+        <ol class="progress" id="progress"></ol>
+        <div class="language-panel" id="language-panel"></div>
+      </aside>
+
+      <main class="workspace">
+        <section class="step-card" id="step-card" aria-labelledby="step-title">
+          <div class="step-heading">
+            <h1 id="step-title">Opening the local setup</h1>
+            <p class="description" id="step-description">The wizard is reading the setup session.</p>
+          </div>
+
+          <div class="status-message" id="status-message" role="alert" hidden></div>
+          <form id="step-form" novalidate>
+            <div class="fields" id="fields"></div>
+            <div class="preview" id="preview" hidden></div>
+            <div class="actions">
+              <button class="button secondary" id="back-button" type="button">Back</button>
+              <button class="button primary" id="continue-button" type="submit">Continue</button>
+            </div>
+          </form>
+        </section>
+
+        <p class="live-status" id="live-status" aria-live="polite"></p>
+      </main>
+    </div>
+    <dialog class="mode-dialog" id="mode-dialog" aria-labelledby="mode-dialog-title">
+      <h2 id="mode-dialog-title"></h2>
+      <p id="mode-dialog-copy"></p>
+      <button class="button primary" id="mode-dialog-close" type="button"></button>
+    </dialog>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

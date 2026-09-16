@@ -1,5 +1,7 @@
 machine: LAPTOP
 mind: D:\mind
+language: en
+preferences-first: yes
 update-check: daily
 last-check: 2026-09-15
 setup: done

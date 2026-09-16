@@ -1,0 +1,24 @@
+{
+  "id": "opencode",
+  "displayName": "OpenCode",
+  "detect": {
+    "homePaths": [".config/opencode"],
+    "binaries": ["opencode"]
+  },
+  "skills": {
+    "homePath": ".agents/skills",
+    "extension": ".md",
+    "layout": "folder",
+    "fileName": "SKILL.md",
+    "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata"]
+  },
+  "rules": null,
+  "cli": {
+    "binary": "opencode",
+    "oneShot": ["run", "{prompt}"]
+  },
+  "readOnly": {
+    "mode": "prompt",
+    "oneShotArgs": []
+  }
+}
