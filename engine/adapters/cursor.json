@@ -1,0 +1,27 @@
+{
+  "id": "cursor",
+  "displayName": "Cursor",
+  "detect": {
+    "homePaths": [".cursor"],
+    "binaries": ["cursor", "cursor-agent"]
+  },
+  "skills": {
+    "homePath": ".agents/skills",
+    "extension": ".md",
+    "layout": "folder",
+    "fileName": "SKILL.md",
+    "frontmatterKeys": ["name", "description", "paths", "disable-model-invocation", "icon", "color", "metadata"]
+  },
+  "rules": {
+    "homePath": ".cursor/rules/hivem1nd.mdc",
+    "mode": "cursor"
+  },
+  "cli": {
+    "binary": "cursor-agent",
+    "oneShot": ["--print", "{prompt}"]
+  },
+  "readOnly": {
+    "mode": "prompt",
+    "oneShotArgs": ["--print"]
+  }
+}

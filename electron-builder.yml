@@ -1,0 +1,33 @@
+appId: com.txmska.hivem1nd
+productName: HIVEM1ND
+copyright: Copyright (c) 2026 TXMSKA
+asar: true
+directories:
+  output: dist
+files:
+  - gui/**
+  - engine/**
+  - cli/**
+  - roles/**
+  - commands/**
+  - features/**
+  - knowledge/**
+  - migrations/**
+  - fixtures/**
+  - assets/**
+  - rules.md
+  - files.md
+  - uninstall.cmd
+  - README.md
+  - LICENSE
+  - CONTRIBUTING.md
+  - CHANGELOG.md
+  - package.json
+  - '!**/test/**'
+win:
+  icon: assets/installer.ico
+  target:
+    - target: dir
+      arch:
+        - x64
+  artifactName: HIVEM1ND-${version}-${arch}.${ext}

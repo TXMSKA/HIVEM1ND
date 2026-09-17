@@ -1,1 +1,1 @@
-The Node module: detection, questions, writing, adapters/.
+The shared Node module provides local discovery, agent adapters, setup steps, installation, updates and team state. Terminal, browser and desktop fronts use the same operations. Tests run against isolated homes, minds and Git repositories.
