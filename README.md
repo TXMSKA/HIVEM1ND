@@ -36,7 +36,7 @@ HIVEM1ND is a folder of plain markdown that any coding agent can read and write.
 
 All four ask the same questions in the same order and resume where a previous attempt stopped.
 
-The Windows build is unsigned, so SmartScreen may warn before the first run, and Smart App Control blocks it outright. The `npx hivem1nd` command becomes available once a version is published to npm; the clone and Genesis paths work regardless.
+The Windows build is unsigned, so SmartScreen may warn before the first run, and Smart App Control blocks it outright. The `npx hivem1nd` path requires Node.js 22 or later.
 
 ## How it works
 
