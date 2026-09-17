@@ -203,6 +203,11 @@ async function gitRoot(directory) {
   return path.resolve(result.stdout);
 }
 
+async function isSameDirectory(left, right) {
+  const [realLeft, realRight] = await Promise.all([fs.realpath(left), fs.realpath(right)]);
+  return realLeft.toLowerCase() === realRight.toLowerCase();
+}
+
 async function registryVersion(packageName) {
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`, {
     headers: { accept: "application/json" },
@@ -366,7 +371,7 @@ export async function evolve(options = {}) {
 
   if (resolved.pull !== false) {
     const baseRoot = await gitRoot(resolved.kitPath);
-    if (baseRoot && baseRoot.toLowerCase() === resolved.kitPath.toLowerCase()) {
+    if (baseRoot && await isSameDirectory(baseRoot, resolved.kitPath)) {
       const status = await runGit(
         resolved.kitPath,
         ["status", "--porcelain", "--untracked-files=normal"],
@@ -528,7 +533,7 @@ export async function checkForUpdates(options = {}) {
   let latestVersion = sourceVersion;
   if (resolved.fetch !== false) {
     const baseRoot = await gitRoot(resolved.kitPath);
-    if (baseRoot && baseRoot.toLowerCase() === resolved.kitPath.toLowerCase()) {
+    if (baseRoot && await isSameDirectory(baseRoot, resolved.kitPath)) {
       const fetched = await runGit(
         resolved.kitPath,
         ["fetch", "--quiet"],

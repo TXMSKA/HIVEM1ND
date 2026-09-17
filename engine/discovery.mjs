@@ -261,7 +261,7 @@ async function pathExists(filePath) {
     await lstat(filePath);
     return true;
   } catch (error) {
-    if (error?.code === 'ENOENT') return false;
+    if (['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) return false;
     throw error;
   }
 }
