@@ -43,6 +43,8 @@ function localizeReason(reason, language) {
   return text(language, key, { path: reason.slice(prefix.length) });
 }
 
+export const OWNED_RULE_MODES = new Set(['cursor', 'copilot']);
+
 export function autoRuleLine(mindPath) {
   return `HIVEM1ND: the mind is at ${mindPath}. Read ${path.join(mindPath, 'rules.md')} first, then the role or command asked for.`;
 }
@@ -551,8 +553,9 @@ async function planRuleFile(adapter, destination, root, line, managedFiles, agen
       conflict: { path: destination, reason: unsafeReason, choices: ['keep'] },
     };
   }
-  if (adapter.rules.mode === 'cursor') {
-    const content = `---\ndescription: Loads HIVEM1ND before every request.\nalwaysApply: true\n---\n\n${line}\n`;
+  if (OWNED_RULE_MODES.has(adapter.rules.mode)) {
+    const scope = adapter.rules.mode === 'cursor' ? 'alwaysApply: true' : 'applyTo: "**"';
+    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n`;
     return singlePlannedFile({
       destination,
       content,

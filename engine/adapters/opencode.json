@@ -12,7 +12,10 @@
     "fileName": "SKILL.md",
     "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata"]
   },
-  "rules": null,
+  "rules": {
+    "homePath": ".config/opencode/AGENTS.md",
+    "mode": "append"
+  },
   "cli": {
     "binary": "opencode",
     "oneShot": ["run", "{prompt}"]

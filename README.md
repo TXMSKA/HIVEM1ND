@@ -52,13 +52,15 @@ The hive is the mind itself: one per user, holding roles, commands, features and
 
 Any agent attaches in one of two modes. In on-demand mode nothing loads by itself; a command starts a chat in a role, and from there the agent works with the mind's context. In auto mode every new chat has HIVEM1ND loaded without running anything, through one line added to the agent's own rules file.
 
-### Protocols and packs
+### Knowledge packs and protocols
+
+Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
+
+Packs are read while planning. Asked for a contact page with a form, the executor reads each index, opens only the categories the work touches, such as forms, interface copy and API security, and writes their `Build:` lines into the plan as requirements, each naming the file it came from. A large pack costs a few hundred words to consult instead of all of it, and a task that touches no category reads nothing more.
 
 A protocol is a checklist an agent can actually run: a strict sequence of steps, each with a task, a time limit and a result that proves it happened, such as a measured contrast ratio, a status code or a search that returns nothing. A step without its result is not done, and a run stops at the first step that fails.
 
-Protocols are grouped in knowledge packs, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, the options to choose from, and which protocols to open. An agent working on a form reads the index, opens the forms category and runs only the protocols it names, so a large pack costs a few hundred words to consult instead of all of it.
-
-Protocols also run on their own. When a task is closed, the work it touched is matched against the packs, the matching protocols run, and the task stays open until each step has its result. A pack can be left out at setup, and a user adds private protocols and packs the same way under `user/`.
+Protocols are offered, not imposed. While a task is planned, the protocols that cover something the plan actually builds are listed next to it, and before the report the agent asks which ones to run; only the confirmed ones run. A pack can be left out at setup, and a user adds private protocols and packs the same way under `user/`: global protocols in `user/protocols/`, and local ones for a single project in `user/projects/<project>/protocols/`.
 
 ## Setup steps
 
@@ -115,7 +117,7 @@ Every role is a command, and a few more operate the system. Every command also w
 | `/pylon` | Adds shared team state to a repository without switching or changing its code branch. |
 | `/swarm` | Lists every active unit, open or delivered task, and unread inbox in the mind. |
 | `/uninstall` | Removes what was installed on this machine: commands, skills and the auto rule line for each attached agent. |
-| `/protocol` | Creates or runs a protocol: a strict sequence of steps, each with a task, a time and a result. A protocol also runs by itself when a task whose work matches its scope is closed. |
+| `/protocol` | Creates or runs a protocol: a strict sequence of steps, each with a task, a time and a result. A task whose work matches a protocol's scope lists it in its plan and runs it before the report once the user confirms. |
 
 </details>
 

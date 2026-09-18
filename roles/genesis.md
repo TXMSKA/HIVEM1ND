@@ -36,9 +36,9 @@ Codex is detected by `~/.codex/`, `~/.agents/` or the `codex` binary. It reads s
 
 Cursor is detected by `~/.cursor/` or the `cursor` binary. It reads both skill folders, `~/.claude/skills` and `~/.agents/skills`, so the copy goes to `~/.agents/skills/<name>/SKILL.md` once, shared with Codex. Rules folder: `~/.cursor/rules/`, one `.mdc` file per rule; the rules line goes into `~/.cursor/rules/hivem1nd.mdc`, with a frontmatter of two keys, `description:` (one line saying what the rule is) and `alwaysApply: true`, followed by the line as the body.
 
-OpenCode is detected by `~/.config/opencode/` or the `opencode` binary. It reads both skill folders, the same copy as Cursor. No rules file is named for it: auto mode goes through the attach prompt.
+OpenCode is detected by `~/.config/opencode/` or the `opencode` binary. It reads both skill folders, the same copy as Cursor. Rules file: `~/.config/opencode/AGENTS.md`. The line follows the selected preference order.
 
-VS Code is detected by the `code` binary or its user data folder. It reads both skill folders, the same copy as Cursor. No rules file is named for it: auto mode goes through the attach prompt.
+VS Code is detected by the `code` binary or its user data folder. It reads both skill folders, the same copy as Cursor. Rules folder: `~/.copilot/instructions/`, one `.instructions.md` file per rule; the rules line goes into `~/.copilot/instructions/hivem1nd.instructions.md`, with a frontmatter of two keys, `description:` (one line saying what the rule is) and `applyTo: "**"`, followed by the line as the body.
 
 ## Attach prompt
 

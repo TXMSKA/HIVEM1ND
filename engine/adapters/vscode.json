@@ -13,7 +13,10 @@
     "fileName": "SKILL.md",
     "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata", "argument-hint", "user-invocable", "disable-model-invocation", "context"]
   },
-  "rules": null,
+  "rules": {
+    "homePath": ".copilot/instructions/hivem1nd.instructions.md",
+    "mode": "copilot"
+  },
   "cli": {
     "binary": "code",
     "oneShot": ["chat", "--mode", "agent", "{prompt}"]

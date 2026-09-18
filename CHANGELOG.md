@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 - 2026-09-18
+
+- OpenCode and VS Code attach in auto mode without manual steps: the rules line goes into the OpenCode global rules file and into a VS Code user instructions file.
+- The attach prompt names the literal mind placeholder to replace instead of the mind path.
+- Executor, Super executor and the plan command read the knowledge modules while planning, and write the build rules of the categories a task touches into the task as requirements.
+- Protocols are a confirmation instead of a silent run: planning lists the ones whose scope matches the work, and each runs before the report only with the user's yes. The protocol command also lists the protocols of the knowledge modules.
+- Executor delegates the implementation by default: the plan is split into pieces that share no file, each sent to a subagent on the next cheaper model and reviewed against the plan, with small pieces grouped into one brief. Pieces run one after another on the task branch, and only parallel pieces get their own worktree. A single concrete change, or the user saying so, is implemented directly. Super executor follows the same method.
+- Local protocols per project in `user/projects/<project>/protocols/`, used only while that project is the current one, next to the global ones in `user/protocols/`.
+
 ## 1.1.0 - 2026-09-17
 
 - Three chat roles that work from the mind alone, without a shell or a repository: executive decisions, technical direction and marketing.
