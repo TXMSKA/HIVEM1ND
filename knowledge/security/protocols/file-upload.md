@@ -1,0 +1,39 @@
+name: file-upload
+purpose: Prove an uploaded file cannot execute, cannot come back as script, and cannot exhaust the disk.
+trigger: manual, on any upload, import, avatar, attachment, archive, generated document or image transform
+repeat: once per audit, and again whenever an upload path or a processing library is added
+inputs: the upload endpoints, the storage configuration, the serving path, a set of test files
+stop: an uploaded file executes on the server or renders as script in a viewer's browser, which is a P0
+report: the accepted type list with how it is decided, the stored path and name per upload, the serving headers, the ceilings with the response at each, and the decoder versions
+
+## Steps
+
+1. Decide the accepted types, and decide them by content.
+   Task: for each upload path, write the allowlist of accepted types. Then check the type by reading the file's own content rather than trusting the extension or the client-declared type, both of which the caller controls.
+   Time: 25 minutes. Repository, plus running application.
+   Result: the allowlist per endpoint with its entries, and one line per test file showing a mismatched pair rejected: correct extension with wrong content, and correct content with an executable extension.
+
+2. Take the caller's filename out of the path.
+   Task: store under a generated name and keep the original only as a display label. Send filenames containing traversal sequences, null bytes, leading dots, reserved device names and a very long name.
+   Time: 25 minutes. Running application, plus a read of the storage location.
+   Result: the stored path and generated name per upload, read from the filesystem or the object store, showing every payload landed inside the intended prefix with a name that contains none of the payload.
+
+3. Serve what was stored as data, never as code.
+   Task: store outside any directory the server will execute from, ideally on a separate origin. Then read the headers on the serving response.
+   Time: 25 minutes. Running application.
+   Result: `X-Content-Type-Options: nosniff` and a content type from the allowlist rather than from the file, `Content-Disposition: attachment` for anything not rendered inline, and a request for an uploaded script file returning the file as bytes rather than executing it, recorded with the status and the body.
+
+4. Treat the decoder as the attack surface.
+   Task: image, document and archive libraries parse hostile input in a process holding the application's privileges. Record each processing library and its version, and compare against its advisories fetched in this pass. One image optimization endpoint carried an unauthenticated remote code execution originating in the image library underneath it, as recorded in [framework-traps.md](../framework-traps.md).
+   Time: 30 minutes. Repository, plus network access to the advisory pages.
+   Result: one line per library with installed version, fixed version, advisory identifier and advisory URL. Where a format cannot be made safe, the configuration that disables that format is recorded.
+
+5. Put ceilings on size, count and expansion.
+   Task: set a maximum body size, a maximum file count per request and per account, and a maximum expansion ratio and entry count for archives. Then send a file above the limit, a request above the count, and an archive that expands far beyond its compressed size.
+   Time: 30 minutes. Running application.
+   Result: the status code returned at each ceiling, the connection refused before the body is fully read rather than after, and the disk usage measured before and after the archive test showing no growth.
+
+6. Keep the upload path behind the same checks as everything else.
+   Task: confirm the endpoint requires authentication where it should, applies the rate limit from [resource-limits](resource-limits.md), and that reading a stored file checks the caller against its owner.
+   Time: 20 minutes. Running application.
+   Result: a request for another account's stored file returning 403 or 404 with its status code, and the rate limit response recorded on the upload path itself.
