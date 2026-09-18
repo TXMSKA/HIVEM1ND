@@ -397,7 +397,8 @@ test("browser API completes the real setup engine inside an isolated home", asyn
   const done = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
   assert.equal(done.data.number, 8);
   assert.equal(done.data.done, true);
-  assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), "1.0.0\n");
+  const kitVersion = JSON.parse(await readFile(path.join(kitPath, "package.json"), "utf8")).version;
+  assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), `${kitVersion}\n`);
 });
 
 test("removing a repository or an environment over HTTP drops it before install", async (context) => {
