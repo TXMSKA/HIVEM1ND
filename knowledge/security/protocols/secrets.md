@@ -1,6 +1,7 @@
 name: secrets
 purpose: Prove no live credential reaches the repository, the client bundle or a log line.
-trigger: manual, on any key, token, password, connection string, environment file or build output
+scope: keys, tokens, passwords, connection strings, environment files, public-prefixed variables, the git history and the build output
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again after any change to the environment files or the build configuration
 inputs: the working tree, the full git history, the build output, the scanner of choice, the provider consoles
 stop: a live credential is confirmed, in which case rotation starts before any remaining step
@@ -21,19 +22,24 @@ report: hits per scanner over the tree and over the history, the build-output se
 3. Search the build output for the value, not for the name.
    Task: build the application, then search every output directory for the literal value of each server-side secret: `grep -rFl "<value>" dist build .next 2>/dev/null`. A framework that inlines variables carrying a public prefix puts them in the bundle by design, and the only check that catches a secret given that prefix by mistake is a search for what it contains.
    Time: 20 minutes. Repository, after a build.
-   Result: zero hits for every server-side secret value, recorded per secret. A hit is a P0, and the secret is treated as public.
+   Result: zero hits for every server-side secret value, recorded per secret. A hit is a P0, and the secret is treated as public. Plus the list of variables carrying a public prefix, such as `NEXT_PUBLIC_`, `VITE_` or `EXPO_PUBLIC_`, with each one shown to be a key designed to be public, per [configuration.md](../configuration.md).
 
 4. Check what the repository tracks.
    Task: `git ls-files | grep -E '(^|/)\.env'` and read every example or sample environment file that comes back from `git ls-files`.
    Time: 10 minutes. Repository.
-   Result: zero tracked environment files holding real values, and the example file's contents showing placeholders that authenticate nothing.
+   Result: zero tracked environment files holding real values, and the example file's contents showing placeholders that authenticate nothing. The configuration loader fails the boot with the variable's name when a required secret is missing, proved by starting once with one unset, and the search for a fallback literal beside a secret read returns zero hits.
 
 5. Rotate first, then scrub, and assume the leak is permanent.
    Task: for every confirmed live credential, rotate it at the provider before rewriting anything. Rewriting history is the second action, never the fix: forks, clones, mirrors and caches survive a rewrite, so anything that reached a public repository is public from then on. **Needs a person**: the rotation order and the outage it causes are a decision, not a check.
    Time: as long as the rotation takes.
    Result: the old credential returns an authentication failure from the provider, recorded with the request and the response. The history rewrite is recorded beside it as secondary, with the name of whoever ordered the rotation.
 
-6. Close the door behind the fix.
+6. Give each consumer its own key with the least privilege it needs.
+   Task: list every credential with the consumer that holds it: the browser, the server, continuous integration, a developer machine. Read the scope each one carries at the provider. Publishing tokens for a package registry or a source host are listed too, because a registry worm spreads through exactly those.
+   Time: 25 minutes. Repository, plus the provider consoles.
+   Result: a table of credential, consumer, environment and scope, with no credential shared across consumers, projects or environments, and no consumer holding a scope it does not use.
+
+7. Close the door behind the fix.
    Task: add the tree scan to a pre-commit hook and the history scan to continuous integration.
    Time: 20 minutes. Repository.
    Result: a commit carrying a test credential rejected by the hook, with the hook output, and a pipeline job that exits non-zero on the same commit.

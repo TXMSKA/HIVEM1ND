@@ -22,7 +22,7 @@ Promotional variants of the same habit: *groundbreaking, renowned, nestled, in t
 
 ## Pattern classes
 
-Six classes, each with a search that returns a count. The searches use the regular expression syntax of ripgrep and are run case-insensitively over the text under work.
+Seven classes with a search that returns a count, and one read by hand. The searches use the regular expression syntax of ripgrep and are run case-insensitively over the text under work.
 
 **Copula avoidance.** A plain *is* or *has* replaced by a verb that claims more than it says.
 
@@ -71,6 +71,16 @@ Replace with the named source and its date, or delete the claim.
 \b(you\s+can|there\s+(is|are|was|were)|in\s+order\s+to|going\s+forward|utili[sz]e|leverage|facilitate|delve|delves|delving)\b
 ```
 
+**Collaborative residue.** Phrases addressed to the person who asked for the text, left inside the text itself (catalogued as collaborative communication and knowledge-cutoff disclaimers at https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing).
+
+```
+\b(i\s+hope\s+this\s+helps|let\s+me\s+know\s+if|feel\s+free\s+to|happy\s+to\s+help|great\s+question|as\s+of\s+my\s+last|here\s+is\s+(a|an|the)\s+(revised|updated|rewritten))\b
+```
+
+Every hit is deleted. None of them survives the deletion test in a published text.
+
+**Rule of three.** Three adjectives, three parallel clauses or three examples where the third adds nothing (catalogued in the same inventory). No search catches it reliably, so it is read by hand: count the triads in the draft and cut each to the items that carry information.
+
 ## Structural tells
 
 These are formatting habits, and a published style rule usually already forbids each one.
@@ -80,7 +90,11 @@ These are formatting habits, and a published style rule usually already forbids 
 - A heading over a very short body. Convention: fewer than five lines of body under a heading means the heading is merged upward.
 - A closing paragraph that restates what was already said. Delete it. The last sentence of the argument is the ending.
 - A list whose items are full sentences. That was prose. Turn it back into prose, or cut each item to a fragment that earns the bullet.
-- Em dashes above the cap in [measures.md](measures.md).
+- A heading whose only content is other headings, and a thematic break between every section.
+- Inline-header lists: bullets that open with a bold label and a colon, then a sentence. Either the label is the item, or the item is prose.
+- Emoji used as bullets or as heading decoration.
+- Meta-labels such as *Key takeaway*, *Note*, *In summary* or *TL;DR* over a sentence that reads the same without them.
+- Em dashes above the dash policy in [options.md](options.md), counted as in [measures.md](measures.md).
 
 The em dash belongs with the structural tells for a reason. In one study, an instruction to drop markdown formatting removed headers and bullet points from model output immediately, while em dash use barely moved, because the em dash is valid prose punctuation as well as a structural marker (https://arxiv.org/html/2603.27006v1). That is why formatting is treated here as a writing-quality rule and never as a provenance signal.
 

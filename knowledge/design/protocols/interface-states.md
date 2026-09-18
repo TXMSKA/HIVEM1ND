@@ -1,6 +1,7 @@
 name: interface-states
 purpose: Design and prove every state a surface can reach, not only the populated one.
-trigger: manual, on any control, form, list or table, and on anything that loads, fails or can be empty
+scope: controls, lists, tables and anything that loads, fails, is empty or succeeds
+trigger: manual, on any control, list or table, and on anything that loads, fails, can be empty or confirms an action
 repeat: once per component, and again whenever a data path is added
 inputs: the component under work, its data contract, the rendered page
 stop: a state has no design at all, in which case it is designed before the pass continues rather than left to the framework
@@ -9,7 +10,7 @@ report: the state inventory with one screenshot each, the contrast per state, an
 ## Steps
 
 1. Inventory the states.
-   Task: list every state the component can reach: rest, hover, active, keyboard focus, disabled, loading, error, empty, and partial or sparse where the data allows it. A state that the code can reach and the list does not name is the one that ships broken.
+   Task: list every state the component can reach: rest, hover, active, keyboard focus, selected, disabled, loading, error, empty, success, and partial or sparse where the data allows it. A state that the code can reach and the list does not name is the one that ships broken.
    Time: 15 minutes.
    Result: the written inventory, with the condition that produces each state next to it.
 
@@ -18,27 +19,27 @@ report: the state inventory with one screenshot each, the contrast per state, an
    Time: 30 minutes; a state that cannot be reached from the interface is reached by forcing the prop or the class, and the record says which.
    Result: one screenshot per state, named after the component and the state, and the computed contrast of the text in each.
 
-3. Make the empty state an invitation.
-   Task: write the empty state as a direction rather than a mood: what goes here and the action that puts it there. Write the error state as the problem and the recovery, in the interface's own voice, never vague and never apologising.
+3. Give every empty and error state a way forward.
+   Task: write each empty state by its kind in [states.md](../states.md), with a title naming the real object, a visual, the reason and one action. Write each error as what failed and how to recover, in the interface's own voice.
    Time: 20 minutes.
-   Result: the copy for both states recorded, each naming one concrete next action, and no screen in the inventory that ends without a next step.
+   Result: the copy for every empty and error state recorded, each naming one concrete next action, and no screen in the inventory that ends without a next step.
 
-4. Keep the control usable while it works.
-   Task: keep a submit enabled until the request starts, then disable it and show a spinner while keeping the original label. Accept free text and validate after, never blocking typing, and allow an incomplete submission so the validation can surface.
+4. Show work and outcome honestly.
+   Task: give every activation feedback within about 400 milliseconds, every wait a skeleton in the shape of the final content, every disabled control an inline reason, and every completed action a success state rather than a silent reset.
    Time: 20 minutes.
-   Result: the loading screenshot shows the original label beside the spinner, and a transcript of one submission with an empty required field showing the validation appearing rather than the submission being blocked.
+   Result: the loading screenshot with the skeleton occupying the final box, zero disabled controls without an inline reason, and a success screenshot for every action that submits or saves.
 
-5. Put the errors where the fields are.
-   Task: render each error inline next to its field, move focus to the first error on submit, and announce transient messages through a polite live region.
-   Time: 20 minutes.
-   Result: a keyboard transcript of a failed submission showing focus landing on the first error, and the live region present on every toast and inline validation.
+5. Announce what appears on its own.
+   Task: put a polite live region on every toast, inline validation, loading change and success message that appears without the person moving focus.
+   Time: 15 minutes.
+   Result: the live region present on each, confirmed in the accessibility tree.
 
 6. Protect the destructive paths.
-   Task: give every destructive action either a confirmation or an undo window, and warn before navigation discards unsaved changes.
+   Task: give every destructive action an undo window when recovery is safe, or a confirmation that names the object and the consequence when it is not, and warn before navigation discards unsaved changes.
    Time: 15 minutes.
-   Result: one transcript per destructive action showing the confirmation or the undo, and one showing the unsaved changes warning.
+   Result: one transcript per destructive action showing the undo or the confirmation, and one showing the unsaved changes warning.
 
 7. Run the content extremes.
-   Task: render every text slot with an empty string, a one-word value, an average value and a value far longer than the design assumed, and render lists at zero, one, a typical count and a large count.
+   Task: render every text slot with an empty string, a one-word value, an average value and a value far longer than the design assumed, and render lists at zero, one, a typical count and a large count. Add a failed network response and a missing permission.
    Time: 20 minutes.
-   Result: a screenshot per extreme with no overflow, no broken layout and no clipped word, and skeletons that occupy the same box as the content they stand in for, so nothing shifts when the data lands.
+   Result: a screenshot per extreme with no overflow, no broken layout and no clipped word, and nothing shifting when the data lands.

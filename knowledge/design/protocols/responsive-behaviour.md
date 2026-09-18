@@ -1,5 +1,6 @@
 name: responsive-behaviour
 purpose: Hold the layout from 320 CSS pixels to ultra-wide, under real content and under touch.
+scope: layout, text length, media and pointer input across viewport widths
 trigger: manual, on any change to layout, text length, media or pointer input across widths
 repeat: once per surface, and again whenever a breakpoint or a text slot is added
 inputs: the rendered page, the breakpoint definitions, the longest and shortest real content available

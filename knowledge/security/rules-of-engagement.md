@@ -12,7 +12,7 @@ Read the repository, the lockfile and the configuration. Build the application a
 
 **No credential flow.** A pass never enters a password, an API key, a card number, a recovery code or a one-time code into anything, and never authenticates as a real user. Session handling is tested with accounts created for the test, or with a session the owner supplies for the purpose, and the test says which.
 
-**No production data.** Testing runs against a build made for it. Where only production exists, the pass is read-only against it: requests that create, modify or delete are not sent, and the steps that need them are recorded as not run with the reason. Deleting, exporting or copying real records is out of bounds in every case.
+**No production data.** Testing runs against a build made for it, with its own store. Where only production exists, the pass sends only requests that touch no real record: public responses, and the accounts created for the test and removed at the end; the steps that need more are recorded as not run with the reason. Reading, deleting, exporting, importing over or copying real records is out of bounds in every case, and so is a test session writing to a store that also holds real data.
 
 **No third-party secret is ever verified against its provider by exercising it.** A scanner that reports a credential as live has already made that call under its own terms; a pass does not make it again by hand, and it does not use a found credential for anything.
 

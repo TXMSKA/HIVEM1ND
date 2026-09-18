@@ -1,5 +1,6 @@
 name: accessibility
 purpose: Meet WCAG 2.2 level AA and keep the keyboard path whole.
+scope: any rendered page, component or view, before it ships
 trigger: manual, on any change that reaches the rendered page, and always before a surface ships
 repeat: once per surface, and again after any change to markup, focus or colour
 inputs: the rendered page, the markup, the token file, a keyboard

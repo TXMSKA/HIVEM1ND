@@ -1,6 +1,6 @@
 # Evidence
 
-A protocol step is finished when it has produced an artifact. Four kinds count, and nothing else does.
+A protocol step is finished when it has produced an artifact. Five kinds count, and nothing else does.
 
 ## Computed number
 
@@ -16,6 +16,8 @@ A value read out of the running page or the stylesheet, recorded with the elemen
 
 A screenshot is evidence only when the state it shows is named in the record: the element, the state and the viewport. A page screenshot proves the page rendered, not that the state exists. Both themes when the change touches colour, both motion preferences when it touches motion.
 
+A capture is valid only when entrance animations had settled, it starts from the top of the page, and the file was opened afterwards to confirm it shows what its name says. A capture taken and not looked at proves nothing.
+
 ## Search that returns no hits
 
 The negative checks in [defaults.md](defaults.md) and in the protocols are run as searches over the component tree, and the finished result is zero hits. When hits remain, each one carries a file and line reference and the sentence in the brief that earns it. A search nobody ran is not a clean search.
@@ -23,6 +25,10 @@ The negative checks in [defaults.md](defaults.md) and in the protocols are run a
 ## Keyboard walk transcript
 
 Focus the document from the address bar and move forward through the whole surface with the tab key, then back. Record one line per stop, in order: the element, whether the focus ring was visible, whether anything covered it, and what the enter or space key did. A transcript is complete when it reaches the end of the page and returns, and when every interactive element in the source appears in it. Any element that appears in the source and not in the transcript is a finding, and so is any stop that the transcript reaches but the pointer path does not.
+
+## Written critique
+
+The judgment in [critique.md](critique.md), written against named captures before any number was read, one line per question with the element it concerns. It is the evidence that the surface is good, as opposed to usable: passing numbers on an ugly page are not a pass.
 
 ## Ranking findings
 

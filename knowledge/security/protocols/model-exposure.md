@@ -1,6 +1,7 @@
 name: model-exposure
 purpose: Prove an injected instruction reaches nothing privileged and that spend has a hard ceiling.
-trigger: manual, on any model call, agent, tool, retrieval index or generated value that reaches a user or a system
+scope: model calls, agents, tools, retrieval indexes, system prompts and generated output that reaches a user or a system
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again whenever a tool, a data source or a model is added
 inputs: the model call sites, the tool definitions, the retrieval sources, the provider console, the browser network log
 stop: an API key is found in the client bundle or a request goes from the page straight to the provider, which is a P0
@@ -24,7 +25,7 @@ report: the key location per call site, the tool inventory with the privilege of
    Result: a capture per action class showing the exact parameters presented and the run halted until confirmation, plus a test where the confirmation is refused and nothing was written, read from the store.
 
 4. Test injection, and grade it at the boundary rather than at the reply.
-   Task: place instructions in every channel the model reads that a user or a third party controls: the message, an uploaded document, a retrieved page, a tool result, a file name, a database field. Ask the injected instruction to call a privileged tool or reveal another user's data.
+   Task: place instructions in every channel the model reads that a user or a third party controls: the message, an uploaded document, a retrieved page, a tool result, a file name, a database field. Include an instruction hidden by encoding or addressed to the model and not to the reader, since that is the shape real injections take. Ask the injected instruction to call a privileged tool or reveal another user's data.
    Time: 60 minutes. Running application. Only against the application under test.
    Result: per channel, the tool call log and the credential boundary showing the injected instruction reached nothing privileged. The model refusing is not a pass and is not recorded as one, because the next phrasing will not be refused.
 
@@ -34,9 +35,9 @@ report: the key location per call site, the tool inventory with the privilege of
    Result: the system prompt quoted with each item classified as instruction or control, and every control found relocated into code, with the relocation shown at a file reference.
 
 6. Make the spend ceiling halt the work.
-   Task: set token, request and currency ceilings per user, per session and for the service, at the provider and in the application. Reaching one stops the work; raising an alert while the work continues is not a ceiling.
+   Task: set token, request and currency ceilings per account, per session, per period and for the service, at the provider and in the application, and cap the size of a single request so one call cannot carry an unbounded prompt. Reaching one stops the work; raising an alert while the work continues is not a ceiling.
    Time: 30 minutes. Running application, plus the provider console.
-   Result: the configured ceilings, and a run against a deliberately low ceiling showing the work halted, the status returned to the caller, and the spend recorded at the provider. **Needs a person** for what the ceilings should be.
+   Result: the configured ceilings including the single request size, an oversized request rejected with its status code, and a run against a deliberately low ceiling showing the work halted, the status returned to the caller, and the spend recorded at the provider. **Needs a person** for what the ceilings should be.
 
 7. Handle the output as untrusted input.
    Task: model output reaching a renderer, a shell, a query, a file path or another tool is caller-controlled data by a longer route. Apply the sinks check from [injection-and-output](injection-and-output.md) to every place generated text lands.

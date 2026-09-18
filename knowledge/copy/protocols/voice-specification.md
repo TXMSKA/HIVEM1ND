@@ -1,5 +1,6 @@
 name: voice-specification
 purpose: Turn a voice from a set of adjectives into values and lists a reviewer can check a string against.
+scope: a new product or section, a rewrite that spans categories, or a disagreement about how the text should sound
 trigger: manual, before writing copy for a new product or section, and on any rewrite that spans surfaces
 repeat: once per product, and again when the product changes what it is
 inputs: the brief, the existing copy, three real strings to calibrate against
@@ -14,7 +15,7 @@ report: the four dimension values, the size of the word table, the sentence rule
    Result: either the path of the existing specification is recorded and the run ends, or it is recorded that none exists.
 
 2. Place the voice on the four dimensions.
-   Task: score the voice from 1 to 5 on each of formal against casual, serious against funny, respectful against irreverent, and matter-of-fact against enthusiastic (https://www.nngroup.com/articles/tone-of-voice-dimensions/). Write one sentence under each score saying what in the product or the audience earns it.
+   Task: score the voice from 1 to 5 on each of formal against casual, serious against funny, respectful against irreverent, and matter-of-fact against enthusiastic (https://www.nngroup.com/articles/tone-of-voice-dimensions/), starting from the closest preset in [options.md](../options.md). Write one sentence under each score saying what in the product or the audience earns it.
    Time: 20 minutes; when the brief cannot answer a dimension, record the proposal as an assumption and ask before the specification is published.
    Result: four numbers recorded, each with a sentence naming something the brief actually contains. A dimension scored without a sentence is not scored.
 
@@ -24,7 +25,7 @@ report: the four dimension values, the size of the word table, the sentence rule
    Result: a table of at least fifteen rows, every row with both columns filled. A row with an empty replacement column is not a rule, and is removed or completed.
 
 4. Fix the sentence rules.
-   Task: decide and write down, with one passing example and one failing example each, whether contractions are used, which person the copy speaks in, which tense, whether questions may be headings, and how numbers and dates are written. These are conventions, and the point is that they are chosen once rather than argued per string.
+   Task: pick a value for every option in [options.md](../options.md), person, length, line shape, dash policy, casing, contractions, emoji, opening and closing, register per language and claim level, then add the tense, whether questions may be headings, and how numbers and dates are written. Write each with one passing example and one failing example. These are conventions, and the point is that they are chosen once rather than argued per string.
    Time: 20 minutes.
    Result: each rule is one sentence with two examples. The count of rules without both examples is zero.
 

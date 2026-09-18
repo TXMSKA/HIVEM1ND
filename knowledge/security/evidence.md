@@ -53,4 +53,6 @@ Findings are ranked so that a long list stays usable. The test for the boundary 
 | P2 | Weakens a defence without crossing a boundary on its own | In the next pass |
 | P3 | Hardening with no path to impact found | When there is time |
 
+Every check ends in one verdict: pass, fail, or not applicable with the reason. Nothing ships with an open fail. A P2 or P3 left for a later pass is a risk accepted, recorded as a decision with a name against it, as below.
+
 Every finding carries the location, the evidence that proves it, the impact in one line, the fix, and the evidence that would prove it fixed. A finding without a fix is an observation, and a list of observations is not a report. A finding whose fix cannot be verified by the same kind of artifact that found it is incomplete.

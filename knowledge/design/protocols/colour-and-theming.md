@@ -1,5 +1,6 @@
 name: colour-and-theming
 purpose: Keep colour on semantic tokens, carrying meaning, with every pair above its contrast target in both themes.
+scope: colour, tokens, surfaces, borders, shadows and light or dark themes
 trigger: manual, on any change to colour, tokens, surfaces, borders, shadows, or a light or dark theme
 repeat: once per surface, and again whenever a token is added or re-pointed
 inputs: the token file, the component tree, the rendered page in both themes
@@ -39,6 +40,6 @@ report: the contrast table for both themes, the count of colour literals outside
    Result: the count of colour-only cues is zero, and a screenshot in greyscale still distinguishes every state and every chart series.
 
 7. Keep the surfaces honest.
-   Task: check the edges. Shadows carry an offset and a soft blur; a zero offset halo is decoration. Coloured borders stay at or below 1 pixel. Borders and shadows tint toward the background hue. Nested radii stay concentric, with the child radius never larger than the parent.
+   Task: check the edges. Shadows carry an offset and a soft blur; a zero offset halo is decoration. Elevation is declared once, as a border or as a shadow, not both. Coloured borders stay at or below 1 pixel, except the selection indicator of a navigation item. Borders and shadows tint toward the background hue. Decoration never borrows the action colour, so the eye can still find the action. Nested radii stay concentric, with the child radius never larger than the parent.
    Time: 15 minutes.
-   Result: the search for zero offset shadows returns zero hits, the computed width of every coloured border is at or below 1 pixel, and no decorative gradient, glow or glass surface remains that the brief did not ask for.
+   Result: the search for zero offset shadows returns zero hits, the computed width of every coloured border outside navigation selection is at or below 1 pixel, on a restrained palette the accent appears only on actions, selection and state, and no decorative gradient, glow or glass surface remains that the brief did not ask for.

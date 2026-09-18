@@ -1,44 +1,45 @@
 name: motion
-purpose: Keep motion short, compositor-only, purposeful and reducible.
-trigger: manual, on any transition, animation, transform, reveal or scroll effect
+purpose: Keep motion purposeful, short, compositor-only, interruptible and reducible.
+scope: transitions, animations, transforms, reveals, scroll effects and gestures on any rendered surface
+trigger: manual, on any transition, animation, transform, reveal, scroll effect or gesture, and on a request to add motion
 repeat: once per surface, and again whenever an animation is added
 inputs: the stylesheet and animation code, the rendered page, the reduced motion setting
-stop: a required animation cannot be expressed in transform and opacity, in which case the effect is redesigned rather than moved onto layout properties
-report: the duration and easing of every transition, the count of animated layout properties, and the reduced motion capture pair
+stop: a required animation cannot be expressed in transform, opacity and clip path, in which case the effect is redesigned rather than moved onto layout properties
+report: the animation table with purpose, frequency, duration and curve, the animations removed, the searches with zero hits, and the reduced motion capture pair
 
 ## Steps
 
-1. Earn each animation.
-   Task: list every animated element and write what its motion explains: a state change, a continuity between two positions, or the confirmation of an action. Cut the rest. One orchestrated moment per surface lands; a fade and slide on every section and a transition on every card is the generic default and reads as such.
+1. Run the gates.
+   Task: list every animated element and run it through the frequency, purpose, budget and function gates in [animation.md](../animation.md). Cut what fails. On a marketing surface, name the one committed gesture; on a working app, keep motion to feedback, anchored overlays and short crossfades.
    Time: 20 minutes.
-   Result: one line per surviving animation naming what it explains, and the count of animations removed. Motion that answers no action and explains no change is recorded as removed, not as pending.
+   Result: one row per surviving animation naming its purpose and frequency tier, the count removed with the gate that removed each, and zero animation on keyboard-initiated actions.
 
-2. Set the durations.
-   Task: assign a duration to each animation by its size. Simple feedback such as a toggle or a checkbox sits near 100 milliseconds, where it reads as physical manipulation. Ordinary interface transitions sit between 150 and 200. A substantial change such as a modal or a panel sits between 250 and 300. A large movement reaches 400 at most. From 500 upward the interface feels like a delay.
-   Time: 15 minutes.
-   Result: the computed duration of every transition read from the running page and recorded in milliseconds, none at or above 500.
-
-3. Set the easing.
-   Task: give entrances a decelerating curve, which starts fast and settles so the eye can follow the element to its final position, and give exits an accelerating curve. Write the curves as explicit cubic-bezier values rather than the built-in keywords: a decelerate curve such as `cubic-bezier(0, 0, 0, 1)` or the softer `cubic-bezier(0.05, 0.7, 0.1, 1)`, an accelerate curve such as `cubic-bezier(0.3, 0, 1, 1)`, and a standard curve such as `cubic-bezier(0.2, 0, 0, 1)` for a change that stays on screen. Linear motion is never the answer, and an entrance may run slightly longer than the matching exit.
-   Time: 15 minutes.
-   Result: the computed timing function of every transition recorded, with no keyword curves left and every entrance and exit pair using opposite curves.
-
-4. Animate only what the compositor can carry.
-   Task: restrict animation to transform and opacity, list the properties explicitly, and set the transform origin to where the motion physically starts. A scale never starts at zero, because the element springs out of nothing and the eye loses it.
+2. Set durations and curves.
+   Task: assign each animation a duration from the table in [animation.md](../animation.md) and an explicit curve by direction: decelerating for entrances and exits, symmetric for movement on screen, linear only for constant motion.
    Time: 20 minutes.
-   Result: the search for animated layout properties such as top, left, width and height returns zero hits, the search for an unlisted blanket transition returns zero hits, and no keyframe starts a scale at zero.
+   Result: the computed duration and timing function of every transition read from the running page, interface motion at or under 300 milliseconds, travelling overlays at or under 500, no built-in keyword curve on a deliberate animation, and zero accelerating curves on interface motion.
 
-5. Match the motion to the frequency.
-   Task: rank the animated interactions by how often a person performs them. The more frequent the interaction, the less it may animate, down to none. An action started from the keyboard does not animate at all, because the person is already moving faster than the animation.
-   Time: 10 minutes.
-   Result: the ranked list with a duration against each, decreasing as frequency rises, and zero animation on keyboard-initiated actions.
+3. Animate only what the compositor carries.
+   Task: restrict animation to transform, opacity and clip path, list the properties explicitly, set the transform origin at the trigger for anchored surfaces, and start no scale below 0.9.
+   Time: 20 minutes.
+   Result: the searches for animated layout properties, for a blanket transition on all properties, and for a scale starting at zero each return zero hits, and hover motion never changes the element's box.
+
+4. Keep it interruptible.
+   Task: trigger every quickly repeated animation twice in a row and grab every draggable surface mid-motion. Use transitions rather than keyframes for anything retriggered, springs for anything a hand drives, and never lock input during a transition.
+   Time: 15 minutes.
+   Result: a transcript of one animation interrupted mid-run and retargeting from its on-screen position, and one drag released with a flick that settles with its velocity.
+
+5. Protect the reading.
+   Task: load the page cold and check that no reveal or stagger holds back text in the first viewport, that reveals fire once, and that text keeps its contrast at the midpoint of every fade.
+   Time: 15 minutes.
+   Result: the first viewport readable at first paint in a screenshot, reveals firing once, and the contrast at the midpoint frame recorded above its target.
 
 6. Honour the reduced motion preference.
-   Task: under the reduced motion setting, drop the travel and keep the state change. The element still appears, still changes, and still confirms; it simply does not move. A blanket rule that reduces every duration to near zero destroys the feedback the motion carried.
+   Task: under the reduced motion setting, drop travel, springs, parallax and loops, and keep opacity and colour feedback so every confirmation still happens.
    Time: 20 minutes.
-   Result: a pair of screenshots of the same state change, one at each motion preference, showing the same end state, plus a transcript confirming that every confirmation still occurs.
+   Result: a pair of screenshots of the same state change at each motion preference showing the same end state, and a transcript confirming every confirmation still occurs.
 
-7. Keep it interruptible.
-   Task: make every animation interruptible and driven by input. Restrict autoplay to muted, non-essential loops, and give any autoplaying motion that runs longer than 5 seconds alongside other content a control to pause, stop or hide it.
+7. Feel it, then limit the loops.
+   Task: play each surviving animation at a quarter of its speed, check the origin, the curve and the sync of coordinated properties, and give any autoplaying motion that runs longer than 5 seconds a control to pause, stop or hide it.
    Time: 15 minutes.
-   Result: a transcript of one animation interrupted mid-run and settling correctly, and the count of autoplaying loops with their durations and their controls.
+   Result: one line per animation noting the slowed check, and the count of autoplaying loops with their durations and their controls.

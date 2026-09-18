@@ -1,6 +1,7 @@
 name: supply-chain
 purpose: Prove what installs is what was reviewed, and that a freshly poisoned release cannot land.
-trigger: manual, on any dependency change, lockfile change, build pipeline or continuous integration workflow
+scope: the manifest, the lockfile, package manager settings, added dependencies and the continuous integration workflows
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again on every dependency addition or major upgrade
 inputs: the manifest, the lockfile, the package manager configuration, the pipeline definitions
 stop: an install script runs during a clean install without being listed, which is reported before the pass continues
@@ -34,6 +35,6 @@ report: the two settings with the values the tool reports back, the install comm
    Result: the advisory count at high and critical with the fixed version offered for each. A clean result is recorded as a clean audit and nothing more: it does not read install scripts, and a version poisoned in the last few hours has no advisory yet.
 
 6. Read what a new dependency actually ships.
-   Task: for every added package and every new major, read its lifecycle scripts and the file list it publishes, and check the maintainer change since the last version. Provenance attestation proves where a package was built, not that it is safe: every recent registry worm published from a legitimately authenticated session. **Needs a person**: accepting a package whose scripts do real work is a decision.
+   Task: for every added package and every new major, record the reason it is needed, read its lifecycle scripts and the file list it publishes, check the maintainer change since the last version, and check that the version has a matching commit or tag in its source repository. Packages nothing imports any more are removed. Provenance attestation proves where a package was built, not that it is safe: every recent registry worm published from a legitimately authenticated session. **Needs a person**: accepting a package whose scripts do real work is a decision.
    Time: 20 minutes per added package. Repository.
-   Result: per added package, the contents of its lifecycle scripts or a note that it declares none, the published file list, and the acceptance recorded with a name against it.
+   Result: per added package, the reason, the contents of its lifecycle scripts or a note that it declares none, the published file list, the source commit or tag, and the acceptance recorded with a name against it. Plus the list of unused packages found, and zero left.

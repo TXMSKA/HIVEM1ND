@@ -1,6 +1,7 @@
 name: resource-limits
 purpose: Prove every entry point has a ceiling and that reaching it costs the caller, not the service.
-trigger: manual, on any public endpoint, search, export, batch job, paid call or unbounded query
+scope: public endpoints, searches, exports, pagination, batch jobs, metered calls and business flows with value at the end
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again whenever a public endpoint or a metered call is added
 inputs: the route table, the rate limit configuration, the billing or quota console, a request client
 stop: a ceiling is found only by exceeding it, in which case the test stops at the ceiling and the rest is inferred, never driven further
@@ -9,9 +10,9 @@ report: the limit and the response at the limit per endpoint, the pagination cei
 ## Steps
 
 1. Put a limit on every entry point, keyed on something the caller cannot change freely.
-   Task: record the limit per endpoint and what it is keyed on: the account, the address, the API key, or a combination. An unauthenticated endpoint keyed only on the address is recorded as such, since addresses are cheap.
+   Task: record the limit per endpoint and what it is keyed on: the account, the address, the API key, or a combination. Authentication, password reset and every expensive call are keyed on both the address and the account, and repeated hits back off rather than resetting. An unauthenticated endpoint keyed only on the address is recorded as such, since addresses are cheap. Behind a proxy, the address is read with the number of trusted hops configured, never from the first value of a forwarding header the caller can set.
    Time: 30 minutes. Repository, plus the limiter configuration.
-   Result: one line per endpoint with its limit, its window and its key. An endpoint with no row is a finding.
+   Result: one line per endpoint with its limit, its window and its key, and one request carrying a forged forwarding header showing the limit still counts it against the real address. An endpoint with no row is a finding. Unauthenticated forms that send mail or cost money also carry bot protection proportional to the risk, recorded by name.
 
 2. Find each ceiling by reaching it, and stop there.
    Task: drive requests until the limit engages, then stop. Per [rules-of-engagement.md](../rules-of-engagement.md), the ceiling and the response at it are the evidence; going past it is an attack on the service.

@@ -1,6 +1,7 @@
 name: headers-and-transport
 purpose: Prove the enforced headers and the transport settle at the target values, error responses included.
-trigger: manual, on any deployed response, server or proxy configuration, certificate or cookie attribute
+scope: the response headers of a deployed site, the server, proxy and edge configuration, the certificate and the HTTPS redirect
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again after any change to the server, the proxy or the edge configuration
 inputs: the deployed address, a request client that shows headers, the server configuration, the published header sets
 stop: none; every step produces a finding rather than halting the pass
@@ -14,7 +15,7 @@ report: the header set on a success and on an error response, the missing and th
    Result: both header sets recorded verbatim, and any header present on the 200 and absent on the error named as a finding with its response code.
 
 2. Compare against the published set.
-   Task: fetch the recommended set in this pass and compare header by header:
+   Task: start from the baseline in [headers.md](../headers.md), then fetch the recommended set in this pass and compare header by header:
    https://raw.githubusercontent.com/OWASP/www-project-secure-headers/master/ci/headers_add.json
    Time: 20 minutes. Running application, plus network access.
    Result: one line per header in the published set marked present with its value, present with a weaker value, or absent, with the fetched file's own last-update timestamp recorded beside the comparison.

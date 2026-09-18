@@ -1,6 +1,7 @@
 name: version-floor
 purpose: Fail anything running past its support date or below a published fix version.
-trigger: manual, at the start of any audit, and on any runtime, framework or dependency upgrade
+scope: the runtime version, the framework and view library versions, the lockfile, and any runtime or framework upgrade
+trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again after any change to the lockfile or the runtime
 inputs: the lockfile, the runtime version, the vendor advisory pages, the runtime support calendar
 stop: the runtime is past its end of life, in which case the pass stops and that is the only finding until it is raised
@@ -21,7 +22,7 @@ report: the runtime version against its calendar status, one line per framework 
 3. Compare each against its vendor advisories, fetched now.
    Task: for each framework and view library in the table, open the vendor's security advisories index and read the advisories covering the installed major. Follow the procedure in [framework-traps.md](../framework-traps.md), which names the traps worth looking for and the pages that carry them.
    Time: 30 minutes. Repository, plus network access to the advisory pages.
-   Result: one line per package: installed version, fixed version, advisory identifier, advisory URL, and one of not applicable, below the fix, or at or above the fix. A version quoted from anything other than a page fetched in this pass is not a result.
+   Result: one line per package: installed version, fixed version, advisory identifier, advisory URL, and one of not applicable, below the fix, or at or above the fix. Where the advisory depends on the hosting mode or the host operating system, both are recorded on the same line, and a static export with no framework server in production is recorded as exposed only in development. A version quoted from anything other than a page fetched in this pass is not a result. The entries in [incidents.md](../incidents.md) name advisories worth checking first.
 
 4. Run the advisory database as a second pass, not as the first.
    Task: `npm audit --audit-level=high`. Record the count and the fixed version offered for each entry.
@@ -31,7 +32,7 @@ report: the runtime version against its calendar status, one line per framework 
 5. Confirm the deployed build carries the versions just checked.
    Task: compare the lockfile in the deployment artifact against the one in the repository, or read the versions the running service reports. A floor proved in the repository says nothing about what is serving traffic.
    Time: 15 minutes. Running application.
-   Result: the two lockfile hashes match, or the mismatched packages are listed with both versions.
+   Result: the two lockfile hashes match, or the mismatched packages are listed with both versions. Where several repositories consume a shared package that declares the framework, every one of them resolves the same fixed version, or the exception is recorded with its reason.
 
 6. Put the floor in the pipeline.
    Task: add the runtime check and the audit to continuous integration so a version below the floor fails the build rather than appearing in the next audit.

@@ -1,5 +1,6 @@
 name: design-specificity
 purpose: Separate the choices made for this brief from the treatments that would appear on any brief.
+scope: new surfaces and passes that set or change the visual direction
 trigger: manual, before building a new surface and before any pass that changes the visual direction
 repeat: once per surface
 inputs: the brief or request, the surface under work, the token file, the rendered page
@@ -9,7 +10,7 @@ report: the subject, audience and primary job in one line each, the count of def
 ## Steps
 
 1. Name the subject.
-   Task: write one concrete subject, one audience and one primary job for the surface. Take them from the brief where it says them; where it does not, write them as a proposal and ask before continuing. Distinctive choices come from the subject's own material and vernacular, so a subject written as a product category is not yet a subject.
+   Task: write one concrete subject, one audience and one primary job for the surface. Take them from the brief where it says them; where it does not, write them as a proposal and ask before continuing. Distinctive choices come from the subject's own material and vernacular, so a subject written as a product category is not yet a subject. Name the mode of the surface from [direction.md](../direction.md) at the same time.
    Time: 10 minutes; when the brief cannot answer and no one is available to confirm, record the proposal as an assumption and continue.
    Result: three lines recorded in the design plan, each naming something the brief actually contains, each under 120 characters.
 
@@ -38,7 +39,7 @@ report: the subject, audience and primary job in one line each, the count of def
    Time: 10 minutes.
    Result: two screenshots of the first viewport, one with text and one masked, and the same dominant object named in both. Different objects, or no dominant object in the masked capture, means the hierarchy is carried by words alone and the composition is redesigned before coding continues.
 
-7. Count the boldness.
-   Task: list every element that competes for attention through scale, colour, weight or motion. Keep one. Quiet or remove the rest.
+7. Spend the boldness once.
+   Task: on a Persuade or Experience surface, write the one gesture that belongs to the subject, as in [direction.md](../direction.md). Then list every element that competes for attention through scale, colour, weight or motion, keep the one that carries the gesture or the primary job, and quiet or remove the rest.
    Time: 10 minutes.
-   Result: exactly one element is recorded as the bold one, and the count of elements quieted or removed is written down.
+   Result: the gesture recorded in one line where the mode calls for it, exactly one element recorded as the bold one, and the count of elements quieted or removed written down.

@@ -1,37 +1,60 @@
+module: security
+purpose: Security checks for a web application, split by the part of the application a change touches.
+
 # Security
 
-Security work runs as protocols. This file is the whole map. Read it, pick the two or three protocols the work in hand actually needs, and read only those.
+Read this file, open only the category the work touches, and from there only the protocols and topic sections it names. Each category file lists its subcategories with the requests and diffs that match them, the options with when to pick each, and the files to open. Most changes touch one or two categories. When nothing below matches, the change has no security surface.
 
-Reading every protocol before every change is the wrong way to use the module. It spends context on rules the change cannot break and turns into a checklist nobody runs. A protocol that is not read is cheaper than a protocol that is skimmed.
+## Categories
 
-Match the work against the second column: the words there describe a diff or a request, not a discipline. Most changes match two or three rows. When nothing matches, the change has no security surface and no protocol applies.
+The order is the order of a full pass: what a stranger can reach without a credential comes first.
 
-| Protocol | Applies when | Purpose |
-| --- | --- | --- |
-| [version-floor](protocols/version-floor.md) | Any audit, any runtime or framework upgrade, any version in the manifest or the lockfile | Fail anything running past its support date or below a published fix version |
-| [secrets](protocols/secrets.md) | Any key, token, password, connection string, environment file, build output or log | Prove no live credential reaches the repository, the client bundle or a log line |
-| [access-control](protocols/access-control.md) | Any route, endpoint, server action, job or query that reads an identifier from the request | Prove every object and every function checks the caller against the record |
-| [authentication-and-session](protocols/authentication-and-session.md) | Any login, registration, password reset, token issue, cookie or logout path | Prove a session cannot be forged, fixed, replayed or kept alive after logout |
-| [injection-and-output](protocols/injection-and-output.md) | Any query, command, template, redirect, deserialiser or value rendered from input | Prove untrusted data never becomes code, in the database, the shell or the page |
-| [supply-chain](protocols/supply-chain.md) | Any dependency change, lockfile change, build pipeline or continuous integration workflow | Prove what installs is what was reviewed, and that a freshly poisoned release cannot land |
-| [headers-and-transport](protocols/headers-and-transport.md) | Any deployed response, server or proxy configuration, certificate or cookie attribute | Prove the enforced headers and the transport settle at the target values, errors included |
-| [request-forgery](protocols/request-forgery.md) | Any state-changing form, and any request the server makes to a URL it did not fix itself | Prove a cross-site request cannot act and a server-side fetch cannot reach the metadata service |
-| [file-upload](protocols/file-upload.md) | Any upload, import, avatar, attachment, archive, generated document or image transform | Prove an uploaded file cannot execute, cannot come back as script, and cannot exhaust the disk |
-| [resource-limits](protocols/resource-limits.md) | Any public endpoint, search, export, batch job, paid call or unbounded query | Prove every entry point has a ceiling and that reaching it costs the caller, not the service |
-| [logging-and-errors](protocols/logging-and-errors.md) | Any error path, exception handler, log statement, alert rule or retention setting | Prove failures close, records carry no secrets, and an attack in progress raises something |
-| [model-exposure](protocols/model-exposure.md) | Any model call, agent, tool, retrieval index or generated value that reaches a user or a system | Prove an injected instruction reaches nothing privileged and that spend has a hard ceiling |
+- [dependencies](categories/dependencies.md): the runtime, framework and package versions against their advisories, install scripts, the lockfile and the pipeline that installs.
+- [secrets and configuration](categories/secrets-and-configuration.md): keys and environment values in the repository, the history, the client bundle and the pipeline, their scope and rotation.
+- [deployment](categories/deployment.md): what the deployed host serves besides the application, default credentials, stock routes, the hosting shape and the pre-launch pass.
+- [API](categories/api.md): endpoint inventory, authorization per object and per function, identity from the session, writable and returned fields, input validation, rate limits and idempotency.
+- [identity](categories/identity.md): login, credential storage, sessions and cookies, signed tokens, reset and invitation links, the first account, throttling and the second factor.
+- [payments](categories/payments.md): prices, checkout and fulfilment, inbound webhooks, subscriptions and refunds, card data and reconciliation.
+- [outbound](categories/outbound.md): requests to URLs taken from input, image proxies, third-party APIs consumed and webhooks the service emits.
+- [files](categories/files.md): upload, storage and serving, download access and the decoders that parse files.
+- [web surface](categories/web-surface.md): headers and the content policy, transport, cookies, cross-site forgery, cross-origin access and framing, rendered content and redirects.
+- [data](categories/data.md): queries, database accounts and privileges, row policies, migrations, sensitive fields, backups and exports.
+- [model features](categories/model-features.md): where the model runs, tools and agency, injection through content, the system prompt, spend and generated output.
+- [logging and errors](categories/logging-and-errors.md): failure handling, error responses, security events and alerts, secrets in records and retention.
 
-Every protocol ends in artifacts: a status code, a command with its output, a version comparison, a search that returns no hits, or a query result. A step whose result is "reviewed" or "looks fine" is a step that was not run.
+## Protocols
 
-Four topics at the module root back the protocols and are read only when a step points at them:
+One line each, for the automatic match at task close. A category file says which steps apply to which subcategory.
 
-- [standards.md](standards.md) names which published standard answers which question, with the editions current at the last check.
-- [evidence.md](evidence.md) defines what counts as proof for each kind of check and how findings are ranked.
-- [framework-traps.md](framework-traps.md) holds the failures that belong to a framework rather than to a category, with the advisories that fixed them.
-- [rules-of-engagement.md](rules-of-engagement.md) sets what a pass may touch and what it may never touch.
+- [version-floor](protocols/version-floor.md): scope the runtime, framework and view library versions and the lockfile.
+- [supply-chain](protocols/supply-chain.md): scope the manifest, the lockfile, package manager settings, added dependencies and pipeline workflows.
+- [secrets](protocols/secrets.md): scope keys, environment files, public-prefixed variables, the git history and the build output.
+- [deployment-surface](protocols/deployment-surface.md): scope the deployed origin, static paths, stock and debug routes, bundled services, pipeline secrets and the hosting shape.
+- [access-control](protocols/access-control.md): scope routes, handlers, server actions and jobs that read an identifier or a role from the request.
+- [authentication-and-session](protocols/authentication-and-session.md): scope login, registration, reset, invitation and setup links, cookies, tokens, logout and second factor.
+- [payments-and-webhooks](protocols/payments-and-webhooks.md): scope checkout, prices, subscriptions, refunds, provider calls and inbound webhooks.
+- [outbound-requests](protocols/outbound-requests.md): scope outbound HTTP clients, URL fetching, image proxies, third-party APIs and emitted webhooks.
+- [file-upload](protocols/file-upload.md): scope uploads, stored files, their serving path and the decoders that process them.
+- [cross-site-requests](protocols/cross-site-requests.md): scope state-changing endpoints called from a browser, cross-origin settings and framing.
+- [headers-and-transport](protocols/headers-and-transport.md): scope response headers, server and edge configuration, certificates and the HTTPS redirect.
+- [injection-and-output](protocols/injection-and-output.md): scope queries, commands, file paths, templates, rendered content, redirects and deserialisers fed by input.
+- [data-store](protocols/data-store.md): scope stores, their accounts and grants, row policies, migrations, backups and exports.
+- [resource-limits](protocols/resource-limits.md): scope public endpoints, searches, exports, pagination, metered calls and business flows.
+- [model-exposure](protocols/model-exposure.md): scope model calls, agents, tools, retrieval, system prompts and generated output.
+- [logging-and-errors](protocols/logging-and-errors.md): scope exception handlers, error responses, log sinks, alert rules and retention.
 
-The command [cyberattack](features/cyberattack.md) runs the module against a whole application or against one feature.
+## Topics
 
-## What this module is not
+Read when a category or a step names them.
 
-It is not a penetration test and it is not a certification. It produces findings with the evidence that proves each one and the evidence that would prove it fixed. Deciding to accept a risk, to build a threat model, or to put a domain on a list that takes months to leave, is a person's decision, and the protocols say so at the step where it arises.
+- [rules-of-engagement.md](rules-of-engagement.md): what a pass may touch and what it may never touch. Read before any request to a running application.
+- [evidence.md](evidence.md): what counts as proof, the verdicts and the ranking of findings.
+- [standards.md](standards.md): which published standard answers which question, with the editions current at the last check.
+- [incidents.md](incidents.md): dated advisories, leaks and registry worms with what to check. New entries are appended there.
+- [framework-traps.md](framework-traps.md): failures that belong to a framework rather than to a category.
+- [pre-launch.md](pre-launch.md): the last pass on the deployed environment before going public.
+- [sessions-and-credentials.md](sessions-and-credentials.md), [api-conventions.md](api-conventions.md), [headers.md](headers.md), [payments.md](payments.md), [configuration.md](configuration.md): the reference values behind the options.
+
+The command [cyberattack](features/cyberattack.md) runs the module against a whole application or against one part of it.
+
+It is not a penetration test and it is not a certification. It produces findings with the evidence that proves each one and the evidence that would prove it fixed. Accepting a risk, building a threat model or submitting a domain to a list that takes months to leave is a person's decision, and the protocols say so at the step where it arises.

@@ -1,5 +1,6 @@
 name: theme-direction
 purpose: Apply a stated aesthetic through the primitive layer, without hardcoding it into components and without losing contrast.
+scope: a stated aesthetic, a restyle, a brand change or a change of look
 trigger: manual, on a stated aesthetic, a restyle, a brand change or a request to change the look
 repeat: once per direction
 inputs: the direction in the requester's own words, the token file, the component tree, the rendered page in both themes

@@ -2,6 +2,12 @@
 
 A second language is not a pass over a finished text. It is a second column written at the same time as the first. Writing one language and translating it later costs several times more, because the layout was already built around the wrong lengths.
 
+## Declare the base
+
+Each product declares its languages and its base language in its rules file when it opens (Convention). The base language decides which column is authored first for prose; the longer language decides it for anything inside a fixed container (see Expansion below).
+
+Labels, sample content and demo data are written in the base language of the product they ship in. A demo whose content is in one language inside a product whose base is another reads as unfinished (Practice).
+
 ## Expansion
 
 Measured. Text translated from English into European languages grows, and the shorter the source string the more it grows (https://www.w3.org/International/articles/article-text-size).
@@ -24,6 +30,20 @@ Two working rules follow. For anything inside a fixed container, write the longe
 Both columns are written in the same sitting, by whoever is writing the copy, before the component is built. A string that exists in one language only is not finished.
 
 The practical form is a table or a resource file with one row per key and one column per language, and no row left half empty. Review reads the row, not the column.
+
+## What never translates
+
+- Identifiers: routes, ids, permission keys, design tokens, CSS classes, file names. They are English whatever the content language, and one identifier in another language is the worst outcome, because it cannot be found by the name every other identifier follows.
+- Brand and product names.
+- Strings kept in one language on purpose, such as a role line or a brand description that reads the same in every market. Each one is listed in the rules file, so it is not reported as a missing translation.
+
+## Store keys, not translated text
+
+The result of a translation call is never persisted. A column name saved as translated text stays frozen in the language it was created in and shows up in the wrong language for everyone else (Practice). Saved data holds the key, and the string is resolved at render time. A name the person typed is stored as typed and shown as typed.
+
+## Register
+
+Spanish, and any language with more than one form of address, needs its register chosen once per product (see the Spanish register option in [options.md](options.md)). The conversation in which the copy is written is not the product: a writer who speaks one regional form will slip into it while writing fast, so every Spanish string is re-read for register before it is called done (Practice).
 
 ## Spanish conventions
 
@@ -55,3 +75,4 @@ A label that is a fragment in English becomes a whole action in both columns. *F
 - No label clipped, truncated with an ellipsis or wrapped onto a third line.
 - No string built by concatenation anywhere in the copy layer.
 - Every key present in every language, with the count of missing keys at zero.
+- No translated string in persisted data, and no identifier outside English.

@@ -4,9 +4,15 @@ Every number this module reports is defined here: what it counts, how it is prod
 
 All densities are per thousand words of the text under work, counted on the prose only, with code blocks, tables and quoted material excluded from both the word count and the hit count.
 
+## The four signals
+
+Any rewrite reports four figures before and after, side by side: tell density, dash density, sentence length standard deviation, and word ratio. They are the ones cheap enough to compute on any text and hard to game without improving it. The other measures below are run when a protocol step asks for them.
+
+On a string set, such as the labels of one component, the densities are computed over the set as a whole, and sentence statistics are reported as not applicable when the set holds fewer than five sentences (Convention). The word ratio is always reported.
+
 ## Tell density
 
-What it counts: the hits of all six pattern classes in [tells.md](tells.md), plus flag-list words that failed the deletion test, divided by words, times one thousand.
+What it counts: the hits of every searchable pattern class in [tells.md](tells.md), plus flag-list words that failed the deletion test, divided by words, times one thousand.
 
 How: run each search, sum the counts, divide by the word count of the same text.
 
@@ -14,13 +20,13 @@ Mark: the flag list is Measured (319 excess style words in 2024 across more than
 
 Does not prove: authorship. See the note in [INDEX.md](INDEX.md).
 
-## Em dash density
+## Dash density
 
-What it counts: the em dash character, plus the double hyphen typed in its place, per thousand words.
+What it counts: the em dash character (U+2014), plus the double hyphen typed in its place, per thousand words. The ripgrep search is `\x{2014}|\s--\s`.
 
 Mark: Measured baseline, Convention cap. Published essays across literary criticism, journalism and technical writing were measured at a weighted mean of 3.23 em dashes per thousand words, with a median of 3.83 and a range from 0.33 to 17.12. Unconstrained model output in the same study ran far higher, for example 10.62 per thousand words for one model, and an explicit instruction to write prose without markdown moved that figure only to 9.10 (https://arxiv.org/html/2603.27006v1).
 
-The cap this module uses is 3.23 per thousand words, the human mean. Choosing the mean as a cap is a convention, not a finding: the human range is wide, and a text above the cap is a text to look at, not a text that is wrong. Where the house rule of a project forbids the em dash outright, the cap is zero and this measure becomes a search that must return no hits.
+The target follows the dash policy in [options.md](options.md). Under the default policy, none, the target is zero and this measure is a search that must return no hits. Under the cap policy the target is 3.23 per thousand words, the human mean; choosing the mean as a cap is a convention, not a finding, since the human range is wide and a text above the cap is a text to look at, not a text that is wrong.
 
 ## Pattern searches
 
@@ -62,7 +68,7 @@ Mark: the study is Measured. The ratio target is Convention: this module expects
 
 What it counts: claims carrying a number, a name or a date, against superlatives with no referent.
 
-How: list every sentence that asserts quality, scale or importance. Each one either carries a figure, a named thing or a date, or it is cut.
+How: [claim-check](protocols/claim-check.md) lists every sentence that asserts quality, scale or importance. Each one either carries a figure, a named thing or a date, or it is cut.
 
 Mark: Convention as a ratio, Measured as a direction, since objective language was one of the three variables that improved usability in the study above. The target is zero superlatives without a referent.
 

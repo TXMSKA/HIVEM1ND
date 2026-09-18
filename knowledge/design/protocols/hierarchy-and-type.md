@@ -1,5 +1,6 @@
 name: hierarchy-and-type
 purpose: Make one reading order obvious and keep every size, weight and measure on a named role.
+scope: headings, body copy, type scale, weights, measure and numerals
 trigger: manual, on any change to headings, body copy, type scale, weights, measure or numerals
 repeat: once per surface, and again whenever a role is added
 inputs: the type roles in the token file, the stylesheet, the rendered page at every breakpoint

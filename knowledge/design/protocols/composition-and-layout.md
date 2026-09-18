@@ -1,5 +1,6 @@
 name: composition-and-layout
 purpose: Give each reading moment one dominant object, on a shared grid, with space that means something.
+scope: page structure, grids, sections, spacing, cards and containers
 trigger: manual, on any change to page structure, grid, sections, spacing, cards or containers
 repeat: once per surface, and again after any section is added or removed
 inputs: the surface under work, the grid definition, the rendered page at every breakpoint
@@ -24,14 +25,14 @@ report: the dominant object per section, the column counts, the count of card le
    Result: the column span of every object is recorded, no object sits off the grid, and no wrapped heading or phrase reads across a gutter into the next column.
 
 4. Make the space mean something.
-   Task: put every gap on one of the three bands in [tokens.md](../tokens.md). Then find the large empty rectangles: an underfilled split, an orphaned third item, a sparse final row. Reflow or rebalance each one.
+   Task: put every gap on one of the three bands in [tokens.md](../tokens.md), with the density rules there: the tighter value first, no content band stretched to the viewport height, no padding stacked on a child margin. Then find the large empty rectangles: an underfilled split, an orphaned third item, a sparse final row, a grid with empty cells. Reflow or rebalance each one, or add content; never pad around it.
    Time: 20 minutes.
-   Result: the distinct gap values resolve to three bands, and every remaining empty area is recorded with the focal object it amplifies.
+   Result: the distinct gap values resolve to three bands, no section has a minimum height tied to the viewport without a pinned sequence that needs it, and every remaining empty area is recorded with the focal object it amplifies.
 
-5. Remove the containers that carry nothing.
-   Task: count the card levels and the borders. A page is one continuous canvas until a surface communicates selection, interaction, warning or a grouping that spacing cannot express. Replace decorative containers with spacing, alignment and a change in density.
+5. Give every container a job.
+   Task: list the cards, panels and dividers. A container stays when it groups one concept into a unit, marks selection, interaction or a warning, or holds a target: a card, a shadow or a divider grouping related content is a valid choice, per uniform connectedness in [ux-laws.md](../ux-laws.md). A container that holds another container of the same kind is flattened into spacing, and one that groups nothing is removed.
    Time: 20 minutes.
-   Result: the count of nested card levels is zero, the count of top-level cards is recorded, and no border remains whose removal would not change the meaning.
+   Result: one line per container naming the group or the state it marks, zero cards nested inside cards, and zero containers recorded as grouping nothing.
 
 6. Cut the repetition.
    Task: list what each section asks and answers. Combine sections that answer the same question, and keep one evidence home per claim. Repetition is rhythm only between true peers; between unequal findings it is template noise.
