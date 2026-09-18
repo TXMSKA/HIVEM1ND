@@ -176,8 +176,10 @@ One line per preference, with the date and the reason. The global file applies e
 
 ```
 knowledge/<module>/
-  INDEX.md                    the first level: categories and protocols, one line each
-  categories/<category>.md    the second level: subcategories with use cases, options and files to open
+  INDEX.md                    the first level: categories, a routing table to protocol steps, and protocols, one line each
+  essentials.md               the floor rules and default values, read first for a build from scratch or a whole pass
+  steps.md                    what each protocol step checks, in a few words, so a pass opens only the protocols it runs
+  categories/<category>.md    the second level: subcategories with use cases, a build recipe, options and files to open
   <topic>.md                  knowledge topics, any number, read when a category or protocol names them
   protocols/<name>.md         protocols shipped with the module
   features/<name>.md          commands installed with the module
@@ -207,12 +209,16 @@ Read this file, open only the category the work touches, and from there only the
 
 Applies when: a reset flow is added or changed, or a request mentions forgotten passwords.
 
+Build: answer the same way whether the account exists, email a single-use link that expires, invalidate every session on use.
+
 Options:
 - **Emailed single-use link**, the default.
 - **Code typed into the open session**, when the link would open on another device.
 
 Open: [authentication-and-session](../protocols/authentication-and-session.md), step 5; [sessions-and-credentials.md](../sessions-and-credentials.md), Reset.
 ```
+
+A pack serves two jobs. Building something new starts with `essentials.md` and the `Build:` line of each subcategory it touches, so the first version is right; auditing runs the protocols. Protocol times are ceilings, a step that does not apply ends as not applicable, and evidence the tool at hand cannot produce is recorded as such instead of blocking the pass.
 
 The index stays small on purpose. An agent reads it whole, opens the one category the work touches, and from there only the protocols and topic sections that subcategory names, instead of loading the module. A new subcategory is a section in its category file; a new category is a file plus one line in the index; a new check is a protocol named from the subcategories that need it. The protocol lines, with their scope, are also what the automatic run on task close matches against.
 

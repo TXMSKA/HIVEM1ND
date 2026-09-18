@@ -12,7 +12,7 @@ This file covers what goes inside an overview surface and how it is arranged. Th
 
 ## Cards
 
-- **Summarize, then link.** A card carries the summary and an action that opens the detail. Long text belongs on the detail screen.
+- **Summarize, then link.** A card carries the summary and an action that opens the detail. Long text belongs on the detail screen. A figure with no detail to open is not dressed as a linked card: it sits in the lead panel or in a plain row of figures, or, when it stays a card, its linked peers carry the hover reaction and a visible link word that it lacks.
 - **The whole card is the target when there is one action.** If the only thing a card does is open its detail, the entire card is clickable, not a link inside it, and the target then obeys the reach rules in [ux-laws.md](ux-laws.md). A card with two or more actions keeps them as separate controls and is not itself a link.
 - **Mark the container.** A soft shadow or a border, so the card reads as one grouped unit, per uniform connectedness in [ux-laws.md](ux-laws.md). Subtle is the point: the edge marks the group, it does not add depth theatre.
 
@@ -23,7 +23,7 @@ This file covers what goes inside an overview surface and how it is arranged. Th
 
 ## Charts
 
-- **Charts need their own navigation.** Switching the view and switching the date range are primary controls on the chart, visible without hunting, not buried in a global filter bar.
+- **Charts need their own navigation.** Switching the view and switching the date range are primary controls on the chart, visible without hunting, not buried in a global filter bar. A view is another reading of the same data: the chart or its table, one metric or another, absolute or relative. The table view is the default second view, because it is also the accessible alternative. Both switches are segmented controls of two to four options.
 - **A chart only where a relationship is faster to see than to read.** Values alone never earn a chart. Magnitude and rank become length on one scale, change over time becomes a line on a shared axis, composition becomes proportion.
 - **Colour encodes a series or a state, never decoration**, and every series has a second cue besides hue: a label at the end of the line, a pattern or a position.
 - **Data the reader is acting on does not animate for style.** A chart that draws itself every time it loads delays the reading it exists for.
@@ -38,6 +38,6 @@ This file covers what goes inside an overview surface and how it is arranged. Th
 - [ ] One concept per card, each card grouped by shadow or border, summarizing and linking to detail.
 - [ ] Whole card clickable when it has a single action.
 - [ ] Every figure drives a decision and carries its unit and period.
-- [ ] Charts expose a view switch and a date switch, and no series is told apart by colour alone.
+- [ ] Charts expose a view switch with a table view and a date switch, and no series is told apart by colour alone.
 - [ ] Section titles and labels consistent and scannable.
 - [ ] Every value comes from the tokens.

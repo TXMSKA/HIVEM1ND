@@ -3,7 +3,7 @@ purpose: Prove every object and every function checks the caller against the rec
 scope: routes, API handlers, server actions, jobs and queries that read an identifier or a role from the request
 trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again whenever an endpoint is added or a role is changed
-inputs: the route table, two accounts per role, a request client, the data store
+inputs: the route table, two accounts per role as allowed by [rules-of-engagement.md](../rules-of-engagement.md#test-accounts), a request client, the data store
 stop: any request returns another account's data, which is a P0 and is reported before the pass continues
 report: the endpoint table, the status code matrix of actor against endpoint, the property-level results, and the direct-request results for every server function
 
@@ -27,7 +27,7 @@ report: the endpoint table, the status code matrix of actor against endpoint, th
 4. Test property level authorization in both directions.
    Task: on every write, send fields the role must not set, such as a role, an owner identifier, a price or a verification flag. On every read, list the fields the response actually returns per role.
    Time: 40 minutes. Running application, with a read against the data store.
-   Result: the stored row read back after each write shows the extra field unchanged, taken from the store and not from the response. Plus the returned field list per role, with any field the view does not use, or no role should see, named as a finding. Writes accept an allowlist of fields; a handler passing the whole body to an update is a finding whatever the test showed.
+   Result: the stored row read back after each write shows the extra field unchanged, taken from the store and not from the response. Plus the returned field list per role, with any field the view does not use, or no role should see, named as a finding. Writes accept an allowlist of fields; a handler passing the whole body to an update is a finding whatever the test showed. The read direction also runs from the repository when no session is possible: a handler that serializes a whole stored record, a user row with its password hash, or a query selecting every column straight into the response is a finding, with a file and line reference.
 
 5. Put the check inside the action, not on the page in front of it.
    Task: server actions and API handlers are routed endpoints reachable by a request built by hand, whatever the page that renders the form decided. Call each one directly, without loading the page. Middleware is a convenience layer and has been bypassed through a trusted internal header, as recorded in [framework-traps.md](../framework-traps.md).

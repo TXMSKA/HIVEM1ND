@@ -20,12 +20,12 @@ report: the dominant object per section, the column counts, the count of card le
    Result: one line per section naming the variable and the reason, and a chart only where a relationship is faster to see than to read. Values alone never earn a chart.
 
 3. Put everything on the grid.
-   Task: place every object on the shared grid, normally twelve columns on desktop, six on tablet and four on mobile, with reading prose in six or seven desktop columns and evidence free to take the full width. Align each object to a shared edge, baseline or grid line.
-   Time: 30 minutes.
-   Result: the column span of every object is recorded, no object sits off the grid, and no wrapped heading or phrase reads across a gutter into the next column.
+   Task: place every object on the shared grid, normally twelve columns on desktop, six on tablet and four on mobile, with reading prose in six or seven desktop columns and evidence free to take the full width. Align each object to a shared edge, baseline or grid line. A surface built as one contained column records the column width and the edges its objects share instead.
+   Time: 30 minutes at most.
+   Result: the objects off the grid or off a shared edge are listed, with the count of those on it, and no wrapped heading or phrase reads across a gutter into the next column.
 
 4. Make the space mean something.
-   Task: put every gap on one of the three bands in [tokens.md](../tokens.md), with the density rules there: the tighter value first, no content band stretched to the viewport height, no padding stacked on a child margin. Then find the large empty rectangles: an underfilled split, an orphaned third item, a sparse final row, a grid with empty cells. Reflow or rebalance each one, or add content; never pad around it.
+   Task: put every gap on one of the three bands in [tokens.md](../tokens.md), with the density rules there: the tighter value first, no content band stretched to the viewport height, no padding stacked on a child margin. Then find the large empty rectangles: an underfilled split, an orphaned third item, a sparse final row, a grid with empty cells. Reflow or rebalance each one, or add content; never pad around it. A grid of a known count takes column counts that divide it at each breakpoint, or lets a lead item span; auto-fit columns are for open-ended collections, as in [containers](../categories/containers.md), Cards.
    Time: 20 minutes.
    Result: the distinct gap values resolve to three bands, no section has a minimum height tied to the viewport without a pinned sequence that needs it, and every remaining empty area is recorded with the focal object it amplifies.
 

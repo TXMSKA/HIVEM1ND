@@ -13,6 +13,8 @@ Options:
 - **Inline or a drawer** when the task needs neither interruption nor protected focus.
 - **A full-height sheet** in place of a long modal on phones.
 
+Build: A native `dialog` opened with `showModal()` and labelled by its title; focus on the first field, or on the safe action of a confirmation; Escape closes it natively, and a backdrop click closes it only through `closedby="any"` or a click handler on the dialog itself, since `showModal()` does not provide it; focus returns to the opener, or to the next logical control when the opener is gone, as in [overlays.md](../overlays.md), Modal.
+
 Open: [interface-states](../protocols/interface-states.md), step 6; [accessibility](../protocols/accessibility.md), step 2; [overlays.md](../overlays.md), Modal; [animation.md](../animation.md), Recipes.
 
 ## Drawer and sheet
@@ -24,6 +26,8 @@ Options:
 - **A drawer from the side** for a secondary task reached from several entry points.
 - **A bottom sheet** on phones in place of a dropdown or a modal.
 - **A draggable sheet** that follows the finger and dismisses on a flick.
+
+Build: A panel at its edge, translated by 100 percent of its size when closed, entering on the sheet curve in up to 500 milliseconds, with modal focus handling when it blocks the page.
 
 Open: [overlays.md](../overlays.md), Drawer and sheet; [motion](../protocols/motion.md), step 4.
 
@@ -37,6 +41,8 @@ Options:
 - **A portal** when an ancestor clips overflow.
 - **A sheet** on phones when the content is more than a few items.
 
+Build: A panel anchored to its trigger and mounted outside any clipping ancestor, through the `popover` attribute or a portal, flipping to the side with room; Escape closes it and returns focus.
+
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 4; [overlays.md](../overlays.md), Popover and menu.
 
 ## Toast
@@ -48,6 +54,8 @@ Options:
 - **A toast** for a result that needs no answer, with an undo when the action is reversible.
 - **Inline at the field** for form errors.
 - **A banner in the page** for a persistent condition, such as being offline.
+
+Build: A status region in the page from the first load, toasts appended inside it at one bottom corner, 6 seconds each, paused on hover, focus and a hidden tab, a close button, and an undo when the action can be reversed.
 
 Open: [overlays.md](../overlays.md), Toast; [interface-states](../protocols/interface-states.md), step 5.
 
@@ -61,6 +69,8 @@ Options:
 - **Text on the page** when the content is needed to proceed.
 - **A first-use hint** that points at a new feature once and never returns after dismissal.
 
+Build: Shown on hover and on focus of its trigger after a short delay, linked by `aria-describedby`, holding no control, hidden by Escape, with the same words reachable another way on touch.
+
 Open: [overlays.md](../overlays.md), Tooltip; [animation.md](../animation.md), Recipes; [states.md](../states.md), Onboarding.
 
 ## Banners and consent
@@ -72,5 +82,7 @@ Options:
 - **No banner** when there is nothing to consent to.
 - **A consent banner** that preselects the most private choice and never covers the primary action.
 - **An announcement bar** that can be dismissed and stays dismissed.
+
+Build: Only when there is something to consent to or announce: a region at the page edge that never covers the primary action, the most private choice preselected, and the dismissal remembered.
 
 Open: [overlays.md](../overlays.md), Banners and consent; [site-polish.md](../site-polish.md).

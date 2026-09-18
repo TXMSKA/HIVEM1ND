@@ -3,21 +3,21 @@ purpose: Prove a session cannot be forged, fixed, replayed or kept alive after l
 scope: login, registration, password reset, invitation and setup links, session cookies, token issue and refresh, logout and second factor
 trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again after any change to the session store, the cookie attributes, the credential storage or the reset flow
-inputs: test accounts created for the pass, a request client that shows headers, the session store, the source of the credential handling
+inputs: test accounts as allowed by [rules-of-engagement.md](../rules-of-engagement.md#test-accounts), a request client that shows headers, the session store, the source of the credential handling
 stop: a session identifier survives logout or does not change at login, which is reported before the pass continues
 report: the cookie attribute line as served, the identifier before and after login, the replay results, the credential storage parameters, the throttling results, the link results, the enumeration comparison, and the token lifetimes
 
 ## Steps
 
 1. Read the cookie exactly as it is served.
-   Task: `curl -sI https://<host>/<login-path>` and read every `Set-Cookie` line, on the login response and on the response that establishes the session.
+   Task: `curl -sI https://<host>/<login-path>`, written `curl.exe` in Windows PowerShell, and read every `Set-Cookie` line, on the login response and on the response that establishes the session.
    Time: 15 minutes. Running application.
    Result: the verbatim attribute line per cookie. The session cookie carries `HttpOnly`, `Secure`, an explicit `SameSite`, a `Path` and an expiry, and is named with the `__Host-` prefix, which the browser only accepts with `Secure` set, `Path=/` and no `Domain` attribute, and only from a secure origin. The attribute values are in [sessions-and-credentials.md](../sessions-and-credentials.md).
 
 2. Prove the identifier rotates and dies.
-   Task: record the session identifier before authenticating, authenticate, record it again. Change the password and record it a third time. Then log out and replay the pre-logout identifier against an authenticated endpoint. Read the idle timeout and the absolute timeout from the configuration, and let a session pass each one.
-   Time: 30 minutes. Running application, with a read against the session store.
-   Result: the identifier differs after login and again after the password change, every other session of that account is revoked by the change, the replayed identifier returns 401, and the session row is gone from the store or marked revoked. Both timeouts are recorded in seconds, and a session past each one returns 401. A logout that only clears the cookie leaves the session alive and is a finding.
+   Task: first read the repository, on every pass whether or not a login is possible: find the logout route and what it does to the server-side session, and the idle timeout and the absolute timeout checked on each request, with file references. Then record the session identifier before authenticating, authenticate, record it again. Change the password and record it a third time. Then log out and replay the pre-logout identifier against an authenticated endpoint, and let a session pass each timeout.
+   Time: 30 minutes. Repository, plus running application with a read against the session store.
+   Result: the repository read names a logout route that deletes or revokes the server-side session, and both timeouts in seconds; any one of the three absent is a finding. A missing logout route also records the replay as not run, with that reason, and a missing timeout records its expiry test as not run. At runtime, the identifier differs after login and again after the password change, every other session of that account is revoked by the change, the replayed identifier returns 401, and the session row is gone from the store or marked revoked. A session past each timeout returns 401. A logout that only clears the cookie leaves the session alive and is a finding. When no login is possible, the repository read stands alone and the runtime part is recorded as not run.
 
 3. Keep the session out of places that leak.
    Task: search the source for a session identifier or a token written to a URL, a log statement or `localStorage`, and read the browser storage and the address bar after logging in.

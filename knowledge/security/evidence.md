@@ -8,6 +8,27 @@ The command exactly as executed, the directory it ran in, and the output it prod
 
 Every command carries one mark: **repository** when it reads files and needs no service, or **running application** when it needs the application up at a known address. A running-application command also records the address and the build it hit, because the same command against a stale deployment is evidence about the stale deployment.
 
+## Time and proportion
+
+The time on a protocol step is a ceiling, not a budget. A step whose subject does not exist, such as payments in an application that takes none, ends at once as not applicable with the reason. A small application gets a short pass: the evidence required is the same, the volume of it is proportional to the surface.
+
+## Commands on any shell
+
+Commands in the protocols are written once and run on a Unix shell and on Windows PowerShell. Where they differ:
+
+| Need | Unix shell | Windows PowerShell |
+| --- | --- | --- |
+| A request client | `curl` | `curl.exe`, since `curl` can be an alias of another command |
+| Discard output | `-o /dev/null` | `-o NUL` |
+| Search tracked files | `git grep -n -F "<text>"` | the same |
+| Search ignored files, such as build output | `git grep --no-index -l -F "<text>" -- <dirs>` | the same |
+| List tracked environment files | `git ls-files ":(glob)**/.env*"` | the same |
+| Search the history | `git log --all -p -G "<pattern>"` | the same |
+
+On Windows the request client is called as `curl.exe` from every shell, a Unix-style shell such as Git Bash included, so the same line works wherever the pass runs.
+
+A missing tool never blocks a pass. The step records which tool was missing and uses the fallback the protocol names, such as `git grep` in place of ripgrep or a secret scanner; where no fallback can produce the evidence, the step ends as not verifiable with the tool at hand.
+
 ## Status code
 
 The request and the response status, recorded as one line: the actor, the method, the path, the identifier used, and the code returned. Authorization evidence is a table of these, one row per role against one endpoint, because a single passing request proves one path and the failure being looked for is the path nobody tried.
@@ -16,7 +37,7 @@ A 2xx where a denial was expected is the finding. A 500 is also a finding: it me
 
 ## Version comparison
 
-The installed version, the fixed version from the advisory, and the advisory identifier, on one line. The installed version is read from the lockfile or from the running process, never from the manifest range, because a range is an intention and the lockfile is what shipped.
+The installed version, the fixed version from the advisory, and the advisory identifier, on one line. The installed version is read from the lockfile or from the running process, never from the manifest range, because a range is an intention and the lockfile is what shipped. Where no lockfile exists, the manifest is the only record: an exact pin is read as the version and a range as the lowest version it admits, the line is marked as read from the manifest, and the missing lockfile is a finding of its own.
 
 A version check against a number written in a document is worth nothing once the document is a month old. The comparison is made against the vendor advisory fetched in the same pass, and the advisory URL is recorded beside the numbers.
 
@@ -53,6 +74,6 @@ Findings are ranked so that a long list stays usable. The test for the boundary 
 | P2 | Weakens a defence without crossing a boundary on its own | In the next pass |
 | P3 | Hardening with no path to impact found | When there is time |
 
-Every check ends in one verdict: pass, fail, or not applicable with the reason. Nothing ships with an open fail. A P2 or P3 left for a later pass is a risk accepted, recorded as a decision with a name against it, as below.
+Every check ends in one verdict: pass, fail, not applicable with the reason, not run with the reason, or not verifiable with the tool at hand. The last one names the tool that was missing, what a person must check and where, and the pass continues. Nothing ships with an open fail. A P2 or P3 left for a later pass is a risk accepted, recorded as a decision with a name against it, as below.
 
 Every finding carries the location, the evidence that proves it, the impact in one line, the fix, and the evidence that would prove it fixed. A finding without a fix is an observation, and a list of observations is not a report. A finding whose fix cannot be verified by the same kind of artifact that found it is incomplete.

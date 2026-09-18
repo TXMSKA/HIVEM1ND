@@ -46,4 +46,4 @@ A first impression in one line, two or three specific strengths, three to five p
 
 ## Fresh eyes
 
-The final look comes from a reviewer who did not build the surface: a separate agent, or the same one the next day. Its verdict is one of four: recapture when the evidence was bad, rebuild when the result failed wholesale, fix with a list of at most eight items, or ship. A fix claimed but not visible in the new capture is unresolved, and a round that resolves nothing ends the loop.
+The final look comes from a reviewer who did not build the surface: a separate agent, or the same one the next day. A single agent with neither records the verdict as not verifiable with the tool at hand and leaves it to a person. Its verdict is one of four: recapture when the evidence was bad, rebuild when the result failed wholesale, fix with a list of at most eight items, or ship. A fix claimed but not visible in the new capture is unresolved, and a round that resolves nothing ends the loop.

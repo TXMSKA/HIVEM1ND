@@ -4,13 +4,16 @@ Where an icon comes from and how it is embedded, and how images, video and fonts
 
 ## Icons
 
-- **Every functional icon is fetched, never drawn.** A functional icon is a rail entry, a menu button, a control or a status glyph. It comes from a published icon set through a search and fetch tool or the set's own files. A path drawn from memory produces the shape that was recalled, not the right one, and it is slower.
+- **Every functional icon comes from one published open icon set, never drawn.** A functional icon is a rail entry, a menu button, a control or a status glyph. It is taken as SVG from the set's own files: a copy already in the project, the set's published package or repository, or an icon search tool when one is available. A path drawn from memory produces the shape that was recalled, not the right one, and it is slower.
+- **The licence is respected.** The set's licence is read before the first icon is copied. Permissive code licences such as MIT, ISC or Apache 2.0 ask for the copyright and licence notice to travel with the copied files: a licence file in the icon folder, or a comment in the file that holds the icons. A Creative Commons attribution licence asks for visible credit with a link to the licence, on a credits or about page. A set with no licence, or one that forbids the use, is not used.
+- **Normalized on the way in.** Every glyph shares one stroke width and one grid, sized from the icon scale, 1.25em beside text and 20 or 24 CSS pixels in controls, and drawn in `currentColor`.
+- **A text label when no set can be fetched.** When no set is in the project and none can be downloaded, each icon is replaced by its word. Fetching a set counts as a download: when the rules of the run require an approval before any download and nobody is there to give it, the set cannot be fetched, and the record says so. The replacement is a visible label, or a text button such as "Delete" or "Close". Chevrons for sorting and disclosure may come from the set or from a text character hidden from assistive technology, with the state carried by an attribute such as `aria-sort` or `aria-expanded`.
 - **One set per surface.** Mixing sets on one surface is a defect, not a style: stroke widths, corner treatments and optical sizes stop agreeing. When a needed glyph is missing from the set, the closest glyph of the same set wins over a glyph from another.
 - **Inline SVG in the source.** No hardcoded fill or stroke colour, and no width or height attributes: the icon inherits the current text colour and takes its size from the surrounding CSS, which is what lets a theme move it.
 - **No icon runtime.** A package that ships every icon to the browser, or a runtime that fetches icons on load, is never added. The SVG lives in the source: no runtime cost and no extra origin in the content security policy.
 - **Brand marks are drawings, not icons.** A logo, a wordmark or a product mark is the only hand-drawn path. When the artwork exists, the mark is traced from it rather than typeset, and when a brand sheet and the artwork disagree on a value, the artwork wins. A package shared by several brands carries no mark at all.
 - **An icon that is the only content of a control has an accessible name.** An icon beside a text label is decorative and hidden from assistive technology.
-- **Emoji and stray Unicode glyphs never stand in for an icon set.**
+- **Emoji never stand in for an icon set**, and neither do decorative Unicode glyphs such as a heavy check or a cross used as a close button.
 
 ## Choosing whether to add icons
 

@@ -2,7 +2,11 @@
 
 A default is a treatment that arrives without a decision. Every item here is legitimate for some brief. The failure is not the treatment, it is reaching for it while the axis was free. When the brief pins a direction, the brief wins and the item is a choice; when the brief is silent, the item is a tell. The test for the whole surface: if the look could be guessed from the product category alone, it is a default.
 
-Recognising one means rewriting the element, not softening it.
+Recognising one means rewriting the element, not softening it, in a build, a target that names it, or a direction.
+
+## In a refine
+
+A refine keeps the current look, so the defaults here are sorted by one question: does the default break a floor rule in [essentials.md](essentials.md), such as contrast, visible focus, reflow at 320 CSS pixels, target size or motion safety. When it does, the refine fixes the floor with the smallest change that meets it, such as darkening the gradient stop behind a heading or adding a reduced motion block, and leaves the treatment in place. When it does not, the default is the look itself: a centred hero with identical cards, a decorative gradient, a system display face, a palette cluster or template chrome is reported as open with its fix and waits for a yes. Moving literal values onto tokens changes no pixel and stays in the pass.
 
 ## Template chrome
 
@@ -16,7 +20,7 @@ These carry no information and appear whatever the subject.
 - Step labels that are numbers alone, where a verb would say what happens.
 - Monospace used as a costume for technical subject matter rather than for code, commands, paths, identifiers or measurement.
 - Emoji or stray Unicode glyphs standing in for an icon set.
-- A badge, pill or capsule around ordinary metadata.
+- A badge, pill or capsule around ordinary metadata. A status that changes what the person does next, such as paid or overdue, is state rather than metadata: it is shown as its word in the status colour, with a second cue from [data-display](categories/data-display.md), Live and changing values.
 - Version or build labels, scroll cues, rotated vertical text and decorative crosshair lines on a page that is not about any of them.
 
 ## Page scaffolds
@@ -54,7 +58,7 @@ Generated interfaces cluster. Landing on one of these by accident means the axis
 
 ## Searches
 
-Run these over the component tree. Each should return no hits, or each hit should carry a line reference and the sentence in the brief that earns it.
+Run these over the stylesheets, markup and scripts of the components, with the token file excluded, in the forms given in [evidence.md](evidence.md), Portable commands. Each should return no hits, or each hit should carry a line reference and the sentence in the brief that earns it. The colour search runs over stylesheets and `style` attributes only, because an anchor such as `href="#tasks"` or an id selector matches a hex pattern. When the tokens live in a `:root` block at the top of the only stylesheet, that block is the token file: the searches run from the line after it, and the start line is recorded with the result. The `theme-color` meta in the document head is the one place a colour value may sit outside the token file, one per scheme, equal to the page surface token.
 
 | Search | Finds |
 | --- | --- |
@@ -65,8 +69,9 @@ Run these over the component tree. Each should return no hits, or each hit shoul
 | `font-family:[^;]*mono` | Monospace outside code and measurement |
 | `linear-gradient|radial-gradient|repeating-linear-gradient` | Decorative gradients, stripes and gradient text |
 | `feTurbulence` | Fake grain and paper texture |
-| `#[0-9a-fA-F]{3,8}|rgba?\(` | Colour written outside the token file |
-| `border-radius` | Radius set outside the shape scale |
+| `#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|oklch\(` in stylesheets | Colour written outside the token file |
+| `border-radius:\s*[0-9]` | Radius written as a literal instead of a shape token |
+| `font-size:\s*[0-9]` | Font size written as a literal instead of a type role |
 | `box-shadow:[^;]*0 0 ` | Zero offset halos |
 | `min-height:\s*100s?d?vh` | Content bands stretched to the viewport |
 | `transition:\s*all` | Unlisted transition properties |

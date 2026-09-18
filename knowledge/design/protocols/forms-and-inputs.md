@@ -15,22 +15,22 @@ report: the control table, the press count for the slowest field, the transcript
    Result: the control table recorded, one row per field, with no dropdown holding fewer than five options.
 
 2. Label without helper text.
-   Task: give every field a visible label above it, move any format the person must know before typing into the label, and remove the helper sentences under fields and headings, moving each constraint into the error or into a live indicator.
+   Task: give every field a visible label above it, move any format the person must know before typing into the label, and remove the helper sentences under fields and headings, moving each constraint into the error or into a live indicator. Labels are structural words: this pass writes them, from the placeholder or the field's purpose when nothing better exists, and flags them for the copy pass.
    Time: 15 minutes.
-   Result: every field has a programmatic label, the search for placeholder-only fields returns zero hits, and no helper sentence remains under a field.
+   Result: every field has a visible label tied to it, no field is named by its placeholder alone, and no helper sentence remains under a field.
 
 3. Count the presses on the slowest field.
    Task: reach a date thirty years back and the last item of the longest list, by pointer and by keyboard, and count the presses. Make dates typeable in the local order with a year jump, and put a filter field on every list of about ten items or more.
-   Time: 20 minutes.
+   Time: 20 minutes; a form with no date and no list of ten or more ends this step as not applicable.
    Result: the press count per field recorded, a typed date accepted in the local order, and every list of ten or more rows narrowing as the person types, with a no results state.
 
 4. Keep menus open, anchored and visible.
    Task: open every menu near the bottom edge of the viewport and at the narrow width, and pick several items in each multi-select.
-   Time: 15 minutes.
+   Time: 15 minutes; a form with no custom menu ends this step as not applicable.
    Result: a screenshot of each menu near the bottom edge, opened upward or fully visible and unclipped by any ancestor; each multi-select stays open, counts the selection and closes with Done.
 
 5. Give every disabled control its reason.
-   Task: find every disabled control and write inline what is missing and what unlocks it, with the unblocking action one step away. A form that keeps its submit enabled instead lets the incomplete submission run and surfaces the validation.
+   Task: find every disabled control and write inline what is missing and what unlocks it, with the unblocking action one step away; the reason is a structural word this pass writes and flags for copy. A form that keeps its submit enabled instead lets the incomplete submission run and surfaces the validation, which is the simpler fix when the reasons are several.
    Time: 15 minutes.
    Result: the count of disabled controls without an inline reason is zero, and a transcript shows the reason moving focus to the missing field.
 

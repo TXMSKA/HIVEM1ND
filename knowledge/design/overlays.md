@@ -17,8 +17,9 @@ A modal for a task that needs neither interruption nor protected focus is a defa
 
 ## Modal
 
-- Focus moves into the modal on open, stays trapped inside it, and returns to the control that opened it on close.
-- Escape closes it, and so does a click on the backdrop unless closing would lose entered data.
+- Focus moves into the modal on open, stays trapped inside it, and returns to the control that opened it on close. When that control no longer exists, such as the delete button of a row just deleted, focus goes to the next logical control: the same control in the next row, else in the previous row, else the heading or the result summary of the list.
+- Built on the native `dialog` element opened with `showModal()`, which gives the backdrop, the inert page and Escape; a custom modal adds each of them by hand.
+- Escape closes it, and so does a click on the backdrop unless closing would lose entered data. `showModal()` does not close on a backdrop click: the dialog gets `closedby="any"`, or a click handler on the dialog itself that closes it when the click lands on the dialog element rather than on its content, with the handler kept for browsers that ignore the attribute.
 - The backdrop dims and pushes the page back; a stacked modal dims its parent in turn.
 - The title names what is happening, and a destructive confirmation names the object and the consequence, with the destructive action labelled by its verb.
 - The page behind does not scroll while it is open.
@@ -41,7 +42,8 @@ A modal for a task that needs neither interruption nor protected focus is a defa
 ## Toast
 
 - It confirms, it does not ask. Anything that needs a decision is not a toast.
-- It appears in one consistent corner, stacks without covering the primary action, and is announced through a polite live region.
+- It appears in one consistent corner, stacks without covering the primary action, and is announced through a live region with the status role that is already in the page before the toast arrives.
+- It is a layer, not a section, so it may take an inverse surface, dark on a light page and light on a dark one, as its own semantic pair measured in each theme.
 - Its timer pauses while the tab is hidden and while the pointer or focus rests on it, and it can be dismissed by hand.
 - A toast that carries an undo stays long enough to use it.
 - Errors in a form are shown inline at the field, not as a toast.

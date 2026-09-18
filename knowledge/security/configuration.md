@@ -39,3 +39,5 @@ A secret scanner runs in the pre-commit hook and in continuous integration, and 
 ## Logs
 
 Known variable names and anything shaped like a token are redacted before they reach a log line or an error report.
+
+A development mail transport that prints or stores messages instead of sending them carries reset and verification links, so it writes to its own sink and never through the application logger, whose output a log search must be able to show free of tokens.

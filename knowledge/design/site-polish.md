@@ -5,7 +5,7 @@ Small additions that separate a site that works from a site that feels finished.
 ## Build first
 
 - **Site search.** Once navigation alone cannot reach a given page in two steps.
-- **Mobile menu.** Non-negotiable on any responsive site: it is the whole navigation on most sessions.
+- **Mobile menu.** On any responsive site whose destinations do not fit one row at 320 CSS pixels, usually past four short items: it is the whole navigation on most sessions. Four or fewer short destinations stay visible, on a second row below the brand when needed, because core functions are never hidden on a phone.
 - **Hover states.** Every interactive element reacts to the pointer, and the reaction is the same across the site. Measured in [colour-and-theming](protocols/colour-and-theming.md).
 - **Form success state.** A real confirmation after a submission, never a silent reset. The person must know the message was sent.
 - **Form error state.** Inline next to the field that failed, with the reason and the fix, and focus moved to the first failure. Proved in [forms-and-inputs](protocols/forms-and-inputs.md).
@@ -37,4 +37,4 @@ Small additions that separate a site that works from a site that feels finished.
 
 ## Usually not needed
 
-- **Light and dark toggle.** On a site that is dark or light by design, a toggle adds a second full theme to maintain for a preference the design already made. Build it only when the product explicitly requires both.
+- **Light and dark toggle.** On a site that ships one theme, a toggle adds a second full theme to maintain for a preference the design already made. When the site ships both, the choice follows the one rule in [tokens.md](tokens.md), Themes.

@@ -4,6 +4,8 @@ Rules for text read as a page rather than in passing: marketing and product page
 
 On these surfaces the promotional words of the flag list in [tells.md](tells.md) are exactly the ones doing no work. Concise text measured 58 percent higher on usability than a promotional control, objective language 27 percent higher, and concise, scannable and objective together 124 percent higher (https://www.nngroup.com/articles/concise-scannable-and-objective-how-to-write-for-the-web/). That is why the default tone here is Plain (see [options.md](options.md)).
 
+Page copy handed over as a file is a copy deck: one slot per line, the slot name, a colon and the text, in page order (*Headline:*, *Subheadline:*, *Button:*). Slot names are labels for the builder, not inline-header lists, and are not counted as text (Convention).
+
 ## Hero
 
 - The first sentence names what the product is and who it is for, in plain nouns. Nothing comes before it.
@@ -22,21 +24,23 @@ On these surfaces the promotional words of the flag list in [tells.md](tells.md)
 
 - Each plan says who it is for in its name or its first line.
 - Price, billing period, currency and taxes are explicit, in the same unit on every plan (Convention).
-- What a plan excludes is stated as plainly as what it includes.
+- What a plan excludes is stated as plainly as what it includes. An inclusion the brief does not settle is a missing fact, not a guess.
+- A button that charges states the price and the period next to it, or on the step it opens before any charge.
 - No *starting at* that hides the price most people pay.
 - Result to record: count of plans missing a period, a currency or a stated limit.
 
 ## Calls to action
 
 - A verb and an object: *Start a free trial*, *Book a call*. Never *Learn more* when a specific destination exists.
-- The label matches the heading of the page it leads to.
+- The label matches the heading of the page it leads to. A button with no destination, such as one with no handler, keeps its label, and the missing destination is listed as an open item.
 - One primary call per view (Convention).
 - Result to record: count of calls to action without an object, and count whose label differs from the destination heading.
 
 ## Proof and claims
 
 - Every claim carries a number, a name or a date. A claim that cannot carry one is cut, not softened.
-- Nothing is invented to fill a gap: no testimonial, figure, customer logo, screenshot or quote that does not exist. A missing asset stays visible as a gap until the real one arrives (Practice).
+- Nothing is invented to fill a gap: no testimonial, figure, customer logo, screenshot or quote that does not exist. A missing asset stays visible as a gap until the real one arrives, written as the missing-fact marker in [essentials.md](essentials.md#missing-facts) (Practice).
+- A testimonial or a named quote already on the page is not the pass's to judge. It stays word for word and is listed for the owner when no record of it is at hand (see [boundaries.md](boundaries.md)).
 - A claim agrees with the legal and policy pages of the same site (see [boundaries.md](boundaries.md)).
 - A name that a contract or a client relationship keeps private is never used as proof.
 - Result to record: claims with a referent against claims without, and the count of invented items, which must be zero. [claim-check](protocols/claim-check.md) produces both.

@@ -12,10 +12,10 @@ report: the role table, the measure per breakpoint, the largest computed font si
 1. Assign roles.
    Task: map every piece of text on the surface to one of the named roles in [tokens.md](../tokens.md). Text that fits no role either takes the closest one or justifies a new role that more than one place will use.
    Time: 20 minutes.
-   Result: a table of text blocks against roles with no empty cells, and the count of distinct font sizes in the stylesheet equal to the count of roles.
+   Result: a table of text blocks against roles with no empty cells, and the count of distinct font sizes rendered on visible text no higher than the count of roles. Two roles may share a size and differ by weight or colour; a visually hidden heading is left out of the count.
 
 2. Remove the free sizes.
-   Task: search the component tree for font size, font weight and line height written outside the role definitions, and move each hit onto a role.
+   Task: search the component stylesheets for `font-(size|weight):\s*[0-9]|line-height:\s*[0-9]` outside the role definitions, and move each hit onto a role.
    Time: 15 minutes.
    Result: the search returns zero hits.
 
@@ -25,9 +25,9 @@ report: the role table, the measure per breakpoint, the largest computed font si
    Result: every body block computes between 65 and 75 characters, and none exceeds 80. Serif body text may sit at the top of the range and carries more line height than the sans equivalent.
 
 4. Cap the display and the tracking.
-   Task: read the computed font size of the largest text and the computed letter spacing of every element.
+   Task: read the computed font size of the largest text and the computed letter spacing of every element. On a Persuade section, also read the computed face, weight and letter spacing of the display role against the body role.
    Time: 10 minutes.
-   Result: the largest computed font size is at or below 6rem, and no computed letter spacing is below -0.04em. Negative tracking below that floor collides glyphs at the sizes where it is usually applied.
+   Result: the largest computed font size is at or below 6rem, and no computed letter spacing is below -0.04em. Negative tracking below that floor collides glyphs at the sizes where it is usually applied. On a Persuade section the display role differs from body by more than size, as in [essentials.md](../essentials.md): its own face, or weight 700 or more with tracking near -0.02em. A display role that differs only by size, line height or the browser's default heading weight is a finding.
 
 5. Set the numerals.
    Task: find every place where numbers are compared down a column or across peers, and set tabular numerals on it.

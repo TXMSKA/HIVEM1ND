@@ -27,12 +27,12 @@ report: the empty-catch search, the response body on each error class, the secur
 4. Record the events that matter.
    Task: confirm the sink actually holds an entry for each of: failed authentication, successful authentication, password change, access denial, input validation failure, privilege change, administrative action, and rate limit engagement. The current list names alerting alongside logging, so an event with no rule attached is only half the control.
    Time: 40 minutes. Running application, with a read of the log sink.
-   Result: one line per event type quoting the entry as stored, with a timestamp, the actor, the source address and the outcome, enough to reconstruct an incident from the sink alone. A missing event type is a finding.
+   Result: one line per event type quoting the entry as stored, with a timestamp, the actor, the source address and the outcome, enough to reconstruct an incident from the sink alone. Where the only actor is an address a stranger typed, a keyed hash of it counts as the actor. A missing event type is a finding.
 
 5. Keep secrets and personal data out of the records.
    Task: search the log sink and the log-writing code for tokens, passwords, keys, card numbers, full personal data, full request bodies and identity documents. Redaction happens at the point of writing, not in a later filter.
    Time: 30 minutes. Repository, plus a search over the sink.
-   Result: zero hits for each pattern searched, with the search expressions recorded. A request body logged in full at any level is a finding, because the level changes and the sink does not.
+   Result: zero hits for each pattern searched, with the search expressions recorded. A request body logged in full at any level is a finding, because the level changes and the sink does not. Mail captured in development, which carries reset and verification links, goes to its own sink and never through the application logger.
 
 6. Make an attack raise something.
    Task: run one of the bounded tests from an earlier protocol, such as the failed login sequence or the rate limit test, and watch whether an alert fires and where it lands.

@@ -3,9 +3,9 @@ purpose: Apply a stated aesthetic through the primitive layer, without hardcodin
 scope: a stated aesthetic, a restyle, a brand change or a change of look
 trigger: manual, on a stated aesthetic, a restyle, a brand change or a request to change the look
 repeat: once per direction
-inputs: the direction in the requester's own words, the token file, the component tree, the rendered page in both themes
+inputs: the direction in the requester's own words, the token file, the component tree, the rendered page in each theme that ships
 stop: the direction cannot be reached without dropping a pair below its contrast target, in which case the direction is adjusted and the requester is told which part changed and why
-report: the direction in one sentence, the primitive set before and after, the files the diff touched, and the contrast tables recomputed in both themes
+report: the direction in one sentence, the primitive set before and after, the files the diff touched, and the contrast tables recomputed in each theme that ships
 
 ## Steps
 
@@ -30,7 +30,7 @@ report: the direction in one sentence, the primitive set before and after, the f
    Result: the diff touches only the files listed in step 2, and the search for colour literals, font families and radius values in the component tree returns zero hits. A component that had to change is recorded as a finding against the token layer, not absorbed into the pass.
 
 5. Recompute the contrast.
-   Task: rebuild the contrast tables for both themes after the re-point, as in [colour-and-theming](colour-and-theming.md).
+   Task: rebuild the contrast tables for each theme that ships after the re-point, as in [colour-and-theming](colour-and-theming.md).
    Time: 20 minutes.
    Result: both tables meeting 4.5:1 for body text, 3:1 for large text, and 3:1 for non-text and the focus ring. A direction that lowers any pair below its target is adjusted at the primitive, never shipped and never excused by the aesthetic.
 
@@ -42,4 +42,4 @@ report: the direction in one sentence, the primitive set before and after, the f
 7. Spend the direction in one place.
    Task: pick the single element that carries the new world, and let everything around it stay quiet. A direction applied evenly across every surface reads as a skin; applied to one element it reads as a decision.
    Time: 20 minutes.
-   Result: a before and after screenshot pair of the first viewport in both themes, with the one carrying element named, and the count of elements that took the direction and were returned to neutral.
+   Result: a before and after screenshot pair of the first viewport in each theme that ships, with the one carrying element named, and the count of elements that took the direction and were returned to neutral.

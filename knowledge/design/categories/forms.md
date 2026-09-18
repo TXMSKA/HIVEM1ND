@@ -1,6 +1,6 @@
 # Forms
 
-Fields combined into a task: sign-up, checkout, contact, settings, editors. The controls themselves are in [inputs-and-controls.md](inputs-and-controls.md).
+Fields combined into a task: sign-up, checkout, contact, settings, editors. The controls themselves are in the [inputs-and-controls category](inputs-and-controls.md).
 
 ## Layout
 
@@ -12,6 +12,8 @@ Options:
 - **Paired fields on one row** only when they are read as one thing, such as a first and a last name.
 - **Grouped sections with short headings** for long forms, with more space between groups than inside them.
 - **Inline editing** instead of a form in a modal when the person is changing one value in place.
+
+Build: One column about 40rem wide, related fields in a `fieldset` with a `legend` as its heading, more space between groups than inside them, the primary action last and aligned with the fields.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 1; [forms-and-controls.md](../forms-and-controls.md), Layout and flow; [ux-laws.md](../ux-laws.md), proximity.
 
@@ -25,6 +27,8 @@ Options:
 - **Live indicator while typing** for rules the person works toward, such as password strength.
 - **Error summary at the top** in addition to inline errors, for long forms.
 
+Build: Validate on blur and clear on input once valid. The error sits under its field, tied by `aria-describedby` with `aria-invalid` set, and carries a cue besides colour, such as a word or glyph before the message and a heavier border. On submit, focus moves to the first error and typed values stay.
+
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 6; [forms-and-controls.md](../forms-and-controls.md), Validation and submission; [states.md](../states.md), Error.
 
 ## Submission and success
@@ -37,6 +41,8 @@ Options:
 - **Disabled submit with an inline reason** that names what is missing and moves focus to it; valid, never without the reason.
 - **Success state in place** for small forms; **a page of its own** after a conversion.
 
+Build: Keep submit enabled and validate on press. While sending, keep the label, add a spinner, set `aria-busy` and ignore repeats. End in a success state in place that says what happened and what comes next, focused or announced in a status region.
+
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), steps 5 and 7; [states.md](../states.md), Success, Disabled.
 
 ## Multi step
@@ -47,6 +53,8 @@ Options:
 
 - **One page** when the steps are not separate decisions.
 - **Steps with progress** when they are: the current step and the count shown, a back route that keeps what was entered, verbs as step names, saved progress when losing it would hurt.
+
+Build: Step names as verbs, the current step and the count visible, Back keeping every value, progress saved when losing it would hurt.
 
 Open: [forms-and-controls.md](../forms-and-controls.md), Layout and flow; [ux-laws.md](../ux-laws.md), goal-gradient and Zeigarnik.
 
@@ -59,5 +67,7 @@ Options:
 - **Minimum fields now, the rest later**, with smart defaults.
 - **Sign-in that the browser can fill**: autocomplete tokens on the username and password, and a visibility toggle on the password.
 - **First use inside the real product** rather than a separate tutorial.
+
+Build: `autocomplete` tokens `username` or `email` and `current-password` or `new-password`, a show-password button with `aria-pressed`, and only the fields the first use needs.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md); [states.md](../states.md), Onboarding.

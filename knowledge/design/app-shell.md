@@ -17,12 +17,12 @@ The anatomy of an admin, an editor or a management panel. Every value in it come
 ## Overview
 
 - **A lead panel on top.** A large radius, the raised surface, a subtle border, a short label naming the area, a large title and one status line that says what is going on.
-- **A card grid below it.** Columns that fit as many cards as the width allows at a minimum of about 280 CSS pixels each, so the grid reflows without breakpoints. Each card opens with a small label naming its kind, and its figures sit on a sunken surface with the label above and the number in the display face with tabular numerals.
+- **A card grid below it.** For a known set of cards, column counts that divide the count at each breakpoint, such as 1, 2 and 4 for four cards, or a lead card that spans; auto-fit columns at a minimum of about 280 CSS pixels each only for an open-ended collection, where a short last row is expected. Each card opens with a small label naming its kind, and its figures sit on a sunken surface with the label above and the number in the display face with tabular numerals.
 - **One concept per card**, with the card rules of [dashboards.md](dashboards.md).
 
 ## Lists and choices
 
-- **Rows, not a ruled table, when the content is a list of things.** Each row is a block with a radius and a raised hover surface, with its metadata in a small secondary style. A table stays a table when the reader compares values across columns.
+- **Rows, not a ruled table, when the content is a list of things.** Each row is a block with a radius and a hover surface one step from the list surface, with its metadata in a small secondary style; the text on the hover surface keeps its contrast target. A table stays a table when the reader compares values across columns.
 - **Choosing a content type is a set of cards, not a select.** Each option shows an icon, a name and one line that says what it produces, so the choice is made by recognition rather than by reading a menu.
 
 ## Never

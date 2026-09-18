@@ -18,6 +18,9 @@ Headers are verified with `curl -I` against the deployed origin, never against a
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Keeps paths and query strings out of other sites' logs. |
 | `Permissions-Policy` | Deny camera, microphone, geolocation and payment unless the feature exists | A feature not used cannot be abused by injected content. |
 | `X-Frame-Options` | `DENY`, alongside `frame-ancestors` | Framing protection for browsers that ignore the policy directive. |
+| `Cache-Control` | `no-store` on every authenticated or personal response | Keeps account data out of shared caches and the browser's cache. |
+
+A response that renders no page, such as a JSON API, carries `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, since it loads nothing. A user file served back adds `sandbox` to its policy, so a document that carries script cannot run it on the application's origin. A service with no cross-origin consumers can add `Cross-Origin-Resource-Policy: same-origin`.
 
 A content security policy is tightened in report-only mode first and then switched to the enforcing header. A report-only policy is recorded separately and never counted as enforcement.
 

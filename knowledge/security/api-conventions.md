@@ -40,6 +40,8 @@ Authentication travels as a bearer token in the `Authorization` header, scoped t
 
 Anything that creates a record or charges money accepts an `Idempotency-Key` header, stored with the response for 24 hours, so a retry returns the same result instead of acting twice. Clients retry only the calls documented as safe to retry, with exponential backoff and jitter.
 
+The key is scoped to the caller's account, so two accounts cannot collide or read each other's stored response. It is stored with a fingerprint of the request body: the same key with another body answers 422, a key whose first request is still running answers 409, and a missing key on an operation that requires one answers 400, as the header's draft specification sets out. A replayed response is marked as a replay in a header, and the expiry period is published with the API.
+
 ## Webhooks the service emits
 
 Outgoing webhooks are signed with a shared secret, carry a timestamp against replay and an event identifier for deduplication, and are delivered at least once with retries and backoff. The receiving side is expected to treat them as idempotent. The check is in [outbound-requests](protocols/outbound-requests.md).

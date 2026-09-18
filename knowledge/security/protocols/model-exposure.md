@@ -35,9 +35,9 @@ report: the key location per call site, the tool inventory with the privilege of
    Result: the system prompt quoted with each item classified as instruction or control, and every control found relocated into code, with the relocation shown at a file reference.
 
 6. Make the spend ceiling halt the work.
-   Task: set token, request and currency ceilings per account, per session, per period and for the service, at the provider and in the application, and cap the size of a single request so one call cannot carry an unbounded prompt. Reaching one stops the work; raising an alert while the work continues is not a ceiling.
-   Time: 30 minutes. Running application, plus the provider console.
-   Result: the configured ceilings including the single request size, an oversized request rejected with its status code, and a run against a deliberately low ceiling showing the work halted, the status returned to the caller, and the spend recorded at the provider. **Needs a person** for what the ceilings should be.
+   Task: start from the repository, for every model or chat endpoint including a stub that calls no model yet: read the input size cap, the output token cap passed on each call, the authentication or rate limit in front of it, and the spend counter. Then set token, request and currency ceilings per account, per session, per period and for the service, at the provider and in the application, and cap the size of a single request so one call cannot carry an unbounded prompt. Reaching one stops the work; raising an alert while the work continues is not a ceiling.
+   Time: 30 minutes. Repository, then running application and the provider console.
+   Result: the repository reading with file references, each missing cap a finding on its own, then the configured ceilings including the single request size, an oversized request rejected with its status code, and a run against a deliberately low ceiling showing the work halted, the status returned to the caller, and the spend recorded at the provider. **Needs a person** for what the ceilings should be.
 
 7. Handle the output as untrusted input.
    Task: model output reaching a renderer, a shell, a query, a file path or another tool is caller-controlled data by a longer route. Apply the sinks check from [injection-and-output](injection-and-output.md) to every place generated text lands.

@@ -25,9 +25,9 @@ report: the limit and the response at the limit per endpoint, the pagination cei
    Result: the maximum page size enforced server-side with its value, recorded as the response to an oversized request; the response time for the worst case measured; and the cost-heavy sorts restricted to the allowlist from [injection-and-output](injection-and-output.md).
 
 4. Bound the request itself.
-   Task: set and test a maximum body size, a header size limit, a request timeout and a limit on concurrent connections per caller. Send an oversized body, a slow body, and a request that never completes.
+   Task: set and test a maximum body size, a header size limit, a request timeout and a limit on concurrent connections, per caller where the server offers it and globally where it does not, with the values in [essentials.md](../essentials.md). Send an oversized body, a slow body, and a request that never completes.
    Time: 30 minutes. Running application.
-   Result: the status code for the oversized body with the connection closed before the whole body was read, and the timeout value observed on the slow request rather than read from a configuration file.
+   Result: the status code for the oversized body received by the client, with nothing past the limit buffered or processed, and the timeout value observed on the slow request rather than read from a configuration file. Limiter state kept in one process's memory is recorded as holding only while one instance runs.
 
 5. Cap spend so that the cap halts the work.
    Task: for every metered or paid call, set a token, request and currency ceiling per account and for the service as a whole, and make reaching it stop the work. A cap that raises an alert and keeps spending is not a cap.

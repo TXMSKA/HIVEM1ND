@@ -9,10 +9,10 @@ report: the two settings with the values the tool reports back, the install comm
 
 ## Steps
 
-1. Refuse install scripts by default.
-   Task: set the package manager to run no lifecycle scripts, and list the few packages that genuinely need a build step explicitly. The setting is `ignore-scripts` for npm, default false, documented as "npm does not run scripts specified in package.json files". The equivalent for pnpm is `ignoreScripts`, which is configured in the workspace or global configuration file rather than in an npm-style configuration file.
+1. Read the install scripts, then refuse them by default.
+   Task: first read the lifecycle scripts the manifest itself declares, `preinstall`, `install`, `postinstall` and `prepare`: a script that downloads, pipes or executes remote code is a P1 finding on its own. Then read the project's own package manager configuration file, since `npm config get` also reports the machine's settings. Set the package manager to run no lifecycle scripts, and list the few packages that genuinely need a build step explicitly. The setting is `ignore-scripts` for npm, default false, documented as "npm does not run scripts specified in package.json files". The equivalent for pnpm is `ignoreScripts`, which is configured in the workspace or global configuration file rather than in an npm-style configuration file.
    Time: 25 minutes. Repository.
-   Result: `npm config get ignore-scripts` returns `true`, and a fresh install into an empty directory produces an install log containing no lifecycle script output. The explicitly allowed packages are listed by name with the reason each one needs a build.
+   Result: the manifest's lifecycle scripts quoted, or a note that it declares none. `npm config get ignore-scripts` returns `true` from the project directory, and a fresh install into an empty directory produces an install log containing no lifecycle script output. The explicitly allowed packages are listed by name with the reason each one needs a build.
 
 2. Refuse versions that are too young to have been looked at.
    Task: set a minimum release age of about a week. The npm setting is `min-release-age`, default null, documented as building the tree "such that only versions that were available more than the given number of days ago will be installed". The pnpm setting is `minimumReleaseAge`, in the workspace or global configuration. These two settings, together with step 1, are what would have stopped every recent registry worm.
@@ -30,7 +30,7 @@ report: the two settings with the values the tool reports back, the install comm
    Result: a search across the workflow files returning zero action references by tag or branch, the token permission block quoted, and zero direct interpolations of an untrusted context value into a script.
 
 5. Run the audit, and read the result for what it is.
-   Task: `npm audit --audit-level=high` and record what comes back.
+   Task: `npm audit --audit-level=high` and record what comes back. Without a lockfile or without the tool, the step ends as not run with the reason, as in step 4 of [version-floor](version-floor.md).
    Time: 10 minutes. Repository.
    Result: the advisory count at high and critical with the fixed version offered for each. A clean result is recorded as a clean audit and nothing more: it does not read install scripts, and a version poisoned in the last few hours has no advisory yet.
 

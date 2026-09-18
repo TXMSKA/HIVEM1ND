@@ -22,12 +22,12 @@ report: the price fields read from the request per handler, the tampered order r
 3. Verify every webhook signature before reading the body.
    Task: the model of the flow is in [payments.md](../payments.md). Confirm each handler checks the provider's signature, usually an HMAC over the raw body with a shared secret, compares it in constant time, and checks the timestamp window. Then send the handler a request with no signature, with a wrong one, and with a valid one over a modified body.
    Time: 30 minutes. Repository, plus running application.
-   Result: all three rejected with their status codes, and the store unchanged after each, read from the store rather than from the response.
+   Result: all three rejected with their status codes, and the store unchanged after each, read from the store rather than from the response. The source also shows, with file references, that a verified event's amount and currency are compared with the local record before any state changes, and that an event for an unknown record or an unhandled type is answered 2xx and logged rather than acted on. The construction is in [payments.md](../payments.md#webhooks-received).
 
 4. Make the handler idempotent.
    Task: replay a correctly signed event twice, and deliver two events for the same payment out of order.
    Time: 20 minutes. Running application, provider test mode only.
-   Result: the store read after the replay shows one charge, one grant or one fulfilment, keyed on the provider's event identifier, and the out-of-order pair leaves the record in the state of the later event. Every create or capture call the server makes to the provider carries an idempotency key derived from the order identifier, quoted from the source with a file reference.
+   Result: the store read after the replay shows one charge, one grant or one fulfilment, keyed on the provider's event identifier, stored in the same transaction as the state change, and the out-of-order pair leaves the record in the state the precedence rule in [payments.md](../payments.md#webhooks-received) gives, never in the state of whichever event arrived last. Every create or capture call the server makes to the provider carries an idempotency key derived from the order identifier, quoted from the source with a file reference.
 
 5. Confirm the state against the provider, not against the client.
    Task: check that fulfilment, access grants and refunds are driven by the verified webhook or by a server-side call to the provider, never by a return URL or a client message saying the payment succeeded.

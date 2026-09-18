@@ -10,22 +10,22 @@ report: hits per scanner over the tree and over the history, the build-output se
 ## Steps
 
 1. Scan the working tree.
-   Task: `gitleaks dir -v .` in the project. The command names changed in recent releases: `detect` and `protect` still work but are deprecated and hidden from the help output, and the current commands are `git`, `dir` and `stdin`. Check the tool's own current documentation before writing the command into a pipeline.
+   Task: `gitleaks dir -v .` in the project. The command names changed in recent releases: `detect` and `protect` still work but are deprecated and hidden from the help output, and the current commands are `git`, `dir` and `stdin`. Check the tool's own current documentation before writing the command into a pipeline. Without the scanner, the fallback runs on any shell with git alone: `git grep -n -I -i -E "(api[_-]?key|secret|token|passw(or)?d|private[_-]?key|connection[_-]?string).{0,3}[:=]"` and `git grep -n -I -E "BEGIN [A-Z ]*PRIVATE KEY"`, plus `git grep --no-index` with the same patterns over untracked files; the missing scanner is recorded.
    Time: 10 minutes. Repository.
    Result: the hit count with the command output. Zero, or each hit with its file and line.
 
 2. Scan the whole history, and separate live from merely present.
    Task: `gitleaks git -v --log-opts="--all" .` for every ref. Then run a verifying scanner, which calls the provider to find out whether the credential still works: `trufflehog git file://<repo-directory> --results=verified --fail`, run from the parent directory, because it clones the repository to a temporary location before scanning.
    Time: 20 minutes. Repository, plus network access for verification.
-   Result: the gitleaks hit count across all refs, and the verifying scanner's exit code, 0 for no results and 183 for results found under `--fail`. Only some scanners verify, so an unverified hit stays a finding until it is shown to be a sample value.
+   Result: the gitleaks hit count across all refs, and the verifying scanner's exit code, 0 for no results and 183 for results found under `--fail`. Only some scanners verify, so an unverified hit stays a finding until it is shown to be a sample value. Without the scanners, `git log --all -p -G "<pattern>"` with the step 1 patterns searches the history, and liveness is not verifiable with the tool at hand: every hit stays a finding and a person checks it at the provider console.
 
 3. Search the build output for the value, not for the name.
-   Task: build the application, then search every output directory for the literal value of each server-side secret: `grep -rFl "<value>" dist build .next 2>/dev/null`. A framework that inlines variables carrying a public prefix puts them in the bundle by design, and the only check that catches a secret given that prefix by mistake is a search for what it contains.
+   Task: build the application, then search every output directory for the literal value of each server-side secret: `git grep --no-index -l -F "<value>" -- dist build .next`, which works on any shell, searches ignored files and skips directories that do not exist. A framework that inlines variables carrying a public prefix puts them in the bundle by design, and the only check that catches a secret given that prefix by mistake is a search for what it contains.
    Time: 20 minutes. Repository, after a build.
    Result: zero hits for every server-side secret value, recorded per secret. A hit is a P0, and the secret is treated as public. Plus the list of variables carrying a public prefix, such as `NEXT_PUBLIC_`, `VITE_` or `EXPO_PUBLIC_`, with each one shown to be a key designed to be public, per [configuration.md](../configuration.md).
 
 4. Check what the repository tracks.
-   Task: `git ls-files | grep -E '(^|/)\.env'` and read every example or sample environment file that comes back from `git ls-files`.
+   Task: `git ls-files ":(glob)**/.env*"`, which works on any shell, and read every example or sample environment file it returns.
    Time: 10 minutes. Repository.
    Result: zero tracked environment files holding real values, and the example file's contents showing placeholders that authenticate nothing. The configuration loader fails the boot with the variable's name when a required secret is missing, proved by starting once with one unset, and the search for a fallback literal beside a secret read returns zero hits.
 

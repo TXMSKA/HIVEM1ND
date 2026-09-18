@@ -20,7 +20,16 @@ Amounts are integers in minor units, with the currency stored next to them. A fl
 
 ## Webhooks received
 
-Every webhook is verified against the provider's signature with the webhook secret before its body is used, the timestamp is checked against replay, and the event identifier is stored so the same event applied twice does nothing. The handler answers 200 fast and does the work after. Providers retry and do not guarantee order, so handlers are idempotent state transitions: if the order is already paid, the event is ignored.
+Every webhook is verified against the provider's signature with the webhook secret before its body is used, the timestamp is checked against replay, and the event identifier is stored so the same event applied twice does nothing. Providers retry and do not guarantee order, so handlers are idempotent state transitions: if the order is already paid, the event is ignored. The values are in [essentials.md](essentials.md). In order:
+
+1. **Read the raw body** before any parser touches it, since the signature covers the exact bytes.
+2. **Verify the signature** with the current and, during a rotation, the previous secret, comparing in constant time, and check the timestamp against the tolerance. A failure answers 400 and changes nothing.
+3. **Map the event to the local record** through the identifier the server stored when it created the provider object, never through a value the client supplied at checkout.
+4. **Answer unknown things with 2xx and a logged warning.** An event for a record that does not exist, or of a type the handler does not handle, is acknowledged so the provider stops retrying, and nothing changes.
+5. **Compare amount and currency with the record.** A signed event for a smaller amount or another currency never settles the order; it is logged and flagged for reconciliation.
+6. **Insert the event identifier and apply the transition in one short transaction**, as a conditional update from the expected state. A duplicate identifier ends the transaction with nothing changed.
+7. **Decide order by precedence, not by arrival.** Terminal states win over earlier ones, such as refunded over paid and paid over pending; an event never moves a record backwards. The provider's own timestamps can share a second, so they do not order events on their own.
+8. **Answer 2xx once the transaction commits**, and push slow work, such as mail or fulfilment calls, to a queue behind it. The short transaction is the fast answer the provider asks for.
 
 During a rotation of the webhook secret, the signature is checked against the current and the previous secret, and the previous one is removed when the window closes.
 

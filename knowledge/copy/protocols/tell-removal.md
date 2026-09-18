@@ -4,15 +4,15 @@ scope: any prose or string set written or rewritten with a model, or that reads 
 trigger: manual, on any draft written or rewritten with a model
 repeat: once per draft, and again after any rewrite of it
 inputs: the draft, the marks from rewrite-boundary, the catalogue in tells.md, the definitions in measures.md, the dash policy in options.md
-stop: every section is marked untouchable by rewrite-boundary, in which case the run ends after step 1
+stop: every section is marked untouchable by rewrite-boundary, in which case the run ends after step 1; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: the four signals before and after, hits per pattern class before and after, the count of flagged words kept with a reason, and the word ratio
 
 ## Steps
 
 1. Count the baseline.
-   Task: count the words of the draft with code blocks, tables and quotations excluded, run the pattern searches from [tells.md](../tells.md), and count dashes as defined in [measures.md](../measures.md).
+   Task: build the corpus as in [measures.md](../measures.md#the-corpus), count its words, run the combined pattern and each class search from [tells.md](../tells.md#running-the-searches), and count dashes as defined in [measures.md](../measures.md#dash-density).
    Time: 5 minutes.
-   Result: a recorded table with the word count, the hits per pattern class, the tell density, the dash density and the sentence length mean and standard deviation.
+   Result: a recorded table with the word count, the hits per pattern class, the tell density, the dash density and the sentence length mean and standard deviation on prose, or not applicable where [measures.md](../measures.md#the-four-signals) says so, with the search tool used.
 
 2. Respect the marks.
    Task: take the marks from [rewrite-boundary](rewrite-boundary.md), or run it when none exist. Sections marked filler only receive step 3 and nothing else; untouchable sections and fenced literal spans receive nothing.
@@ -40,7 +40,7 @@ report: the four signals before and after, hits per pattern class before and aft
    Result: both searches return zero hits, and the count of claims deleted for want of a source is recorded.
 
 7. Fix the structural tells and the dashes.
-   Task: apply the structural list in [tells.md](../tells.md): sentence-case headings with no ending period, no bold inside paragraphs, headings below the body floor merged upward, the restating closing paragraph deleted, full-sentence lists returned to prose, emoji and meta-labels removed. Replace each dash above the policy in [options.md](../options.md) with a comma, a colon, parentheses or a new sentence.
+   Task: apply the structural list in [tells.md](../tells.md): sentence-case headings with no ending period, no bold inside paragraphs, headings below the body floor merged upward except the readme and reference headings [tells.md](../tells.md#structural-tells) exempts, the restating closing paragraph deleted, full-sentence lists returned to prose, emoji and meta-labels removed. Replace each dash above the policy in [options.md](../options.md) with a comma, a colon, parentheses or a new sentence.
    Time: 10 minutes.
    Result: zero title-case headings, zero bold runs inside paragraph text, dash density within the policy, and a recorded count of headings merged, closings deleted and lists converted.
 

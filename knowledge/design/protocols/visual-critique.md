@@ -35,6 +35,6 @@ report: the named screenshots, the critique with ranked findings and a fix each,
    Result: the ranked list with a fix against each, and a new capture of every P0 and P1 fix showing it resolved.
 
 6. Get fresh eyes.
-   Task: hand the captures and the plan, without the build reasoning, to a reviewer who did not build the surface, or look again in a later session.
+   Task: hand the captures and the plan, without the build reasoning, to a reviewer who did not build the surface, by the rule in [critique.md](../critique.md), Fresh eyes.
    Time: 20 minutes.
-   Result: a verdict of recapture, rebuild, fix with at most eight items, or ship. A claimed fix not visible in the new capture is recorded as unresolved, and the loop ends on ship or on a round that resolves nothing.
+   Result: the verdict that rule defines, or the step recorded as not verifiable with the tool at hand.

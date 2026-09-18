@@ -1,13 +1,13 @@
 # Microcopy
 
-Rules for the strings that sit inside a control or next to one, and for the messages an interface shows about its own state. Each section is one subcategory. A string belongs to exactly one section, and that section decides it; [surface-copy](protocols/surface-copy.md) is the pass that applies them.
+Rules for the strings that sit inside a control or next to one, and for the messages an interface shows about its own state. Each section is one subcategory. A string belongs to exactly one section, and that section decides it; [surface-copy](protocols/surface-copy.md) is the pass that applies them. When a string fits two sections, the one whose rule ties it to other strings wins, because breaking that tie breaks more than one string (Convention): a card that is also a navigation destination follows Navigation, a page button that is also a call to action follows the call to action, and a first-use empty state follows Empty states with the Warm tone of onboarding.
 
 ## Buttons and controls
 
 - A verb first, and the verb is the thing that will happen: *Save changes*, not *OK* or *Submit*.
 - The label matches the heading of the thing it acts on, word for word where possible.
 - Sentence case, no ending period (Microsoft style guide, https://learn.microsoft.com/en-us/style-guide/top-10-tips-style-voice).
-- Under four words. A label that needs more is a label for a decision the screen has not explained yet (Convention).
+- Four words at most. A label that needs more is a label for a decision the screen has not explained yet (Convention).
 - A destructive action names what it destroys: *Delete project*, never *Delete* alone.
 - Result to record: count of labels not starting with a verb, and count over four words, each fixed or explained.
 
@@ -42,7 +42,7 @@ Placeholder text is not a label. It disappears on input, strains memory, blocks 
 
 ## Navigation and menus
 
-- Places are nouns, actions are verbs. A menu mixing the two is two menus.
+- Places are nouns, actions are verbs. A menu mixing the two is two menus. The verb rule for short labels in [bilingual.md](bilingual.md#add-the-verb-to-short-labels) covers controls that act, never places, so a navigation item stays a noun in every language.
 - An item names the object it opens, in the same words as the heading of the page it opens.
 - Order by frequency of use or by the order of the work, never alphabetically by accident.
 - Result to record: count of items whose destination heading differs from the item text.
@@ -53,6 +53,9 @@ Guidelines from https://www.nngroup.com/articles/error-message-guidelines/.
 
 - Placed next to the thing that caused it. On a form, focus moves to the first failing field.
 - Says precisely what happened. A generic message is a failure even when polite.
+- Shape. When the reader fixes it, one instruction that carries the cause: *Enter a due date*, *Enter an amount of 1 or more*; the GOV.UK patterns are *Enter*, *Select* and *must be*, with no *please*, *sorry*, *valid*, *invalid* or *oops* (https://design-system.service.gov.uk/components/error-message/). When the system failed, an impersonal cause, then the next step, then, where true, that the input was kept: *The invoice was not saved. Try again; your entries are still here.*
+- Sign-in and account lookup are the exception to precision: one message for a wrong email and a wrong password, so the message does not reveal which accounts exist (https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html). *The email or password is incorrect.*
+- A message key shared by call sites that need different causes is split, one key per cause (see [boundaries.md](boundaries.md#code-around-the-strings)). Until it is split, the shared string says the most specific thing true at every call site, and the split is listed as open.
 - Says what to do next. Identifying the problem is half the message.
 - No blame words. *Invalid* and *illegal* describe the person, not the input.
 - No jokes, no raw jargon, no bare error code as the whole message.
@@ -94,6 +97,7 @@ Three kinds, and the kind decides the content (Carbon empty states pattern, http
 - One or two sentences say why it is empty and what the first step is.
 - One primary action, matched to the kind: create, clear the filter, retry or request access. Not two.
 - Nothing about parts of the product that are not this one.
+- When the product has no control for the first step, the empty state says only why it is empty, and the missing action is reported as a gap, never invented or pointed at a control that does not exist.
 - Result to record: count of empty states without a next action, and count of the three kinds sharing one string, both zero.
 
 ## Loading and progress
@@ -104,8 +108,10 @@ Three kinds, and the kind decides the content (Carbon empty states pattern, http
 
 ## Onboarding steps
 
+- No onboarding at all unless the product needs information to start or works unlike familiar patterns; help at the first encounter with a feature beats a tour up front (https://www.nngroup.com/articles/mobile-app-onboarding/).
 - Each step states the outcome the person gets, then the action, in that order.
 - One action per step. A step with two actions is two steps.
-- Skippable, and saying so is part of the copy.
+- Skippable, and saying so is part of the copy. The skip is visible on every step, with progress shown as *Step {current} of {total}* (same source).
+- Shape of a step: a title that is the outcome, at most one sentence of body, one primary button that performs the action, and a secondary *Skip this step*. Plain: *Add your first client* / *Invoices need someone to send them to.* / *Add client*. Warm: *Who are you billing?* / *Add a client and your first invoice is one step away.* / *Add client*.
 - No welcome paragraph that teaches nothing. The first screen either does something or is removed.
 - Result to record: steps counted, actions per step counted, and the word ratio against the previous version.

@@ -29,6 +29,8 @@ When auditing, the first-use states come first, then empty search and filter res
 
 - **Immediate feedback on every activation**, within about 400 milliseconds; past that, a visible loading state.
 - **Skeletons in the shape of the final layout**, occupying the same box as the content they stand in for, so nothing shifts when the data lands. A spinner in the middle of content is the weaker option.
+- **A skeleton is built from the real component.** The same grid, the same classes and the same breakpoints render placeholder rows or cards: bars one line height tall per text line, the count equal to the page size or the last known count, and the same fixed heights as the real items. A responsive card grid therefore reflows its skeleton exactly as it reflows its cards.
+- **Loading text and indicators never push content.** A loading message sits in a slot that already exists, or inside the control that started the work; one inserted above a list moves the list on every keystroke.
 - **Every loading case is covered**: the first load, the next page, a refresh.
 - **Determinate progress when the length is known**, and an honest estimate on long operations. Progress is never faked and completion is never delayed for a flourish.
 - **Loading text names the real operation**, not a generic "Loading".
@@ -50,7 +52,7 @@ When auditing, the first-use states come first, then empty search and filter res
 
 ## Disabled
 
-A disabled control says inline what is missing and what unlocks it, and the unblocking action is one step away. A disabled primary action is valid when that reason is present. Disabled content keeps enough contrast to be read, and never carries a saturated accent.
+A disabled control says inline what is missing and what unlocks it, and the unblocking action is one step away. The reason is a structural word, written by the design pass and flagged for the copy pass. A disabled primary action is valid when that reason is present. Disabled content keeps enough contrast to be read, and never carries a saturated accent.
 
 ## Announcements
 

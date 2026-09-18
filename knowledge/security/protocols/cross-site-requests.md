@@ -12,7 +12,7 @@ report: the token result per state-changing endpoint, the state-changing handler
 1. Require a token on every state change.
    Task: send each state-changing request with a valid session and no token, then with a token issued to a different session. The control is a synchronizer token or a signed double submit token bound to the session, or the framework's built-in protection that implements one. The current application list grades cross-site request forgery as an access control failure, under its first entry.
    Time: 40 minutes. Running application.
-   Result: one line per endpoint with the status code for each case, all denials. An endpoint that accepts either case is a finding regardless of what the cookie attributes say.
+   Result: one line per endpoint with the status code for each case, all denials. An endpoint that accepts either case is a finding regardless of what the cookie attributes say. Endpoints that run before a session exists, such as login, registration and reset, refuse a request carrying `Sec-Fetch-Site: cross-site` or a foreign `Origin`. Without a test session, a source with no token check on any state change is the finding, from the repository.
 
 2. Keep state changes off the safe methods.
    Task: search the route table for handlers bound to `GET` or `HEAD` that write, send, delete or change a setting. A safe method carries no token and is sent by any link or image on any site.
@@ -32,4 +32,4 @@ report: the token result per state-changing endpoint, the state-changing handler
 5. Refuse to be framed.
    Task: read the frame ancestors directive and `X-Frame-Options` on the pages that carry a session, then load one inside a frame on the second origin.
    Time: 10 minutes. Running application, with a browser.
-   Result: the header values quoted and the framed load refused, with the browser console message captured. A page meant to be embedded names its allowed parents explicitly.
+   Result: the header values quoted and the framed load refused, with the browser console message captured. When both headers are absent, the header read alone closes the step as a fail and no browser is needed; the browser is for a header present but possibly bypassed. A page meant to be embedded names its allowed parents explicitly.

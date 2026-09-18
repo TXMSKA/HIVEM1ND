@@ -11,6 +11,8 @@ How the application behaves when something fails, what it tells the caller, what
 - **Fail closed.** The default. A failed check denies, and a caught error never falls through to the success path.
 - **Recover explicitly.** Only where the failure is genuinely recoverable, with the reason written beside the handler.
 
+**Build:** One top-level handler turns any unexpected error into a 500 with the error envelope, an unhandled rejection stops the process, and no catch returns a success value.
+
 **Open:** steps 1 and 2 of [logging-and-errors](../protocols/logging-and-errors.md).
 
 ## Error responses
@@ -21,6 +23,8 @@ How the application behaves when something fails, what it tells the caller, what
 
 - **A stable code and a request identifier for the caller, the details in the server log.** The default.
 - **One error envelope for every endpoint.** Per [api-conventions.md](../api-conventions.md#one-error-envelope).
+
+**Build:** Answer every error with `{ error: { code, message, fields, requestId } }` and write the detail to the log under the same request identifier.
 
 **Open:** step 3 of [logging-and-errors](../protocols/logging-and-errors.md).
 
@@ -33,6 +37,8 @@ How the application behaves when something fails, what it tells the caller, what
 - **Every security event written with time, actor, address and outcome.** The default.
 - **Alerts on the events worth waking someone for.** Who receives them and at what threshold is a person's decision.
 
+**Build:** Write events through one function with time, actor, address and outcome. When the only actor is an address typed by a stranger, such as a failed login for an unknown account, record a keyed hash of it rather than the address itself.
+
 **Open:** steps 4 and 6 of [logging-and-errors](../protocols/logging-and-errors.md).
 
 ## Secrets and personal data in records
@@ -44,6 +50,8 @@ How the application behaves when something fails, what it tells the caller, what
 - **Redaction at the point of writing.** The default, never a later filter.
 - **Log identifiers, never bodies.** Full request bodies are never logged at any level, because the level changes and the sink does not.
 
+**Build:** The logger accepts named fields, redacts known secret names and token-shaped values when writing, and never serializes a request body. Development mail capture writes to its own sink, never to the application log.
+
 **Open:** step 5 of [logging-and-errors](../protocols/logging-and-errors.md); [configuration.md](../configuration.md#logs).
 
 ## Retention and protection
@@ -54,5 +62,7 @@ How the application behaves when something fails, what it tells the caller, what
 
 - **Append-only for the application's own account, read access restricted, clocks synchronised.** The default.
 - **Retention period.** A person's decision, recorded in days.
+
+**Build:** Make the sink append-only for the application's account, restrict read access, synchronise clocks, and record the retention period a person chose.
 
 **Open:** step 7 of [logging-and-errors](../protocols/logging-and-errors.md).

@@ -22,21 +22,21 @@ report: one screenshot per named width, the overflow measurement at each, the co
 3. Reflow before shrinking.
    Task: let the layout change its arrangement rather than its scale. Give grid and flex children a zero minimum width so text can truncate or clamp instead of forcing the track wider, and keep type and control sizes readable at every width instead of scaling the page down to fit.
    Time: 30 minutes.
-   Result: the search for flex and grid children without a zero minimum width returns zero hits in the components that truncate, and the computed body font size is the same at the narrow width as at the wide one.
+   Result: every flex or grid child that holds text of unknown length computes a minimum width of zero, and the computed body font size is the same at the narrow width as at the wide one.
 
 4. Run the real content.
    Task: fill every text slot with the shortest and the longest real value the data allows, and with a value longer than the design assumed. Run the lists at zero, one, typical and large counts. Numbers, dates and currencies are formatted by locale, not by string concatenation.
    Time: 30 minutes.
-   Result: a screenshot per extreme at the narrow and the wide width with no clipped word, no broken box and no horizontal scroll, and every container that can receive long text carrying a truncation or clamp rule.
+   Result: a screenshot per extreme at the narrow and the wide width with no clipped word, no broken box and no horizontal scroll. Long text wraps by default; a container that clamps or truncates does so only where the full value is reachable on focus, on activation or on a linked page, as in [accessibility](accessibility.md), step 6.
 
 5. Make it work under a finger.
    Task: set every pointer target to at least 44 by 44 CSS pixels on touch, expanding the hit area rather than the visual when the visual has to stay small. Set the input font size to at least 16 CSS pixels so the phone browser does not zoom the page on focus, and leave browser zoom enabled: a fixed maximum scale or a disabled user scaling is never shipped.
    Time: 20 minutes.
-   Result: the measured bounding box of every target at the touch widths, the computed input font size at or above 16 pixels, and the search for disabled zoom in the viewport declaration returning zero hits.
+   Result: the measured bounding box of every target at the touch widths, the computed input font size at or above 16 pixels, and the search `user-scalable\s*=\s*(no|0)|maximum-scale` over the markup returning zero hits.
 
 6. Exercise the gestures.
    Task: give every drag, swipe, pinch or path gesture a tap alternative and a keyboard alternative, unless the gesture is essential to the task. Set the touch action so a double tap does not zoom a control, clear the drag state when the gesture is cancelled or focus is lost, and disable text selection while a drag is running.
-   Time: 20 minutes.
+   Time: 20 minutes; a surface with no gesture ends this step as not applicable.
    Result: a transcript per gesture showing the alternative path completing the same task, and a transcript of one interrupted gesture leaving no stuck state. A gesture exercised only through an emulated viewport is recorded as untested under touch.
 
 7. Respect the edges of the device.

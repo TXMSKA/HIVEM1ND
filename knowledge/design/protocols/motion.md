@@ -12,7 +12,7 @@ report: the animation table with purpose, frequency, duration and curve, the ani
 1. Run the gates.
    Task: list every animated element and run it through the frequency, purpose, budget and function gates in [animation.md](../animation.md). Cut what fails. On a marketing surface, name the one committed gesture; on a working app, keep motion to feedback, anchored overlays and short crossfades.
    Time: 20 minutes.
-   Result: one row per surviving animation naming its purpose and frequency tier, the count removed with the gate that removed each, and zero animation on keyboard-initiated actions.
+   Result: one row per surviving animation naming its purpose and frequency tier, the count removed with the gate that removed each, and zero animation on shortcuts, focus movement and list navigation by keyboard.
 
 2. Set durations and curves.
    Task: assign each animation a duration from the table in [animation.md](../animation.md) and an explicit curve by direction: decelerating for entrances and exits, symmetric for movement on screen, linear only for constant motion.
@@ -22,11 +22,11 @@ report: the animation table with purpose, frequency, duration and curve, the ani
 3. Animate only what the compositor carries.
    Task: restrict animation to transform, opacity and clip path, list the properties explicitly, set the transform origin at the trigger for anchored surfaces, and start no scale below 0.9.
    Time: 20 minutes.
-   Result: the searches for animated layout properties, for a blanket transition on all properties, and for a scale starting at zero each return zero hits, and hover motion never changes the element's box.
+   Result: the searches `transition[^;]*\b(width|height|top|left|margin|padding)\b`, `transition:\s*all` and `scale\(0\)` each return zero hits, and hover motion never changes the element's box.
 
 4. Keep it interruptible.
    Task: trigger every quickly repeated animation twice in a row and grab every draggable surface mid-motion. Use transitions rather than keyframes for anything retriggered, springs for anything a hand drives, and never lock input during a transition.
-   Time: 15 minutes.
+   Time: 15 minutes; a surface with no retriggered animation and nothing draggable ends this step as not applicable.
    Result: a transcript of one animation interrupted mid-run and retargeting from its on-screen position, and one drag released with a flick that settles with its velocity.
 
 5. Protect the reading.
@@ -37,7 +37,7 @@ report: the animation table with purpose, frequency, duration and curve, the ani
 6. Honour the reduced motion preference.
    Task: under the reduced motion setting, drop travel, springs, parallax and loops, and keep opacity and colour feedback so every confirmation still happens.
    Time: 20 minutes.
-   Result: a pair of screenshots of the same state change at each motion preference showing the same end state, and a transcript confirming every confirmation still occurs.
+   Result: a pair of screenshots of the same state change at each motion preference showing the same end state, and a transcript confirming every confirmation still occurs. A tool that cannot emulate the preference records the reduced motion block read from the stylesheet with what it removes, as in [evidence.md](../evidence.md), Tool limits.
 
 7. Feel it, then limit the loops.
    Task: play each surviving animation at a quarter of its speed, check the origin, the curve and the sync of coordinated properties, and give any autoplaying motion that runs longer than 5 seconds a control to pause, stop or hide it.

@@ -18,10 +18,10 @@ How a page is composed from its first viewport to its close. The measured checks
 - **Each section answers a new question.** Two sections that restate one claim in new words add length, not substance, and are merged. Proof beats claims: show the product at work.
 - **A section's default shape** is a short heading, a short paragraph, and one visual or one action. More needs a reason.
 - **Vary the families.** A layout family appears once per page, and no more than two image-and-text alternating rows run in a row before a full-width, stacked or grid section breaks the run.
-- **Grids fill exactly.** A bento or feature grid has as many cells as items: three items become one plus two, five become two plus three. No empty tile, and no row of identical cards as the whole structure of the page.
+- **Grids fill exactly.** A bento or feature grid has as many cells as items: three items become one plus two, five become two plus three, at every breakpoint. No empty tile, and no row of identical cards as the whole structure of the page. Auto-fit columns are for open-ended collections only.
 - **Lists on marketing pages stay short.** The top three to five items with a link to the rest, rather than a dump.
 - **Specification lists avoid a rule on every row.** A few labelled clusters, or three or four headline values with the rest behind a disclosure.
-- **Logos** sit in their own band directly under the hero, as real marks that work in both themes, never as plain text.
+- **Logos** sit in their own band directly under the hero, as real marks that work in each theme that ships, never as plain text.
 - **Quotes** run three lines at most, attributed with a name and a role.
 - **Short labels above headings are rationed** on marketing pages: a few across the page, never one on every section. In an app shell a small label naming a card's kind is a choice, per [app-shell.md](app-shell.md).
 - **End on a real close**: a final action, a summary or a next step, not a fade into the footer.

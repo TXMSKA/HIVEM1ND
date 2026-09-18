@@ -10,7 +10,7 @@ report: the status code per probed path, the default credential inventory with t
 ## Steps
 
 1. Request the environment files over HTTP.
-   Task: `curl -s -o /dev/null -w "%{http_code}" https://<host>/.env`, and the same for `.env.local`, `.env.production`, `.git/config` and any configuration file the stack keeps at its root. The repository and the client bundle are covered by [secrets](secrets.md); this step covers what the web server itself will hand out.
+   Task: `curl -s -o /dev/null -w "%{http_code}" https://<host>/.env`, written `curl.exe -s -o NUL` in Windows PowerShell, and the same for `.env.local`, `.env.production`, `.git/config` and any configuration file the stack keeps at its root. The repository and the client bundle are covered by [secrets](secrets.md); this step covers what the web server itself will hand out.
    Time: 10 minutes. Running application.
    Result: one line per path with its status code, every one 404 or 403, and no response body containing a variable assignment.
 
