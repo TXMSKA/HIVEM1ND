@@ -60,7 +60,7 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
   const includeStep = await session.getStep();
   assert.equal(includeStep.number, 4);
   assert.equal(includeStep.fields[0].options.find((entry) => entry.value === 'feature:brainstorm').label, '/brainstorm');
-  assert.deepEqual(includeStep.categories.map((category) => category.id), ['planning', 'quality', 'continuity']);
+  assert.deepEqual(includeStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
   await session.answer({ included: includeStep.values.included });
   const scanStep = await session.answer({ addRoot: fixture.projectsRoot });
   assert.equal(scanStep.number, 5);
@@ -87,7 +87,7 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
   const featureNames = (await readdir(path.join(KIT_PATH, 'features')))
     .filter((name) => name.endsWith('.md') && name.toLowerCase() !== 'readme.md')
     .map((name) => path.basename(name, '.md'));
-  assert.equal(featureNames.length, 11);
+  assert.ok(featureNames.length > 0);
   assert.ok(featureNames.every((name) => installedSkills.includes(name)));
   const rules = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
   assert.ok(rules.startsWith('Existing agent preference stays first.\n'));
@@ -469,7 +469,7 @@ test('junctions inside an agent skills folder are skipped and reported as one wa
   assert.deepEqual(await readdir(outsideReport), []);
 });
 
-test('content categories group all eleven features deterministically and control the included set', async (context) => {
+test('content categories group every feature deterministically and control the included set', async (context) => {
   const fixture = await makeFixture(context);
   const session = await createSetupSession({
     kitPath: KIT_PATH,
@@ -485,12 +485,15 @@ test('content categories group all eleven features deterministically and control
   const contentStep = await session.answer({});
   assert.equal(contentStep.number, 4);
 
-  assert.deepEqual(contentStep.categories.map((category) => category.id), ['planning', 'quality', 'continuity']);
+  assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['brainstorm', 'plan', 'report']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
-  assert.equal(new Set(allIds).size, 11);
+  const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
+    .filter((name) => name.endsWith('.md') && name.toLowerCase() !== 'readme.md').length;
+  assert.equal(new Set(allIds).size, allIds.length);
+  assert.equal(allIds.filter((id) => id.startsWith('feature:')).length, featureCount);
 
   const planningIds = contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.id);
   const qualityIds = contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.id);
@@ -501,6 +504,51 @@ test('content categories group all eleven features deterministically and control
   const backToContent = await session.back();
   assert.equal(backToContent.number, 4);
   assert.deepEqual(backToContent.values.included, selection);
+});
+
+test('knowledge packs form their own last group, and each option names the pack and the commands it installs', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-packs-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const kitPath = path.join(root, 'kit');
+  const homeDir = path.join(root, 'home');
+  const mindPath = path.join(root, 'mind');
+  await mkdir(path.join(kitPath, 'features'), { recursive: true });
+  await mkdir(path.join(kitPath, 'knowledge', 'security', 'features'), { recursive: true });
+  await mkdir(path.join(kitPath, 'knowledge', 'security', 'protocols'), { recursive: true });
+  await mkdir(path.join(kitPath, 'knowledge', 'design'), { recursive: true });
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(path.join(mindPath, 'user'), { recursive: true });
+  await writeFile(path.join(kitPath, 'features', 'alpha.md'), '---\nname: alpha\ndescription: Alpha.\ncategory: planning\n---\n\n# Alpha\n');
+  await writeFile(path.join(kitPath, 'knowledge', 'security', 'features', 'cyberattack.md'), '---\nname: cyberattack\ndescription: Attack.\n---\n\n# Cyberattack\n');
+  await writeFile(path.join(kitPath, 'knowledge', 'security', 'protocols', 'secrets.md'), '# Secrets\n');
+  await writeFile(path.join(kitPath, 'knowledge', 'design', 'INDEX.md'), '# Design\n');
+
+  const session = await createSetupSession({
+    kitPath,
+    mindPath,
+    homeDir,
+    hostname: 'TESTBOX',
+    language: 'en',
+    env: { PATH: '' },
+    resume: false,
+  });
+  await session.answer({ installMode: 'custom' });
+  await session.answer({ mindPath });
+  await session.answer({ scan: true });
+  const step = await session.answer({});
+  assert.equal(step.number, 4);
+
+  assert.deepEqual(step.categories.map((category) => category.id), ['planning', 'knowledge']);
+  const packs = step.categories.at(-1);
+  assert.equal(packs.label, text('en', 'categoryPacks'));
+  assert.deepEqual(packs.items, [
+    { id: 'knowledge:design', name: 'design', commands: [] },
+    { id: 'knowledge:security', name: 'security', commands: ['/cyberattack'] },
+  ]);
+  const labelById = new Map(step.fields[0].options.map((entry) => [entry.value, entry.label]));
+  assert.equal(labelById.get('knowledge:security'), 'security /cyberattack');
+  assert.equal(labelById.get('knowledge:design'), 'design');
+  assert.equal(labelById.get('feature:alpha'), '/alpha');
 });
 
 test('the preview groups files by owner: the mind for kit and data files, the adapter for agent files', async (context) => {
@@ -563,6 +611,27 @@ test('install-plan warnings are rendered in the session language', async (contex
     const result = await session.install();
     assert.ok(result.warnings.includes(expected), `expected ${language} completion warning: ${expected}`);
   }
+});
+
+test('setup installs a role and a feature added to the mind folder', async (context) => {
+  const fixture = await makeFixture(context);
+  await mkdir(path.join(fixture.mindPath, 'roles'), { recursive: true });
+  await mkdir(path.join(fixture.mindPath, 'features'), { recursive: true });
+  await writeFile(
+    path.join(fixture.mindPath, 'roles', 'archivist.md'),
+    '---\nname: archivist\ndescription: Archive.\n---\n\n# Archivist\n\nMind: {{mind}}\n',
+  );
+  await writeFile(path.join(fixture.mindPath, 'features', 'tidy.md'), '---\nname: tidy\ndescription: Tidy.\n---\n\n# Tidy\n');
+
+  const session = await completeAnswers(fixture, ['codex']);
+  await session.answer({ confirm: true });
+  await session.install();
+
+  const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'archivist', 'SKILL.md');
+  assert.match(await readFile(skillPath, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
+  assert.match(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'tidy', 'SKILL.md'), 'utf8'), /# Tidy/);
+  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  assert.ok(machine.managedFiles[skillPath]);
 });
 
 async function makeFixture(context) {

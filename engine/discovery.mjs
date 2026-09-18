@@ -138,11 +138,15 @@ export async function discoverContent(kitPath) {
     type: 'feature',
     category: await readFeatureCategory(featuresDirectory, name),
   })));
-  const knowledge = await discoverNamedEntries(path.join(kitPath, 'knowledge'));
-  return [
-    ...features,
-    ...knowledge.map((name) => ({ id: `knowledge:${name}`, name, type: 'knowledge' })),
-  ];
+  const knowledgeDirectory = path.join(kitPath, 'knowledge');
+  const knowledgeNames = await discoverNamedEntries(knowledgeDirectory);
+  const knowledge = await Promise.all(knowledgeNames.map(async (name) => ({
+    id: `knowledge:${name}`,
+    name,
+    type: 'knowledge',
+    commands: await discoverNamedEntries(path.join(knowledgeDirectory, name, 'features')),
+  })));
+  return [...features, ...knowledge];
 }
 
 async function readFeatureCategory(featuresDirectory, name) {

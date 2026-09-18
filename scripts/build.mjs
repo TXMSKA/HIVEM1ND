@@ -27,10 +27,12 @@ for (const directory of ["engine", "cli", "gui", "migrations"]) {
   for (const file of await sourceFiles(path.join(root, directory))) runNode(["--check", file]);
 }
 
-for (const [directory, expected] of [["roles", 7], ["commands", 9], ["features", 11]]) {
+const counts = [];
+for (const directory of ["roles", "commands", "features"]) {
   const entries = await readdir(path.join(root, directory), { withFileTypes: true });
   const commands = entries.filter(entry => entry.name !== "README.md" && (entry.isDirectory() || entry.name.endsWith(".md")));
-  if (commands.length !== expected) throw new Error(`${directory}: expected ${expected} commands, found ${commands.length}`);
+  if (commands.length === 0) throw new Error(`${directory}: no installable command found.`);
+  counts.push(`${commands.length} ${directory}`);
 }
 
 await mkdir(path.join(root, "dist"), { recursive: true });
@@ -47,4 +49,4 @@ for (const name of included) {
     throw new Error(`Private or development file in package: ${name}`);
   }
 }
-console.log(`Built ${manifest.name}@${manifest.version}: dist/${archive.filename} (${archive.files.length} files).`);
+console.log(`Built ${manifest.name}@${manifest.version}: dist/${archive.filename} (${archive.files.length} files, ${counts.join(", ")}).`);

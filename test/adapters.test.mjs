@@ -97,6 +97,6 @@ test('content discovery ignores README placeholders and exposes future knowledge
   await writeFile(path.join(root, 'knowledge', 'security', 'guide.md'), 'module\n');
 
   assert.deepEqual(await discoverContent(root), [
-    { id: 'knowledge:security', name: 'security', type: 'knowledge' },
+    { id: 'knowledge:security', name: 'security', type: 'knowledge', commands: [] },
   ]);
 });

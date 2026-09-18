@@ -24,7 +24,7 @@ test("help documents every v1 command", async () => {
   const code = await runCli(["--help"], { stdout: output.stream, stderr: errors.stream });
   assert.equal(code, 0);
   assert.equal(errors.read(), "");
-  for (const command of ["init", "evolve", "pylon", "swarm"]) {
+  for (const command of ["init", "evolve", "check", "pylon", "swarm"]) {
     assert.match(output.read(), new RegExp(`\\b${command}\\b`));
   }
   assert.match(helpText(), /--gui/);
@@ -353,5 +353,36 @@ test("swarm output is human-readable and JSON remains opt-in", async () => {
 
   const json = sink();
   assert.equal(await runCli(["swarm", "--mind-path", ".", "--json"], { stdout: json.stream, stderr: sink().stream, lifecycle }), 0);
+  assert.deepEqual(JSON.parse(json.read()), result);
+});
+
+test("check output has one line per finding and JSON remains opt-in", async () => {
+  const result = {
+    action: "status",
+    machine: "TEST",
+    machineRecord: true,
+    missing: [{ name: "helper", type: "role", agents: ["codex"] }],
+    update: { checked: false, currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true },
+    cwd: "C:/private/repos/app",
+    project: { name: "app", path: "C:/private/repos/app", unread: 2, open: 1 },
+    repository: null,
+    executive: { unread: 0, open: 0 },
+    warnings: [],
+  };
+  const lifecycle = { async check() { return result; } };
+  const human = sink();
+  assert.equal(await runCli(["check", "--mind-path", "."], { stdout: human.stream, stderr: sink().stream, lifecycle }), 0);
+  assert.equal(
+    human.read(),
+    "Not installed on this machine: helper. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
+  );
+
+  const quiet = sink();
+  const clean = { ...result, missing: [], update: { ...result.update, updateAvailable: false }, project: { ...result.project, unread: 0, open: 0 } };
+  assert.equal(await runCli(["check", "--mind-path", "."], { stdout: quiet.stream, stderr: sink().stream, lifecycle: { async check() { return clean; } } }), 0);
+  assert.equal(quiet.read(), "");
+
+  const json = sink();
+  assert.equal(await runCli(["check", "--mind-path", ".", "--json"], { stdout: json.stream, stderr: sink().stream, lifecycle }), 0);
   assert.deepEqual(JSON.parse(json.read()), result);
 });

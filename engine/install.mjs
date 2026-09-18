@@ -16,6 +16,7 @@ const KIT_EXCLUSIONS = new Set([
   '.agents', '.cache', '.codex', '.cursor', '.git', 'coverage', 'dist', 'node_modules', 'test', 'tests', 'tmp', 'user',
 ]);
 const PRIVATE_INSTRUCTION_FILES = new Set(['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md']);
+const ASSET_SECTIONS = ['roles', 'commands', 'features', 'knowledge'];
 
 const REASON_KEYS = {
   'Two setup operations produce different content for this path.': 'reasonDifferentContent',
@@ -133,10 +134,10 @@ export async function planAgentAssets({
 }) {
   const available = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   const excludedNames = new Set(excluded);
-  const sourceAssets = await listInstallableAssets(kitPath, excludedNames);
+  const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames);
   const items = [];
   const conflicts = [];
-  const warnings = [];
+  const warnings = [...sourceAssets.warnings];
   const symlinkSkips = [];
   const agentFiles = new Map();
 
@@ -156,7 +157,7 @@ export async function planAgentAssets({
     const resolved = resolveAdapterPaths(adapter, { homeDir, env });
     const owner = { id: adapter.id, label: adapter.displayName };
     const files = [];
-    for (const asset of sourceAssets) {
+    for (const asset of sourceAssets.assets) {
       const rendered = renderSkill(asset.mainContent, asset.name, adapter, mindPath);
       const skillRoot = path.join(resolved.skillsRoot, asset.name);
       const mainPath = path.join(skillRoot, adapter.skills.fileName);
@@ -408,49 +409,84 @@ export function reportSymlinkSkips(plan, language = 'en') {
   return { ...plan, warnings: [...plan.warnings, [header, ...folders].join('\n')] };
 }
 
-export async function listInstallableAssets(kitPath, excludedNames = new Set()) {
+export function installableAssetRoots(kitPath, mindPath) {
+  const kitRoot = { path: path.resolve(kitPath), scope: 'kit', sections: ASSET_SECTIONS, mirrorsKit: false };
+  if (!mindPath || normalizePath(mindPath) === normalizePath(kitRoot.path)) return [kitRoot];
+  const mind = path.resolve(mindPath);
+  return [
+    kitRoot,
+    { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true },
+    { path: path.join(mind, 'user'), scope: 'mind', sections: ['knowledge'], mirrorsKit: false },
+  ];
+}
+
+export async function listInstallableAssets(roots, excludedNames = new Set()) {
+  const sources = typeof roots === 'string' ? installableAssetRoots(roots) : roots;
   const assets = [];
-  const sourcesByName = new Map();
-  for (const group of ['roles', 'commands']) {
-    const directory = path.join(kitPath, group);
+  const warnings = [];
+  const keptByName = new Map();
+  for (const root of sources) {
+    for (const asset of await readRootAssets(root, excludedNames)) addAsset(asset, root);
+  }
+  return { assets: assets.sort((left, right) => left.name.localeCompare(right.name)), warnings };
+
+  function addAsset(asset, root) {
+    const kept = keptByName.get(asset.name);
+    if (!kept) {
+      keptByName.set(asset.name, { root, sourcePath: asset.sourcePath });
+      assets.push(asset);
+      return;
+    }
+    if (kept.root.scope === 'kit' && root.scope === 'kit') {
+      throw new Error(`Duplicate installable command name "${asset.name}" in ${kept.sourcePath} and ${asset.sourcePath}.`);
+    }
+    // A mind that mirrors the kit holds the copy of every kit asset, and the copy is not a collision.
+    const mirrored = root.mirrorsKit
+      && kept.root.scope === 'kit'
+      && path.relative(root.path, asset.sourcePath) === path.relative(kept.root.path, kept.sourcePath);
+    if (!mirrored) warnings.push(assetCollisionWarning(asset.name, kept.sourcePath, asset.sourcePath));
+  }
+}
+
+function assetCollisionWarning(name, keptSource, skippedSource) {
+  return `${skippedSource}: the command "${name}" already installs from ${keptSource}; this file was skipped; renaming it lets it install.`;
+}
+
+async function readRootAssets(root, excludedNames) {
+  const assets = [];
+  for (const section of root.sections) {
+    if (section === 'features') {
+      for (const feature of await readFeatureEntries(path.join(root.path, 'features'))) {
+        if (!isExcluded(excludedNames, 'feature', feature.name)) assets.push(feature);
+      }
+      continue;
+    }
+    if (section === 'knowledge') {
+      const knowledgeDirectory = path.join(root.path, 'knowledge');
+      if (!await isDirectory(knowledgeDirectory) || excludedNames.has('knowledge')) continue;
+      for (const entry of await readdir(knowledgeDirectory, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || isExcluded(excludedNames, 'knowledge', entry.name)) continue;
+        const moduleFeatures = path.join(knowledgeDirectory, entry.name, 'features');
+        for (const feature of await readFeatureEntries(moduleFeatures)) assets.push(feature);
+      }
+      continue;
+    }
+    const directory = path.join(root.path, section);
     if (!await isDirectory(directory)) continue;
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.toLowerCase() === 'readme.md') continue;
       const sourcePath = path.join(directory, entry.name);
       const mainContent = await readFile(sourcePath, 'utf8');
-      addAsset({
+      assets.push({
         name: skillName(mainContent, entry.name),
-        type: group.slice(0, -1),
+        type: section.slice(0, -1),
         mainContent,
         supportFiles: [],
         sourcePath,
       });
     }
   }
-
-  const featuresDirectory = path.join(kitPath, 'features');
-  for (const feature of await readFeatureEntries(featuresDirectory)) {
-    if (!isExcluded(excludedNames, 'feature', feature.name)) addAsset(feature);
-  }
-
-  const knowledgeDirectory = path.join(kitPath, 'knowledge');
-  if (await isDirectory(knowledgeDirectory) && !excludedNames.has('knowledge')) {
-    for (const entry of await readdir(knowledgeDirectory, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.isSymbolicLink() || isExcluded(excludedNames, 'knowledge', entry.name)) continue;
-      const moduleFeatures = path.join(knowledgeDirectory, entry.name, 'features');
-      for (const feature of await readFeatureEntries(moduleFeatures)) addAsset(feature);
-    }
-  }
-  return assets.sort((left, right) => left.name.localeCompare(right.name));
-
-  function addAsset(asset) {
-    const existingSource = sourcesByName.get(asset.name);
-    if (existingSource) {
-      throw new Error(`Duplicate installable command name "${asset.name}" in ${existingSource} and ${asset.sourcePath}.`);
-    }
-    sourcesByName.set(asset.name, asset.sourcePath);
-    assets.push(asset);
-  }
+  return assets;
 }
 
 async function readFeatureEntries(directory) {

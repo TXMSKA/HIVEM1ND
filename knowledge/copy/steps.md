@@ -1,0 +1,13 @@
+# Protocol steps
+
+What each protocol step checks, in a few words, so a pass can pick its steps from the [routing table](INDEX.md#routing) without opening every protocol. A protocol file is opened only when at least one of its steps will actually run; a step with nothing to act on in the target ends as not applicable from its line here. Each protocol file holds the task, the time and the result that counts as evidence.
+
+- [rewrite-boundary](protocols/rewrite-boundary.md): 1 the target split into markable sections; 2 each section marked open, filler only or untouchable; 3 identifiers, quotations and verbatim strings fenced inside open sections; 4 the policy page behind each legal or data claim.
+- [tell-removal](protocols/tell-removal.md): 1 baseline counts of tells and dashes; 2 the marks respected; 3 deletion test on flag-list and residue hits; 4 copula avoidance; 5 impact clauses, negative parallelism and triads; 6 vague attribution and undue significance; 7 structural tells and dashes; 8 recount against the baseline.
+- [surface-copy](protocols/surface-copy.md): 1 every changed string assigned to one subcategory; 2 option values from the voice file or the defaults; 3 the rules of each subcategory's topic section; 4 outcome first and weak phrasing cut; 5 each string shortened toward half; 6 a next action on every error, blocked control and empty state.
+- [claim-check](protocols/claim-check.md): 1 every claim of quality, scale or importance listed; 2 a number, name or date behind each; 3 each referent traced to a record; 4 claims against their policy pages; 5 positioning against the brief.
+- [voice-specification](protocols/voice-specification.md): 1 an existing voice file or guide; 2 the voice on four dimensions; 3 the word table; 4 a value for every option; 5 three real strings calibrated; 6 the specification published where [boundaries.md](boundaries.md#the-voice-file) allows it.
+- [bilingual-copy](protocols/bilingual-copy.md): 1 languages, base and register declared; 2 both columns filled, no empty cells; 3 concatenation replaced by templates and plural forms; 4 per-language conventions and register; 5 containers sized and both languages rendered at the narrow width.
+- [copy-verification](protocols/copy-verification.md): 1 tell and dash densities; 2 the pattern-class searches; 3 sentence length on prose; 4 the style linter; 5 word ratio, claim counts and missing-fact markers.
+
+A whole pass on a small product takes the category rows the target touches, reads the lines above, and opens only the protocols with a step that applies: a product with no second language never opens bilingual-copy, and one with no claims never opens claim-check.

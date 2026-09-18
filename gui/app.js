@@ -360,28 +360,57 @@ function renderContent(step) {
   const tree = el("div", "feature-tree");
   for (const category of step.categories) {
     const section = el("section", "feature-category");
-    const heading = el("label", "category-heading");
-    const headingCheckbox = document.createElement("input");
-    headingCheckbox.type = "checkbox";
-    headingCheckbox.dataset.category = category.id;
-    headingCheckbox.checked = category.items.every((item) => included.has(item.id));
-    heading.append(headingCheckbox, el("span", "", category.label));
-    section.append(heading);
+    const head = el("div", "category-head");
 
     const items = el("div", "feature-items");
+    items.id = `feature-items-${category.id}`;
+    items.hidden = true;
     for (const item of category.items) {
-      const label = el("label", "feature-item");
+      const row = el("label", "feature-item");
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.dataset.feature = item.id;
       checkbox.checked = included.has(item.id);
-      label.append(checkbox, document.createTextNode(labelById.get(item.id) ?? item.name));
-      items.append(label);
+      row.append(checkbox);
+      if (item.commands) row.append(el("span", "pack-name", item.name), el("span", "feature-command pack-command", item.commands.join(" ")));
+      else row.append(el("span", "feature-command", labelById.get(item.id) ?? item.name));
+      items.append(row);
     }
-    section.append(items);
+
+    if (category.items.length > 0) {
+      const toggle = el("button", "group-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", items.id);
+      toggle.append(iconElement(chevronIcon()), el("span", "category-name", category.label));
+      toggle.addEventListener("click", () => {
+        const next = toggle.getAttribute("aria-expanded") !== "true";
+        toggle.setAttribute("aria-expanded", String(next));
+        items.hidden = !next;
+      });
+      head.append(toggle);
+    } else {
+      head.append(el("span", "category-name", category.label));
+    }
+    head.append(el("span", "category-count"));
+
+    const headingCheckbox = document.createElement("input");
+    headingCheckbox.type = "checkbox";
+    headingCheckbox.dataset.category = category.id;
+    headingCheckbox.checked = category.items.length > 0 && category.items.every((item) => included.has(item.id));
+    headingCheckbox.setAttribute("aria-label", category.label);
+    head.append(headingCheckbox);
+
+    section.append(head, items);
+    updateCategoryCount(section);
     tree.append(section);
   }
   return [tree];
+}
+
+function updateCategoryCount(section) {
+  const checkboxes = [...section.querySelectorAll("[data-feature]")];
+  section.querySelector(".category-count").textContent = `${checkboxes.filter((checkbox) => checkbox.checked).length}/${checkboxes.length}`;
 }
 
 function renderProjectsConfirm(step) {
@@ -713,11 +742,13 @@ elements.fields.addEventListener("change", (event) => {
     section.querySelectorAll("[data-feature]").forEach((checkbox) => {
       checkbox.checked = event.target.checked;
     });
+    updateCategoryCount(section);
     return;
   }
   if (event.target.dataset.feature !== undefined) {
     const section = event.target.closest(".feature-category");
     section.querySelector("[data-category]").checked = [...section.querySelectorAll("[data-feature]")].every((checkbox) => checkbox.checked);
+    updateCategoryCount(section);
   }
 });
 

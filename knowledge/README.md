@@ -1,7 +1,11 @@
 # Knowledge modules
 
-Each module is a folder under `knowledge/`. Markdown files in the module contain its knowledge topics.
+Each module is a folder under `knowledge/`, organized as a two-level index so an agent reads only what the work needs.
 
-An optional `features/` folder contains commands installed with the module. Its files and folders use the same format as the base `features/` folder. Excluding the module skips those commands.
+`INDEX.md` is the first level: one line per category, a routing table from each category to the protocol steps it uses, and one line per protocol with its scope. `categories/<category>.md` is the second level: each subcategory with when it applies, a `Build:` recipe for getting it right the first time, the options to choose from, and the protocols and topic sections to open. `essentials.md` holds the floor rules and default values, read first when building from scratch or passing over a whole product. Markdown files at the module root are the topics those entries point to.
 
-The base has no knowledge modules at launch.
+A `protocols/` folder contains the module's protocols, in the format described in `files.md`. They are read on demand and are never installed as agent commands. A protocol with a scope also runs on its own when a task that touched that scope is closed.
+
+An optional `features/` folder contains commands installed with the module. Its files and folders use the same format as the base `features/` folder. Excluding the module skips its commands, its protocols and its topics.
+
+The base ships three modules: `security`, `design` and `copy`. A user adds private modules the same way, under `user/knowledge/`.

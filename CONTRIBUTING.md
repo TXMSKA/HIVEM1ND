@@ -16,7 +16,7 @@ A feature is a Markdown file in `features/`, or a folder containing the command 
 
 ## Knowledge modules
 
-A knowledge module is a folder in `knowledge/` with Markdown topics and optional `features/`. Module features use the same format as base features. Command names must be unique across the selected content. See [the module format](knowledge/README.md).
+A knowledge module is a folder in `knowledge/` with Markdown topics, an `INDEX.md` listing its protocols with their scope, an optional `protocols/` folder and an optional `features/`. Module features use the same format as base features. Command names must be unique across the selected content. A protocol step states a result that can be checked by reading a file, an output or a measurement. See [the module format](knowledge/README.md).
 
 ## Verification
 

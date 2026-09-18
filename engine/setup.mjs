@@ -216,7 +216,7 @@ class SetupSession {
         false,
         content.map((item) => ({
           value: item.id,
-          label: item.type === 'feature' ? `/${item.name}` : text(language, 'knowledgeModule', { name: item.name }),
+          label: item.type === 'feature' ? `/${item.name}` : [item.name, ...packCommands(item)].join(' '),
         })),
       )];
       if (content.length === 0) base.description = text(language, 'nothingToInclude');
@@ -743,23 +743,32 @@ function normalizeAttach(value) {
 }
 
 function buildContentCategories(content, language) {
-  const categorized = new Set();
+  const features = content.filter((item) => item.type === 'feature');
   const categories = [];
   for (const category of CATEGORY_ORDER) {
-    const items = content.filter((item) => item.category === category.id);
+    const items = features.filter((item) => item.category === category.id);
     if (items.length === 0) continue;
-    for (const item of items) categorized.add(item.id);
-    categories.push({
-      id: category.id,
-      label: text(language, category.labelKey),
-      items: items.map((item) => ({ id: item.id, name: item.name })),
-    });
+    categories.push({ id: category.id, label: text(language, category.labelKey), items: items.map(contentItem) });
   }
-  const remaining = content.filter((item) => !categorized.has(item.id));
+  const ordered = new Set(CATEGORY_ORDER.map((category) => category.id));
+  const remaining = features.filter((item) => !ordered.has(item.category));
   if (remaining.length > 0) {
-    categories.push({ id: 'other', label: text(language, 'included'), items: remaining.map((item) => ({ id: item.id, name: item.name })) });
+    categories.push({ id: 'other', label: text(language, 'included'), items: remaining.map(contentItem) });
+  }
+  const packs = content.filter((item) => item.type === 'knowledge');
+  if (packs.length > 0) {
+    categories.push({ id: 'knowledge', label: text(language, 'categoryPacks'), items: packs.map(contentItem) });
   }
   return categories;
+}
+
+function contentItem(item) {
+  if (item.type !== 'knowledge') return { id: item.id, name: item.name };
+  return { id: item.id, name: item.name, commands: packCommands(item) };
+}
+
+function packCommands(item) {
+  return (item.commands ?? []).map((command) => `/${command}`);
 }
 
 function assignProjectsToRoots(discovered, roots) {

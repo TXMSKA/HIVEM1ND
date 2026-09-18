@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { installAgentAssets } from "../engine/install.mjs";
-import { checkForUpdates, evolve, pylon, swarm } from "../engine/lifecycle.mjs";
+import { check, checkForUpdates, evolve, pylon, swarm } from "../engine/lifecycle.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -128,7 +128,7 @@ test("evolve records successful migrations across an installation conflict", asy
 test("bundled migrations are idempotent and preserve existing private files", async (t) => {
   const root = await temporaryDirectory(t, "bundled-migrations");
   const userPath = path.join(root, "user");
-  const versions = ["0.2.0", "0.3.0", "1.0.0"];
+  const versions = ["0.2.0", "0.3.0", "1.0.0", "1.1.0"];
   for (const version of versions) {
     const migration = await import(`../migrations/${version}.mjs`);
     assert.equal(migration.idempotent, true);
@@ -136,12 +136,29 @@ test("bundled migrations are idempotent and preserve existing private files", as
   }
   await write(path.join(userPath, "roles", "private.md"), "private role\n");
   await write(path.join(userPath, "knowledge", "private.md"), "private knowledge\n");
+  await write(path.join(userPath, "protocols", "private.md"), "private protocol\n");
   for (const version of versions) {
     const migration = await import(`../migrations/${version}.mjs`);
     await migration.migrate({ userPath });
   }
   assert.equal(await fs.readFile(path.join(userPath, "roles", "private.md"), "utf8"), "private role\n");
   assert.equal(await fs.readFile(path.join(userPath, "knowledge", "private.md"), "utf8"), "private knowledge\n");
+  assert.equal(await fs.readFile(path.join(userPath, "protocols", "private.md"), "utf8"), "private protocol\n");
+});
+
+test("the 1.1.0 migration creates the private protocols folder", async (t) => {
+  const root = await temporaryDirectory(t, "protocols-migration");
+  const userPath = path.join(root, "user");
+  const migration = await import("../migrations/1.1.0.mjs");
+  assert.equal(migration.version, "1.1.0");
+  assert.equal(migration.idempotent, true);
+
+  await migration.migrate({ userPath });
+  assert.equal((await fs.stat(path.join(userPath, "protocols"))).isDirectory(), true);
+  assert.deepEqual(await fs.readdir(userPath), ["protocols"]);
+
+  await migration.migrate({ userPath });
+  assert.equal((await fs.stat(path.join(userPath, "protocols"))).isDirectory(), true);
 });
 
 test("evolve resumes after a later migration fails without repeating completed work", async (t) => {
@@ -677,4 +694,108 @@ test("swarm summarizes root, environment and project state", async (t) => {
   assert.deepEqual(result.tasks.projects[0].items.map((item) => item.slug), ["login", "copy"]);
   assert.equal(result.inboxes.unread, 2);
   assert.equal(result.inboxes.units[0].unit, "executor-app");
+});
+
+async function snapshot(directory) {
+  const files = {};
+  for (const entry of await fs.readdir(directory, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    const filePath = path.join(entry.parentPath, entry.name);
+    files[filePath] = await fs.readFile(filePath, "utf8");
+  }
+  return files;
+}
+
+async function writeMachine(mindPath, { agents = "", paths = "" } = {}) {
+  await write(
+    path.join(mindPath, "user", "machines", "TEST.md"),
+    `machine: TEST\nmind: ${mindPath}\nupdate-check: off\nlast-check: \nsetup: done\n\n## Agents\n${agents}\n## Paths\n${paths}\n## Excluded\n`,
+  );
+}
+
+test("check reports a role added to the mind until evolve installs it and writes nothing", async (t) => {
+  const root = await temporaryDirectory(t, "check-assets");
+  const mindPath = await makeMind(root);
+  const kitPath = path.join(root, "kit");
+  const homeDir = path.join(root, "home");
+  const env = { ...process.env, CODEX_HOME: path.join(homeDir, ".codex") };
+  await writeMachine(mindPath, { agents: "- codex: on-demand\n" });
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["roles/"] })}\n`);
+  await write(path.join(kitPath, "roles", "executor.md"), "---\nname: executor\ndescription: Executor\n---\n\n# /executor\n");
+  await installAgentAssets({ kitPath, mindPath, homeDir, hostname: "TEST", env });
+  await write(path.join(mindPath, "roles", "helper.md"), "---\nname: helper\ndescription: Helper\n---\n\n# /helper\n");
+  const options = { kitPath, mindPath, homeDir, hostname: "TEST", env, cwd: root };
+
+  const before = await snapshot(root);
+  const pending = await check(options);
+  assert.deepEqual(await snapshot(root), before);
+  assert.equal(pending.machineRecord, true);
+  assert.deepEqual(pending.missing, [{ name: "helper", type: "role", agents: ["codex"] }]);
+  assert.equal(pending.update.updateAvailable, true);
+  assert.equal(pending.update.latestVersion, "1.0.0");
+
+  const evolved = await evolve({ kitPath, mindPath, homeDir, hostname: "TEST", env, pull: false });
+  assert.equal(evolved.completed, true);
+  const current = await check(options);
+  assert.deepEqual(current.missing, []);
+  assert.equal(current.update.updateAvailable, false);
+});
+
+test("check names the registered project and the work waiting for it", async (t) => {
+  const root = await temporaryDirectory(t, "check-project");
+  const mindPath = await makeMind(root);
+  const kitPath = await makeKit(root);
+  const reposPath = path.join(root, "repos");
+  const appPath = path.join(reposPath, "app");
+  await writeMachine(mindPath, { paths: `- web: ${reposPath}\n- app: ${appPath}\n` });
+  await write(path.join(mindPath, "user", "routes.md"), "## Environments\n- web: app\n\n## Projects\n- app (web)\n\n## Minds\n");
+  await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "20300102-1000-overseer.md"), "message\n");
+  await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
+  await write(path.join(mindPath, "user", "projects", "app", "tasks", "002-copy.md"), "id: 002\nstatus: done\n\n## Request\nCopy.\n");
+  await write(path.join(mindPath, "user", "tasks", "001-machine.md"), "id: 001\nstatus: open\n\n## Request\nMachine.\n");
+  await fs.mkdir(path.join(appPath, "src"), { recursive: true });
+  const options = { kitPath, mindPath, homeDir: path.join(root, "home"), hostname: "TEST" };
+
+  const inside = await check({ ...options, cwd: path.join(appPath, "src") });
+  assert.deepEqual(inside.project, { name: "app", path: appPath, unread: 1, open: 1 });
+  assert.deepEqual(inside.executive, { unread: 0, open: 1 });
+  assert.equal(inside.repository, null);
+
+  const environment = await check({ ...options, cwd: reposPath });
+  assert.equal(environment.project, null);
+});
+
+test("check reports a Git repository that is not a registered project", async (t) => {
+  const root = await temporaryDirectory(t, "check-repository");
+  const mindPath = await makeMind(root);
+  const kitPath = await makeKit(root);
+  const repoPath = path.join(root, "other");
+  await writeMachine(mindPath);
+  await fs.mkdir(repoPath);
+  await git(repoPath, ["init"], process.env);
+
+  const result = await check({ kitPath, mindPath, homeDir: path.join(root, "home"), hostname: "TEST", cwd: repoPath });
+  assert.equal(result.project, null);
+  assert.equal(path.basename(result.repository), "other");
+});
+
+test("the check command prints nothing for a clean state and one line per finding", async (t) => {
+  const root = await temporaryDirectory(t, "check-cli");
+  const mindPath = await makeMind(root);
+  const kitPath = await makeKit(root, "0.1.0");
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  await writeMachine(mindPath);
+  const run = async (hostname) => (await execFileAsync(
+    process.execPath,
+    [cliPath, "check", "--kit-path", kitPath, "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", hostname],
+    { cwd: root, encoding: "utf8" },
+  )).stdout;
+
+  const before = await snapshot(root);
+  assert.equal(await run("TEST"), "");
+  await write(path.join(mindPath, "user", "inbox", "overseer", "20300102-1000-executor-app.md"), "message\n");
+  assert.equal(await run("TEST"), "Executive roles: 1 unread message.\n");
+  assert.match(await run("OTHER"), /^This machine \(OTHER\) has no machine record in the mind\./);
+  await fs.rm(path.join(mindPath, "user", "inbox"), { recursive: true });
+  assert.deepEqual(await snapshot(root), before);
 });

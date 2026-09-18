@@ -23,7 +23,7 @@
 
 ## What it is
 
-HIVEM1ND is a folder of plain markdown that any coding agent can read and write. Context, memory, preferences and work in progress carry over across projects and machines instead of resetting with every chat. Roles, commands, features and knowledge modules are files, so there is no database, lock or index, and any agent or app can read the folder directly. Every supported agent attaches to the same mind through its own adapter, and an agent without one gets a generic attach prompt.
+HIVEM1ND is a folder of plain markdown that any coding agent can read and write. Context, memory, preferences and work in progress carry over across projects and machines instead of resetting with every chat. Roles, commands, features and knowledge modules are files, so there is no database and no lock, and any agent or app can read the folder directly. The only index is a markdown file inside each knowledge module, listing its protocols so an agent loads the ones the work needs instead of the whole module. Every supported agent attaches to the same mind through its own adapter, and an agent without one gets a generic attach prompt.
 
 ## Quick start
 
@@ -52,6 +52,14 @@ The hive is the mind itself: one per user, holding roles, commands, features and
 
 Any agent attaches in one of two modes. In on-demand mode nothing loads by itself; a command starts a chat in a role, and from there the agent works with the mind's context. In auto mode every new chat has HIVEM1ND loaded without running anything, through one line added to the agent's own rules file.
 
+### Protocols and packs
+
+A protocol is a checklist an agent can actually run: a strict sequence of steps, each with a task, a time limit and a result that proves it happened, such as a measured contrast ratio, a status code or a search that returns nothing. A step without its result is not done, and a run stops at the first step that fails.
+
+Protocols are grouped in knowledge packs, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, the options to choose from, and which protocols to open. An agent working on a form reads the index, opens the forms category and runs only the protocols it names, so a large pack costs a few hundred words to consult instead of all of it.
+
+Protocols also run on their own. When a task is closed, the work it touched is matched against the packs, the matching protocols run, and the task stays open until each step has its result. A pack can be left out at setup, and a user adds private protocols and packs the same way under `user/`.
+
 ## Setup steps
 
 | # | Step | What it asks |
@@ -69,10 +77,10 @@ Any agent attaches in one of two modes. In on-demand mode nothing loads by itsel
 
 ### Roles
 
-A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. See [roles/README.md](roles/README.md).
+A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. See [roles/README.md](roles/README.md).
 
 <details>
-<summary>Executive and operative roles</summary>
+<summary>Executive, operative and chat roles</summary>
 
 | Role | Group | Description |
 | --- | --- | --- |
@@ -83,6 +91,9 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
 | Super executor | Operative | The Executor seat on the strongest model available, for tasks that require it. |
 | Consultant | Operative | Reads, explains and reviews inside one repo and never writes. |
+| Executive | Chat | Decides business questions from the mind alone, on a mid-tier model. |
+| Operator | Chat | The technical counterpart: architecture, integrations and improving what exists, on the strongest model available. |
+| Marketing | Chat | Ideas, campaigns, social and commercial copy, from the mind alone. |
 
 </details>
 
@@ -100,10 +111,11 @@ Every role is a command, and a few more operate the system. Every command also w
 | `/task` | Creates a task file with the next id for a unit and leaves it a message that the task is ready. |
 | `/msg` | Writes a message into a unit's inbox and, when its agent has a CLI and the unit is in, tells it to read the inbox. |
 | `/absorb` | Stores a piece of feedback as a preference, for the current project or globally, with the date and the reason. |
+| `/migrate` | Absorbs a structure a person already has, the rules and memories of their agents and repositories, into the mind, without touching the original. |
 | `/pylon` | Adds shared team state to a repository without switching or changing its code branch. |
 | `/swarm` | Lists every active unit, open or delivered task, and unread inbox in the mind. |
 | `/uninstall` | Removes what was installed on this machine: commands, skills and the auto rule line for each attached agent. |
-| `/protocol` | Creates or runs a protocol: a strict sequence of steps, each with a task, a time and a result. |
+| `/protocol` | Creates or runs a protocol: a strict sequence of steps, each with a task, a time and a result. A protocol also runs by itself when a task whose work matches its scope is closed. |
 
 </details>
 
@@ -112,7 +124,7 @@ Every role is a command, and a few more operate the system. Every command also w
 A feature is a workflow that runs on a repo, with a start and an end, one markdown file in `features/`. Most are included in the base; the rest are installed with a knowledge module and require it.
 
 <details>
-<summary>Eleven features</summary>
+<summary>Fourteen features</summary>
 
 | Feature | Category | Description |
 | --- | --- | --- |
@@ -127,6 +139,9 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 | `/catchup` | Continuity | Summarizes changes, authors, open work and unread messages since the unit's recorded state without changing files. |
 | `/docs` | Continuity | Updates only the documentation affected by the current diff or a supplied commit range. |
 | `/release` | Continuity | Prepares a local release from commits since the last tag and reports the commands needed to publish it. |
+| `/cyberattack` | Quality | Audits security, the whole project or one feature, and warns before the full pass. Installed with the `security` module. |
+| `/uify` | Quality | Reviews design and interface, the whole project or one feature, and applies the pass. Installed with the `design` module. |
+| `/humanize` | Quality | Rewrites copy that reads as written by an AI, the whole project or one feature. Installed with the `copy` module. |
 
 </details>
 
@@ -140,7 +155,7 @@ Several people can share a repo, each with their own mind. The team's shared sta
 
 ## Updating and uninstalling
 
-`/evolve` pulls the new version into the mind, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Anything left out at setup stays out on later updates.
+`/evolve` pulls the new version into the mind, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Roles, commands and features written inside the mind are installed alongside the ones the kit ships. Anything left out at setup stays out on later updates.
 
 To remove what was installed on a machine, run `uninstall.cmd` in the mind folder, `hivem1nd uninstall [--dry-run] [--remove-mind]` from a terminal, or `/uninstall` from an attached agent. A dry run reports the plan before anything is removed.
 
