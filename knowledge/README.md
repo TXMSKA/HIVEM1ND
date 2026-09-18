@@ -1,8 +1,8 @@
 # Knowledge modules
 
-Each module is a folder under `knowledge/`. Markdown files in the module contain its knowledge topics.
+Each module is a folder under `knowledge/`, organized as a two-level index so an agent reads only what the work needs.
 
-`INDEX.md` lists what the module holds: one row per protocol, with its scope and its purpose in one line. An agent reads the index, decides which protocols the work needs and opens only those, so a large module costs little to consult.
+`INDEX.md` is the first level: one line per category and one line per protocol with its scope. `categories/<category>.md` is the second level: each subcategory with when it applies, the options to choose from, and the protocols and topic sections to open. Markdown files at the module root are the topics those entries point to.
 
 A `protocols/` folder contains the module's protocols, in the format described in `files.md`. They are read on demand and are never installed as agent commands. A protocol with a scope also runs on its own when a task that touched that scope is closed.
 

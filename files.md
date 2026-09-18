@@ -176,8 +176,9 @@ One line per preference, with the date and the reason. The global file applies e
 
 ```
 knowledge/<module>/
-  INDEX.md                    the protocols of the module, one line each
-  <topic>.md                  knowledge topics, any number, in folders or not
+  INDEX.md                    the first level: categories and protocols, one line each
+  categories/<category>.md    the second level: subcategories with use cases, options and files to open
+  <topic>.md                  knowledge topics, any number, read when a category or protocol names them
   protocols/<name>.md         protocols shipped with the module
   features/<name>.md          commands installed with the module
 ```
@@ -186,15 +187,34 @@ knowledge/<module>/
 
 ```markdown
 module: security
-purpose: Web security practices, from headers to sessions.
+purpose: Web application security by category, with the checks that prove it.
+
+Read this file, open only the category the work touches, and from there only the protocols and topic sections it names.
+
+## Categories
+- [identity](categories/identity.md): login, sessions and cookies, signed tokens, password reset, second factor.
+- [api](categories/api.md): endpoint inventory, authorization per object, input validation, rate limits.
 
 ## Protocols
-- session-review: scope authentication, sessions and password flows. Checks a login against the session rules before it ships.
-- headers-review: scope the responses of a deployed site. Verifies the security headers and the content security policy.
-- dependency-audit: scope the dependency manifest. Reports known vulnerabilities and versions left unpinned.
+- authentication-and-session: scope login, sessions and password flows. Checks a login against the session rules before it ships.
+- access-control: scope any endpoint that reads an identifier from the request. Proves one account cannot reach another's objects.
 ```
 
-One line per protocol, with its name, its scope and its purpose in one sentence. The index stays small on purpose: an agent reads it whole, picks the two or three protocols the work actually needs and opens only those, instead of loading the module. The topics are not indexed; they are read by name when a role, a feature or a protocol names them.
+`categories/<category>.md`, one section per subcategory:
+
+```markdown
+## Password reset
+
+Applies when: a reset flow is added or changed, or a request mentions forgotten passwords.
+
+Options:
+- **Emailed single-use link**, the default.
+- **Code typed into the open session**, when the link would open on another device.
+
+Open: [authentication-and-session](../protocols/authentication-and-session.md), step 5; [sessions-and-credentials.md](../sessions-and-credentials.md), Reset.
+```
+
+The index stays small on purpose. An agent reads it whole, opens the one category the work touches, and from there only the protocols and topic sections that subcategory names, instead of loading the module. A new subcategory is a section in its category file; a new category is a file plus one line in the index; a new check is a protocol named from the subcategories that need it. The protocol lines, with their scope, are also what the automatic run on task close matches against.
 
 A module under `user/knowledge/` has the same layout. A folder of notes becomes one by writing its index, by hand or by having an agent read the folder and write it. Excluding a module at setup leaves out its topics, its protocols and its features alike.
 

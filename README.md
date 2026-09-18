@@ -52,6 +52,14 @@ The hive is the mind itself: one per user, holding roles, commands, features and
 
 Any agent attaches in one of two modes. In on-demand mode nothing loads by itself; a command starts a chat in a role, and from there the agent works with the mind's context. In auto mode every new chat has HIVEM1ND loaded without running anything, through one line added to the agent's own rules file.
 
+### Protocols and packs
+
+A protocol is a checklist an agent can actually run: a strict sequence of steps, each with a task, a time limit and a result that proves it happened, such as a measured contrast ratio, a status code or a search that returns nothing. A step without its result is not done, and a run stops at the first step that fails.
+
+Protocols are grouped in knowledge packs, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, the options to choose from, and which protocols to open. An agent working on a form reads the index, opens the forms category and runs only the protocols it names, so a large pack costs a few hundred words to consult instead of all of it.
+
+Protocols also run on their own. When a task is closed, the work it touched is matched against the packs, the matching protocols run, and the task stays open until each step has its result. A pack can be left out at setup, and a user adds private protocols and packs the same way under `user/`.
+
 ## Setup steps
 
 | # | Step | What it asks |
