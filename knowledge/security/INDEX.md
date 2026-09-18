@@ -45,7 +45,7 @@ The protocol steps each category can call for, so a pass over a whole category n
 
 ## Protocols
 
-One line each, for the automatic match at task close. A category file says which steps apply to which subcategory.
+One line each, for the match made while planning. A category file says which steps apply to which subcategory.
 
 - [version-floor](protocols/version-floor.md): scope the runtime, framework and view library versions and the lockfile.
 - [supply-chain](protocols/supply-chain.md): scope the manifest, the lockfile, package manager settings, added dependencies and pipeline workflows.
