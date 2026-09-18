@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 - 2026-09-17
+
+- Three chat roles that work from the mind alone, without a shell or a repository: executive decisions, technical direction and marketing.
+- Security, design and copy knowledge modules, each with the command it installs: a security audit, a design and interface pass, and a rewrite of copy that reads as written by an AI, whole or scoped to one feature.
+- Knowledge modules with an index of their protocols, so an agent loads the ones the work needs instead of the module.
+- Protocols that run by themselves when a task is closed, matched against the work by their scope.
+- Migration command, absorbing the rules, memories and notes an agent or a repository already holds, and leaving every original untouched.
+- Roles, commands and features written inside the mind installed for every attached agent.
+
 ## 1.0.0 - 2026-09-15
 
 - Shared rules, record formats, seven roles and example mind and team records.
