@@ -702,7 +702,7 @@ class SetupSession {
   }
 
   completionResult(files, warnings) {
-    const prompt = text(this.answers.language, 'attachPrompt', { mind: this.mindPath });
+    const prompt = text(this.answers.language, 'attachPrompt', { mind: this.mindPath, placeholder: '{{mind}}' });
     const attachAgents = (this.answers.agents ?? [])
       .filter((agent) => agent.selected !== false && agent.attach === 'auto')
       .filter((agent) => !this.adapters.find((candidate) => candidate.id === agent.id)?.rules)

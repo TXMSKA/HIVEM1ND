@@ -175,11 +175,12 @@ export async function discoverPreferenceFiles(agentIds, { adapters, homeDir, env
   for (const adapter of adapters) {
     if (!selected.has(adapter.id) || !adapter.rules) continue;
     const { rulesPath } = resolveAdapterPaths(adapter, { homeDir, env });
-    if (adapter.rules.mode === 'cursor') {
+    const ownedSuffix = { cursor: '.mdc', copilot: '.instructions.md' }[adapter.rules.mode];
+    if (ownedSuffix) {
       const directory = path.dirname(rulesPath);
       if (!await isDirectory(directory)) continue;
       for (const entry of await readdir(directory, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.mdc')) paths.push(path.join(directory, entry.name));
+        if (entry.isFile() && entry.name.endsWith(ownedSuffix)) paths.push(path.join(directory, entry.name));
       }
     } else if (await isNonemptyFile(rulesPath)) {
       paths.push(rulesPath);

@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { applyInstallPlan, combinePlans, installAgentAssets, planDataFile } from '../engine/install.mjs';
+import { loadAdapters } from '../engine/discovery.mjs';
+import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, planDataFile } from '../engine/install.mjs';
 import { assertSafePath, parseMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 import { text } from '../engine/texts.mjs';
@@ -79,7 +80,9 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
   assert.equal(result.firstCommand, '/executor <project>');
   assert.equal((await session.getStep()).number, 8);
   assert.equal((await session.getStep()).done, true);
-  assert.equal(result.attachPrompts[0].agent, 'vscode');
+  assert.deepEqual(result.attachPrompts, []);
+  const copilot = await readFile(path.join(fixture.homeDir, '.copilot', 'instructions', 'hivem1nd.instructions.md'), 'utf8');
+  assert.match(copilot, /^---\ndescription: .+\napplyTo: "\*\*"\n---\n\nHIVEM1ND: the mind is at /);
 
   const installed = await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'), 'utf8');
   assert.match(installed, new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
@@ -582,34 +585,28 @@ test('a late file change aborts the whole install before an earlier write', asyn
 });
 
 test('install-plan warnings are rendered in the session language', async (context) => {
+  const [vscode] = (await loadAdapters({ kitPath: KIT_PATH })).filter((adapter) => adapter.id === 'vscode');
+  const ruleless = { ...vscode, id: 'ruleless', displayName: 'Ruleless Agent', rules: null };
   for (const language of ['en', 'es']) {
     const fixture = await makeFixture(context);
-    const session = await createSetupSession({
+    const plan = await planAgentAssets({
       kitPath: KIT_PATH,
       mindPath: fixture.mindPath,
       homeDir: fixture.homeDir,
-      hostname: 'TESTBOX',
-      language,
       env: { PATH: '' },
+      adapters: [ruleless],
+      agents: [{ name: 'ruleless', mode: 'auto' }],
+      language,
     });
-    await session.answer({ installMode: 'custom' });
-    await session.answer({ mindPath: fixture.mindPath });
-    await session.answer({ scan: true });
-    await session.answer({ addAgent: 'vscode' });
-    await session.answer({ agents: ['codex', 'vscode'], attachModes: { codex: 'on-demand', vscode: 'auto' } });
-    const includeStep = await session.getStep();
-    await session.answer({ included: includeStep.values.included });
-    await session.answer({ addRoot: fixture.projectsRoot });
-    await session.answer({ projectsConfirmed: true });
-    await session.answer({ skipPreferences: true, autoUpdates: false });
+    const expected = text(language, 'warningNoRulesFile', { agent: 'Ruleless Agent' });
+    assert.ok(plan.warnings.includes(expected), `expected ${language} warning: ${expected}`);
+  }
+});
 
-    const preview = await session.preview();
-    const expected = text(language, 'warningNoRulesFile', { agent: 'Visual Studio Code' });
-    assert.ok(preview.warnings.includes(expected), `expected ${language} warning: ${expected}`);
-
-    await session.answer({ confirm: true });
-    const result = await session.install();
-    assert.ok(result.warnings.includes(expected), `expected ${language} completion warning: ${expected}`);
+test('the attach prompt keeps the literal mind placeholder', () => {
+  for (const language of ['en', 'es']) {
+    const prompt = text(language, 'attachPrompt', { mind: 'C:/mind', placeholder: '{{mind}}' });
+    assert.match(prompt, /\{\{mind\}\} (with|por) C:\/mind\./);
   }
 });
 

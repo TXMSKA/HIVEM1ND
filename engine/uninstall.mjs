@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, rm, rmdir, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadAdapters, resolveAdapterPaths } from './discovery.mjs';
-import { autoRuleLine } from './install.mjs';
+import { OWNED_RULE_MODES, autoRuleLine } from './install.mjs';
 import { atomicWriteFile, hashContent, readMachineRecord } from './records.mjs';
 
 const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
@@ -64,7 +64,7 @@ export async function uninstall(options = {}) {
   for (const agent of record.agents ?? []) {
     if (agent.mode !== 'auto') continue;
     const adapter = adaptersById.get(agent.name);
-    if (!adapter?.rules || adapter.rules.mode === 'cursor') continue;
+    if (!adapter?.rules || OWNED_RULE_MODES.has(adapter.rules.mode)) continue;
     const { rulesPath, rulesBase } = resolveAdapterPaths(adapter, { homeDir, env });
     const outcome = await removeRuleLine(rulesPath, rulesBase, ruleLine, dryRun);
     if (outcome === 'symlink') kept.push({ path: rulesPath, reason: SYMLINK_REASON });
