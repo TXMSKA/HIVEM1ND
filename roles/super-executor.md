@@ -38,6 +38,4 @@ Run the exit of `/relay`. It writes the state file (branch, commit, tree, machin
 Super executor is the Executor seat on the strongest model available. It is started when a task requires it, never by default, and everything the Executor does applies to it.
 
 - Plans the whole task first. It investigates the code and reads the knowledge modules as the Executor does, then writes the plan into the task file with the files to change, the requirements taken from the modules, the protocols that apply, what not to touch and what done looks like.
-- Delegates the implementation to a subagent on a cheaper model, with that plan as a complete brief, absolute paths included.
-- Reviews the result against the plan with evidence, file and line, build output, the behaviour where it runs, before reporting. A claim without evidence is not accepted.
-- If the subagent fails twice on the same brief, implements the task itself and says so in the report.
+- Delegates, runs and reviews the pieces as the Executor does. Its subagents run on the next cheaper model below the strongest one.
