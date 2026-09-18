@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { assertSafePath as assertRecordSafePath, atomicWriteFile } from "./records.mjs";
+import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord } from "./records.mjs";
 
 const execFileAsync = promisify(execFile);
 const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -981,6 +981,26 @@ async function collectScopes(userPath) {
   return scopes;
 }
 
+async function readTasks(taskPath) {
+  const items = [];
+  for (const fileName of await listFiles(taskPath)) {
+    if (!fileName.endsWith(".md")) continue;
+    const filePath = path.join(taskPath, fileName);
+    const content = await readText(filePath);
+    const status = headerValue(content, "status").toLowerCase();
+    if (status !== "open" && status !== "done") continue;
+    const fileMatch = fileName.match(/^(\d+)-(.*)\.md$/);
+    items.push({
+      id: headerValue(content, "id") || fileMatch?.[1] || "",
+      slug: fileMatch?.[2] ?? path.basename(fileName, ".md"),
+      status,
+      path: filePath,
+    });
+  }
+  items.sort((left, right) => left.id.localeCompare(right.id, "en", { numeric: true }));
+  return items;
+}
+
 export async function swarm(options = {}) {
   const resolved = resolveOptions(options);
   const userPath = path.join(resolved.mindPath, "user");
@@ -1028,23 +1048,7 @@ export async function swarm(options = {}) {
   let open = 0;
   let done = 0;
   for (const project of await listDirectories(path.join(userPath, "projects"))) {
-    const taskPath = path.join(userPath, "projects", project, "tasks");
-    const items = [];
-    for (const fileName of await listFiles(taskPath)) {
-      if (!fileName.endsWith(".md")) continue;
-      const filePath = path.join(taskPath, fileName);
-      const content = await readText(filePath);
-      const status = headerValue(content, "status").toLowerCase();
-      if (status !== "open" && status !== "done") continue;
-      const fileMatch = fileName.match(/^(\d+)-(.*)\.md$/);
-      items.push({
-        id: headerValue(content, "id") || fileMatch?.[1] || "",
-        slug: fileMatch?.[2] ?? path.basename(fileName, ".md"),
-        status,
-        path: filePath,
-      });
-    }
-    items.sort((left, right) => left.id.localeCompare(right.id, "en", { numeric: true }));
+    const items = await readTasks(path.join(userPath, "projects", project, "tasks"));
     const projectOpen = items.filter((item) => item.status === "open").length;
     const projectDone = items.filter((item) => item.status === "done").length;
     open += projectOpen;
@@ -1062,5 +1066,102 @@ export async function swarm(options = {}) {
       unread: inboxUnits.reduce((sum, inbox) => sum + inbox.count, 0),
       units: inboxUnits,
     },
+  };
+}
+
+function isInsidePath(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function waitingWork(scopePath) {
+  let unread = 0;
+  for (const unit of await listDirectories(path.join(scopePath, "inbox"))) {
+    unread += (await listFiles(path.join(scopePath, "inbox", unit))).length;
+  }
+  const open = (await readTasks(path.join(scopePath, "tasks"))).filter((item) => item.status === "open").length;
+  return { unread, open };
+}
+
+async function missingAssets(resolved, record) {
+  const { installableAssetRoots, listInstallableAssets } = await import("./install.mjs");
+  const { loadAdapters, resolveAdapterPaths } = await import("./discovery.mjs");
+  const adapters = new Map((await loadAdapters({ kitPath: resolved.kitPath })).map((adapter) => [adapter.id, adapter]));
+  const { assets } = await listInstallableAssets(
+    installableAssetRoots(resolved.kitPath, resolved.mindPath),
+    new Set(record.excluded),
+  );
+  const missing = new Map();
+  for (const agent of record.agents) {
+    const adapter = adapters.get(agent.name);
+    if (!adapter) continue;
+    const { skillsRoot } = resolveAdapterPaths(adapter, { homeDir: resolved.homeDir, env: resolved.env });
+    for (const asset of assets) {
+      const mainPath = path.join(skillsRoot, asset.name, adapter.skills.fileName);
+      if (record.managedFiles[mainPath] && await pathExists(mainPath)) continue;
+      if (!missing.has(asset.name)) missing.set(asset.name, { name: asset.name, type: asset.type, agents: [] });
+      missing.get(asset.name).agents.push(agent.name);
+    }
+  }
+  return [...missing.values()];
+}
+
+function environmentNames(routes) {
+  const lines = splitLines(routes);
+  const bounds = sectionBounds(lines, "Environments");
+  return new Set(lines.slice(bounds.start + 1, bounds.end)
+    .map((line) => line.match(/^-\s+([^:]+):/)?.[1]?.trim().toLowerCase())
+    .filter(Boolean));
+}
+
+export async function check(options = {}) {
+  const resolved = resolveOptions(options);
+  const cwd = path.resolve(resolved.cwd ?? process.cwd());
+  const userPath = path.join(resolved.mindPath, "user");
+  await assertSafePath(resolved.mindPath, userPath, { allowMissing: false });
+  let record = null;
+  try {
+    const machinePath = await machineFilePath(resolved.mindPath, resolved.hostname);
+    await assertSafePath(resolved.mindPath, machinePath, { allowMissing: false });
+    record = parseMachineRecord(await readText(machinePath));
+  } catch (error) {
+    if (error.code !== "MACHINE_NOT_FOUND") throw error;
+  }
+
+  const warnings = [];
+  let missing = [];
+  let update = null;
+  if (record) {
+    missing = await missingAssets(resolved, record);
+    // Recording the date keeps the network check to once a day instead of once per chat.
+    const result = await checkForUpdates(resolved);
+    update = {
+      checked: result.checked,
+      currentVersion: result.currentVersion,
+      latestVersion: result.latestVersion,
+      updateAvailable: compareVersions(result.latestVersion, result.currentVersion) > 0,
+    };
+    warnings.push(...result.warnings);
+  }
+
+  const environments = environmentNames(await readText(path.join(userPath, "routes.md"), ""));
+  const entry = (record?.paths ?? [])
+    .filter((item) => item.path && !environments.has(item.name.toLowerCase()) && isInsidePath(path.resolve(item.path), cwd))
+    .sort((left, right) => path.resolve(right.path).length - path.resolve(left.path).length)[0];
+  const repository = entry ? null : await gitRoot(cwd);
+
+  return {
+    action: "status",
+    machine: resolved.hostname,
+    machineRecord: Boolean(record),
+    missing,
+    update,
+    cwd,
+    project: entry
+      ? { name: entry.name, path: path.resolve(entry.path), ...await waitingWork(path.join(userPath, "projects", entry.name)) }
+      : null,
+    repository,
+    executive: await waitingWork(userPath),
+    warnings,
   };
 }

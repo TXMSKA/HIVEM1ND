@@ -27,6 +27,7 @@ export function helpText() {
 Usage:
   hivem1nd init [--gui] [--resume] [options]
   hivem1nd evolve [--check-only] [options]
+  hivem1nd check [options]
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
@@ -34,6 +35,7 @@ Usage:
 Commands:
   init       Configure this machine in eight guided steps
   evolve     Update the mind and apply pending migrations
+  check      Report what a new chat should know, without writing
   pylon      Attach a repository to the shared mind
   swarm      Show units, tasks and unread messages
   uninstall  Remove what HIVEM1ND wrote on this machine
@@ -99,6 +101,7 @@ const ALLOWED_FLAGS = {
   init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname"]),
   evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
+  check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   uninstall: new Set(["dryRun", "removeMind", "json", "mindPath", "homeDir", "hostname"]),
 };
@@ -242,6 +245,29 @@ function formatSwarm(result) {
   return lines.join("\n");
 }
 
+function waitingText({ unread, open }) {
+  return [
+    unread ? `${unread} unread message${unread === 1 ? "" : "s"}` : "",
+    open ? `${open} open task${open === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(", ");
+}
+
+function formatStatus(result) {
+  const lines = [];
+  if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
+  if (result.missing?.length) {
+    lines.push(`Not installed on this machine: ${result.missing.map((asset) => asset.name).join(", ")}. Run /evolve to install.`);
+  }
+  if (result.update?.updateAvailable) lines.push(`HIVEM1ND ${result.update.latestVersion} is available. Run /evolve to update.`);
+  if (result.repository) lines.push(`${result.repository} is a Git repository that is not a registered project.`);
+  const project = result.project ? waitingText(result.project) : "";
+  if (project) lines.push(`${result.project.name}: ${project}.`);
+  const executive = result.executive ? waitingText(result.executive) : "";
+  if (executive) lines.push(`Executive roles: ${executive}.`);
+  for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
+  return lines.join("\n");
+}
+
 function formatUninstall(result) {
   const lines = result.removed.length
     ? result.removed.map((path) => `Removed: ${path}`)
@@ -257,6 +283,7 @@ function formatHumanResult(result) {
   if (result.action === "evolve") return formatEvolve(result);
   if (result.action === "pylon") return formatPylon(result);
   if (result.action === "swarm") return formatSwarm(result);
+  if (result.action === "status") return formatStatus(result);
   if (result.action === "uninstall") return formatUninstall(result);
   return formatResult(result);
 }
@@ -705,6 +732,8 @@ async function runLifecycle(command, options, dependencies, output) {
     }
   } else if (command === "swarm") {
     result = await lifecycle.swarm(common);
+  } else if (command === "check") {
+    result = await lifecycle.check(common);
   } else {
     const prompts = dependencies.prompts ?? await import("@clack/prompts");
     const complete = await completePylonOptions(options, prompts);
@@ -718,7 +747,8 @@ async function runLifecycle(command, options, dependencies, output) {
       ...(complete.environment ? { environment: complete.environment } : {}),
     });
   }
-  output.write(`${options.json ? formatResult(result) : formatHumanResult(result)}\n`);
+  const text = options.json ? formatResult(result) : formatHumanResult(result);
+  if (text) output.write(`${text}\n`);
   return result.completed === false ? 1 : 0;
 }
 
