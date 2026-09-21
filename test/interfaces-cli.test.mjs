@@ -194,11 +194,13 @@ test("terminal setup renders descriptors and installs only after preview", async
   };
   const notes = [];
   const stepLogs = [];
+  const infoLogs = [];
+  const warnLogs = [];
   const prompts = {
     intro(message) { intro = message; },
     outro() {},
     note(message, title) { notes.push({ message, title }); },
-    log: { step(message) { stepLogs.push(message); } },
+    log: { step(message) { stepLogs.push(message); }, info(message) { infoLogs.push(message); }, warn(message) { warnLogs.push(message); } },
     isCancel() { return false; },
     cancel() {},
     async group(group) {
@@ -240,7 +242,7 @@ test("a descriptor field of type number prompts as text and is sent as a number"
     intro() {},
     outro() {},
     note() {},
-    log: { step() {} },
+    log: { step() {}, info() {}, warn() {} },
     isCancel() { return false; },
     cancel() {},
     async group(group) {
@@ -280,7 +282,7 @@ test("terminal setup walks step 5 of a real session: remove a repository, remove
     intro() {},
     outro() {},
     note(message, title) { notes.push({ message, title }); },
-    log: { step() {} },
+    log: { step() {}, info() {}, warn() {} },
     isCancel() { return false; },
     cancel() {},
     async group(group) {

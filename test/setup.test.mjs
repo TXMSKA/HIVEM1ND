@@ -400,12 +400,13 @@ test('resuming a draft keeps the previously selected mind path', async (context)
   assert.equal(step.language, 'en');
 });
 
-test('a symbolic ancestor never receives writes and is reported as one aggregated warning, not per-file conflicts', async (t) => {
+test('a symbolic ancestor becomes one conflict with replace as the default, and omitting writes nothing behind it', async (t) => {
   const fixture = await makeFixture(t);
   const outside = path.join(fixture.root, 'outside');
   await mkdir(outside);
+  const link = path.join(fixture.homeDir, '.agents');
   try {
-    await symlink(outside, path.join(fixture.homeDir, '.agents'), process.platform === 'win32' ? 'junction' : 'dir');
+    await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
   } catch (error) {
     if (error?.code === 'EPERM') {
       t.skip('Creating a test junction requires Windows Developer Mode');
@@ -420,21 +421,37 @@ test('a symbolic ancestor never receives writes and is reported as one aggregate
     /symbolic destination/,
   );
   const preview = await session.preview();
-  const skillConflicts = preview.conflicts.filter((conflict) => conflict.path.includes(`${path.sep}.agents${path.sep}`));
-  assert.equal(skillConflicts.length, 0);
-  const skillFiles = preview.files.filter((file) => file.path.includes(`${path.sep}.agents${path.sep}`));
-  assert.equal(skillFiles.length, 0);
-  const warning = preview.warnings.find((entry) => entry.includes(path.join(fixture.homeDir, '.agents')));
-  assert.ok(warning, 'expected an aggregated symlink-skip warning');
-  assert.match(warning, /^\d+ files skipped because their destination is a symbolic link\./);
+  const linkConflicts = preview.conflicts.filter((conflict) => conflict.link === true);
+  assert.equal(linkConflicts.length, 1);
+  assert.equal(linkConflicts[0].path, link);
+  assert.deepEqual(linkConflicts[0].choices, ['replace', 'omit']);
+  assert.equal(linkConflicts[0].selection, 'replace');
+  const perFileConflicts = preview.conflicts.filter((conflict) => conflict.path.startsWith(`${link}${path.sep}`));
+  assert.equal(perFileConflicts.length, 0);
+  assert.ok(preview.files.some((file) => file.path.startsWith(`${link}${path.sep}`)), 'files behind the link stay in the plan');
 
-  await session.answer({ confirm: true });
+  const step = await session.getStep();
+  const conflictField = step.fields.find((field) => field.label === link);
+  assert.deepEqual(conflictField.options.map((option) => option.value), ['replace', 'omit']);
+  assert.equal(conflictField.options[0].label, text('en', 'replaceLink'));
+
+  await session.answer({ confirm: true, conflicts: { [link]: 'omit' } });
   const result = await session.install();
-  assert.ok(result.warnings.some((entry) => entry.includes(path.join(fixture.homeDir, '.agents'))));
+  assert.ok(result.omitted.length > 0);
+  assert.ok(result.omitted.every((item) => item.component === link));
+  assert.equal(result.files.filter((file) => file.startsWith(`${link}${path.sep}`)).length, 0);
   assert.deepEqual(await readdir(outside), []);
+  assert.equal((await lstat(link)).isSymbolicLink(), true);
+
+  const report = await readFile(result.reportPath, 'utf8');
+  assert.match(report, new RegExp(`^omitted: ${result.omitted.length}$`, 'm'));
+  assert.ok(report.includes(link));
+  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  assert.equal(record.setup, 'done');
+  assert.equal(Object.keys(record.managedFiles).some((filePath) => filePath.startsWith(`${link}${path.sep}`)), false);
 });
 
-test('junctions inside an agent skills folder are skipped and reported as one warning listing every affected folder', async (t) => {
+test('replacing a junction inside a skills folder removes the link, writes the files and leaves the target untouched', async (t) => {
   const fixture = await makeFixture(t);
   const skillsDir = path.join(fixture.homeDir, '.agents', 'skills');
   await mkdir(skillsDir, { recursive: true });
@@ -442,10 +459,13 @@ test('junctions inside an agent skills folder are skipped and reported as one wa
   const outsideReport = path.join(fixture.root, 'outside-report');
   await mkdir(outsideQa);
   await mkdir(outsideReport);
+  await writeFile(path.join(outsideQa, 'kept.md'), 'kept\n');
   const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const qaLink = path.join(skillsDir, 'qa');
+  const reportLink = path.join(skillsDir, 'report');
   try {
-    await symlink(outsideQa, path.join(skillsDir, 'qa'), linkType);
-    await symlink(outsideReport, path.join(skillsDir, 'report'), linkType);
+    await symlink(outsideQa, qaLink, linkType);
+    await symlink(outsideReport, reportLink, linkType);
   } catch (error) {
     if (error?.code === 'EPERM') {
       t.skip('Creating a test junction requires Windows Developer Mode');
@@ -456,20 +476,25 @@ test('junctions inside an agent skills folder are skipped and reported as one wa
 
   const session = await completeAnswers(fixture, ['codex']);
   const preview = await session.preview();
-  const linkedConflicts = preview.conflicts.filter((conflict) => (
-    conflict.path.includes(`${path.sep}skills${path.sep}qa${path.sep}`) || conflict.path.includes(`${path.sep}skills${path.sep}report${path.sep}`)
-  ));
-  assert.equal(linkedConflicts.length, 0);
+  const linkConflicts = preview.conflicts.filter((conflict) => conflict.link === true);
+  assert.deepEqual(linkConflicts.map((conflict) => conflict.path).sort(), [qaLink, reportLink].sort());
 
-  const warning = preview.warnings.find((entry) => entry.includes(path.join(skillsDir, 'qa')));
-  assert.ok(warning, 'expected an aggregated symlink-skip warning');
-  assert.ok(warning.includes(path.join(skillsDir, 'report')));
-  assert.match(warning, /^2 files skipped because their destination is a symbolic link\./);
-
-  await session.answer({ confirm: true });
-  await session.install();
-  assert.deepEqual(await readdir(outsideQa), []);
+  await session.answer({ confirm: true, conflicts: { [qaLink]: 'replace', [reportLink]: 'replace' } });
+  const result = await session.install();
+  assert.deepEqual(result.omitted, []);
+  assert.deepEqual([...result.replacedLinks].sort(), [qaLink, reportLink].sort());
+  assert.equal((await lstat(qaLink)).isSymbolicLink(), false);
+  assert.ok(result.files.includes(path.join(qaLink, 'SKILL.md')));
+  assert.ok((await readdir(qaLink)).includes('SKILL.md'));
+  // The folder the junction pointed at keeps its own content.
+  assert.deepEqual(await readdir(outsideQa), ['kept.md']);
   assert.deepEqual(await readdir(outsideReport), []);
+
+  const report = await readFile(result.reportPath, 'utf8');
+  assert.match(report, /^links-replaced: 2$/m);
+  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  assert.equal(record.setup, 'done');
+  assert.equal(record.managedFiles[path.join(qaLink, 'SKILL.md')] !== undefined, true);
 });
 
 test('content categories group every feature deterministically and control the included set', async (context) => {
@@ -630,6 +655,139 @@ test('setup installs a role and a feature added to the mind folder', async (cont
   const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
   assert.ok(machine.managedFiles[skillPath]);
 });
+
+test('a private role in user/roles installs like a kit role, and a kit name keeps the kit file', async (context) => {
+  const fixture = await makeFixture(context);
+  await mkdir(path.join(fixture.mindPath, 'user', 'roles'), { recursive: true });
+  await mkdir(path.join(fixture.mindPath, 'user', 'commands'), { recursive: true });
+  await writeFile(
+    path.join(fixture.mindPath, 'user', 'roles', 'overmind.md'),
+    ['---', 'name: overmind', 'description: Private role.', '---', '', '# Overmind', '', 'Mind: {{mind}}', ''].join('\n'),
+  );
+  await writeFile(
+    path.join(fixture.mindPath, 'user', 'commands', 'relay.md'),
+    ['---', 'name: relay', 'description: A name the kit already ships.', '---', '', '# Local relay', ''].join('\n'),
+  );
+
+  const session = await completeAnswers(fixture, ['codex']);
+  await session.answer({ confirm: true });
+  const result = await session.install();
+
+  const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'overmind', 'SKILL.md');
+  assert.match(await readFile(privateSkill, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
+  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  assert.ok(machine.managedFiles[privateSkill]);
+  // The private half never reaches the published folder.
+  assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'overmind.md')), false);
+  // A name the kit already ships keeps the kit file and says so.
+  assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'relay', 'SKILL.md'), 'utf8'), /# Local relay/);
+  assert.ok(result.warnings.some((warning) => warning.includes(path.join('user', 'commands', 'relay.md'))));
+});
+
+async function pathExists(target) {
+  try {
+    await lstat(target);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+test('custom mode alerts about an installed mind, attaches the machine and leaves the mind content alone', async (context) => {
+  const fixture = await makeFixture(context);
+  await makeInstalledMind(fixture, '1.0.0');
+  const session = await createSetupSession({
+    kitPath: KIT_PATH,
+    mindPath: fixture.mindPath,
+    homeDir: fixture.homeDir,
+    hostname: 'SECOND',
+    language: 'en',
+    env: { PATH: '' },
+    resume: false,
+  });
+
+  await session.answer({ installMode: 'custom' });
+  const location = await session.getStep();
+  assert.equal(location.number, 2);
+  assert.equal(location.existingMind.path, fixture.mindPath);
+  assert.equal(location.existingMind.version, '1.0.0');
+  assert.match(location.alert, /1\.0\.0/);
+  const attachField = location.fields.find((field) => field.id === 'attach');
+  assert.ok(attachField, 'expected the attach question');
+  assert.equal(location.values.attach, true);
+
+  await session.answer({ mindPath: fixture.mindPath, attach: true });
+  await session.answer({ scan: true });
+  await session.answer({ agents: ['codex'], attachModes: { codex: 'auto' } });
+  const includeStep = await session.getStep();
+  await session.answer({ included: includeStep.values.included });
+  await session.answer({ addRoot: fixture.projectsRoot });
+  // Preferences belong to the mind, so an attach goes straight to the install step.
+  const installStep = await session.answer({ projectsConfirmed: true });
+  assert.equal(installStep.number, 7);
+
+  const preview = await session.preview();
+  const mindFiles = preview.files.filter((file) => file.path.startsWith(`${fixture.mindPath}${path.sep}`));
+  assert.deepEqual(
+    mindFiles.map((file) => path.relative(fixture.mindPath, file.path)).sort(),
+    [path.join('user', 'machines', 'SECOND.md'), path.join('user', 'routes.md')].sort(),
+  );
+
+  await session.answer({ confirm: true });
+  const result = await session.install();
+  assert.equal(result.attached, true);
+  assert.ok(result.notices.some((notice) => notice.includes(fixture.mindPath)));
+  assert.ok(result.notices.some((notice) => notice.includes('1.0.0')), 'expected the version pair notice');
+  assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(
+    await readFile(path.join(fixture.mindPath, 'user', 'preferences.md'), 'utf8'),
+    '- 2026-01-01: Existing preference stays first. Why: chosen before setup.\n',
+  );
+  assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Older rules kept.\n');
+  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'SECOND.md'), 'utf8'));
+  assert.equal(machine.setup, 'done');
+  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
+});
+
+test('simple mode attaches to a mind already installed on this machine instead of writing a second one', async (context) => {
+  const fixture = await makeFixture(context);
+  const installed = path.join(fixture.homeDir, 'HIVEM1ND');
+  await makeInstalledMind({ ...fixture, mindPath: installed }, '1.1.1');
+  const session = await createSetupSession({
+    kitPath: KIT_PATH,
+    mindPath: path.join(fixture.root, 'unused'),
+    homeDir: fixture.homeDir,
+    hostname: 'SECOND',
+    language: 'en',
+    env: { PATH: '' },
+    resume: false,
+  });
+
+  const step = await session.answer({ installMode: 'simple' });
+  assert.equal(step.number, 7);
+  const preview = await session.preview();
+  assert.equal(preview.files.some((file) => file.path.startsWith(`${path.join(fixture.root, 'unused')}${path.sep}`)), false);
+  await session.answer({ confirm: true });
+  const result = await session.install();
+  assert.equal(result.attached, true);
+  assert.equal(result.mindPath, installed);
+  assert.equal(await pathExists(path.join(fixture.root, 'unused')), false);
+  assert.equal(await readFile(path.join(installed, 'user', 'VERSION'), 'utf8'), '1.1.1\n');
+  assert.ok(await pathExists(path.join(installed, 'user', 'machines', 'SECOND.md')));
+});
+
+async function makeInstalledMind(fixture, version) {
+  await mkdir(path.join(fixture.mindPath, 'user', 'machines'), { recursive: true });
+  await writeFile(path.join(fixture.mindPath, 'rules.md'), 'Older rules kept.\n');
+  await writeFile(path.join(fixture.mindPath, 'files.md'), 'Older formats kept.\n');
+  await writeFile(path.join(fixture.mindPath, 'user', 'VERSION'), `${version}\n`);
+  await writeFile(
+    path.join(fixture.mindPath, 'user', 'preferences.md'),
+    '- 2026-01-01: Existing preference stays first. Why: chosen before setup.\n',
+  );
+  await writeFile(path.join(fixture.mindPath, 'user', 'routes.md'), '## Environments\n\n## Projects\n\n## Minds\n');
+}
 
 async function makeFixture(context) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-setup-'));

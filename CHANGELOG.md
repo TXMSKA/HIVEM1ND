@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 - 2026-09-21
+
+- An install is never reported as done over files it did not write: a symbolic link or a Windows junction standing where files belong stops the run and asks, replacing the link by default and keeping the folder it points at, with omitting available as an explicit choice.
+- Every install, attach and update writes `user/machines/<host>.report.md` with what it wrote, omitted or replaced.
+- Attaching a machine is its own flow: a mind already installed is detected, simple mode attaches to it and custom mode asks at the mind location step, leaving the mind's content, preferences and version untouched.
+- Roles, commands and features in `user/roles`, `user/commands` and `user/features` install like the ones the kit ships, so a role private to one mind stays out of the published folder.
+
 ## 1.1.1 - 2026-09-18
 
 - OpenCode and VS Code attach in auto mode without manual steps: the rules line goes into the OpenCode global rules file and into a VS Code user instructions file.

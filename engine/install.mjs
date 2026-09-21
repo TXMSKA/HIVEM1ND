@@ -1,11 +1,14 @@
-import { lstat, readdir, readFile, unlink } from 'node:fs/promises';
+import { lstat, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverContent, loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import {
   atomicWriteFile,
   hashContent,
+  machineReportPath,
   parseFrontmatter,
   readMachineRecord,
+  removeSymbolicLink,
+  restoreSymbolicLink,
   serializeFrontmatter,
   unsafeDestinationReason,
   writeMachineRecord,
@@ -17,6 +20,7 @@ const KIT_EXCLUSIONS = new Set([
 ]);
 const PRIVATE_INSTRUCTION_FILES = new Set(['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md']);
 const ASSET_SECTIONS = ['roles', 'commands', 'features', 'knowledge'];
+const MISSING_SNAPSHOT = { kind: 'missing', hash: null, content: null };
 
 const REASON_KEYS = {
   'Two setup operations produce different content for this path.': 'reasonDifferentContent',
@@ -86,7 +90,7 @@ export async function installAgentAssets({
     excluded: record.excluded,
     language,
   });
-  const plan = reportSymlinkSkips(combinePlans(kitPlan, agentPlan), language);
+  const plan = registerLinkConflicts(combinePlans(kitPlan, agentPlan), language);
   const unresolved = plan.conflicts.filter((conflict) => {
     const allowed = conflict.choices ?? ['keep', 'replace'];
     return !allowed.includes(conflictChoices[conflict.path]);
@@ -99,7 +103,8 @@ export async function installAgentAssets({
       path: conflict.path,
       reason: localizeReason(conflict.reason, language),
       choices: conflict.choices ?? ['keep', 'replace'],
-      selection: conflictChoices[conflict.path] ?? null,
+      selection: conflictChoices[conflict.path] ?? conflict.selection ?? null,
+      link: conflict.link === true,
     })),
   };
   if (previewOnly || unresolved.length > 0) return result;
@@ -109,8 +114,20 @@ export async function installAgentAssets({
   for (const conflict of plan.conflicts) {
     if (conflictChoices[conflict.path] === 'keep') delete record.managedFiles[conflict.path];
   }
+  for (const item of applied.omitted) delete record.managedFiles[item.path];
   delete record.managedFiles[machinePath];
   await writeMachineRecord(mindPath, hostname, record);
+  const report = {
+    action: 'evolve',
+    written: applied.files.length,
+    omitted: applied.omitted,
+    replacedLinks: applied.replacedLinks,
+    kept: plan.conflicts
+      .filter((conflict) => conflictChoices[conflict.path] === 'keep')
+      .map((conflict) => ({ path: conflict.path, reason: localizeReason(conflict.reason, language) })),
+    warnings: result.warnings,
+  };
+  const reportPath = await writeInstallReport({ mindPath, hostname, language, report });
   return {
     agents: result.agents.map((agent) => ({
       ...agent,
@@ -119,7 +136,42 @@ export async function installAgentAssets({
     baseFiles: result.baseFiles.filter((filePath) => applied.files.includes(filePath)),
     warnings: result.warnings,
     conflicts: [],
+    omitted: applied.omitted,
+    replacedLinks: applied.replacedLinks,
+    reportPath,
   };
+}
+
+// One file per machine, replaced on every run, so what a run did outlives the window it ran in.
+export async function writeInstallReport({ mindPath, hostname, language = 'en', report }) {
+  const destination = machineReportPath(mindPath, hostname);
+  const lines = [
+    `machine: ${hostname}`,
+    `date: ${reportDate()}`,
+    `action: ${report.action}`,
+    `written: ${report.written}`,
+    `omitted: ${report.omitted.length}`,
+    `unwritten: ${(report.unwritten ?? []).length}`,
+    `links-replaced: ${report.replacedLinks.length}`,
+  ];
+  const sections = [
+    ['reportOmitted', report.omitted.map((item) => `${item.path}: ${text(language, 'reportOmittedReason', { path: item.component })}`)],
+    ['reportReplacedLinks', report.replacedLinks],
+    ['reportKept', (report.kept ?? []).map((item) => `${item.path}: ${localizeReason(item.reason, language)}`)],
+    ['reportUnwritten', report.unwritten ?? []],
+    ['reportWarnings', report.warnings ?? []],
+  ];
+  for (const [key, values] of sections) {
+    if (values.length === 0) continue;
+    lines.push('', `## ${text(language, key)}`, ...values.map((value) => `- ${value}`));
+  }
+  await atomicWriteFile(destination, `${lines.join('\n')}\n`, { root: mindPath });
+  return destination;
+}
+
+function reportDate(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 export async function planAgentAssets({
@@ -140,7 +192,7 @@ export async function planAgentAssets({
   const items = [];
   const conflicts = [];
   const warnings = [...sourceAssets.warnings];
-  const symlinkSkips = [];
+  const linkComponents = [];
   const agentFiles = new Map();
 
   for (const selected of agents ?? []) {
@@ -167,7 +219,7 @@ export async function planAgentAssets({
       await addPlannedFile({
         items,
         conflicts,
-        symlinkSkips,
+        linkComponents,
         destination: mainPath,
         content: rendered,
         root: resolved.skillsBase,
@@ -184,7 +236,7 @@ export async function planAgentAssets({
         await addPlannedFile({
           items,
           conflicts,
-          symlinkSkips,
+          linkComponents,
           destination: supportPath,
           content: support.content,
           root: resolved.skillsBase,
@@ -211,7 +263,7 @@ export async function planAgentAssets({
           agentName,
           keepExistingPreferences,
           owner,
-          symlinkSkips,
+          linkComponents,
         );
         files.push(resolved.rulesPath);
         mergePlanItem(items, conflicts, rulePlan);
@@ -224,7 +276,7 @@ export async function planAgentAssets({
     items: deduplicatePlanItems(items, conflicts),
     conflicts: deduplicateConflicts(conflicts),
     warnings: [...new Set(warnings)],
-    symlinkSkips,
+    linkComponents,
     agentFiles,
     roots: [...new Set(items.map((item) => item.root))],
   };
@@ -240,14 +292,14 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
   const items = [];
   const conflicts = [];
   const warnings = [];
-  const symlinkSkips = [];
+  const linkComponents = [];
   const excludedNames = new Set(excluded);
   const nestedDestination = relativeChild(sourceRoot, destinationRoot);
   const packageJson = JSON.parse(await readFile(path.join(sourceRoot, 'package.json'), 'utf8'));
   const distributableRoots = new Set(['package.json', ...(packageJson.files ?? []).map(topLevelEntry).filter(Boolean)]);
   const owner = { id: 'mind', label: text(language, 'ownerMind') };
   await walk(sourceRoot, '');
-  return { items, conflicts, warnings, symlinkSkips };
+  return { items, conflicts, warnings, linkComponents };
 
   async function walk(directory, relativeDirectory) {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -279,7 +331,7 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
       await addPlannedFile({
         items,
         conflicts,
-        symlinkSkips,
+        linkComponents,
         destination,
         content: await readFile(source),
         root: destinationRoot,
@@ -304,11 +356,11 @@ export async function planDataFile({
 }) {
   const items = [];
   const conflicts = [];
-  const symlinkSkips = [];
+  const linkComponents = [];
   await addPlannedFile({
     items,
     conflicts,
-    symlinkSkips,
+    linkComponents,
     destination,
     content,
     root,
@@ -318,7 +370,7 @@ export async function planDataFile({
     allowExisting,
     owner: { id: 'mind', label: text(language, 'ownerMind') },
   });
-  return { items, conflicts, warnings: [], symlinkSkips };
+  return { items, conflicts, warnings: [], linkComponents };
 }
 
 export async function applyInstallPlan(plan, conflictChoices = {}) {
@@ -331,8 +383,25 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
     }
   }
 
+  const linkConflicts = (plan.conflicts ?? []).filter((conflict) => conflict.link === true);
+  const omittedComponents = new Set(linkConflicts
+    .filter((conflict) => (selected.get(conflict.path) ?? conflict.selection) === 'omit')
+    .map((conflict) => conflict.path));
+  const omitted = (plan.items ?? [])
+    .filter((item) => item.linkComponent && omittedComponents.has(item.linkComponent))
+    .map((item) => ({ path: item.path, component: item.linkComponent }));
+  const removedLinks = [];
+  // The links go first: every file behind one is planned as a creation at a path that only
+  // becomes writable once the link is gone.
+  for (const conflict of linkConflicts) {
+    if (omittedComponents.has(conflict.path)) continue;
+    const removed = await removeSymbolicLink(conflict.root ?? path.dirname(conflict.path), conflict.path);
+    if (removed) removedLinks.push(removed);
+  }
+
   const currentByPath = new Map();
   for (const item of plan.items) {
+    if (item.linkComponent && omittedComponents.has(item.linkComponent)) continue;
     if (!currentByPath.has(item.path)) {
       currentByPath.set(item.path, await currentSnapshot(item.path, true));
     }
@@ -347,7 +416,8 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
   const written = [];
   try {
     for (const item of plan.items) {
-      const conflict = (plan.conflicts ?? []).find((candidate) => candidate.path === item.path);
+      if (item.linkComponent && omittedComponents.has(item.linkComponent)) continue;
+      const conflict = (plan.conflicts ?? []).find((candidate) => candidate.path === item.path && candidate.link !== true);
       const choice = conflict ? selected.get(item.path) ?? conflict.selection : null;
       if (choice === 'keep') continue;
       if (item.action !== 'unchanged') {
@@ -358,13 +428,13 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
       if (item.owned) managedFiles[item.path] = hashContent(item.content);
     }
   } catch (error) {
-    const rollbackErrors = await rollbackWrites(written);
+    const rollbackErrors = await rollbackWrites(written, removedLinks);
     if (rollbackErrors.length > 0) {
       throw new AggregateError([error, ...rollbackErrors], 'Install failed and one or more files could not be restored');
     }
     throw error;
   }
-  return { files, managedFiles };
+  return { files, managedFiles, omitted, replacedLinks: removedLinks.map((link) => link.path) };
 }
 
 export function publicPreview(plan, language = 'en') {
@@ -376,6 +446,7 @@ export function publicPreview(plan, language = 'en') {
       reason: localizeReason(conflict.reason, language),
       choices: conflict.choices ?? ['keep', 'replace'],
       selection: conflict.selection ?? null,
+      link: conflict.link === true,
     })),
   };
 }
@@ -384,7 +455,7 @@ export function combinePlans(...plans) {
   const items = [];
   const conflicts = [];
   const warnings = [];
-  const symlinkSkips = [];
+  const linkComponents = [];
   for (const plan of plans) {
     if (!plan) continue;
     for (const item of plan.items ?? []) {
@@ -398,17 +469,34 @@ export function combinePlans(...plans) {
     }
     conflicts.push(...(plan.conflicts ?? []));
     warnings.push(...(plan.warnings ?? []));
-    symlinkSkips.push(...(plan.symlinkSkips ?? []));
+    linkComponents.push(...(plan.linkComponents ?? []));
   }
-  return { items, conflicts: deduplicateConflicts(conflicts), warnings: [...new Set(warnings)], symlinkSkips };
+  return { items, conflicts: deduplicateConflicts(conflicts), warnings: [...new Set(warnings)], linkComponents };
 }
 
-export function reportSymlinkSkips(plan, language = 'en') {
-  if (!plan.symlinkSkips?.length) return plan;
-  const folders = [...new Set(plan.symlinkSkips)].sort((left, right) => left.localeCompare(right));
-  const count = plan.symlinkSkips.length;
-  const header = text(language, count === 1 ? 'warningSymlinkDestinationSkippedOne' : 'warningSymlinkDestinationSkippedOther', { count });
-  return { ...plan, warnings: [...plan.warnings, [header, ...folders].join('\n')] };
+// One conflict per link, not per file: a single junction can stand in front of every skill
+// of an agent, and the choice is the same for all of them.
+export function registerLinkConflicts(plan, language = 'en') {
+  if (!plan.linkComponents?.length) return plan;
+  const byPath = new Map();
+  for (const component of plan.linkComponents) {
+    if (!byPath.has(component.path)) byPath.set(component.path, { ...component, count: 0 });
+    byPath.get(component.path).count += 1;
+  }
+  const conflicts = [...byPath.values()]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((component) => ({
+      path: component.path,
+      reason: text(language, component.count === 1 ? 'reasonLinkComponentOne' : 'reasonLinkComponentOther', {
+        count: component.count,
+        path: component.path,
+      }),
+      choices: ['replace', 'omit'],
+      selection: 'replace',
+      link: true,
+      root: component.root,
+    }));
+  return { ...plan, conflicts: [...plan.conflicts, ...conflicts] };
 }
 
 export function installableAssetRoots(kitPath, mindPath) {
@@ -418,7 +506,9 @@ export function installableAssetRoots(kitPath, mindPath) {
   return [
     kitRoot,
     { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true },
-    { path: path.join(mind, 'user'), scope: 'mind', sections: ['knowledge'], mirrorsKit: false },
+    // The private half installs the same four sections as the kit, so a role written for
+    // this mind alone lives in user/roles and never sits in the published folder.
+    { path: path.join(mind, 'user'), scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: false },
   ];
 }
 
@@ -534,17 +624,28 @@ function summarizeAgentPlan(plan, language = 'en') {
       path: conflict.path,
       reason: localizeReason(conflict.reason, language),
       choices: conflict.choices ?? ['keep', 'replace'],
-      selection: null,
+      selection: conflict.selection ?? null,
+      link: conflict.link === true,
     })),
   };
 }
 
-async function planRuleFile(adapter, destination, root, line, managedFiles, agentName, keepExistingPreferences, owner, symlinkSkips) {
+async function planRuleFile(adapter, destination, root, line, managedFiles, agentName, keepExistingPreferences, owner, linkComponents) {
   const unsafeReason = await unsafeDestinationReason(root, destination);
   const symlinkAncestor = symlinkComponentPath(unsafeReason);
   if (symlinkAncestor) {
-    symlinkSkips.push(symlinkAncestor);
-    return { item: null, conflict: null };
+    // Nothing is written through the link, so the file is planned as a creation for once the
+    // link is gone. Reading through the link is safe, and it keeps the existing lines.
+    const existing = (await currentSnapshot(destination, true)).content?.toString('utf8') ?? '';
+    const withoutRule = removeExactLine(existing, line);
+    const separator = withoutRule.length === 0 || withoutRule.endsWith('\n') ? '' : '\n';
+    const merged = keepExistingPreferences
+      ? `${withoutRule}${separator}${line}\n`
+      : `${line}\n${withoutRule}`;
+    const item = plannedItem(destination, merged, root, 'rule', MISSING_SNAPSHOT, 'create', false, agentName, owner);
+    item.linkComponent = symlinkAncestor;
+    linkComponents.push({ path: symlinkAncestor, root: path.resolve(root) });
+    return { item, conflict: null };
   }
   if (unsafeReason) {
     const snapshot = await currentSnapshot(destination);
@@ -565,7 +666,7 @@ async function planRuleFile(adapter, destination, root, line, managedFiles, agen
       agentName,
       owned: true,
       owner,
-      symlinkSkips,
+      linkComponents,
     });
   }
 
@@ -633,7 +734,7 @@ function symlinkComponentPath(reason) {
 async function addPlannedFile({
   items,
   conflicts,
-  symlinkSkips,
+  linkComponents,
   destination,
   content,
   root,
@@ -647,7 +748,12 @@ async function addPlannedFile({
   const unsafeReason = await unsafeDestinationReason(root, destination);
   const symlinkAncestor = symlinkComponentPath(unsafeReason);
   if (symlinkAncestor) {
-    symlinkSkips.push(symlinkAncestor);
+    // The file is planned as a creation behind the link: replacing the link leaves the
+    // destination missing, and omitting it is what drops the file, with a record of both.
+    const item = plannedItem(destination, content, root, kind, MISSING_SNAPSHOT, 'create', owned, agentName, owner);
+    item.linkComponent = symlinkAncestor;
+    items.push(item);
+    linkComponents.push({ path: symlinkAncestor, root: path.resolve(root) });
     return;
   }
   const snapshot = await currentSnapshot(destination);
@@ -814,8 +920,32 @@ function excludedKnowledgePath(segments, excludedNames) {
   return excludedNames.has('knowledge') || isExcluded(excludedNames, 'knowledge', segments[1]);
 }
 
-async function rollbackWrites(written) {
+async function rollbackWrites(written, removedLinks = []) {
   const errors = [];
+  await restoreWrittenFiles(written, errors);
+  // The files come back first: the folder created where the link stood has to be empty
+  // again before the link can take its place.
+  for (const link of [...removedLinks].reverse()) {
+    try {
+      await removeEmptyDirectory(link.path);
+      await restoreSymbolicLink(link);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+async function removeEmptyDirectory(directory) {
+  const state = await lstat(directory).catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!state || state.isSymbolicLink() || !state.isDirectory()) return;
+  await rmdir(directory);
+}
+
+async function restoreWrittenFiles(written, errors) {
   for (const { item, snapshot } of [...written].reverse()) {
     try {
       const current = await currentSnapshot(item.path);

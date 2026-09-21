@@ -280,6 +280,65 @@ test("evolve upgrades a copied mind through the real installer and keeps exclusi
   await fs.access(path.join(mindPath, "user", "roles"));
 });
 
+test("evolve stops on a dangling junction, then replaces it and writes the run report", async (t) => {
+  const root = await temporaryDirectory(t, "evolve-link");
+  const mindPath = await makeMind(root);
+  const kitPath = path.join(root, "kit");
+  const homeDir = path.join(root, "home");
+  const env = { ...process.env, CODEX_HOME: path.join(homeDir, ".codex") };
+  await write(
+    path.join(mindPath, "user", "machines", "TEST.md"),
+    `machine: TEST\nmind: ${mindPath}\nupdate-check: daily\nlast-check: 2029-01-01\nsetup: done\n\n## Agents\n- codex: on-demand\n\n## Paths\n\n## Excluded\n`,
+  );
+  await write(
+    path.join(kitPath, "package.json"),
+    `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["features/"] })}\n`,
+  );
+  await write(
+    path.join(kitPath, "features", "report.md"),
+    "---\nname: report\ndescription: report.\n---\n\n# /report\n",
+  );
+
+  const skillsDir = path.join(homeDir, ".agents", "skills");
+  await fs.mkdir(skillsDir, { recursive: true });
+  const link = path.join(skillsDir, "report");
+  try {
+    await fs.symlink(path.join(root, "gone"), link, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      t.skip("Creating a test junction requires Windows Developer Mode");
+      return;
+    }
+    throw error;
+  }
+
+  const blocked = await evolve({ kitPath, mindPath, homeDir, hostname: "TEST", env, pull: false });
+  assert.equal(blocked.completed, false);
+  assert.equal(blocked.conflicts.length, 1);
+  assert.equal(blocked.conflicts[0].path, link);
+  assert.deepEqual(blocked.conflicts[0].choices, ["replace", "omit"]);
+  assert.equal(blocked.conflicts[0].selection, "replace");
+  assert.equal(await fs.readFile(path.join(mindPath, "user", "VERSION"), "utf8"), "0.1.0\n");
+
+  const result = await evolve({
+    kitPath,
+    mindPath,
+    homeDir,
+    hostname: "TEST",
+    env,
+    pull: false,
+    conflicts: { [link]: "replace" },
+  });
+  assert.equal(result.completed, true);
+  assert.deepEqual(result.replacedLinks, [link]);
+  assert.equal((await fs.lstat(link)).isSymbolicLink(), false);
+  await fs.access(path.join(link, "SKILL.md"));
+  const report = await fs.readFile(result.reportPath, "utf8");
+  assert.match(report, /^action: evolve$/m);
+  assert.match(report, /^links-replaced: 1$/m);
+  assert.ok(report.includes(link));
+});
+
 test("evolve preserves user-added kit files and warns only when the kit ships the same path", async (t) => {
   const root = await temporaryDirectory(t, "evolve-user-files");
   const mindPath = await makeMind(root);

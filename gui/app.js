@@ -238,6 +238,12 @@ function renderInstallMode(step) {
 
 function renderLocation(step) {
   const field = step.fields[0];
+  const blocks = [];
+  if (step.alert) {
+    const alert = el("p", "warning", step.alert);
+    alert.setAttribute("role", "status");
+    blocks.push(alert);
+  }
   const wrapper = el("div", "field");
   const label = el("label", "", fieldLabel(field) || field.label);
   label.htmlFor = "mind-path";
@@ -279,7 +285,22 @@ function renderLocation(step) {
     presets.append(chip);
   }
   wrapper.append(presets);
-  return [wrapper];
+  blocks.push(wrapper);
+
+  const attachField = step.fields.find((candidate) => candidate.id === "attach");
+  if (attachField) {
+    const attachWrapper = el("div", "field");
+    const line = el("label", "check-option");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = "attach-mind";
+    checkbox.checked = step.values.attach !== false;
+    line.append(checkbox, document.createTextNode(attachField.label));
+    attachWrapper.append(line);
+    if (attachField.help) attachWrapper.append(el("p", "field-help", attachField.help));
+    blocks.push(attachWrapper);
+  }
+  return blocks;
 }
 
 function renderAgents(step) {
@@ -623,10 +644,16 @@ function renderInstallPreview(step, preview) {
 }
 
 function renderDone(step) {
+  const blocks = [];
+  for (const notice of step.result?.notices ?? []) blocks.push(el("p", "warning", notice));
+  if (step.result?.reportPath) {
+    blocks.push(el("p", "warning", ui().reportSaved.replace("{path}", step.result.reportPath)));
+  }
   const panel = el("div", "success-panel");
   const command = step.result?.firstCommand ?? "/executor <project>";
   panel.append(el("p", "result-label", ui().firstCommand), el("code", "", command));
-  return [panel];
+  blocks.push(panel);
+  return blocks;
 }
 
 function continueLabel(step) {
@@ -703,8 +730,12 @@ function collectValues() {
   switch (currentStep.number) {
     case 1:
       return { installMode: document.querySelector('input[name="installMode"]:checked')?.value ?? currentStep.values.installMode };
-    case 2:
-      return { mindPath: document.getElementById("mind-path").value.trim() };
+    case 2: {
+      const values = { mindPath: document.getElementById("mind-path").value.trim() };
+      const attachBox = document.getElementById("attach-mind");
+      if (attachBox) values.attach = attachBox.checked;
+      return values;
+    }
     case 3:
       if (!currentStep.scanned || !currentStep.agents?.length) return {};
       return {

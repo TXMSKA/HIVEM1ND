@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine } from './install.mjs';
-import { atomicWriteFile, hashContent, readMachineRecord } from './records.mjs';
+import { atomicWriteFile, hashContent, machineReportPath, readMachineRecord } from './records.mjs';
 
 const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
 const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
@@ -80,6 +80,12 @@ export async function uninstall(options = {}) {
   } else {
     if (!dryRun) await removeFile(machinePath);
     removed.push(machinePath);
+    // The install report belongs to this machine and goes with its record.
+    const reportPath = machineReportPath(mindPath, hostname);
+    if (await lstatIfPresent(reportPath)) {
+      if (!dryRun) await removeFile(reportPath);
+      removed.push(reportPath);
+    }
     if (eligibility) kept.push({ path: mindPath, reason: eligibility.reason });
   }
 
@@ -145,7 +151,7 @@ async function checkMindRemovable(mindPath, hostname, record) {
   });
   const ownRecordName = normalizePath(`${hostname}.md`);
   const otherMachines = machineEntries
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md') && !entry.name.toLowerCase().endsWith('.report.md'))
     .map((entry) => entry.name)
     .filter((name) => normalizePath(name) !== ownRecordName);
   if (otherMachines.length > 0) {
@@ -154,6 +160,7 @@ async function checkMindRemovable(mindPath, hostname, record) {
 
   const managedByNormalizedPath = new Map(Object.entries(record.managedFiles ?? {}).map(([entryPath, hash]) => [normalizePath(entryPath), hash]));
   const ownRecordPath = path.join(machinesDir, `${hostname}.md`);
+  const ownReportPath = path.join(machinesDir, `${hostname}.report.md`);
   const migrationsPath = path.join(mindPath, 'user', 'MIGRATIONS');
   const extras = [];
   await walk(mindPath);
@@ -176,6 +183,7 @@ async function checkMindRemovable(mindPath, hostname, record) {
       }
       if (!entry.isFile()) continue;
       if (normalizePath(entryPath) === normalizePath(ownRecordPath)) continue;
+      if (normalizePath(entryPath) === normalizePath(ownReportPath)) continue;
       if (normalizePath(entryPath) === normalizePath(migrationsPath)) continue;
       const managedHash = managedByNormalizedPath.get(normalizePath(entryPath));
       if (managedHash === undefined) {

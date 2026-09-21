@@ -47,8 +47,8 @@ Init options:
 
 Evolve options:
   --check-only          Check for a newer version without changing files
-  --conflict <path>=<keep|replace>
-                        Resolve a file conflict (repeatable)
+  --conflict <path>=<keep|replace|omit>
+                        Resolve a file or link conflict (repeatable)
 
 Uninstall options:
   --dry-run             Report the plan without removing anything
@@ -127,9 +127,9 @@ export function parseArgs(argv) {
     if (token === "--conflict") {
       if (!ALLOWED_FLAGS[command].has("conflicts")) throw new CliUsageError(`${token} is not valid for ${command}.`);
       const value = tokens[index + 1];
-      if (!value) throw new CliUsageError("--conflict requires <path>=keep or <path>=replace.");
-      const match = /^(.*)=(keep|replace)$/.exec(value);
-      if (!match?.[1]) throw new CliUsageError("--conflict requires <path>=keep or <path>=replace.");
+      if (!value) throw new CliUsageError("--conflict requires <path>=keep, <path>=replace or <path>=omit.");
+      const match = /^(.*)=(keep|replace|omit)$/.exec(value);
+      if (!match?.[1]) throw new CliUsageError("--conflict requires <path>=keep, <path>=replace or <path>=omit.");
       options.conflicts ??= {};
       if (Object.hasOwn(options.conflicts, match[1])) throw new CliUsageError(`Conflict path was provided more than once: ${match[1]}`);
       options.conflicts[match[1]] = match[2];
@@ -209,6 +209,11 @@ function formatEvolve(result) {
   if (result.agents?.length) {
     lines.push(`Agent files: ${result.agents.map((agent) => `${agent.name} (${agent.files?.length ?? 0})`).join(", ")}`);
   }
+  if (result.replacedLinks?.length) lines.push(`Links replaced: ${result.replacedLinks.join(", ")}`);
+  if (result.omitted?.length) {
+    lines.push(`Left uninstalled: ${result.omitted.length}. Run evolve again to install them.`);
+  }
+  if (result.reportPath) lines.push(`Report: ${result.reportPath}`);
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }
@@ -331,6 +336,9 @@ const terminalCopy = {
     writePreview: "Write preview",
     keep: "Keep existing",
     replace: "Replace",
+    replaceLink: "Remove the link and write the files",
+    omitLink: "Leave those files uninstalled",
+    report: "Report",
     confirm: "Write these files?",
     cancelled: "Nothing was written.",
     installing: "Installing the mind",
@@ -353,6 +361,9 @@ const terminalCopy = {
     writePreview: "Vista previa",
     keep: "Conservar existente",
     replace: "Reemplazar",
+    replaceLink: "Quitar el enlace y escribir los archivos",
+    omitLink: "Dejar esos archivos sin instalar",
+    report: "Reporte",
     confirm: "¿Escribir estos archivos?",
     cancelled: "No se escribió nada.",
     installing: "Instalando el mind",
@@ -543,6 +554,17 @@ async function runProjectsStep(session, prompts, initialStep) {
   }
 }
 
+function reportOutcome(prompts, labels, result) {
+  for (const attach of result?.attachPrompts ?? []) prompts.note(attach.text, attach.agent);
+  for (const notice of result?.notices ?? []) prompts.log.info(notice);
+  if (result?.reportPath) prompts.log.info(`${labels.report}: ${result.reportPath}`);
+}
+
+function conflictLabel(labels, conflict, value) {
+  if (conflict.link) return value === "replace" ? labels.replaceLink : labels.omitLink;
+  return value === "keep" ? labels.keep : labels.replace;
+}
+
 function previewText(preview, language) {
   const labels = terminalCopy[language];
   const files = preview.files?.map((file) => `${file.action.padEnd(8)} ${file.path}`) ?? [];
@@ -573,7 +595,7 @@ export async function runTerminalSetup(session, prompts) {
     const step = await session.getStep();
     const labels = terminalCopy[step.language ?? "en"];
     if (step.done || step.number === 8) {
-      for (const attach of step.result?.attachPrompts ?? []) prompts.note(attach.text, attach.agent);
+      reportOutcome(prompts, labels, step.result);
       prompts.outro(step.result?.message ?? step.description ?? step.title);
       return step.result ?? step;
     }
@@ -581,6 +603,7 @@ export async function runTerminalSetup(session, prompts) {
     const heading = `${labels.step} ${step.number}/8 · ${step.title}`;
     if (step.description) prompts.note(step.description, heading);
     else prompts.log.step(heading);
+    if (step.alert) prompts.log.warn(step.alert);
     if (step.number === 5) {
       const result = await runProjectsStep(session, prompts, step);
       if (result === null) return null;
@@ -595,7 +618,7 @@ export async function runTerminalSetup(session, prompts) {
           message: `${conflict.path}: ${conflict.reason}`,
           options: (conflict.choices ?? ["keep", "replace"]).map((value) => ({
             value,
-            label: value === "keep" ? labels.keep : labels.replace,
+            label: conflictLabel(labels, conflict, value),
           })),
           initialValue: conflict.selection,
         });
@@ -619,7 +642,7 @@ export async function runTerminalSetup(session, prompts) {
         const result = await session.install();
         spin.stop(labels.installed);
         const completed = await session.getStep();
-        for (const attach of completed.result?.attachPrompts ?? []) prompts.note(attach.text, attach.agent);
+        reportOutcome(prompts, labels, completed.result ?? result);
         prompts.outro(completed.result?.message ?? result?.message ?? labels.done);
         return result;
       } catch (error) {
@@ -718,7 +741,7 @@ async function runLifecycle(command, options, dependencies, output) {
           message: `${conflict.path}: ${conflict.reason}`,
           options: (conflict.choices ?? ["keep", "replace"]).map((value) => ({
             value,
-            label: value === "keep" ? "Keep existing" : "Replace",
+            label: conflictLabel(terminalCopy.en, conflict, value),
           })),
           initialValue: conflict.selection,
         });
