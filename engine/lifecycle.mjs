@@ -454,6 +454,8 @@ export async function evolve(options = {}) {
   const installation = await installAgentAssets(installOptions);
   const agents = installation?.agents ?? [];
   const baseFiles = installation?.baseFiles ?? [];
+  const omitted = installation?.omitted ?? [];
+  const replacedLinks = installation?.replacedLinks ?? [];
   const warnings = [...lifecycleWarnings, ...collisionWarnings, ...(installation?.warnings ?? [])];
   const conflicts = installation?.conflicts ?? [];
   const lastCheck = isoDate(resolved.now);
@@ -478,6 +480,9 @@ export async function evolve(options = {}) {
     agents,
     warnings,
     conflicts,
+    omitted,
+    replacedLinks,
+    reportPath: installation?.reportPath ?? null,
     lastCheck: completed ? lastCheck : headerValue(
       await readText(await machineFilePath(resolved.mindPath, resolved.hostname)),
       "last-check",

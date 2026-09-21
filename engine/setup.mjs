@@ -2,6 +2,7 @@ import { lstat, readFile, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  detectExistingMind,
   discoverAgents,
   discoverContent,
   discoverHomeProjects,
@@ -18,7 +19,8 @@ import {
   planDataFile,
   planKitCopy,
   publicPreview,
-  reportSymlinkSkips,
+  registerLinkConflicts,
+  writeInstallReport,
 } from './install.mjs';
 import {
   ensureSafeDirectory,
@@ -93,6 +95,7 @@ class SetupSession {
       addressStyle: 'impersonal',
       customPreference: '',
       keepExistingPreferences: true,
+      attach: null,
       conflicts: {},
       confirm: false,
     };
@@ -101,11 +104,15 @@ class SetupSession {
     this.discoveryCache = null;
     this.contentCache = null;
     this.preferenceFiles = [];
+    this.existingMind = null;
+    this.attachOutdated = null;
+    this.alertedMind = null;
   }
 
   async initialize() {
     const { record } = await readMachineRecord(this.mindPath, this.hostname);
     this.machineRecord = record;
+    this.existingMind = await this.inspectMind(this.mindPath);
     if (!record) return;
     if (record.machine && record.machine !== this.hostname) return;
 
@@ -158,6 +165,23 @@ class SetupSession {
         label: text(language, preset.labelKey),
         path: preset.path,
       }));
+      if (this.canAttach()) {
+        base.existingMind = { ...this.existingMind };
+        base.alert = text(language, 'existingMindFound', {
+          path: this.existingMind.path,
+          version: this.existingMind.version || text(language, 'unknownVersion'),
+        });
+        base.fields.push(field(
+          'attach',
+          'boolean',
+          text(language, 'attachQuestion'),
+          true,
+          [option(language, true, 'yes'), option(language, false, 'no')],
+          text(language, 'attachHelp'),
+        ));
+        base.values.attach = this.answers.attach ?? true;
+        this.alertedMind = normalizePath(this.mindPath);
+      }
     }
     if (this.currentStep === 3) {
       base.scanned = this.answers.agentsScanned === true;
@@ -297,7 +321,7 @@ class SetupSession {
         'select',
         conflict.path,
         true,
-        conflict.choices.map((choice) => option(language, choice, choice)),
+        conflict.choices.map((choice) => option(language, choice, conflictChoiceKey(conflict, choice))),
         conflict.reason,
       ));
       base.fields.push(field(
@@ -309,7 +333,7 @@ class SetupSession {
       ));
       base.values = { confirm: this.answers.confirm, conflicts: { ...this.answers.conflicts } };
       for (const [index, conflict] of preview.conflicts.entries()) {
-        base.values[`conflict.${index}`] = this.answers.conflicts[conflict.path] ?? null;
+        base.values[`conflict.${index}`] = this.answers.conflicts[conflict.path] ?? conflict.selection ?? null;
       }
     }
     return base;
@@ -330,6 +354,12 @@ class SetupSession {
       if (mode !== 'simple' && mode !== 'custom') throw new SetupValidationError('installMode must be simple or custom');
       this.answers.installMode = mode;
       if (mode === 'simple') {
+        // A mind already on this machine is attached instead of installed over.
+        const found = this.existingMind ?? await this.findInstalledMind();
+        if (found) {
+          await this.selectMind(found.path);
+          this.answers.attach = this.canAttach();
+        }
         await this.applySimpleDefaults();
         this.currentStep = 7;
       } else {
@@ -340,8 +370,15 @@ class SetupSession {
       validateMindSelection(selected, this.kitPath);
       await validateDestinationType(selected);
       const previousMind = this.mindPath;
-      this.mindPath = selected;
-      this.answers.mindPath = selected;
+      await this.selectMind(selected);
+      // A path that turns out to hold a mind goes back to this step with the alert, so the
+      // attach question is answered about the folder the answer belongs to.
+      if (this.canAttach() && this.alertedMind !== normalizePath(selected)) {
+        await this.persistDraft();
+        if (normalizePath(previousMind) !== normalizePath(selected)) await removeOwnedDraft(previousMind, this.hostname);
+        return this.getStep();
+      }
+      this.answers.attach = this.canAttach() && values.attach !== false;
       this.currentStep = 3;
       await this.persistDraft();
       if (normalizePath(previousMind) !== normalizePath(selected)) await removeOwnedDraft(previousMind, this.hostname);
@@ -410,7 +447,8 @@ class SetupSession {
         ));
       }
       this.answers.projectsConfirmed = true;
-      this.currentStep = 6;
+      // Preferences belong to the mind, not to the machine: an attach leaves them as they are.
+      this.currentStep = this.answers.attach ? 7 : 6;
     } else if (this.currentStep === 6) {
       this.answers.skipPreferences = values.skipPreferences === true;
       if (values.keepExistingPreferences !== undefined) {
@@ -449,8 +487,9 @@ class SetupSession {
   async back() {
     if (this.currentStep <= 1) return this.getStep();
     if (this.currentStep === 8) this.currentStep = 7;
-    else if (this.currentStep === 7) this.currentStep = this.answers.installMode === 'simple' ? 1 : 6;
-    else this.currentStep -= 1;
+    else if (this.currentStep === 7) {
+      this.currentStep = this.answers.installMode === 'simple' ? 1 : (this.answers.attach ? 5 : 6);
+    } else this.currentStep -= 1;
     this.answers.confirm = false;
     await this.persistDraft(this.currentStep);
     return this.getStep();
@@ -462,7 +501,7 @@ class SetupSession {
     const preview = publicPreview(plan, this.answers.language);
     preview.conflicts = preview.conflicts.map((conflict) => ({
       ...conflict,
-      selection: this.answers.conflicts[conflict.path] ?? null,
+      selection: this.answers.conflicts[conflict.path] ?? conflict.selection ?? null,
     }));
     return preview;
   }
@@ -484,15 +523,55 @@ class SetupSession {
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
     }
+    for (const item of applied.omitted) delete managedFiles[item.path];
     delete managedFiles[path.join(this.mindPath, 'user', 'machines', `${this.hostname}.md`)];
-    const record = this.buildMachineRecord('done');
-    record.draft = {};
+    // An asset that was neither written nor answered for leaves the setup at the install
+    // step, so the next run finishes it instead of reporting an installation that is not there.
+    const unwritten = this.unwrittenAssets(plan, applied);
+    const record = this.buildMachineRecord(unwritten.length === 0 ? 'done' : 7);
+    record.draft = unwritten.length === 0 ? {} : { ...this.answers, mindPath: this.mindPath };
     record.managedFiles = managedFiles;
     await writeMachineRecord(this.mindPath, this.hostname, record);
     this.machineRecord = record;
+    const reportPath = await writeInstallReport({
+      mindPath: this.mindPath,
+      hostname: this.hostname,
+      language: this.answers.language,
+      report: {
+        action: this.answers.attach ? 'attach' : 'install',
+        written: applied.files.length,
+        omitted: applied.omitted,
+        replacedLinks: applied.replacedLinks,
+        kept: plan.conflicts
+          .filter((conflict) => this.answers.conflicts[conflict.path] === 'keep')
+          .map((conflict) => ({ path: conflict.path, reason: conflict.reason })),
+        unwritten,
+        warnings: plan.warnings,
+      },
+    });
     this.currentStep = 8;
-    this.result = this.completionResult(applied.files, plan.warnings);
+    this.result = this.completionResult(applied.files, plan.warnings, {
+      omitted: applied.omitted,
+      replacedLinks: applied.replacedLinks,
+      unwritten,
+      reportPath,
+    });
     return this.result;
+  }
+
+  unwrittenAssets(plan, applied) {
+    const answered = new Set([
+      ...applied.omitted.map((item) => item.path),
+      ...Object.entries(this.answers.conflicts)
+        .filter(([, choice]) => choice === 'keep')
+        .map(([conflictPath]) => conflictPath),
+    ]);
+    return plan.items
+      .filter((item) => item.owned
+        && item.action !== 'unchanged'
+        && !applied.files.includes(item.path)
+        && !answered.has(item.path))
+      .map((item) => item.path);
   }
 
   async detectedAgents() {
@@ -628,6 +707,42 @@ class SetupSession {
     };
   }
 
+  // The machine can be attached while the mind is already installed and this machine has no
+  // finished record in it. A machine that finished its setup there is running it again.
+  canAttach() {
+    return Boolean(this.existingMind) && this.machineRecord?.setup !== 'done';
+  }
+
+  async inspectMind(candidate) {
+    if (!await detectExistingMind(candidate)) return null;
+    const version = (await readTextIfPresent(path.join(candidate, 'user', 'VERSION')) ?? '').trim();
+    return { path: path.resolve(candidate), version };
+  }
+
+  async findInstalledMind() {
+    for (const preset of this.presets) {
+      if (normalizePath(preset.path) === normalizePath(this.kitPath)) continue;
+      const found = await this.inspectMind(preset.path);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  async selectMind(selected) {
+    this.mindPath = selected;
+    this.answers.mindPath = selected;
+    const { record } = await readMachineRecord(selected, this.hostname);
+    this.machineRecord = record?.machine === this.hostname ? record : null;
+    this.existingMind = await this.inspectMind(selected);
+    if (!this.existingMind) this.answers.attach = false;
+  }
+
+  async outdatedMind(kitVersion) {
+    const mindVersion = this.existingMind?.version ?? '';
+    if (!mindVersion || mindVersion === kitVersion) return null;
+    return { mindVersion, kitVersion };
+  }
+
   excludedItems() {
     const included = new Set(this.answers.included ?? []);
     return (this.contentCache ?? [])
@@ -637,7 +752,10 @@ class SetupSession {
 
   async buildPlan() {
     const existingManaged = this.machineRecord?.managedFiles ?? {};
-    const kitPlan = await planKitCopy({
+    // An attach writes what belongs to this machine. The kit copy, the preferences and the
+    // recorded version belong to the mind and stay as the mind already has them.
+    const attach = this.answers.attach === true;
+    const kitPlan = attach ? { items: [], conflicts: [], warnings: [] } : await planKitCopy({
       kitPath: this.kitPath,
       mindPath: this.mindPath,
       managedFiles: existingManaged,
@@ -658,9 +776,13 @@ class SetupSession {
     const finalRecord = this.buildMachineRecord('done');
     finalRecord.draft = {};
 
-    const dataPlans = await Promise.all([
+    if (attach) this.attachOutdated = await this.outdatedMind(packageJson.version);
+    const mindPlans = attach ? [] : [
       planDataFile({ destination: versionPath, content: `${packageJson.version}\n`, root: this.mindPath, managedHash: existingManaged[versionPath], kind: 'version', allowExisting: true, language: this.answers.language }),
       planDataFile({ destination: preferencesPath, content: preferences, root: this.mindPath, managedHash: existingManaged[preferencesPath], kind: 'preferences', allowExisting: true, language: this.answers.language }),
+    ];
+    const dataPlans = await Promise.all([
+      ...mindPlans,
       planDataFile({ destination: routesPath, content: routes, root: this.mindPath, managedHash: existingManaged[routesPath], kind: 'routes', allowExisting: true, language: this.answers.language }),
     ]);
     const agentPlan = await planAgentAssets({
@@ -684,7 +806,10 @@ class SetupSession {
       owned: false,
       language: this.answers.language,
     });
-    return reportSymlinkSkips(combinePlans(kitPlan, ...dataPlans, agentPlan, machinePlan), this.answers.language);
+    return registerLinkConflicts(
+      combinePlans(kitPlan, ...dataPlans, agentPlan, machinePlan),
+      this.answers.language,
+    );
   }
 
   async createMindLayout() {
@@ -701,18 +826,33 @@ class SetupSession {
     for (const relative of directories) await ensureSafeDirectory(this.mindPath, path.join(this.mindPath, relative));
   }
 
-  completionResult(files, warnings) {
+  completionResult(files, warnings, outcome = {}) {
     const prompt = text(this.answers.language, 'attachPrompt', { mind: this.mindPath, placeholder: '{{mind}}' });
     const attachAgents = (this.answers.agents ?? [])
       .filter((agent) => agent.selected !== false && agent.attach === 'auto')
       .filter((agent) => !this.adapters.find((candidate) => candidate.id === agent.id)?.rules)
       .map((agent) => agent.id);
+    const language = this.answers.language;
+    const notices = [];
+    if (this.answers.attach) notices.push(text(language, 'attachedMachine', { mind: this.mindPath }));
+    if (this.attachOutdated) {
+      notices.push(text(language, 'attachOutdated', {
+        mind: this.attachOutdated.mindVersion,
+        kit: this.attachOutdated.kitVersion,
+      }));
+    }
     return {
-      message: text(this.answers.language, 'step8Description'),
+      message: text(language, 'step8Description'),
       firstCommand: '/executor <project>',
       mindPath: this.mindPath,
+      attached: this.answers.attach === true,
       files,
       warnings: [...new Set(warnings)],
+      notices,
+      omitted: outcome.omitted ?? [],
+      replacedLinks: outcome.replacedLinks ?? [],
+      unwritten: outcome.unwritten ?? [],
+      reportPath: outcome.reportPath ?? null,
       attachPrompts: attachAgents.map((agent) => ({ agent, text: prompt })),
     };
   }
@@ -723,6 +863,11 @@ export class SetupValidationError extends Error {
     super(message);
     this.name = 'SetupValidationError';
   }
+}
+
+export function conflictChoiceKey(conflict, choice) {
+  if (!conflict?.link) return choice;
+  return choice === 'replace' ? 'replaceLink' : 'omitLink';
 }
 
 function field(id, type, label, required, options, help) {

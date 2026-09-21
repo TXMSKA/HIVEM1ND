@@ -11,7 +11,7 @@ const UI_KEYS = [
   "back", "continue", "install", "installing", "loading", "language", "searchLanguages",
   "browse", "add", "attachAuto", "attachOnDemand", "noFiles", "filesCountOne", "filesCountOther",
   "firstCommand", "actionCreate", "actionUpdate", "actionUnchanged", "actionAppend", "actionConflict",
-  "documentTitle", "environmentPlaceholder",
+  "documentTitle", "environmentPlaceholder", "reportSaved",
   "step1Title", "step2Title", "step3Title", "step4Title", "step5Title", "step6Title", "step7Title", "step8Title",
   "sessionMissing", "requestFailed",
 ];

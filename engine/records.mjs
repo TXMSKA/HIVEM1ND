@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 const FENCE = '```json';
@@ -167,6 +167,33 @@ export async function writeMachineRecord(mindPath, hostname, record) {
 
 export function machineRecordPath(mindPath, hostname) {
   return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.md`);
+}
+
+export function machineReportPath(mindPath, hostname) {
+  return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.report.md`);
+}
+
+// Removes the link itself, never what it points at, so a junction left by an older setup
+// can be replaced without touching the folder behind it.
+export async function removeSymbolicLink(root, target) {
+  const destination = path.resolve(target);
+  assertWithin(path.resolve(root), destination);
+  const state = await lstatIfPresent(destination);
+  if (!state) return null;
+  if (!state.isSymbolicLink()) throw new Error(`Refusing to remove a path that is not a symbolic link: ${destination}`);
+  const linkTarget = await readlink(destination).catch(() => null);
+  try {
+    await unlink(destination);
+  } catch (error) {
+    if (error?.code !== 'EPERM' && error?.code !== 'EISDIR') throw error;
+    await rmdir(destination);
+  }
+  return { path: destination, target: linkTarget };
+}
+
+export async function restoreSymbolicLink(link) {
+  if (!link?.target) throw new Error(`Cannot restore a link with no recorded target: ${link?.path}`);
+  await symlink(link.target, link.path, process.platform === 'win32' ? 'junction' : undefined);
 }
 
 export async function atomicWriteFile(filePath, content, { root, overwrite = true } = {}) {

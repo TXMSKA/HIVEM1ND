@@ -229,6 +229,12 @@ async function discoverNamedEntries(directory) {
   return [...new Set(names)].sort((left, right) => left.localeCompare(right));
 }
 
+// A mind already installed at that path: its rules, its format reference and its user folder.
+export async function detectExistingMind(candidate) {
+  if (!candidate) return false;
+  return isMind(path.resolve(candidate));
+}
+
 async function isMind(candidate) {
   return await pathExists(path.join(candidate, 'rules.md'))
     && await pathExists(path.join(candidate, 'files.md'))
