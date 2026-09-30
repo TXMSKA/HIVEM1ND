@@ -123,7 +123,8 @@ function removeExactLine(content, line) {
 }
 
 async function removeEmptyDirectories(directories, bases) {
-  const queue = [...directories];
+  // Deepest first, so a folder is looked at after the folders inside it are gone.
+  const queue = [...directories].sort((left, right) => path.resolve(right).length - path.resolve(left).length);
   const processed = new Set();
   while (queue.length > 0) {
     const directory = path.resolve(queue.shift());
