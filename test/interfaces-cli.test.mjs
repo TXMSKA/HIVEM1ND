@@ -342,14 +342,14 @@ test("swarm output is human-readable and JSON remains opt-in", async () => {
   const result = {
     action: "swarm",
     units: [{ unit: "executor-app", state: "in", machine: "TEST", date: "2026-09-15", context: "Working\nMore", path: "C:/private/state.md" }],
-    tasks: { open: 1, done: 0, projects: [{ project: "app", open: 1, done: 0, items: [{ id: "007", slug: "ship", status: "open", path: "C:/private/task.md" }] }] },
+    tasks: { open: 1, review: 0, done: 0, projects: [{ project: "app", open: 1, review: 0, done: 0, items: [{ id: "007", slug: "ship", status: "open", path: "C:/private/task.md" }] }] },
     inboxes: { unread: 2, units: [{ unit: "executor-app", count: 2, path: "C:/private/inbox" }] },
   };
   const lifecycle = { async swarm() { return result; } };
   const human = sink();
   assert.equal(await runCli(["swarm", "--mind-path", "."], { stdout: human.stream, stderr: sink().stream, lifecycle }), 0);
   assert.match(human.read(), /^Units\nexecutor-app \| in/);
-  assert.match(human.read(), /Tasks\napp \| open 1 \| done 0\n007 ship \| open/);
+  assert.match(human.read(), /Tasks\napp \| open 1 \| review 0 \| done 0\n007 ship \| open/);
   assert.match(human.read(), /Inboxes\nexecutor-app \| 2 unread/);
   assert.doesNotMatch(human.read(), /C:\/private/);
 
