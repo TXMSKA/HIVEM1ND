@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Blueprint Lite, the `/blueprint` feature: one local server per machine, on port 3300, draws the screen-flow boards of every project at once. Projects come from the mind (the machine record's paths and the routes), a project shows in the viewer when its repository has `docs/flows/boards/index.json`, and the comments made in the viewer are written to that repository's `docs/flows/comments/<board>.json`, where agents read them. The board and comment formats are documented in the feature. It ships as a folder with its scripts, and it is a temporary tool that the full Blueprint replaces.
+- A feature folder is listed by its category in the content step of the installer, the same as a feature file.
+
 ## 1.2.0 - 2026-09-21
 
 - An install is never reported as done over files it did not write: a symbolic link or a Windows junction standing where files belong stops the run and asks, replacing the link by default and keeping the folder it points at, with omitting available as an explicit choice.

@@ -514,12 +514,12 @@ test('content categories group every feature deterministically and control the i
   assert.equal(contentStep.number, 4);
 
   assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['brainstorm', 'plan', 'report']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
   const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
-    .filter((name) => name.endsWith('.md') && name.toLowerCase() !== 'readme.md').length;
+    .filter((name) => (name.endsWith('.md') || !name.includes('.')) && name.toLowerCase() !== 'readme.md').length;
   assert.equal(new Set(allIds).size, allIds.length);
   assert.equal(allIds.filter((id) => id.startsWith('feature:')).length, featureCount);
 
