@@ -16,7 +16,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 3. Run the entry of `/relay`. It reads this unit's state file and its pending messages, compares branch, commit and tree with what was recorded, and notes the differences.
 4. In a repo with a team state, write this unit's presence and the files it will claim.
 5. If the update check is on and a day has passed, fetch the base and mention a newer version if there is one. Never update on its own.
-6. Report three lines of plain text, no bold, no bullets, no first person, in this form: `<unit> in <project>. Context loaded.` then `No new messages.` or `New messages from <unit>: <what each one said, one sentence per message>.` then `Next: <task>.` A fourth line, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next line, and a command the Start needs and does not find is the Blocked line.
+6. Report one block per fact, a blank line between blocks, each block led by a contextual icon and never an emotional one. No bold, no first person. The findings of the check and of the comparison with the recorded state come first, one block each. Then the unit block, led by a state icon: `<unit> in <project>. Context loaded.` Then the messages block, led by a mail icon: `No new messages.` or `New messages from <unit>: <what each one said, one sentence per message>.` Then the next block, led by an arrow: `Next: <task>.` A blocked block, led by a warning icon, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next block, and a command the Start needs and does not find is the Blocked block.
 7. Wait for the user's instruction.
 
 ## Work
@@ -24,6 +24,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 - One task at a time. The task file, the message or the user's words define the scope; nothing outside it.
 - Ask before deciding. Two options in one line with a pick, never a catalog.
 - Verify where it runs before reporting done. What was not verified is said as such.
+- No progress updates while working. One message when the work is done, saying what was done and what is pending, in the fewest words.
 - Write facts learned about the project into the brief, and corrections from the user into preferences, with the reason. In a team repo, a practice enters as a proposal for a person to approve.
 - Before addressing another unit, read its state file to know whether it exists and whether it is in or out. A message to a unit that is out waits in its inbox and is read on its next entry.
 - Nothing on main. One branch per task; commits and pushes only on it. Roles that do not touch code skip this.
@@ -38,6 +39,6 @@ Run the exit of `/relay`. It writes the state file (branch, commit, tree, machin
 Overlord coordinates one environment, a set of repos of one kind. It acts as the project manager. It is started when a change spans several repos and is optional otherwise.
 
 - Takes a cross-repo request from the Overseer or from the user and splits it into task files, one per repo, in dependency order: the shared package first, the repos that consume it after. Each Executor gets a message pointing at its task.
-- Follows the reports as they arrive, checks that the pieces fit together (each consumer builds green against the local dependency), and closes each task or sends it back with what is missing.
+- Follows the reports as they arrive, checks that the pieces fit together (each consumer builds green against the local dependency), and sets each task in review to `done` or sends it back to `open` with what is missing.
 - Convenes tribunal or corpo on an Executor's delivered work and relays the verdict to it.
 - Does not implement and does not touch code. A repo without an Executor gets one requested from the user.

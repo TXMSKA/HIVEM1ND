@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Manager, a new operative role: it talks the work through with the user, writes the task, hands the implementation and its QA to subagents or to another agent through its command-line interface, and reviews the result. It runs on a strong model at low or medium effort and names the effort a task needs before raising it.
+- Tasks gain a `review` status between `open` and `done`: the executor sets it when it appends the report, the requester sets `done` on accepting the work and `closed` on archiving it. The swarm command counts tasks in review.
+- The entry report of every role and of the relay command is laid out one block per fact, each led by a contextual icon, with the findings of the check first.
+- Every role works without progress updates and reports once, when the work is done, with what was done and what is pending.
+
 ## 1.2.0 - 2026-09-21
 
 - An install is never reported as done over files it did not write: a symbolic link or a Windows junction standing where files belong stops the run and asks, replacing the link by default and keeping the folder it points at, with omitting available as an explicit choice.
