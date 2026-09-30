@@ -81,7 +81,11 @@ test('feature categories come from frontmatter, and a missing or unknown categor
   await writeFile(path.join(featuresDir, 'gamma.md'), '---\nname: gamma\ndescription: Gamma.\n---\n\n# Gamma\n');
   await writeFile(path.join(featuresDir, 'delta.md'), '---\nname: delta\ndescription: Delta.\ncategory: mystery\n---\n\n# Delta\n');
 
+  await mkdir(path.join(featuresDir, 'folder'), { recursive: true });
+  await writeFile(path.join(featuresDir, 'folder', 'folder.md'), '---\nname: folder\ndescription: Folder.\ncategory: continuity\n---\n\n# Folder\n');
+
   const content = await discoverContent(kitPath);
+  assert.equal(content.find((item) => item.name === 'folder').category, 'continuity');
   assert.equal(content.find((item) => item.name === 'alpha').category, 'planning');
   assert.equal(content.find((item) => item.name === 'beta').category, 'quality');
   assert.equal(content.find((item) => item.name === 'gamma').category, undefined);
