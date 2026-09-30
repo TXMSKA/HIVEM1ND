@@ -1,0 +1,1506 @@
+/* Review: the viewer that looks at a board and takes comments, without editing.
+ *
+ * It runs on system fonts only and calls no outside service. The chrome floats:
+ * a pill on the left for the tools, one at the top for the projects and their
+ * boards, the comments as a card on the right that folds into a round button.
+ * The canvas is a dark ground with a faint hexagonal mesh that moves with the
+ * board, the screens on it and thin light links between them. Everything below
+ * the token block reads a token (--bp-*); the only literals left are spacing.
+ */
+
+:root {
+  /* The palette is one neutral ramp, darkest at the bottom: a well, the
+     ground, the mesh, the floating surfaces, what is lit on them, the
+     dividers. Elevation is a lighter step, never a heavier shadow, and
+     nothing on the ground is white: text is #ededed and the links a light
+     grey, the way n8n draws its canvas.
+
+     The chrome tokens: */
+  --bp-bg: #121212;
+  --bp-surface: #222222;
+  --bp-surface-2: #2e2e2e;
+  --bp-surface-glass: rgba(34, 34, 34, 0.86);
+  --bp-text: #ededed;
+  --bp-text-soft: #a9a9a9;
+  --bp-line: #353535;
+  --bp-accent: #a855f7;
+  --bp-on-accent: #0b0612;
+  --bp-danger: #ff7b86;
+  --bp-shadow: rgba(0, 0, 0, 0.45);
+  --bp-radius-bar: 999px;
+  --bp-radius-control: 10px;
+  --bp-radius-popup: 14px;
+  /* The bars stay compact, so a viewer keeps its chrome small. A finger gets
+     the larger sizes back, at the end. */
+  --bp-bar-size: 52px;
+  --bp-bar-offset: 12px;
+  --bp-bar-gap: 4px;
+  --bp-bar-item: 40px;
+  --bp-main-button: 40px;
+  --bp-motion-fast: 120ms;
+  --bp-motion-base: 200ms;
+  --bp-motion-slow: 320ms;
+  --bp-ease: cubic-bezier(0.2, 0, 0, 1);
+  --bp-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --bp-font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --bp-text-xs: 12px;
+  --bp-text-sm: 13px;
+  --bp-text-md: 14px;
+  --bp-z-bar: 500;
+  --bp-z-popup: 700;
+  --bp-z-toast: 800;
+
+  /* The ground and its mesh: flat hexagons, 17 px a side, with a round point
+     on every joint. Lines and points are one grey, a hair lighter than the
+     ground (L* 9.9 against 8.2, contrast 1.04), and 3 px wide, so the mesh
+     reads as the grain of the ground: never black, never lit. To make it
+     stronger or fainter, move --bp-mesh-line one step either way. */
+  --bp-canvas: #181818;
+  --bp-mesh-line: #1c1c1c;
+  --bp-mesh-dot: #1c1c1c;
+  --bp-mesh-width: 3px;
+  --bp-mesh-side: 17px;
+  /* What frames a screen on the ground: a hairline and a shadow under it. */
+  --bp-screen-edge: #333333;
+  --bp-screen-shadow: #000000;
+  /* Links and titles: 8.6 and 15.3 on the ground. */
+  --bp-wire: #b4b4b4;
+  --bp-title: #ededed;
+  --bp-select: #3ea6ff;
+  --bp-hover: rgba(62, 166, 255, 0.6);
+  --bp-hover-fill: rgba(62, 166, 255, 0.08);
+  --bp-pin: #ffb020;
+  --bp-pin-ink: #1c1300;
+  --bp-pin-done: #d9d9d9;
+  --bp-pin-shape: 999px 999px 999px 4px;
+  /* An agent's name in a thread. The accent itself stays under the 4.5 text
+     needs on the surface; this lighter violet measures 6.0. */
+  --bp-agent: #c084fc;
+  /* The edge of a text field: 3.1 on the surface, where the field has to be
+     found by its outline. --bp-line stays for dividers. */
+  --bp-field-edge: #6e6e6e;
+  /* The smallest text: numbers, keys, paths and marks in the mono face. */
+  --bp-text-caption: 11px;
+
+  /* Type roles. Two may share a size and differ by weight. */
+  --type-body: 400 var(--bp-text-sm) / 1.45 var(--bp-font);
+  --type-meta: 400 var(--bp-text-xs) / 1.5 var(--bp-font);
+  --type-label: 500 var(--bp-text-sm) / 1.3 var(--bp-font);
+  --type-strong: 600 var(--bp-text-sm) / 1.3 var(--bp-font);
+  --type-title: 600 var(--bp-text-md) / 1.3 var(--bp-font);
+  --type-mono: 500 var(--bp-text-caption) / 1.35 var(--bp-font-mono);
+  --type-mono-plain: 400 var(--bp-text-caption) / 1.5 var(--bp-font-mono);
+  --type-pin: 600 var(--bp-text-xs) / 1 var(--bp-font-mono);
+  --type-tag: 500 var(--bp-text-caption) / 1 var(--bp-font);
+
+  /* Icon sizes: 18 in a small control, 20 on the bar and the button. */
+  --icon-sm: 18px;
+  --icon-md: 20px;
+  /* The working target on touch. */
+  --target-touch: 44px;
+
+  --panel-w: 340px;
+  --card-w: 320px;
+  /* The band the top pill takes, which the comments card keeps clear of. */
+  --top-band: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-item));
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* An element told to hide stays hidden, whatever display its class gives it. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--bp-canvas);
+  color: var(--bp-text);
+  font: var(--type-body);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* The focus ring is the accent: 4.35 on the
+   surface, over the 3 a ring needs. Blue stays for what is picked on the
+   canvas, the way a design tool marks a selection. */
+:where(button, a, input, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--bp-accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+svg {
+  flex: none;
+}
+
+/* Over the top pill when focused, so it covers nothing else. */
+.skip {
+  position: fixed;
+  top: var(--bp-bar-offset);
+  left: 50%;
+  z-index: var(--bp-z-toast);
+  padding: 10px 18px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-accent);
+  color: var(--bp-on-accent);
+  font: var(--type-label);
+  text-decoration: none;
+  translate: -50% calc(-100% - var(--bp-bar-offset) * 2);
+}
+
+.skip:focus-visible {
+  translate: -50% 0;
+}
+
+/* ---- the stage --------------------------------------------------------- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.stage:focus {
+  outline: none;
+}
+
+.stage:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 2px solid var(--bp-accent);
+  border-radius: var(--bp-radius-popup);
+  pointer-events: none;
+}
+
+/* The ground. Its mesh is painted by review.js into one tile at the screen's
+   own pixel density, with hairlines one device pixel wide, and placed on
+   whole device pixels, so it stays sharp at any display scale. */
+.stage {
+  background-color: var(--bp-canvas);
+  background-repeat: repeat;
+}
+
+.stage[data-mode="move"] {
+  cursor: grab;
+}
+
+.stage[data-panning="true"] {
+  cursor: grabbing;
+}
+
+.stage[data-mode="comment"] {
+  cursor: crosshair;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* The world reaches half a stage past each edge, so a pan uncovers screens
+   already drawn, and it is its own layer: while the view moves, review.js
+   moves it as one picture with a transform from its top left corner. */
+.world {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  display: block;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Far out, a line of text is under a pixel tall: the screens are drawn
+   without it, and a board of thousands of lines redraws in a fraction. */
+.world[data-far="true"] text {
+  display: none;
+}
+
+.world .screen-edge {
+  fill: none;
+  stroke: var(--bp-screen-edge);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The feature's own screens, against the ones shown for context: the accent
+   measures 4.49 on the ground, over the 3 a boundary needs. */
+.world .screen-edge.is-feature {
+  stroke: var(--bp-accent);
+  stroke-width: 3;
+}
+
+.world .screen-shadow {
+  fill: var(--bp-screen-shadow);
+}
+
+#overlay {
+  /* Some browser themes force a background on every SVG. The overlay must
+     stay clear so it cannot cover the screens in the world beneath it. */
+  background-color: transparent !important;
+  pointer-events: none;
+}
+
+.overlay .pin {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* An SVG group draws no outline, so a focused pin shows a white ring a few
+   pixels out: white on the ground measures 18.1. */
+.overlay .pin:focus {
+  outline: none;
+}
+
+/* A 44 pixel reach round every pin, for a finger. */
+.overlay .pin-hit {
+  fill: transparent;
+}
+
+.overlay g.pin path.pin-ring {
+  display: none;
+  fill: none;
+  stroke: var(--bp-wire);
+  stroke-width: 2;
+}
+
+.overlay g.pin:focus-visible path.pin-ring {
+  display: inline;
+}
+
+/* ---- floating chrome: shared ------------------------------------------ */
+
+/* Glass, a hairline and a shadow. */
+.top,
+.rail,
+.note {
+  border: 1px solid var(--bp-line);
+  background: var(--bp-surface-glass);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+}
+
+/* ---- the boards, a pill at the top ------------------------------------ */
+
+.top {
+  position: fixed;
+  top: var(--bp-bar-offset);
+  left: 50%;
+  z-index: var(--bp-z-bar);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - (var(--bp-bar-size) + var(--bp-bar-offset) * 2) * 2);
+  height: var(--bp-bar-item);
+  padding: 0 4px 0 14px;
+  border-radius: var(--bp-radius-bar);
+  translate: -50% 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* The mark: two screens and the link between them. */
+.brand-mark {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--bp-text);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.brand-name {
+  font: var(--type-title);
+  white-space: nowrap;
+}
+
+.brand-mode {
+  padding: 1px 8px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-bar);
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.top-rule {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--bp-line);
+}
+
+.boards {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.board-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px 0 6px;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: none;
+  color: var(--bp-text-soft);
+  font: var(--type-label);
+  white-space: nowrap;
+  transition:
+    background var(--bp-motion-fast) var(--bp-ease),
+    color var(--bp-motion-fast) var(--bp-ease);
+}
+
+.board-tab:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.board-tab[aria-current="true"] {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.board-tab .letter {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-bg);
+  font: var(--type-mono);
+}
+
+.board-tab[aria-current="true"] .letter {
+  background: var(--bp-accent);
+  color: var(--bp-on-accent);
+}
+
+/* A project's tab names the board open in it, and a chevron says its boards
+   are one click away. */
+.project-tab .tab-board {
+  color: var(--bp-text-soft);
+}
+
+.project-tab .tab-board::before {
+  content: "· ";
+}
+
+.project-tab .chevron {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--bp-motion-fast) var(--bp-ease);
+}
+
+.project-tab[aria-expanded="true"] {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.project-tab[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
+}
+
+.board-menu {
+  position: fixed;
+  z-index: calc(var(--bp-z-bar) + 2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 280px;
+  max-height: min(70vh, 560px);
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--bp-line);
+  border-radius: 14px;
+  background: var(--bp-surface);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+  animation: board-menu-in var(--bp-motion-fast) var(--bp-ease);
+}
+
+.board-menu[hidden] {
+  display: none;
+}
+
+.board-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 8px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--bp-text-soft);
+  text-align: left;
+  font: var(--type-label);
+}
+
+.board-item:hover,
+.board-item:focus-visible,
+.board-item[aria-current="true"] {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.board-item .letter {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-bg);
+  font: var(--type-mono);
+}
+
+.board-item[aria-current="true"] .letter {
+  background: var(--bp-accent);
+  color: var(--bp-on-accent);
+}
+
+.board-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.board-item-title {
+  overflow: hidden;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes board-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ---- the tools, a pill centred on the left edge ------------------------ */
+
+/* Centred on the left edge. */
+.rail {
+  position: fixed;
+  top: 50%;
+  left: var(--bp-bar-offset);
+  z-index: var(--bp-z-bar);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--bp-bar-gap);
+  width: var(--bp-bar-size);
+  max-height: calc(100% - var(--bp-bar-offset) * 2);
+  padding: calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2) 0;
+  overflow-y: auto;
+  border-radius: var(--bp-radius-bar);
+  scrollbar-width: none;
+  translate: 0 -50%;
+  transition:
+    transform var(--bp-motion-base) var(--bp-ease),
+    opacity var(--bp-motion-base) var(--bp-ease);
+}
+
+/* Hidden: slid past the left edge,
+   keeping its size on the way. review.js brings it back. */
+.rail[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(-100% - 2 * var(--bp-bar-offset)));
+}
+
+/* What the hidden bar leaves at the edge. */
+.edge {
+  position: fixed;
+  top: 50%;
+  left: 3px;
+  z-index: var(--bp-z-bar);
+  width: 4px;
+  height: 64px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-text-soft);
+  opacity: 0;
+  pointer-events: none;
+  translate: 0 -50%;
+  transition: opacity var(--bp-motion-base) var(--bp-ease);
+}
+
+.edge[data-shown] {
+  opacity: 0.6;
+}
+
+.item[hidden] {
+  display: none;
+}
+
+.item {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--bp-bar-item);
+  height: var(--bp-bar-item);
+  padding: 0;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: none;
+  color: var(--bp-text-soft);
+  transition:
+    background var(--bp-motion-fast) var(--bp-ease),
+    color var(--bp-motion-fast) var(--bp-ease);
+}
+
+.item:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.item svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The tool or layer in use: the lit ground and an
+   accent pill at the bar's inner edge, so the state is a shape and not only
+   a shade. */
+.item[aria-pressed="true"] {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.item[aria-pressed="true"]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc((var(--bp-bar-size) - var(--bp-bar-item)) / -2 + 2px);
+  width: 3px;
+  height: 20px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-accent);
+  translate: 0 -50%;
+}
+
+/* The name of a tool and its key, beside the bar. */
+.tip {
+  position: fixed;
+  z-index: var(--bp-z-toast);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-control);
+  background: var(--bp-surface);
+  box-shadow: 0 8px 24px var(--bp-shadow);
+  font: var(--type-meta);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.tip[hidden] {
+  display: none;
+}
+
+.tip kbd {
+  min-width: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-control);
+  color: var(--bp-text-soft);
+  font: var(--type-mono);
+  text-align: center;
+}
+
+/* ---- the board note, folded into its title on demand ------------------ */
+
+/* In the bottom left corner, under the tools bar and sharing its left edge. */
+.note {
+  position: absolute;
+  left: var(--bp-bar-offset);
+  bottom: var(--bp-bar-offset);
+  z-index: var(--bp-z-bar);
+  max-width: min(62ch, calc(100% - (var(--bp-bar-offset) * 3 + var(--bp-main-button))));
+  padding: 8px 14px 10px;
+  border-radius: var(--bp-radius-popup);
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+/* Beside the comments card while it is open, never under it. On a phone the
+   card covers the board and the note with it. */
+@media (min-width: 701px) {
+  body[data-panel="open"] .note {
+    max-width: min(62ch, calc(100% - (var(--bp-bar-offset) * 3 + var(--panel-w))));
+  }
+}
+
+.note summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--bp-text);
+  font: var(--type-strong);
+  list-style: none;
+  cursor: pointer;
+}
+
+.note summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A chevron that points down while the note is open. */
+.note summary::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  rotate: -45deg;
+  transition: rotate var(--bp-motion-fast) var(--bp-ease);
+}
+
+.note[open] summary::before {
+  rotate: 45deg;
+}
+
+.note p {
+  margin: 4px 0 0;
+}
+
+/* ---- cards: the composer and a thread --------------------------------- */
+
+.card {
+  position: absolute;
+  z-index: var(--bp-z-popup);
+  width: min(var(--card-w), calc(100% - var(--bp-bar-offset) * 2));
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-popup);
+  background: var(--bp-surface);
+  box-shadow: 0 18px 48px var(--bp-shadow);
+  cursor: default;
+  user-select: text;
+}
+
+.card[hidden] {
+  display: none;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.crumbs li {
+  display: flex;
+  align-items: center;
+}
+
+.crumbs li + li::before {
+  content: "›";
+  margin-right: 4px;
+  color: var(--bp-text-soft);
+}
+
+.crumbs button {
+  min-height: 24px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: none;
+  color: inherit;
+}
+
+.crumbs button:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.crumbs [aria-current="true"] {
+  color: var(--bp-select);
+  font-weight: 600;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--bp-field-edge);
+  border-radius: var(--bp-radius-control);
+  background: var(--bp-bg);
+  resize: vertical;
+}
+
+textarea::placeholder {
+  color: var(--bp-text-soft);
+  opacity: 1;
+}
+
+/* It grows with what is written, up to a limit, instead of a native grip. */
+textarea {
+  field-sizing: content;
+  max-height: 40vh;
+  resize: none;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.card-actions .hint {
+  margin-right: auto;
+  color: var(--bp-text-soft);
+  font: var(--type-mono-plain);
+}
+
+.card-actions .spacer {
+  flex: 1;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-surface-2);
+  font: var(--type-label);
+}
+
+.btn:hover {
+  border-color: var(--bp-text-soft);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--bp-accent);
+  color: var(--bp-on-accent);
+}
+
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--bp-text-soft);
+}
+
+.btn.ghost:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.btn.danger {
+  color: var(--bp-danger);
+}
+
+.btn.icon {
+  width: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: none;
+  color: var(--bp-text-soft);
+}
+
+.btn.icon:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.btn.icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.thread-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.thread-head .crumbs {
+  flex: 1;
+}
+
+.messages {
+  display: grid;
+  gap: 10px;
+  max-height: 260px;
+  margin: 0 0 10px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.message {
+  display: grid;
+  gap: 2px;
+}
+
+.message-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: var(--type-meta);
+}
+
+.message-author {
+  font-weight: 600;
+}
+
+.message-author[data-agent="true"] {
+  color: var(--bp-agent);
+}
+
+.message-time {
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.message-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the comments: a card on the right, or a round button ------------- */
+
+/* Anchored to the corner of the button it folds into, as tall as its threads
+   and never past the band of the top pill. */
+.panel {
+  position: fixed;
+  right: var(--bp-bar-offset);
+  bottom: var(--bp-bar-offset);
+  z-index: var(--bp-z-popup);
+  display: flex;
+  flex-direction: column;
+  width: min(var(--panel-w), calc(100% - var(--bp-bar-offset) * 2));
+  max-height: min(760px, calc(100% - var(--top-band) - var(--bp-bar-offset)));
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-popup);
+  background: var(--bp-surface);
+  box-shadow: 0 18px 48px var(--bp-shadow);
+  overflow: hidden;
+  transform-origin: 100% 100%;
+  transition:
+    opacity var(--bp-motion-base) var(--bp-ease),
+    scale var(--bp-motion-base) var(--bp-ease),
+    visibility 0s linear 0s;
+}
+
+/* Folded, the card shrinks into the corner where the button waits. */
+body[data-panel="closed"] .panel {
+  opacity: 0;
+  scale: 0.92;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--bp-motion-fast) var(--bp-ease),
+    scale var(--bp-motion-fast) var(--bp-ease),
+    visibility 0s linear var(--bp-motion-fast);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 18px;
+  border-bottom: 1px solid var(--bp-line);
+}
+
+.panel-head h2 {
+  margin: 0 auto 0 0;
+  font: var(--type-title);
+}
+
+.panel-head h2:focus {
+  outline: none;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+  cursor: pointer;
+}
+
+.switch input {
+  margin: 0;
+  accent-color: var(--bp-accent);
+}
+
+.threads {
+  min-height: 0;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.threads:empty {
+  display: none;
+}
+
+.thread-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--bp-radius-control);
+  background: none;
+  text-align: left;
+}
+
+.thread-item:hover,
+.thread-item[aria-current="true"] {
+  border-color: var(--bp-line);
+  background: var(--bp-surface-2);
+}
+
+.thread-number {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--bp-pin-shape);
+  background: var(--bp-pin);
+  color: var(--bp-pin-ink);
+  font: var(--type-mono);
+}
+
+.thread-item[data-status="resolved"] .thread-number {
+  background: var(--bp-pin-done);
+}
+
+.thread-body {
+  min-width: 0;
+}
+
+/* The start of the path gives way first; the thing itself stays named. */
+.thread-where {
+  display: flex;
+  min-width: 0;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+  white-space: nowrap;
+}
+
+.where-trail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.where-trail:not(:empty) + .where-last {
+  margin-left: 0.3em;
+}
+
+.where-last {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-first {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.thread-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.panel-empty {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 18px;
+  color: var(--bp-text-soft);
+}
+
+.panel-empty[hidden] {
+  display: none;
+}
+
+.panel-empty p {
+  margin: 0;
+}
+
+.panel-empty[data-kind="error"] p {
+  color: var(--bp-danger);
+}
+
+.panel-foot {
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--bp-line);
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+/* The path is one unit: it goes on its own line rather than breaking. */
+.panel-foot code {
+  display: block;
+  overflow: hidden;
+  font: var(--type-mono-plain);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The folded comments: a round button in the corner, the size of the main
+   button, with the open threads counted on its shoulder. */
+.bubble {
+  position: fixed;
+  right: var(--bp-bar-offset);
+  bottom: var(--bp-bar-offset);
+  z-index: var(--bp-z-popup);
+  display: grid;
+  place-items: center;
+  width: var(--bp-main-button);
+  height: var(--bp-main-button);
+  padding: 0;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-accent);
+  color: var(--bp-on-accent);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+  transition:
+    scale var(--bp-motion-fast) var(--bp-ease),
+    opacity var(--bp-motion-base) var(--bp-ease),
+    visibility 0s linear 0s;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .bubble:hover {
+    scale: 1.04;
+  }
+}
+
+.bubble:active {
+  scale: 0.96;
+}
+
+.bubble svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body[data-panel="open"] .bubble {
+  opacity: 0;
+  scale: 0.8;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    scale var(--bp-motion-fast) var(--bp-ease),
+    opacity var(--bp-motion-fast) var(--bp-ease),
+    visibility 0s linear var(--bp-motion-fast);
+}
+
+.count {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-pin);
+  color: var(--bp-pin-ink);
+  font: var(--type-mono);
+  text-align: center;
+}
+
+.bubble .count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  box-shadow: 0 0 0 2px var(--bp-bg);
+}
+
+.bubble .count[data-zero="true"] {
+  display: none;
+}
+
+/* ---- status ------------------------------------------------------------ */
+
+/* Always in the page, so the live region exists before a message arrives;
+   empty, it draws nothing. */
+.status {
+  position: fixed;
+  top: var(--top-band);
+  left: 50%;
+  z-index: var(--bp-z-toast);
+  translate: -50% 0;
+  padding: 8px 16px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-surface);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+}
+
+.status:empty {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.status[data-kind="error"] {
+  border-color: var(--bp-danger);
+  color: var(--bp-danger);
+}
+
+/* The top pill stops naming the product before it starts squeezing tabs. */
+@media (max-width: 1100px) {
+  .brand-name,
+  .top-rule {
+    display: none;
+  }
+}
+
+/* A phone: the tools become a bar along the bottom
+   that runs behind the round button, and the cards take the width. */
+@media (max-width: 700px) {
+  .top {
+    left: var(--bp-bar-offset);
+    right: var(--bp-bar-offset);
+    max-width: none;
+    translate: none;
+  }
+
+  .brand-mode {
+    display: none;
+  }
+
+  .edge {
+    display: none;
+  }
+
+  .rail {
+    top: auto;
+    translate: none;
+    right: calc(var(--bp-bar-offset) + var(--bp-main-button) / 2);
+    bottom: var(--bp-bar-offset);
+    flex-direction: row;
+    width: auto;
+    height: var(--bp-bar-size);
+    max-height: none;
+    padding: 0 calc(var(--bp-main-button) / 2 + var(--bp-bar-offset) * 3) 0 calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2);
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* The fade before the button says the bar goes on: the rest scrolls in. */
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--bp-main-button) - var(--bp-bar-offset) * 3), transparent calc(100% - var(--bp-main-button) / 2));
+    mask-image: linear-gradient(to right, black calc(100% - var(--bp-main-button) - var(--bp-bar-offset) * 3), transparent calc(100% - var(--bp-main-button) / 2));
+  }
+
+  .item[aria-pressed="true"]::before {
+    top: auto;
+    bottom: calc((var(--bp-bar-size) - var(--bp-bar-item)) / -2 + 2px);
+    left: 50%;
+    width: 24px;
+    height: 3px;
+    translate: -50% 0;
+  }
+
+  .bubble {
+    bottom: calc(var(--bp-bar-offset) + (var(--bp-bar-size) - var(--bp-main-button)) / 2);
+  }
+
+  .panel {
+    left: var(--bp-bar-offset);
+    bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
+    width: auto;
+    max-height: calc(100% - var(--top-band) - var(--bp-bar-offset) * 2 - var(--bp-bar-size));
+  }
+
+  .note {
+    left: var(--bp-bar-offset);
+    right: var(--bp-bar-offset);
+    bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
+    max-width: none;
+  }
+}
+
+/* Under a finger, every control reaches the working size, and the bars take
+   the larger sizes back. */
+@media (pointer: coarse) {
+  :root {
+    --bp-bar-size: 68px;
+    --bp-bar-gap: 6px;
+    --bp-bar-item: 48px;
+    --bp-main-button: 52px;
+    --icon-sm: 20px;
+    --icon-md: 24px;
+  }
+
+  .skip,
+  .board-tab,
+  .board-item,
+  .btn,
+  .crumbs button,
+  .switch,
+  .note summary {
+    min-height: var(--target-touch);
+  }
+
+  .btn.icon {
+    width: var(--target-touch);
+  }
+
+  .top {
+    height: calc(var(--target-touch) + 8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+  }
+
+  .panel,
+  .bubble {
+    scale: none !important;
+  }
+}
+
+/* ---- what the overlay draws ------------------------------------------- */
+
+.overlay .screen-title {
+  fill: var(--bp-title);
+  font: var(--type-label);
+}
+
+.overlay .wire {
+  fill: none;
+  stroke: var(--bp-wire);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The stretch inside the screen, from the control to the edge. */
+.overlay .wire-inner {
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
+
+.overlay .hot {
+  fill: var(--bp-wire);
+  stroke: var(--bp-canvas);
+  stroke-width: 2;
+}
+
+/* A hovered control and every link it starts, in the selection blue: 5.3
+   on the ground, over the 3 a line needs. */
+.overlay .wire.lit {
+  stroke: var(--bp-select);
+  stroke-width: 2;
+}
+
+.overlay .wire-inner.lit {
+  opacity: 1;
+}
+
+.overlay .hot.lit {
+  fill: var(--bp-select);
+}
+
+.overlay .source-box {
+  fill: none;
+  stroke: var(--bp-select);
+  stroke-width: 1.5;
+}
+
+/* A label is a small dark tag on its link: it names the condition without
+   outshining the screens. */
+.overlay .link-label rect {
+  fill: var(--bp-surface);
+  stroke: var(--bp-line);
+}
+
+.overlay .link-label text {
+  fill: var(--bp-text);
+  font: var(--type-tag);
+  dominant-baseline: central;
+}
+
+.overlay .select-box {
+  fill: none;
+  stroke: var(--bp-select);
+  stroke-width: 2;
+}
+
+.overlay .hover-box {
+  fill: var(--bp-hover-fill);
+  stroke: var(--bp-hover);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.overlay .pin path {
+  fill: var(--bp-pin);
+  stroke: var(--bp-pin-ink);
+  stroke-width: 1.5;
+}
+
+.overlay .pin text {
+  fill: var(--bp-pin-ink);
+  font: var(--type-pin);
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.overlay .pin[data-status="resolved"] path {
+  fill: var(--bp-pin-done);
+}
+
+.overlay .pin[data-open="true"] path {
+  stroke: var(--bp-select);
+  stroke-width: 2.5;
+}
+
+.overlay .pin-draft path {
+  fill: var(--bp-surface);
+  stroke: var(--bp-pin);
+  stroke-width: 2;
+}
+
+.overlay .pin-draft text {
+  fill: var(--bp-pin);
+}
+
+/* A screen with an animation carries a play button at the end of its title:
+   nothing on a board moves by itself, and the board moving stops it. A dark
+   tag like a link's label, its glyph in the text colour; playing, it is
+   ringed in the selection blue. */
+.overlay .play {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.overlay .play:focus {
+  outline: none;
+}
+
+.overlay .play-hit {
+  fill: transparent;
+}
+
+.overlay .play-face {
+  fill: var(--bp-surface);
+  stroke: var(--bp-line);
+}
+
+.overlay .play path,
+.overlay .play rect {
+  fill: var(--bp-text);
+}
+
+.overlay .play[data-on="true"] .play-face {
+  stroke: var(--bp-select);
+  stroke-width: 2;
+}
+
+.overlay .play-ring {
+  display: none;
+  fill: none;
+  stroke: var(--bp-wire);
+  stroke-width: 2;
+}
+
+.overlay .play:focus-visible .play-ring {
+  display: inline;
+}

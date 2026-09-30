@@ -438,13 +438,14 @@ test("evolve stops before pulling when the kit ships a file the user added", asy
   assert.equal(await git(kitPath, ["status", "--porcelain"], env), "?? features/my-onboarding.md");
 });
 
-test("the actual setup installer parses and installs all eleven feature commands", async (t) => {
+test("the actual setup installer parses and installs all twelve feature commands", async (t) => {
   const root = await temporaryDirectory(t, "feature-install");
   const mindPath = await makeMind(root);
   const homeDir = path.join(root, "home");
   const kitPath = path.resolve(import.meta.dirname, "..");
   const env = { ...process.env, CODEX_HOME: path.join(homeDir, ".codex") };
   const featureNames = [
+    "blueprint",
     "brainstorm",
     "catchup",
     "conflicts",
@@ -469,6 +470,10 @@ test("the actual setup installer parses and installs all eleven feature commands
     assert.match(content, new RegExp(`^---\\nname: ${name}\\n`, "m"));
     assert.match(content, new RegExp(`Mind: ${mindPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.doesNotMatch(content, /\{\{mind\}\}/);
+  }
+  // A feature folder installs its scripts next to the command.
+  for (const support of ["server.mjs", path.join("review", "review.js"), path.join("kit", "kit.mjs")]) {
+    await fs.access(path.join(homeDir, ".agents", "skills", "blueprint", support));
   }
 });
 
