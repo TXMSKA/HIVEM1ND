@@ -742,6 +742,7 @@ test("swarm summarizes root, environment and project state", async (t) => {
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "002-copy.md"), "id: 002\nstatus: done\n\n## Request\nCopy.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "003-old.md"), "id: 003\nstatus: closed\n\n## Request\nOld.\n");
+  await write(path.join(mindPath, "user", "projects", "app", "tasks", "004-reset.md"), "id: 004\nstatus: review\n\n## Request\nReset.\n");
   await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "one.md"), "message\n");
   await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "two.md"), "message\n");
 
@@ -749,8 +750,9 @@ test("swarm summarizes root, environment and project state", async (t) => {
   assert.deepEqual(result.units.map((unit) => unit.scope).sort(), ["environment", "project", "root"]);
   assert.equal(result.units.find((unit) => unit.unit === "overseer").context, "Planning releases.");
   assert.equal(result.tasks.open, 1);
+  assert.equal(result.tasks.review, 1);
   assert.equal(result.tasks.done, 1);
-  assert.deepEqual(result.tasks.projects[0].items.map((item) => item.slug), ["login", "copy"]);
+  assert.deepEqual(result.tasks.projects[0].items.map((item) => item.slug), ["login", "copy", "reset"]);
   assert.equal(result.inboxes.unread, 2);
   assert.equal(result.inboxes.units[0].unit, "executor-app");
 });

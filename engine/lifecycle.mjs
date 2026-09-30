@@ -993,7 +993,7 @@ async function readTasks(taskPath) {
     const filePath = path.join(taskPath, fileName);
     const content = await readText(filePath);
     const status = headerValue(content, "status").toLowerCase();
-    if (status !== "open" && status !== "done") continue;
+    if (status !== "open" && status !== "review" && status !== "done") continue;
     const fileMatch = fileName.match(/^(\d+)-(.*)\.md$/);
     items.push({
       id: headerValue(content, "id") || fileMatch?.[1] || "",
@@ -1051,14 +1051,17 @@ export async function swarm(options = {}) {
 
   const projectSummaries = [];
   let open = 0;
+  let review = 0;
   let done = 0;
   for (const project of await listDirectories(path.join(userPath, "projects"))) {
     const items = await readTasks(path.join(userPath, "projects", project, "tasks"));
     const projectOpen = items.filter((item) => item.status === "open").length;
+    const projectReview = items.filter((item) => item.status === "review").length;
     const projectDone = items.filter((item) => item.status === "done").length;
     open += projectOpen;
+    review += projectReview;
     done += projectDone;
-    projectSummaries.push({ project, open: projectOpen, done: projectDone, items });
+    projectSummaries.push({ project, open: projectOpen, review: projectReview, done: projectDone, items });
   }
 
   units.sort((left, right) => left.unit.localeCompare(right.unit, "en"));
@@ -1066,7 +1069,7 @@ export async function swarm(options = {}) {
   return {
     action: "swarm",
     units,
-    tasks: { open, done, projects: projectSummaries },
+    tasks: { open, review, done, projects: projectSummaries },
     inboxes: {
       unread: inboxUnits.reduce((sum, inbox) => sum + inbox.count, 0),
       units: inboxUnits,
