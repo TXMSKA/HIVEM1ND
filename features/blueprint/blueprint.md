@@ -92,7 +92,14 @@ export default board({
 - A tree is made of `box`, `col`, `row`, `stack`, `text`, `icon`, `image`, `rule`, `vector`, `space` and `fill` from `blueprint/kit.mjs`. The controls in `blueprint/ui.mjs` (buttons, fields, tabs, menus, switches) are built from them. Layout props: `pad`, `gap`, `w`, `h` (a number, or `"fill"` for `w`), `grow`, `align`, `justify`, `radius` (`none`, `xs`, `sm`, `md`, `lg`, `xl`, `pill` or a number), `fill`, `stroke`, `shadow`, `clip`. Text props: `size` (`micro` to `3xl` or a number), `weight`, `color`, `align`, `lines`, `upper`, `face` (`body` or `mono`).
 - Colours are role names of the theme (`canvas`, `surface`, `line`, `title`, `text`, `soft`, `primary`, `error`, and the rest of the palette in the project's `skins.mjs`) or a literal `#rrggbb`. An unknown role stops the board from drawing. See Theme for where the palette and the fonts come from.
 - A node with a `name` (and a human `label`) can be commented on and can start a link. Names are lowercase letters and digits joined by hyphens or dots. A name used twice on a screen gets `-2`, `-3` after it.
-- Icons are Lucide names from `icons.mjs`. A picture is an `image` with `src` set to `/p/<project>/assets/<file>`.
+- Icons are Lucide names from `icons.mjs`. A repository adds its own, such as brand marks, in `docs/flows/kit/extra-icons.mjs` (see Extending the kit). A picture is an `image` with `src` set to `/p/<project>/assets/<file>`.
+
+## Extending the kit
+
+The shared kit is the base only: what a single project uses lives in that project. A repository adds it from `docs/flows/kit/` without keeping a copy of `kit.mjs`. Both files are plain modules the repository controls, so they may import from another path or a package. The viewer registers them for that repository's boards only, before it lays out or draws them. A repository that keeps its own `kit.mjs` is unaffected.
+
+- `extra-icons.mjs`: the default export (or `ICONS`) is an object of icon name to SVG markup, drawn in a 24 by 24 box like the shared icons (`filled: true` on the node fills instead of stroking). A name in both takes the repository's drawing.
+- `extra-nodes.mjs`: the default export (or `NODES`) is an object of node type to `{ measure, draw, place? }`. A board builds the node itself (`{ t: "<type>", ...props, kids }`). `measure(node, avail, stretch, axis, api)` must set `node._w` and `node._h`; its `api` has `layout(tree, w, h)` (lays a subtree out alone) and `withMeasureSkin(skin, work)` (measures text in another skin). `place(node, x, y, w, h, api)` is optional and runs when the parent places the node. `draw(node, g)` pushes SVG into `g.out`; `g` has `walk(child)` (draws a child; a named child is recorded for comments and links, so a node that draws its children with `walk` makes them pinnable), `mute(work)` (names inside are not recorded, so a comment pins to the node as a whole), `withSkin(skin, ids, work)` (draws in another skin), `uid(kind)` (an id under the screen's prefix), `paint(role)`, `radius(node)`, `esc(text)`, and the current `skin` and `ids`.
 
 ## Theme
 
