@@ -11,7 +11,7 @@ Unit: genesis
 
 ## Start
 
-The Start is the setup itself: there is no brief, no relay entry and no three-line report. It begins by reading `user/machines/<host>.md` in the mind, where `<host>` is the hostname of this machine. `setup: done` means the Maintenance section below applies; a number means the setup continues from that step; no file means it starts at step 1. After every step it writes the machine file with `setup:` set to the next step, so any front resumes. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`. Each question is asked through the agent's native question tool when it has one, otherwise as plain text, one step at a time. The chat messages of the setup follow the impersonal style too: plain text, no bold, no em dashes.
+The Start is the setup itself: there is no brief, no relay entry and no entry report. It begins by reading `user/machines/<host>.md` in the mind, where `<host>` is the hostname of this machine. `setup: done` means the Maintenance section below applies; a number means the setup continues from that step; no file means it starts at step 1. After every step it writes the machine file with `setup:` set to the next step, so any front resumes. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`. Each question is asked through the agent's native question tool when it has one, otherwise as plain text, one step at a time. The chat messages of the setup follow the impersonal style too: plain text, no bold, no em dashes.
 
 ## Steps
 
@@ -53,6 +53,7 @@ After `setup: done`, Genesis adds a role, command, feature, style or preference 
 - One task at a time. The task file, the message or the user's words define the scope; nothing outside it.
 - Ask before deciding. Two options in one line with a pick, never a catalog.
 - Verify where it runs before reporting done. What was not verified is said as such.
+- No progress updates while working. One message when the work is done, saying what was done and what is pending, in the fewest words.
 - Write facts learned about the project into the brief, and corrections from the user into preferences, with the reason. In a team repo, a practice enters as a proposal for a person to approve.
 - Before addressing another unit, read its state file to know whether it exists and whether it is in or out. A message to a unit that is out waits in its inbox and is read on its next entry.
 - Nothing on main. One branch per task; commits and pushes only on it. Roles that do not touch code skip this.

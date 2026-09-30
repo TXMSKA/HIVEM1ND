@@ -239,7 +239,7 @@ function formatSwarm(result) {
   lines.push("", "Tasks");
   if (!result.tasks?.projects?.length) lines.push("(none)");
   for (const project of result.tasks?.projects ?? []) {
-    lines.push(`${project.project} | open ${project.open} | done ${project.done}`);
+    lines.push(`${project.project} | open ${project.open} | review ${project.review} | done ${project.done}`);
     for (const item of project.items ?? []) lines.push(`${item.id} ${item.slug} | ${item.status}`);
   }
 

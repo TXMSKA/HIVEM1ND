@@ -18,5 +18,5 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 1. List the tasks with `status: open` in the project.
 2. Group them so that no two groups share a file, using the files named in each Request. Two tasks that share a file go to the same group.
 3. Start one subagent per group, in one message, each with its tasks in full, the brief, the rules file and the order to implement on one branch per task.
-4. When they return, verify each task first-hand where it runs: lint, build, and the behaviour in the browser, the editor or the console. Set `status: done` on each verified task and append what was verified to its Report. A task that fails stays `open` with the failure in its Report.
-5. Report numbers: tasks done, tasks left open, groups run.
+4. When they return, verify each task first-hand where it runs: lint, build, and the behaviour in the browser, the editor or the console. Set `status: review` on each verified task and append what was verified to its Report. A task that fails stays `open` with the failure in its Report.
+5. Report numbers: tasks in review, tasks left open, groups run.
