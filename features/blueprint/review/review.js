@@ -160,7 +160,7 @@ function kitOf(entry) {
     kits.set(
       entry.kit,
       Promise.all([import(`${entry.kit}kit.mjs`), import(`${entry.kit}skins.mjs`), import(`${entry.kit}board.mjs`)]).then(
-        ([engine, themes, frame]) => ({ draw: engine.draw, layout: engine.layout, skins: themes.skins, skinDefs: themes.skinDefs, GAP_Y: frame.GAP_Y }),
+        ([engine, themes, frame]) => ({ draw: engine.draw, layout: engine.layout, useSkin: engine.useSkin, skins: themes.skins, skinDefs: themes.skinDefs, GAP_Y: frame.GAP_Y }),
       ),
     );
   }
@@ -279,6 +279,8 @@ async function openBoard(project, id) {
   try {
     kit = await kitOf(entry);
     await fontsReady(kit.skins[pickLayer(kit)]);
+    // A repository engine older than useSkin measures in its own faces.
+    kit.useSkin?.(kit.skins[pickLayer(kit)]);
     board = (await import(`${entry.url}?v=${Date.now()}`)).default;
     for (const def of board.screens) {
       const node = def.root();
