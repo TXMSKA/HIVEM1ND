@@ -6,8 +6,8 @@
 // the Review app rather than in a build step, and why every screen stays
 // vector at any zoom.
 //
-// Layout is measured with the system font stacks the skin names, so a board
-// measures what the page draws.
+// Layout is measured with the faces and weights of the skin the board is drawn
+// in (see useSkin), so a board measures what the page draws.
 
 import { ICONS } from "./icons.mjs";
 
@@ -50,6 +50,8 @@ export const fill = (weight = 1) => ({ t: "space", size: 0, grow: weight });
 
 export const SIZES = { micro: 10, "2xs": 11, xs: 12, sm: 14, base: 16, lg: 18, xl: 22, "2xl": 28, "3xl": 36 };
 
+// The stacks text is measured in until a skin is given: the same system stacks
+// the fallback theme draws with.
 const FACES = {
   body: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
   mono: 'ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
@@ -58,11 +60,25 @@ const FACES = {
 
 const measureCtx = document.createElement("canvas").getContext("2d");
 
+let measureSkin = null;
+
+/**
+ * Sets the skin text is measured with: its `face()` and `weight()` decide the
+ * font a line is measured in, the same two calls `draw` makes, so layout and
+ * drawing agree. Call it once per board, before `layout`, with the skin the
+ * board is drawn in. Without a skin the system stacks above are used.
+ */
+export function useSkin(skin) {
+  measureSkin = skin ?? null;
+}
+
 function fontOf(node) {
   const size = typeof node.size === "number" ? node.size : SIZES[node.size ?? "sm"];
   const face = node.face ?? "body";
-  const weight = node.weight ?? (face === "display" ? 400 : 400);
-  return { size, face, weight, css: `${weight} ${size}px ${FACES[face]}` };
+  const weight = node.weight ?? 400;
+  const family = measureSkin?.face(face) ?? FACES[face];
+  const drawn = measureSkin?.weight(face, weight) ?? weight;
+  return { size, face, weight, css: `${drawn} ${size}px ${family}` };
 }
 
 function widthOf(str, font, track) {
@@ -125,6 +141,7 @@ function pads(pad) {
   if (pad === undefined) return [0, 0, 0, 0];
   if (typeof pad === "number") return [pad, pad, pad, pad];
   if (pad.length === 2) return [pad[0], pad[1], pad[0], pad[1]];
+  if (pad.length === 3) return [pad[0], pad[1], pad[2], pad[1]];
   return pad;
 }
 
@@ -312,9 +329,10 @@ function place(node, x, y, w, h) {
   const align = node.align ?? (rowDir ? "center" : "stretch");
   kids.forEach((kid, i) => {
     const along = sizes[i];
-    // A child that names its own cross size, or its own alignment, keeps it.
-    const fixedAcross = rowDir ? typeof kid.h === "number" : typeof kid.w === "number";
-    const stretchKid = align === "stretch" && !fixedAcross && (kid.self ?? "stretch") === "stretch" && (isBlock(kid) || kid.t === "text");
+    // A child that names its own alignment (`self`) keeps its size. One that
+    // only names a size is still stretched across: a fixed `w` or `h` is the
+    // size the parent measures it at, not the size it is placed at.
+    const stretchKid = align === "stretch" && (kid.self ?? "stretch") === "stretch" && (isBlock(kid) || kid.t === "text");
     const across = rowDir
       ? stretchKid && kid.t !== "text"
         ? ih
@@ -429,8 +447,8 @@ export function draw(root, skin, ids) {
           // name its own `shadow` colour, such as a grey that reads on black.
           const shade = (skin.id === "design" && themes[themes.length - 1]?.shadow) || paint("canvas");
           out.push(
-            `<rect x="${node._x - 4}" y="${node._y + 8}" width="${node._w + 8}" height="${node._h + 6}" rx="${r + 4}" fill="${shade}" opacity="0.22"/>` +
-              `<rect x="${node._x - 10}" y="${node._y + 16}" width="${node._w + 20}" height="${node._h + 12}" rx="${r + 10}" fill="${shade}" opacity="0.1"/>`,
+            `<rect x="${node._x - 6}" y="${node._y + 14}" width="${node._w + 12}" height="${node._h + 10}" rx="${r + 6}" fill="${shade}" opacity="0.35"/>` +
+              `<rect x="${node._x - 16}" y="${node._y + 26}" width="${node._w + 32}" height="${node._h + 20}" rx="${r + 16}" fill="${shade}" opacity="0.18"/>`,
           );
         }
         if (node.fill || node.stroke) {
