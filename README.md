@@ -96,6 +96,7 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | Overlord | Operative | Coordinates one environment as the project manager, for a change that spans several repos. |
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
 | Super executor | Operative | The Executor seat on the strongest model available, for tasks that require it. |
+| Manager | Operative | Prepares each task with the user and hands its implementation and QA to another agent, on a strong model whose effort follows the work. |
 | Consultant | Operative | Reads, explains and reviews inside one repo and never writes. |
 | Executive | Chat | Decides business questions from the mind alone, on a mid-tier model. |
 | Operator | Chat | The technical counterpart: architecture, integrations and improving what exists, on the strongest model available. |

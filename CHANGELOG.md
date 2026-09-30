@@ -4,6 +4,10 @@
 
 - Blueprint Lite, the `/blueprint` feature: one local server per machine, on port 3300, draws the screen-flow boards of every project at once. Projects come from the mind (the machine record's paths and the routes), a project shows in the viewer when its repository has `docs/flows/boards/index.json`, and the comments made in the viewer are written to that repository's `docs/flows/comments/<board>.json`, where agents read them. The board and comment formats are documented in the feature. It ships as a folder with its scripts, and it is a temporary tool that the full Blueprint replaces.
 - A feature folder is listed by its category in the content step of the installer, the same as a feature file.
+- Manager, a new operative role: it talks the work through with the user, writes the task, hands the implementation and its QA to subagents or to another agent through its command-line interface, and reviews the result. It runs on a strong model at low or medium effort and names the effort a task needs before raising it.
+- Tasks gain a `review` status between `open` and `done`: the executor sets it when it appends the report, the requester sets `done` on accepting the work and `closed` on archiving it. The swarm command counts tasks in review.
+- The entry report of every role and of the relay command is laid out one block per fact, each led by a contextual icon, with the findings of the check first.
+- Every role works without progress updates and reports once, when the work is done, with what was done and what is pending.
 
 ## 1.2.0 - 2026-09-21
 
