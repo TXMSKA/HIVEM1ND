@@ -187,6 +187,10 @@ async function boardIndex(projects) {
       continue;
     }
     if (!Array.isArray(entries)) continue;
+    // A repository's own icons and node types on top of the shared kit: docs/flows/kit/extra-icons.mjs and extra-nodes.mjs.
+    const extra = async (file) => ((await isFile(join(project.flows, "kit", file))) ? `/p/${encodeURIComponent(project.name)}/kit/${file}` : undefined);
+    const icons = await extra("extra-icons.mjs");
+    const nodes = await extra("extra-nodes.mjs");
     for (const entry of entries) {
       if (!entry || typeof entry.id !== "string" || !BOARD_ID.test(entry.id)) continue;
       all.push({
@@ -197,6 +201,8 @@ async function boardIndex(projects) {
         title: label(entry.title, MAX_LABEL) ?? entry.id,
         url: `/p/${encodeURIComponent(project.name)}/boards/${entry.id}.mjs`,
         kit: `/p/${encodeURIComponent(project.name)}/kit/`,
+        icons,
+        nodes,
       });
     }
   }
