@@ -80,14 +80,14 @@ export default board({
   title: "Checkout",
   note: "Shown in the note over the canvas.",
   screens: [
-    { id: "cart", title: "Cart", col: 0, row: 0, root: page("Cart") },
+    { id: "cart", title: "Cart", col: 0, row: 0, root: page("Cart"), note: "The cart before payment." },
     { id: "pay", title: "Payment", col: 1, row: 0, root: page("Payment") },
   ],
   links: [{ from: "cart", to: "pay", at: "continue", label: "Continue" }],
 });
 ```
 
-- A screen is `{ id, title, col, row, root }`. `id` is lowercase letters, digits and hyphens. The size is 1440 by 900 unless `w` and `h` are given, and `x` and `y` place it freely instead of `col` and `row`. `root` is a function returning the tree of the screen.
+- A screen is `{ id, title, col, row, root }`. `id` is lowercase letters, digits and hyphens. The size is 1440 by 900 unless `w` and `h` are given, and `x` and `y` place it freely instead of `col` and `row`. `root` is a function returning the tree of the screen. An optional `note` is a short explanation of the screen: a click on the screen shows it in the note over the canvas in place of the board's note, and a click on the empty canvas brings the board's note back.
 - A link is `{ from, to, at?, label? }`: screen ids, the `name` of the element the arrow leaves from, and a caption.
 - A tree is made of `box`, `col`, `row`, `stack`, `text`, `icon`, `image`, `rule`, `vector`, `space` and `fill` from `blueprint/kit.mjs`. The controls in `blueprint/ui.mjs` (buttons, fields, tabs, menus, switches) are built from them. Layout props: `pad`, `gap`, `w`, `h` (a number, or `"fill"` for `w`), `grow`, `align`, `justify`, `radius` (`none`, `xs`, `sm`, `md`, `lg`, `xl`, `pill` or a number), `fill`, `stroke`, `shadow`, `clip`. Text props: `size` (`micro` to `3xl` or a number), `weight`, `color`, `align`, `lines`, `upper`, `face` (`body` or `mono`).
 - Colours are role names of the theme (`canvas`, `surface`, `line`, `title`, `text`, `soft`, `primary`, `error`, and the rest of the palette in the project's `skins.mjs`) or a literal `#rrggbb`. An unknown role stops the board from drawing. See Theme for where the palette and the fonts come from.
