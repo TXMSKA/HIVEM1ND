@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Switching machines takes one command on each side. The exit of `/relay` commits and pushes everything uncommitted in the repos of the unit's scope, on a new branch when the changes sit on the default branch, writes a state that resumes on another machine with nothing else, and clears the conversation; running it is the yes for those commits and pushes. The entry fetches, brings each repo to the branch recorded on exit and fast-forwards it, stopping only on uncommitted changes or a branch that cannot fast-forward, and asks for the yes to continue the half-done work. The scope is the current repo for a role in one repo, the environment for the Overlord and every project for the Overseer; a unit with several repos records each one in a `## Repos` section of its state.
 - Present plays a Blueprint Lite board as a prototype: one screen at a time, fitted to the window, where a click on a control a link leaves from opens the screen it leads to. A click that misses lights the controls that lead somewhere, Back and Backspace return to the previous screen, and Escape goes back to the board.
 - A Blueprint Lite screen can carry its own `note`. A click on the screen shows it in the note over the canvas, and a click on the empty canvas brings the board's note back.
 - Blueprint Lite kit extension points: a repository adds its own icons (`docs/flows/kit/extra-icons.mjs`) and node types (`docs/flows/kit/extra-nodes.mjs`, measure and draw) over the shared kit without keeping a copy of `kit.mjs`.
