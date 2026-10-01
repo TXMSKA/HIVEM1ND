@@ -15,7 +15,7 @@ import { ICONS } from "./icons.mjs";
 //
 // The shared kit is the base only. A repository adds what only it uses from
 // its own docs/flows/kit/, without keeping a copy of this file: icons in
-// extra-icons.mjs and node types in nodes.mjs (see blueprint.md). The viewer
+// extra-icons.mjs and node types in extra-nodes.mjs (see blueprint.md). The viewer
 // hands them over before it lays out or draws that repository's boards.
 
 let extraIcons = {};
