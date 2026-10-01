@@ -1243,6 +1243,111 @@ body[data-panel="open"] .bubble {
   color: var(--bp-danger);
 }
 
+/* ---- present: the board played as a prototype ------------------------- */
+
+.present {
+  flex: none;
+  height: 32px;
+  padding: 0 14px 0 10px;
+}
+
+.present svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.present:disabled {
+  opacity: 0.4;
+  filter: none;
+  cursor: default;
+}
+
+/* One screen at a time over everything, fitted to the window under a bar of
+   its own: the board, its tools and the comments stay behind it. */
+.player {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--bp-z-toast) + 1);
+  display: flex;
+  flex-direction: column;
+  background: var(--bp-bg);
+}
+
+.player-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  max-width: calc(100% - var(--bp-bar-offset) * 2);
+  height: var(--bp-bar-item);
+  margin-top: var(--bp-bar-offset);
+  padding: 0 4px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-surface-glass);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+}
+
+.player-title {
+  overflow: hidden;
+  padding: 0 6px;
+  font: var(--type-title);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.player-next {
+  display: flex;
+  gap: 4px;
+}
+
+.player-next:empty {
+  display: none;
+}
+
+.player-bar .hint {
+  color: var(--bp-text-soft);
+  font: var(--type-mono-plain);
+}
+
+.player-bar .btn:disabled {
+  opacity: 0.4;
+  background: none;
+  cursor: default;
+}
+
+.player-stage {
+  flex: 1;
+  min-height: 0;
+  padding: var(--bp-bar-offset) 24px 24px;
+}
+
+.player-screen {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 18px 40px var(--bp-shadow));
+}
+
+/* A control that leads somewhere is invisible until a click misses it, and
+   then every one on the screen is lit for a moment. */
+.player-screen .spot {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 3;
+  cursor: pointer;
+  transition:
+    fill var(--bp-motion-slow) var(--bp-ease),
+    stroke var(--bp-motion-slow) var(--bp-ease);
+}
+
+.player[data-flash="true"] .spot {
+  fill: var(--bp-hover-fill);
+  stroke: var(--bp-select);
+  transition-duration: 0ms;
+}
+
 /* The top pill stops naming the product before it starts squeezing tabs. */
 @media (max-width: 1100px) {
   .brand-name,
@@ -1262,6 +1367,16 @@ body[data-panel="open"] .bubble {
   }
 
   .brand-mode {
+    display: none;
+  }
+
+  /* Present keeps its icon only, so the tabs keep the width. */
+  .present {
+    width: var(--bp-bar-item);
+    padding: 0;
+  }
+
+  .present span {
     display: none;
   }
 
