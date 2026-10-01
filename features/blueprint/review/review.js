@@ -161,9 +161,25 @@ function kitOf(entry) {
   if (!kits.has(entry.kit)) {
     kits.set(
       entry.kit,
-      Promise.all([import(`${entry.kit}kit.mjs`), import(`${entry.kit}skins.mjs`), import(`${entry.kit}board.mjs`)]).then(
-        ([engine, themes, frame]) => ({ draw: engine.draw, layout: engine.layout, useSkin: engine.useSkin, skins: themes.skins, skinDefs: themes.skinDefs, GAP_Y: frame.GAP_Y }),
-      ),
+      Promise.all([
+        import(`${entry.kit}kit.mjs`),
+        import(`${entry.kit}skins.mjs`),
+        import(`${entry.kit}board.mjs`),
+        entry.icons ? import(entry.icons) : {},
+        entry.nodes ? import(entry.nodes) : {},
+      ]).then(([engine, themes, frame, moreIcons, moreNodes]) => {
+        // The repository's own icons (docs/flows/kit/extra-icons.mjs) go over the shared set. The engine is
+        // one module for every repository that keeps none of its own, so each repository's icons and node types (or none) are set before each layout and draw.
+        const icons = moreIcons.default ?? moreIcons.ICONS;
+        const nodes = moreNodes.default ?? moreNodes.NODES;
+        const activate = () => {
+          engine.useIcons?.(icons);
+          engine.useNodes?.(nodes);
+        };
+        const draw = (...args) => (activate(), engine.draw(...args));
+        const layout = (...args) => (activate(), engine.layout(...args));
+        return { activate, draw, layout, useSkin: engine.useSkin, skins: themes.skins, skinDefs: themes.skinDefs, GAP_Y: frame.GAP_Y };
+      }),
     );
   }
   return kits.get(entry.kit);
@@ -283,6 +299,7 @@ async function openBoard(project, id) {
     await fontsReady(kit.skins[pickLayer(kit)]);
     // A repository engine older than useSkin measures in its own faces.
     kit.useSkin?.(kit.skins[pickLayer(kit)]);
+    kit.activate();
     board = (await import(`${entry.url}?v=${Date.now()}`)).default;
     for (const def of board.screens) {
       const node = def.root();

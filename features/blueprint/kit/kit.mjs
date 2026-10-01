@@ -11,6 +11,31 @@
 
 import { ICONS } from "./icons.mjs";
 
+// ---- extension points ----------------------------------------------------
+//
+// The shared kit is the base only. A repository adds what only it uses from
+// its own docs/flows/kit/, without keeping a copy of this file: icons in
+// extra-icons.mjs and node types in extra-nodes.mjs (see blueprint.md). The viewer
+// hands them over before it lays out or draws that repository's boards.
+
+let extraIcons = {};
+let extraNodes = {};
+
+/** Sets the icons of the repository being drawn: name to SVG markup, over the shared set. */
+export function useIcons(icons) {
+  extraIcons = icons ?? {};
+}
+
+/**
+ * Sets the node types of the repository being drawn: type name to
+ * `{ measure(node, avail, stretch, axis, api), place?(node, x, y, w, h, api), draw(node, g) }`.
+ */
+export function useNodes(nodes) {
+  extraNodes = nodes ?? {};
+}
+
+const iconOf = (name) => extraIcons[name] ?? ICONS[name];
+
 // ---- nodes ---------------------------------------------------------------
 
 const clean = (kids) => kids.flat(Infinity).filter((kid) => kid && typeof kid === "object");
@@ -189,8 +214,23 @@ function measure(node, avail, stretch = false, axis = "col") {
     }
     case "box":
       return measureBox(node, avail, stretch);
-    default:
-      throw new Error(`Unknown node ${node.t}`);
+    default: {
+      const extra = extraNodes[node.t];
+      if (!extra) throw new Error(`Unknown node ${node.t}`);
+      // `layout` lays a subtree out alone; `withMeasureSkin` runs work with text measured in another skin.
+      extra.measure(node, avail, stretch, axis, { layout, withMeasureSkin });
+      return;
+    }
+  }
+}
+
+function withMeasureSkin(skin, work) {
+  const outer = measureSkin;
+  measureSkin = skin ?? outer;
+  try {
+    return work();
+  } finally {
+    measureSkin = outer;
   }
 }
 
@@ -270,7 +310,10 @@ function place(node, x, y, w, h) {
     if (again.lines.length <= node._text.lines.length) node._text = again;
     return;
   }
-  if (node.t !== "box") return;
+  if (node.t !== "box") {
+    extraNodes[node.t]?.place?.(node, x, y, w, h, { place });
+    return;
+  }
 
   const [pt, pr, pb, pl] = pads(node.pad);
   const gap = node.gap ?? 0;
@@ -397,6 +440,8 @@ function radius(node) {
  * its rectangle is recorded so a pin or a link can find it again.
  */
 export function draw(root, skin, ids) {
+  // Names inside a muted subtree are not recorded: no comment pins to them.
+  let muted = 0;
   const out = [];
   const rects = new Map();
   const seen = new Map();
@@ -414,7 +459,7 @@ export function draw(root, skin, ids) {
   };
 
   function named(node) {
-    if (!node.name) return null;
+    if (!node.name || muted) return null;
     const count = seen.get(node.name) ?? 0;
     seen.set(node.name, count + 1);
     const name = count ? `${node.name}-${count + 1}` : node.name;
@@ -527,7 +572,7 @@ export function draw(root, skin, ids) {
         break;
       }
       case "icon": {
-        const paths = ICONS[node.icon];
+        const paths = iconOf(node.icon);
         if (!paths) throw new Error(`Unknown icon ${node.icon}`);
         const color = paint(node.color ?? "soft");
         out.push(
@@ -547,10 +592,10 @@ export function draw(root, skin, ids) {
           break;
         }
         out.push(skin.image(node, r, ids));
-        if (node.glyph && ICONS[node.glyph]) {
+        if (node.glyph && iconOf(node.glyph)) {
           const size = Math.min(node._w, node._h) * 0.36;
           out.push(
-            `<svg x="${node._x + node._w - size * 0.95}" y="${node._y + node._h - size * 0.95}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${paint("dim")}" stroke-width="1.5" opacity="0.28" stroke-linecap="round" stroke-linejoin="round">${ICONS[node.glyph]}</svg>`,
+            `<svg x="${node._x + node._w - size * 0.95}" y="${node._y + node._h - size * 0.95}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${paint("dim")}" stroke-width="1.5" opacity="0.28" stroke-linecap="round" stroke-linejoin="round">${iconOf(node.glyph)}</svg>`,
           );
         }
         break;
@@ -572,12 +617,51 @@ export function draw(root, skin, ids) {
         break;
       }
       default:
+        extraNodes[node.t]?.draw(node, api);
         break;
     }
 
     if (name || node.opacity !== undefined) out.push("</g>");
     if (node.theme) themes.pop();
   }
+
+  // What a repository's node type draws with: the output, the walk, the colours and the skin of the
+  // moment. `walk` draws a child (named children register for comments unless muted), `mute` runs work
+  // with names dropped, `withSkin` runs work drawn in another skin and ids, `uid` makes an id.
+  const api = {
+    out,
+    walk,
+    paint,
+    radius,
+    esc,
+    get skin() {
+      return skin;
+    },
+    get ids() {
+      return ids;
+    },
+    uid: (kind = "x") => `${ids.prefix}-${kind}-${clipCount++}`,
+    mute(work) {
+      muted += 1;
+      try {
+        work();
+      } finally {
+        muted -= 1;
+      }
+    },
+    withSkin(nextSkin, nextIds, work) {
+      const outerSkin = skin;
+      const outerIds = ids;
+      skin = nextSkin;
+      ids = nextIds ?? ids;
+      try {
+        work();
+      } finally {
+        skin = outerSkin;
+        ids = outerIds;
+      }
+    },
+  };
 
   walk(root);
   return { svg: out.join(""), rects };
