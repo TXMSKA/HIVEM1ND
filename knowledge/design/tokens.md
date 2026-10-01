@@ -64,7 +64,7 @@ One radius system per product, written down: all sharp, all soft, or a stated mi
 
 ## Dark mode
 
-Dark mode re-points the semantic layer at a second primitive set. It never inverts the first one.
+Dark mode re-points the semantic layer at a second primitive set. It never inverts the first one. A light theme derived from a dark one, or from a chosen palette, follows [light-themes.md](light-themes.md).
 
 - Pure black is not the page surface, and pure white is not the text. Elevation reads as a lighter surface, not as a heavier shadow, because shadow disappears against a dark field.
 - Accents lose a little saturation. A saturated hue that reads as confident on a light page reads as a glare on a dark one, while the brand colour stays recognisable.
