@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Present plays a Blueprint Lite board as a prototype: one screen at a time, fitted to the window, where a click on a control a link leaves from opens the screen it leads to. A click that misses lights the controls that lead somewhere, Back and Backspace return to the previous screen, and Escape goes back to the board.
 - A Blueprint Lite screen can carry its own `note`. A click on the screen shows it in the note over the canvas, and a click on the empty canvas brings the board's note back.
 - Blueprint Lite, the `/blueprint` feature: one local server per machine, on port 3300, draws the screen-flow boards of every project at once. Projects come from the mind (the machine record's paths and the routes), a project shows in the viewer when its repository has `docs/flows/boards/index.json`, and the comments made in the viewer are written to that repository's `docs/flows/comments/<board>.json`, where agents read them. The board and comment formats are documented in the feature. It ships as a folder with its scripts, and it is a temporary tool that the full Blueprint replaces. The shared kit measures text in the faces and weights of the skin it is drawn in, and follows the repository engines for three-value padding, stretched fixed-size children and dialog shadows, so a repository can drop its own `kit.mjs`.
 - A feature folder is listed by its category in the content step of the installer, the same as a feature file.
