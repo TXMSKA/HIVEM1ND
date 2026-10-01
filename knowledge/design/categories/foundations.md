@@ -75,6 +75,21 @@ Build: Decide one theme or both by the rule in [tokens.md](../tokens.md), Themes
 
 Open: [colour-and-theming](../protocols/colour-and-theming.md); [tokens.md](../tokens.md), Themes, Dark mode.
 
+## Light theme
+
+Applies when: a light theme is added to a dark product, derived from a chosen palette, restyled, or reported as glaring, washed out or looking inverted.
+
+Options:
+
+- **Dim**, a grey ground with no surface near white and raised layers one soft step lighter, for people who find any bright field harsh.
+- **Soft**, a deeper tinted ground and dark grey text near 8.5:1 to 11:1, for long reading and tools used for hours.
+- **Standard**, an off-white ground and near-black text between 13:1 and 16:1, the default for apps.
+- **Crisp**, the lightest ground and the darkest text, for dense data, editorial pages and outdoor use, still without a pure white page or pure black text.
+
+Build: Never invert. Give every source colour its job, keep the neutral hue and the accent hues, tint the off-white ground toward the neutral hue, keep white for raised layers with one soft shadow except in the dim character, give each accent a text, a fill and a tint value at the lightness its floor needs, and spend the saturated accent on small areas only.
+
+Open: [light-theme](../protocols/light-theme.md); [light-themes.md](../light-themes.md); [colour-and-theming](../protocols/colour-and-theming.md), steps 3 to 6.
+
 ## Direction and restyle
 
 Applies when: a request names a look ("switch to a medieval theme", "make it feel like a newspaper", "more premium", "less generic"), a brand changes, or a new surface needs its identity.
