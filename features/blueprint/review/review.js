@@ -82,6 +82,8 @@ const state = {
   showResolved: false,
   space: false,
   comments: "loading",
+  // The last screen clicked on the board, where Present starts.
+  touched: null,
 };
 
 // ---- helpers -------------------------------------------------------------
@@ -301,6 +303,7 @@ async function openBoard(project, id) {
   state.kit = kit;
   state.layer = pickLayer(kit);
   state.board = board;
+  state.touched = null;
   state.screens.clear();
   for (const [key, screen] of screens) state.screens.set(key, screen);
   // The last board's comments are not this one's.
@@ -310,6 +313,7 @@ async function openBoard(project, id) {
   renderTabs();
   showNote(null);
   $("#board-note").hidden = false;
+  $("#present").disabled = board.screens.length === 0;
   $("#view-title").textContent = `Review: ${state.board.title}`;
   document.title = `${state.board.title} · Review`;
   $("#panel-foot").innerHTML = `<span>Saved to</span> <code>${esc(entry.project)}/docs/flows/comments/${esc(entry.id)}.json</code>`;
@@ -1634,6 +1638,7 @@ function endPan(event) {
   if (wasClick && state.mode === "move") {
     closeCards();
     showNote(screen);
+    if (screen) state.touched = screen;
   }
 }
 
@@ -1690,6 +1695,7 @@ overlay.addEventListener("focusin", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (!player.hidden) return playerKey(event);
   const typing = event.target.closest?.("textarea, input");
   if (event.key === "Escape") {
     hideTip();
@@ -1865,6 +1871,104 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") loadComments();
 });
 
+// ---- present -------------------------------------------------------------
+
+// Present plays the board as a prototype: one screen at a time, fitted to the
+// window. A control a link leaves from opens the screen it leads to, and a
+// link with no control is a button in the bar. A click that hits no link
+// lights the ones the screen has for a moment.
+const player = $("#player");
+const playerScreen = $("#player-screen");
+const play = { at: null, back: [], flashTimer: 0 };
+
+function present() {
+  if (!state.board?.screens.length) return;
+  const start = state.screens.has(state.touched) ? state.touched : state.board.screens[0].id;
+  closeCards();
+  hideTip();
+  play.back = [];
+  player.hidden = false;
+  showScreen(start);
+  $("#player-exit").focus();
+}
+
+function leavePlayer() {
+  player.hidden = true;
+  playerScreen.innerHTML = "";
+  delete player.dataset.flash;
+  $("#present").focus();
+}
+
+/**
+ * The screen as the board draws it, taken from the world with its ids made
+ * its own, and over it a target for each control a link leaves from.
+ */
+function showScreen(id) {
+  const screen = state.screens.get(id);
+  const drawn = world.querySelector(`svg.screen[data-screen="${CSS.escape(id)}"]`);
+  if (!screen || !drawn) return;
+  const { def } = screen;
+  const own = (markup) =>
+    markup
+      .replace(/\sid="([^"]+)"/g, ' id="pl-$1"')
+      .replace(/url\(#([^)]+)\)/g, "url(#pl-$1)")
+      .replace(/((?:xlink:)?href=")#/g, "$1#pl-");
+  const links = state.board.links.filter((link) => link.from === id && state.screens.has(link.to));
+  const spots = new Map();
+  for (const link of links) {
+    const rect = link.at ? screen.rects.get(link.at) : null;
+    if (rect && !spots.has(link.at)) spots.set(link.at, { rect, to: link.to });
+  }
+  const targets = [...spots.values()]
+    .map(({ rect, to }) => `<rect class="spot" data-to="${esc(to)}" x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="6"/>`)
+    .join("");
+  playerScreen.setAttribute("viewBox", `0 0 ${def.w} ${def.h}`);
+  playerScreen.setAttribute("aria-label", def.title ?? id);
+  playerScreen.innerHTML = own(world.querySelector(":scope > defs").outerHTML + drawn.innerHTML) + targets;
+  $("#player-title").textContent = def.title ?? id;
+  $("#player-next").innerHTML = links
+    .filter((link) => !link.at || !screen.rects.get(link.at))
+    .map((link) => `<button type="button" class="btn" data-to="${esc(link.to)}">${esc(link.label ?? state.screens.get(link.to).def.title ?? link.to)}</button>`)
+    .join("");
+  $("#player-back").disabled = play.back.length === 0;
+  play.at = id;
+}
+
+function goTo(id) {
+  play.back.push(play.at);
+  showScreen(id);
+}
+
+function goBack() {
+  if (play.back.length) showScreen(play.back.pop());
+}
+
+function flashSpots() {
+  clearTimeout(play.flashTimer);
+  player.dataset.flash = "true";
+  play.flashTimer = setTimeout(() => delete player.dataset.flash, 400);
+}
+
+function playerKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    leavePlayer();
+  } else if (event.key === "Backspace") {
+    event.preventDefault();
+    goBack();
+  }
+}
+
+$("#present").addEventListener("click", present);
+
+player.addEventListener("click", (event) => {
+  const to = event.target.closest("[data-to]");
+  if (to) return goTo(to.dataset.to);
+  if (event.target.closest("#player-back")) return goBack();
+  if (event.target.closest("#player-exit")) return leavePlayer();
+  if (!event.target.closest(".player-bar")) flashSpots();
+});
+
 // ---- boot ----------------------------------------------------------------
 
 async function boot() {
@@ -1919,7 +2023,7 @@ function showShot(id) {
 }
 
 // For an agent inspecting the page from a browser tool.
-window.__review = { state, openBoard, fit, frame };
+window.__review = { state, openBoard, fit, frame, present };
 
 boot().catch((error) => {
   console.error(error, error?.stack);
