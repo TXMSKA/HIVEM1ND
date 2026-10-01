@@ -82,6 +82,8 @@ const state = {
   showResolved: false,
   space: false,
   comments: "loading",
+  // The last screen clicked on the board, where Present starts.
+  touched: null,
 };
 
 // ---- helpers -------------------------------------------------------------
@@ -318,6 +320,7 @@ async function openBoard(project, id) {
   state.kit = kit;
   state.layer = pickLayer(kit);
   state.board = board;
+  state.touched = null;
   state.screens.clear();
   for (const [key, screen] of screens) state.screens.set(key, screen);
   // The last board's comments are not this one's.
@@ -325,15 +328,24 @@ async function openBoard(project, id) {
   state.comments = "loading";
   drawWorld();
   renderTabs();
-  $("#board-note-title").textContent = state.board.title;
-  $("#board-note-text").textContent = state.board.note ?? "";
+  showNote(null);
   $("#board-note").hidden = false;
+  $("#present").disabled = board.screens.length === 0;
   $("#view-title").textContent = `Review: ${state.board.title}`;
   document.title = `${state.board.title} · Review`;
   $("#panel-foot").innerHTML = `<span>Saved to</span> <code>${esc(entry.project)}/docs/flows/comments/${esc(entry.id)}.json</code>`;
   writeHash();
   await loadComments();
   if (ticket === opening) fit(false);
+}
+
+// A screen with a note of its own explains itself in the note card while it is
+// the one clicked; the canvas, or a screen without a note, shows the board's.
+function showNote(id) {
+  const def = state.screens.get(id)?.def;
+  const own = def?.note ? def : null;
+  $("#board-note-title").textContent = own ? (own.title ?? own.id) : state.board.title;
+  $("#board-note-text").textContent = own ? own.note : (state.board.note ?? "");
 }
 
 // A repository's own viewer serves docs/flows as the site root, so its boards
@@ -1606,7 +1618,8 @@ stage.addEventListener("pointerdown", (event) => {
   if (wantsPan) {
     event.preventDefault();
     const [x, y] = local(event);
-    panning = { x, y, vx: state.view.x, vy: state.view.y, moved: false };
+    const screen = event.target.closest?.("svg.screen")?.dataset.screen ?? null;
+    panning = { x, y, vx: state.view.x, vy: state.view.y, moved: false, screen };
     stage.setPointerCapture(event.pointerId);
     stage.dataset.panning = "true";
     return;
@@ -1636,14 +1649,20 @@ function endPan(event) {
   if (!panning) return;
   if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
   const wasClick = !panning.moved;
+  const { screen } = panning;
   panning = null;
   stage.dataset.panning = "false";
-  if (wasClick && state.mode === "move") closeCards();
+  if (wasClick && state.mode === "move") {
+    closeCards();
+    showNote(screen);
+    if (screen) state.touched = screen;
+  }
 }
 
-// A double click on a screen brings it to fill the stage.
+// A double click on a screen brings it to fill the stage. The pan holds the
+// pointer, so the click lands on the stage and the screen is found by point.
 stage.addEventListener("dblclick", (event) => {
-  const screenEl = event.target.closest?.("svg.screen");
+  const screenEl = document.elementFromPoint(event.clientX, event.clientY)?.closest("svg.screen");
   if (!screenEl || state.mode !== "move") return;
   const { def } = state.screens.get(screenEl.dataset.screen);
   frame({ x: def.x, y: def.y, w: def.w, h: def.h });
@@ -1693,6 +1712,7 @@ overlay.addEventListener("focusin", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (!player.hidden) return playerKey(event);
   const typing = event.target.closest?.("textarea, input");
   if (event.key === "Escape") {
     hideTip();
@@ -1868,6 +1888,104 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") loadComments();
 });
 
+// ---- present -------------------------------------------------------------
+
+// Present plays the board as a prototype: one screen at a time, fitted to the
+// window. A control a link leaves from opens the screen it leads to, and a
+// link with no control is a button in the bar. A click that hits no link
+// lights the ones the screen has for a moment.
+const player = $("#player");
+const playerScreen = $("#player-screen");
+const play = { at: null, back: [], flashTimer: 0 };
+
+function present() {
+  if (!state.board?.screens.length) return;
+  const start = state.screens.has(state.touched) ? state.touched : state.board.screens[0].id;
+  closeCards();
+  hideTip();
+  play.back = [];
+  player.hidden = false;
+  showScreen(start);
+  $("#player-exit").focus();
+}
+
+function leavePlayer() {
+  player.hidden = true;
+  playerScreen.innerHTML = "";
+  delete player.dataset.flash;
+  $("#present").focus();
+}
+
+/**
+ * The screen as the board draws it, taken from the world with its ids made
+ * its own, and over it a target for each control a link leaves from.
+ */
+function showScreen(id) {
+  const screen = state.screens.get(id);
+  const drawn = world.querySelector(`svg.screen[data-screen="${CSS.escape(id)}"]`);
+  if (!screen || !drawn) return;
+  const { def } = screen;
+  const own = (markup) =>
+    markup
+      .replace(/\sid="([^"]+)"/g, ' id="pl-$1"')
+      .replace(/url\(#([^)]+)\)/g, "url(#pl-$1)")
+      .replace(/((?:xlink:)?href=")#/g, "$1#pl-");
+  const links = state.board.links.filter((link) => link.from === id && state.screens.has(link.to));
+  const spots = new Map();
+  for (const link of links) {
+    const rect = link.at ? screen.rects.get(link.at) : null;
+    if (rect && !spots.has(link.at)) spots.set(link.at, { rect, to: link.to });
+  }
+  const targets = [...spots.values()]
+    .map(({ rect, to }) => `<rect class="spot" data-to="${esc(to)}" x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="6"/>`)
+    .join("");
+  playerScreen.setAttribute("viewBox", `0 0 ${def.w} ${def.h}`);
+  playerScreen.setAttribute("aria-label", def.title ?? id);
+  playerScreen.innerHTML = own(world.querySelector(":scope > defs").outerHTML + drawn.innerHTML) + targets;
+  $("#player-title").textContent = def.title ?? id;
+  $("#player-next").innerHTML = links
+    .filter((link) => !link.at || !screen.rects.get(link.at))
+    .map((link) => `<button type="button" class="btn" data-to="${esc(link.to)}">${esc(link.label ?? state.screens.get(link.to).def.title ?? link.to)}</button>`)
+    .join("");
+  $("#player-back").disabled = play.back.length === 0;
+  play.at = id;
+}
+
+function goTo(id) {
+  play.back.push(play.at);
+  showScreen(id);
+}
+
+function goBack() {
+  if (play.back.length) showScreen(play.back.pop());
+}
+
+function flashSpots() {
+  clearTimeout(play.flashTimer);
+  player.dataset.flash = "true";
+  play.flashTimer = setTimeout(() => delete player.dataset.flash, 400);
+}
+
+function playerKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    leavePlayer();
+  } else if (event.key === "Backspace") {
+    event.preventDefault();
+    goBack();
+  }
+}
+
+$("#present").addEventListener("click", present);
+
+player.addEventListener("click", (event) => {
+  const to = event.target.closest("[data-to]");
+  if (to) return goTo(to.dataset.to);
+  if (event.target.closest("#player-back")) return goBack();
+  if (event.target.closest("#player-exit")) return leavePlayer();
+  if (!event.target.closest(".player-bar")) flashSpots();
+});
+
 // ---- boot ----------------------------------------------------------------
 
 async function boot() {
@@ -1922,7 +2040,7 @@ function showShot(id) {
 }
 
 // For an agent inspecting the page from a browser tool.
-window.__review = { state, openBoard, fit, frame };
+window.__review = { state, openBoard, fit, frame, present };
 
 boot().catch((error) => {
   console.error(error, error?.stack);
