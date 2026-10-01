@@ -308,8 +308,7 @@ async function openBoard(project, id) {
   state.comments = "loading";
   drawWorld();
   renderTabs();
-  $("#board-note-title").textContent = state.board.title;
-  $("#board-note-text").textContent = state.board.note ?? "";
+  showNote(null);
   $("#board-note").hidden = false;
   $("#view-title").textContent = `Review: ${state.board.title}`;
   document.title = `${state.board.title} · Review`;
@@ -317,6 +316,15 @@ async function openBoard(project, id) {
   writeHash();
   await loadComments();
   if (ticket === opening) fit(false);
+}
+
+// A screen with a note of its own explains itself in the note card while it is
+// the one clicked; the canvas, or a screen without a note, shows the board's.
+function showNote(id) {
+  const def = state.screens.get(id)?.def;
+  const own = def?.note ? def : null;
+  $("#board-note-title").textContent = own ? (own.title ?? own.id) : state.board.title;
+  $("#board-note-text").textContent = own ? own.note : (state.board.note ?? "");
 }
 
 // A repository's own viewer serves docs/flows as the site root, so its boards
@@ -1589,7 +1597,8 @@ stage.addEventListener("pointerdown", (event) => {
   if (wantsPan) {
     event.preventDefault();
     const [x, y] = local(event);
-    panning = { x, y, vx: state.view.x, vy: state.view.y, moved: false };
+    const screen = event.target.closest?.("svg.screen")?.dataset.screen ?? null;
+    panning = { x, y, vx: state.view.x, vy: state.view.y, moved: false, screen };
     stage.setPointerCapture(event.pointerId);
     stage.dataset.panning = "true";
     return;
@@ -1619,14 +1628,19 @@ function endPan(event) {
   if (!panning) return;
   if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
   const wasClick = !panning.moved;
+  const { screen } = panning;
   panning = null;
   stage.dataset.panning = "false";
-  if (wasClick && state.mode === "move") closeCards();
+  if (wasClick && state.mode === "move") {
+    closeCards();
+    showNote(screen);
+  }
 }
 
-// A double click on a screen brings it to fill the stage.
+// A double click on a screen brings it to fill the stage. The pan holds the
+// pointer, so the click lands on the stage and the screen is found by point.
 stage.addEventListener("dblclick", (event) => {
-  const screenEl = event.target.closest?.("svg.screen");
+  const screenEl = document.elementFromPoint(event.clientX, event.clientY)?.closest("svg.screen");
   if (!screenEl || state.mode !== "move") return;
   const { def } = state.screens.get(screenEl.dataset.screen);
   frame({ x: def.x, y: def.y, w: def.w, h: def.h });
