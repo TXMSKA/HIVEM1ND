@@ -113,7 +113,7 @@ Every role is a command, and a few more operate the system. Every command also w
 
 | Command | Description |
 | --- | --- |
-| `/relay` | Starts and ends a role's session. On entry it reads the state and the inbox; on exit it writes the state and the log. |
+| `/relay` | Starts and ends a role's session. On entry it fetches, aligns the repos with the recorded branches and reads the state and the inbox; on exit it commits and pushes everything, writes the state and the log, and clears the conversation. |
 | `/evolve` | Updates the mind base, applies private migrations in order and reinstalls the included commands for this machine. |
 | `/task` | Creates a task file with the next id for a unit and leaves it a message that the task is ready. |
 | `/msg` | Writes a message into a unit's inbox and, when its agent has a CLI and the unit is in, tells it to read the inbox. |

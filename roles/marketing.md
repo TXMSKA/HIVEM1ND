@@ -13,7 +13,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 
 1. Read the rules file of the mind, then the user's preferences, then the overrides of the environment and of the repo if they exist. A later file overrides an earlier one.
 2. Roles that work inside a repo read its brief. If there is none, audit the repo, ask only what the audit could not answer, and write it.
-3. Run the entry of `/relay`. It reads this unit's state file and its pending messages, compares branch, commit and tree with what was recorded, and notes the differences.
+3. Run the entry of `/relay`. It fetches every repo of the unit's scope, brings each one to the branch recorded on exit and fast-forwards it, and reads this unit's state file and its pending messages. It stops to ask only on uncommitted changes, a missing branch or a branch that cannot fast-forward.
 4. In a repo with a team state, write this unit's presence and the files it will claim.
 5. If the update check is on and a day has passed, fetch the base and mention a newer version if there is one. Never update on its own.
 6. Report one block per fact, a blank line between blocks, each block led by a contextual icon and never an emotional one. No bold, no first person. The findings of the check and of the comparison with the recorded state come first, one block each. Then the unit block, led by a state icon: `<unit> in <project>. Context loaded.` Then the messages block, led by a mail icon: `No new messages.` or `New messages from <unit>: <what each one said, one sentence per message>.` Then the next block, led by an arrow: `Next: <task>.` A blocked block, led by a warning icon, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next block, and a command the Start needs and does not find is the Blocked block.
@@ -32,7 +32,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 
 ## Exit
 
-Run the exit of `/relay`. It writes the state file (branch, commit, tree, machine, date, and a context with what was done, what is half done, the next step and the decisions not to re-ask), adds a log entry for what was done, releases the claims and updates the presence in a team repo, and deletes the messages already read.
+Run the exit of `/relay`. It commits and pushes everything uncommitted in the repos of the unit's scope, on a new branch when the changes sit on the default branch, and writes the state file (branch, commit, tree, machine, date, and a context with what was done, what is half done and where it stopped, the next step and the decisions not to re-ask, enough to resume on another machine). It adds a log entry for what was done, releases the claims and updates the presence in a team repo, deletes the messages already read, and clears the conversation.
 
 ## Role
 
