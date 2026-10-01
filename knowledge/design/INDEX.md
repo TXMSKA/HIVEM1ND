@@ -7,7 +7,7 @@ A build from scratch or a pass over a whole surface reads [essentials.md](essent
 
 ## Categories
 
-- [foundations](categories/foundations.md): tokens, type, spacing and density, colour, theme and dark mode, direction and restyle, shape and depth.
+- [foundations](categories/foundations.md): tokens, type, spacing and density, colour, theme and dark mode, light theme, direction and restyle, shape and depth.
 - [text-and-content](categories/text-and-content.md): headings, body text and reading, lists and FAQs, figures in text, quotes and proof, code and copyable values.
 - [inputs-and-controls](categories/inputs-and-controls.md): text input, select and menu of options, checkbox and radio, toggle, date and number, search.
 - [forms](categories/forms.md): layout, validation and errors, submission and success, multi step, sign-up and first use.
@@ -27,7 +27,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 
 | Category | Protocols and steps | Topic sections |
 | --- | --- | --- |
-| foundations | colour-and-theming 1 to 7; hierarchy-and-type 1, 2, 6; composition-and-layout 4; design-specificity; theme-direction only for a restyle | tokens: Rules, Type roles, Spacing bands, Themes, or whole for a build; direction: Read the request first, Name the mode; defaults: In a refine, Searches |
+| foundations | colour-and-theming 1 to 7; light-theme 1 to 8 when a light theme is built or derived; hierarchy-and-type 1, 2, 6; composition-and-layout 4; design-specificity; theme-direction only for a restyle | tokens: Rules, Type roles, Spacing bands, Themes, or whole for a build; light-themes whole for a light theme; direction: Read the request first, Name the mode; defaults: In a refine, Searches |
 | text-and-content | hierarchy-and-type 1 to 7; responsive-behaviour 4 | tokens: Type roles; pages-and-sections: Sections; defaults: Template chrome; site-polish: Build first |
 | inputs-and-controls | forms-and-inputs 1 to 4, 8; accessibility 4 | forms-and-controls: Fields, Choosing the control, Menus and selects, Dates, Search |
 | forms | forms-and-inputs 1, 2, 5 to 7; interface-states 3 to 6 | forms-and-controls: Validation and submission, Layout and flow; states: Error, Success, Disabled |
@@ -57,6 +57,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 - forms-and-inputs: scope forms, fields, selects, dates, search and submit flows. Keeps presses low, blocks explained and errors in place.
 - hierarchy-and-type: scope headings, body copy, type scale, measure and numerals. Makes one reading order obvious on named roles.
 - interface-states: scope anything that loads, fails, is empty, is disabled or succeeds. Designs and proves every state.
+- light-theme: scope a light theme built, derived from a dark theme or a chosen palette, or restyled. Designs it by the job of each colour instead of by inversion, calm and within the floors.
 - motion: scope transitions, animations, reveals, scroll effects and gestures. Keeps motion purposeful, short, compositor-only and reducible.
 - responsive-behaviour: scope layout, text length, media and pointer input across widths. Holds the layout from 320 CSS pixels to ultra-wide.
 - theme-direction: scope a stated aesthetic, restyle or brand change. Applies a look through the primitive layer without losing contrast.
