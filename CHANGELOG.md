@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-10-02
 
 - The design pack designs light themes instead of inverting dark ones: a `light-themes.md` topic and a `light-theme` protocol that read the source palette by the job of each colour, pick a dim, soft, standard or crisp contrast character, tint an off-white ground toward the neutral hue, keep white for raised layers outside the dim character, give each accent a text, a fill and a tint value at the lightness its floor needs, keep saturated colour to small areas, and judge both themes side by side. A light theme subcategory joins foundations.
 - Switching machines takes one command on each side. The exit of `/relay` commits and pushes everything uncommitted in the repos of the unit's scope, on a new branch when the changes sit on the default branch, writes a state that resumes on another machine with nothing else, and clears the conversation; running it is the yes for those commits and pushes. The entry fetches, brings each repo to the branch recorded on exit and fast-forwards it, stopping only on uncommitted changes or a branch that cannot fast-forward, and asks for the yes to continue the half-done work. The scope is the current repo for a role in one repo, the environment for the Overlord and every project for the Overseer; a unit with several repos records each one in a `## Repos` section of its state.
