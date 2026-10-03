@@ -586,6 +586,13 @@ svg {
   display: none;
 }
 
+/* The note folds from its own title beside the tools; only a phone needs it in the bar. */
+@media (min-width: 701px) {
+  .rail .note-toggle {
+    display: none;
+  }
+}
+
 .item {
   position: relative;
   display: grid;
@@ -1366,8 +1373,31 @@ body[data-panel="open"] .bubble {
     translate: none;
   }
 
-  .brand-mode {
+  .brand,
+  .brand-mode,
+  .top-rule,
+  .project-tab .tab-board {
     display: none;
+  }
+
+  .top {
+    padding-left: 4px;
+  }
+
+  /* Other projects keep their letter only, so the open one keeps its name. */
+  .project-tab[aria-current="false"] .tab-name,
+  .project-tab[aria-current="false"] .chevron {
+    display: none;
+  }
+
+  .project-tab[aria-current="false"] {
+    padding: 0 6px;
+  }
+
+  .project-tab .tab-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Present keeps its icon only, so the tabs keep the width. */
@@ -1426,6 +1456,16 @@ body[data-panel="open"] .bubble {
     right: var(--bp-bar-offset);
     bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
     max-width: none;
+  }
+
+  /* The note button in the tools bar shows and hides it whole. */
+  .note:not([open]),
+  .note summary::before {
+    display: none;
+  }
+
+  .note summary {
+    pointer-events: none;
   }
 }
 
