@@ -217,7 +217,7 @@ function renderTabs() {
     .map(({ name, boards }) => {
       const open = boards.find((entry) => sameBoard(entry, state.entry));
       const current = open ? `<span class="tab-board">${esc(open.short ?? open.title)}</span>` : "";
-      return `<button type="button" class="board-tab project-tab" data-project="${esc(name)}" aria-haspopup="menu" aria-expanded="false" aria-current="${Boolean(open)}" title="${esc(name)}"><span class="letter">${esc(initials(name))}</span><span>${esc(name)}</span>${current}${CHEVRON}</button>`;
+      return `<button type="button" class="board-tab project-tab" data-project="${esc(name)}" aria-haspopup="menu" aria-expanded="false" aria-current="${Boolean(open)}" title="${esc(name)}"><span class="letter">${esc(initials(name))}</span><span class="tab-name">${esc(name)}</span>${current}${CHEVRON}</button>`;
     })
     .join("");
 }
@@ -1365,7 +1365,8 @@ function setPanel(open, { focus = false } = {}) {
 }
 
 // The tools bar is one tab stop; the arrows move along it, as a toolbar does.
-const railItems = () => [...rail.querySelectorAll(".item")];
+// A tool the layout hides is skipped.
+const railItems = () => [...rail.querySelectorAll(".item")].filter((item) => item.offsetParent);
 
 function rove(target) {
   for (const item of railItems()) item.tabIndex = item === target ? 0 : -1;
@@ -1433,7 +1434,7 @@ rail.addEventListener("focusin", (event) => {
 rail.addEventListener("focusout", hideTip);
 rail.addEventListener("click", hideTip);
 
-for (const item of railItems()) {
+for (const item of rail.querySelectorAll(".item")) {
   if (/^[a-z0-9]$/i.test(item.dataset.key ?? "")) item.setAttribute("aria-keyshortcuts", item.dataset.key);
 }
 
@@ -1746,6 +1747,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (key === "h" || key === "v") setMode("move");
   else if (key === "c") setMode("comment");
+  else if (key === "n") toggleNote();
   // A shortcut never animates.
   else if (key === "0") fit(false);
   else if (key === "+" || key === "=") zoomAt(1.25, cx, cy);
@@ -1771,6 +1773,7 @@ document.addEventListener("click", async (event) => {
 
   const mode = event.target.closest("[data-mode]");
   if (mode) return setMode(mode.dataset.mode);
+  if (event.target.closest("#note-toggle")) return toggleNote();
 
   if (event.target.closest("#panel-empty-action")) {
     setMode("comment");
@@ -1986,6 +1989,10 @@ player.addEventListener("click", (event) => {
   if (!event.target.closest(".player-bar")) flashSpots();
 });
 
+function toggleNote() {
+  $("#board-note").open = !$("#board-note").open;
+}
+
 // ---- boot ----------------------------------------------------------------
 
 async function boot() {
@@ -1996,9 +2003,14 @@ async function boot() {
   paintGround();
   watchDensity();
   // The note sits over the canvas, so it folds to its title and stays folded.
+  // On a phone it is shown and hidden from the tools bar, and starts hidden.
   const note = $("#board-note");
-  note.open = store.get("review.note", "open") !== "closed";
-  note.addEventListener("toggle", () => store.set("review.note", note.open ? "open" : "closed"));
+  note.open = store.get("review.note", sideBar.matches ? "open" : "closed") !== "closed";
+  $("#note-toggle").setAttribute("aria-pressed", String(note.open));
+  note.addEventListener("toggle", () => {
+    store.set("review.note", note.open ? "open" : "closed");
+    $("#note-toggle").setAttribute("aria-pressed", String(note.open));
+  });
   state.index = await (await fetch("/api/boards", { cache: "no-store" })).json();
   if (state.index.length === 0) {
     showEmpty();
