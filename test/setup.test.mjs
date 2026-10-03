@@ -514,7 +514,7 @@ test('content categories group every feature deterministically and control the i
   assert.equal(contentStep.number, 4);
 
   assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report', 'void']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));

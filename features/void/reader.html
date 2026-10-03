@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Void Text Reader</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css" rel="stylesheet">
+<style>html,body{margin:0;background:#000}html body #vtr{--h:100vh;border-radius:0}</style></head><body>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+#vtr{--bg:#000;--fg:#e6e3dc;--head:#f4f2ee;--soft:#a9a69e;--mute:#8a877f;--dim:#5f5c55;--line:#262626;--done:#4a4740;--edit:#8f7f55;--panel:#0b0b0b;--hover:#171717;--r:999px;--rail:56px;--h:600px;--z:1;position:relative;height:var(--h);overflow:hidden;background:var(--bg);color:var(--fg);border-radius:16px;font-family:'Atkinson Hyperlegible',system-ui,sans-serif;outline:none}
+#vtr-body{position:absolute;top:0;bottom:0;left:0;right:calc(var(--rail) + 16px);display:flex;flex-direction:column;overflow-y:auto;padding:28px 20px 28px calc(var(--rail) + 36px);scrollbar-gutter:stable both-edges;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+#vtr-body .col{margin:auto;width:100%;max-width:calc(580px * var(--z))}
+#vtr-body p{font-size:calc(19px * var(--z));line-height:1.8;text-align:justify;hyphens:auto;margin:0 0 1.1em;letter-spacing:.01em}
+#vtr-body p.h{font-size:calc(23px * var(--z));font-weight:700;text-align:center;margin:0 0 1.2em;letter-spacing:.02em;color:var(--head)}
+#vtr-body p.gap{margin-bottom:1.9em}
+#vtr-body .lang{font-size:13px;color:var(--mute);text-align:center;letter-spacing:.12em;margin:0 0 18px}
+#vtr-body hr{border:0;height:1px;background:var(--line);border-radius:var(--r);margin:34px auto;width:80px}
+#vtr-body .ed{outline:none;caret-color:var(--fg);border-radius:12px;padding:4px 10px;margin:0 -10px}
+#vtr-body .ed:focus{background:var(--panel)}
+#vtr-key{font-size:12px;color:var(--dim);text-align:center;letter-spacing:.02em;margin:0 0 22px}
+#vtr-rail{position:absolute;top:8px;bottom:8px;right:8px;width:var(--rail);box-sizing:border-box;padding:16px 0;display:flex;flex-direction:column;align-items:center;background:var(--panel);border-radius:var(--r)}
+.vtr-btn{flex:none;width:36px;height:36px;padding:0;border:0;border-radius:var(--r);background:none;color:var(--mute);font:inherit;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.vtr-btn:hover{background:var(--hover);color:var(--fg)}
+.vtr-z{font-size:13px;letter-spacing:.04em}
+.vtr-in{flex:none;width:46px;box-sizing:border-box;padding:3px 0;border:0;border-radius:var(--r);background:none;color:var(--fg);font:inherit;text-align:center;cursor:text;outline:none}
+.vtr-in:hover{background:var(--hover)}
+.vtr-in:focus{background:var(--hover);box-shadow:0 0 0 1px var(--dim)}
+.vtr-btn:focus-visible{box-shadow:0 0 0 1px var(--dim)}
+#vtr-pg{font-size:19px;font-weight:700}
+#vtr-t{flex:none;font-size:12px;color:var(--dim);margin:1px 0 6px}
+#vtr-zin{font-size:12px;color:var(--soft)}
+.vtr-sl{position:relative;width:100%;cursor:pointer;touch-action:none}
+#vtr-track{flex:1;min-height:40px;margin:8px 0}
+#vtr-zs{flex:none;height:84px;margin:8px 0}
+.vtr-ln,.vtr-fl{position:absolute;left:50%;width:3px;margin-left:-1.5px;border-radius:var(--r);pointer-events:none}
+.vtr-ln{top:0;bottom:0;background:var(--line)}
+.vtr-fl{background:var(--done)}
+#vtr-track .vtr-fl{top:0}
+#vtr-zs .vtr-fl{bottom:0}
+.vtr-kn{position:absolute;left:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:var(--r);background:var(--fg);pointer-events:none}
+.vtr-sl:hover .vtr-kn,.vtr-sl.drag .vtr-kn{width:16px;height:16px;margin:-8px 0 0 -8px}
+.vtr-dot{position:absolute;left:calc(50% + 8px);width:5px;height:5px;margin-top:-2.5px;border-radius:var(--r);background:var(--edit);pointer-events:none}
+.vtr-sep{flex:none;width:20px;height:1px;margin:10px 0;background:var(--line);border-radius:var(--r)}
+#vtr-tip{position:absolute;top:0;left:0;transform:translateY(-50%);padding:5px 12px;border-radius:var(--r);background:var(--hover);color:var(--soft);font-size:12px;white-space:nowrap;pointer-events:none;visibility:hidden}
+</style>
+<div id="vtr" tabindex="0">
+<div id="vtr-body"><div class="col"><div id="vtr-key"></div><div id="vtr-col"></div></div></div>
+<div id="vtr-rail">
+<input class="vtr-in" id="vtr-pg" inputmode="numeric" autocomplete="off" aria-label="Go to page" title="Go to page">
+<div id="vtr-t"></div>
+<button class="vtr-btn" id="vtr-prev" aria-label="Previous page" title="Previous page (Left or Up arrow)"><i class="ti ti-chevron-up" aria-hidden="true"></i></button>
+<div class="vtr-sl" id="vtr-track" role="slider" aria-label="Page"><div class="vtr-ln"></div><div class="vtr-fl"></div><div id="vtr-dots"></div><div class="vtr-kn"></div></div>
+<button class="vtr-btn" id="vtr-next" aria-label="Next page" title="Next page (Right or Down arrow)"><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+<div class="vtr-sep"></div>
+<input class="vtr-in" id="vtr-zin" inputmode="numeric" autocomplete="off" aria-label="Text size in percent" title="Text size">
+<button class="vtr-btn vtr-z" id="vtr-zi" aria-label="Larger text" title="Larger text (+)">A+</button>
+<div class="vtr-sl" id="vtr-zs" role="slider" aria-label="Text size"><div class="vtr-ln"></div><div class="vtr-fl"></div><div class="vtr-kn"></div></div>
+<button class="vtr-btn vtr-z" id="vtr-zo" aria-label="Smaller text" title="Smaller text (-)">A&minus;</button>
+</div>
+<div id="vtr-tip"></div>
+</div>
+<script>
+const PAGES=[{"k":"Void.About","en":"<b>Void</b>\nA quiet page for reading and correcting long texts.\n\nEach entry has its own page, with both languages stacked.","es":"<b>Void</b>\nUna página tranquila para leer y corregir textos largos.\n\nCada entrada tiene su propia página, con los dos idiomas uno debajo del otro."},{"k":"Void.Editing","en":"<b>Editing</b>\nClick a text to edit it in place. Esc, or a click elsewhere, leaves editing.\n\nServed by /void, every change is saved into the document on disk, where an agent reads it.","es":"<b>Edición</b>\nUn clic en un texto lo edita en su lugar. Esc, o un clic fuera, sale de la edición.\n\nServido por /void, cada cambio se guarda en el documento en disco, donde lo lee un agente."}];
+const ZMIN=.8,ZMAX=1.8;
+const $=id=>document.getElementById(id),root=$('vtr'),body=$('vtr-body'),col=$('vtr-col'),rail=$('vtr-rail'),track=$('vtr-track'),zs=$('vtr-zs'),dots=$('vtr-dots'),tip=$('vtr-tip'),pg=$('vtr-pg'),zin=$('vtr-zin'),keyEl=$('vtr-key');
+const store={get(k){try{return JSON.parse(localStorage.getItem('vtr:'+k))}catch(e){return null}},set(k,v){try{localStorage.setItem('vtr:'+k,JSON.stringify(v))}catch(e){}}};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const FILE=new URLSearchParams(location.search).get('file'),LIVE=!!FILE&&location.protocol.startsWith('http');
+let N=0,i=0,z=+store.get('zoom')||1,dirty=new Set(),failed=false;
+const edits={};
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function rich(s){return esc(s).replace(/&lt;(\/?)(b|i)&gt;/g,'<$1$2>')}
+function html(t){const ls=t.split('\n');let h='';ls.forEach((l,n)=>{if(l==='')return;const head=/^<(b|i)>[^<]*<\/(b|i)>$/.test(l.trim());const gap=ls[n+1]==='';h+='<p class="'+(head?(gap?'h hg':'h'):(gap?'gap':''))+'">'+rich(l)+'</p>'});return h}
+function inline(n){let s='';n.childNodes.forEach(c=>{if(c.nodeType===3)s+=c.nodeValue;else if(c.nodeName==='BR')s+='\n';else if(c.nodeName==='B'||c.nodeName==='STRONG')s+='<b>'+inline(c)+'</b>';else if(c.nodeName==='I'||c.nodeName==='EM')s+='<i>'+inline(c)+'</i>';else if(c.nodeType===1)s+=inline(c)});return s}
+function text(el){const out=[];el.childNodes.forEach(c=>{if(c.nodeName==='P'||c.nodeName==='DIV')out.push({t:inline(c).replace(/\n$/,''),gap:c.classList.contains('gap')||c.classList.contains('hg')});else{const t=c.nodeType===3?c.nodeValue:inline(c);if(t.trim())out.push({t,gap:false})}});return out.map((b,n)=>b.t+(n<out.length-1?(b.gap?'\n\n':'\n'):'')).join('').replace(/ /g,' ')}
+function block(k,lang,label,content){return '<div class="lang">'+label+'</div><div class="ed" contenteditable="true" spellcheck="true" lang="'+lang+'" data-l="'+lang+'" data-k="'+esc(k).replace(/"/g,'&quot;')+'">'+content+'</div>'}
+function editOf(k){return LIVE?{}:edits[k]||store.get('edit:'+k)||{}}
+function label(k){return k+(dirty.has(k)?'  ·  edited':'')}
+function keyLine(){keyEl.textContent=label(PAGES[i].k)+(failed?'  ·  not saved':'')}
+function ticks(){if(!N)return;const seg=track.clientHeight/N,ln=track.querySelector('.vtr-ln'),fl=track.querySelector('.vtr-fl');if(seg<6){ln.style.background=fl.style.background='';return}const a=(seg-2).toFixed(2)+'px',b=seg.toFixed(2)+'px',g=c=>'repeating-linear-gradient(to bottom,var('+c+') 0 '+a+',transparent '+a+' '+b+')';ln.style.background=g('--line');fl.style.background=g('--done')}
+function paintDots(){dots.innerHTML=PAGES.map((p,n)=>dirty.has(p.k)?'<div class="vtr-dot" style="top:'+((n+.5)/N*100)+'%"></div>':'').join('')}
+function show(){
+  const p=PAGES[i],e=editOf(p.k);
+  col.innerHTML=block(p.k,'en','ENGLISH',e.en||html(p.en))+'<hr>'+block(p.k,'es','ESPAÑOL',e.es||html(p.es));
+  keyLine();
+  if(document.activeElement!==pg)pg.value=i+1;
+  track.querySelector('.vtr-fl').style.height=(i/N*100)+'%';
+  track.querySelector('.vtr-kn').style.top=((i+.5)/N*100)+'%';
+  track.setAttribute('aria-valuenow',i+1);
+  body.scrollTop=0;
+}
+function to(n){n=clamp(n,0,N-1);if(n===i)return;if(editing())document.activeElement.blur();i=n;show()}
+function zoom(v){z=Math.round(clamp(v,ZMIN,ZMAX)*100)/100;root.style.setProperty('--z',z);if(document.activeElement!==zin)zin.value=Math.round(z*100)+'%';const f=(z-ZMIN)/(ZMAX-ZMIN);zs.querySelector('.vtr-fl').style.height=(f*100)+'%';zs.querySelector('.vtr-kn').style.top=((1-f)*100)+'%';zs.setAttribute('aria-valuenow',Math.round(z*100));store.set('zoom',z)}
+function tipAt(n){tip.textContent=(n+1)+'   '+label(PAGES[n].k);const r=track.getBoundingClientRect(),o=root.getBoundingClientRect();tip.style.top=(r.top-o.top+(n+.5)/N*r.height)+'px';tip.style.left=(rail.offsetLeft-tip.offsetWidth-10)+'px';tip.style.visibility='visible'}
+function scrub(el,set,hover){
+  const frac=e=>{const r=el.getBoundingClientRect();return clamp((e.clientY-r.top)/r.height,0,.9999)};
+  el.addEventListener('pointerdown',e=>{if(e.button||!N)return;el.setPointerCapture(e.pointerId);el.classList.add('drag');set(frac(e));e.preventDefault()});
+  el.addEventListener('pointermove',e=>{if(!N)return;const f=frac(e);if(el.classList.contains('drag'))set(f);if(hover)hover(f)});
+  const end=()=>{if(!el.classList.contains('drag'))return;el.classList.remove('drag');root.focus()};
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);
+  el.addEventListener('pointerleave',()=>{if(!el.classList.contains('drag'))tip.style.visibility='hidden'});
+}
+function field(inp,current,commit){
+  inp.addEventListener('focus',()=>{inp.value=current();inp.select()});
+  inp.addEventListener('keydown',e=>{e.stopPropagation();if(e.key!=='Enter'&&e.key!=='Escape')return;if(e.key==='Escape')inp.dataset.cancel=1;e.preventDefault();inp.blur();root.focus()});
+  inp.addEventListener('blur',()=>{const v=parseFloat(inp.value);if(!inp.dataset.cancel&&isFinite(v))commit(v);delete inp.dataset.cancel;pg.value=i+1;zin.value=Math.round(z*100)+'%'});
+}
+function editing(){const a=document.activeElement;return a&&a.classList&&a.classList.contains('ed')}
+let queue=Promise.resolve();
+function save(p,lang,t){
+  const k=p.k;
+  queue=queue.then(()=>fetch('/api/save?file='+encodeURIComponent(FILE),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({k,lang,text:t})}).then(r=>r.ok?r.json():Promise.reject(r.status))).then(res=>{failed=false;if(res.edited)dirty.add(k);else dirty.delete(k)},()=>{failed=true}).then(()=>{paintDots();if(PAGES[i].k===k)keyLine()});
+}
+scrub(track,f=>to(Math.floor(f*N)),f=>tipAt(Math.floor(f*N)));
+scrub(zs,f=>zoom(Math.round((ZMAX-f*(ZMAX-ZMIN))*20)/20));
+field(pg,()=>String(i+1),v=>to(Math.round(v)-1));
+field(zin,()=>String(Math.round(z*100)),v=>zoom(v/100));
+col.addEventListener('input',ev=>{if(LIVE)return;const el=ev.target.closest('.ed');if(!el)return;const k=el.dataset.k;const e=edits[k]||(edits[k]=editOf(k));e[el.dataset.l]=el.innerHTML;store.set('edit:'+k,e);if(!dirty.has(k)){dirty.add(k);paintDots();keyLine()}});
+col.addEventListener('focusout',ev=>{if(!LIVE)return;const el=ev.target.closest('.ed');if(!el)return;const p=PAGES.find(x=>x.k===el.dataset.k),lang=el.dataset.l;if(!p)return;const t=text(el);if(t!==p[lang]){p[lang]=t;save(p,lang,t)}});
+col.addEventListener('paste',ev=>{ev.preventDefault();document.execCommand('insertText',false,(ev.clipboardData||window.clipboardData).getData('text'))});
+$('vtr-prev').onclick=()=>{to(i-1);root.focus()};
+$('vtr-next').onclick=()=>{to(i+1);root.focus()};
+$('vtr-zi').onclick=()=>zoom(z+.1);
+$('vtr-zo').onclick=()=>zoom(z-.1);
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&editing()){document.activeElement.blur();window.getSelection().removeAllRanges();root.focus();e.preventDefault();return}
+  if(editing()||!N)return;
+  if(e.key==='ArrowRight'||e.key==='ArrowDown')to(i+1);
+  else if(e.key==='ArrowLeft'||e.key==='ArrowUp')to(i-1);
+  else if(e.key==='Home')to(0);
+  else if(e.key==='End')to(N-1);
+  else if(e.key==='+'||e.key==='=')zoom(z+.1);
+  else if(e.key==='-')zoom(z-.1);
+  else if(e.key==='0')zoom(1);
+  else return;
+  e.preventDefault();
+});
+function start(){
+  N=PAGES.length;
+  track.setAttribute('aria-valuemin',1);track.setAttribute('aria-valuemax',N);
+  zs.setAttribute('aria-valuemin',ZMIN*100);zs.setAttribute('aria-valuemax',ZMAX*100);
+  $('vtr-t').textContent='/ '+N;
+  zoom(z);paintDots();show();ticks();
+  if(window.ResizeObserver)new ResizeObserver(ticks).observe(track);
+  root.focus();
+}
+if(LIVE)fetch('/api/doc?file='+encodeURIComponent(FILE)).then(r=>r.ok?r.json():r.text().then(t=>Promise.reject(t))).then(doc=>{PAGES.splice(0,PAGES.length,...doc.pages);dirty=new Set(doc.edited);if(doc.title)document.title=doc.title;start()},err=>{keyEl.textContent='Could not open '+FILE+': '+err});
+else{dirty=new Set(PAGES.filter(p=>{const e=store.get('edit:'+p.k);return e&&(e.en||e.es)}).map(p=>p.k));start()}
+</script>
+</body></html>
