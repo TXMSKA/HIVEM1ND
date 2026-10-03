@@ -12,7 +12,7 @@ Argument: [in|out] [context]
 
 Locate the mind through the Mind line above. Before anything else, run `node "{{mind}}/cli/index.mjs" check --mind-path "{{mind}}" --json` from the working directory. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. The current project is the `project` of the check, which resolves the working directory against those paths. Resolve the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
 
-The scope of the unit is the set of repos the relay keeps in sync: the current repo for a role that works in one repo, every repo of the environment for the Overlord, and every project with a path in the machine record for the Overseer. A role that works without a repo, and the Consultant, which changes nothing, skip the git work of both steps and only compare and report.
+The scope of the unit is the set of repos the relay keeps in sync: the current repo for a role that works in one folder, and every repo of the environment for the Overlord. A role that works without a repo skips the git work of both steps and only compares and reports.
 
 ## Steps
 

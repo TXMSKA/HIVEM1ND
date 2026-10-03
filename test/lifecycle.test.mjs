@@ -741,7 +741,7 @@ test("empty last-check headers preserve the following machine preferences", asyn
 test("swarm summarizes root, environment and project state", async (t) => {
   const root = await temporaryDirectory(t, "swarm");
   const mindPath = await makeMind(root);
-  await write(path.join(mindPath, "user", "state", "overseer.md"), "unit: overseer\nstate: in\nmachine: TEST\ndate: 2030-01-02 10:00\n\nPlanning releases.\nMore context.\n");
+  await write(path.join(mindPath, "user", "state", "genesis.md"), "unit: genesis\nstate: in\nmachine: TEST\ndate: 2030-01-02 10:00\n\nPlanning releases.\nMore context.\n");
   await write(path.join(mindPath, "user", "envs", "web", "state", "overlord-web.md"), "unit: overlord-web\nstate: out\nmachine: TEST\ndate: 2030-01-02 09:00\n\nWaiting for reports.\n");
   await write(path.join(mindPath, "user", "projects", "app", "state", "executor-app.md"), "unit: executor-app\nstate: in\nmachine: TEST\ndate: 2030-01-02 11:00\n\nBuilding login.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
@@ -753,7 +753,7 @@ test("swarm summarizes root, environment and project state", async (t) => {
 
   const result = await swarm({ mindPath, kitPath: mindPath, homeDir: root, hostname: "TEST" });
   assert.deepEqual(result.units.map((unit) => unit.scope).sort(), ["environment", "project", "root"]);
-  assert.equal(result.units.find((unit) => unit.unit === "overseer").context, "Planning releases.");
+  assert.equal(result.units.find((unit) => unit.unit === "genesis").context, "Planning releases.");
   assert.equal(result.tasks.open, 1);
   assert.equal(result.tasks.review, 1);
   assert.equal(result.tasks.done, 1);
@@ -815,7 +815,7 @@ test("check names the registered project and the work waiting for it", async (t)
   const appPath = path.join(reposPath, "app");
   await writeMachine(mindPath, { paths: `- web: ${reposPath}\n- app: ${appPath}\n` });
   await write(path.join(mindPath, "user", "routes.md"), "## Environments\n- web: app\n\n## Projects\n- app (web)\n\n## Minds\n");
-  await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "20300102-1000-overseer.md"), "message\n");
+  await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "20300102-1000-genesis.md"), "message\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "002-copy.md"), "id: 002\nstatus: done\n\n## Request\nCopy.\n");
   await write(path.join(mindPath, "user", "tasks", "001-machine.md"), "id: 001\nstatus: open\n\n## Request\nMachine.\n");
@@ -859,7 +859,7 @@ test("the check command prints nothing for a clean state and one line per findin
 
   const before = await snapshot(root);
   assert.equal(await run("TEST"), "");
-  await write(path.join(mindPath, "user", "inbox", "overseer", "20300102-1000-executor-app.md"), "message\n");
+  await write(path.join(mindPath, "user", "inbox", "genesis", "20300102-1000-executor-app.md"), "message\n");
   assert.equal(await run("TEST"), "Executive roles: 1 unread message.\n");
   assert.match(await run("OTHER"), /^This machine \(OTHER\) has no machine record in the mind\./);
   await fs.rm(path.join(mindPath, "user", "inbox"), { recursive: true });

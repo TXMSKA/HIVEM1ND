@@ -86,21 +86,14 @@ No install is left half done. A destination that cannot be written stops on that
 A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. See [roles/README.md](roles/README.md).
 
 <details>
-<summary>Executive, operative and chat roles</summary>
+<summary>Executive and operative roles</summary>
 
 | Role | Group | Description |
 | --- | --- | --- |
-| Overseer | Executive | Coordinates the whole swarm as the product owner; talks to the user, decides and distributes the work. |
-| Technician | Executive | Responsible for the machine and the tooling, as the tech lead. |
 | Genesis | Executive | Installs the mind on a machine and maintains it afterward. |
 | Overlord | Operative | Coordinates one environment as the project manager, for a change that spans several repos. |
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
-| Super executor | Operative | The Executor seat on the strongest model available, for tasks that require it. |
-| Manager | Operative | Prepares each task with the user and hands its implementation and QA to another agent, on a strong model whose effort follows the work. |
-| Consultant | Operative | Reads, explains and reviews inside one repo and never writes. |
-| Executive | Chat | Decides business questions from the mind alone, on a mid-tier model. |
-| Operator | Chat | The technical counterpart: architecture, integrations and improving what exists, on the strongest model available. |
-| Marketing | Chat | Ideas, campaigns, social and commercial copy, from the mind alone. |
+| Incubator | Operative | Develops ideas into products inside one folder: brainstorms them, prototypes them fast and sends each one to the product it belongs in. |
 
 </details>
 

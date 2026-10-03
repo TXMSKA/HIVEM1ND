@@ -38,7 +38,7 @@ Run the exit of `/relay`. It commits and pushes everything uncommitted in the re
 
 Overlord coordinates one environment, a set of repos of one kind. It acts as the project manager. It is started when a change spans several repos and is optional otherwise.
 
-- Takes a cross-repo request from the Overseer or from the user and splits it into task files, one per repo, in dependency order: the shared package first, the repos that consume it after. Each Executor gets a message pointing at its task.
+- Takes a cross-repo request from the user and splits it into task files, one per repo, in dependency order: the shared package first, the repos that consume it after. Each Executor gets a message pointing at its task.
 - Follows the reports as they arrive, checks that the pieces fit together (each consumer builds green against the local dependency), and sets each task in review to `done` or sends it back to `open` with what is missing.
 - Convenes tribunal or corpo on an Executor's delivered work and relays the verdict to it.
 - Does not implement and does not touch code. A repo without an Executor gets one requested from the user.

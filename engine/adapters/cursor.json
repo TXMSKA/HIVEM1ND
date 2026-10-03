@@ -19,9 +19,5 @@
   "cli": {
     "binary": "cursor-agent",
     "oneShot": ["--print", "{prompt}"]
-  },
-  "readOnly": {
-    "mode": "prompt",
-    "oneShotArgs": ["--print"]
   }
 }

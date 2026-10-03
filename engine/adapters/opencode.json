@@ -19,9 +19,5 @@
   "cli": {
     "binary": "opencode",
     "oneShot": ["run", "{prompt}"]
-  },
-  "readOnly": {
-    "mode": "prompt",
-    "oneShotArgs": []
   }
 }

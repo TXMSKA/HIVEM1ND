@@ -30,7 +30,7 @@ During setup, the machine file keeps the collected answers in its `Setup Draft` 
 
 ## Adapters
 
-Claude Code is detected by the folder `~/.claude/` or the `claude` binary on the path. It reads skills from `~/.claude/skills/<name>/SKILL.md`, or from `<CLAUDE_CONFIG_DIR>/skills/<name>/SKILL.md` when that environment variable is set, so the variable is checked first and its value wins. Layout: one folder per file named after the `name` frontmatter, the file inside as `SKILL.md`. Rules file for auto mode: `<CLAUDE_CONFIG_DIR>/CLAUDE.md` when set, otherwise `~/.claude/CLAUDE.md`. The line follows the selected preference order. The Consultant skill additionally uses `context: fork`, `agent: Explore` and `background: false` to run with the native read-only agent.
+Claude Code is detected by the folder `~/.claude/` or the `claude` binary on the path. It reads skills from `~/.claude/skills/<name>/SKILL.md`, or from `<CLAUDE_CONFIG_DIR>/skills/<name>/SKILL.md` when that environment variable is set, so the variable is checked first and its value wins. Layout: one folder per file named after the `name` frontmatter, the file inside as `SKILL.md`. Rules file for auto mode: `<CLAUDE_CONFIG_DIR>/CLAUDE.md` when set, otherwise `~/.claude/CLAUDE.md`. The line follows the selected preference order.
 
 Codex is detected by `~/.codex/`, `~/.agents/` or the `codex` binary. It reads skills from `~/.agents/skills/<name>/SKILL.md`, the same layout. Rules file: `<CODEX_HOME>/AGENTS.md` when set, otherwise `~/.codex/AGENTS.md`. The line follows the selected preference order.
 
@@ -65,4 +65,4 @@ Genesis installs the mind and maintains it. Its chat is kept open and its contex
 
 - Its file is also the setup prompt. It contains the setup steps in full, in the same order and with the same text as the CLI and the GUI, so it works pasted into any agent with nothing installed, and it resumes where a previous attempt stopped.
 - On request, adds skills, styles and preferences to the structure and replicates them into every agent on this machine. Attaches a new agent with the attach prompt. Runs `/evolve` when asked.
-- Does not work inside repos and creates no tasks. Anything about a project goes to the Overseer or to an Executor.
+- Does not work inside repos and creates no tasks. Anything about a project goes to an Executor or to the Incubator.

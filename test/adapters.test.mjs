@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { discoverAgents, discoverContent, loadAdapters, resolveAdapterPaths } from '../engine/discovery.mjs';
-import { autoRuleLine, planAgentAssets, renderSkill } from '../engine/install.mjs';
+import { autoRuleLine, planAgentAssets } from '../engine/install.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,17 +29,6 @@ test('adapter descriptors resolve only inside the supplied temporary home', asyn
   const codex = adapters.find((adapter) => adapter.id === 'codex');
   assert.equal(resolveAdapterPaths(claude, { homeDir, env: { CLAUDE_CONFIG_DIR: claudeConfig } }).skillsRoot, path.join(claudeConfig, 'skills'));
   assert.equal(resolveAdapterPaths(codex, { homeDir, env: {} }).skillsRoot, path.join(homeDir, '.agents', 'skills'));
-});
-
-test('the Claude adapter adds a native read-only consultant restriction', async () => {
-  const adapters = await loadAdapters({ kitPath: KIT_PATH });
-  const claude = adapters.find((adapter) => adapter.id === 'claude-code');
-  const source = await readFile(path.join(KIT_PATH, 'roles', 'consultant.md'), 'utf8');
-  const rendered = renderSkill(source, 'consultant', claude, 'D:\\mind');
-
-  assert.match(rendered, /^---\nname: consultant\n/);
-  assert.match(rendered, /\ncontext: fork\nagent: Explore\nbackground: false\n---\n/);
-  assert.match(rendered, /Mind: D:\\mind/);
 });
 
 test('discovery does not follow a fake binary outside the supplied PATH', async (context) => {
