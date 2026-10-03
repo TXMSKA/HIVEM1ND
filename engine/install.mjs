@@ -71,6 +71,13 @@ export async function installAgentAssets({
   const { filePath: machinePath, record } = await readMachineRecord(mindPath, hostname);
   if (!record) throw new Error(`Machine record not found for ${hostname}`);
   const adapters = await loadAdapters({ kitPath });
+  const kitPlan = await planKitCopy({
+    kitPath,
+    mindPath,
+    managedFiles: record.managedFiles,
+    excluded: record.excluded,
+    language,
+  });
   const agentPlan = await planAgentAssets({
     kitPath,
     mindPath,
@@ -80,17 +87,15 @@ export async function installAgentAssets({
     agents: record.agents,
     excluded: record.excluded,
     managedFiles: record.managedFiles,
+    retiredSources: retiredKitSources(kitPlan, record.managedFiles, kitPath, mindPath),
     keepExistingPreferences: record.keepExistingPreferences,
     language,
   });
-  const kitPlan = await planKitCopy({
-    kitPath,
+  const plan = await planManagedFileRemovals(registerLinkConflicts(combinePlans(kitPlan, agentPlan), language), {
     mindPath,
     managedFiles: record.managedFiles,
-    excluded: record.excluded,
-    language,
+    skillsRoots: adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir, env }).skillsRoot),
   });
-  const plan = registerLinkConflicts(combinePlans(kitPlan, agentPlan), language);
   const unresolved = plan.conflicts.filter((conflict) => {
     const allowed = conflict.choices ?? ['keep', 'replace'];
     return !allowed.includes(conflictChoices[conflict.path]);
@@ -99,6 +104,8 @@ export async function installAgentAssets({
     ...summarizeAgentPlan(agentPlan, language),
     baseFiles: kitPlan.items.map((item) => item.path),
     warnings: plan.warnings,
+    removed: plan.removals.map((item) => item.path),
+    kept: plan.kept.map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     conflicts: plan.conflicts.map((conflict) => ({
       path: conflict.path,
       reason: localizeReason(conflict.reason, language),
@@ -111,6 +118,7 @@ export async function installAgentAssets({
 
   const applied = await applyInstallPlan(plan, conflictChoices);
   record.managedFiles = { ...record.managedFiles, ...applied.managedFiles };
+  for (const filePath of plan.retired) delete record.managedFiles[filePath];
   for (const conflict of plan.conflicts) {
     if (conflictChoices[conflict.path] === 'keep') delete record.managedFiles[conflict.path];
   }
@@ -122,9 +130,10 @@ export async function installAgentAssets({
     written: applied.files.length,
     omitted: applied.omitted,
     replacedLinks: applied.replacedLinks,
-    kept: plan.conflicts
+    removed: applied.removed,
+    kept: [...applied.kept, ...plan.conflicts
       .filter((conflict) => conflictChoices[conflict.path] === 'keep')
-      .map((conflict) => ({ path: conflict.path, reason: localizeReason(conflict.reason, language) })),
+      .map((conflict) => ({ path: conflict.path, reason: localizeReason(conflict.reason, language) }))],
     warnings: result.warnings,
   };
   const reportPath = await writeInstallReport({ mindPath, hostname, language, report });
@@ -138,6 +147,8 @@ export async function installAgentAssets({
     conflicts: [],
     omitted: applied.omitted,
     replacedLinks: applied.replacedLinks,
+    removed: applied.removed,
+    kept: report.kept.map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     reportPath,
   };
 }
@@ -153,10 +164,12 @@ export async function writeInstallReport({ mindPath, hostname, language = 'en', 
     `omitted: ${report.omitted.length}`,
     `unwritten: ${(report.unwritten ?? []).length}`,
     `links-replaced: ${report.replacedLinks.length}`,
+    `removed: ${(report.removed ?? []).length}`,
   ];
   const sections = [
     ['reportOmitted', report.omitted.map((item) => `${item.path}: ${text(language, 'reportOmittedReason', { path: item.component })}`)],
     ['reportReplacedLinks', report.replacedLinks],
+    ['reportRemoved', report.removed ?? []],
     ['reportKept', (report.kept ?? []).map((item) => `${item.path}: ${localizeReason(item.reason, language)}`)],
     ['reportUnwritten', report.unwritten ?? []],
     ['reportWarnings', report.warnings ?? []],
@@ -183,12 +196,13 @@ export async function planAgentAssets({
   agents,
   excluded = [],
   managedFiles = {},
+  retiredSources = new Set(),
   keepExistingPreferences = true,
   language = 'en',
 }) {
   const available = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   const excludedNames = new Set(excluded);
-  const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames);
+  const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames, retiredSources);
   const items = [];
   const conflicts = [];
   const warnings = [...sourceAssets.warnings];
@@ -373,6 +387,50 @@ export async function planDataFile({
   return { items, conflicts, warnings: [], linkComponents };
 }
 
+export function retiredKitSources(kitPlan, managedFiles, kitPath, mindPath) {
+  if (normalizePath(kitPath) === normalizePath(mindPath)) return new Set();
+  const planned = new Set(kitPlan.items.map((item) => normalizePath(item.path)));
+  return new Set(Object.keys(managedFiles).filter((filePath) => relativeChild(mindPath, filePath)
+    && !relativeChild(path.join(mindPath, 'user'), filePath)
+    && !planned.has(normalizePath(filePath))).map(normalizePath));
+}
+
+export async function planManagedFileRemovals(plan, { managedFiles, mindPath, skillsRoots = [], retainedPaths = [] }) {
+  const planned = new Set([...plan.items.map((item) => item.path), ...retainedPaths].map(normalizePath));
+  const retired = [];
+  const removals = [];
+  const kept = [];
+  const userPath = path.join(mindPath, 'user');
+  for (const [filePath, expectedHash] of Object.entries(managedFiles)) {
+    if (planned.has(normalizePath(filePath))) continue;
+    retired.push(filePath);
+    if (normalizePath(filePath) === normalizePath(userPath) || relativeChild(userPath, filePath)) continue;
+    // Only kit copies and rendered skills are removed; a rule file may hold the user's own lines.
+    if (!relativeChild(mindPath, filePath) && !skillsRoots.some((skillsRoot) => relativeChild(skillsRoot, filePath))) continue;
+    const root = path.parse(path.resolve(filePath)).root;
+    const reason = await removalReason(filePath, root, expectedHash);
+    if (reason) {
+      kept.push({ path: filePath, reason });
+      continue;
+    }
+    if ((await currentSnapshot(filePath)).kind === 'missing') continue;
+    const cleanupRoot = skillsRoots.find((skillsRoot) => relativeChild(skillsRoot, filePath));
+    removals.push({ path: filePath, root, currentHash: expectedHash, cleanupRoot });
+  }
+  return { ...plan, retired, removals, kept };
+}
+
+async function removalReason(filePath, root, expectedHash) {
+  if (!path.isAbsolute(filePath)) return `Path escapes the selected destination: ${filePath}`;
+  const unsafeReason = await unsafeDestinationReason(root, filePath);
+  if (unsafeReason) return unsafeReason;
+  const snapshot = await currentSnapshot(filePath);
+  if (snapshot.kind === 'missing') return null;
+  if (snapshot.kind !== 'file') return 'The destination is a symbolic link or is not a regular file.';
+  if (snapshot.hash !== expectedHash) return 'The HIVEM1ND-managed file was modified after installation.';
+  return null;
+}
+
 export async function applyInstallPlan(plan, conflictChoices = {}) {
   const selected = new Map(Object.entries(conflictChoices ?? {}));
   for (const conflict of plan.conflicts ?? []) {
@@ -414,6 +472,8 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
   const files = [];
   const managedFiles = {};
   const written = [];
+  const deleted = [];
+  const kept = [...(plan.kept ?? [])];
   try {
     for (const item of plan.items) {
       if (item.linkComponent && omittedComponents.has(item.linkComponent)) continue;
@@ -427,19 +487,60 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
       }
       if (item.owned) managedFiles[item.path] = hashContent(item.content);
     }
+    for (const item of plan.removals ?? []) {
+      const reason = await removalReason(item.path, item.root, item.currentHash);
+      if (reason) {
+        kept.push({ path: item.path, reason });
+        continue;
+      }
+      const snapshot = await currentSnapshot(item.path, true);
+      if (snapshot.kind === 'missing') continue;
+      if (snapshot.hash !== item.currentHash) {
+        kept.push({ path: item.path, reason: 'The HIVEM1ND-managed file was modified after installation.' });
+        continue;
+      }
+      await unlink(item.path);
+      deleted.push({ item, snapshot });
+    }
+    for (const { item } of deleted) {
+      if (!item.cleanupRoot) continue;
+      let directory = path.dirname(item.path);
+      while (relativeChild(item.cleanupRoot, directory)) {
+        if (await unsafeDestinationReason(item.root, path.join(directory, '.'))) break;
+        try {
+          await removeEmptyDirectory(directory);
+        } catch (error) {
+          if (error?.code === 'ENOTEMPTY' || error?.code === 'EEXIST') break;
+          throw error;
+        }
+        directory = path.dirname(directory);
+      }
+    }
   } catch (error) {
-    const rollbackErrors = await rollbackWrites(written, removedLinks);
+    const rollbackErrors = [];
+    for (const { item, snapshot } of [...deleted].reverse()) {
+      try {
+        await atomicWriteFile(item.path, snapshot.content, { root: item.root, overwrite: false });
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    rollbackErrors.push(...await rollbackWrites(written, removedLinks));
     if (rollbackErrors.length > 0) {
       throw new AggregateError([error, ...rollbackErrors], 'Install failed and one or more files could not be restored');
     }
     throw error;
   }
-  return { files, managedFiles, omitted, replacedLinks: removedLinks.map((link) => link.path) };
+  return { files, managedFiles, omitted, replacedLinks: removedLinks.map((link) => link.path), removed: deleted.map(({ item }) => item.path), kept };
 }
 
 export function publicPreview(plan, language = 'en') {
   return {
-    files: plan.items.map((item) => ({ path: item.path, action: item.action, owner: item.owner })),
+    files: [
+      ...plan.items.map((item) => ({ path: item.path, action: item.action, owner: item.owner })),
+      ...(plan.removals ?? []).map((item) => ({ path: item.path, action: 'delete' })),
+    ],
+    kept: (plan.kept ?? []).map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     warnings: [...(plan.warnings ?? [])],
     conflicts: (plan.conflicts ?? []).map((conflict) => ({
       path: conflict.path,
@@ -512,13 +613,17 @@ export function installableAssetRoots(kitPath, mindPath) {
   ];
 }
 
-export async function listInstallableAssets(roots, excludedNames = new Set()) {
+export async function listInstallableAssets(roots, excludedNames = new Set(), retiredSources = new Set()) {
   const sources = typeof roots === 'string' ? installableAssetRoots(roots) : roots;
   const assets = [];
   const warnings = [];
   const keptByName = new Map();
   for (const root of sources) {
-    for (const asset of await readRootAssets(root, excludedNames)) addAsset(asset, root);
+    for (const asset of await readRootAssets(root, excludedNames)) {
+      if (retiredSources.has(normalizePath(asset.sourcePath))) continue;
+      asset.supportFiles = asset.supportFiles.filter((support) => !retiredSources.has(normalizePath(path.join(path.dirname(asset.sourcePath), support.relativePath))));
+      addAsset(asset, root);
+    }
   }
   return { assets: assets.sort((left, right) => left.name.localeCompare(right.name)), warnings };
 
@@ -606,12 +711,8 @@ async function readFeatureEntries(directory) {
 
 export function renderSkill(content, name, adapter, mindPath) {
   const parsed = parseFrontmatter(String(content));
-  const additions = name === 'consultant' && adapter.readOnly?.mode === 'frontmatter'
-    ? adapter.readOnly.frontmatter
-    : {};
   const rendered = serializeFrontmatter(parsed, {
     allowedKeys: adapter.skills.frontmatterKeys,
-    additions,
   });
   return rendered.replaceAll('{{mind}}', mindPath);
 }

@@ -21,9 +21,5 @@
   "cli": {
     "binary": "codex",
     "oneShot": ["exec", "{prompt}"]
-  },
-  "readOnly": {
-    "mode": "prompt",
-    "oneShotArgs": ["--sandbox", "read-only"]
   }
 }

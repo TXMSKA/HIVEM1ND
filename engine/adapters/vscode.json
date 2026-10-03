@@ -20,9 +20,5 @@
   "cli": {
     "binary": "code",
     "oneShot": ["chat", "--mode", "agent", "{prompt}"]
-  },
-  "readOnly": {
-    "mode": "prompt",
-    "oneShotArgs": ["chat", "--mode", "ask"]
   }
 }

@@ -14,7 +14,7 @@ user/
   knowledge/                  private modules, same format as the base ones
   protocols/<name>.md         global protocols, for every project, one file per protocol
   roles/ commands/ features/  written for this mind, installed like the base ones
-  state/ inbox/ tasks/ log/   executive roles (overseer, technician, genesis)
+  state/ inbox/ tasks/ log/   executive roles (genesis)
   envs/<env>/
     state/ inbox/ tasks/ log/
   projects/<project>/
@@ -69,7 +69,7 @@ One folder per recipient. The recipient deletes the file at its exit, once read.
 ```markdown
 id: 003
 status: open
-from: overseer
+from: overlord-web
 to: executor-myapp
 date: 2026-09-15 13:40
 depends: 002

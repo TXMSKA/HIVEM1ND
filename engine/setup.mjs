@@ -11,6 +11,7 @@ import {
   discoverProjects,
   envValue,
   loadAdapters,
+  resolveAdapterPaths,
 } from './discovery.mjs';
 import {
   applyInstallPlan,
@@ -18,8 +19,10 @@ import {
   planAgentAssets,
   planDataFile,
   planKitCopy,
+  planManagedFileRemovals,
   publicPreview,
   registerLinkConflicts,
+  retiredKitSources,
   writeInstallReport,
 } from './install.mjs';
 import {
@@ -520,6 +523,7 @@ class SetupSession {
     await this.createMindLayout();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
     const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
+    for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
     }
@@ -542,9 +546,10 @@ class SetupSession {
         written: applied.files.length,
         omitted: applied.omitted,
         replacedLinks: applied.replacedLinks,
-        kept: plan.conflicts
+        removed: applied.removed,
+        kept: [...applied.kept, ...plan.conflicts
           .filter((conflict) => this.answers.conflicts[conflict.path] === 'keep')
-          .map((conflict) => ({ path: conflict.path, reason: conflict.reason })),
+          .map((conflict) => ({ path: conflict.path, reason: conflict.reason }))],
         unwritten,
         warnings: plan.warnings,
       },
@@ -553,6 +558,7 @@ class SetupSession {
     this.result = this.completionResult(applied.files, plan.warnings, {
       omitted: applied.omitted,
       replacedLinks: applied.replacedLinks,
+      removed: applied.removed,
       unwritten,
       reportPath,
     });
@@ -755,7 +761,7 @@ class SetupSession {
     // An attach writes what belongs to this machine. The kit copy, the preferences and the
     // recorded version belong to the mind and stay as the mind already has them.
     const attach = this.answers.attach === true;
-    const kitPlan = attach ? { items: [], conflicts: [], warnings: [] } : await planKitCopy({
+    const kitPlan = await planKitCopy({
       kitPath: this.kitPath,
       mindPath: this.mindPath,
       managedFiles: existingManaged,
@@ -794,6 +800,7 @@ class SetupSession {
       agents: finalRecord.agents,
       excluded: finalRecord.excluded,
       managedFiles: existingManaged,
+      retiredSources: retiredKitSources(kitPlan, existingManaged, this.kitPath, this.mindPath),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       language: this.answers.language,
     });
@@ -806,10 +813,15 @@ class SetupSession {
       owned: false,
       language: this.answers.language,
     });
-    return registerLinkConflicts(
-      combinePlans(kitPlan, ...dataPlans, agentPlan, machinePlan),
+    return planManagedFileRemovals(registerLinkConflicts(
+      combinePlans(attach ? null : kitPlan, ...dataPlans, agentPlan, machinePlan),
       this.answers.language,
-    );
+    ), {
+      managedFiles: existingManaged,
+      mindPath: this.mindPath,
+      retainedPaths: attach ? kitPlan.items.map((item) => item.path) : [],
+      skillsRoots: this.adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir: this.homeDir, env: this.env }).skillsRoot),
+    });
   }
 
   async createMindLayout() {
@@ -851,6 +863,7 @@ class SetupSession {
       notices,
       omitted: outcome.omitted ?? [],
       replacedLinks: outcome.replacedLinks ?? [],
+      removed: outcome.removed ?? [],
       unwritten: outcome.unwritten ?? [],
       reportPath: outcome.reportPath ?? null,
       attachPrompts: attachAgents.map((agent) => ({ agent, text: prompt })),

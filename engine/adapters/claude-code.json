@@ -22,14 +22,5 @@
   "cli": {
     "binary": "claude",
     "oneShot": ["--print", "{prompt}"]
-  },
-  "readOnly": {
-    "mode": "frontmatter",
-    "frontmatter": {
-      "context": "fork",
-      "agent": "Explore",
-      "background": "false"
-    },
-    "oneShotArgs": ["--permission-mode", "plan"]
   }
 }

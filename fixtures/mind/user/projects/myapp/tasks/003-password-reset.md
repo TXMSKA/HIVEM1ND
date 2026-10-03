@@ -1,6 +1,6 @@
 id: 003
 status: open
-from: overseer
+from: overlord-web
 to: executor-myapp
 date: 2026-09-15 13:40
 depends: 002
