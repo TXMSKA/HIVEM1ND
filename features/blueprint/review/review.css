@@ -1568,8 +1568,8 @@ body[data-panel="open"] .bubble {
   }
 }
 
-/* A phone: the tools become a bar along the bottom, as long as its tools
-   and clear of the round button, and the cards take the width. */
+/* A phone: the tools become a bar centred along the bottom, as long as its
+   tools and clear of the round button, and the cards take the width. */
 @media (max-width: 700px) {
   .top {
     max-width: calc(100% - var(--bp-bar-offset) * 2);
@@ -1608,11 +1608,12 @@ body[data-panel="open"] .bubble {
 
   .rail {
     top: auto;
-    translate: none;
+    left: 50%;
+    translate: -50% 0;
     bottom: var(--bp-bar-offset);
     flex-direction: row;
     width: auto;
-    max-width: calc(100% - var(--bp-bar-offset) * 3 - var(--bp-main-button));
+    max-width: calc(100% - (var(--bp-bar-offset) * 2 + var(--bp-main-button)) * 2);
     height: var(--bp-bar-size);
     max-height: none;
     padding: 0 calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2);
@@ -1640,10 +1641,11 @@ body[data-panel="open"] .bubble {
     max-height: calc(100% - var(--top-band) - var(--bp-bar-offset) * 2 - var(--bp-bar-size));
   }
 
-  /* The note is a bubble out of its button in the tools bar, the third tool:
+  /* The note is a bubble out of its button, the third and last tool of the
+     centred bar, whose centre sits one tool and one gap right of the middle:
      the button shows and hides it whole. */
   .note {
-    --note-tail: calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2 + var(--bp-bar-item) * 2.5 + var(--bp-bar-gap) * 2);
+    --note-tail: calc(50% + var(--bp-bar-item) + var(--bp-bar-gap));
     left: var(--bp-bar-offset);
     right: var(--bp-bar-offset);
     bottom: calc(var(--bp-bar-offset) + var(--bp-bar-size) + 10px);
