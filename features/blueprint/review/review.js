@@ -378,7 +378,11 @@ function writeHash() {
 let opening = 0;
 
 async function openBoard(project, id) {
-  const entry = state.index.find((item) => item.project === project && item.id === id) ?? state.index[0];
+  // A link that names only the project opens its first board.
+  const entry =
+    state.index.find((item) => item.project === project && item.id === id) ??
+    state.index.find((item) => item.project === project) ??
+    state.index[0];
   const ticket = ++opening;
   assetsOf = entry.project;
   // Built apart from what is on the stage, so a board that fails to build
