@@ -25,9 +25,9 @@ report: the control table, the press count for the slowest field, the transcript
    Result: the press count per field recorded, a typed date accepted in the local order, and every list of ten or more rows narrowing as the person types, with a no results state.
 
 4. Keep menus open, anchored and visible.
-   Task: open every menu near the bottom edge of the viewport and at the narrow width, and pick several items in each multi-select.
-   Time: 15 minutes; a form with no custom menu ends this step as not applicable.
-   Result: a screenshot of each menu near the bottom edge, opened upward or fully visible and unclipped by any ancestor; each multi-select stays open, counts the selection and closes with Done.
+   Task: open every menu near the bottom edge of the viewport and at the narrow width, and pick several items in each multi-select. Open every native select of the app as well, all of them whenever one changes, in each theme that ships.
+   Time: 15 minutes; a form with no menu and no select ends this step as not applicable.
+   Result: a screenshot of each menu near the bottom edge, opened upward or fully visible and unclipped by any ancestor; each multi-select stays open, counts the selection and closes with Done; each native select open in the theme's colours with readable options, its chevron at the right edge, as wide as its column and as tall as the other fields.
 
 5. Give every disabled control its reason.
    Task: find every disabled control and write inline what is missing and what unlocks it, with the unblocking action one step away; the reason is a structural word this pass writes and flags for copy. A form that keeps its submit enabled instead lets the incomplete submission run and surfaces the validation, which is the simpler fix when the reasons are several.
@@ -47,4 +47,4 @@ report: the control table, the press count for the slowest field, the transcript
 8. Fit the phone.
    Task: at the narrow width, read the computed input font size, the input type, input mode and autocomplete token of every field, and the size of every control.
    Time: 15 minutes.
-   Result: every input at 16 CSS pixels or more, the numeric fields showing a numeric keyboard, known personal fields carrying an autocomplete token, and every control at least 44 by 44 CSS pixels on touch.
+   Result: every input at 16 CSS pixels or more at the narrow width and on touch, with desktop chrome keeping its compact size, the numeric fields showing a numeric keyboard, known personal fields carrying an autocomplete token, and every control at least 44 by 44 CSS pixels on touch.

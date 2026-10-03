@@ -6,7 +6,7 @@ The one file to read first for a build from scratch or a pass over a whole surfa
 
 A surface that breaks one of these is not finished, whatever the direction asks.
 
-- **Contrast.** Text at 4.5:1, large text at 3:1, and non-text at 3:1: control borders, meaningful icons, chart marks and the focus ring. Measured in every theme that ships and in every state, hover included. Disabled controls are exempt but stay readable.
+- **Contrast.** Text at 4.5:1, large text at 3:1, and non-text at 3:1 where the colour is what identifies the part: the boundary of a control with no fill of its own, meaningful icons, chart marks and the focus ring. A button or a pill told apart by its fill or its text needs no border contrast. Measured in every theme that ships and in every state, hover included. Disabled controls are exempt but stay readable.
 - **Keyboard.** Every interactive element is reached with Tab in reading order and works with Enter or Space. Escape closes an overlay, focus is trapped only inside a modal, and it returns to a sensible control when an overlay closes.
 - **Focus.** A visible ring on every stop, never hidden under a sticky region.
 - **Targets.** At least 24 by 24 CSS pixels, 44 by 44 on touch.
@@ -17,6 +17,17 @@ A surface that breaks one of these is not finished, whatever the direction asks.
 - **Values live in tokens.** No colour, font size, gap, radius, duration or layer index written in a component.
 - **Icons come from one published open icon set**, inline SVG, never emoji and never drawn by hand. When no set can be fetched, as [icons-and-media.md](icons-and-media.md), Icons, defines it, a text label replaces the icon.
 - **Structural words are part of the design pass.** Visible labels, accessible names, the reason a control is disabled, the action on an empty state, the recovery on an error and the skip link are written by the pass that builds the structure, then flagged for the copy pass. Only persuasive and explanatory text waits for copy.
+
+## Applying a floor to a design
+
+A floor applies as its standard writes it, at its narrowest reading; a stricter house reading is named as one and never applied silently. Passing the floors is not a verdict on the design: [visual-critique](protocols/visual-critique.md) gives that. When an approved design misses a floor, the least visible means that meets it comes first.
+
+- **Boundaries.** A control boundary at 3:1 takes the theme's own line hue at the lowest step that reaches it, never a near-white. A fill that tells the control apart removes the need for the border.
+- **Text edited in place.** Reading text that can be edited keeps its look: a 3:1 bottom rule at rest, the full border on hover and focus, never a boxed form.
+- **Instructions and readouts.** What the board draws bare stays bare on screen: the instruction is visually hidden and tied by `aria-describedby` or a status region.
+- **Long motion.** Motion past 5 seconds gets one pause for the page, or each scene stays under 5 seconds; never a control under every scene.
+- **A visible change is shown first.** A fix that adds or changes anything visible on an approved board is shown beside the board before it ships.
+- **Behaviour stays off the design.** Notes on motion, keyboard and states live in the board's notes and in the code, never drawn on a screen.
 
 ## Build order
 
@@ -34,13 +45,13 @@ Sources marked "pack" are this module's own choice, stated so a builder does not
 | --- | --- | --- |
 | Body text contrast | 4.5:1 or above, placeholders included | WCAG 1.4.3 |
 | Large text contrast | 3:1 or above; large is 18pt (about 24 CSS px), or 14pt bold (about 18.5 CSS px) | WCAG 1.4.3 |
-| Non-text contrast | 3:1 against adjacent colours, for control borders, focus indicators, meaningful icons and chart marks | WCAG 1.4.11 |
+| Non-text contrast | 3:1 against adjacent colours where the colour identifies the part: the boundary of a control with no fill of its own, focus indicators, meaningful icons and chart marks | WCAG 1.4.11 |
 | Hover and active states | every state pair still meets its target; a hover treatment needs no contrast of its own, the text on it does | WCAG 1.4.11 |
 | Links in running text | underlined; colour alone needs 3:1 against the surrounding text plus another cue | WCAG 1.4.1, technique G183 |
 | Focus ring | `outline: 2px solid` the focus role, `outline-offset: 2px`, 3:1 against what surrounds it | WCAG 2.4.13 (AAA) names a 2 px solid outline as the easiest pass; 1.4.11 |
 | Focus under sticky regions | `scroll-padding-top` equal to the sticky header height | WCAG 2.4.11, technique C43 |
 | Pointer target | 24 by 24 CSS px minimum; 44 by 44 on touch and for primary controls | WCAG 2.5.8; 2.5.5 (AAA) |
-| Input font size | 16 CSS px or more | pack, [forms-and-controls.md](forms-and-controls.md): phone browsers zoom smaller inputs |
+| Input font size | 16 CSS px or more on phones and touch; desktop chrome keeps its compact size | pack, [forms-and-controls.md](forms-and-controls.md): phone browsers zoom smaller inputs |
 | Reflow | 320 CSS px wide, 256 CSS px tall; a data table may scroll on its own axis | WCAG 1.4.10 |
 | Text spacing test | line height 1.5, paragraph spacing 2, letter spacing 0.12, word spacing 0.16, each times the font size | WCAG 1.4.12 |
 | Truncation | allowed only when the full value is reachable on focus, on activation or on a linked page | WCAG 1.4.12 understanding |
@@ -55,14 +66,14 @@ Sources marked "pack" are this module's own choice, stated so a builder does not
 | Page width | content contained at 75rem, gutter 1rem below 40rem and 1.5rem above | pack |
 | Breakpoints | where the content breaks; the usual starting set is 40, 48, 64 and 80 rem (640, 768, 1024, 1280 px) | pack, [pages-and-sections.md](pages-and-sections.md), Widths |
 | Radius | one stated mix: 0.375rem controls, 0.75rem containers, full round for switches and avatars; inner radius is outer minus padding, and at zero or below it takes the smallest step | pack, [tokens.md](tokens.md), Shape |
-| Borders | 1 px; a border that marks a control reaches 3:1 | WCAG 1.4.11; pack |
+| Borders | 1 px; a border that alone identifies a control reaches 3:1, in the theme's line hue | WCAG 1.4.11; pack |
 | Elevation | one soft offset shadow or one border, never both; in dark themes a lighter surface instead | pack, [tokens.md](tokens.md) |
 | Layers | content 0, sticky 10, dropdown and popover 20, drawer 30, modal 40, toast 50, as named tokens | pack, order from [tokens.md](tokens.md), Rules |
 | Durations | press 100 to 160 ms, tooltip 125 to 200, menu 150 to 250, modal 200 to 300, drawer and toast up to 500, crossfade about 180 | pack, [animation.md](animation.md), Numbers |
 | Easing | decelerate `cubic-bezier(0.23, 1, 0.32, 1)`, in and out `cubic-bezier(0.77, 0, 0.175, 1)`, sheet `cubic-bezier(0.32, 0.72, 0, 1)`, linear for progress | pack, [animation.md](animation.md) |
 | Scale in motion | entrances from 0.9 to 0.97, press at 0.97 | pack, [animation.md](animation.md) |
 | Feedback time | a visible response within about 400 ms | pack, [states.md](states.md), Loading |
-| Moving content | anything that starts on its own and runs past 5 seconds gets pause, stop or hide; a loading indicator is exempt | WCAG 2.2.2 |
+| Moving content | anything that starts on its own and runs past 5 seconds gets pause, stop or hide, one control for the page; a loading indicator is exempt | WCAG 2.2.2 |
 | Reduced motion | `@media (prefers-reduced-motion: reduce)` drops travel and loops | WCAG 2.3.3 (AAA), technique C39 |
 | Layout shift | 0 px movement of content under a loading indicator; page score at or below 0.1 | pack, [interface-states](protocols/interface-states.md), step 4; cumulative layout shift threshold at the 75th percentile |
 | Status messages | `role="status"` for results and success, `role="alert"` for errors, present in the markup before the message arrives | WCAG 4.1.3 |
@@ -71,5 +82,6 @@ Sources marked "pack" are this module's own choice, stated so a builder does not
 | Toast | bottom corner, 6 s, pausing on hover, focus and hidden tab; longer when it carries an undo | pack, [overlays.md](overlays.md) |
 | Search | results as the person types, debounced 200 to 300 ms | pack |
 | Controls by option count | 2 to 4: radios or a segmented control; 5 to about 10: a select; 10 or more: a menu with a filter | pack, [forms-and-controls.md](forms-and-controls.md) |
+| Native select | chevron at the right edge, as wide as its column, as tall as the other fields, the open list in the theme's colours through `color-scheme` and explicit option colours | pack |
 
 The palette, the faces and the one bold move come from the subject, through [direction.md](direction.md) and [defaults.md](defaults.md).

@@ -61,6 +61,6 @@ Which protocol steps and topic sections each category sends work to. accessibili
 - motion: scope transitions, animations, reveals, scroll effects and gestures. Keeps motion purposeful, short, compositor-only and reducible.
 - responsive-behaviour: scope layout, text length, media and pointer input across widths. Holds the layout from 320 CSS pixels to ultra-wide.
 - theme-direction: scope a stated aesthetic, restyle or brand change. Applies a look through the primitive layer without losing contrast.
-- visual-critique: scope any rendered surface after a design or polish pass. Judges it as a person will see it before it is reported done.
+- visual-critique: scope any rendered surface after a design or polish pass. A gate: compares it with the approved board, checks proportion and judges it as a person will see it before it is reported done.
 
 The command [uify](features/uify.md) runs the module on a surface, a target or a direction.
