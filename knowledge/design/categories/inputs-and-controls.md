@@ -13,7 +13,7 @@ Options:
 - **Live indicator** for a rule that is easier to meet while typing, such as password strength.
 - **Password field with a visibility toggle**; **code input** that accepts a pasted code whole.
 
-Build: A `label` tied by `for` above each field, the matching `type`, `inputmode` and `autocomplete`, a font size of 16 CSS pixels or more, 44 pixels high on touch, a border at 3:1, and errors tied by `aria-describedby`. When a design pass finds only a placeholder, it writes the visible label from it.
+Build: A `label` tied by `for` above each field, the matching `type`, `inputmode` and `autocomplete`, a font size of 16 CSS pixels or more on phones and touch, 44 pixels high on touch, a border at 3:1 when the border alone tells the field apart (a 3:1 bottom rule at rest for text edited in place), and errors tied by `aria-describedby`. When a design pass finds only a placeholder, it writes the visible label from it.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), steps 2 and 8; [forms-and-controls.md](../forms-and-controls.md), Fields.
 
@@ -29,7 +29,7 @@ Options:
 - **A multi-select that stays open**, with checkboxes, a live count and Done.
 - **Cards** when the choice is between content types.
 
-Build: Count the options and pick by the table in [forms-and-controls.md](../forms-and-controls.md). A native `select` for five to about ten, with an explicit background and text colour from the tokens; a filtered menu past ten, mounted where no ancestor clips it.
+Build: Count the options and pick by the table in [forms-and-controls.md](../forms-and-controls.md). A native `select` for five to about ten, with an explicit background and text colour from the tokens, the chevron at the right edge, as wide as its column and as tall as the other fields, and the open list in the theme's colours through `color-scheme`; a filtered menu past ten, mounted where no ancestor clips it. Every select is opened and checked where it runs, all of them when one changes.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), steps 1, 3 and 4; [forms-and-controls.md](../forms-and-controls.md), Choosing the control, Menus and selects.
 
