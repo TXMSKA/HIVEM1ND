@@ -139,6 +139,7 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 | `/plan` | Planning | Splits a request into ordered task files for the owning units and sends each unit a message without implementing it. |
 | `/brainstorm` | Planning | Develops a topic one approved decision at a time and records agreed text separately from open questions. |
 | `/blueprint` | Planning | Serves the screen-flow boards of every project on the machine in one local viewer and writes the comments left on them into each repo. A temporary Lite version. |
+| `/void` | Planning | Opens a long text in a quiet reader where the person corrects it in place, and saves every edit into the file on disk, keeping the original and each version, where agents read it. |
 | `/qa` | Quality | Runs every open project task in non-overlapping groups, verifies the results and records what passed or failed. |
 | `/tribunal` | Quality | Convenes three judges, cross-examines their findings and records an evidence-backed verdict without editing code. |
 | `/corpo` | Quality | Stress-tests delivered work with three deliberately difficult reviewers and records every finding for the user. |
