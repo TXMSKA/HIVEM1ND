@@ -8,7 +8,7 @@ What the application runs on and what it installs: the runtime, the framework, t
 
 **Options:**
 
-- **Compare the lockfile against the vendor advisories fetched in the pass.** Always. A dependency audit runs beside it and never replaces it.
+- **Compare the lockfile against the vendor advisories fetched in the pass.** Always. A dependency audit runs beside it and never replaces it, over the full tree with development and transitive packages and at every severity, because the hosting platform counts them all.
 - **Runtime on a supported line of its own calendar.** A runtime past its end of life fails regardless of any advisory.
 
 **Build:** Start on a runtime major its calendar lists as supported, pin exact versions of the framework and the view library, commit the lockfile from the first install, and read each one against its advisories page before the first release.

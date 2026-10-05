@@ -30,9 +30,9 @@ report: the two settings with the values the tool reports back, the install comm
    Result: a search across the workflow files returning zero action references by tag or branch, the token permission block quoted, and zero direct interpolations of an untrusted context value into a script.
 
 5. Run the audit, and read the result for what it is.
-   Task: `npm audit --audit-level=high` and record what comes back. Without a lockfile or without the tool, the step ends as not run with the reason, as in step 4 of [version-floor](version-floor.md).
+   Task: `npm audit` over the full tree, development and transitive packages included, and record what comes back per severity. Without a lockfile or without the tool, the step ends as not run with the reason, as in step 4 of [version-floor](version-floor.md).
    Time: 10 minutes. Repository.
-   Result: the advisory count at high and critical with the fixed version offered for each. A clean result is recorded as a clean audit and nothing more: it does not read install scripts, and a version poisoned in the last few hours has no advisory yet.
+   Result: the advisory count per severity with the fixed version offered for each; critical and high block a release. A clean result is recorded as a clean audit and nothing more: it does not read install scripts, and a version poisoned in the last few hours has no advisory yet.
 
 6. Read what a new dependency actually ships.
    Task: for every added package and every new major, record the reason it is needed, read its lifecycle scripts and the file list it publishes, check the maintainer change since the last version, and check that the version has a matching commit or tag in its source repository. Packages nothing imports any more are removed. Provenance attestation proves where a package was built, not that it is safe: every recent registry worm published from a legitimately authenticated session. **Needs a person**: accepting a package whose scripts do real work is a decision.
