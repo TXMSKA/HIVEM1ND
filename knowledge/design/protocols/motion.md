@@ -40,6 +40,6 @@ report: the animation table with purpose, frequency, duration and curve, the ani
    Result: a pair of screenshots of the same state change at each motion preference showing the same end state, and a transcript confirming every confirmation still occurs. A tool that cannot emulate the preference records the reduced motion block read from the stylesheet with what it removes, as in [evidence.md](../evidence.md), Tool limits.
 
 7. Feel it, then limit the loops.
-   Task: play each surviving animation at a quarter of its speed, check the origin, the curve and the sync of coordinated properties, and give any autoplaying motion that runs longer than 5 seconds a control to pause, stop or hide it.
+   Task: play each surviving animation at a quarter of its speed, check the origin, the curve and the sync of coordinated properties, and give any autoplaying motion that runs longer than 5 seconds a way to pause, stop or hide it: one pause for the page, or scenes kept under 5 seconds, never a control under every scene. What reduced motion shows is written in the board's notes, never drawn on the design.
    Time: 15 minutes.
-   Result: one line per animation noting the slowed check, and the count of autoplaying loops with their durations and their controls.
+   Result: one line per animation noting the slowed check, and the count of autoplaying loops with their durations and the page pause that covers them.
