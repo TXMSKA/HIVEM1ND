@@ -17,7 +17,7 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 
 ## Steps
 
-1. Ask `http://localhost:3300/api/boards`. When it answers, the server is already running: there is one per machine, and a second is never started. Otherwise start it in the background and leave it running: `node "{{mind}}/features/blueprint/server.mjs" --mind "{{mind}}"`. Port 3300 is fixed.
+1. Ask `http://localhost:3300/api/boards`. When it answers, the server is already running: there is one per machine, and a second is never started. Otherwise start it in the background and leave it running: `node "{{mind}}/features/blueprint/server.mjs" --mind "{{mind}}"`. Port 3300 is fixed. To review from a phone on the same network, the server runs with `--lan` added: it then also answers on this machine's network addresses and prints one link per address with a key, which goes to the user. A server already running without `--lan` is restarted with it only when the user asks.
 2. Open `http://localhost:3300/review/#project=<project>&board=<id>` for the project and board named in the argument, or the current project's first board when none is named. Without an argument, open the viewer and list the projects and boards it shows.
 3. When the current project has no `docs/flows/boards/index.json`, say so and ask before creating the first board. A board is written in the repository, in the formats below, and appears in the viewer on the next reload: nothing is registered anywhere else.
 4. To act on the review, read `docs/flows/comments/<board>.json` in the repository and take the threads whose `status` is `open`. Answer a thread by appending a message to its `messages` with the unit as `author`, and change the board only when the thread asks for it.
@@ -37,7 +37,7 @@ One process, bound to `127.0.0.1:3300`, Node built-ins only. The projects are th
 | `/api/boards` | Every board of every project, with its `project`, `id`, `short`, `title` and `url` |
 | `/api/comments/<project>/<board>` | GET reads, POST changes the comments of that board |
 
-Requests are accepted only for the hosts `localhost:3300` and `127.0.0.1:3300`; a POST with a foreign `Origin` or a cross-site fetch is refused. Pages run under a content security policy that allows the server's own scripts, styles and images only.
+Requests are accepted only for the hosts `localhost:3300` and `127.0.0.1:3300`, and with `--lan` for this machine's network addresses on port 3300; a POST with a foreign `Origin` or a cross-site fetch is refused. A request on a network address needs the key printed at start, given once in the link and kept as a cookie; the key changes on every start. Pages run under a content security policy that allows the server's own scripts, styles and images only.
 
 ## Board format
 

@@ -457,11 +457,9 @@ svg {
   z-index: calc(var(--bp-z-bar) + 2);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 280px;
+  width: min(360px, calc(100vw - 16px));
   max-height: min(70vh, 560px);
-  padding: 6px;
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid var(--bp-line);
   border-radius: 14px;
   background: var(--bp-surface);
@@ -471,6 +469,213 @@ svg {
 
 .board-menu[hidden] {
   display: none;
+}
+
+/* The search stays at the top while the list scrolls under it. */
+.menu-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--bp-field-edge);
+  border-radius: var(--bp-radius-control);
+  background: var(--bp-bg);
+  color: var(--bp-text-soft);
+}
+
+.menu-search:focus-within {
+  outline: 2px solid var(--bp-accent);
+  outline-offset: 2px;
+}
+
+.menu-search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.menu-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--bp-text);
+  font: var(--type-body);
+}
+
+.menu-search input:focus-visible {
+  outline: none;
+}
+
+.menu-search input::placeholder {
+  color: var(--bp-text-soft);
+  opacity: 1;
+}
+
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+}
+
+.menu-section,
+.board-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-section {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--bp-line);
+}
+
+/* Folded projects sit together; an open one is set apart above and below. */
+.board-group + .board-group:has(> [aria-expanded="true"]),
+.board-group:has(> [aria-expanded="true"]) + .board-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--bp-line);
+}
+
+/* Favorites and Frequent read quieter than a project. */
+.section-toggle {
+  color: var(--bp-text-soft);
+  font: var(--type-label);
+}
+
+.menu-empty {
+  margin: 0;
+  padding: 16px 10px;
+  color: var(--bp-text-soft);
+  font: var(--type-body);
+}
+
+/* A project folds to its name; the chevron points down while it is open. */
+.board-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px 8px 8px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--bp-text);
+  text-align: left;
+  font: var(--type-strong);
+}
+
+.board-group-toggle:hover,
+.board-group-toggle:focus-visible {
+  background: var(--bp-surface-2);
+}
+
+.group-count {
+  margin-left: auto;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.board-group-toggle .chevron {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: rotate var(--bp-motion-fast) var(--bp-ease);
+}
+
+.board-group-toggle[aria-expanded="false"] .chevron {
+  rotate: -90deg;
+}
+
+.board-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.board-group-items[hidden] {
+  display: none;
+}
+
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.board-row .board-item {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The star shows on hover and focus, and stays once a board is starred. */
+.board-star {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: none;
+  color: var(--bp-text-soft);
+  opacity: 0;
+}
+
+.board-row:hover .board-star,
+.board-star:focus-visible,
+.board-star[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.board-star:hover {
+  background: var(--bp-surface-2);
+  color: var(--bp-text);
+}
+
+.board-star[aria-pressed="true"] {
+  color: var(--bp-accent);
+}
+
+.board-star svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.board-star[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+.board-group-toggle .letter {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--bp-radius-bar);
+  background: var(--bp-bg);
+  font: var(--type-mono);
 }
 
 .board-item {
@@ -584,6 +789,13 @@ svg {
 
 .item[hidden] {
   display: none;
+}
+
+/* The note folds from its own title beside the tools; only a phone needs it in the bar. */
+@media (min-width: 701px) {
+  .rail .note-toggle {
+    display: none;
+  }
 }
 
 .item {
@@ -1356,18 +1568,28 @@ body[data-panel="open"] .bubble {
   }
 }
 
-/* A phone: the tools become a bar along the bottom
-   that runs behind the round button, and the cards take the width. */
+/* A phone: the tools become a bar centred along the bottom, as long as its
+   tools and clear of the round button, and the cards take the width. */
 @media (max-width: 700px) {
   .top {
-    left: var(--bp-bar-offset);
-    right: var(--bp-bar-offset);
-    max-width: none;
-    translate: none;
+    max-width: calc(100% - var(--bp-bar-offset) * 2);
+    padding-left: 4px;
   }
 
-  .brand-mode {
+  .brand,
+  .brand-mode,
+  .top-rule {
     display: none;
+  }
+
+  .project-tab {
+    min-width: 0;
+  }
+
+  .project-tab .tab-board {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Present keeps its icon only, so the tabs keep the width. */
@@ -1386,19 +1608,17 @@ body[data-panel="open"] .bubble {
 
   .rail {
     top: auto;
-    translate: none;
-    right: calc(var(--bp-bar-offset) + var(--bp-main-button) / 2);
+    left: 50%;
+    translate: -50% 0;
     bottom: var(--bp-bar-offset);
     flex-direction: row;
     width: auto;
+    max-width: calc(100% - (var(--bp-bar-offset) * 2 + var(--bp-main-button)) * 2);
     height: var(--bp-bar-size);
     max-height: none;
-    padding: 0 calc(var(--bp-main-button) / 2 + var(--bp-bar-offset) * 3) 0 calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2);
+    padding: 0 calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2);
     overflow-x: auto;
     overflow-y: hidden;
-    /* The fade before the button says the bar goes on: the rest scrolls in. */
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--bp-main-button) - var(--bp-bar-offset) * 3), transparent calc(100% - var(--bp-main-button) / 2));
-    mask-image: linear-gradient(to right, black calc(100% - var(--bp-main-button) - var(--bp-bar-offset) * 3), transparent calc(100% - var(--bp-main-button) / 2));
   }
 
   .item[aria-pressed="true"]::before {
@@ -1421,11 +1641,46 @@ body[data-panel="open"] .bubble {
     max-height: calc(100% - var(--top-band) - var(--bp-bar-offset) * 2 - var(--bp-bar-size));
   }
 
+  /* The note is a bubble out of its button, the third and last tool of the
+     centred bar, whose centre sits one tool and one gap right of the middle:
+     the button shows and hides it whole. */
   .note {
+    --note-tail: calc(50% + var(--bp-bar-item) + var(--bp-bar-gap));
     left: var(--bp-bar-offset);
     right: var(--bp-bar-offset);
-    bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
+    bottom: calc(var(--bp-bar-offset) + var(--bp-bar-size) + 10px);
     max-width: none;
+    transform-origin: var(--note-tail) calc(100% + 10px);
+    animation: note-pop var(--bp-motion-fast) var(--bp-ease);
+  }
+
+  .note::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--note-tail) - 6px);
+    bottom: -7px;
+    width: 12px;
+    height: 12px;
+    border-right: 1px solid var(--bp-line);
+    border-bottom: 1px solid var(--bp-line);
+    background: var(--bp-surface-glass);
+    rotate: 45deg;
+  }
+
+  .note:not([open]),
+  .note summary::before {
+    display: none;
+  }
+
+  .note summary {
+    pointer-events: none;
+  }
+}
+
+@keyframes note-pop {
+  from {
+    opacity: 0;
+    scale: 0.9;
   }
 }
 
@@ -1455,6 +1710,12 @@ body[data-panel="open"] .bubble {
     width: var(--target-touch);
   }
 
+  .board-star {
+    width: var(--target-touch);
+    height: var(--target-touch);
+    opacity: 1;
+  }
+
   .top {
     height: calc(var(--target-touch) + 8px);
   }
@@ -1466,7 +1727,8 @@ body[data-panel="open"] .bubble {
   }
 
   .panel,
-  .bubble {
+  .bubble,
+  .note {
     scale: none !important;
   }
 }
