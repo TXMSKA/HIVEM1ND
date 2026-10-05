@@ -41,7 +41,7 @@ if (!npmPath) throw new Error("Run the build with npm run build.");
 const packed = JSON.parse(runNode([npmPath, "pack", "--json", "--ignore-scripts", "--pack-destination", "dist"]));
 const [archive] = Array.isArray(packed) ? packed : Object.values(packed);
 const included = new Set(archive.files.map(file => file.path.replaceAll("\\", "/")));
-for (const required of ["cli/index.mjs", "engine/setup.mjs", "engine/lifecycle.mjs", "engine/uninstall.mjs", "gui/electron.mjs", "rules.md", "files.md", "uninstall.cmd", "roles/genesis.md", "LICENSE"]) {
+for (const required of ["cli/index.mjs", "engine/setup.mjs", "engine/lifecycle.mjs", "engine/uninstall.mjs", "engine/relay/store.mjs", "engine/relay/wake.mjs", "engine/relay/claude-wake.mjs", "engine/relay/codex-wake.mjs", "engine/relay/mcp.mjs", "engine/relay/config.mjs", "engine/relay/hooks.mjs", "gui/electron.mjs", "rules.md", "files.md", "uninstall.cmd", "roles/genesis.md", "features/relay-client-setup.md", "LICENSE"]) {
   if (!included.has(required)) throw new Error(`Missing package file: ${required}`);
 }
 for (const name of included) {

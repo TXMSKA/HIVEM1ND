@@ -30,6 +30,7 @@ Usage:
   hivem1nd check [options]
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
+  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
 
 Commands:
@@ -38,7 +39,28 @@ Commands:
   check      Report what a new chat should know, without writing
   pylon      Attach a repository to the shared mind
   swarm      Show units, tasks and unread messages
+  relay      Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
+
+Relay options:
+  --mind-path <path>       Path to the private mind
+  --kit-path <path>        Path to the HIVEM1ND kit
+  --session-id <id>        Stable Relay instance identifier
+  --native-session-id <id> Native client session identifier
+  --client <name>          Client name: claude, codex, cursor, opencode, host or user
+  --unit <name>            Explicit unit name, including user
+  --event <name>           Native hook event name
+  --hours <4|5|6|7|8|12|24> Bounded wake window (12/24 require --extended)
+  --max-handoffs <1-100> Maximum submitted Relay pointers (default 20)
+  --to <unit> --subject <text> --body <text>
+  --reply-to <id> --thread-id <id> --reply-requested
+  --priority <normal|urgent> --attachment <path> (repeatable)
+  --id <message-id> (repeatable) --limit <count>
+
+Relay wake actions:
+  relay wake attach --client <claude|codex> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--mind-path <path>]
+  relay wake enable|disable|status --unit <name> --native-session-id <id> [options]
+  relay wake watch --unit <name> --native-session-id <id> [options] (internal worker)
 
 Init options:
   --gui                 Open the local browser wizard
@@ -108,6 +130,7 @@ const ALLOWED_FLAGS = {
 
 export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
+  if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
   if (argv.length === 1 && ["-h", "--help"].includes(argv[0])) return { help: true };
   if (argv.length === 1 && ["-v", "--version"].includes(argv[0])) return { version: true };
@@ -175,6 +198,61 @@ export function parseArgs(argv) {
   }
 
   return { command, options };
+}
+
+const RELAY_VALUE_FLAGS = new Map([
+  ["--mind-path", "mindPath"], ["--kit-path", "kitPath"], ["--home-dir", "homeDir"], ["--hostname", "hostname"],
+  ["--session-id", "sessionId"], ["--native-session-id", "nativeSessionId"], ["--client", "client"], ["--unit", "unit"],
+  ["--event", "event"], ["--to", "to"], ["--subject", "subject"], ["--body", "body"], ["--priority", "priority"],
+  ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
+  ["--attachment", "attachments"], ["--id", "ids"],
+  ["--hours", "hours"],
+  ["--max-handoffs", "maxHandoffs"],
+]);
+const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
+
+function parseRelayArgs(tokens) {
+  let [action, ...rest] = tokens;
+  let wakeAction;
+  if (action === "wake") {
+    wakeAction = rest.shift();
+    if (!wakeAction || !["attach", "enable", "disable", "status", "watch"].includes(wakeAction)) {
+      throw new CliUsageError("relay wake requires attach, enable, disable, status or watch.");
+    }
+  }
+  if (!action || action === "--help" || action === "-h") return { command: "relay", options: { help: true } };
+  if (!RELAY_ACTIONS.has(action)) throw new CliUsageError(`Unknown relay action: ${action}`);
+  const options = { action: action === "in" ? "register" : action, attachments: [], ids: [] };
+  if (wakeAction) options.wakeAction = wakeAction;
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    if (token === "--reply-requested") { options.replyRequested = true; continue; }
+    if (token === "--body-stdin") { options.bodyStdin = true; continue; }
+    if (token === "--extended") { if (options.extended) throw new CliUsageError("--extended was provided more than once."); options.extended = true; continue; }
+    if (token === "--unlimited") { if (options.unlimited) throw new CliUsageError("--unlimited was provided more than once."); options.unlimited = true; continue; }
+    if (token === "--manual-consent") { if (options.manualConsent) throw new CliUsageError("--manual-consent was provided more than once."); options.manualConsent = true; continue; }
+    const key = RELAY_VALUE_FLAGS.get(token);
+    if (!key) throw new CliUsageError(`Unknown Relay option: ${token}`);
+    const value = rest[index + 1];
+    if (value === undefined || value.startsWith("--")) throw new CliUsageError(`${token} requires a value.`);
+    if (key === "attachments" || key === "ids") options[key].push(value);
+    else if (Object.hasOwn(options, key)) throw new CliUsageError(`${token} was provided more than once.`);
+    else options[key] = value;
+    index += 1;
+  }
+  if (options.limit !== undefined && (!/^\d+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) throw new CliUsageError("--limit must be between 1 and 500.");
+  if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
+  if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
+  if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
+  if (["12", "24"].includes(options.hours) && !options.extended) throw new CliUsageError("--hours 12 or --hours 24 requires --extended.");
+  if (options.extended && !["12", "24"].includes(options.hours)) throw new CliUsageError("--extended is only valid with --hours 12 or --hours 24.");
+  if (options.unlimited && (options.hours !== undefined || !options.manualConsent)) throw new CliUsageError("--unlimited requires --manual-consent and cannot be combined with --hours.");
+  if (options.manualConsent && !options.unlimited) throw new CliUsageError("--manual-consent is only valid with --unlimited.");
+  if (options.quota !== undefined) {
+    try { options.quota = JSON.parse(options.quota); }
+    catch { throw new CliUsageError("--quota must be valid JSON."); }
+  }
+  return { command: "relay", options };
 }
 
 function formatResult(result) {
@@ -786,6 +864,230 @@ async function runUninstall(options, dependencies, output) {
   return 0;
 }
 
+async function readInput(stream, maximum = 262144) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of stream) {
+    const value = Buffer.from(chunk);
+    length += value.length;
+    if (length > maximum) throw new Error("Relay input exceeds the allowed size.");
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function relayWakeBinding(options, hostname = os.hostname()) {
+  if (!options.unit) throw new CliUsageError('Relay wake requires an explicit --unit.');
+  if (!options.nativeSessionId) throw new CliUsageError('Relay wake requires --native-session-id.');
+  const client = options.client ?? 'claude';
+  if (!['claude', 'codex'].includes(client)) throw new CliUsageError('Relay wake supports Claude Code and Codex.');
+  return { unit: options.unit, nativeSessionId: options.nativeSessionId, client, machine: hostname };
+}
+
+async function runRelayWake(options, dependencies, output, errorOutput) {
+  if (!options.mindPath) throw new CliUsageError(`relay wake ${options.wakeAction} requires --mind-path.`);
+  const env = dependencies.env ?? process.env;
+  const hostname = options.hostname ?? os.hostname();
+  const client = options.client ?? 'claude';
+  if (!['claude', 'codex'].includes(client)) throw new CliUsageError('Relay wake supports Claude Code and Codex.');
+  const { createRelayWakeController } = dependencies.createRelayWakeController
+    ? { createRelayWakeController: dependencies.createRelayWakeController }
+    : await import('../engine/relay/wake.mjs');
+  const claude = await import('../engine/relay/claude-wake.mjs');
+  const codex = client === 'codex' ? await import('../engine/relay/codex-wake.mjs') : null;
+  const adapter = client === 'codex' ? codex : claude;
+  const sink = client === 'codex'
+    ? (delivery) => codex.sendCodexWake({ ...delivery, env, platform: dependencies.platform ?? process.platform })
+    : (delivery) => claude.sendClaudeWake({ ...delivery, env, platform: dependencies.platform ?? process.platform });
+  const controller = await createRelayWakeController({
+    mindPath: options.mindPath,
+    hostname,
+    sink,
+  });
+
+  if (options.wakeAction === 'attach') {
+    if (!options.unit) throw new CliUsageError('relay wake attach requires an explicit --unit.');
+    const nativeSessionId = client === 'codex' ? options.nativeSessionId : env.CLAUDE_CODE_SESSION_ID;
+    if (typeof nativeSessionId !== 'string' || !nativeSessionId) {
+      throw new CliUsageError(client === 'codex'
+        ? 'Codex wake attach requires an explicit --native-session-id for the target chat.'
+        : 'Claude wake attach requires CLAUDE_CODE_SESSION_ID from the target session.');
+    }
+    const capability = adapter[client === 'codex' ? 'codexWakeCapability' : 'claudeWakeCapability']({ env, platform: dependencies.platform ?? process.platform });
+    if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
+    if (client === 'codex' && !(await codex.findCodexAppToolsServer({ env }))) {
+      throw new CliUsageError('Codex App Tools server is unavailable in this CODEX_HOME.');
+    }
+    const binding = { unit: options.unit, nativeSessionId, client, machine: hostname };
+    const { createRelay } = dependencies.createRelay
+      ? { createRelay: dependencies.createRelay }
+      : await import('../engine/relay/store.mjs');
+    const relay = await createRelay({
+      mindPath: options.mindPath,
+      hostname,
+      sessionId: client === 'codex' ? env.CODEX_THREAD_ID : nativeSessionId,
+      client,
+    });
+    if (client === 'codex') {
+      const existing = await relay.reminder({ nativeSessionId, client });
+      if (!existing.registered || existing.unit !== options.unit) {
+        throw new CliUsageError('Codex wake requires an existing exact registration for the selected target and unit.');
+      }
+    } else {
+      await relay.register({ unit: options.unit, nativeSessionId, client });
+    }
+    const policy = await controller.enable({
+      ...binding,
+      ...(options.hours ? { windowHours: Number(options.hours) } : {}),
+      ...(options.extended ? { extended: true } : {}),
+      ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
+      ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+    });
+    if (client === 'claude') await controller.observeActivity(binding, { activity: 'busy' });
+    try {
+      const defaultSpawner = client === 'codex' ? codex.spawnCodexWakeWorker : claude.spawnClaudeWakeWorker;
+      const spawnWorker = client === 'codex'
+        ? (dependencies.spawnCodexWakeWorker ?? defaultSpawner)
+        : (dependencies.spawnClaudeWakeWorker ?? defaultSpawner);
+      const worker = spawnWorker({ cliPath: path.join(dependencies.kitPath ?? KIT_PATH, 'cli', 'index.mjs'), mindPath: options.mindPath, binding, env, keepParentAliveUntilReady: true });
+      const readiness = await worker.ready;
+      output.write(`${formatResult({ binding, policy, worker: readiness.state, ownsLease: readiness.ownsLease, delivery: 'not claimed' })}\n`);
+    } catch (error) {
+      await controller.disable(binding).catch(() => {});
+      throw new CliUsageError(client + ' wake watcher could not start: ' + error.message);
+    }
+    return 0;
+  }
+
+  const binding = relayWakeBinding(options, hostname);
+  if (options.wakeAction === 'watch') {
+    const capability = adapter[client === 'codex' ? 'codexWakeCapability' : 'claudeWakeCapability']({ env, platform: dependencies.platform ?? process.platform });
+    if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
+    if (client === 'claude' && env.CLAUDE_CODE_SESSION_ID !== binding.nativeSessionId) throw new CliUsageError('Wake worker native session ID does not match CLAUDE_CODE_SESSION_ID.');
+    if (client === 'codex' && !(await codex.findCodexAppToolsServer({ env }))) throw new CliUsageError('Codex App Tools server is unavailable in this CODEX_HOME.');
+    const handle = controller.start(binding);
+    const terminate = () => handle.stop();
+    process.once('SIGINT', terminate);
+    process.once('SIGTERM', terminate);
+    try {
+      const readiness = await handle.ready;
+      if (process.connected) {
+        try {
+          process.send?.({ type: 'relay-wake-ready', state: readiness.state, ownsLease: readiness.ownsLease }, (error) => {
+            if (error && process.connected) {
+              try { process.disconnect(); } catch { /* parent already exited */ }
+            }
+          });
+        } catch { /* the detached hook parent may have exited */ }
+        try { if (process.connected) process.disconnect(); } catch { /* already disconnected */ }
+      }
+      const result = await handle.done;
+      if (result?.reason === 'error') errorOutput.write('Relay wake watcher stopped after an internal error.\n');
+    } finally {
+      process.removeListener('SIGINT', terminate);
+      process.removeListener('SIGTERM', terminate);
+    }
+    return 0;
+  }
+
+  if (options.wakeAction === 'enable') {
+    const policy = await controller.enable({
+      ...binding,
+      ...(options.hours ? { windowHours: Number(options.hours) } : {}),
+      ...(options.extended ? { extended: true } : {}),
+      ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
+      ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+    });
+    output.write(`${formatResult(policy)}\n`);
+  } else if (options.wakeAction === 'disable') {
+    output.write(`${formatResult(await controller.disable(binding))}\n`);
+  } else {
+    output.write(`${formatResult(await controller.status(binding))}\n`);
+  }
+  return 0;
+}
+
+async function runRelay(options, dependencies, output) {
+  if (options.help) { output.write(`${helpText()}\n`); return 0; }
+  const { action } = options;
+  if (action === "diagnose") {
+    const { diagnoseRelayClients } = await import("../engine/relay/config.mjs");
+    const result = await diagnoseRelayClients({ homeDir: options.homeDir });
+    output.write(`${formatResult(result)}\n`);
+    return 0;
+  }
+  if (action === "configure" || action === "unconfigure") {
+    if (!options.client) throw new CliUsageError(`relay ${action} requires --client.`);
+    const config = await import("../engine/relay/config.mjs");
+    const result = action === "configure"
+      ? await config.configureRelayClient(options)
+      : await config.unconfigureRelayClient(options);
+    output.write(`${formatResult(result)}\n`);
+    return 0;
+  }
+  if (!options.mindPath) throw new CliUsageError(`relay ${action} requires --mind-path.`);
+  if (action === "hook") {
+    if (!options.client) throw new CliUsageError("relay hook requires --client.");
+    const { runRelayHook } = await import("../engine/relay/hooks.mjs");
+    await runRelayHook({
+      ...options,
+      stdin: dependencies.stdin ?? process.stdin,
+      stdout: output,
+      stderr: dependencies.stderr ?? process.stderr,
+    });
+    return 0;
+  }
+  if (action === 'wake') return runRelayWake(options, dependencies, output, dependencies.stderr ?? process.stderr);
+  if (action === "mcp") {
+    const { serveRelayMcp } = await import("../engine/relay/mcp.mjs");
+    await serveRelayMcp({ ...options, stdin: dependencies.stdin ?? process.stdin, stdout: output, stderr: dependencies.stderr ?? process.stderr });
+    return 0;
+  }
+  if (action === "reminder" && !options.sessionId && !options.nativeSessionId) throw new CliUsageError("relay reminder requires --session-id or --native-session-id.");
+  if (action !== "reminder" && action !== "status" && !options.sessionId) throw new CliUsageError(`relay ${action} requires --session-id to select its registered instance.`);
+
+  const { createRelay } = await import("../engine/relay/store.mjs");
+  const relay = await createRelay({
+    mindPath: options.mindPath,
+    ...(options.hostname ? { hostname: options.hostname } : {}),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.client ? { client: options.client } : {}),
+  });
+  let args = {};
+  if (action === "register") {
+    if (!options.unit) throw new CliUsageError("relay register requires an explicit --unit.");
+    args = {
+      unit: options.unit,
+      ...(options.nativeSessionId ? { nativeSessionId: options.nativeSessionId } : {}),
+      ...(options.client ? { client: options.client } : {}),
+      ...(options.activity ? { activity: options.activity } : {}),
+      ...(options.quota !== undefined ? { quota: options.quota } : {}),
+    };
+  } else if (action === "send") {
+    if (!options.to || !options.subject) throw new CliUsageError("relay send requires --to and --subject.");
+    const body = options.bodyStdin ? await readInput(dependencies.stdin ?? process.stdin) : options.body;
+    if (body === undefined) throw new CliUsageError("relay send requires --body or --body-stdin.");
+    args = { to: options.to, subject: options.subject, body, priority: options.priority, replyTo: options.replyTo, threadId: options.threadId,
+      replyRequested: options.replyRequested, attachments: options.attachments.length ? options.attachments : undefined };
+  } else if (action === "inbox" || action === "read" || action === "history" || action === "status" || action === "events") {
+    args = { unit: options.unit, limit: options.limit ? Number(options.limit) : undefined };
+    if (action === "read" || action === "history") {
+      if (options.ids.length) args.ids = options.ids;
+      if (options.threadId) args.threadId = options.threadId;
+    }
+  } else if (action === "reminder") {
+    args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
+  }
+  const method = action === "register" ? "register"
+    : action === "send" ? "send"
+      : action === "inbox" ? "inbox"
+        : action === "read" ? "read"
+          : action;
+  const result = await relay[method](args);
+  output.write(`${formatResult(result)}\n`);
+  return 0;
+}
+
 export async function runCli(argv, dependencies = {}) {
   const output = dependencies.stdout ?? process.stdout;
   const errorOutput = dependencies.stderr ?? process.stderr;
@@ -803,6 +1105,8 @@ export async function runCli(argv, dependencies = {}) {
       return await runInit(parsed.options, dependencies, output);
     } else if (parsed.command === "uninstall") {
       return await runUninstall(parsed.options, dependencies, output);
+    } else if (parsed.command === "relay") {
+      return await runRelay(parsed.options, dependencies, output);
     } else {
       return await runLifecycle(parsed.command, parsed.options, dependencies, output);
     }
