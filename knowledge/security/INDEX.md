@@ -30,7 +30,7 @@ The protocol steps each category can call for, so a pass over a whole category n
 
 | Category | Protocol steps |
 | --- | --- |
-| dependencies | version-floor 1 to 6; supply-chain 1 to 6 |
+| dependencies | version-floor 1 to 7; supply-chain 1 to 6 |
 | secrets and configuration | secrets 1 to 7; supply-chain 4; deployment-surface 6 |
 | deployment | deployment-surface 1 to 7; injection-and-output 3; [pre-launch.md](pre-launch.md) |
 | API | access-control 1 to 7; injection-and-output 1, 7; resource-limits 1 to 6; payments-and-webhooks 4 |

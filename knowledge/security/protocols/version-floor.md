@@ -5,7 +5,7 @@ trigger: task close when the closed work matches the scope, or manual
 repeat: once per audit, and again after any change to the lockfile or the runtime
 inputs: the lockfile, or the manifest when no lockfile exists, the runtime version, the vendor advisory pages, the runtime support calendar
 stop: the runtime is past its end of life, in which case the pass stops and that is the only finding until it is raised
-report: the runtime version against its calendar status, one line per framework with installed version, fixed version, advisory identifier and advisory URL, and the audit counts at high and critical
+report: the runtime version against its calendar status, one line per framework with installed version, fixed version, advisory identifier and advisory URL, and the audit counts per severity, with the package that pulls in each transitive entry
 
 ## Steps
 
@@ -25,16 +25,21 @@ report: the runtime version against its calendar status, one line per framework 
    Result: one line per package: installed version, fixed version, advisory identifier, advisory URL, and one of not applicable, below the fix, or at or above the fix. Where the advisory depends on the hosting mode or the host operating system, both are recorded on the same line, and a static export with no framework server in production is recorded as exposed only in development. A version quoted from anything other than a page fetched in this pass is not a result, and neither is an age judgment such as "an old release" or "well below current". When the advisory pages are not fetched, for any reason, the step is recorded as not run with that reason, and the report lists it under the steps not run. The entries in [incidents.md](../incidents.md) name advisories worth checking first.
 
 4. Run the advisory database as a second pass, not as the first.
-   Task: `npm audit --audit-level=high`. Record the count and the fixed version offered for each entry. The audit needs a lockfile; without one, or without the tool, the step ends as not run with the reason, and step 3 stands alone.
-   Time: 10 minutes. Repository.
-   Result: the advisory count at high and critical with a fixed version against each. A clean audit is recorded as a clean audit and nothing more, for the reasons in [evidence.md](../evidence.md).
+   Task: `npm audit` over the whole tree, development and transitive packages included, then `npm audit --omit=dev` beside it. Record the count per severity (critical, high, moderate, low) for each run, and for every entry the package, the installed version, the fixed version offered and, for a transitive package, the direct dependency that pulls it in (`npm ls <package> --all`). A hosting platform scans the whole tree, so a count taken with `--omit=dev` or only at high and critical understates what it will show. The audit needs a lockfile; without one, or without the tool, the step ends as not run with the reason, and step 3 stands alone.
+   Time: 15 minutes. Repository.
+   Result: two counts per severity, full tree and production only, with a fixed version against each entry and the parent of each transitive one. A clean audit is recorded as a clean audit and nothing more, for the reasons in [evidence.md](../evidence.md).
 
-5. Confirm the deployed build carries the versions just checked.
+5. Compare the count with the one the hosting platform shows.
+   Task: when the platform scans the project (a security or vulnerability panel, or a build log that prints advisories), read its list and match it against step 4 by package and version. The platform's list is read from the person who can open it, as pasted text or a capture; it is never guessed.
+   Time: 10 minutes. Repository, plus the platform's panel.
+   Result: every entry on the platform's list is on the step 4 list or is recorded as a difference with the package and the version. A platform that does not scan is recorded as such. The release gate is zero critical and zero high on the full tree; moderate and low entries are recorded with the version that fixes each and do not block.
+
+6. Confirm the deployed build carries the versions just checked.
    Task: compare the lockfile in the deployment artifact against the one in the repository, or read the versions the running service reports. A floor proved in the repository says nothing about what is serving traffic.
    Time: 15 minutes. Running application.
    Result: the two lockfile hashes match, or the mismatched packages are listed with both versions. Where several repositories consume a shared package that declares the framework, every one of them resolves the same fixed version, or the exception is recorded with its reason.
 
-6. Put the floor in the pipeline.
-   Task: add the runtime check and the audit to continuous integration so a version below the floor fails the build rather than appearing in the next audit.
+7. Put the floor in the pipeline.
+   Task: add the runtime check and the full-tree audit to continuous integration so a version below the floor, or any critical or high entry, fails the build rather than appearing in the next audit.
    Time: 20 minutes. Repository.
    Result: a pipeline run against a deliberately lowered version that exits non-zero, recorded with the job output.
