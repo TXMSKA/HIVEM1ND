@@ -602,15 +602,13 @@ export function registerLinkConflicts(plan, language = 'en') {
 
 export function installableAssetRoots(kitPath, mindPath) {
   const kitRoot = { path: path.resolve(kitPath), scope: 'kit', sections: ASSET_SECTIONS, mirrorsKit: false };
-  if (!mindPath || normalizePath(mindPath) === normalizePath(kitRoot.path)) return [kitRoot];
+  if (!mindPath) return [kitRoot];
   const mind = path.resolve(mindPath);
-  return [
-    kitRoot,
-    { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true },
-    // The private half installs the same four sections as the kit, so a role written for
-    // this mind alone lives in user/roles and never sits in the published folder.
-    { path: path.join(mind, 'user'), scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: false },
-  ];
+  // The private half installs the same four sections as the kit, so a role written for
+  // this mind alone lives in user/roles and never sits in the published folder.
+  const userRoot = { path: path.join(mind, 'user'), scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: false };
+  if (normalizePath(mind) === normalizePath(kitRoot.path)) return [kitRoot, userRoot];
+  return [kitRoot, { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true }, userRoot];
 }
 
 export async function listInstallableAssets(roots, excludedNames = new Set(), retiredSources = new Set()) {

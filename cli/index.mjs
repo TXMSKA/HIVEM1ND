@@ -3,8 +3,8 @@
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -814,7 +814,7 @@ export async function runCli(argv, dependencies = {}) {
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
 if (isMain) {
   process.exitCode = await runCli(process.argv.slice(2));
 }
