@@ -53,7 +53,7 @@
   "devDependencies": {
     "electron": "44.3.0",
     "electron-builder": "26.16.1",
-    "markdownlint-cli2": "0.23.2",
-    "markdownlint-rule-relative-links": "5.1.2"
+    "markdownlint-cli2": "^0.23.3",
+    "markdownlint-rule-relative-links": "^5.1.3"
   }
 }
