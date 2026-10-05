@@ -866,6 +866,172 @@ function rounded(points, radius) {
   return `${d} L${last[0]} ${last[1]}`;
 }
 
+// ---- link routing ----------------------------------------------------------
+// Links are routed once per layout, in world units, on a grid of tracks laid in
+// the gaps between the screens and round the outside of the board. A line never
+// enters a screen or its title, bends cost, and a track already carrying a line
+// costs more, so lines that share a gap sit side by side instead of on top of
+// each other.
+
+const ROUTE_MARGIN = 10;
+const ROUTE_TITLE = 44;
+const ROUTE_STUB = 24;
+const ROUTE_BEND = 30;
+const ROUTE_SHARED = 70;
+const routeCache = new WeakMap();
+
+function trackLines(intervals, extra) {
+  const bands = [];
+  for (const [lo, hi] of [...intervals].sort((m, n) => m[0] - n[0])) {
+    const last = bands.at(-1);
+    if (last && lo <= last[1]) last[1] = Math.max(last[1], hi);
+    else bands.push([lo, hi]);
+  }
+  const lines = [...extra];
+  bands.slice(1).forEach(([lo], i) => {
+    const from = bands[i][1];
+    const count = Math.min(9, Math.max(1, Math.floor((lo - from) / 12)));
+    for (let j = 1; j <= count; j += 1) lines.push(from + ((lo - from) * j) / (count + 1));
+  });
+  for (let j = 1; j <= 4; j += 1) {
+    lines.push(bands[0][0] - ROUTE_STUB * j, bands.at(-1)[1] + ROUTE_STUB * j);
+  }
+  const sorted = lines.map((v) => Math.round(v * 2) / 2).sort((m, n) => m - n);
+  return sorted.filter((v, i) => i === 0 || v - sorted[i - 1] >= 1);
+}
+
+class MinHeap {
+  constructor() { this.items = []; }
+  get size() { return this.items.length; }
+  push(cost, key) {
+    const a = this.items;
+    a.push([cost, key]);
+    for (let i = a.length - 1; i > 0;) {
+      const p = (i - 1) >> 1;
+      if (a[p][0] <= a[i][0]) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.items;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      for (let i = 0; ;) {
+        let m = i;
+        for (const c of [2 * i + 1, 2 * i + 2]) if (c < a.length && a[c][0] < a[m][0]) m = c;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+/** One route per request ({ sx, sy, tx, ty }), as world points, from a screen's right edge to the left edge of another. */
+function routeLinks(all, screens) {
+  const requests = all.filter(Boolean);
+  const walls = screens.map((s) => ({ x1: s.x - ROUTE_MARGIN, y1: s.y - ROUTE_TITLE, x2: s.x + s.w + ROUTE_MARGIN, y2: s.y + s.h + ROUTE_MARGIN }));
+  const xs = trackLines(walls.map((w) => [w.x1, w.x2]), screens.flatMap((s) => [s.x - ROUTE_STUB, s.x + s.w + ROUTE_STUB]));
+  const ys = trackLines(walls.map((w) => [w.y1, w.y2]), requests.flatMap((r) => [r.sy, r.ty]));
+  const nx = xs.length;
+  const ny = ys.length;
+  const inside = (x, y) => walls.some((w) => x > w.x1 && x < w.x2 && y > w.y1 && y < w.y2);
+  const nodeBlocked = new Uint8Array(nx * ny);
+  const across = new Uint8Array(nx * ny);
+  const down = new Uint8Array(nx * ny);
+  for (let i = 0; i < nx; i += 1) {
+    for (let j = 0; j < ny; j += 1) {
+      const n = i * ny + j;
+      nodeBlocked[n] = inside(xs[i], ys[j]) ? 1 : 0;
+      if (i + 1 < nx) across[n] = inside((xs[i] + xs[i + 1]) / 2, ys[j]) ? 1 : 0;
+      if (j + 1 < ny) down[n] = inside(xs[i], (ys[j] + ys[j + 1]) / 2) ? 1 : 0;
+    }
+  }
+  const nearest = (list, v) => {
+    let best = 0;
+    list.forEach((c, i) => { if (Math.abs(c - v) < Math.abs(list[best] - v)) best = i; });
+    return best;
+  };
+  const used = new Map();
+  const dx = [1, 0, -1, 0];
+  const dy = [0, 1, 0, -1];
+  const edgeOf = (a, b) => Math.min(a, b) * 2 + (Math.abs(a - b) === ny ? 0 : 1);
+
+  const routes = requests.map((r) => {
+    const start = nearest(xs, r.sx + ROUTE_STUB) * ny + nearest(ys, r.sy);
+    const goal = nearest(xs, r.tx - ROUTE_STUB) * ny + nearest(ys, r.ty);
+    const best = new Map([[start * 4, 0]]);
+    const from = new Map();
+    const heap = new MinHeap();
+    const gx = xs[Math.floor(goal / ny)];
+    const gy = ys[goal % ny];
+    heap.push(0, start * 4);
+    let reached = -1;
+    while (heap.size) {
+      const [, key] = heap.pop();
+      const n = key >> 2;
+      const d = key & 3;
+      const g = best.get(key);
+      if (n === goal && d === 0) { reached = key; break; }
+      const i = Math.floor(n / ny);
+      const j = n % ny;
+      for (const nd of [d, (d + 1) & 3, (d + 3) & 3]) {
+        const ni = i + dx[nd];
+        const nj = j + dy[nd];
+        if (ni < 0 || nj < 0 || ni >= nx || nj >= ny) continue;
+        const next = ni * ny + nj;
+        if (nodeBlocked[next]) continue;
+        const edge = edgeOf(n, next);
+        if ((nd === 0 || nd === 2 ? across : down)[Math.min(n, next)]) continue;
+        const len = Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j]);
+        const cost = g + len + (nd === d ? 0 : ROUTE_BEND) + (used.get(edge) ?? 0) * ROUTE_SHARED;
+        const k = next * 4 + nd;
+        if (cost < (best.get(k) ?? Infinity)) {
+          best.set(k, cost);
+          from.set(k, key);
+          heap.push(cost + Math.abs(xs[ni] - gx) + Math.abs(ys[nj] - gy), k);
+        }
+      }
+    }
+    if (reached < 0) return [[r.sx, r.sy], [r.sx + ROUTE_STUB, r.sy], [r.tx - ROUTE_STUB, r.ty], [r.tx, r.ty]];
+    const nodes = [];
+    for (let k = reached; k !== undefined; k = from.get(k)) nodes.push(k);
+    nodes.reverse();
+    nodes.forEach((k, idx) => {
+      if (idx === 0) return;
+      const edge = edgeOf(nodes[idx - 1] >> 2, k >> 2);
+      used.set(edge, (used.get(edge) ?? 0) + 1);
+    });
+    const points = [[r.sx, r.sy]];
+    for (const k of nodes) {
+      const n = k >> 2;
+      const p = [xs[Math.floor(n / ny)], ys[n % ny]];
+      const a = points.at(-1);
+      const b = points.at(-2);
+      if (b && ((a[0] === b[0] && a[0] === p[0]) || (a[1] === b[1] && a[1] === p[1]))) points[points.length - 1] = p;
+      else points.push(p);
+    }
+    points.push([r.tx, r.ty]);
+    return points;
+  });
+  let next = 0;
+  return all.map((r) => (r ? routes[next++] : null));
+}
+
+function routesFor(requests) {
+  const screens = [...state.screens.values()].map(({ def }) => def);
+  const signature = JSON.stringify([screens.map((s) => [s.x, s.y, s.w, s.h]), requests.map((r) => r && [r.sx, r.sy, r.tx, r.ty])]);
+  const cached = routeCache.get(state.board);
+  if (cached?.signature === signature) return cached.routes;
+  const routes = routeLinks(requests, screens);
+  routeCache.set(state.board, { signature, routes });
+  return routes;
+}
+
 function linksSvg() {
   const incoming = new Map();
   const parts = [];
@@ -876,6 +1042,25 @@ function linksSvg() {
     incoming.set(link.to, list);
   }
 
+  const requests = state.board.links.map((link) => {
+    const from = state.screens.get(link.from);
+    const to = state.screens.get(link.to);
+    if (!from || !to) return null;
+    const a = from.def;
+    const b = to.def;
+    const rect = link.at ? from.rects.get(link.at) : null;
+    const siblings = incoming.get(link.to);
+    // Links into one screen arrive apart, so two arrowheads never meet in one point.
+    const step = Math.min(64, (b.h * 0.8) / Math.max(1, siblings.length - 1));
+    return {
+      sx: a.x + a.w,
+      sy: rect ? a.y + rect.y + rect.h / 2 : a.y + a.h / 2,
+      tx: b.x,
+      ty: b.y + b.h / 2 + (siblings.indexOf(link) - (siblings.length - 1) / 2) * step,
+    };
+  });
+  const routes = routesFor(requests);
+
   state.board.links.forEach((link, index) => {
     const from = state.screens.get(link.from);
     const to = state.screens.get(link.to);
@@ -885,41 +1070,7 @@ function linksSvg() {
     const b = to.def;
     const rect = link.at ? from.rects.get(link.at) : null;
     const hot = rect ? [a.x + rect.x + rect.w, a.y + rect.y + rect.h / 2] : null;
-    const siblings = incoming.get(link.to);
-    // Links into one screen arrive apart: 64 units, or 18 pixels on screen
-    // when the board is far out, so two arrowheads never meet in one point.
-    const step = Math.min(Math.max(64, 18 / state.view.k), (b.h * 0.8) / Math.max(1, siblings.length - 1));
-    const spread = (siblings.indexOf(link) - (siblings.length - 1) / 2) * step;
-
-    // Routed in world units, so the shape of a flow is the same at any zoom.
-    const sx = a.x + a.w;
-    const sy = hot ? hot[1] : a.y + a.h / 2;
-    const tx = b.x;
-    const ty = b.y + b.h / 2 + spread;
-    const gapX = tx - sx;
-    const lead = 90;
-    let route;
-    const nextColumn = gapX > lead * 2 && gapX < 520;
-    if (nextColumn) {
-      // The neighbour: out, across, in, the way the sketch draws it, turning
-      // close to the screen it leaves.
-      const mid = sx + Math.min(lead, gapX / 2);
-      route = [[sx, sy], [mid, sy], [mid, ty], [tx, ty]];
-    } else {
-      // Further away: drop into the gap between rows and travel there, so
-      // the line never crosses a screen on its way. The lower row's titles
-      // take a band of the gap that is fixed on screen, so the lane runs in
-      // what is left above it.
-      const below = b.y > a.y + a.h;
-      const above = b.y + b.h < a.y;
-      // The gap right under the upper of the two rows: a gap measured all the
-      // way to a screen two rows down would put the lane through the row between.
-      const top = below ? a.y + a.h : above ? b.y + b.h : Math.max(a.y + a.h, b.y + b.h);
-      const gap = Math.min(state.kit.GAP_Y, below ? b.y - top : above ? a.y - top : state.kit.GAP_Y);
-      const free = Math.max(gap - TITLE_BAND / state.view.k, gap * 0.3);
-      const lane = top + free / 2 + ((index % 5) - 2) * Math.min(26, free / 8);
-      route = [[sx, sy], [sx + lead, sy], [sx + lead, lane], [tx - lead, lane], [tx - lead, ty], [tx, ty]];
-    }
+    const route = routes[index];
     const points = route.map(([x, y]) => toScreen(x, y));
     const [px, py] = points[0];
     const [qx, qy] = points[points.length - 1];
