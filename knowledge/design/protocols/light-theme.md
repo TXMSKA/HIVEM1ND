@@ -45,6 +45,6 @@ report: the source table with each colour's job, the contrast character and why,
    Result: every status and series pair at its target, every state ratio recorded per [colour-and-theming](colour-and-theming.md), step 5, the search `box-shadow:[^;]*0 0 |drop-shadow\(0 0 ` returning no hit in the light theme, and the list of assets given a light variant.
 
 8. Judge both themes side by side.
-   Task: capture the same key screens in dark and in light at the same size and run [visual-critique](visual-critique.md), steps 2, 5 and 6, on the pair. Write the judgment before reading any number: whether the light one is calm to look at for a long session, whether the two read as one family, and where the eye goes first. Check that no light token is the arithmetic inversion of its dark counterpart.
+   Task: capture the same key screens in dark and in light at the same size and run [visual-critique](visual-critique.md), steps 4, 7 and 8, on the pair. Write the judgment before reading any number: whether the light one is calm to look at for a long session, whether the two read as one family, and where the eye goes first. Check that no light token is the arithmetic inversion of its dark counterpart.
    Time: 20 minutes.
    Result: the paired captures, the written verdict naming any glare, washed-out area or inverted look with its fix, the fixes applied, and a final verdict that the light theme passes.
