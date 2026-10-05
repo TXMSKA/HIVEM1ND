@@ -13,14 +13,15 @@
 // small operations rather than by overwriting the file, so a reply written by
 // hand into the JSON while the page is open is not lost on the next click.
 //
-// Run: node server.mjs [--mind <path>] [--hostname <name>] [--port <number>]
-// then open http://localhost:3300/
+// Run: node server.mjs [--mind <path>] [--hostname <name>] [--port <number>] [--lan]
+// then open http://localhost:3300/, or from a phone on the same network the
+// link with a key that --lan prints.
 
 import { createServer } from "node:http";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { homedir, hostname as machineName } from "node:os";
+import { homedir, hostname as machineName, networkInterfaces } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,8 +92,23 @@ const PORT = Number(option("port")) || DEFAULT_PORT;
 // The server's own names. A page on another site can still reach 127.0.0.1,
 // straight or through a name it points here (DNS rebinding); the browser says
 // where such a request comes from, and only these may read or change anything.
-const HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+const LOCAL_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+
+// With --lan the server also answers on this machine's home network addresses,
+// for a phone on the same Wi-Fi. Anyone on that network can reach them, so each
+// of those requests needs the key printed at start: once in the link, then as a
+// cookie. The key changes on every start.
+const LAN = process.argv.includes("--lan");
+const LAN_KEY = LAN ? randomBytes(18).toString("base64url") : "";
+const LAN_HOSTS = LAN
+  ? Object.values(networkInterfaces())
+      .flat()
+      .filter((address) => address.family === "IPv4" && !address.internal)
+      .map((address) => `${address.address}:${PORT}`)
+  : [];
+const HOSTS = new Set([...LOCAL_HOSTS, ...LAN_HOSTS]);
 const ORIGINS = new Set([...HOSTS].map((host) => `http://${host}`));
+const KEY_COOKIE = "blueprint-key";
 
 // The one outside host a repository's fonts may come from, when its own review
 // page already names it.
@@ -347,6 +363,32 @@ function send(res, status, body, type = "application/json; charset=utf-8", csp =
 
 const notFound = (res) => send(res, 404, "Not found.", "text/plain; charset=utf-8");
 
+const sameKey = (given) => Boolean(given) && given.length === LAN_KEY.length && timingSafeEqual(Buffer.from(given), Buffer.from(LAN_KEY));
+
+// A request from the home network passes with the key. The link's key becomes a
+// cookie and the address loses it, so it stays out of the history and of what
+// the page shares.
+function lanPass(req, res) {
+  const url = new URL(req.url ?? "/", "http://lan");
+  if (sameKey(url.searchParams.get("key"))) {
+    url.searchParams.delete("key");
+    res.writeHead(303, {
+      Location: url.pathname + url.search,
+      "Set-Cookie": `${KEY_COOKIE}=${LAN_KEY}; HttpOnly; SameSite=Strict; Path=/`,
+      "Cache-Control": "no-store",
+    });
+    res.end();
+    return false;
+  }
+  const cookie = String(req.headers.cookie ?? "")
+    .split(";")
+    .map((part) => part.trim().split("="))
+    .find(([name]) => name === KEY_COOKIE);
+  if (sameKey(cookie?.[1])) return true;
+  send(res, 403, "This address needs the link with the key that Blueprint printed when it started.", "text/plain; charset=utf-8");
+  return false;
+}
+
 // Past the limit the body is read to its end and dropped, so the answer is a
 // 413 the page can show rather than a connection cut halfway.
 function readBody(req) {
@@ -531,7 +573,9 @@ async function route(req, res) {
 
 const server = createServer(async (req, res) => {
   try {
-    if (!HOSTS.has(String(req.headers.host ?? "").toLowerCase())) return send(res, 421, { error: "Unknown host." });
+    const host = String(req.headers.host ?? "").toLowerCase();
+    if (!HOSTS.has(host)) return send(res, 421, { error: "Unknown host." });
+    if (!LOCAL_HOSTS.has(host) && !lanPass(req, res)) return;
     return await route(req, res);
   } catch (error) {
     if (error instanceof URIError) return send(res, 400, "Bad path.", "text/plain; charset=utf-8");
@@ -546,8 +590,9 @@ server.on("error", (error) => {
   process.exit(1);
 });
 
-server.listen(PORT, HOST, async () => {
+server.listen(PORT, LAN ? "0.0.0.0" : HOST, async () => {
   console.log(`Blueprint is on http://localhost:${PORT}/ (mind ${MIND}, machine ${HOSTNAME})`);
+  for (const host of LAN_HOSTS) console.log(`On the home network: http://${host}/review/?key=${LAN_KEY}`);
   try {
     const projects = await discover();
     console.log(`Projects with boards: ${projects.size ? [...projects.keys()].join(", ") : "none yet"}`);

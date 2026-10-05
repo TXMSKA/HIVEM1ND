@@ -192,8 +192,10 @@ function pickLayer(kit) {
 
 // ---- boards --------------------------------------------------------------
 
-// Every project of the machine that has boards gets a tab, and its boards
-// open from a menu under it. The server fills in each entry's project.
+// One button names the open project and board and opens the boards panel:
+// a search, the boards starred and the ones opened most, then every project
+// folded to its name, so the bar stays as long as its content however many
+// projects there are. The server fills in each entry's project.
 
 const sameBoard = (entry, other) => Boolean(entry && other) && entry.project === other.project && entry.id === other.id;
 
@@ -210,25 +212,114 @@ function projects() {
 const initials = (name) => name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase();
 
 const CHEVRON = `<svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+const STAR = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>`;
+const SEARCH = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
 
-function renderTabs() {
-  const nav = $("#boards");
-  nav.innerHTML = projects()
-    .map(({ name, boards }) => {
-      const open = boards.find((entry) => sameBoard(entry, state.entry));
-      const current = open ? `<span class="tab-board">${esc(open.short ?? open.title)}</span>` : "";
-      return `<button type="button" class="board-tab project-tab" data-project="${esc(name)}" aria-haspopup="menu" aria-expanded="false" aria-current="${Boolean(open)}" title="${esc(name)}"><span class="letter">${esc(initials(name))}</span><span>${esc(name)}</span>${current}${CHEVRON}</button>`;
-    })
-    .join("");
+// Stars, visits and the projects left open are this browser's own.
+const boardKey = (entry) => `${entry.project}/${entry.id}`;
+
+function readList(key, fallback) {
+  try {
+    return JSON.parse(store.get(key, "")) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-// The menu lives on the body: the tab row scrolls sideways and would clip it.
+function countVisit(entry) {
+  const visits = readList("review.visits", {});
+  visits[boardKey(entry)] = { n: (visits[boardKey(entry)]?.n ?? 0) + 1, at: Date.now() };
+  store.set("review.visits", JSON.stringify(visits));
+}
+
+function frequent() {
+  const visits = readList("review.visits", {});
+  return state.index
+    .filter((entry) => visits[boardKey(entry)])
+    .sort((a, b) => visits[boardKey(b)].n - visits[boardKey(a)].n || visits[boardKey(b)].at - visits[boardKey(a)].at)
+    .slice(0, 4);
+}
+
+function renderTabs() {
+  const open = state.entry;
+  $("#boards").innerHTML = `<button type="button" class="board-tab project-tab" aria-haspopup="dialog" aria-expanded="false" aria-current="true" aria-label="Project ${esc(open.project)}, board ${esc(open.short ?? open.title)}"><span class="letter">${esc(initials(open.project))}</span><span class="tab-name">${esc(open.project)}</span><span class="tab-board">${esc(open.short ?? open.title)}</span>${CHEVRON}</button>`;
+}
+
+// The panel lives on the body, clear of the bar's own clipping.
 const boardMenu = document.createElement("div");
 boardMenu.className = "board-menu";
-boardMenu.setAttribute("role", "menu");
+boardMenu.setAttribute("role", "dialog");
+boardMenu.setAttribute("aria-label", "Boards");
 boardMenu.hidden = true;
+boardMenu.innerHTML = `<label class="menu-search">${SEARCH}<input type="search" id="board-search" placeholder="Search boards" aria-label="Search boards" autocomplete="off" spellcheck="false" /></label><div class="menu-list" id="board-list"></div>`;
 document.body.append(boardMenu);
+const boardSearch = $("#board-search");
+const boardList = $("#board-list");
 let menuTab = null;
+
+function boardRow(entry, section, sub) {
+  const key = boardKey(entry);
+  const starred = readList("review.favorites", []).includes(key);
+  const name = entry.short ?? entry.title;
+  return `<div class="board-row"><button type="button" class="board-item" data-project="${esc(entry.project)}" data-board="${esc(entry.id)}" aria-current="${sameBoard(entry, state.entry)}"><span class="letter">${esc(entry.letter ?? "")}</span><span class="board-item-text"><span>${esc(name)}</span><span class="board-item-title">${esc(sub)}</span></span></button><button type="button" class="board-star" data-star="${esc(key)}" data-section="${esc(section)}" aria-pressed="${starred}" aria-label="Favorite ${esc(name)}, ${esc(entry.project)}">${STAR}</button></div>`;
+}
+
+function renderBoardList() {
+  const words = boardSearch.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (entry) => words.every((word) => `${entry.project} ${entry.short ?? ""} ${entry.title}`.toLowerCase().includes(word));
+  const expanded = new Set(readList("review.expanded", []));
+  expanded.add(state.entry.project);
+  let html = "";
+  if (words.length === 0) {
+    const favorites = readList("review.favorites", []);
+    const starred = state.index.filter((entry) => favorites.includes(boardKey(entry)));
+    const often = frequent();
+    // Favorites and Frequent start open and fold like a project.
+    const folded = new Set(readList("review.folded", []));
+    const section = (id, title, entries) =>
+      `<div class="menu-section"><button type="button" class="board-group-toggle section-toggle" data-section-toggle="${id}" aria-expanded="${!folded.has(id)}"><span class="group-name">${title}</span><span class="group-count">${entries.length}</span>${CHEVRON}</button><div class="board-group-items"${folded.has(id) ? " hidden" : ""}>${entries.map((entry) => boardRow(entry, id, entry.project)).join("")}</div></div>`;
+    if (starred.length) html += section("favorites", "Favorites", starred);
+    if (often.length) html += section("frequent", "Frequent", often);
+  }
+  for (const { name, boards } of projects()) {
+    const shown = boards.filter(matches);
+    if (shown.length === 0) continue;
+    // A search opens every project it finds something in.
+    const open = words.length > 0 || expanded.has(name);
+    html += `<div class="board-group"><button type="button" class="board-group-toggle" data-group="${esc(name)}" aria-expanded="${open}"><span class="letter">${esc(initials(name))}</span><span class="group-name">${esc(name)}</span><span class="group-count">${shown.length}</span>${CHEVRON}</button><div class="board-group-items"${open ? "" : " hidden"}>${shown.map((entry) => boardRow(entry, name, entry.title)).join("")}</div></div>`;
+  }
+  boardList.innerHTML = html || `<p class="menu-empty">No board matches “${esc(boardSearch.value.trim())}”.</p>`;
+}
+
+function toggleFavorite(star) {
+  const { star: key, section } = star.dataset;
+  const favorites = readList("review.favorites", []);
+  store.set("review.favorites", JSON.stringify(favorites.includes(key) ? favorites.filter((k) => k !== key) : [...favorites, key]));
+  renderBoardList();
+  // The list is drawn again: the focus goes back to the same star in the same place.
+  boardList.querySelector(`.board-star[data-star="${CSS.escape(key)}"][data-section="${CSS.escape(section)}"]`)?.focus();
+}
+
+function toggleGroup(toggle) {
+  const id = toggle.dataset.sectionToggle;
+  if (id) {
+    const folded = new Set(readList("review.folded", []));
+    if (folded.has(id)) folded.delete(id);
+    else folded.add(id);
+    store.set("review.folded", JSON.stringify([...folded]));
+    renderBoardList();
+    boardList.querySelector(`[data-section-toggle="${id}"]`)?.focus();
+    return;
+  }
+  const name = toggle.dataset.group;
+  const expanded = new Set(readList("review.expanded", []));
+  expanded.add(state.entry.project);
+  if (toggle.getAttribute("aria-expanded") === "true") expanded.delete(name);
+  else expanded.add(name);
+  store.set("review.expanded", JSON.stringify([...expanded]));
+  renderBoardList();
+  boardList.querySelector(`.board-group-toggle[data-group="${CSS.escape(name)}"]`)?.focus();
+}
 
 function closeBoardMenu({ focus = false } = {}) {
   if (!menuTab) return;
@@ -242,37 +333,39 @@ function closeBoardMenu({ focus = false } = {}) {
 function openBoardMenu(tab) {
   if (menuTab === tab) return closeBoardMenu();
   closeBoardMenu();
-  const group = projects().find((project) => project.name === tab.dataset.project);
-  if (!group) return;
   menuTab = tab;
   tab.setAttribute("aria-expanded", "true");
-  boardMenu.setAttribute("aria-label", group.name);
-  boardMenu.innerHTML = group.boards
-    .map(
-      (entry) =>
-        `<button type="button" role="menuitem" class="board-item" data-project="${esc(entry.project)}" data-board="${esc(entry.id)}" aria-current="${sameBoard(entry, state.entry)}"><span class="letter">${esc(entry.letter ?? "")}</span><span class="board-item-text"><span>${esc(entry.short ?? entry.title)}</span><span class="board-item-title">${esc(entry.title)}</span></span></button>`,
-    )
-    .join("");
-  const box = tab.getBoundingClientRect();
-  boardMenu.style.left = `${Math.round(box.left)}px`;
-  boardMenu.style.top = `${Math.round(box.bottom + 6)}px`;
+  boardSearch.value = "";
+  renderBoardList();
   boardMenu.hidden = false;
-  (boardMenu.querySelector('[aria-current="true"]') ?? boardMenu.querySelector("button"))?.focus();
+  const box = tab.getBoundingClientRect();
+  boardMenu.style.left = `${Math.round(clamp(box.left, 8, innerWidth - boardMenu.offsetWidth - 8))}px`;
+  boardMenu.style.top = `${Math.round(box.bottom + 6)}px`;
+  // A finger gets the list, not a keyboard over half the screen.
+  if (matchMedia("(pointer: fine)").matches) boardSearch.focus();
+  else boardList.querySelector('.board-group .board-item[aria-current="true"]')?.focus();
 }
 
+boardSearch.addEventListener("input", renderBoardList);
+
 boardMenu.addEventListener("keydown", (event) => {
-  const items = [...boardMenu.querySelectorAll(".board-item")];
-  const at = items.indexOf(document.activeElement);
+  const stops = [...boardMenu.querySelectorAll("#board-search, .board-item, .board-group-toggle")].filter((el) => el.offsetParent);
+  const at = stops.indexOf(document.activeElement);
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     const step = event.key === "ArrowDown" ? 1 : -1;
-    items[(at + step + items.length) % items.length]?.focus();
+    stops[(at + step + stops.length) % stops.length]?.focus();
+  } else if (event.key === "Enter" && event.target === boardSearch) {
+    event.preventDefault();
+    boardList.querySelector(".board-item")?.click();
   } else if (event.key === "Escape") {
     event.stopPropagation();
     closeBoardMenu({ focus: true });
-  } else if (event.key === "Tab") {
-    closeBoardMenu();
   }
+});
+
+boardMenu.addEventListener("focusout", (event) => {
+  if (event.relatedTarget && !boardMenu.contains(event.relatedTarget) && event.relatedTarget !== menuTab) closeBoardMenu();
 });
 
 function writeHash() {
@@ -285,7 +378,11 @@ function writeHash() {
 let opening = 0;
 
 async function openBoard(project, id) {
-  const entry = state.index.find((item) => item.project === project && item.id === id) ?? state.index[0];
+  // A link that names only the project opens its first board.
+  const entry =
+    state.index.find((item) => item.project === project && item.id === id) ??
+    state.index.find((item) => item.project === project) ??
+    state.index[0];
   const ticket = ++opening;
   assetsOf = entry.project;
   // Built apart from what is on the stage, so a board that fails to build
@@ -317,6 +414,7 @@ async function openBoard(project, id) {
   closeThread();
   state.hot = null;
   state.entry = entry;
+  countVisit(entry);
   state.kit = kit;
   state.layer = pickLayer(kit);
   state.board = board;
@@ -1365,7 +1463,8 @@ function setPanel(open, { focus = false } = {}) {
 }
 
 // The tools bar is one tab stop; the arrows move along it, as a toolbar does.
-const railItems = () => [...rail.querySelectorAll(".item")];
+// A tool the layout hides is skipped.
+const railItems = () => [...rail.querySelectorAll(".item")].filter((item) => item.offsetParent);
 
 function rove(target) {
   for (const item of railItems()) item.tabIndex = item === target ? 0 : -1;
@@ -1433,7 +1532,7 @@ rail.addEventListener("focusin", (event) => {
 rail.addEventListener("focusout", hideTip);
 rail.addEventListener("click", hideTip);
 
-for (const item of railItems()) {
+for (const item of rail.querySelectorAll(".item")) {
   if (/^[a-z0-9]$/i.test(item.dataset.key ?? "")) item.setAttribute("aria-keyshortcuts", item.dataset.key);
 }
 
@@ -1746,6 +1845,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (key === "h" || key === "v") setMode("move");
   else if (key === "c") setMode("comment");
+  else if (key === "n") toggleNote();
   // A shortcut never animates.
   else if (key === "0") fit(false);
   else if (key === "+" || key === "=") zoomAt(1.25, cx, cy);
@@ -1760,6 +1860,10 @@ window.addEventListener("keyup", (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  const star = event.target.closest(".board-star");
+  if (star) return toggleFavorite(star);
+  const toggle = event.target.closest(".board-group-toggle");
+  if (toggle) return toggleGroup(toggle);
   const boardItem = event.target.closest(".board-item");
   if (boardItem) {
     closeBoardMenu();
@@ -1769,8 +1873,10 @@ document.addEventListener("click", async (event) => {
   if (tab) return openBoardMenu(tab);
   if (!event.target.closest(".board-menu")) closeBoardMenu();
 
-  const mode = event.target.closest("[data-mode]");
+  // The stage carries a data-mode of its own; only a tool button picks one.
+  const mode = event.target.closest("button[data-mode]");
   if (mode) return setMode(mode.dataset.mode);
+  if (event.target.closest("#note-toggle")) return toggleNote();
 
   if (event.target.closest("#panel-empty-action")) {
     setMode("comment");
@@ -1829,6 +1935,9 @@ replyForm.addEventListener("submit", async (event) => {
     await send({ op: "reply", thread: state.open, text });
     // Sent: the box empties. A redraw of the same thread keeps what is in it,
     // which is right for a half-written reply and wrong for one just sent.
+    // A phone keyboard still composing writes its last word back into a
+    // focused box, so the box lets go of the focus first.
+    replyText.blur();
     replyText.value = "";
     openThread(state.open);
   } catch (error) {
@@ -1986,6 +2095,10 @@ player.addEventListener("click", (event) => {
   if (!event.target.closest(".player-bar")) flashSpots();
 });
 
+function toggleNote() {
+  $("#board-note").open = !$("#board-note").open;
+}
+
 // ---- boot ----------------------------------------------------------------
 
 async function boot() {
@@ -1996,9 +2109,14 @@ async function boot() {
   paintGround();
   watchDensity();
   // The note sits over the canvas, so it folds to its title and stays folded.
+  // On a phone it is shown and hidden from the tools bar, and starts hidden.
   const note = $("#board-note");
-  note.open = store.get("review.note", "open") !== "closed";
-  note.addEventListener("toggle", () => store.set("review.note", note.open ? "open" : "closed"));
+  note.open = store.get("review.note", sideBar.matches ? "open" : "closed") !== "closed";
+  $("#note-toggle").setAttribute("aria-pressed", String(note.open));
+  note.addEventListener("toggle", () => {
+    store.set("review.note", note.open ? "open" : "closed");
+    $("#note-toggle").setAttribute("aria-pressed", String(note.open));
+  });
   state.index = await (await fetch("/api/boards", { cache: "no-store" })).json();
   if (state.index.length === 0) {
     showEmpty();
