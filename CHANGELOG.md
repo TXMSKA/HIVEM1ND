@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Manager, an executive role that manages the whole mind: it surveys every project, defines scope with the user one topic at a time, gates the work before it reaches the executors and keeps its memory in `user/manager/`.
+- `evolve` runs when started from a linked install inside the mind folder, and installs the roles, commands and features of the mind's `user/` folder when the kit and the mind are the same folder.
+- Blueprint Lite routes links round the screens on separate tracks, so a line never crosses a screen or its title.
+- The security module audits the full dependency tree at every severity and compares the count with the hosting platform's scan.
+
 ## 1.3.0 - 2026-10-02
 
 - Four roles instead of eleven. Overseer, Technician, Super executor, Consultant, Executive, Operator and Marketing leave the kit: the Executor covers the single-repo seats and the Overlord the cross-repo work.
