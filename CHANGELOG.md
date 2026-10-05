@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-10-02
 
 - Four roles instead of eleven. Overseer, Technician, Super executor, Consultant, Executive, Operator and Marketing leave the kit: the Executor covers the single-repo seats and the Overlord the cross-repo work.
 - Incubator, a new operative role that develops ideas into products inside one folder: it brainstorms an idea until it is well formed, analyses its opportunities and weaknesses, sends it to the product it belongs in or prototypes it fast, writes code with YAGNI first, and offers improvements to the product after doing what was asked.
