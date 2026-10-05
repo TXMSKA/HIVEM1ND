@@ -93,6 +93,7 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | Genesis | Executive | Installs the mind on a machine and maintains it afterward. |
 | Overlord | Operative | Coordinates one environment as the project manager, for a change that spans several repos. |
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
+| Manager | Executive | Manages the whole mind: knows where every project stands, defines scope with the user and hands work to the executors. |
 | Incubator | Operative | Develops ideas into products inside one folder: brainstorms them, prototypes them fast and sends each one to the product it belongs in. |
 
 </details>
