@@ -1,6 +1,6 @@
 # Files
 
-Every record is one file with one writer. Headers are `key: value` lines, then a blank line, then the body. Dates are `YYYY-MM-DD HH:MM`, local time. Folder names are the same at every level: `state/`, `inbox/`, `tasks/` and `log/` exist per project, per environment and at the root of `user/` for the executive roles.
+Every record is one file with one writer. Headers are `key: value` lines, then a blank line, then the body. State, task and log dates are `YYYY-MM-DD HH:MM`, local time. Relay message timestamps are ISO 8601. Folder names are the same at every level: `state/`, `inbox/`, `tasks/` and `log/` exist per project, per environment and at the root of `user/` for the executive roles.
 
 Layout inside the mind, all generated, all under `user/` (git-ignored):
 
@@ -51,18 +51,31 @@ Login form done and tested in the browser. Password reset half done: the mail te
 
 `state` is `in` or `out`. `tree` is `clean` or the output of `git status --porcelain` in one line. `claims` only in team repos. The body is the context, ten lines at most, written so a session on another machine can resume from it alone. A unit whose relay scope holds several repos keeps `branch`, `commit` and `tree` for the current one and adds a `## Repos` section after the context, one line per repo, such as `- shop: feat/cart 8b1d044 clean`.
 
-## Message: `inbox/<to>/<YYYYMMDD-HHMM>-<from>.md`
+## Message: `inbox/<to>/<filename>.md`
+
+New Relay messages use filenames with seconds, machine name and a random collision-resistant suffix. Existing minute-based messages remain readable.
 
 ```markdown
-from: overlord-web@SCOUT
+id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
+from: manager
 to: executor-myapp
-date: 2026-09-15 14:02
+machine: SCOUT
+timestamp: 2026-09-15T14:02:03.000Z
+priority: normal
 subject: task 003 is ready
+thread-id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
+reply-to:
+reply-requested: false
+attachments: []
 
 Task 003 in tasks/. It depends on 002, already closed. Start when the current one is done.
 ```
 
-One folder per recipient. The recipient deletes the file at its exit, once read. A second message to the same recipient in the same minute appends -2, then -3, to the file name. A message is context, never authorization.
+One folder per recipient. Relay archives a message after reading it under `user/relay/archive/<to>/`, retaining its original bytes for history and retry. Reading does not delete it. Older messages keep their original headers and filenames. OneDrive can take time to sync; separate machines do not share an atomic filesystem transaction. A message is context, never authorization.
+
+Relay stores session registrations, archives and metadata-only events under `user/relay/`. Temporary publication files and OneDrive conflict copies are ignored. Attachments are references only; no files are copied or automatically opened.
+
+Relay wake policies, bounded worker leases and submitted-message bookkeeping are also stored under `user/relay/`. A policy binds one explicit unit to one native session, client and local machine, with a fixed start/deadline and handoff cap; resuming or re-registering does not renew it. The Claude Code adapter keeps `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` in the target process environment only. The Codex adapter inherits the host-provided `CODEX_APP_TOOLS_PIPE_PATH` and actual `CODEX_THREAD_ID` in memory and invokes only the installed bundled App Tools MCP server. Neither transport endpoint is written to the mind, CLI arguments, client config, events or logs. A successful transport response is recorded as submitted, never as delivered; ambiguous Codex MCP failures are not replayed by another transport.
 
 ## Task: `tasks/<id>-<slug>.md`
 
