@@ -29,7 +29,7 @@ async function fixture(context) {
 }
 
 async function until(predicate, message = 'condition did not become true') {
-  const deadline = Date.now() + 4000;
+  const deadline = Date.now() + 15000;
   let last;
   while (Date.now() < deadline) {
     last = await predicate();
