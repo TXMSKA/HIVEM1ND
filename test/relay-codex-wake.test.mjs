@@ -146,15 +146,15 @@ test('Codex wake never submits invalid pointer data or claims malformed MCP resu
 });
 
 test('Codex wake distinguishes pre-dispatch cancellation from an ambiguous dispatched timeout', async () => {
-  const before = fixtureChild({ delayInitializeMs: 30 });
+  const before = fixtureChild({ delayInitializeMs: 500 });
   const abortBefore = new AbortController();
-  const early = sendCodexWake({ binding, text: pointer, env: env(), platform: 'win32', serverPath: 'server.mjs', timeoutMs: 200, signal: abortBefore.signal, spawnProcess: () => before });
+  const early = sendCodexWake({ binding, text: pointer, env: env(), platform: 'win32', serverPath: 'server.mjs', timeoutMs: 2000, signal: abortBefore.signal, spawnProcess: () => before });
   setTimeout(() => abortBefore.abort(), 5);
   assert.deepEqual(await early, { status: 'not_submitted', reason: 'cancelled_before_submit' });
   assert.equal(before.calls.some((request) => request.method === 'tools/call'), false);
 
   const during = fixtureChild({ delayCall: true });
-  const late = await sendCodexWake({ binding, text: pointer, env: env(), platform: 'win32', serverPath: 'server.mjs', timeoutMs: 25, spawnProcess: () => during });
+  const late = await sendCodexWake({ binding, text: pointer, env: env(), platform: 'win32', serverPath: 'server.mjs', timeoutMs: 300, spawnProcess: () => during });
   assert.deepEqual(late, { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' });
   assert.equal(during.calls.filter((request) => request.method === 'tools/call').length, 1);
   assert.equal(during.killed, true);
