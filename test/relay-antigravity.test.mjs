@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { antigravityWakeCapability, sendAntigravityWake } from '../engine/relay/antigravity-wake.mjs';
+import { ANTIGRAVITY_CONTROLLER_BOUND_MS, ANTIGRAVITY_TURN_TIMEOUT_MS, antigravityWakeCapability, sendAntigravityWake, wakeAdapter } from '../engine/relay/antigravity-wake.mjs';
 import { localWakeChildEnv, spawnLocalWakeWorker } from '../engine/relay/local-wake.mjs';
 import { createRelay } from '../engine/relay/store.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
@@ -31,6 +31,7 @@ function fakeAgy(mode = 'success') {
     child.prompts.push(JSON.parse(line));
     setImmediate(() => {
       if (mode === 'hang-after') return;
+      if (mode.startsWith('slow-')) { setTimeout(() => emit({ event: 'result', result: { conversation_id: binding.nativeSessionId, status: 'SUCCESS' } }), 250); return; }
       if (mode === 'error-after') { child.stdin.emit('error', new Error('fixture secret')); return; }
       if (mode === 'oversize-after') { child.stdout.emit('data', Buffer.alloc(1024 * 1024 + 1)); return; }
       if (mode === 'duplicate-init') { emit({ event: 'init', conversation_id: binding.nativeSessionId }); return; }
@@ -82,6 +83,28 @@ for (const mode of ['wrong-result', 'failed-result', 'hang-after', 'error-after'
     assert.equal(child.prompts.length, 1); assert.equal(child.killed, true);
   });
 }
+
+test('Antigravity gives a measured slow turn time to reach its result and stays bounded by the controller', async (context) => {
+  assert.equal(ANTIGRAVITY_TURN_TIMEOUT_MS, 120_000);
+  assert.ok(ANTIGRAVITY_CONTROLLER_BOUND_MS >= ANTIGRAVITY_TURN_TIMEOUT_MS + 500);
+  assert.equal(wakeAdapter.controllerOptions.retryPolicy.sinkTimeoutMs, ANTIGRAVITY_CONTROLLER_BOUND_MS);
+  assert.ok(wakeAdapter.controllerOptions.retryPolicy.leaseMs > ANTIGRAVITY_CONTROLLER_BOUND_MS + 1000);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'relay-agy-bound-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const mind = await makeRelayMind(root);
+  await createRelayWakeController({ mindPath: mind, sink: async () => ({ status: 'submitted' }), ...wakeAdapter.controllerOptions });
+});
+
+test('Antigravity slow turn completes as submitted and a turn past the bound is ambiguous without replay', async () => {
+  const slow = fakeAgy('slow-result');
+  const done = await sendAntigravityWake({ binding, text: pointer, env, timeoutMs: 2000, spawnProcess: () => slow });
+  assert.deepEqual(done, { status: 'submitted', transport: 'antigravity-stream-json' });
+  assert.equal(slow.prompts.length, 1); assert.equal(slow.killed, true);
+  const late = fakeAgy('slow-result');
+  const outcome = await sendAntigravityWake({ binding, text: pointer, env, timeoutMs: 100, spawnProcess: () => late });
+  assert.deepEqual(outcome, { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' });
+  assert.equal(late.prompts.length, 1); assert.equal(late.killed, true);
+});
 
 test('Antigravity rejects missing cwd, foreign bindings, arbitrary content, flag IDs and cancelled delivery before launch', async () => {
   assert.equal(antigravityWakeCapability({ env: {} }).available, false);

@@ -11,7 +11,7 @@ import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-pa
 const OWNED_SERVER = 'hivem1nd-relay';
 const MARKER = '# HIVEM1ND Relay managed server';
 const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
-const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot']);
+const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot', 'antigravity']);
 
 const CLIENT_PATHS = {
   claude: (home) => ({ mcp: path.join(home, '.claude.json'), hooks: path.join(home, '.claude', 'settings.json') }),
@@ -19,6 +19,7 @@ const CLIENT_PATHS = {
   cursor: (home) => ({ mcp: path.join(home, '.cursor', 'mcp.json'), hooks: path.join(home, '.cursor', 'hooks.json') }),
   opencode: (home) => ({ mcp: path.join(home, '.config', 'opencode', 'opencode.jsonc') }),
   copilot: (home) => ({ mcp: path.join(home, '.copilot', 'mcp-config.json') }),
+  antigravity: (home) => ({ mcp: path.join(home, '.gemini', 'antigravity-cli', 'settings.json') }),
 };
 
 function safeString(value, name) {
@@ -119,6 +120,70 @@ function openCodeMcpMerge(text, options) {
   const intended = ownedOpenCodeMcp(options);
   if (existing && JSON.stringify(existing) === JSON.stringify(intended)) return initial;
   return editJsonc(initial, ['mcp', OWNED_SERVER], intended);
+}
+
+// Antigravity CLI settings.json holds permission rules, not an MCP server; the
+// generic "mcp" slot of the config API carries that single file. A plain
+// command(...) rule cannot match a Windows command line with backslashes, so
+// the rules use the documented regex form: each whitespace-separated token is an
+// anchored regular expression, and the tokens end at the mind path, which allows
+// only the kit's relay read and relay send for that mind.
+const ANTIGRAVITY_ACTIONS = ['read', 'send'];
+const ANTIGRAVITY_CLI_TOKEN_END = String.raw`cli[\\/]index\.mjs`;
+const ANTIGRAVITY_OWNED_RULE = /^command\(regex:node (\S+) relay (?:read|send) --mind-path (\S+) \.\*\)$/;
+
+function antigravityPathPattern(value) {
+  const drive = /^([A-Za-z]):(?=[\\/])/.exec(value);
+  const body = (drive ? value.slice(2) : value).split(/[\\/]/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(String.raw`[\\/]`);
+  return drive ? `(?:${drive[1]}:)?${body}` : body;
+}
+
+function antigravityRules({ kitPath, mindPath }) {
+  const cliPath = path.join(kitPath, 'cli', 'index.mjs');
+  for (const value of [cliPath, mindPath]) {
+    if (/[\s"'()]/.test(value)) throw new Error('Antigravity permission rules need kit and mind paths without whitespace, quotes or parentheses.');
+  }
+  const cli = `${antigravityPathPattern(kitPath)}${String.raw`[\\/]`}${ANTIGRAVITY_CLI_TOKEN_END}`;
+  const mind = antigravityPathPattern(mindPath);
+  return ANTIGRAVITY_ACTIONS.map((action) => `command(regex:node ${cli} relay ${action} --mind-path ${mind} .*)`);
+}
+
+function antigravityAllowList(text) {
+  const document = parseJsoncObject(text.trim() ? text : '{}\n', 'Antigravity settings');
+  const permissions = document.permissions;
+  if (permissions !== undefined && (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))) {
+    throw Object.assign(new Error('Antigravity permissions must be an object; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' });
+  }
+  if (permissions?.allow !== undefined && !Array.isArray(permissions.allow)) {
+    throw Object.assign(new Error('Antigravity permissions.allow must be an array; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' });
+  }
+  return permissions?.allow;
+}
+
+function antigravityMerge(text, options) {
+  const initial = text.trim() ? text : '{}\n';
+  const allow = antigravityAllowList(initial) ?? [];
+  const missing = antigravityRules(options).filter((rule) => !allow.includes(rule));
+  if (!missing.length) return initial;
+  return editJsonc(initial, ['permissions', 'allow'], [...allow, ...missing]);
+}
+
+function antigravityRemove(text, mindPath) {
+  if (!text.trim()) return text;
+  const allow = antigravityAllowList(text);
+  if (!allow) return text;
+  const wanted = mindPath === undefined ? undefined : path.resolve(mindPath);
+  const kept = allow.filter((rule) => {
+    const match = typeof rule === 'string' ? ANTIGRAVITY_OWNED_RULE.exec(rule) : null;
+    return !match || !match[1].endsWith(ANTIGRAVITY_CLI_TOKEN_END)
+      || (wanted !== undefined && match[2] !== antigravityPathPattern(wanted));
+  });
+  if (kept.length === allow.length) return text;
+  if (kept.length) return editJsonc(text, ['permissions', 'allow'], kept);
+  let next = editJsonc(text, ['permissions', 'allow'], undefined);
+  if (!Object.keys(parseJsoncObject(next, 'Antigravity settings').permissions ?? {}).length) next = editJsonc(next, ['permissions'], undefined);
+  return next;
 }
 
 function jsonMerge(existingText, kind, options) {
@@ -254,6 +319,7 @@ export function buildClientConfig({ client, existing = {}, kitPath, mindPath, un
   if (client === 'opencode') {
     return { mcp: openCodeMcpMerge(existing.mcp ?? '', { client, kitPath, mindPath, unit, sessionId, nodePath }) };
   }
+  if (client === 'antigravity') return { mcp: antigravityMerge(existing.mcp ?? '', { kitPath, mindPath }) };
   if (client === 'copilot') {
     return { mcp: jsonMerge(existing.mcp ?? '', 'mcp', { client, kitPath, mindPath, unit, sessionId, nodePath }) };
   }
@@ -327,6 +393,10 @@ export function clientConfigPaths({ client, homeDir, env = process.env } = {}) {
       mcp: path.join(mcpRoot, '.claude.json'), hooks: path.join(configRoot, 'settings.json'),
       mcpRoot, hooksRoot: configRoot,
     };
+  }
+  if (client === 'antigravity') {
+    const root = path.join(home, '.gemini', 'antigravity-cli');
+    return { mcp: path.join(root, 'settings.json'), mcpRoot: root };
   }
   if (client === 'opencode') {
     const customConfig = !explicitHome && typeof env.OPENCODE_CONFIG === 'string' && env.OPENCODE_CONFIG.trim();
@@ -424,7 +494,7 @@ export async function configureRelayClient({ client, homeDir, env = process.env,
   return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: applied.filter((item) => item.changed).map((item) => item.filePath), backups: applied.filter((item) => item.changed && item.prior).map((item) => `${item.filePath}.relay-backup`) };
 }
 
-export async function unconfigureRelayClient({ client, homeDir, env = process.env } = {}) {
+export async function unconfigureRelayClient({ client, homeDir, env = process.env, mindPath } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   const targets = clientConfigPaths({ client, homeDir, env });
   const mcpText = await readRegular(targets.mcp);
@@ -441,6 +511,8 @@ export async function unconfigureRelayClient({ client, homeDir, env = process.en
       nextMcp = replaceOwnedTomlBlock(mcpText, markerAt, headerAt, '');
     }
     nextHooks = removeJsonHooks(hooksText, 'codex');
+  } else if (client === 'antigravity') {
+    nextMcp = antigravityRemove(mcpText, mindPath);
   } else if (client === 'opencode') {
     const document = parseJsoncObject(mcpText, 'OpenCode config');
     if (isOwnedOpenCodeMcp(document.mcp?.[OWNED_SERVER])) nextMcp = editJsonc(mcpText, ['mcp', OWNED_SERVER], undefined);
@@ -496,7 +568,7 @@ export async function diagnoseRelayClients({ homeDir, env = process.env, executa
   const result = {};
   for (const client of SUPPORTED) {
     const config = clientConfigPaths({ client, homeDir, env });
-    const command = executables[client] ?? (client === 'claude' ? 'claude' : client === 'codex' ? 'codex' : client === 'cursor' ? 'cursor' : client === 'copilot' ? 'copilot' : 'opencode');
+    const command = executables[client] ?? (client === 'claude' ? 'claude' : client === 'codex' ? 'codex' : client === 'cursor' ? 'cursor' : client === 'copilot' ? 'copilot' : client === 'antigravity' ? 'agy' : 'opencode');
     let available = false;
     const pathValue = env.PATH ?? env.Path ?? '';
     const extensions = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').map((extension) => extension.toLowerCase())] : [''];
