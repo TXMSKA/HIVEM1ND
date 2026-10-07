@@ -45,7 +45,9 @@
     "dist:win": "npm run pack:win && node scripts/zip-win.mjs"
   },
   "dependencies": {
-    "@clack/prompts": "1.8.1"
+    "@clack/prompts": "1.8.1",
+    "jsonc-parser": "3.3.1",
+    "smol-toml": "1.8.0"
   },
   "overrides": {
     "smol-toml": "1.8.0"
