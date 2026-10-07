@@ -36,7 +36,7 @@ In an isolated test home, set `--home-dir <isolated-directory>` on setup; it ove
 
 OpenCode exposes native session IDs with `opencode session list --format json --max-count <count>`. Select the exact session being used, then call Relay's MCP `register` tool with its `nativeSessionId` and explicit `unit`. Never choose the newest ID automatically when multiple sessions are listed. The OpenCode MCP server starts without a role binding; register before sending or reading role-scoped messages.
 
-SessionStart and supported user-turn hooks supply a brief inbox pointer. An unregistered manual session receives one bootstrap reminder naming its native session ID and asking it to register its explicit role. A registered quiet session receives no repeated setup prompt. Claude additionally supports PostToolUse; Codex uses SessionStart and UserPromptSubmit; Cursor uses sessionStart and postToolUse. Cursor's beforeSubmitPrompt event does not support the context return shape, so Relay does not configure it.
+SessionStart and supported user-turn hooks supply a brief inbox pointer. An unregistered manual session receives one bootstrap reminder naming its native session ID and asking it to register its explicit role. A registered quiet session receives no repeated setup prompt. Claude additionally supports PostToolUse; Codex uses SessionStart and UserPromptSubmit; Cursor uses sessionStart and postToolUse, plus the opt-in stop follow-up described below. Cursor's beforeSubmitPrompt event does not support the context return shape, so Relay does not configure it.
 
 ## Claude Code Desktop wake
 
@@ -70,9 +70,97 @@ Use `relay wake status --mind-path <mind> --client codex --unit <unit> --native-
 
 This path does not change MCP configuration, tool approval settings or client permissions. A live idle-chat smoke test is still required before relying on a particular installed host's behavior. The current verified boundary is an installed-server MCP initialize/tools-list handshake and a read-only `read_thread` call to an explicitly selected existing chat. The behavior of `send_message_to_thread` for an active/busy target is not established here; test only an idle target and do not use it to interrupt or steer a running turn. No Codex lifecycle hook or automatic policy renewal is installed.
 
+## Cursor stop follow-up and headless ACP wake
+
+Relay configuration includes a `stop` command hook with `loop_limit: 5`. [Cursor's hook contract](https://cursor.com/docs/hooks) supplies `conversation_id` and `loop_count`, and accepts `followup_message` as the next user message. Register the exact conversation to its explicit unit, then enable a policy without starting an ACP worker:
+
+```powershell
+node <kit>\cli\index.mjs relay register --mind-path <mind> --client cursor --session-id <relay-instance> --unit <unit> --native-session-id <conversation-id>
+node <kit>\cli\index.mjs relay wake enable --mind-path <mind> --client cursor --unit <unit> --native-session-id <conversation-id> --hours 4 --max-handoffs 20
+```
+
+This editor path delivers at the next stop boundary. It returns only the standard untrusted unread pointer, with no subject or body. No policy, expired or disabled consent, no unread messages, an invalid loop count, a mismatched identity, or a running ACP worker produces no follow-up. Each returned follow-up reserves one handoff under a local policy lock. Repeated generation/loop pairs are suppressed when Cursor supplies `generation_id`. Reservation happens before stdout; a crashed hook can spend a handoff without Cursor receiving it. No native acknowledgment or message read is claimed. The hook never archives the inbox and cannot create or renew consent. The generated limit and runtime cap are both five consecutive follow-ups.
+
+[Cursor CLI ACP](https://cursor.com/docs/cli/acp) also supports headless resume of an exact existing conversation. Pre-authenticate the CLI with `agent login`, set `RELAY_CURSOR_CWD` to that conversation's absolute project directory, and optionally set `RELAY_CURSOR_AGENT` to its executable path. Close this conversation in every other client before attachment. Use the existing exact registration:
+
+```powershell
+node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client cursor --unit <unit> --native-session-id <conversation-id> --hours 4 --max-handoffs 20
+```
+
+The worker starts `agent acp`, checks ACP v1 and `loadSession`, calls `session/load` with that exact ID, then `session/prompt`, and closes the process. It never calls `session/new`, infers an ID, or falls back after a failed load. Each attempt has a 14-second adapter timeout and a 15-second controller bound. A timeout after prompt dispatch is ambiguous, is cancelled, and is not replayed. This short headless turn must finish within the bound; it is not an editor wake or a general long-running agent host. Client capabilities do not offer file or terminal operations, permission requests receive a cancelled decision, and interactive extensions receive an unsupported-method error. Existing native configuration and permissions still apply. Use Nova's own ACP connection when interactive approvals or longer turns are needed.
+
+## OpenCode server wake
+
+[OpenCode's server API](https://opencode.ai/docs/server/) documents `POST /session/:id/prompt_async`, returning 204 for an asynchronous prompt with text parts. Open a disposable TUI in its project with an explicit local endpoint, for example `opencode --hostname 127.0.0.1 --port 4096`. Alternatively start `opencode serve --hostname 127.0.0.1 --port 4096` and use an existing session on that server. Select its native session ID explicitly and register it with client `opencode`. Do not attach to a guessed or newly selected default session.
+
+Set `RELAY_OPENCODE_URL=http://127.0.0.1:4096` in the attaching process, then run:
+
+```powershell
+node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client opencode --unit <unit> --native-session-id <session-id> --hours 4 --max-handoffs 20
+```
+
+Only plain HTTP on an explicit numeric loopback address and port is accepted, including `[::1]`. URL credentials, paths, queries, redirects and remote endpoints are refused. If server authentication is enabled, inherit `OPENCODE_SERVER_PASSWORD` and optionally `OPENCODE_SERVER_USERNAME` (default `opencode`) through the process environment; never put credentials in command arguments or mind files. The worker does not launch OpenCode, create a session or change its configuration. It verifies `GET /session/:id` against the exact ID and checks `/session/status`. Busy or retry states defer every pointer, including urgent pointers, without consuming retry or handoff budgets. Idle sessions omitted by that API are eligible. The status check and asynchronous post are separate operations, so activity can change between them; no cancellation or abort request is sent.
+
+Only `{parts: [{type: "text", text: <pointer>}]}` is posted. Model, agent, system instructions, permissions and tools are not overridden. A four-second total request bound and bounded response sizes apply. A 204 response means submitted, not read or delivered. Failures after a post are ambiguous and never replayed. No OpenCode plugin or lifecycle hook is installed. Official API behavior is fixture tested; the installed npm shim and package could not be read in the restricted build sandbox, so compatibility with that installed version remains a live-test prerequisite.
+
+## Host sink for Nova and Nebula
+
+Nova's provisional `extensions/nova/src/agents/relay.ts` on `feat/relay-phase1` starts the kit through stdio MCP and queries CLI reminders per chat with client `nova`. It has no inbound wake listener. The kit adds `relay-host-v1`: bounded newline-delimited JSON over a local Windows named pipe or an absolute Unix socket. This keeps the existing stdio framing style while allowing an already running host to receive wake pointers. It introduces no TCP server or cloud channel.
+
+The host must create a user-restricted local socket and a fresh authentication token, then launch attachment with `RELAY_HOST_SOCKET` and `RELAY_HOST_TOKEN` inherited in its environment. Windows endpoints must be local flat pipe names such as `\\.\pipe\nova-relay-<instance>`. Tokens are 16 to 512 characters and are never persisted or printed by Relay. Register the exact native session through Nova's existing Relay MCP server, using its existing per-chat correlation ID and client `nova`, then attach:
+
+```powershell
+node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client nova --unit <unit> --native-session-id <native-id> --hours 4 --max-handoffs 20
+```
+
+One connection sends two JSON lines, each ending with a newline:
+
+```json
+{"type":"auth","token":"<environment-only token>"}
+{"type":"relay-wake","version":1,"binding":{"unit":"<unit>","nativeSessionId":"<exact-id>","client":"nova","machine":"<local-machine>"},"text":"<standard untrusted unread pointer>"}
+```
+
+After authenticating, the host validates every binding field against its existing per-chat registration and active connection. It delivers `text` through `session/prompt` on its own ACP connection or the matching existing CLI transport, preserving the host's approvals, sandbox and model. It must not resume a competing process or create a conversation. An active target queues or rejects the pointer as busy without interrupting its turn. Reply with one JSON line:
+
+```json
+{"version":1,"status":"accepted","unit":"<unit>","nativeSessionId":"<exact-id>"}
+```
+
+`accepted` means queued once on that exact host connection. `busy` means no prompt was queued and permits later polling without spending a retry or handoff. `rejected` also means not queued, but uses the bounded failure retry policy. A missing, oversized or mismatched acknowledgment after sending is ambiguous and will not be replayed. Connections have a four-second bound; replies are limited to 8 KiB. The payload carries no subject, body or attachment content. The host must not log tokens and must revoke the exact policy when its chat or listener ends. Use `relay wake disable` with the same client, unit and native ID.
+
+Nova must implement this listener, map exact bindings to live agent connections, and test idle delivery, busy deferral and shutdown. Nebula can later consume the same host contract with client `nova` as a generic host binding, mapping it to its local phone/sync registration, retaining explicit consent, exact identity and retry safety. Phone transport, push, synchronized thread/read state and product UI are still phase 4 work. Neither host repository was edited, and neither currently has an accepted live sink.
+
+## Antigravity CLI wake
+
+[Google's headless mode contract](https://www.antigravity.google/docs/cli/headless/) documents `--conversation <id>` with streaming JSON input and output. Relay starts `agy`, verifies the initialization ID before sending one pointer through stdin, then closes the process. This resumes a CLI conversation; it does not wake an open editor. [Desktop import clones history](https://www.antigravity.google/docs/cli/commands/resume), so register the CLI ID explicitly after importing.
+
+Install and sign in through `agy` first. Close the selected conversation in other clients. Set `RELAY_ANTIGRAVITY_CWD` to its absolute project directory; `RELAY_ANTIGRAVITY_AGY` optionally selects an executable. Register that exact conversation with client `antigravity`, then attach:
+
+```powershell
+node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client antigravity --unit <unit> --native-session-id <conversation-id> --hours 4 --max-handoffs 20
+```
+
+Each attempt has a 14-second timeout and a 500 ms shutdown margin. The controller allows 15 seconds. Mismatched initialization sends nothing. A successful result for the exact ID records submission; other post-dispatch outcomes are ambiguous and never replayed. Native output is discarded. Permissions, model and sandbox are not overridden. Installation compatibility and native read/reply await a live trial; fixtures launch no real client. Use the same binding with `relay wake disable` and `status` to verify shutdown.
+
+## Adding an agent
+
+Create `engine/relay/<agent>-wake.mjs` exporting `wakeAdapter`, import it and add one lazy entry in `engine/relay/wake-adapters.mjs`, then add fake transport tests. The CLI, controller, worker environment and build inventory read that table. No controller or CLI branch is required. Native hook/configuration support is separate.
+
+The shared interface is:
+
+- `moduleUrl: import.meta.url`, `label`, `helpLines`: inventory, errors and help.
+- `capability({env, platform})`: return `{available, reason?}` without launching a client.
+- `attachIdentity({nativeSessionId, env, platform})`: return `{nativeSessionId, sessionId, requireRegistration, activity?}`. Use `explicitWakeAttach` for exact existing registrations.
+- `validateRuntime({env, platform, binding?})`: check attach/watch prerequisites; watch supplies `binding`.
+- `sendPointer({binding, text, env, platform, signal})`: return `{status: 'submitted'|'not_submitted'|'ambiguous', reason?, transport?, deferred?}`.
+- `spawnWorker(options)`: return `{child, ready}`, with readiness `{state, ownsLease}`. `workerDependency` names the test injection; shared `spawnLocalWakeWorker` reads `workerEnvKeys`.
+- Optional `controllerOptions` sets retry/lease bounds. `acceptsDeferred` releases busy `not_submitted` claims with `deferred: true` without spending budgets. `stopLoopLimit` sets hook reservation limits.
+
+Validate exact local identity and pointer-only text. Bound delivery, retain environment-only credentials, and classify uncertain dispatch as ambiguous without fallback. Test identity, isolation, refusal, cancellation, timeouts, readiness and shutdown with isolated minds/homes. Existing named exports remain compatible.
+
 ## Phase boundary
 
-Relay phase 1 provides durable messages, explicit registration, MCP and CLI access, reminders and reversible client configuration. Phase 2 includes bounded, opt-in Claude Code inbox wake and a scoped Codex App Tools wake adapter. Neither installs global configuration automatically, infers a role, changes permissions, guarantees delivery receipts, or completes the later notification, Nova, Nebula or phone phases.
+Relay phase 1 provides durable messages, explicit registration, MCP and CLI access, reminders and reversible client configuration. Phase 2 includes bounded, opt-in Claude Code inbox wake, scoped Codex App Tools wake, Cursor stop/ACP, OpenCode server wake and a local host sink contract. These adapters do not install global configuration automatically, infer a role, change permissions, guarantee delivery receipts, or complete the later notification, Nova, Nebula or phone phases. All clients use exact `relay wake status` and `relay wake disable` bindings; no adapter renews consent automatically.
 
 Use `relay diagnose` to see whether Claude Code, Codex, Cursor and OpenCode executables are present and which config paths setup will target. Missing executables mean configuration files can be prepared but that client UI cannot be tested. If a client does not list Relay tools, check the active config home, verify the configured mind path, restart the client after setup, and inspect its MCP logs. Invalid existing JSON, JSONC or TOML blocks setup before any write. A `.relay-backup` is a one-time recovery copy; it is not overwritten on reinstall.
 

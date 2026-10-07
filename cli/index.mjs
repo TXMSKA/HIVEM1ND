@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -47,7 +48,7 @@ Relay options:
   --kit-path <path>        Path to the HIVEM1ND kit
   --session-id <id>        Stable Relay instance identifier
   --native-session-id <id> Native client session identifier
-  --client <name>          Client name: claude, codex, cursor, opencode, nova or user
+  --client <name>          Client name: ${Object.keys(WAKE_ADAPTERS).join(', ')} or user
   --unit <name>            Explicit unit name, including user
   --event <name>           Native hook event name
   --hours <4|5|6|7|8|12|24> Bounded wake window (12/24 require --extended)
@@ -58,9 +59,11 @@ Relay options:
   --id <message-id> (repeatable) --limit <count>
 
 Relay wake actions:
-  relay wake attach --client <claude|codex> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--mind-path <path>]
+  relay wake attach --client <${Object.keys(WAKE_ADAPTERS).join('|')}> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--mind-path <path>]
   relay wake enable|disable|status --unit <name> --native-session-id <id> [options]
   relay wake watch --unit <name> --native-session-id <id> [options] (internal worker)
+${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line) => '  ' + line).join('\n')}
+  Clients other than Claude require an existing exact registration and explicit native ID.
 
 Init options:
   --gui                 Open the local browser wizard
@@ -876,11 +879,11 @@ async function readInput(stream, maximum = 262144) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function relayWakeBinding(options, hostname = os.hostname()) {
+function relayWakeBinding(options, hostname = os.hostname(), adapters = WAKE_ADAPTERS) {
   if (!options.unit) throw new CliUsageError('Relay wake requires an explicit --unit.');
   if (!options.nativeSessionId) throw new CliUsageError('Relay wake requires --native-session-id.');
   const client = options.client ?? 'claude';
-  if (!['claude', 'codex'].includes(client)) throw new CliUsageError('Relay wake supports Claude Code and Codex.');
+  if (!getWakeAdapter(client, adapters)) throw new CliUsageError('Unsupported Relay wake client.');
   return { unit: options.unit, nativeSessionId: options.nativeSessionId, client, machine: hostname };
 }
 
@@ -889,35 +892,32 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
   const env = dependencies.env ?? process.env;
   const hostname = options.hostname ?? os.hostname();
   const client = options.client ?? 'claude';
-  if (!['claude', 'codex'].includes(client)) throw new CliUsageError('Relay wake supports Claude Code and Codex.');
+  const adapters = dependencies.wakeAdapters ?? WAKE_ADAPTERS;
+  const adapter = getWakeAdapter(client, adapters);
+  if (!adapter) throw new CliUsageError('Unsupported Relay wake client.');
   const { createRelayWakeController } = dependencies.createRelayWakeController
     ? { createRelayWakeController: dependencies.createRelayWakeController }
     : await import('../engine/relay/wake.mjs');
-  const claude = await import('../engine/relay/claude-wake.mjs');
-  const codex = client === 'codex' ? await import('../engine/relay/codex-wake.mjs') : null;
-  const adapter = client === 'codex' ? codex : claude;
-  const sink = client === 'codex'
-    ? (delivery) => codex.sendCodexWake({ ...delivery, env, platform: dependencies.platform ?? process.platform })
-    : (delivery) => claude.sendClaudeWake({ ...delivery, env, platform: dependencies.platform ?? process.platform });
+  const runtime = { env, platform: dependencies.platform ?? process.platform };
+  const sink = (delivery) => adapter.sendPointer({ ...delivery, ...runtime });
   const controller = await createRelayWakeController({
     mindPath: options.mindPath,
     hostname,
     sink,
+    ...adapter.controllerOptions,
+    ...(dependencies.wakeAdapters ? { adapters } : {}),
   });
 
   if (options.wakeAction === 'attach') {
     if (!options.unit) throw new CliUsageError('relay wake attach requires an explicit --unit.');
-    const nativeSessionId = client === 'codex' ? options.nativeSessionId : env.CLAUDE_CODE_SESSION_ID;
-    if (typeof nativeSessionId !== 'string' || !nativeSessionId) {
-      throw new CliUsageError(client === 'codex'
-        ? 'Codex wake attach requires an explicit --native-session-id for the target chat.'
-        : 'Claude wake attach requires CLAUDE_CODE_SESSION_ID from the target session.');
-    }
-    const capability = adapter[client === 'codex' ? 'codexWakeCapability' : 'claudeWakeCapability']({ env, platform: dependencies.platform ?? process.platform });
+    let identity;
+    try { identity = adapter.attachIdentity({ nativeSessionId: options.nativeSessionId, ...runtime }); }
+    catch (error) { throw new CliUsageError(error.message); }
+    const { nativeSessionId } = identity;
+    const capability = adapter.capability(runtime);
     if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
-    if (client === 'codex' && !(await codex.findCodexAppToolsServer({ env }))) {
-      throw new CliUsageError('Codex App Tools server is unavailable in this CODEX_HOME.');
-    }
+    try { await adapter.validateRuntime(runtime); }
+    catch (error) { throw new CliUsageError(error.message); }
     const binding = { unit: options.unit, nativeSessionId, client, machine: hostname };
     const { createRelay } = dependencies.createRelay
       ? { createRelay: dependencies.createRelay }
@@ -925,13 +925,13 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
     const relay = await createRelay({
       mindPath: options.mindPath,
       hostname,
-      sessionId: client === 'codex' ? env.CODEX_THREAD_ID : nativeSessionId,
+      sessionId: identity.sessionId,
       client,
     });
-    if (client === 'codex') {
+    if (identity.requireRegistration) {
       const existing = await relay.reminder({ nativeSessionId, client });
       if (!existing.registered || existing.unit !== options.unit) {
-        throw new CliUsageError('Codex wake requires an existing exact registration for the selected target and unit.');
+        throw new CliUsageError(adapter.label + ' wake requires an existing exact registration for the selected target and unit.');
       }
     } else {
       await relay.register({ unit: options.unit, nativeSessionId, client });
@@ -943,12 +943,9 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
       ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
       ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
     });
-    if (client === 'claude') await controller.observeActivity(binding, { activity: 'busy' });
+    if (identity.activity) await controller.observeActivity(binding, { activity: identity.activity });
     try {
-      const defaultSpawner = client === 'codex' ? codex.spawnCodexWakeWorker : claude.spawnClaudeWakeWorker;
-      const spawnWorker = client === 'codex'
-        ? (dependencies.spawnCodexWakeWorker ?? defaultSpawner)
-        : (dependencies.spawnClaudeWakeWorker ?? defaultSpawner);
+      const spawnWorker = dependencies[adapter.workerDependency] ?? adapter.spawnWorker;
       const worker = spawnWorker({ cliPath: path.join(dependencies.kitPath ?? KIT_PATH, 'cli', 'index.mjs'), mindPath: options.mindPath, binding, env, keepParentAliveUntilReady: true });
       const readiness = await worker.ready;
       output.write(`${formatResult({ binding, policy, worker: readiness.state, ownsLease: readiness.ownsLease, delivery: 'not claimed' })}\n`);
@@ -959,12 +956,12 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
     return 0;
   }
 
-  const binding = relayWakeBinding(options, hostname);
+  const binding = relayWakeBinding(options, hostname, adapters);
   if (options.wakeAction === 'watch') {
-    const capability = adapter[client === 'codex' ? 'codexWakeCapability' : 'claudeWakeCapability']({ env, platform: dependencies.platform ?? process.platform });
+    const capability = adapter.capability(runtime);
     if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
-    if (client === 'claude' && env.CLAUDE_CODE_SESSION_ID !== binding.nativeSessionId) throw new CliUsageError('Wake worker native session ID does not match CLAUDE_CODE_SESSION_ID.');
-    if (client === 'codex' && !(await codex.findCodexAppToolsServer({ env }))) throw new CliUsageError('Codex App Tools server is unavailable in this CODEX_HOME.');
+    try { await adapter.validateRuntime({ ...runtime, binding }); }
+    catch (error) { throw new CliUsageError(error.message); }
     const handle = controller.start(binding);
     const terminate = () => handle.stop();
     process.once('SIGINT', terminate);

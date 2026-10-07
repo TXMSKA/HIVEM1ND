@@ -2,6 +2,24 @@ import { createConnection } from 'node:net';
 import { fork } from 'node:child_process';
 import os from 'node:os';
 
+export const wakeAdapter = Object.freeze({
+  moduleUrl: import.meta.url,
+  label: 'claude', capability: claudeWakeCapability, sendPointer: sendClaudeWake,
+  attachIdentity: ({ env }) => {
+    const nativeSessionId = env.CLAUDE_CODE_SESSION_ID;
+    if (typeof nativeSessionId !== 'string' || !nativeSessionId) {
+      throw new Error('Claude wake attach requires CLAUDE_CODE_SESSION_ID from the target session.');
+    }
+    return { nativeSessionId, sessionId: nativeSessionId, requireRegistration: false, activity: 'busy' };
+  },
+  validateRuntime: async ({ binding, env }) => {
+    if (binding && env.CLAUDE_CODE_SESSION_ID !== binding.nativeSessionId) {
+      throw new Error('Wake worker native session ID does not match CLAUDE_CODE_SESSION_ID.');
+    }
+  },
+  spawnWorker: spawnClaudeWakeWorker, workerDependency: 'spawnClaudeWakeWorker', helpLines: Object.freeze([]),
+});
+
 const MAX_POINTER_BYTES = 8 * 1024;
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CHILD_ENV_KEYS = [

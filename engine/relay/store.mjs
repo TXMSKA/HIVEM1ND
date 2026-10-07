@@ -628,7 +628,15 @@ export async function createRelay(options = {}) {
     await ensureDirectory(mindPath, path.dirname(lockPath));
     const token = randomUUID();
     for (let attempt = 0; attempt < 80; attempt += 1) {
-      await safePath(mindPath, lockPath);
+      try { await safePath(mindPath, lockPath); }
+      catch (error) {
+        // A live owner can release the lock between lstat and realpath.
+        // Revalidate the parent before retrying only a missing lock path.
+        if (!isMissingPath(error) && error?.code !== 'UNSAFE_PATH') throw error;
+        await safePath(mindPath, path.dirname(lockPath), { missing: false });
+        if (!isMissingPath(error) && await lstatOrNull(lockPath)) throw error;
+        continue;
+      }
       let handle;
       try {
         handle = await open(lockPath, 'wx', 0o600);
@@ -641,7 +649,7 @@ export async function createRelay(options = {}) {
         if (!currentState) continue;
         if (currentState.isSymbolicLink() || !currentState.isFile()) throw relayError('UNSAFE_PATH', 'A wake lock path is unsafe.');
         let current = null;
-        try { current = await readJsonSafe(mindPath, lockPath); }
+        try { current = await readWakeRecord('locks', lockKey); }
         catch (readError) {
           if (readError?.code !== 'MALFORMED_RECORD') throw readError;
           // Another process may have created the exclusive lock but not finished

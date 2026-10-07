@@ -3,6 +3,17 @@ import { readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { explicitWakeAttach } from './local-wake.mjs';
+
+export const wakeAdapter = Object.freeze({
+  moduleUrl: import.meta.url,
+  label: 'Codex', capability: codexWakeCapability, sendPointer: sendCodexWake,
+  attachIdentity: ({ nativeSessionId, env }) => ({ ...explicitWakeAttach('Codex', nativeSessionId), sessionId: env.CODEX_THREAD_ID }),
+  validateRuntime: async ({ env }) => {
+    if (!await findCodexAppToolsServer({ env })) throw new Error('Codex App Tools server is unavailable in this CODEX_HOME.');
+  },
+  spawnWorker: spawnCodexWakeWorker, workerDependency: 'spawnCodexWakeWorker', helpLines: Object.freeze([]),
+});
 
 const MAX_POINTER_BYTES = 8 * 1024;
 const MAX_FRAME_BYTES = 1024 * 1024;
