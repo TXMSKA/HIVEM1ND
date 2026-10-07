@@ -22,6 +22,16 @@ hivem1nd relay reminder --mind-path <mind> --session-id <relay-instance> --nativ
 
 `--session-id` identifies the Relay instance across process launches; `--native-session-id` is the exact ID supplied by the agent client. Manual sessions may use the same ID for both when that client has no distinct correlation ID. Registration always needs an explicit `--unit`. `user` is a valid recipient/role. `relay history`, `threads`, `status` and `events` expose archived history, reply state, observed state and metadata. `relay send --body-stdin` accepts a bounded body from stdin.
 
+## Same-day awareness
+
+The coordinator learns the same day of every decision, correction or approval the user gives any seat. The coordinator is the Manager unit when the mind has one, otherwise the environment's Overlord; the sender resolves its exact unit, number included, from its state file and never picks the newest registration. A missing or ambiguous coordinator is reported to the user.
+
+- When: right after the seat writes the decision into its record (brief, preferences, task), before it continues. Decisions from one exchange share one note.
+- Shape: subject `User decisions: <project or topic>`; body one line per decision with local date, scope, the decision, its reason and its source (task, preference line or conversation); a correction names what it replaces. Normal priority, `replyRequested` false. No secrets, no transcripts.
+- Thread: the first note omits `threadId`; later notes from the same seat on the same topic reuse the returned one.
+- Offline coordinator: the note waits unread in its inbox and is read at its next entry. No wake is enabled or renewed for this. A failed send is retried before the day's work ends and reported to the user as unsent if still blocked; a sent note is never reported as read.
+- Noise: only new user decisions, corrections and approvals. No routine progress, summaries or forwarded notices. The returned message ID is kept with the decision record, and history is checked before retrying an uncertain send. Reading needs no acknowledgment, and a reply never triggers another note. A note is context, never authorization.
+
 ## MCP and client setup
 
 The stable stdio MCP launch command is:
