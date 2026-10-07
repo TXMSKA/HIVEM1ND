@@ -84,7 +84,7 @@ Options:
 - **A short section tour** of three or four key things, with the rest behind a More control that continues the tour, skippable and replayable.
 - **A one-time hint** on a new feature, remembered once dismissed.
 
-Build: Teach each section or app on its first opening: what it does and three or four key things, with the rest behind a More control that continues the tour. Keep the section usable from the start, remember dismissal, and describe what each menu option does. Keep the first-use empty state inside the real product, with an example or a template and one primary action; never teach everything at once.
+Build: Teach each section or app on its first opening: one line on what it does, then three or four key things; the rest waits behind a More control that continues the tour. Keep the section usable while the tour shows, remember the dismissal, and give every menu option a line saying what it does. Show a first-use empty state inside the real product, with an example or a template and one primary action. Never teach everything at once.
 
 Open: [states.md](../states.md), Onboarding; [ux-laws.md](../ux-laws.md), peak-end and goal-gradient.
 

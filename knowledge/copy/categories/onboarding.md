@@ -28,7 +28,7 @@ Applies when: a product, game, section or app inside a product opens for the fir
 
 Options: three or four key things on first opening, a More control for the remaining tour, skippable and replayable steps; one-line descriptions beside menu option labels.
 
-Build: start with what the section does, then name an outcome and at most one sentence per key thing. Keep the section usable while the tour is open. Label the continuation *More*, with *Continue the tour* where its purpose needs explaining; reveal the remaining steps only on request. Give each menu option one line stating its action or result, such as *Import files* / *Add existing files to the library.* Never present the whole product's tour at once.
+Build: open with one line on what the section does. Give each of the three or four key things a title that is the outcome and at most one sentence. Keep the section usable while the tour is open. Put the remaining steps behind a control labelled *More*, or *Continue the tour* where *More* alone does not say what it does, and show them only when it is pressed. Give every menu option its label and one line on what it does, such as *Import files* / *Add existing files to the library.* Never show the tour of a whole product at once.
 
 Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps) and [microcopy.md, Labels](../microcopy.md#labels).
 
