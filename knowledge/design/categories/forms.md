@@ -13,7 +13,7 @@ Options:
 - **Grouped sections with short headings** for long forms, with more space between groups than inside them.
 - **Inline editing** instead of a form in a modal when the person is changing one value in place.
 
-Build: One column about 40rem wide, related fields in a `fieldset` with a `legend` as its heading, more space between groups than inside them, the primary action last and aligned with the fields.
+Build: One column about 40rem wide, related fields in a `fieldset` with a `legend` as its heading, more space between groups than inside them, the primary action last and aligned with the fields. On a phone the focused field scrolls clear of the on-screen keyboard and of any fixed bar.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 1; [forms-and-controls.md](../forms-and-controls.md), Layout and flow; [ux-laws.md](../ux-laws.md), proximity.
 
@@ -41,9 +41,25 @@ Options:
 - **Disabled submit with an inline reason** that names what is missing and moves focus to it; valid, never without the reason.
 - **Success state in place** for small forms; **a page of its own** after a conversion.
 
-Build: Keep submit enabled and validate on press. While sending, keep the label, add a spinner, set `aria-busy` and ignore repeats. End in a success state in place that says what happened and what comes next, focused or announced in a status region.
+Build: Keep submit enabled and validate on press. While sending, keep the label, add a spinner, set `aria-busy` and ignore repeats. End in a success state in place that says what happened and what comes next, focused or announced in a status region. Typed values survive Back, reload and a failed request.
 
 Open: [forms-and-inputs](../protocols/forms-and-inputs.md), steps 5 and 7; [states.md](../states.md), Success, Disabled.
+
+## Consent and honest choices
+
+Applies when: a form carries an agreement, a marketing opt-in, an age or a birth date, a plan or an add-on, or a cancellation; a countdown, a scarcity line or a decline button is added.
+
+Options:
+
+- **Every agreement unticked, one box per purpose**, never bundled with the terms or with the sign-up button.
+- **A decline as visible as the accept**: same size, weight and place in the reading path, worded as the choice it is.
+- **Leaving where joining was**: cancel and delete reached in no more presses than sign-up took.
+- **Urgency and scarcity only when true**, read from a real deadline or a real count.
+- **The full price before the last press.**
+
+Build: Unticked native checkboxes labelled with the purpose and a link to the notice; accept and decline as sibling buttons of equal weight; a cancel route from the account page; a countdown or stock line read from data; fees, taxes and shipping in the total before the pay button; no preselected add-on, upgrade or donation.
+
+Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 9; [forms-and-controls.md](../forms-and-controls.md), Honest choices; step 2 of the security module's personal-data protocol.
 
 ## Multi step
 

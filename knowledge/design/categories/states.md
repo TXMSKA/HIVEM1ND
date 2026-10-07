@@ -42,7 +42,7 @@ Options:
 - **In place of the failed component** with a retry, leaving the rest of the screen working.
 - **A full page** only when nothing on the screen can work, with a way out.
 
-Build: In place of the failed component: what failed and a retry button, the rest of the screen still working, the message in an alert region, and what was typed kept.
+Build: In place of the failed component: what failed and a retry button, the rest of the screen still working, the message in an alert region, and what was typed kept. The message comes from a table of causes with a written fallback, never from the exception or the response body.
 
 Open: [interface-states](../protocols/interface-states.md), steps 3 and 7; [states.md](../states.md), Error.
 

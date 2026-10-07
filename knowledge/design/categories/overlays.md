@@ -80,9 +80,10 @@ Applies when: a cookie or consent banner, an announcement bar or a system notice
 Options:
 
 - **No banner** when there is nothing to consent to.
-- **A consent banner** that preselects the most private choice and never covers the primary action.
+- **A consent banner** that preselects the most private choice, offers Reject as plainly as Accept and never covers the primary action.
+- **A footer link that reopens the choice**, so withdrawing is as easy as giving.
 - **An announcement bar** that can be dismissed and stays dismissed.
 
-Build: Only when there is something to consent to or announce: a region at the page edge that never covers the primary action, the most private choice preselected, and the dismissal remembered.
+Build: Only when there is something to consent to or announce: a region at the page edge that never covers the primary action, Accept and Reject as equal buttons of one press each, the most private choice preselected, nothing non-essential loaded or set before the choice, a link to the cookie notice, the choice stored and reopened from the footer, and the dismissal remembered.
 
-Open: [overlays.md](../overlays.md), Banners and consent; [site-polish.md](../site-polish.md).
+Open: [overlays.md](../overlays.md), Banners and consent; [site-polish.md](../site-polish.md); [forms-and-inputs](../protocols/forms-and-inputs.md), step 9; step 3 of the security module's personal-data protocol for what loads before the choice.

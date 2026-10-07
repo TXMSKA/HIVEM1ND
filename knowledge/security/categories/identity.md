@@ -67,7 +67,7 @@ Who the caller is and how that is proved on every request: login, sessions, toke
 - **Soft lock before hard lock.** A growing delay per account and per address, so an attacker cannot lock the owner out.
 - **Bot protection proportional to the risk.** A honeypot field or a short delay for a contact form; proof of work or a challenge for a flow with value. A third-party challenge brings cookies and a privacy notice update.
 
-**Build:** Build the three uniform answers as in [sessions-and-credentials.md](../sessions-and-credentials.md#uniform-answers): registration confirms the address first, login verifies a dummy hash for an unknown account, and reset answers before the lookup. Add a growing delay per account and per address under the ceiling in [essentials.md](../essentials.md).
+**Build:** Build the three uniform answers as in [sessions-and-credentials.md](../sessions-and-credentials.md#uniform-answers): registration confirms the address first, login verifies a dummy hash for an unknown account, and reset answers before the lookup. Add a growing delay per account and per address under the ceiling in [essentials.md](../essentials.md), and limit reset and verification mail per target address.
 
 **Open:** steps 4 and 6 of [authentication-and-session](../protocols/authentication-and-session.md); step 1 of [resource-limits](../protocols/resource-limits.md).
 
