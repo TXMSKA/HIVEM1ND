@@ -7,7 +7,7 @@ import { claudeWakeCapability, spawnClaudeWakeWorker, sendClaudeWake } from './c
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
   codex: new Set(['SessionStart', 'UserPromptSubmit']),
-  cursor: new Set(['sessionStart', 'postToolUse']),
+  cursor: new Set(['sessionStart', 'postToolUse', 'stop']),
 };
 const REMINDER_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
@@ -102,6 +102,21 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
   const hookEvent = event ?? context.event;
   if (!CLIENT_EVENTS[client]?.has(hookEvent)) return null;
   try {
+    if (client === 'cursor' && hookEvent === 'stop') {
+      // Use the conversation identity supplied by Cursor, never a unit override.
+      const id = input.conversation_id;
+      if (typeof id !== 'string' || !id || id.length > 180 || /[\u0000-\u001f\u007f]/.test(id)
+          || nativeSessionId && nativeSessionId !== id) return null;
+      const { createRelayWakeController } = await import('./wake.mjs');
+      const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: os.hostname(),
+        sink: async () => ({ status: 'not_submitted' }) });
+      const binding = await controller.findEnabledBinding({ nativeSessionId: id, client, machine: os.hostname() });
+      if (!binding || unit && unit !== binding.unit) return null;
+      const text = await controller.cursorStop(binding, { loopCount: input.loop_count, generationId: input.generation_id });
+      const response = text ? { followup_message: text } : null;
+      if (response) stdout.write(`${JSON.stringify(response)}\n`);
+      return response;
+    }
     if (client === 'claude') {
       await runClaudeWakeLifecycle({
         event: hookEvent,

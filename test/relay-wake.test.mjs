@@ -97,23 +97,53 @@ test('worker coalesces metadata, persists dedupe across restart, never archives,
 test('urgent arrivals bypass normal cooldown while busy and handoff budget prevents fresh-ID churn', async (context) => {
   const { mind, sender, binding } = await fixture(context);
   const notices = [];
-  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  let now = Date.now();
+  let resumePoll = null;
+  const clock = {
+    now: () => now,
+    sleep: (_ms, signal) => new Promise((resolve) => {
+      if (signal?.aborted) { resolve(); return; }
+      function resume() { resumePoll = null; signal?.removeEventListener('abort', resume); resolve(); }
+      resumePoll = resume;
+      signal?.addEventListener('abort', resume, { once: true });
+    }),
+  };
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; }, { clock });
   context.after(() => wake.stopAll());
+  async function poll() {
+    assert.equal(typeof resumePoll, 'function', 'the previous iteration finished before changing policy or inbox');
+    resumePoll();
+    await until(() => resumePoll !== null);
+  }
   await wake.enable({ ...binding, maxHandoffs: 2 });
   await wake.observeActivity(binding, { activity: 'idle' });
   const handle = wake.start(binding);
   assert.equal((await handle.ready).ownsLease, true);
-  await sender.send({ to: binding.unit, subject: 'First', body: 'one' });
-  await until(() => notices.length === 1);
+  await until(() => resumePoll !== null);
+  const first = await sender.send({ to: binding.unit, subject: 'First', body: 'one' });
+  await poll();
+  assert.equal(notices.length, 1);
+  assert.deepEqual(notices[0].messageIds, [first.id]);
+  assert.equal((await wake.status(binding)).wakeCount, 1, 'the first sink result has settled');
   await wake.observeActivity(binding, { activity: 'busy' });
-  await sender.send({ to: binding.unit, subject: 'Urgent', body: 'two', priority: 'urgent' });
-  await until(() => notices.length === 2);
+  const urgent = await sender.send({ to: binding.unit, subject: 'Urgent', body: 'two', priority: 'urgent' });
+  await poll();
   assert.equal(notices.length, 2, 'urgent messages do not wait behind a normal-message cooldown');
+  assert.deepEqual(notices[1].messageIds, [urgent.id]);
   assert.equal(notices[1].urgent, true);
+  assert.equal(notices[1].activity, 'busy');
+  assert.equal((await wake.status(binding)).wakeCount, 2, 'both handoffs settled without advancing the cooldown clock');
   await wake.observeActivity(binding, { activity: 'idle' });
   await sender.send({ to: binding.unit, subject: 'Fresh ID', body: 'three' });
+  await poll();
+  assert.equal((await wake.status(binding)).pausedReason, null, 'normal arrivals still wait for cooldown');
+  assert.equal(notices.length, 2);
+  now += 1001;
+  resumePoll();
   await until(async () => (await wake.status(binding)).pausedReason === 'handoff-budget-exhausted');
   assert.equal((await handle.done).reason, 'budget-exhausted');
+  assert.equal(notices.length, 2, 'a fresh ID cannot cause a third handoff');
+  assert.equal((await wake.status(binding)).wakeCount, 2);
 });
 
 test('ambiguous sink writes are not retried and arbitrary sink errors are never persisted', async (context) => {
@@ -267,6 +297,41 @@ test('repeated attach waits for an old generation to release its lease before re
   assert.equal((await oldWorker.done).reason, 'policy-replaced');
   await replacementWorker.stop();
   assert.equal((await second.status(binding)).enabled, true);
+});
+
+test('wake lock acquisition retries when an owner releases between lstat and realpath', async (context) => {
+  const { mind } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'release-probe' });
+  const lockKey = 'release-during-check';
+  const lockPath = path.join(mind, 'user', 'relay', 'wake', 'locks', `${createHash('sha256').update(lockKey).digest('hex')}.json`);
+  let ownerEntered, releaseOwner, checkEntered, releaseCheck;
+  const ownerStarted = new Promise((resolve) => { ownerEntered = resolve; });
+  const ownerGate = new Promise((resolve) => { releaseOwner = resolve; });
+  const checkStarted = new Promise((resolve) => { checkEntered = resolve; });
+  const checkGate = new Promise((resolve) => { releaseCheck = resolve; });
+  const originalRealpath = fsPromises.realpath;
+  let intercepted = false;
+  context.after(() => { releaseOwner(); releaseCheck(); fsPromises.realpath = originalRealpath; syncBuiltinESMExports(); });
+  const order = [];
+  const owner = relay.wakePersistence.withLock(lockKey, async () => { ownerEntered(); await ownerGate; order.push('owner'); });
+  await ownerStarted;
+  fsPromises.realpath = async (...args) => {
+    if (!intercepted && path.resolve(String(args[0])) === path.resolve(lockPath)) {
+      intercepted = true;
+      checkEntered();
+      await checkGate;
+    }
+    return originalRealpath(...args);
+  };
+  syncBuiltinESMExports();
+  const contender = relay.wakePersistence.withLock(lockKey, async () => { order.push('contender'); });
+  await checkStarted;
+  assert.deepEqual(order, []);
+  releaseOwner();
+  await owner;
+  releaseCheck();
+  await contender;
+  assert.deepEqual(order, ['owner', 'contender']);
 });
 
 test('atomic store locks serialize overlapping writers and recover a stale partial lock', async (context) => {

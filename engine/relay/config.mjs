@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import { CURSOR_STOP_LOOP_LIMIT } from './cursor-wake.mjs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -142,13 +143,16 @@ function jsonMerge(existingText, kind, options) {
     if (!Number.isInteger(document.version) || document.version < 1) throw new Error('Cursor hooks.json has an unsupported version.');
     document.hooks ??= {};
     if (!document.hooks || typeof document.hooks !== 'object' || Array.isArray(document.hooks)) throw new Error('Cursor hooks must be an object.');
-    for (const event of ['sessionStart', 'postToolUse']) {
+    for (const event of ['sessionStart', 'postToolUse', 'stop']) {
       const command = hookCommand({ ...options, client, event, unit });
       const existing = document.hooks[event] ?? [];
       if (!Array.isArray(existing)) throw new Error(`Cursor hook ${event} must be an array.`);
       const owned = existing.filter((item) => isOwnedHookCommand(item?.command, client, event));
       if (owned.length) for (const item of owned) item.command = command;
       else existing.push({ command, timeout: 5 });
+      if (event === 'stop') for (const item of existing) {
+        if (isOwnedHookCommand(item?.command, client, event)) item.loop_limit = CURSOR_STOP_LOOP_LIMIT;
+      }
       document.hooks[event] = existing;
     }
     return `${JSON.stringify(document, null, 2)}\n`;
