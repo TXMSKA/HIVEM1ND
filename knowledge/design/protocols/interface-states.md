@@ -20,9 +20,9 @@ report: the state inventory with one screenshot each, the contrast per state, an
    Result: one capture per state, named after the component and the state, and the computed contrast of the text in each.
 
 3. Give every empty and error state a way forward.
-   Task: write each empty state by its kind in [states.md](../states.md), with a title naming the real object, a visual, the reason and one action. Write each error as what failed and how to recover, in the interface's own voice. These are structural words: this pass writes them and flags them for the copy pass. When the product has no action that could resolve an empty state, the reason says so and the record names the missing action.
+   Task: write each empty state by its kind in [states.md](../states.md), with a title naming the real object, a visual, the reason and one action. Write each error as what failed and how to recover, in the interface's own voice. Force a thrown error, a 500, an offline request and a malformed body, and read what the screen shows. These are structural words: this pass writes them and flags them for the copy pass. When the product has no action that could resolve an empty state, the reason says so and the record names the missing action.
    Time: 20 minutes.
-   Result: the copy for every empty and error state recorded, each naming one concrete next action, and no screen in the inventory that ends without a next step.
+   Result: the copy for every empty and error state recorded, each naming one concrete next action, no screen in the inventory that ends without a next step, and zero forced failures showing exception text, a stack frame, a response body, `undefined` or `[object Object]`.
 
 4. Show work and outcome honestly.
    Task: give every activation feedback within about 400 milliseconds, every wait a skeleton in the shape of the final content, every disabled control an inline reason, and every completed action a success state rather than a silent reset.

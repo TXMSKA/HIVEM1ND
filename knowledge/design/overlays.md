@@ -57,4 +57,4 @@ A modal for a task that needs neither interruption nor protected focus is a defa
 
 ## Banners and consent
 
-A cookie or consent banner appears only when tracking, jurisdiction or compliance demands it, never covers the primary action on a phone, and preselects the most private choice.
+A cookie or consent banner appears only when tracking, jurisdiction or compliance demands it, never covers the primary action on a phone, and preselects the most private choice. Reject sits beside Accept at the same weight and takes one press, the choice is stored and reopens from a footer link, and what is not essential loads only after it.

@@ -39,7 +39,7 @@ report: the icon set and the count of icons fetched, the image table with format
    Time: 15 minutes; a surface on the platform's system face ends this step as not applicable.
    Result: every face listed with a real file source, not a local fallback under the original family name, and the preload count equal to the faces of the first viewport.
 
-7. Leave no invented or orphaned asset.
-   Task: find placeholders that look real, such as fake screenshots built from boxes, stock faces presented as the team or invented reviews, and files nothing references.
+7. Leave no invented, orphaned or unlicensed asset.
+   Task: find placeholders that look real, such as fake screenshots built from boxes, stock faces presented as the team or invented reviews, files nothing references, and every font, photograph and illustration with no licence on record that covers this use.
    Time: 15 minutes.
-   Result: every placeholder is either replaced by a real asset, removed, or visibly marked as missing, and the search for unreferenced files in the asset folder returns zero hits.
+   Result: every placeholder is either replaced by a real asset, removed, or visibly marked as missing, the search for unreferenced files in the asset folder returns zero hits, and every font and image is listed with its source and licence, attribution shown where the licence asks, and no asset of unknown origin.

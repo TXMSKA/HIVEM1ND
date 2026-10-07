@@ -40,6 +40,6 @@ report: one screenshot per named width, the overflow measurement at each, the co
    Result: a transcript per gesture showing the alternative path completing the same task, and a transcript of one interrupted gesture leaving no stuck state. A gesture exercised only through an emulated viewport is recorded as untested under touch.
 
 7. Respect the edges of the device.
-   Task: inset the content from the safe areas so no control sits under a notch, a rounded corner or a home indicator, and keep the sticky regions clear of the focus ring.
+   Task: inset the content from the safe areas so no control sits under a notch, a rounded corner or a home indicator, and keep the sticky regions clear of the focus ring. Focus the lowest field of each form at the phone width with the on-screen keyboard open, and confirm the field and its error stay in view.
    Time: 15 minutes.
-   Result: a screenshot at a width with insets applied showing no control clipped by a device edge.
+   Result: a screenshot at a width with insets applied showing no control clipped by a device edge, and a capture with the keyboard open showing the focused field unobstructed. An emulated viewport shows no keyboard: that capture is recorded as not verifiable there and left to a device.

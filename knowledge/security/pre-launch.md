@@ -15,6 +15,7 @@ The order is priority: the items that lose money or accounts come first, so a pa
 5. **Origins.** Cross-origin access restricted to an exact list of origins, never a wildcard with credentials. Step 4 of [cross-site-requests](protocols/cross-site-requests.md).
 6. **Uploads.** The type allowlist enforced on the deployed storage path, not only in the handler. Steps 1 and 3 of [file-upload](protocols/file-upload.md).
 7. **Infrastructure.** No environment file served, no default credential, stock admin routes removed, directory listing disabled, source maps off the public origin, from [deployment-surface](protocols/deployment-surface.md). Database privileges reduced to what the application uses and row policies on every table the browser reaches, steps 2 and 3 of [data-store](protocols/data-store.md). Security events written and readable, step 4 of [logging-and-errors](protocols/logging-and-errors.md).
+8. **Personal data and notices.** Consent unticked and recorded, nothing non-essential loading before a choice, deletion and unsubscribe working, and the privacy policy, cookie notice, terms, refund policy and business details live, linked and matching what the application does. Steps 2 to 6 of [personal-data](protocols/personal-data.md).
 
 ## Closing rule
 
