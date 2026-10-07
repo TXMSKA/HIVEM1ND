@@ -31,12 +31,12 @@ test('existing adapter metadata preserves native attachment, timing, loop caps a
   assert.deepEqual(WAKE_ADAPTERS.codex.attachIdentity({ nativeSessionId: 'target', env }), {
     nativeSessionId: 'target', sessionId: 'caller-codex', requireRegistration: true,
   });
-  for (const client of ['codex', 'cursor', 'opencode', 'nova', 'antigravity']) {
+  for (const client of ['codex', 'cursor', 'opencode', 'nova', 'antigravity', 'copilot']) {
     assert.throws(() => WAKE_ADAPTERS[client].attachIdentity({ env }), /explicit --native-session-id/);
   }
   assert.equal(WAKE_ADAPTERS.cursor.stopLoopLimit, 5);
   assert.deepEqual(WAKE_ADAPTERS.cursor.controllerOptions, { retryPolicy: { sinkTimeoutMs: 15_000, leaseMs: 30_000 } });
-  for (const client of ['claude', 'codex', 'cursor']) assert.notEqual(WAKE_ADAPTERS[client].acceptsDeferred, true);
+  for (const client of ['claude', 'codex', 'cursor', 'copilot']) assert.notEqual(WAKE_ADAPTERS[client].acceptsDeferred, true);
   for (const client of ['opencode', 'nova']) assert.equal(WAKE_ADAPTERS[client].acceptsDeferred, true);
 });
 

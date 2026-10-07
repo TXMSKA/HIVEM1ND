@@ -93,6 +93,47 @@ test('OpenCode config edits JSONC losslessly, is idempotent and removes only its
   assert.equal(await readFile(configFile, 'utf8'), manual);
 });
 
+test('Copilot paths follow COPILOT_HOME, an explicit home stays isolated, and no hooks file is targeted', () => {
+  const home = path.join(os.tmpdir(), 'relay-home');
+  const custom = clientConfigPaths({ client: 'copilot', env: { COPILOT_HOME: 'C:/copilot-custom' } });
+  assert.equal(custom.mcp, path.resolve('C:/copilot-custom/mcp-config.json'));
+  assert.equal(custom.hooks, undefined);
+  const isolated = clientConfigPaths({ client: 'copilot', homeDir: home, env: { COPILOT_HOME: 'C:/must-not-use' } });
+  assert.equal(isolated.mcp, path.join(home, '.copilot', 'mcp-config.json'));
+  assert.equal(clientConfigPaths({ client: 'copilot', homeDir: home, env: {} }).mcp, isolated.mcp);
+});
+
+test('Copilot mcp-config.json merge keeps other servers, is idempotent and removes only its entry', async (context) => {
+  const root = await temp(context);
+  const opts = { client: 'copilot', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
+  const file = path.join(root, '.copilot', 'mcp-config.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  const other = { type: 'http', url: 'https://example.invalid/mcp', tools: ['*'] };
+  await writeFile(file, JSON.stringify({ mcpServers: { other } }));
+  const installed = await configureRelayClient(opts);
+  assert.deepEqual(installed.changed, [file]); assert.deepEqual(installed.paths, [file]);
+  assert.deepEqual(installed.backups, [file + '.relay-backup']);
+  const document = JSON.parse(await readFile(file, 'utf8'));
+  assert.deepEqual(document.mcpServers.other, other);
+  const entry = document.mcpServers['hivem1nd-relay'];
+  assert.equal(entry.type, 'local'); assert.equal(entry.command, process.execPath); assert.deepEqual(entry.tools, ['*']);
+  assert.deepEqual(entry.args.slice(0, 6), [path.join(opts.kitPath, 'cli', 'index.mjs'), 'relay', 'mcp', '--mind-path', path.resolve(opts.mindPath), '--client']);
+  assert.equal(entry.args[6], 'copilot');
+  assert.equal(entry.env, undefined);
+  assert.deepEqual((await configureRelayClient(opts)).changed, []);
+  await writeFile(file, '{ broken');
+  await assert.rejects(configureRelayClient(opts), { code: 'RELAY_CONFIG_INVALID' });
+  assert.equal(await readFile(file, 'utf8'), '{ broken');
+  await writeFile(file, JSON.stringify(document));
+  assert.deepEqual((await unconfigureRelayClient(opts)).changed, [file]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { mcpServers: { other } });
+  const manual = JSON.stringify({ mcpServers: { 'hivem1nd-relay': { type: 'local', command: 'manual-server', args: [] } } });
+  await writeFile(file, manual);
+  await assert.rejects(configureRelayClient(opts), { code: 'RELAY_CONFIG_CONFLICT' });
+  assert.deepEqual((await unconfigureRelayClient(opts)).changed, []);
+  assert.equal(await readFile(file, 'utf8'), manual);
+});
+
 test('Codex config merge validates TOML and preserves unrelated entries byte-for-byte', () => {
   const original = '# keep this comment\nmodel = "gpt-6-luna"\n\n[mcp_servers.other]\ncommand = "other"\nargs = []\n';
   const merged = buildClientConfig({ ...options('C:/kit-home'), existing: { mcp: original, hooks: '{"other":true}' } });
@@ -188,9 +229,12 @@ test('client diagnostics honor the supplied environment and Windows command shim
   await mkdir(bin);
   await writeFile(path.join(bin, 'claude.cmd'), 'shim');
   await writeFile(path.join(bin, 'opencode.cmd'), 'shim');
+  await writeFile(path.join(bin, 'copilot.cmd'), 'shim');
   const found = await diagnoseRelayClients({ env: { PATH: bin, PATHEXT: '.CMD;.EXE' }, platform: 'win32' });
   assert.equal(found.claude.available, true);
   assert.equal(found.opencode.available, true);
+  assert.equal(found.copilot.available, true);
+  assert.equal(found.copilot.configPaths.mcp.endsWith('mcp-config.json'), true);
   assert.equal(found.codex.available, false);
   assert.equal(found.cursor.available, false);
 });

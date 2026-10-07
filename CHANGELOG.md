@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Relay supports GitHub Copilot: `relay configure --client copilot` writes the user `mcp-config.json` that the Copilot CLI and VS Code Copilot both read, and a `copilot` wake adapter resumes an exact existing CLI session through its ACP server with the same bounds as the other adapters (exact session load, no session creation, permissions never approved, pointer-only text, environment allowlist, no replay of an uncertain dispatch). VS Code wake and Copilot hooks are not covered; see the Relay setup feature for the undocumented contracts that await a live trial.
 - Manager, an executive role that manages the whole mind: it surveys every project, defines scope with the user one topic at a time, gates the work before it reaches the executors and keeps its memory in `user/manager/`.
 - `evolve` runs when started from a linked install inside the mind folder, and installs the roles, commands and features of the mind's `user/` folder when the kit and the mind are the same folder.
 - Blueprint Lite routes links round the screens on separate tracks, so a line never crosses a screen or its title.
