@@ -6,7 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { helpText, parseArgs } from '../cli/index.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
-import { parseMachineRecord, writeMachineRecord } from '../engine/records.mjs';
+import { readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { uninstall } from '../engine/uninstall.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -124,7 +124,7 @@ test('removeMind deletes the mind when this is the only machine', async (context
 test('removeMind keeps the mind when another machine record exists, but this machine still detaches', async (context) => {
   const fixture = await makeFixture(context);
   await installFixture(fixture);
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   await writeMachineRecord(fixture.mindPath, 'OTHERBOX', { ...machine, machine: 'OTHERBOX' });
 
   const result = await uninstall({

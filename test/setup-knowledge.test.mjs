@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { evolve } from '../engine/lifecycle.mjs';
 import { listInstallableAssets } from '../engine/install.mjs';
-import { parseMachineRecord, writeMachineRecord } from '../engine/records.mjs';
+import { readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 
 test('evolve installs an included knowledge feature with its support files', async (context) => {
   const fixture = await makeKnowledgeFixture(context);
@@ -69,7 +69,7 @@ test('evolve installs roles, features and private knowledge features added to th
   for (const [name, heading] of [['archivist', /# Archivist/], ['tidy', /# Tidy/], ['audit', /# Audit/]]) {
     assert.match(await readFile(path.join(fixture.homeDir, '.agents', 'skills', name, 'SKILL.md'), 'utf8'), heading);
   }
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TEST.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TEST')).record;
   assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'archivist', 'SKILL.md')]);
 });
 

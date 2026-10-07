@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadAdapters } from '../engine/discovery.mjs';
 import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, planDataFile, planManagedFileRemovals } from '../engine/install.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
-import { assertSafePath, hashContent, parseMachineRecord, writeMachineRecord } from '../engine/records.mjs';
+import { assertSafePath, hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 import { text } from '../engine/texts.mjs';
 
@@ -102,7 +102,7 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
   assert.match(preferences, /Existing preference stays first\./);
   assert.match(preferences, /answers stay concise\. Why: chosen at setup\./);
 
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.setup, 'done');
   assert.equal(machine.language, 'en');
   assert.equal(machine.updateCheck, 'off');
@@ -132,7 +132,7 @@ test('simple install mode accepts every default and reaches install directly', a
   const result = await session.install();
   assert.equal(result.firstCommand, '/executor <project>');
 
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.setup, 'done');
   assert.equal(machine.updateCheck, 'daily');
   assert.deepEqual(machine.agents, [{ name: 'codex', mode: 'auto' }]);
@@ -205,7 +205,7 @@ test('the automatic update checkbox on the confirm step survives resume', async 
   const installStep = await resumed.getStep();
   await resumed.answer({ confirm: true });
   await resumed.install();
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.updateCheck, 'daily');
   assert.equal(installStep.number, 7);
 });
@@ -301,7 +301,7 @@ test('install and evolve prune retired kit files and skills, and previews leave 
     }
     assert.ok(result.removed.includes(copyPath));
     assert.ok(result.removed.includes(skillPath));
-    const record = parseMachineRecord(await readFile(machinePath, 'utf8'));
+    const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
     for (const filePath of [copyPath, skillPath, supportPath]) assert.equal(record.managedFiles[filePath], undefined);
     assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')), true);
     const report = await readFile(result.reportPath, 'utf8');
@@ -322,7 +322,7 @@ test('retired managed files edited by the user are kept, released and reported i
     assert.deepEqual(result.conflicts, []);
     assert.equal(await readFile(copyPath, 'utf8'), 'edited mind copy\n');
     assert.equal(await readFile(skillPath, 'utf8'), 'edited skill\n');
-    const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+    const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
     const report = await readFile(result.reportPath, 'utf8');
     assert.ok(report.includes(`## ${text(language, 'reportKept')}`));
     for (const filePath of [copyPath, skillPath]) {
@@ -344,7 +344,7 @@ test('pruning never removes managed or unowned files under user', async (context
   await writeFile(trackedPath, 'private notes\n');
   await writeFile(unownedPath, 'private task\n');
   const machinePath = path.join(userPath, 'machines', 'TESTBOX.md');
-  const record = parseMachineRecord(await readFile(machinePath, 'utf8'));
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   record.managedFiles[privatePath] = hashContent(await readFile(privatePath));
   record.managedFiles[trackedPath] = hashContent(await readFile(trackedPath));
   await writeMachineRecord(fixture.mindPath, 'TESTBOX', record);
@@ -575,7 +575,7 @@ test('a symbolic ancestor becomes one conflict with replace as the default, and 
   const report = await readFile(result.reportPath, 'utf8');
   assert.match(report, new RegExp(`^omitted: ${result.omitted.length}$`, 'm'));
   assert.ok(report.includes(link));
-  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(record.setup, 'done');
   assert.equal(Object.keys(record.managedFiles).some((filePath) => filePath.startsWith(`${link}${path.sep}`)), false);
 });
@@ -621,7 +621,7 @@ test('replacing a junction inside a skills folder removes the link, writes the f
 
   const report = await readFile(result.reportPath, 'utf8');
   assert.match(report, /^links-replaced: 2$/m);
-  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(record.setup, 'done');
   assert.equal(record.managedFiles[path.join(qaLink, 'SKILL.md')] !== undefined, true);
 });
@@ -645,7 +645,7 @@ test('content categories group every feature deterministically and control the i
   assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report', 'void']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'relay-client-setup', 'release']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'cleaner', 'docs', 'relay-client-setup', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
   const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
     .filter((name) => (name.endsWith('.md') || !name.includes('.')) && name.toLowerCase() !== 'readme.md').length;
@@ -781,7 +781,7 @@ test('setup installs a role and a feature added to the mind folder', async (cont
   const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'archivist', 'SKILL.md');
   assert.match(await readFile(skillPath, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
   assert.match(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'tidy', 'SKILL.md'), 'utf8'), /# Tidy/);
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.managedFiles[skillPath]);
 });
 
@@ -804,7 +804,7 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
 
   const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'overmind', 'SKILL.md');
   assert.match(await readFile(privateSkill, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.managedFiles[privateSkill]);
   // The private half never reaches the published folder.
   assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'overmind.md')), false);
@@ -822,6 +822,28 @@ async function pathExists(target) {
     throw error;
   }
 }
+
+test('running setup again keeps the evidence folder recorded in the machine paths', async (context) => {
+  const fixture = await makeFixture(context);
+  const options = { kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', language: 'en', env: { PATH: '' }, resume: false };
+  let session = await createSetupSession(options);
+  await session.answer({ installMode: 'simple' });
+  await session.answer({ confirm: true });
+  await session.install();
+
+  const { record } = await readMachineRecord(fixture.mindPath, 'TESTBOX');
+  record.paths.push({ name: 'evidence', path: path.join(fixture.root, 'evidence') });
+  await writeMachineRecord(fixture.mindPath, 'TESTBOX', record);
+
+  session = await createSetupSession(options);
+  await answerReconfiguration(session, fixture, ['codex']);
+  await session.preview();
+  await session.answer({ confirm: true });
+  await session.install();
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+  assert.ok(machine.paths.some((entry) => entry.name === 'evidence' && entry.path === path.join(fixture.root, 'evidence')));
+  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
+});
 
 test('custom mode alerts about an installed mind, attaches the machine and leaves the mind content alone', async (context) => {
   const fixture = await makeFixture(context);
@@ -874,7 +896,7 @@ test('custom mode alerts about an installed mind, attaches the machine and leave
     '- 2026-01-01: Existing preference stays first. Why: chosen before setup.\n',
   );
   assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Older rules kept.\n');
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'SECOND.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'SECOND')).record;
   assert.equal(machine.setup, 'done');
   assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
 });

@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
+import { formatBytes } from '../engine/measure.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -338,6 +339,11 @@ function waitingText({ unread, open }) {
   ].filter(Boolean).join(", ");
 }
 
+function mindText(mind) {
+  if (!mind?.count) return "";
+  return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
+}
+
 function formatStatus(result) {
   const lines = [];
   if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
@@ -350,6 +356,8 @@ function formatStatus(result) {
   if (project) lines.push(`${result.project.name}: ${project}.`);
   const executive = result.executive ? waitingText(result.executive) : "";
   if (executive) lines.push(`Executive roles: ${executive}.`);
+  const mind = mindText(result.mind);
+  if (mind) lines.push(mind);
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }
