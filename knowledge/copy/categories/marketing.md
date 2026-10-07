@@ -28,7 +28,7 @@ Applies when: a pricing table, plan names, a comparison of tiers, a price change
 
 Options: impersonal, table line shape for the comparison, every price with period and currency. Terms that are contractual are filler only (see [boundaries.md](../boundaries.md)).
 
-Build: a table with one row per plan: name, who it is for, price with currency and period, what it includes and excludes. Every unknown value is the missing-fact marker, never a plausible number.
+Build: a table with one row per plan: name, who it is for, price with currency and period, what it includes and excludes. Every unknown value is the missing-fact marker, never a plausible number. Taxes, fees, shipping, the trial's end and the renewal price are stated beside the button that charges.
 
 Open: [pages.md, Pricing](../pages.md#pricing).
 
@@ -48,7 +48,7 @@ Applies when: testimonials, customer logos, figures, awards, comparisons with co
 
 Options: claim level verified only. A missing proof stays a visible gap, written as the missing-fact marker. A testimonial or named quote already on the page is flagged for the owner, never cut.
 
-Build: only proof that exists, with its source recorded; a slot without it holds the missing-fact marker as visible text. A quote already on the page stays verbatim and is listed for the owner when no record of it is at hand.
+Build: only proof that exists, with its source recorded; a slot without it holds the missing-fact marker as visible text. Ratings, review counts, badges and compliance claims trace to a source or a document; reviews the owner wrote or paid for are labelled or removed. A quote already on the page stays verbatim and is listed for the owner when no record of it is at hand.
 
 Open: [pages.md, Proof and claims](../pages.md#proof-and-claims) and [claim-check](../protocols/claim-check.md).
 
@@ -58,6 +58,6 @@ Applies when: footer text, a line about cookies, privacy or tracking outside the
 
 Options: impersonal, fragment or one sentence, linking to the policy rather than paraphrasing it.
 
-Build: links named exactly as the heading of the page they open, even when that heading is in title case (*Privacy policy*, *Terms of Service*), the copyright line with the year and the owner's name or markers, and no sentence restating a policy.
+Build: links named exactly as the heading of the page they open, even when that heading is in title case (*Privacy policy*, *Terms of Service*), the copyright line with the year and the owner's name or markers, and no sentence restating a policy. The footer links every notice the product needs (privacy policy, terms, refund policy, cookie notice with a way to reopen the choice) and carries the business details or links them; the text of each is the owner's.
 
 Open: [pages.md, Footers](../pages.md#footers) and [boundaries.md](../boundaries.md).

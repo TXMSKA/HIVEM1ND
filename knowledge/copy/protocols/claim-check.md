@@ -10,7 +10,7 @@ report: claims with a referent against claims without, the invented items remove
 ## Steps
 
 1. List the claims.
-   Task: list every sentence that asserts quality, scale, speed, popularity, importance or a result for the reader, with its location.
+   Task: list every sentence that asserts quality, scale, speed, popularity, importance, security, compliance or a result for the reader, with its location.
    Time: 10 minutes.
    Result: a numbered list of claims, or a recorded zero.
 
@@ -20,7 +20,7 @@ report: claims with a referent against claims without, the invented items remove
    Result: the count of superlatives without a referent is zero, and the count of claims cut is recorded (Convention as a target, Measured as a direction: objective language measured higher usability, https://www.nngroup.com/articles/concise-scannable-and-objective-how-to-write-for-the-web/).
 
 3. Check that each referent exists.
-   Task: trace every figure, customer name, testimonial, logo and screenshot to a file, a record or a published source. Split what traces to nothing by origin. An item the current draft introduced is removed, and its slot holds the missing-fact marker from [essentials.md](../essentials.md#missing-facts) as visible text. An item already in the target before the pass, above all a quote with a named person attached, is never removed or edited: it is listed for the owner with its location, as [boundaries.md](../boundaries.md) requires. A repository alone rarely holds the record of a customer quote, so its absence there proves nothing.
+   Task: trace every figure, customer name, testimonial, rating, review count, badge, certification and screenshot to a file, a record or a published source. Split what traces to nothing by origin. An item the current draft introduced is removed, and its slot holds the missing-fact marker from [essentials.md](../essentials.md#missing-facts) as visible text. An item already in the target before the pass, above all a quote with a named person attached, is never removed or edited: it is listed for the owner with its location, as [boundaries.md](../boundaries.md) requires. A repository alone rarely holds the record of a customer quote, so its absence there proves nothing.
    Time: 15 minutes.
    Result: every remaining referent has a location, the count of invented items left from the draft is zero, every pre-existing item without a record is listed for the owner and unchanged in the diff, and each slot now holding a marker is listed.
 

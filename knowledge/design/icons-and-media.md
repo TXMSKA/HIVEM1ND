@@ -28,6 +28,7 @@ Icons help where they speed recognition: a rail, a toolbar, a list of file types
 - **Find the largest paint by measuring it**, never by guessing which element it is.
 - **A heavy image that cannot shrink paints progressively.** A non-progressive file drawn top to bottom on a cold load reads as broken; saving it progressive or interlaced removes the half-drawn frame.
 - **Alternative text on every meaningful image**, and an empty alternative on a decorative one.
+- **A licence on record for every image.** A stock photo or an illustration is licensed for web and commercial use, and its licence or link is kept beside the file; one that asks for attribution gets it shown.
 - **No invented content.** A missing screenshot, photo or testimonial stays visibly missing, or the slot is removed. A placeholder that looks real is a false claim.
 - **The file in the repository is the file production serves.** When the two differ, what gets measured is not what anyone sees. Files nothing references are deleted rather than deployed.
 
@@ -40,4 +41,5 @@ Muted, inline on phones, no preload, and a poster frame. Without the poster the 
 - **Self-hosted, compressed as WOFF2, subset to the characters in use, and swapped in** so text is visible while the face loads. A font that blocks the text is a blank page.
 - **Preload only what the first paint needs.** One preload too many competes with the one that matters.
 - **Prove the real face loaded.** A development server can silently fall back to a system face under the original family name, and the loaded-fonts list still reports it as loaded. Read the source of the face from the loaded-fonts list, or measure a known string against the face's advance width. A fallback in development means checking the built output before judging any text width.
+- **A licence on record for every face.** A foundry or marketplace font is licensed for web embedding and for the page views or users it will serve; the licence file or link stays in the repository beside the font.
 - **Before inventing a face, a colour or a mark, look for the brand's own assets.** A face that is not on a public font service is usually already in the brand's files.

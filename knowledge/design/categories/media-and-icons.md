@@ -26,7 +26,7 @@ Options:
 - **An authored or generated image** sized for its slot at twice the displayed size.
 - **A visible gap** when the real asset does not exist yet, never an invented one.
 
-Build: WebP or AVIF at twice the rendered box, `width` and `height` or `aspect-ratio` set, `loading="lazy"` below the fold, `fetchpriority="high"` on the largest image of the first viewport, alternative text on every meaningful image, and a visible gap when the real asset does not exist.
+Build: WebP or AVIF at twice the rendered box, `width` and `height` or `aspect-ratio` set, `loading="lazy"` below the fold, `fetchpriority="high"` on the largest image of the first viewport, alternative text on every meaningful image, a licence on record for each file, and a visible gap when the real asset does not exist.
 
 Open: [assets-and-media](../protocols/assets-and-media.md), steps 4, 5 and 7; [icons-and-media.md](../icons-and-media.md), Images.
 
@@ -54,7 +54,7 @@ Options:
 - **The platform's system face** for a working app with no claim to its own world.
 - **The brand's own face** from its assets, before any substitute.
 
-Build: The platform system stack for a working app. Otherwise self-hosted WOFF2, subset to the characters in use, `font-display: swap`, a preload only for the first paint's faces, and the loaded source read back from the page.
+Build: The platform system stack for a working app. Otherwise self-hosted WOFF2, subset to the characters in use, `font-display: swap`, a preload only for the first paint's faces, the loaded source read back from the page, and the licence on record.
 
 Open: [assets-and-media](../protocols/assets-and-media.md), step 6; [icons-and-media.md](../icons-and-media.md), Fonts.
 

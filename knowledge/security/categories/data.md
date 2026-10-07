@@ -71,3 +71,22 @@ The stores behind the application: databases, caches, object stores, their accou
 **Build:** Hash tokens and passwords, encrypt at rest, make the seed refuse a store that already holds accounts, and have tests create their own temporary store and delete it afterwards.
 
 **Open:** steps 5 and 6 of [data-store](../protocols/data-store.md); step 5 of [logging-and-errors](../protocols/logging-and-errors.md) for personal data in records.
+
+## Personal data, consent and notices
+
+**Applies when:** a form, an import or a script collects data about a person; a consent box, a banner, a mailing list or an age screen is built; a third-party script or SDK is added; account deletion or export is built; a privacy, cookie, terms or refund page is written or linked.
+
+**Options:**
+
+- **Collect only what a feature uses.** The default. Every field has a named purpose and a reader in the code; a field with none is removed, and a value that only needs comparing is stored as a hash.
+- **Consent per purpose, off by default, recorded.** For anything beyond what was asked for: marketing mail, analytics, sharing with a third party. One unticked box per purpose, kept with the time, the text version and the account, and withdrawn as easily as given.
+- **Third-party scripts and SDKs by inventory.** Each named with what it receives and whether it sets an identifier; those that track or set identifiers load only after consent. A tag manager counts as one.
+- **An age screen where children may arrive.** Below the threshold that applies, no account or a parent's approval, and no tracking.
+- **Deletion and export through a request path.** Deletion reaches every store, processor and mailing list, and backups expire on their rotation; the export holds the same fields the inventory lists.
+- **Notices written from the inventory.** Privacy policy, cookie notice, terms, refund policy and business details, each agreeing with what the code does.
+
+Which regime applies (GDPR, CCPA, COPPA, ePrivacy and others differ by place, audience and age threshold), the retention periods and the wording of every notice are a person's decision. Nothing here is legal advice.
+
+**Build:** Keep one table of every personal field with its purpose, store, processor and retention, and build the consent record, the script list, the deletion path and the notices from it. Load non-essential scripts only after the choice, send marketing mail only to addresses with a recorded opt-in and an unsubscribe link, and link each notice from the footer and from the point of collection.
+
+**Open:** steps 1 to 6 of [personal-data](../protocols/personal-data.md); step 5 of [data-store](../protocols/data-store.md); step 5 of [logging-and-errors](../protocols/logging-and-errors.md) for personal data in records.
