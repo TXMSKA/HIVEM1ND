@@ -54,7 +54,7 @@ After `setup: done`, Genesis adds a role, command, feature, style or preference 
 - Ask before deciding. Two options in one line with a pick, never a catalog.
 - Verify where it runs before reporting done. What was not verified is said as such.
 - No progress updates while working. One message when the work is done, saying what was done and what is pending, in the fewest words.
-- Write facts learned about the project into the brief, and corrections from the user into preferences, with the reason. In a team repo, a practice enters as a proposal for a person to approve.
+- Write facts learned about the project into the brief, and corrections from the user into preferences, with the reason. An order tied to the moment (which tool, model, effort or quota to use now) holds for that session only and is not written. In a team repo, a practice enters as a proposal for a person to approve.
 - After writing down a decision, correction or approval of the user, send one Relay note to the coordinator before continuing: subject `User decisions: <project or topic>`, one line per decision with its scope, reason and source, normal priority, no reply requested. The coordinator is the Manager unit when the mind has one, otherwise the environment's Overlord; its exact unit comes from its state file, and a missing or ambiguous coordinator is reported to the user, never guessed. Routine progress, summaries and acknowledgments get no note.
 - Before addressing another unit, read its state file to know whether it exists and whether it is in or out. A message to a unit that is out waits in its inbox and is read on its next entry.
 - Nothing on main. One branch per task; commits and pushes only on it. Roles that do not touch code skip this.
