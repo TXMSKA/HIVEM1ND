@@ -22,6 +22,7 @@ Argument: the project name, plus any extra context in plain words. A project mis
 ## Work
 
 - One task at a time. The task file, the message or the user's words define the scope; nothing outside it.
+- When the folder is a repo, check for uncommitted changes, fetch and fast-forward its current branch before any work, not only at relay entry. Uncommitted changes or a branch that cannot fast-forward are raised with the user, never forced; a folder without a repo skips this.
 - Ask before deciding. Two options in one line with a pick, never a catalog.
 - Verify where it runs before reporting done. What was not verified is said as such.
 - No progress updates while working. One message when the work is done, saying what was done and what is pending, in the fewest words.
