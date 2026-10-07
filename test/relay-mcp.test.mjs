@@ -52,6 +52,15 @@ test('OpenCode identifies itself as a supported Relay MCP registration client', 
   assert.equal(lines[0].result.structuredContent.nativeSessionId, 'opencode-session-1');
 });
 
+test('Copilot identifies itself as a supported Relay MCP registration client', async (context) => {
+  const mindPath = await fixture(context);
+  const { lines } = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'copilot-session-1', client: 'copilot' } } },
+  ], 'copilot');
+  assert.equal(lines[0].result.structuredContent.client, 'copilot');
+  assert.equal(lines[0].result.structuredContent.nativeSessionId, 'copilot-session-1');
+});
+
 test('invalid MCP JSON, primitives, extra fields, unknown tools and oversized lines return errors and keep serving', async (context) => {
   const mindPath = await fixture(context);
   const requests = [
