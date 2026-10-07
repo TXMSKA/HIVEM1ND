@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The design pack's `device-reach` protocol preserves the approved default on simulated low-end Android, computers with a usable GPU or software rendering, Linux, other browser engines and the product's own app, with budgets, visual comparisons and evidence or gaps per profile; QA runs it for tasks in its scope, with independent verification by a second agent command-line interface only when requested in that run.
 - Manager, an executive role that manages the whole mind: it surveys every project, defines scope with the user one topic at a time, gates the work before it reaches the executors and keeps its memory in `user/manager/`.
 - `evolve` runs when started from a linked install inside the mind folder, and installs the roles, commands and features of the mind's `user/` folder when the kit and the mind are the same folder.
 - Blueprint Lite routes links round the screens on separate tracks, so a line never crosses a screen or its title.
