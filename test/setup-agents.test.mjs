@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadAdapters } from '../engine/discovery.mjs';
-import { parseMachineRecord } from '../engine/records.mjs';
+import { readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,7 +35,7 @@ test('scanning detects known agents and selection narrows what gets installed', 
   await finishSetup(session, fixture);
   await session.install();
 
-  const machine = parseMachineRecord(await readFile(machineRecordPath(fixture), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.deepEqual(machine.agents, [{ name: 'codex', mode: 'on-demand' }]);
 });
 
@@ -127,7 +127,7 @@ test('accepting scan results as-is keeps every detected agent selected with its 
 
   await finishSetup(session, fixture);
   await session.install();
-  const machine = parseMachineRecord(await readFile(machineRecordPath(fixture), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.deepEqual(
     machine.agents.map((agent) => agent.name).sort(),
     ['codex', 'cursor'],
