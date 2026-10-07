@@ -705,7 +705,11 @@ class SetupSession {
       agents: (this.answers.agents ?? [])
         .filter((agent) => agent.selected !== false)
         .map((agent) => ({ name: agent.id, mode: agent.attach === 'auto' ? 'auto' : 'on-demand' })),
-      paths: buildMachinePaths(this.answers.projectRoots, this.includedProjects()),
+      // The folder /cleaner moves evidence to is recorded by hand and survives a new setup.
+      paths: [
+        ...buildMachinePaths(this.answers.projectRoots, this.includedProjects()),
+        ...(this.machineRecord?.paths ?? []).filter((entry) => entry.name === 'evidence'),
+      ],
       excluded: this.excludedItems(),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       draft: {},

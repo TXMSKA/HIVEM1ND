@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine } from './install.mjs';
-import { atomicWriteFile, hashContent, machineReportPath, readMachineRecord } from './records.mjs';
+import { atomicWriteFile, hashContent, machineManagedPath, machineReportPath, readMachineRecord } from './records.mjs';
 
 const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
 const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
@@ -86,6 +86,12 @@ export async function uninstall(options = {}) {
       if (!dryRun) await removeFile(reportPath);
       removed.push(reportPath);
     }
+    // The managed map belongs to this machine as well and goes with its record.
+    const managedPath = machineManagedPath(mindPath, hostname);
+    if (await lstatIfPresent(managedPath)) {
+      if (!dryRun) await removeFile(managedPath);
+      removed.push(managedPath);
+    }
     if (eligibility) kept.push({ path: mindPath, reason: eligibility.reason });
   }
 
@@ -162,6 +168,7 @@ async function checkMindRemovable(mindPath, hostname, record) {
   const managedByNormalizedPath = new Map(Object.entries(record.managedFiles ?? {}).map(([entryPath, hash]) => [normalizePath(entryPath), hash]));
   const ownRecordPath = path.join(machinesDir, `${hostname}.md`);
   const ownReportPath = path.join(machinesDir, `${hostname}.report.md`);
+  const ownManagedPath = path.join(machinesDir, `${hostname}.managed.json`);
   const migrationsPath = path.join(mindPath, 'user', 'MIGRATIONS');
   const extras = [];
   await walk(mindPath);
@@ -185,6 +192,7 @@ async function checkMindRemovable(mindPath, hostname, record) {
       if (!entry.isFile()) continue;
       if (normalizePath(entryPath) === normalizePath(ownRecordPath)) continue;
       if (normalizePath(entryPath) === normalizePath(ownReportPath)) continue;
+      if (normalizePath(entryPath) === normalizePath(ownManagedPath)) continue;
       if (normalizePath(entryPath) === normalizePath(migrationsPath)) continue;
       const managedHash = managedByNormalizedPath.get(normalizePath(entryPath));
       if (managedHash === undefined) {
