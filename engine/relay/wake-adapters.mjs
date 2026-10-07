@@ -4,6 +4,7 @@ import { wakeAdapter as cursor } from './cursor-wake.mjs';
 import { wakeAdapter as opencode } from './opencode-wake.mjs';
 import { wakeAdapter as host } from './host-wake.mjs';
 import { wakeAdapter as antigravity } from './antigravity-wake.mjs';
+import { wakeAdapter as copilot } from './copilot-wake.mjs';
 
 // Resolve lazily: native modules also use shared worker helpers that read this
 // table at runtime. Importing a native module directly must work as well.
@@ -14,6 +15,7 @@ export const WAKE_ADAPTERS = Object.freeze({
   get opencode() { return opencode; },
   get host() { return host; },
   get antigravity() { return antigravity; },
+  get copilot() { return copilot; },
 });
 
 export function getWakeAdapter(client, adapters = WAKE_ADAPTERS) {

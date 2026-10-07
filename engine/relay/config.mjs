@@ -11,13 +11,14 @@ import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-pa
 const OWNED_SERVER = 'hivem1nd-relay';
 const MARKER = '# HIVEM1ND Relay managed server';
 const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
-const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode']);
+const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot']);
 
 const CLIENT_PATHS = {
   claude: (home) => ({ mcp: path.join(home, '.claude.json'), hooks: path.join(home, '.claude', 'settings.json') }),
   codex: (home) => ({ mcp: path.join(home, '.codex', 'config.toml'), hooks: path.join(home, '.codex', 'hooks.json') }),
   cursor: (home) => ({ mcp: path.join(home, '.cursor', 'mcp.json'), hooks: path.join(home, '.cursor', 'hooks.json') }),
   opencode: (home) => ({ mcp: path.join(home, '.config', 'opencode', 'opencode.jsonc') }),
+  copilot: (home) => ({ mcp: path.join(home, '.copilot', 'mcp-config.json') }),
 };
 
 function safeString(value, name) {
@@ -67,6 +68,8 @@ function ownedMcp({ client, kitPath, mindPath, unit, sessionId, nodePath }) {
       ...(unit ? ['--unit', unit] : []), ...(sessionId ? ['--session-id', sessionId] : [])],
   };
   if (client === 'cursor') return { type: 'stdio', ...entry };
+  // Copilot's documented mcp-config.json entry shape for a local server.
+  if (client === 'copilot') return { type: 'local', ...entry, tools: ['*'] };
   return entry;
 }
 
@@ -251,6 +254,9 @@ export function buildClientConfig({ client, existing = {}, kitPath, mindPath, un
   if (client === 'opencode') {
     return { mcp: openCodeMcpMerge(existing.mcp ?? '', { client, kitPath, mindPath, unit, sessionId, nodePath }) };
   }
+  if (client === 'copilot') {
+    return { mcp: jsonMerge(existing.mcp ?? '', 'mcp', { client, kitPath, mindPath, unit, sessionId, nodePath }) };
+  }
   return {
     mcp: jsonMerge(existing.mcp ?? '', 'mcp', { client, kitPath, mindPath, unit, sessionId, nodePath }),
     hooks: jsonMerge(existing.hooks ?? '', 'hooks', { client, kitPath, mindPath, unit, nodePath, platform }),
@@ -333,6 +339,11 @@ export function clientConfigPaths({ client, homeDir, env = process.env } = {}) {
     const candidates = ['opencode.jsonc', 'opencode.json', 'config.json'].map((name) => path.join(root, name));
     const mcp = candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
     return { mcp, mcpRoot: root };
+  }
+  if (client === 'copilot') {
+    // COPILOT_HOME overrides ~/.copilot; VS Code reads the same portable user file.
+    const root = path.resolve(explicitHome ? path.join(home, '.copilot') : env.COPILOT_HOME || path.join(home, '.copilot'));
+    return { mcp: path.join(root, 'mcp-config.json'), mcpRoot: root };
   }
   const root = path.join(home, '.cursor');
   return { mcp: path.join(root, 'mcp.json'), hooks: path.join(root, 'hooks.json'), mcpRoot: root, hooksRoot: root };
@@ -485,7 +496,7 @@ export async function diagnoseRelayClients({ homeDir, env = process.env, executa
   const result = {};
   for (const client of SUPPORTED) {
     const config = clientConfigPaths({ client, homeDir, env });
-    const command = executables[client] ?? (client === 'claude' ? 'claude' : client === 'codex' ? 'codex' : client === 'cursor' ? 'cursor' : 'opencode');
+    const command = executables[client] ?? (client === 'claude' ? 'claude' : client === 'codex' ? 'codex' : client === 'cursor' ? 'cursor' : client === 'copilot' ? 'copilot' : 'opencode');
     let available = false;
     const pathValue = env.PATH ?? env.Path ?? '';
     const extensions = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').map((extension) => extension.toLowerCase())] : [''];
