@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseMachineRecord } from '../engine/records.mjs';
+import { readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,7 +48,7 @@ test('editing a group environment name applies it to every repository in that gr
   assert.match(routes, /- repo2 \(oss\)/);
   assert.match(routes, /- oss: repo1, repo2/);
 
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.deepEqual(machine.paths.find((entry) => entry.name === 'oss'), { name: 'oss', path: path.join(fixture.homeDir, 'GitHub') });
   assert.ok(!machine.paths.some((entry) => entry.path === fixture.homeDir));
   assert.ok(machine.paths.some((entry) => entry.name === 'direct-web'));
@@ -72,7 +72,7 @@ test('removing a single repository drops it from its group and keeps it out of r
 
   const routes = await readFile(path.join(fixture.mindPath, 'user', 'routes.md'), 'utf8');
   assert.doesNotMatch(routes, /repo2/);
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(!machine.paths.some((entry) => entry.name === 'repo2'));
 });
 

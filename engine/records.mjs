@@ -136,16 +136,29 @@ export function serializeMachineRecord(record) {
   if (record.setup !== 'done' && Object.keys(record.draft ?? {}).length > 0) {
     lines.push('', '## Setup Draft', FENCE, JSON.stringify(record.draft, null, 2), '```');
   }
-  if (Object.keys(record.managedFiles ?? {}).length > 0) {
-    lines.push('', '## Managed Files', FENCE, JSON.stringify(record.managedFiles, null, 2), '```');
-  }
   return `${lines.join('\n').trimEnd()}\n`;
+}
+
+// The managed map lives beside the machine file. A machine file written before that split
+// still carries it in a `## Managed Files` section, which is read until the next write moves it.
+export async function readManagedFiles(machineFilePath, fallback = {}) {
+  const jsonPath = machineFilePath.replace(/\.md$/i, '') + '.managed.json';
+  const text = await readTextIfPresent(jsonPath);
+  if (text === null) return fallback;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function readMachineRecord(mindPath, hostname) {
   const filePath = machineRecordPath(mindPath, hostname);
   try {
-    return { filePath, record: parseMachineRecord(await readFile(filePath, 'utf8')) };
+    const record = parseMachineRecord(await readFile(filePath, 'utf8'));
+    record.managedFiles = await readManagedFiles(filePath, record.managedFiles);
+    return { filePath, record };
   } catch (error) {
     if (error?.code === 'ENOENT') return { filePath, record: null };
     throw error;
@@ -161,12 +174,24 @@ export async function writeMachineRecord(mindPath, hostname, record) {
       throw new Error(`Refusing to replace an unrecognized machine record: ${filePath}`);
     }
   }
+  // The map goes first: a run that stops between the two writes leaves a machine file that
+  // still holds the old section, and the map beside it wins when both exist.
+  const managedPath = machineManagedPath(mindPath, hostname);
+  const managed = record.managedFiles ?? {};
+  if (Object.keys(managed).length > 0 || await readTextIfPresent(managedPath) !== null) {
+    await atomicWriteFile(managedPath, `${JSON.stringify(managed, null, 2)}
+`, { root: mindPath });
+  }
   await atomicWriteFile(filePath, serializeMachineRecord(record), { root: mindPath });
   return filePath;
 }
 
 export function machineRecordPath(mindPath, hostname) {
   return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.md`);
+}
+
+export function machineManagedPath(mindPath, hostname) {
+  return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.managed.json`);
 }
 
 export function machineReportPath(mindPath, hostname) {

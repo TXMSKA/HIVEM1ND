@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord } from "./records.mjs";
+import { measureMind } from "./measure.mjs";
+import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord, readManagedFiles } from "./records.mjs";
 
 const execFileAsync = promisify(execFile);
 const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -1137,6 +1138,7 @@ export async function check(options = {}) {
     const machinePath = await machineFilePath(resolved.mindPath, resolved.hostname);
     await assertSafePath(resolved.mindPath, machinePath, { allowMissing: false });
     record = parseMachineRecord(await readText(machinePath));
+    record.managedFiles = await readManagedFiles(machinePath, record.managedFiles);
   } catch (error) {
     if (error.code !== "MACHINE_NOT_FOUND") throw error;
   }
@@ -1175,6 +1177,8 @@ export async function check(options = {}) {
       : null,
     repository,
     executive: await waitingWork(userPath),
+    // The measurement is advice: it never fails the check and never writes.
+    mind: await measureMind({ mindPath: resolved.mindPath, hostname: resolved.hostname, now: resolved.now ? new Date(resolved.now) : new Date() }).catch(() => null),
     warnings,
   };
 }
