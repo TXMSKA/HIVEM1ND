@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Relay supports GitHub Copilot: `relay configure --client copilot` writes the user `mcp-config.json` that the Copilot CLI and VS Code Copilot both read, and a `copilot` wake adapter resumes an exact existing CLI session through its ACP server with the same bounds as the other adapters (exact session load, no session creation, permissions never approved, pointer-only text, environment allowlist, no replay of an uncertain dispatch). VS Code wake and Copilot hooks are not covered; see the Relay setup feature for the undocumented contracts that await a live trial.
 - `device-reach`, a design protocol that checks the approved default on simulated low-end phones, computers, Linux, other browser engines and the product's own app against performance budgets, with evidence or a named gap per profile; `/qa` offers it, with the user's yes, for tasks in its scope.
 - Same-day awareness: every seat sends the coordinator (the Manager, or the environment's Overlord) one Relay note right after recording a user decision, correction or approval.
 - Section tours: the design and copy packs teach each section on first opening with three or four key things and a More control that continues the tour.
