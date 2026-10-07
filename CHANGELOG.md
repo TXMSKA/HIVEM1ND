@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- The design pack's `device-reach` protocol preserves the approved default on simulated low-end Android, computers with a usable GPU or software rendering, Linux, other browser engines and the product's own app, with budgets, visual comparisons and evidence or gaps per profile; QA runs it for tasks in its scope, with independent verification by a second agent command-line interface only when requested in that run.
+- `device-reach`, a design protocol that checks the approved default on simulated low-end phones, computers and Linux against performance budgets, with evidence or a named gap per profile; `/qa` runs it for tasks in its scope.
+- Section tours: the design and copy packs teach each section on first opening with three or four key things and a More control that continues the tour.
+- Executor, Incubator and Overlord fetch and fast-forward their repo before any work, not only at relay entry.
 - Manager, an executive role that manages the whole mind: it surveys every project, defines scope with the user one topic at a time, gates the work before it reaches the executors and keeps its memory in `user/manager/`.
 - `evolve` runs when started from a linked install inside the mind folder, and installs the roles, commands and features of the mind's `user/` folder when the kit and the mind are the same folder.
 - Blueprint Lite routes links round the screens on separate tracks, so a line never crosses a screen or its title.

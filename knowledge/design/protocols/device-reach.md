@@ -20,12 +20,12 @@ report: per profile, settings, captures, measurements, pass or fail or not check
    Result: budget table, trace recipe and build sizes; every metric has a tool or a stated limit.
 
 3. Simulate a low-end Android phone.
-   Task: use browser Device Mode at 360 by 640 CSS pixels, density 2 and touch, with 6-times CPU throttling; constrain the test processes to two logical CPUs and a 2 GiB virtual machine. For an Android app, use an Android Emulator AVD with two cores and 2 GiB RAM. Replay step 1 and record step 2. Device Mode approximates browser resources, not Android OS or GPU performance; record those limits separately.
+   Task: use browser Device Mode at 360 by 640 CSS pixels, density 2 and touch, with 6-times CPU throttling; restrict the test processes to two logical CPUs as in step 4, and cap memory at 2 GiB where a virtual machine or container is at hand, otherwise record memory as not limited. For an Android app, use an Android Emulator AVD with two cores and 2 GiB RAM. Replay step 1 and record step 2. Device Mode approximates browser resources, not Android OS or GPU performance; record those limits separately.
    Time: 15 minutes; mark unavailable settings or runtimes not checked and continue.
    Result: captures, trace and actual limits for the mobile browser and applicable Android app, with no claim for an unmodelled resource.
 
 4. Simulate a weak computer with a usable GPU.
-   Task: use 1366 by 768 CSS pixels, density 1, 4-times browser CPU throttling and a 4 GiB virtual machine. Restrict all test processes to two allowed logical CPUs through Task Manager's Set affinity on Windows or `taskset -apc <two-allowed-cpus> <pid>` on Linux. Keep hardware acceleration enabled, verify the renderer in the runtime diagnostics, then replay and record. CPU throttling does not throttle the GPU; record its identity and any supported resource cap, never infer a weak GPU from a powerful host.
+   Task: use 1366 by 768 CSS pixels, density 1, 4-times browser CPU throttling, and memory capped at 4 GiB where a virtual machine or container is at hand, otherwise recorded as not limited. Restrict all test processes to two allowed logical CPUs through Task Manager's Set affinity on Windows or `taskset -apc <two-allowed-cpus> <pid>` on Linux. Keep hardware acceleration enabled, verify the renderer in the runtime diagnostics, then replay and record. CPU throttling does not throttle the GPU; record its identity and any supported resource cap, never infer a weak GPU from a powerful host.
    Time: 15 minutes; mark limits that cannot be applied not checked and continue.
    Result: trace, captures, affinity and memory limits, renderer and the exact extent of GPU simulation.
 
