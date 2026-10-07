@@ -36,10 +36,10 @@ Which protocol steps and topic sections each category sends work to. accessibili
 | navigation | accessibility 3, 7; responsive-behaviour 2, 5; colour-and-theming 6; interface-states 4; assets-and-media 1, 2 for a rail | app-shell: Rail, Navigation link; overlays: Drawer and sheet; site-polish: Build first |
 | overlays | accessibility 2; interface-states 5, 6; forms-and-inputs 4; motion 2, 4 | overlays: Choosing the kind and the section of each kind used; animation: Recipes |
 | states | interface-states 1 to 7; forms-and-inputs 5 | states: the section of each state present; animation: Gates |
-| data-display | composition-and-layout 2; colour-and-theming 6; hierarchy-and-type 5; interface-states 7 | dashboards: Layout, Cards, Figures, Charts; app-shell: Overview |
-| media-and-icons | assets-and-media 1 to 7; accessibility 7; motion 7 for video | icons-and-media: Icons, Choosing whether to add icons, Images, Fonts |
-| motion | motion 1 to 7; design-specificity 7 for a story page; responsive-behaviour 6 for gestures | animation: Gates, Numbers, Recipes, Constraints; pages-and-sections: Pacing and storytelling for a story page |
-| pages-and-composition | composition-and-layout 1 to 7; design-specificity; responsive-behaviour 1 to 5 | pages-and-sections: First viewport, Sections, Widths; direction: Find the gesture; app-shell; site-polish |
+| data-display | composition-and-layout 2; colour-and-theming 6; hierarchy-and-type 5; interface-states 7; device-reach 1 to 10 | dashboards: Layout, Cards, Figures, Charts; app-shell: Overview |
+| media-and-icons | assets-and-media 1 to 7; accessibility 7; motion 7 for video; device-reach 1 to 10 | icons-and-media: Icons, Choosing whether to add icons, Images, Fonts |
+| motion | motion 1 to 7; design-specificity 7 for a story page; responsive-behaviour 6 for gestures; device-reach 1 to 10 | animation: Gates, Numbers, Recipes, Constraints; pages-and-sections: Pacing and storytelling for a story page |
+| pages-and-composition | composition-and-layout 1 to 7; design-specificity; responsive-behaviour 1 to 5; device-reach 1 to 10 | pages-and-sections: First viewport, Sections, Widths; direction: Find the gesture; app-shell; site-polish |
 
 ## Running the protocols
 
@@ -54,6 +54,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 - colour-and-theming: scope colour, tokens, surfaces, borders, shadows and themes. Keeps colour on tokens with every pair above its contrast target.
 - composition-and-layout: scope page structure, grids, sections, spacing and containers. Gives each reading moment one dominant object on a shared grid.
 - design-specificity: scope new surfaces and passes that set the visual direction. Separates choices made for the brief from defaults.
+- device-reach: scope any surface, animation, background or build that ships to users. Keeps the approved default smooth on simulated low-end resources, with evidence per profile.
 - forms-and-inputs: scope forms, fields, selects, dates, search and submit flows. Keeps presses low, blocks explained and errors in place.
 - hierarchy-and-type: scope headings, body copy, type scale, measure and numerals. Makes one reading order obvious on named roles.
 - interface-states: scope anything that loads, fails, is empty, is disabled or succeeds. Designs and proves every state.

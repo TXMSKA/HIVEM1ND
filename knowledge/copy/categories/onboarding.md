@@ -22,6 +22,16 @@ Build: per step, a title that is the outcome, at most one sentence, one primary 
 
 Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps), [microcopy.md, Labels](../microcopy.md#labels) and [microcopy.md, Helper text](../microcopy.md#helper-text) for the fields inside each step.
 
+## Section tours and menus
+
+Applies when: a product, game, section or app inside a product opens for the first time, or a menu offers several actions.
+
+Options: three or four key things on first opening, a More control for the remaining tour, skippable and replayable steps; one-line descriptions beside menu option labels.
+
+Build: open with one line on what the section does. Give each of the three or four key things a title that is the outcome and at most one sentence. Keep the section usable while the tour is open. Put the remaining steps behind a control labelled *More*, or *Continue the tour* where *More* alone does not say what it does, and show them only when it is pressed. Give every menu option its label and one line on what it does, such as *Import files* / *Add existing files to the library.* Never show the tour of a whole product at once.
+
+Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps) and [microcopy.md, Labels](../microcopy.md#labels).
+
 ## First-use empty state
 
 Applies when: a list, board or library shown before anything was created in it.
