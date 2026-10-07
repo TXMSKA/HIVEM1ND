@@ -87,8 +87,8 @@ function parseRetryPolicy(value = {}) {
     || !Number.isInteger(result.baseDelayMs) || result.baseDelayMs < 100 || result.baseDelayMs > 10_000
     || !Number.isInteger(result.maxDelayMs) || result.maxDelayMs < result.baseDelayMs || result.maxDelayMs > 30_000
     || !Number.isInteger(result.cooldownMs) || result.cooldownMs < 1000 || result.cooldownMs > 120_000
-    || !Number.isInteger(result.sinkTimeoutMs) || result.sinkTimeoutMs < 250 || result.sinkTimeoutMs > 15_000
-    || !Number.isInteger(result.leaseMs) || result.leaseMs < 3000 || result.leaseMs > 60_000
+    || !Number.isInteger(result.sinkTimeoutMs) || result.sinkTimeoutMs < 250 || result.sinkTimeoutMs > 180_000
+    || !Number.isInteger(result.leaseMs) || result.leaseMs < 3000 || result.leaseMs > 300_000
     || result.leaseMs <= result.sinkTimeoutMs) {
     throw wakeError('WAKE_INVALID_RETRY_POLICY', 'retryPolicy values are outside their safe bounds.');
   }

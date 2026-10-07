@@ -3,13 +3,18 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { validWakeBinding, validWakePointer, localWakeChildEnv, explicitWakeAttach, spawnLocalWakeWorker } from './local-wake.mjs';
 
+/** One woken turn (init, read, send, answer) needs 25 to 35 s measured; the bound leaves wide headroom. */
+export const ANTIGRAVITY_TURN_TIMEOUT_MS = 120_000;
+/** The controller waits past the adapter's own bound plus its 500 ms shutdown so the adapter reports first. */
+export const ANTIGRAVITY_CONTROLLER_BOUND_MS = ANTIGRAVITY_TURN_TIMEOUT_MS + 5000;
+
 export const wakeAdapter = Object.freeze({
   moduleUrl: import.meta.url,
   label: 'antigravity', capability: antigravityWakeCapability, sendPointer: sendAntigravityWake,
   attachIdentity: ({ nativeSessionId }) => explicitWakeAttach('antigravity', nativeSessionId),
   validateRuntime: async () => {}, spawnWorker: spawnLocalWakeWorker, workerDependency: 'spawnLocalWakeWorker',
   workerEnvKeys: Object.freeze(['RELAY_ANTIGRAVITY_CWD', 'RELAY_ANTIGRAVITY_AGY']),
-  controllerOptions: Object.freeze({ retryPolicy: Object.freeze({ sinkTimeoutMs: 15_000, leaseMs: 30_000 }) }),
+  controllerOptions: Object.freeze({ retryPolicy: Object.freeze({ sinkTimeoutMs: ANTIGRAVITY_CONTROLLER_BOUND_MS, leaseMs: 180_000 }) }),
   helpLines: Object.freeze(['Antigravity CLI: set RELAY_ANTIGRAVITY_CWD; close the exact conversation in other clients.']),
 });
 
@@ -21,7 +26,7 @@ export function antigravityWakeCapability({ env = process.env } = {}) {
 
 /** Google documents --conversation and stream-json input/output in CLI headless mode. */
 export async function sendAntigravityWake({ binding, text, env = process.env, spawnProcess = spawn,
-  timeoutMs = 14_000, signal } = {}) {
+  timeoutMs = ANTIGRAVITY_TURN_TIMEOUT_MS, signal } = {}) {
   const no = (reason) => ({ status: 'not_submitted', reason });
   const capability = antigravityWakeCapability({ env });
   if (!capability.available) return no(capability.reason);

@@ -238,3 +238,79 @@ test('client diagnostics honor the supplied environment and Windows command shim
   assert.equal(found.codex.available, false);
   assert.equal(found.cursor.available, false);
 });
+
+// Antigravity documents regex rules as one anchored regular expression per whitespace-separated token.
+function ruleAllows(rule, line) {
+  const match = /^command\(regex:(.+)\)$/.exec(rule);
+  if (!match) return false;
+  const tokens = match[1].split(' '), words = line.split(' ');
+  return words.length >= tokens.length && tokens.every((token, index) => new RegExp(`^(?:${token})$`).test(words[index]));
+}
+
+test('Antigravity configure adds only the kit relay read and send allow rules and unconfigure restores the file', async (context) => {
+  const root = await temp(context);
+  const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
+  const file = path.join(root, '.gemini', 'antigravity-cli', 'settings.json');
+  assert.equal(clientConfigPaths({ client: 'antigravity', homeDir: root }).mcp, file);
+  await mkdir(path.dirname(file), { recursive: true });
+  const original = `${JSON.stringify({ colorScheme: 'tokyo night', permissions: { allow: ['command(git)'], deny: ['command(sudo)'] } }, null, 2)}\n`;
+  await writeFile(file, original);
+  const cli = path.join(root, 'kit', 'cli', 'index.mjs'), mind = path.join(root, 'mind');
+  const line = (action, extra = '', kit = cli, where = mind) => `node ${kit} relay ${action} --mind-path ${where}${extra}`;
+  const result = await configureRelayClient(opts);
+  assert.deepEqual(result.changed, [file]);
+  const settings = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(settings.colorScheme, 'tokyo night'); assert.deepEqual(settings.permissions.deny, ['command(sudo)']);
+  const [git, ...rules] = settings.permissions.allow;
+  assert.equal(git, 'command(git)'); assert.equal(rules.length, 2);
+  const allowed = (text) => rules.some((rule) => ruleAllows(rule, text));
+  assert.ok(allowed(line('read', ' --session-id fixture-instance'))); assert.ok(allowed(line('send', ' --to peer --body hello')));
+  for (const text of [line('hook'), line('wake'), line('configure'), line('read', '', cli, path.join(root, 'other-mind')),
+    line('read', '', path.join(root, 'other-kit', 'cli', 'index.mjs')), `node ${cli} relay read --mind-path ${mind}2`, `node ${cli} send`]) {
+    assert.equal(allowed(text), false, text);
+  }
+  // The same rules keep matching after Antigravity normalizes the Windows path to forward slashes.
+  assert.ok(allowed(line('read', ' --session-id x', cli.replaceAll(path.sep, '/'), mind.replaceAll(path.sep, '/'))));
+  assert.equal(await readFile(`${file}.relay-backup`, 'utf8'), original);
+  const configured = await readFile(file, 'utf8');
+  assert.deepEqual((await configureRelayClient(opts)).changed, []);
+  assert.equal(await readFile(file, 'utf8'), configured);
+  await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: path.join(root, 'other-mind') });
+  assert.equal(await readFile(file, 'utf8'), configured);
+  assert.deepEqual((await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: mind })).changed, [file]);
+  assert.equal(await readFile(file, 'utf8'), original);
+});
+
+test('Antigravity unconfigure restores a file that had no permissions, keeps foreign rules and preserves JSONC comments', async (context) => {
+  const root = await temp(context);
+  const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
+  const file = path.join(root, '.gemini', 'antigravity-cli', 'settings.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  const original = '{\n  // keep this comment\n  "colorScheme": "tokyo night",\n  "trustedWorkspaces": [\n    "/home/fixture"\n  ]\n}\n';
+  await writeFile(file, original);
+  await configureRelayClient(opts);
+  assert.match(await readFile(file, 'utf8'), /keep this comment/);
+  await unconfigureRelayClient({ client: 'antigravity', homeDir: root });
+  assert.equal(await readFile(file, 'utf8'), original);
+  const foreign = `command(node ${path.join(root, 'elsewhere', 'tool.mjs')} relay read --mind-path ${path.join(root, 'mind')})`;
+  await writeFile(file, JSON.stringify({ permissions: { allow: [foreign] } }));
+  await configureRelayClient(opts);
+  await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: opts.mindPath });
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { permissions: { allow: [foreign] } });
+});
+
+test('Antigravity configure blocks invalid or unsafe settings and paths without writing', async (context) => {
+  const root = await temp(context);
+  const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
+  const file = path.join(root, '.gemini', 'antigravity-cli', 'settings.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  for (const bad of ['{ broken', '[]', '{"permissions": []}', '{"permissions": {"allow": "command(git)"}}']) {
+    await writeFile(file, bad);
+    await assert.rejects(configureRelayClient(opts), /Antigravity|invalid/);
+    await assert.rejects(unconfigureRelayClient({ client: 'antigravity', homeDir: root }), /Antigravity|invalid/);
+    assert.equal(await readFile(file, 'utf8'), bad);
+  }
+  await writeFile(file, '{}');
+  await assert.rejects(configureRelayClient({ ...opts, mindPath: path.join(root, 'my mind') }), /without whitespace/);
+  assert.equal(await readFile(file, 'utf8'), '{}');
+});
