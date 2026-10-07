@@ -223,7 +223,10 @@ test('old in-flight sink completion cannot settle a replacement policy generatio
     },
     sleep: async (_ms, signal) => { if (!signal?.aborted) await new Promise((resolve) => setTimeout(resolve, 2)); },
   };
-  const oldController = await controller(mind, async () => { firstEntered(); await firstGate; return { status: 'submitted' }; }, { clock });
+  const oldController = await controller(mind, async () => { firstEntered(); await firstGate; return { status: 'submitted' }; }, {
+    clock,
+    retryPolicy: { leaseMs: 20_000, sinkTimeoutMs: 15_000, cooldownMs: 1000, baseDelayMs: 100, maxDelayMs: 300 },
+  });
   const newController = await controller(mind, async () => ({ status: 'submitted' }));
   context.after(async () => { releaseFirst(); await oldController.stopAll(); await newController.stopAll(); });
   await oldController.enable(binding);

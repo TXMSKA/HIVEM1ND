@@ -51,6 +51,20 @@ test('CLI preserves clear usage errors and bounded stdin message delivery', asyn
   assert.match(parsed.stdout, /relay <[^\n]*mcp/);
 });
 
+test('CLI status and events pass only the fields their store methods accept', async (context) => {
+  const { mind } = await fixture(context);
+  const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'manager'])).code, 0);
+  const status = await cli(['relay', 'status', ...common, '--unit', 'manager']);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).units[0].unit, 'manager');
+  const events = await cli(['relay', 'events', ...common, '--limit', '5']);
+  assert.equal(events.code, 0, events.stderr);
+  const misplaced = await cli(['relay', 'events', ...common, '--unit', 'manager']);
+  assert.equal(misplaced.code, 1);
+  assert.match(misplaced.stderr, /events does not accept the field unit/);
+});
+
 test('wake command parser requires explicit units and distinguishes bounded extension from unlimited consent', () => {
   const attach = parseArgs(['relay', 'wake', 'attach', '--mind-path', 'C:/mind', '--unit', 'manager']);
   assert.equal(attach.options.action, 'wake');

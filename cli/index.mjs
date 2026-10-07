@@ -1070,7 +1070,9 @@ async function runRelay(options, dependencies, output) {
     args = { to: options.to, subject: options.subject, body, priority: options.priority, replyTo: options.replyTo, threadId: options.threadId,
       replyRequested: options.replyRequested, attachments: options.attachments.length ? options.attachments : undefined };
   } else if (action === "inbox" || action === "read" || action === "history" || action === "status" || action === "events") {
-    args = { unit: options.unit, limit: options.limit ? Number(options.limit) : undefined };
+    // Store methods reject any field they do not accept, even an undefined one.
+    if (options.unit !== undefined) args.unit = options.unit;
+    if (options.limit) args.limit = Number(options.limit);
     if (action === "read" || action === "history") {
       if (options.ids.length) args.ids = options.ids;
       if (options.threadId) args.threadId = options.threadId;

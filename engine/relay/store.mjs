@@ -157,8 +157,10 @@ function candidateMessageFilename(name) {
 function validMessageFilename(name, message) {
   if (SAFE_FILE_PATTERN.test(name)) return true;
   const match = name.match(/^(\d{8}-\d{4}-)([a-zA-Z0-9._@-]+)\.md$/i);
-  const expected = message.legacyFilenameSender ?? message.from;
-  return Boolean(match && match[2].toLowerCase() === expected.toLowerCase());
+  if (!match) return false;
+  const senders = [message.from, message.legacyFilenameSender].filter(Boolean).map((sender) => sender.toLowerCase());
+  const named = match[2].toLowerCase();
+  return senders.includes(named) || senders.includes(named.replace(/-\d+$/, ''));
 }
 
 function serializeMessage(message) {
@@ -421,8 +423,12 @@ async function listRegularFiles(root, directory, predicate) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (!predicate(entry.name) || !entry.isFile() || entry.isSymbolicLink()) continue;
+    if (!predicate(entry.name)) continue;
     const filePath = path.join(directory, entry.name);
+    // The Dirent type of a freshly synced OneDrive file can read as a symbolic
+    // link for a few seconds while lstat already reports a regular file.
+    const entryState = await lstatOrNull(filePath);
+    if (!entryState || entryState.isSymbolicLink() || !entryState.isFile()) continue;
     try { await safePath(root, filePath, { missing: false }); }
     catch (error) {
       if (!isMissingPath(error)) throw error;
@@ -1085,7 +1091,12 @@ async function directoryNames(root, directory) {
   const state = await lstatOrNull(directory);
   if (!state) return [];
   if (!state.isDirectory() || state.isSymbolicLink()) throw relayError('UNSAFE_PATH', 'A Relay directory is unsafe.');
-  return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => entry.name).sort();
+  const names = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryState = await lstatOrNull(path.join(directory, entry.name));
+    if (entryState?.isDirectory() && !entryState.isSymbolicLink()) names.push(entry.name);
+  }
+  return names.sort();
 }
 
 async function readJsonSafe(root, filePath) {
