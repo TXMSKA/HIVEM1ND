@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `device-reach`, a design protocol that checks the approved default on simulated low-end phones, computers, Linux, other browser engines and the product's own app against performance budgets, with evidence or a named gap per profile; `/qa` offers it, with the user's yes, for tasks in its scope.
+- Same-day awareness: every seat sends the coordinator (the Manager, or the environment's Overlord) one Relay note right after recording a user decision, correction or approval.
 - Section tours: the design and copy packs teach each section on first opening with three or four key things and a More control that continues the tour.
 - Executor, Incubator and Overlord fetch and fast-forward their repo before any work, not only at relay entry.
 - Manager, an executive role that manages the whole mind: it surveys every project, defines scope with the user one topic at a time, gates the work before it reaches the executors and keeps its memory in `user/manager/`.
