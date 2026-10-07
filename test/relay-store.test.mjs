@@ -322,6 +322,58 @@ test('legacy minute messages keep a stable id through archive and conflict copie
   assert.equal((await restarted.history({ ids: [id] })).messages[0].id, id);
 });
 
+test('legacy files named after the unit are listed, archived by read and accepted as reply targets', async (context) => {
+  const { mind } = await fixture(context);
+  const recipient = await bind(mind, 'executor-beta', 'legacy-unit-reader');
+  const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  await mkdir(directory, { recursive: true });
+  const header = 'from: manager@SCOUT\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
+  await writeFile(path.join(directory, '20261005-1010-manager.md'), header);
+  const inbox = await recipient.inbox();
+  assert.equal(inbox.unread, 1);
+  const id = inbox.messages[0].id;
+  const read = await recipient.read({ ids: [id] });
+  assert.equal(read.messages[0].id, id);
+  assert.equal(read.messages[0].archived, true);
+  assert.equal(await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', '20261005-1010-manager.md'), 'utf8'), header);
+  const reply = await recipient.send({ to: 'manager', subject: 'Legacy reply', body: 'Received', replyTo: id });
+  assert.equal(reply.threadId, id);
+});
+
+test('legacy files with a same-minute suffix are listed and a filename sender that matches neither form is skipped', async (context) => {
+  const { mind } = await fixture(context);
+  const recipient = await bind(mind, 'executor-beta', 'legacy-suffix-reader');
+  const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  await mkdir(directory, { recursive: true });
+  const header = 'from: manager@SCOUT\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
+  await writeFile(path.join(directory, '20261005-1010-manager-2.md'), header);
+  await writeFile(path.join(directory, '20261005-1010-overseer.md'), header);
+  const inbox = await recipient.inbox();
+  assert.equal(inbox.unread, 1);
+  assert.equal(inbox.messages[0].filename, '20261005-1010-manager-2.md');
+});
+
+test('a message whose directory entry reads as a symbolic link while lstat reports a file is still listed and archived', async (context) => {
+  const { mind } = await fixture(context);
+  const sender = await bind(mind, 'executor-alpha', 'dirent-sender');
+  const recipient = await bind(mind, 'executor-beta', 'dirent-reader');
+  const sent = await sender.send({ to: 'executor-beta', subject: 'Transient', body: 'synced file' });
+  const restore = await interceptFs('readdir', async (original, args) => {
+    const entries = await original(...args);
+    return args[1]?.withFileTypes ? entries.map((entry) => new Proxy(entry, {
+      get: (target, key) => (key === 'isFile' ? () => false : key === 'isSymbolicLink' ? () => true : Reflect.get(target, key)),
+    })) : entries;
+  });
+  try {
+    const inbox = await recipient.inbox();
+    assert.deepEqual(inbox.messages.map((message) => message.id), [sent.id]);
+    const read = await recipient.read({ ids: [sent.id] });
+    assert.equal(read.messages[0].archived, true);
+  } finally {
+    restore();
+  }
+});
+
 test('archive collision preserves both files and reports a stable error', async (context) => {
   const { mind } = await fixture(context);
   const sender = await bind(mind, 'executor-alpha', 'collision-sender');
