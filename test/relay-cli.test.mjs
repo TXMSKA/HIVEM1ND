@@ -238,7 +238,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
   assert.doesNotMatch(Buffer.concat(failureErrors).toString('utf8'), /ephemeral-secret|attach-test/);
 });
 
-test('real CLI attach stays alive through worker readiness and always disables its disposable worker', async (context) => {
+test('real CLI attach stays alive through worker readiness and always disables its disposable worker', { skip: process.platform !== 'win32' && 'Claude wake attach needs a Windows named pipe' }, async (context) => {
   const { root, mind } = await fixture(context);
   const nativeSessionId = `native-cli-${Date.now()}`;
   const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };

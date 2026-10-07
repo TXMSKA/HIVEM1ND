@@ -175,7 +175,8 @@ test('Codex worker requires an explicit binding and kills an invalid readiness c
     cliPath: 'C:\\kit\\cli\\index.mjs',
     mindPath: 'C:\\mind',
     binding,
-    env: env(),
+    // The worker validates the endpoint against the host platform.
+    env: env(process.platform === 'win32' ? {} : { CODEX_APP_TOOLS_PIPE_PATH: '/tmp/fixture-app-tools.sock' }),
     forkProcess: (...args) => { launch = args; return child; },
     readyTimeoutMs: 250,
   });

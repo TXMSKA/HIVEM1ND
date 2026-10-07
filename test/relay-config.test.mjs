@@ -133,7 +133,7 @@ test('isolated install is idempotent, migrates a changed kit path, and uninstall
   assert.ok(initialHooks.includes('echo unrelated'));
 });
 
-test('Claude and Cursor config schemas keep their native structure and Windows hook commands are quoted safely', () => {
+test('Claude and Cursor config schemas keep their native structure and Windows hook commands are quoted safely', { skip: process.platform !== 'win32' && 'asserts Windows paths, which the host path module only produces on Windows' }, () => {
   const claude = buildClientConfig({ client: 'claude', existing: { mcp: '{"other":{}}', hooks: '{"permissions":{"allow":[]}}' }, kitPath: 'C:/kit', mindPath: 'C:/mind', platform: 'win32', nodePath: 'C:/Program Files/nodejs/node.exe' });
   const claudeMcp = JSON.parse(claude.mcp);
   assert.ok(claudeMcp.mcpServers['hivem1nd-relay']);

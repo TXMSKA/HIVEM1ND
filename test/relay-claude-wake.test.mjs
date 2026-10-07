@@ -230,7 +230,12 @@ test('a late pipe connect after timeout cannot write the frame', async () => {
   let destroyed = 0;
   socket.end = () => { writes += 1; };
   socket.destroy = () => { destroyed += 1; };
-  const result = await sendClaudeWake({ binding, text: 'Relay pointer.', env, platform: 'win32', timeoutMs: 10, connect: () => socket });
+  // The production timeout timer is unref'd and the fake socket holds no handle,
+  // so keep the event loop alive until the timeout settles the promise.
+  const keepAlive = setInterval(() => {}, 1_000);
+  let result;
+  try { result = await sendClaudeWake({ binding, text: 'Relay pointer.', env, platform: 'win32', timeoutMs: 10, connect: () => socket }); }
+  finally { clearInterval(keepAlive); }
   assert.deepEqual(result, { status: 'not_submitted', reason: 'native_session_inbox_unavailable' });
   socket.emit('connect');
   assert.equal(writes, 0);
