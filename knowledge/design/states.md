@@ -39,6 +39,7 @@ When auditing, the first-use states come first, then empty search and filter res
 ## Error
 
 - **What failed, why when it is known, and how to recover**, in the interface's own voice, never vague and never blaming the person. Internal codes do not lead.
+- **Raw text never reaches the screen.** An exception message, a stack frame, a status line, a response body, `undefined` or `[object Object]` is not shown: the failure maps through a table of causes to a written message, an unknown cause falls back to a written sentence, and the request identifier from the server's answer may show as a small reference for support.
 - **Each cause gets its own treatment**: invalid input shows at the field, an expired session returns to sign-in and back, a missing permission explains itself, a missing page offers a way out, a rate limit says when to try again, a server failure gives a plain message and a retry.
 - **Network failures** explain, offer a retry, and keep what the person entered.
 - **Errors in a form sit at the field**, not in a toast; the rules are in [forms-and-controls.md](forms-and-controls.md).

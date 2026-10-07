@@ -30,7 +30,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 | foundations | colour-and-theming 1 to 7; light-theme 1 to 8 when a light theme is built or derived; hierarchy-and-type 1, 2, 6; composition-and-layout 4; design-specificity; theme-direction only for a restyle | tokens: Rules, Type roles, Spacing bands, Themes, or whole for a build; light-themes whole for a light theme; direction: Read the request first, Name the mode; defaults: In a refine, Searches |
 | text-and-content | hierarchy-and-type 1 to 7; responsive-behaviour 4 | tokens: Type roles; pages-and-sections: Sections; defaults: Template chrome; site-polish: Build first |
 | inputs-and-controls | forms-and-inputs 1 to 4, 8; accessibility 4 | forms-and-controls: Fields, Choosing the control, Menus and selects, Dates, Search |
-| forms | forms-and-inputs 1, 2, 5 to 7; interface-states 3 to 6 | forms-and-controls: Validation and submission, Layout and flow; states: Error, Success, Disabled |
+| forms | forms-and-inputs 1, 2, 5 to 7, 9; interface-states 3 to 6 | forms-and-controls: Validation and submission, Layout and flow, Honest choices; states: Error, Success, Disabled |
 | actions | interface-states 4, 6; colour-and-theming 5, 6; accessibility 1; responsive-behaviour 5, 7 | animation: Gates, Recipes; ux-laws: Decision cost and attention, Pointing and reach; overlays: Popover and menu |
 | containers | composition-and-layout 4, 5; hierarchy-and-type 5; interface-states 7; responsive-behaviour 4; accessibility 6 | dashboards: Cards; app-shell: Overview, Lists and choices; defaults: Page scaffolds |
 | navigation | accessibility 3, 7; responsive-behaviour 2, 5; colour-and-theming 6; interface-states 4; assets-and-media 1, 2 for a rail | app-shell: Rail, Navigation link; overlays: Drawer and sheet; site-polish: Build first |
@@ -55,7 +55,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 - composition-and-layout: scope page structure, grids, sections, spacing and containers. Gives each reading moment one dominant object on a shared grid.
 - design-specificity: scope new surfaces and passes that set the visual direction. Separates choices made for the brief from defaults.
 - device-reach: scope any surface, animation, background or build that ships to users. Keeps the approved default smooth on simulated low-end resources, with evidence per profile.
-- forms-and-inputs: scope forms, fields, selects, dates, search and submit flows. Keeps presses low, blocks explained and errors in place.
+- forms-and-inputs: scope forms, fields, selects, dates, search and submit flows. Keeps presses low, blocks explained, errors in place and choices honest.
 - hierarchy-and-type: scope headings, body copy, type scale, measure and numerals. Makes one reading order obvious on named roles.
 - interface-states: scope anything that loads, fails, is empty, is disabled or succeeds. Designs and proves every state.
 - light-theme: scope a light theme built, derived from a dark theme or a chosen palette, or restyled. Designs it by the job of each colour instead of by inversion, calm and within the floors.

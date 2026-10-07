@@ -60,7 +60,7 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - **An error never erases what was typed.**
 - **Submit shows it is working.** The button keeps its label, gains a spinner and refuses a second submission while the request runs.
 - **Success is a state, not a reset.** The form confirms what happened and what comes next.
-- **Unsaved changes are protected.** Navigating away from a changed form asks first.
+- **Unsaved changes are protected.** Navigating away from a changed form asks first, and Back, Forward and a reload bring the typed values back: a long form keeps a draft in session storage until the submission succeeds, and a failed request never rebuilds the form empty.
 - **A form is only as long as it needs to be.** Every field removed is a reason to abandon removed.
 
 ## Layout and flow
@@ -69,7 +69,16 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - Related fields are grouped under a short heading, with the space between groups larger than the space inside them.
 - The primary action sits at the end of the reading path, aligned with the fields, and a secondary action is visibly weaker.
 - **Multi step** only when the steps are genuinely separate decisions. Each step shows where the person is and how many remain, keeps what was entered when going back, and saves progress when the form is long enough that losing it would hurt. The step names are verbs that say what happens, not numbers alone.
+- **The keyboard never covers the field being typed in.** On a phone the focused field and its error stay in view above the on-screen keyboard, the submit is one scroll away, a fixed bottom bar moves up or yields while the keyboard is open, and a full-height container is sized in `dvh`, not `vh`.
 - On a redesign, field names and field order do not change silently: analytics and autofill depend on them.
+
+## Honest choices
+
+- **Nothing is chosen for the person.** Consent, marketing mail, add-ons, a higher plan and a donation start unticked or off: the default is the option that costs and shares least.
+- **Decline equals accept.** Same size, weight and place, one press each. A refusal worded to shame the person, or hidden in a link under a bright button, is a trick.
+- **Urgency and scarcity are real.** A timer, "only 2 left" or "12 people are viewing" comes from a deadline or a count in the data, never from a random number or a clock that restarts.
+- **Leaving is as easy as joining.** Cancel, unsubscribe and delete account sit where the person looks, in no more presses than sign-up took, and a refused prompt does not return in the same session.
+- **The price is the price.** Fees, taxes, shipping and the renewal price show before the last press, and the amount charged equals the amount shown.
 
 ## Never
 
@@ -80,6 +89,7 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - A dropdown clipped by a parent's overflow or cut off by the viewport edge.
 - A dropdown for two to four options.
 - A helper sentence under every field.
+- A box ticked for the person, or a decline smaller than its accept.
 
 ## Audit order
 

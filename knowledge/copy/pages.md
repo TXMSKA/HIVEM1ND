@@ -26,8 +26,9 @@ Page copy handed over as a file is a copy deck: one slot per line, the slot name
 - Price, billing period, currency and taxes are explicit, in the same unit on every plan (Convention).
 - What a plan excludes is stated as plainly as what it includes. An inclusion the brief does not settle is a missing fact, not a guess.
 - A button that charges states the price and the period next to it, or on the step it opens before any charge.
+- The total is stated before the last step: fees, shipping and taxes named, a trial's end and the renewal price beside the button that starts it, and the amount charged equal to the amount shown. A fee first named at checkout is a hidden fee.
 - No *starting at* that hides the price most people pay.
-- Result to record: count of plans missing a period, a currency or a stated limit.
+- Result to record: count of plans missing a period, a currency or a stated limit, and of fees first named after the pricing page.
 
 ## Calls to action
 
@@ -43,12 +44,15 @@ Page copy handed over as a file is a copy deck: one slot per line, the slot name
 - A testimonial or a named quote already on the page is not the pass's to judge. It stays word for word and is listed for the owner when no record of it is at hand (see [boundaries.md](boundaries.md)).
 - A claim agrees with the legal and policy pages of the same site (see [boundaries.md](boundaries.md)).
 - A name that a contract or a client relationship keeps private is never used as proof.
+- A rating, a review count, an *as seen in* mark or a trust badge exists and traces to a source. Reviews the owner wrote, paid for or filtered to the positive are labelled or removed, and rating markup in structured data comes from real reviews.
+- A claim about security, privacy, compliance or certification (*compliant*, *certified*, *bank-grade*, *never stored*) traces to a document or a test, or is cut.
 - Result to record: claims with a referent against claims without, and the count of invented items, which must be zero. [claim-check](protocols/claim-check.md) produces both.
 
 ## Footers
 
 - Lines that restate policy (cookies, tracking, data) quote or link the policy page and never paraphrase it into a different claim.
-- Result to record: count of footer claims that contradict a policy page.
+- The footer links the privacy policy, the terms, the refund policy where money is taken and the cookie notice where a banner exists, with a link that reopens the cookie choice. The business details (legal name, address, contact address) sit in the footer or on a contact page it links. The text of those pages is the owner's: the pass links them and never writes them.
+- Result to record: count of footer claims that contradict a policy page, and of required notice pages or business details not linked.
 
 ## Articles
 

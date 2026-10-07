@@ -50,7 +50,7 @@ Login, registration and reset answer with the same status, the same text and the
 
 ## Throttling
 
-Every endpoint a stranger can reach, login, registration, reset and verification, is rate limited per account and per address with backoff. A soft lock, a growing delay, comes before a hard lock, so an attacker cannot keep the owner locked out, and consecutive failures on one account never exceed the ceiling in [essentials.md](essentials.md). The unlock path expires on its own or goes through the verified reset flow. Bot protection is proportional to the risk: a honeypot field, a short delay, proof of work or a challenge. A third-party challenge brings cookies and a privacy notice update, so it is chosen deliberately.
+Every endpoint a stranger can reach, login, registration, reset and verification, is rate limited per account and per address with backoff. Reset and verification mail is also limited per target address and answers the same when limited, so the endpoint cannot flood one inbox. A soft lock, a growing delay, comes before a hard lock, so an attacker cannot keep the owner locked out, and consecutive failures on one account never exceed the ceiling in [essentials.md](essentials.md). The unlock path expires on its own or goes through the verified reset flow. Bot protection is proportional to the risk: a honeypot field, a short delay, proof of work or a challenge. A third-party challenge brings cookies and a privacy notice update, so it is chosen deliberately.
 
 ## Reset, invitation and setup links
 
