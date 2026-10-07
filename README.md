@@ -125,7 +125,7 @@ Every role is a command, and a few more operate the system. Every command also w
 A feature is a workflow that runs on a repo, with a start and an end, one markdown file in `features/`, or a folder with its scripts when the feature has any. Most are included in the base; the rest are installed with a knowledge module and require it.
 
 <details>
-<summary>Fifteen features</summary>
+<summary>Seventeen features</summary>
 
 | Feature | Category | Description |
 | --- | --- | --- |
@@ -140,6 +140,7 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 | `/observer` | Quality | Tests a project under adverse conditions and writes reproducible weakness reports as open tasks. |
 | `/conflicts` | Quality | Resolves compatible merge or rebase conflicts, asks about incompatible hunks and verifies the build before completion. |
 | `/catchup` | Continuity | Summarizes changes, authors, open work and unread messages since the unit's recorded state without changing files. |
+| `/cleaner` | Continuity | Measures how bloated the mind is, proposes every cleanup in one list for a single yes, applies it and verifies that nothing was lost. The startup check offers it when a threshold is crossed. |
 | `/docs` | Continuity | Updates only the documentation affected by the current diff or a supplied commit range. |
 | `/release` | Continuity | Prepares a local release from commits since the last tag and reports the commands needed to publish it. |
 | `/cyberattack` | Quality | Audits security, the whole project or one feature, and warns before the full pass. Installed with the `security` module. |

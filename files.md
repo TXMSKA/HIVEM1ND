@@ -10,6 +10,7 @@ user/
   preferences.md              global preferences
   routes.md                   environments, projects and other minds, names only
   machines/<host>.md          one per machine
+  machines/<host>.managed.json  the files installed on that machine and their hashes
   machines/<host>.report.md   what the last install or update on that machine wrote
   knowledge/                  private modules, same format as the base ones
   protocols/<name>.md         global protocols, for every project, one file per protocol
@@ -166,17 +167,18 @@ setup: done
 - web: C:\Users\me\GitHub
 - myapp: C:\Users\me\GitHub\myapp
 - mygame: C:\Users\me\Unity\mygame
+- evidence: D:\evidence
 
 ## Excluded
 - knowledge
 - corpo
 ```
 
-`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them.
+`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them. The optional `evidence` path is where `/cleaner` moves large evidence and binary folders out of the mind; the brief keeps the relative path.
 
 While `setup` is a number, a temporary `## Setup Draft` section contains a fenced JSON block with the answers collected so far. Every front preserves it when resuming. The section is removed when `setup: done`; completed settings remain in the header and the Agents, Paths and Excluded sections.
 
-The `## Managed Files` section contains a fenced JSON object mapping installed absolute file paths to their SHA-256 content hashes. Setup and updates replace a managed file automatically only while its content still matches the recorded hash. An unowned or locally modified file requires a keep-or-replace choice. Paths and hashes stay private in the machine record. A symbolic link or a Windows junction standing where files have to be written is one choice for every file behind it: replacing it removes the link and keeps the folder it points at, and omitting it leaves those files uninstalled, where the next `check` lists them as missing.
+The managed files live beside the machine file, in `machines/<host>.managed.json`: one JSON object mapping installed absolute file paths to their SHA-256 content hashes, so the machine file keeps only the header, Agents, Paths and Excluded. Setup, attach and updates read and write that file. A machine file from an older install still carries the map in a `## Managed Files` section holding a fenced JSON object; it is read from there while the JSON file does not exist, and the next write moves it out and removes the section. Setup and updates replace a managed file automatically only while its content still matches the recorded hash. An unowned or locally modified file requires a keep-or-replace choice. Paths and hashes stay private in the machine record. A symbolic link or a Windows junction standing where files have to be written is one choice for every file behind it: replacing it removes the link and keeps the folder it points at, and omitting it leaves those files uninstalled, where the next `check` lists them as missing.
 
 ## Install report: `machines/<host>.report.md`
 
