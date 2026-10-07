@@ -645,7 +645,7 @@ test('content categories group every feature deterministically and control the i
   assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report', 'void']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'release']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'relay-client-setup', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
   const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
     .filter((name) => (name.endsWith('.md') || !name.includes('.')) && name.toLowerCase() !== 'readme.md').length;
