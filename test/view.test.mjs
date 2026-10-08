@@ -80,7 +80,7 @@ test("the fixture reads into every key of the contract, with the right types", a
   }
   assert.equal(chat(result, "overlord-web").environment, "web");
   assert.equal(chat(result, "executor-myapp").project, "myapp");
-  assert.equal("project" in chat(result, "manager"), false);
+  assert.equal("project" in chat(result, "overseer"), false);
 
   for (const squad of result.squads) {
     assert.deepEqual(keys(squad).filter((key) => key !== "environment" && key !== "project"), ["lead", "scope", "members", "rollup"]);
@@ -171,7 +171,7 @@ test("a chat is out, unknown, quota, waiting, working or idle, in that order of 
   const result = await view();
   const statuses = Object.fromEntries(result.chats.map((item) => [item.unit, item.status]));
   assert.deepEqual(statuses, {
-    manager: "waiting",
+    overseer: "waiting",
     "overlord-web": "out",
     "overlord-myapp": "waiting",
     "executor-myapp": "working",
@@ -237,7 +237,7 @@ test("a quota counts as exhausted when it says so or has nothing remaining", asy
 test("squads group a lead with its members and the rest by project", async () => {
   const result = await view();
   assert.deepEqual(result.squads, [
-    { lead: null, scope: "root", members: ["manager"], rollup: { working: 0, idle: 0, waiting: 1, out: 0, attention: 0 } },
+    { lead: null, scope: "root", members: ["overseer"], rollup: { working: 0, idle: 0, waiting: 1, out: 0, attention: 0 } },
     { lead: "overlord-web", scope: "environment", environment: "web", members: ["builder-shop"], rollup: { working: 0, idle: 1, waiting: 0, out: 1, attention: 0 } },
     { lead: "overlord-myapp", scope: "project", project: "myapp", members: ["archiver-myapp", "executor-myapp", "reader-myapp"], rollup: { working: 1, idle: 0, waiting: 1, out: 1, attention: 1 } },
     { lead: null, scope: "project", project: "mygame", members: ["executor-mygame"], rollup: { working: 0, idle: 1, waiting: 0, out: 0, attention: 0 } },
@@ -248,17 +248,17 @@ test("squads group a lead with its members and the rest by project", async () =>
     lead: "overlord-myapp", job: "builder", model: "mid", machine: "LAPTOP", date: "2026-10-08 10:10", branch: "feat/login",
     context: "Building the sitemap for task 006.", relay: chat(result, "executor-myapp").relay, path: "user/projects/myapp/state/executor-myapp.md",
   });
-  assert.equal(chat(result, "manager").lead, null);
-  assert.equal(chat(result, "manager").job, null);
+  assert.equal(chat(result, "overseer").lead, null);
+  assert.equal(chat(result, "overseer").job, null);
 });
 
 test("what waits on the person: questions, a message that asks for a reply, and reviews a lead approved", async () => {
   const result = await view();
   assert.deepEqual(result.waiting.map((item) => [item.kind, item.title, item.unit]), [
     ["message", "Shop prices: one plan or two?", "executor-shop"],
-    ["question", "pick the launch date for myapp", "manager"],
-    ["question", "confirm the shop prices (in the shop chat)", "manager"],
-    ["question", "approve the sitemap wording", "manager"],
+    ["question", "pick the launch date for myapp", "overseer"],
+    ["question", "confirm the shop prices (in the shop chat)", "overseer"],
+    ["question", "approve the sitemap wording", "overseer"],
     ["review", "checkout copy", "executor-shop"],
     ["review", "Reset mail wording", "overlord-myapp"],
   ]);
@@ -274,8 +274,8 @@ test("what waits on the person: questions, a message that asks for a reply, and 
   assert.equal(result.waiting.some((item) => item.task === "005"), false, "an unapproved review of a member with a lead does not wait");
   assert.equal(result.waiting.some((item) => item.task === "003"), false, "a review an agent asked for does not wait");
   assert.deepEqual(result.waiting.find((item) => item.kind === "question"), {
-    kind: "question", title: "pick the launch date for myapp", project: null, unit: "manager", since: "2026-10-08 09:30",
-    path: "user/state/manager.md", task: null, approvedBy: null,
+    kind: "question", title: "pick the launch date for myapp", project: null, unit: "overseer", since: "2026-10-08 09:30",
+    path: "user/state/overseer.md", task: null, approvedBy: null,
   });
   const message = result.waiting.find((item) => item.kind === "message");
   assert.equal(message.path, "user/inbox/user/20261008-200000-LAPTOP-5b1c9a7e-3d2f-4c8a-9e61-0a7d4b2c8f10.md");
@@ -297,7 +297,7 @@ test("an approval line counts only from the lead of the executor", async (t) => 
   await fs.writeFile(file, original.replace(/Approved for review by .*/, ""));
   assert.equal(await waits(), false);
 
-  await fs.writeFile(file, original.replace("from: user", "from: User (through the manager)"));
+  await fs.writeFile(file, original.replace("from: user", "from: User (through the overseer)"));
   assert.equal(await waits(), true, "a sender that opens with the user's name is the user");
 
   await fs.writeFile(file, original.replace("from: user", "from: overlord-web"));
@@ -308,7 +308,7 @@ test("a person header identifies a review requester", async (t) => {
   const mind = await copyOfFixture(t);
   const file = path.join(mind, "user", "projects", "myapp", "tasks", "004-reset-mail.md");
   const original = await fs.readFile(file, "utf8");
-  for (const [sender, expected] of [["Alex", true], ["aLeX (through the manager)", true], ["Alexander", false]]) {
+  for (const [sender, expected] of [["Alex", true], ["aLeX (through the overseer)", true], ["Alexander", false]]) {
     await fs.writeFile(file, original.replace("from: user", `from: ${sender}`));
     assert.equal((await view({ mindPath: mind })).waiting.some((item) => item.task === "004"), expected, sender);
   }
@@ -320,11 +320,11 @@ test("person names from every machine are comma-separated and escaped", async (t
   await fs.writeFile(machine, (await fs.readFile(machine, "utf8")).replace("language: en", "language: en\nperson: Alias.One, Alias+, ,"));
   const task = path.join(mind, "user", "projects", "myapp", "tasks", "004-reset-mail.md");
   const original = await fs.readFile(task, "utf8");
-  for (const [sender, expected] of [["Alias.One", true], ["Alias+ (through the manager)", true], ["AliasXOne", false], ["Alias", false], ["Alex", true], ["user", true]]) {
+  for (const [sender, expected] of [["Alias.One", true], ["Alias+ (through the overseer)", true], ["AliasXOne", false], ["Alias", false], ["Alex", true], ["user", true]]) {
     await fs.writeFile(task, original.replace("from: user", `from: ${sender}`));
     assert.equal((await view({ mindPath: mind })).waiting.some((item) => item.task === "004"), expected, sender);
   }
-  await write(path.join(mind, "user", "state", "manager.md"), "unit: manager\nstate: in\n\nWaiting on Alias.One: first choice.\nWaiting on Alias+: second choice.\nWaiting on AliasXOne: not a name.\nWaiting on Alias: not a name.\n");
+  await write(path.join(mind, "user", "state", "overseer.md"), "unit: overseer\nstate: in\n\nWaiting on Alias.One: first choice.\nWaiting on Alias+: second choice.\nWaiting on AliasXOne: not a name.\nWaiting on Alias: not a name.\n");
   assert.deepEqual((await view({ mindPath: mind })).waiting.filter((item) => item.kind === "question").map((item) => item.title), ["first choice", "second choice"]);
 });
 
@@ -351,7 +351,7 @@ test("a mind without a person header matches only user", async (t) => {
   assert.deepEqual((await view({ mindPath: mind })).waiting, (await view()).waiting);
   const task = path.join(mind, "user", "projects", "myapp", "tasks", "004-reset-mail.md");
   await fs.writeFile(task, (await fs.readFile(task, "utf8")).replace("from: user", "from: Alex"));
-  await write(path.join(mind, "user", "state", "manager.md"), "unit: manager\nstate: in\n\nWaiting on Alex: not matched.\nWaiting on user: still matched.\n");
+  await write(path.join(mind, "user", "state", "overseer.md"), "unit: overseer\nstate: in\n\nWaiting on Alex: not matched.\nWaiting on user: still matched.\n");
   const result = await view({ mindPath: mind });
   assert.equal(result.waiting.some((item) => item.task === "004"), false);
   assert.deepEqual(result.waiting.filter((item) => item.kind === "question").map((item) => item.title), ["still matched"]);
@@ -359,10 +359,10 @@ test("a mind without a person header matches only user", async (t) => {
 
 test("a Waiting line with nothing in it adds no question", async (t) => {
   const mind = await copyOfFixture(t);
-  await write(path.join(mind, "user", "state", "manager.md"), "unit: manager\nstate: in\ndate: 2026-10-08 09:30\n\nWaiting on the user: nothing.\n");
+  await write(path.join(mind, "user", "state", "overseer.md"), "unit: overseer\nstate: in\ndate: 2026-10-08 09:30\n\nWaiting on the user: nothing.\n");
   const result = await view({ mindPath: mind });
   assert.equal(result.waiting.some((item) => item.kind === "question"), false);
-  assert.equal(chat(result, "manager").status, "idle");
+  assert.equal(chat(result, "overseer").status, "idle");
 });
 
 test("the product document counts requirements per stage, met by done tasks only", async (t) => {
@@ -408,18 +408,18 @@ test("the inbox lists every file still in an inbox, and a message without a send
   const result = await view();
   assert.deepEqual(result.inbox.map((item) => [item.unit, item.from, item.to, item.subject, item.priority, item.replyRequested]), [
     ["executor-myapp", "overlord-myapp", "executor-myapp", "task 004 is approved", "normal", false],
-    ["manager", "executor-shop", "manager", "Shop prices need a decision", "normal", false],
-    ["user", "manager", "user", "Weekly summary", "normal", false],
+    ["overseer", "executor-shop", "overseer", "Shop prices need a decision", "normal", false],
+    ["user", "overseer", "user", "Weekly summary", "normal", false],
     ["user", "executor-shop", "user", "Shop prices: one plan or two?", "urgent", true],
   ]);
   assert.equal(result.inbox[1].date, "2026-10-08T12:30:00.000Z", "the timestamp of a Relay message is kept as written");
   assert.equal(result.inbox[0].date, "2026-10-08 10:30", "an older message keeps its date header");
 
   const mind = await copyOfFixture(t);
-  await write(path.join(mind, "user", "inbox", "manager", "20261008-0100-stray.md"), "just a note\n");
+  await write(path.join(mind, "user", "inbox", "overseer", "20261008-0100-stray.md"), "just a note\n");
   const next = await view({ mindPath: mind });
   assert.deepEqual(next.issues.filter((issue) => issue.path.includes("stray")), [
-    { path: "user/inbox/manager/20261008-0100-stray.md", reason: "message has no from header" },
+    { path: "user/inbox/overseer/20261008-0100-stray.md", reason: "message has no from header" },
   ]);
   assert.equal(next.counts.unread, 4);
 });
@@ -444,10 +444,10 @@ test("a project keeps its own scope plus the units that lead it", async (t) => {
 
   const mind = await copyOfFixture(t);
   const state = path.join(mind, "user", "projects", "mygame", "state", "executor-mygame.md");
-  await fs.writeFile(state, (await fs.readFile(state, "utf8")).replace("tree: clean", "tree: clean\nlead: manager"));
+  await fs.writeFile(state, (await fs.readFile(state, "utf8")).replace("tree: clean", "tree: clean\nlead: overseer"));
   const mygame = await view({ mindPath: mind, project: "mygame" });
-  assert.deepEqual(mygame.chats.map((item) => item.unit), ["manager", "executor-mygame"], "a root unit that leads the project is kept");
-  assert.deepEqual(mygame.squads.map((squad) => [squad.lead, squad.members]), [["manager", ["executor-mygame"]]]);
+  assert.deepEqual(mygame.chats.map((item) => item.unit), ["overseer", "executor-mygame"], "a root unit that leads the project is kept");
+  assert.deepEqual(mygame.squads.map((squad) => [squad.lead, squad.members]), [["overseer", ["executor-mygame"]]]);
   assert.deepEqual(mygame.waiting.map((item) => item.kind), ["question", "question", "question"]);
 
   const missing = await view({ project: "nothing" });

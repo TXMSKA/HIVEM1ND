@@ -19,10 +19,10 @@ async function fixture(context) {
   await mkdir(path.join(mind, 'user', 'state'), { recursive: true });
   await mkdir(path.join(mind, 'user', 'projects', 'alpha', 'state'), { recursive: true });
   await writeFile(path.join(mind, 'user', 'routes.md'), '## Environments\n- web: alpha\n\n## Projects\n- alpha (web)\n');
-  await writeFile(path.join(mind, 'user', 'state', 'manager.md'), 'unit: manager\nstate: in\nmachine: TESTBOX\n\nManager.\n');
+  await writeFile(path.join(mind, 'user', 'state', 'overseer.md'), 'unit: overseer\nstate: in\nmachine: TESTBOX\n\nManager.\n');
   await writeFile(path.join(mind, 'user', 'projects', 'alpha', 'state', 'executor-alpha.md'), 'unit: executor-alpha\nstate: in\nmachine: TESTBOX\n\nExecutor.\n');
-  const sender = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'manager-chat', client: 'codex' });
-  await sender.register({ unit: 'manager', nativeSessionId: 'manager-native' });
+  const sender = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'overseer-chat', client: 'codex' });
+  await sender.register({ unit: 'overseer', nativeSessionId: 'overseer-native' });
   const receiver = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'executor-chat', client: 'claude' });
   await receiver.register({ unit: 'executor-alpha', nativeSessionId: 'executor-native' });
   return { mind, sender, receiver, binding: { unit: 'executor-alpha', nativeSessionId: 'executor-native', client: 'claude', machine: 'TESTBOX' } };
@@ -49,7 +49,7 @@ test('wake requires exact registration and explicit bounds; unlimited requires m
   const wake = await controller(mind, async () => ({ status: 'submitted' }));
   const absentPolicyDisable = await wake.disable(binding);
   assert.equal(absentPolicyDisable.enabled, false, 'disabling an absent policy is valid and idempotent');
-  await assert.rejects(wake.enable({ ...binding, unit: 'manager' }), { code: 'WAKE_REGISTRATION_MISSING' });
+  await assert.rejects(wake.enable({ ...binding, unit: 'overseer' }), { code: 'WAKE_REGISTRATION_MISSING' });
   await assert.rejects(wake.enable({ ...binding, windowHours: 12 }), { code: 'WAKE_EXTENDED_CONSENT_REQUIRED' });
   await assert.rejects(wake.enable({ ...binding, unlimited: true }), { code: 'WAKE_MANUAL_CONSENT_REQUIRED' });
   await assert.rejects(wake.enable({ ...binding, maxHandoffs: 101 }), { code: 'WAKE_INVALID_POLICY' });

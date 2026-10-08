@@ -49,13 +49,13 @@ test('a new table entry supplies the entire CLI attach and sink path without cli
     workerDependency: 'fixtureWorker', controllerOptions: { retryPolicy: { sinkTimeoutMs: 8000, leaseMs: 20000 } }, helpLines: [] };
   let setup;
   const stdout = new PassThrough(), stderr = new PassThrough();
-  const code = await runCli(['relay', 'wake', 'attach', '--mind-path', 'fixture-mind', '--unit', 'manager',
+  const code = await runCli(['relay', 'wake', 'attach', '--mind-path', 'fixture-mind', '--unit', 'overseer',
     '--native-session-id', 'fixture-native', '--client', 'fixture'], {
     env, stdout, stderr, wakeAdapters: { fixture: adapter },
     createRelayWakeController: async (options) => { setup = options; return { enable: async () => ({ enabled: true }) }; },
     createRelay: async (options) => {
       assert.equal(options.sessionId, 'fixture-instance');
-      return { reminder: async () => ({ registered: true, unit: 'manager' }), register: () => assert.fail('cannot create registration') };
+      return { reminder: async () => ({ registered: true, unit: 'overseer' }), register: () => assert.fail('cannot create registration') };
     },
   });
   assert.equal(code, 0); assert.deepEqual(calls, ['capability', 'runtime', 'worker']);
@@ -68,10 +68,10 @@ test('controller honors a new adapter table entry busy deferral without consumin
   const root = await mkdtemp(path.join(os.tmpdir(), 'relay-table-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = await makeRelayMind(root);
-  const binding = { unit: 'manager', nativeSessionId: 'fixture-native', client: 'fixture', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId: 'fixture-native', client: 'fixture', machine: os.hostname() };
   const relay = await createRelay({ mindPath: mind, client: 'fixture', sessionId: 'fixture-instance' });
   await relay.register({ unit: binding.unit, nativeSessionId: binding.nativeSessionId, client: binding.client });
-  await relay.send({ to: 'manager', subject: 's', body: 'private' });
+  await relay.send({ to: 'overseer', subject: 's', body: 'private' });
   let attempts = 0, idle = false;
   const wake = await createRelayWakeController({ mindPath: mind, pollIntervalMs: 250, adapters: { fixture: { acceptsDeferred: true } },
     sink: async () => { attempts++; return idle ? { status: 'submitted' } : { status: 'not_submitted', deferred: true }; } });

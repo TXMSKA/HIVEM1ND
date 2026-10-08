@@ -14,7 +14,7 @@ All commands require `--mind-path`. Register a native agent session to an explic
 
 ```powershell
 hivem1nd relay register --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex --unit executor-app
-hivem1nd relay send --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex --to manager --subject "Question" --body "Can you review the API shape?"
+hivem1nd relay send --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex --to overseer --subject "Question" --body "Can you review the API shape?"
 hivem1nd relay inbox --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex
 hivem1nd relay read --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session>
 hivem1nd relay reminder --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex
@@ -24,7 +24,7 @@ hivem1nd relay reminder --mind-path <mind> --session-id <relay-instance> --nativ
 
 ## Same-day awareness
 
-The coordinator learns the same day of every decision, correction or approval the user gives any seat. The coordinator is the Manager unit when the mind has one, otherwise the environment's Overlord; the sender resolves its exact unit, number included, from its state file and never picks the newest registration. A missing or ambiguous coordinator is reported to the user.
+The coordinator learns the same day of every decision, correction or approval the user gives any seat. The coordinator is the Overseer unit when the mind has one, otherwise the environment's Overlord; the sender resolves its exact unit, number included, from its state file and never picks the newest registration. A missing or ambiguous coordinator is reported to the user.
 
 - When: right after the seat writes the decision into its record (brief, preferences, task), before it continues. Decisions from one exchange share one note.
 - Shape: subject `User decisions: <project or topic>`; body one line per decision with local date, scope, the decision, its reason and its source (task, preference line or conversation); a correction names what it replaces. Normal priority, `replyRequested` false. No secrets, no transcripts.
@@ -56,7 +56,7 @@ On native Windows, Claude Code must be v2.1.234 or later for same-machine sessio
 node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --unit <explicit-routed-unit>
 ```
 
-Run it through the target Fixer conversation's own Bash or PowerShell tool, with the actual routed unit supplied explicitly. For example, use `manager` only when that is the unit selected for this chat. Do not run it in an unrelated terminal or tell Relay to choose a role. The command registers that exact current session, enables a four-hour policy by default, and starts one hidden bounded worker. `--hours 5` through `--hours 8` selects another ordinary window; `--hours 12` or `--hours 24` requires `--extended`. `--max-handoffs <1-100>` limits submitted pointers (default 20). Unlimited operation requires the explicit `--unlimited --manual-consent` flags and never renews automatically.
+Run it through the target Fixer conversation's own Bash or PowerShell tool, with the actual routed unit supplied explicitly. For example, use `overseer` only when that is the unit selected for this chat. Do not run it in an unrelated terminal or tell Relay to choose a role. The command registers that exact current session, enables a four-hour policy by default, and starts one hidden bounded worker. `--hours 5` through `--hours 8` selects another ordinary window; `--hours 12` or `--hours 24` requires `--extended`. `--max-handoffs <1-100>` limits submitted pointers (default 20). Unlimited operation requires the explicit `--unlimited --manual-consent` flags and never renews automatically.
 
 The Claude hook config adds SessionStart, UserPromptSubmit, Stop and SessionEnd lifecycle handling. SessionStart starts a worker only when exactly one previously enabled policy matches the current native session, Claude client and local machine; it does not register a role or renew a policy. UserPromptSubmit and PreToolUse mark the session busy, Stop marks it idle without blocking or forcing another turn, and SessionEnd revokes that session's wake policy. Resuming later requires another explicit attach. The policy worker defers normal messages while a fresh busy observation applies; urgent messages may enter Claude's native queue, which never interrupts a running tool. When Claude is idle, an accepted native message starts a new turn and uses the normal session permissions and inbound controls.
 

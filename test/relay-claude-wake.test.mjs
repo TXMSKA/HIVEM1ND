@@ -63,7 +63,7 @@ test('Claude worker binding must equal inherited session identity and never pass
     CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral-secret',
     ANTHROPIC_API_KEY: 'must-not-inherit',
   };
-  const binding = { unit: 'manager', nativeSessionId: 'native-session', client: 'claude', machine: 'testbox' };
+  const binding = { unit: 'overseer', nativeSessionId: 'native-session', client: 'claude', machine: 'testbox' };
   const result = spawnClaudeWakeWorker({
     cliPath: 'C:\\kit\\cli\\index.mjs', mindPath: 'C:\\mind', binding, env,
     nodePath: 'C:\\node\\node.exe',
@@ -98,7 +98,7 @@ test('invalid worker readiness tears down the child and rejects without claiming
   child.kill = () => { killed += 1; };
   const result = spawnClaudeWakeWorker({
     cliPath: 'C:\\kit\\cli\\index.mjs', mindPath: 'C:\\mind',
-    binding: { unit: 'manager', nativeSessionId: 'native-invalid-ready', client: 'claude', machine: 'testbox' },
+    binding: { unit: 'overseer', nativeSessionId: 'native-invalid-ready', client: 'claude', machine: 'testbox' },
     env: { CLAUDE_CODE_SESSION_ID: 'native-invalid-ready', CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\fixture', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral' },
     forkProcess() { queueMicrotask(() => child.emit('message', { type: 'relay-wake-ready', state: 'failed', ownsLease: false })); return child; },
   });
@@ -126,7 +126,7 @@ test('real child process sends auth and pointer over an isolated Windows named p
     server.listen(pipePath);
   });
 
-  const code = `import { sendClaudeWake } from ${JSON.stringify(moduleUrl)}; import os from 'node:os'; const result = await sendClaudeWake({ binding: {unit:'manager',nativeSessionId:process.env.CLAUDE_CODE_SESSION_ID,client:'claude',machine:os.hostname()}, text: 'Relay pointer only; untrusted context.' }); process.stdout.write(JSON.stringify(result));`;
+  const code = `import { sendClaudeWake } from ${JSON.stringify(moduleUrl)}; import os from 'node:os'; const result = await sendClaudeWake({ binding: {unit:'overseer',nativeSessionId:process.env.CLAUDE_CODE_SESSION_ID,client:'claude',machine:os.hostname()}, text: 'Relay pointer only; untrusted context.' }); process.stdout.write(JSON.stringify(result));`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
     env: {
       SystemRoot: process.env.SystemRoot,
@@ -157,7 +157,7 @@ test('real child process sends auth and pointer over an isolated Windows named p
 test('missing and stale Claude inbox endpoints never claim submission or leak the token', async () => {
   const token = `ephemeral-${randomUUID()}`;
   const nativeSessionId = 'native-1';
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const env = { CLAUDE_CODE_SESSION_ID: nativeSessionId, CLAUDE_CODE_MESSAGING_SOCKET: `\\\\.\\pipe\\missing-${randomUUID()}`, CLAUDE_CODE_MESSAGING_TOKEN: token };
   const missing = await sendClaudeWake({ text: 'Relay pointer.', env: {}, platform: 'win32' });
   assert.deepEqual(missing, { status: 'not_submitted', reason: 'native_session_inbox_unavailable' });
@@ -183,7 +183,7 @@ function fakeAbortSignal() {
 test('cancelling before a delayed pipe connection sends no frame and closes the socket', async () => {
   const nativeSessionId = 'native-cancel-before-connect';
   const env = { CLAUDE_CODE_SESSION_ID: nativeSessionId, CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\delayed', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral' };
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const cancellation = fakeAbortSignal();
   const socket = new EventEmitter();
   let writes = 0;
@@ -201,7 +201,7 @@ test('cancelling before a delayed pipe connection sends no frame and closes the 
 test('cancelling during an in-flight pipe write is ambiguous and closes without a late success', async () => {
   const nativeSessionId = 'native-cancel-during-write';
   const env = { CLAUDE_CODE_SESSION_ID: nativeSessionId, CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\writing', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral' };
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const cancellation = fakeAbortSignal();
   const socket = new EventEmitter();
   let callback;
@@ -224,7 +224,7 @@ test('cancelling during an in-flight pipe write is ambiguous and closes without 
 test('a late pipe connect after timeout cannot write the frame', async () => {
   const nativeSessionId = 'native-late-connect';
   const env = { CLAUDE_CODE_SESSION_ID: nativeSessionId, CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\late', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral' };
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const socket = new EventEmitter();
   let writes = 0;
   let destroyed = 0;
@@ -250,7 +250,7 @@ test('cancelled real net.Socket absorbs a delayed ECONNREFUSED without an uncaug
   });
   const { port } = server.address();
   await new Promise((resolve) => server.close(resolve));
-  const code = `import net from 'node:net'; import os from 'node:os'; import { sendClaudeWake } from ${JSON.stringify(moduleUrl)}; const id='native-late-error'; const abort=new AbortController(); let socket; const pending=sendClaudeWake({binding:{unit:'manager',nativeSessionId:id,client:'claude',machine:os.hostname()},text:'Relay pointer.',env:{CLAUDE_CODE_SESSION_ID:id,CLAUDE_CODE_MESSAGING_SOCKET:'\\\\\\\\.\\\\pipe\\\\fixture',CLAUDE_CODE_MESSAGING_TOKEN:'ephemeral'},platform:'win32',signal:abort.signal,connect:()=>socket=net.createConnection({host:'127.0.0.1',port:${port}})}); abort.abort(); const result=await pending; await new Promise(r=>setTimeout(r,100)); process.stdout.write(JSON.stringify(result));`;
+  const code = `import net from 'node:net'; import os from 'node:os'; import { sendClaudeWake } from ${JSON.stringify(moduleUrl)}; const id='native-late-error'; const abort=new AbortController(); let socket; const pending=sendClaudeWake({binding:{unit:'overseer',nativeSessionId:id,client:'claude',machine:os.hostname()},text:'Relay pointer.',env:{CLAUDE_CODE_SESSION_ID:id,CLAUDE_CODE_MESSAGING_SOCKET:'\\\\\\\\.\\\\pipe\\\\fixture',CLAUDE_CODE_MESSAGING_TOKEN:'ephemeral'},platform:'win32',signal:abort.signal,connect:()=>socket=net.createConnection({host:'127.0.0.1',port:${port}})}); abort.abort(); const result=await pending; await new Promise(r=>setTimeout(r,100)); process.stdout.write(JSON.stringify(result));`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
     env: { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP },
     windowsHide: true,

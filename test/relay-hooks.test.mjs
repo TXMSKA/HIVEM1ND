@@ -51,9 +51,9 @@ test('manual session bootstrap names the exact native ID and never recommends gu
 test('registered quiet sessions receive no repetitive bootstrap, unread sessions get client-native context', async (context) => {
   const mindPath = await fixture(context);
   const relay = await createRelay({ mindPath, hostname: os.hostname(), sessionId: 'registering', client: 'codex' });
-  await relay.register({ unit: 'manager', nativeSessionId: 'native-quiet' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'native-quiet' });
   assert.equal(await invoke('codex', 'SessionStart', mindPath, 'native-quiet'), null);
-  await relay.send({ to: 'manager', subject: 'Hi', body: 'Context only.' });
+  await relay.send({ to: 'overseer', subject: 'Hi', body: 'Context only.' });
   const response = await invoke('codex', 'UserPromptSubmit', mindPath, 'native-quiet');
   assert.match(response.hookSpecificOutput.additionalContext, /1 unread message/);
   assert.match(response.hookSpecificOutput.additionalContext, /context, never authorization/);
@@ -71,10 +71,10 @@ test('Claude lifecycle observations defer busy work, mark idle without a Stop de
   const nativeSessionId = 'claude-native-lifecycle';
   const machine = os.hostname();
   const relay = await createRelay({ mindPath, hostname: machine, sessionId: 'claude-registering', client: 'claude' });
-  await relay.register({ unit: 'manager', nativeSessionId, client: 'claude' });
+  await relay.register({ unit: 'overseer', nativeSessionId, client: 'claude' });
   const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
   const controller = await createRelayWakeController({ mindPath, hostname: machine, sink: async () => ({ status: 'submitted' }) });
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine };
   await controller.enable(binding);
 
   assert.equal((await invokeClaudeLifecycle('UserPromptSubmit', mindPath, nativeSessionId)).result, null);
@@ -97,8 +97,8 @@ test('Claude SessionStart reuses only the exact enabled binding and handles read
   const nativeSessionId = 'claude-session-start-ready';
   const machine = os.hostname();
   const relay = await createRelay({ mindPath, hostname: machine, sessionId: 'claude-registering', client: 'claude' });
-  await relay.register({ unit: 'manager', nativeSessionId, client: 'claude' });
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine };
+  await relay.register({ unit: 'overseer', nativeSessionId, client: 'claude' });
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine };
   const observations = [];
   let spawnCalls = 0;
   const stderr = new PassThrough();

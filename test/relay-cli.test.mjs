@@ -31,11 +31,11 @@ async function cli(argv, dependencies = {}) {
 test('CLI binds separate instance and native IDs, then resolves a reminder without an explicit unit', async (context) => {
   const { mind } = await fixture(context);
   const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
-  const registered = await cli(['relay', 'register', ...common, '--unit', 'manager']);
+  const registered = await cli(['relay', 'register', ...common, '--unit', 'overseer']);
   assert.equal(registered.code, 0, registered.stderr);
   assert.equal(JSON.parse(registered.stdout).nativeSessionId, 'native-1');
   const reminder = await cli(['relay', 'reminder', ...common]);
-  assert.deepEqual(JSON.parse(reminder.stdout), { unit: 'manager', unread: 0, from: [], text: '', registered: true });
+  assert.deepEqual(JSON.parse(reminder.stdout), { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
 });
 
 test('CLI preserves clear usage errors and bounded stdin message delivery', async (context) => {
@@ -43,7 +43,7 @@ test('CLI preserves clear usage errors and bounded stdin message delivery', asyn
   const missing = await cli(['relay', 'register', '--mind-path', mind, '--session-id', 'instance']);
   assert.equal(missing.code, 2);
   assert.match(missing.stderr, /explicit --unit/);
-  const noIdentity = await cli(['relay', 'send', '--mind-path', mind, '--to', 'manager', '--subject', 'hello', '--body', 'test']);
+  const noIdentity = await cli(['relay', 'send', '--mind-path', mind, '--to', 'overseer', '--subject', 'hello', '--body', 'test']);
   assert.equal(noIdentity.code, 2);
   assert.match(noIdentity.stderr, /--session-id/);
   const parsed = await cli(['relay', '--help']);
@@ -54,29 +54,29 @@ test('CLI preserves clear usage errors and bounded stdin message delivery', asyn
 test('CLI status and events pass only the fields their store methods accept', async (context) => {
   const { mind } = await fixture(context);
   const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
-  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'manager'])).code, 0);
-  const status = await cli(['relay', 'status', ...common, '--unit', 'manager']);
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'overseer'])).code, 0);
+  const status = await cli(['relay', 'status', ...common, '--unit', 'overseer']);
   assert.equal(status.code, 0, status.stderr);
-  assert.equal(JSON.parse(status.stdout).units[0].unit, 'manager');
+  assert.equal(JSON.parse(status.stdout).units[0].unit, 'overseer');
   const events = await cli(['relay', 'events', ...common, '--limit', '5']);
   assert.equal(events.code, 0, events.stderr);
-  const misplaced = await cli(['relay', 'events', ...common, '--unit', 'manager']);
+  const misplaced = await cli(['relay', 'events', ...common, '--unit', 'overseer']);
   assert.equal(misplaced.code, 1);
   assert.match(misplaced.stderr, /events does not accept the field unit/);
 });
 
 test('wake command parser requires explicit units and distinguishes bounded extension from unlimited consent', () => {
-  const attach = parseArgs(['relay', 'wake', 'attach', '--mind-path', 'C:/mind', '--unit', 'manager']);
+  const attach = parseArgs(['relay', 'wake', 'attach', '--mind-path', 'C:/mind', '--unit', 'overseer']);
   assert.equal(attach.options.action, 'wake');
   assert.equal(attach.options.wakeAction, 'attach');
   assert.equal(attach.options.hours, undefined);
-  assert.deepEqual(parseArgs(['relay', 'wake', 'enable', '--mind-path', 'C:/mind', '--unit', 'manager', '--native-session-id', 'native', '--hours', '4']).options, {
-    action: 'wake', attachments: [], ids: [], wakeAction: 'enable', mindPath: 'C:/mind', unit: 'manager', nativeSessionId: 'native', hours: '4',
+  assert.deepEqual(parseArgs(['relay', 'wake', 'enable', '--mind-path', 'C:/mind', '--unit', 'overseer', '--native-session-id', 'native', '--hours', '4']).options, {
+    action: 'wake', attachments: [], ids: [], wakeAction: 'enable', mindPath: 'C:/mind', unit: 'overseer', nativeSessionId: 'native', hours: '4',
   });
-  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'manager', '--hours', '2']), /4 through 8/);
-  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'manager', '--hours', '12']), /--extended/);
-  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'manager', '--unlimited']), /--manual-consent/);
-  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'manager', '--unlimited', '--manual-consent', '--hours', '4']), /cannot be combined/);
+  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'overseer', '--hours', '2']), /4 through 8/);
+  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'overseer', '--hours', '12']), /--extended/);
+  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'overseer', '--unlimited']), /--manual-consent/);
+  assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'overseer', '--unlimited', '--manual-consent', '--hours', '4']), /cannot be combined/);
   const codexAttach = parseArgs(['relay', 'wake', 'attach', '--client', 'codex', '--unit', 'relay-test-codex', '--native-session-id', '01a10cc9-6c04-7cd2-86b8-411e66cecdb0']).options;
   assert.equal(codexAttach.client, 'codex');
   assert.equal(codexAttach.nativeSessionId, '01a10cc9-6c04-7cd2-86b8-411e66cecdb0');
@@ -159,7 +159,7 @@ test('Codex attach refuses a missing or differently routed target registration w
       async disable() {},
     }),
     createRelay: async () => ({
-      async reminder() { return { registered: true, unit: 'manager', unread: 0, from: [], text: '' }; },
+      async reminder() { return { registered: true, unit: 'overseer', unread: 0, from: [], text: '' }; },
       async register() { registered = true; },
     }),
     spawnCodexWakeWorker() { throw new Error('must not spawn'); },
@@ -177,7 +177,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
     CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\attach-test',
     CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral-secret',
   };
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const policy = { enabled: true, deadlineAt: 'bounded', maxHandoffs: 20 };
   let resolveReady;
   let signalSpawned;
@@ -195,7 +195,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
   const errors = [];
   stdout.on('data', (chunk) => output.push(chunk));
   stderr.on('data', (chunk) => errors.push(chunk));
-  const run = runCli(['relay', 'wake', 'attach', '--mind-path', 'C:/isolated-mind', '--unit', 'manager'], {
+  const run = runCli(['relay', 'wake', 'attach', '--mind-path', 'C:/isolated-mind', '--unit', 'overseer'], {
     stdout, stderr, env, platform: 'win32', createRelayWakeController: async () => controller,
     createRelay: async (options) => ({
       async register(input) { calls.push(['register', options.sessionId, input]); },
@@ -207,7 +207,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
   assert.equal(Buffer.concat(output).toString('utf8'), '');
   assert.equal(calls[0][0], 'register');
   assert.equal(calls[0][1], nativeSessionId);
-  assert.deepEqual(calls[0][2], { unit: 'manager', nativeSessionId, client: 'claude' });
+  assert.deepEqual(calls[0][2], { unit: 'overseer', nativeSessionId, client: 'claude' });
   assert.deepEqual(calls.find(([kind]) => kind === 'enable')[1], binding);
   assert.equal(calls.find(([kind]) => kind === 'enable')[1].maxHandoffs, undefined);
   assert.deepEqual(calls.find(([kind]) => kind === 'activity')[2], { activity: 'busy' });
@@ -224,7 +224,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
   const failureError = new PassThrough();
   const failureErrors = [];
   failureError.on('data', (chunk) => failureErrors.push(chunk));
-  const failCode = await runCli(['relay', 'wake', 'attach', '--mind-path', 'C:/isolated-mind', '--unit', 'manager'], {
+  const failCode = await runCli(['relay', 'wake', 'attach', '--mind-path', 'C:/isolated-mind', '--unit', 'overseer'], {
     stdout: failureOutput, stderr: failureError, env, platform: 'win32',
     createRelayWakeController: async () => ({
       async enable() { return policy; }, async observeActivity() {}, async disable() { disabled += 1; },
@@ -241,7 +241,7 @@ test('wake attach reports success only after worker readiness and rolls back on 
 test('real CLI attach stays alive through worker readiness and always disables its disposable worker', { skip: process.platform !== 'win32' && 'Claude wake attach needs a Windows named pipe' }, async (context) => {
   const { root, mind } = await fixture(context);
   const nativeSessionId = `native-cli-${Date.now()}`;
-  const binding = { unit: 'manager', nativeSessionId, client: 'claude', machine: os.hostname() };
+  const binding = { unit: 'overseer', nativeSessionId, client: 'claude', machine: os.hostname() };
   const token = `ephemeral-${Date.now()}`;
   const socketPath = `\\\\.\\pipe\\relay-cli-${Date.now()}`;
   const childEnv = {
@@ -258,7 +258,7 @@ test('real CLI attach stays alive through worker readiness and always disables i
   let workerStopped = false;
   const cleanupController = await createRelayWakeController({ mindPath: mind, hostname: os.hostname(), sink: async () => ({ status: 'submitted' }) });
   try {
-    child = spawn(process.execPath, [cliPath, 'relay', 'wake', 'attach', '--mind-path', mind, '--unit', 'manager'], {
+    child = spawn(process.execPath, [cliPath, 'relay', 'wake', 'attach', '--mind-path', mind, '--unit', 'overseer'], {
       env: childEnv, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));

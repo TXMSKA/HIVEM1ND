@@ -3,7 +3,7 @@ purpose: Writing down what a product is, for whom and what it must do at each st
 
 # Product
 
-What a product is tends to sit in four places at once: the dated lines of its brief, the scope files of the Manager, its boards and its tasks. This module writes the one file that holds it, the product document, in the format of [files.md](../../files.md#product-projectsprojectproductmd), and keeps that file true. It also holds the rules for delegating the work that builds the product. Match the work against the lines below, open the category file, and from it only the protocol steps it names. Work that matches no category is not covered here.
+What a product is tends to sit in four places at once: the dated lines of its brief, the scope files of the Overseer, its boards and its tasks. This module writes the one file that holds it, the product document, in the format of [files.md](../../files.md#product-projectsprojectproductmd), and keeps that file true. It also holds the rules for delegating the work that builds the product. Match the work against the lines below, open the category file, and from it only the protocol steps it names. Work that matches no category is not covered here.
 
 ## Categories
 
