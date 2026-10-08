@@ -1,1 +1,1 @@
-Fixtures of every format in files.md, one file per format; the tests read them.
+Fixtures of every format in files.md, one file per format; the tests read them. `view/mind` is a larger mind for the view reader, with a squad, Relay records, a product document and malformed files on purpose.
