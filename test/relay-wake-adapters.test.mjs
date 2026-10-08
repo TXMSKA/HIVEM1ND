@@ -25,9 +25,11 @@ test('every registered wake module exposes the same interface and supplies CLI h
 
 test('existing adapter metadata preserves native attachment, timing, loop caps and deferral behavior', () => {
   const env = { CLAUDE_CODE_SESSION_ID: 'native-claude', CODEX_THREAD_ID: 'caller-codex' };
-  assert.deepEqual(WAKE_ADAPTERS.claude.attachIdentity({ nativeSessionId: 'ignored', env }), {
-    nativeSessionId: 'native-claude', sessionId: 'native-claude', requireRegistration: false, activity: 'busy',
+  const { warning, ...claudeIdentity } = WAKE_ADAPTERS.claude.attachIdentity({ nativeSessionId: 'ignored', env });
+  assert.deepEqual(claudeIdentity, {
+    nativeSessionId: 'native-claude', sessionId: 'native-claude', requireRegistration: false, activity: null,
   });
+  assert.match(warning, /relay configure --client claude/);
   assert.deepEqual(WAKE_ADAPTERS.codex.attachIdentity({ nativeSessionId: 'target', env }), {
     nativeSessionId: 'target', sessionId: 'caller-codex', requireRegistration: true,
   });

@@ -1009,6 +1009,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
       ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
     });
     if (identity.activity) await controller.observeActivity(binding, { activity: identity.activity });
+    if (identity.warning) errorOutput.write(`${identity.warning}\n`);
     try {
       const spawnWorker = dependencies[adapter.workerDependency] ?? adapter.spawnWorker;
       const worker = spawnWorker({ cliPath: path.join(dependencies.kitPath ?? KIT_PATH, 'cli', 'index.mjs'), mindPath: options.mindPath, binding, env, keepParentAliveUntilReady: true });
