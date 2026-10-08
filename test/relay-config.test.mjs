@@ -332,7 +332,7 @@ test('Antigravity rules allow plain arguments and refuse chained, substituted or
   const toForward = (text) => text.replaceAll(path.sep, '/');
   for (const [cli, where] of [[kit, mind], [toForward(kit), toForward(mind)]]) {
     const read = `node ${cli} relay read --mind-path ${where} --unit u`;
-    const send = `node ${cli} relay send --mind-path ${where} --to manager --subject "Reply" --body "Read, done."`;
+    const send = `node ${cli} relay send --mind-path ${where} --to overseer --subject "Reply" --body "Read, done."`;
     for (const text of [read, send]) {
       assert.ok(rules.some((rule) => ruleAllows(rule, text)), `per token: ${text}`);
       assert.ok(rules.some((rule) => ruleAllowsFullLine(rule, text)), `full line: ${text}`);

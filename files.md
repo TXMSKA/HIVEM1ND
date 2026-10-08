@@ -61,7 +61,7 @@ New Relay messages use filenames with seconds, machine name and a random collisi
 
 ```markdown
 id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
-from: manager
+from: overseer
 to: executor-myapp
 machine: LAPTOP
 timestamp: 2026-09-15T14:02:03.000Z
@@ -191,13 +191,13 @@ One home per fact. Each fact is written once, in the file that owns it, and ever
 
 - Product document: what the product is and for whom, now.
 - Brief: the dated why, and the technical header.
-- Scope file in `user/manager/`, or brainstorm file: open questions only, while a topic is being defined. Agreed text leaves it in the same turn, into the product document or, for a project with a seat, into the brief Fact and the Relay note that hand it to the seat, and an empty file is deleted.
-- Survey and plan in `user/manager/`: status and order of work.
+- Scope file in `user/overseer/`, or brainstorm file: open questions only, while a topic is being defined. Agreed text leaves it in the same turn, into the product document or, for a project with a seat, into the brief Fact and the Relay note that hand it to the seat, and an empty file is deleted.
+- Survey and plan in `user/overseer/`: status and order of work.
 - Boards: the UI.
 - Annex: the how of the product, such as its architecture, data model and integrations.
 - Task: the how of one piece of work, in its Architecture section when it has one.
 
-The seat of the project, its Executor or the unit that works in that project, writes and keeps the project's product document and its annexes, one writer per file. It drafts the product document from the records and edits it in the turn a product decision is taken, with `updated` set and the brief Fact left as one line with its pointer. A requirement changes only on a decision of the user. The coordinator, the Manager unit when the mind has one and otherwise the environment's Overlord, reviews each product document against the user's decisions and approves it with the user. It drafts a product document only for a project that has no seat, and it owns the family product document, which it drafts part by part with the user. A product decision taken with the coordinator is written by the coordinator as a brief Fact with its `(product: <section>)` pointer plus a Relay note to the project's seat, subject `Product decision: <project>`, one line naming the section, normal priority, no reply requested. The seat edits the product document, and the check reports the gap until it does. A seat that edits its product document sends the coordinator its `User decisions` note, so that the change is reviewed. The `product-requirements` protocol of the `product` knowledge module writes a product document, and `/brainstorm` drafts its text.
+The seat of the project, its Executor or the unit that works in that project, writes and keeps the project's product document and its annexes, one writer per file. It drafts the product document from the records and edits it in the turn a product decision is taken, with `updated` set and the brief Fact left as one line with its pointer. A requirement changes only on a decision of the user. The coordinator, the Overseer unit when the mind has one and otherwise the environment's Overlord, reviews each product document against the user's decisions and approves it with the user. It drafts a product document only for a project that has no seat, and it owns the family product document, which it drafts part by part with the user. A product decision taken with the coordinator is written by the coordinator as a brief Fact with its `(product: <section>)` pointer plus a Relay note to the project's seat, subject `Product decision: <project>`, one line naming the section, normal priority, no reply requested. The seat edits the product document, and the check reports the gap until it does. A seat that edits its product document sends the coordinator its `User decisions` note, so that the change is reviewed. The `product-requirements` protocol of the `product` knowledge module writes a product document, and `/brainstorm` drafts its text.
 
 Depends on is data. After a change to a product document that touches a shared contract, whoever edited it, the seat or the coordinator, sends one Relay note to each product listed in that product document's Depends on: subject `Product change: <project>`, one line naming the sections or IDs changed, normal priority, no reply requested. The unit of each product comes from its state file, and a missing or ambiguous unit is reported to the user, never guessed. No code sends it; the roles do.
 
@@ -359,7 +359,7 @@ There is one row per kind of work and client, so a kind of work has several rows
 
 A row changes only when a test changes it. A tool moves from `candidate` to `active` only after a real test: a piece the seat has verified first-hand and, for a client other than the seat's, a Relay live trial. A tool that stops being available, such as a subscription that ends, is `paused`, never deleted, and keeps its history. Prices never enter the table; they stay in the mind's cost notes. The user's call in the moment, which client, model or effort to use now, overrides the table for that session and is never written into it.
 
-When `models.md` does not exist, setup writes it from the Adapters mapping; after that the coordinator, the Manager unit when the mind has one and otherwise the environment's Overlord, edits it in the turn a test changes a row. The check reads the Client column: a row whose first word is neither the key of a Relay wake adapter nor `subagent` is reported with its Work and its client. A missing file, a file without a table and a valid row stay silent, and the measurement never fails the check.
+When `models.md` does not exist, setup writes it from the Adapters mapping; after that the coordinator, the Overseer unit when the mind has one and otherwise the environment's Overlord, edits it in the turn a test changes a row. The check reads the Client column: a row whose first word is neither the key of a Relay wake adapter nor `subagent` is reported with its Work and its client. A missing file, a file without a table and a valid row stay silent, and the measurement never fails the check.
 
 ## Knowledge module: `knowledge/<module>/`
 
