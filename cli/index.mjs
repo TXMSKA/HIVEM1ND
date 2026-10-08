@@ -348,6 +348,24 @@ function mindText(mind) {
   return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
 }
 
+// A seat is told about its own project only. A session that resolves to no project, such as an
+// executive seat at the mind root, gets the count instead of a line per project.
+function missingProductText({ project, mind }) {
+  const missing = mind?.product?.missing ?? [];
+  if (project) {
+    const own = missing.some((item) => item.project.toLowerCase() === project.name.toLowerCase());
+    return own ? `Product document missing for ${project.name}; its seat writes it from the records before other work.` : "";
+  }
+  if (missing.length === 0) return "";
+  const plural = missing.length === 1 ? "" : "s";
+  return `Product document${plural} missing in ${missing.length} project${plural}.`;
+}
+
+function productTexts(result) {
+  const stale = (result.mind?.product?.stale ?? []).map((item) => `Product document of ${item.project}: ${item.updated ? `updated ${item.updated}` : "undated"}, older than the Fact of ${item.fact} that points to it; /protocol product-requirements brings it up to date.`);
+  return [...stale, missingProductText(result)].filter(Boolean);
+}
+
 function formatStatus(result) {
   const lines = [];
   if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
@@ -362,6 +380,7 @@ function formatStatus(result) {
   if (executive) lines.push(`Executive roles: ${executive}.`);
   const mind = mindText(result.mind);
   if (mind) lines.push(mind);
+  lines.push(...productTexts(result));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }

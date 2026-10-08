@@ -20,6 +20,8 @@ user/
     state/ inbox/ tasks/ log/
   projects/<project>/
     brief.md
+    product.md                what the product is and must do, now, written by the project's seat
+    annexes/<name>.md         how the product is built, one file per annex (optional)
     preferences.md            project preferences (optional)
     protocols/<name>.md       local protocols, only for this project (optional)
     state/ inbox/ tasks/ log/
@@ -88,6 +90,7 @@ to: executor-myapp
 date: 2026-09-15 13:40
 depends: 002
 design: docs/design.md
+requirements: APP-B-04
 
 ## Request
 Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not touch src/auth/session.ts. Done means: a user receives the mail, the link opens the form, the new password works, all three seen in the browser.
@@ -95,7 +98,7 @@ Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not t
 ## Report
 ```
 
-`id` is sequential per project, three digits. `status` moves from `open` to `review` when the executor appends the report and the work waits for the requester's look, to `done` when the requester accepts it, and to `closed` when the requester archives it. A task sent back from `review` returns to `open` with what is missing in its Report. Each change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends` and `design` are optional; `design` comes from the brief.
+`id` is sequential per project, three digits. `status` moves from `open` to `review` when the executor appends the report and the work waits for the requester's look, to `done` when the requester accepts it, and to `closed` when the requester archives it. A task sent back from `review` returns to `open` with what is missing in its Report. Each change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends`, `design` and `requirements` are optional; `design` comes from the brief, and `requirements` lists, comma separated, the IDs of the requirements of the product document that the task delivers.
 
 ## Brief: `projects/<project>/brief.md`
 
@@ -111,9 +114,92 @@ repo: github.com/user/myapp
 ## Facts
 - 2026-09-12: the blog is stored in MySQL and edited from /admin; the JSON files are gone.
 - 2026-09-14: sessions stay in cookies; no JWT.
+- 2026-09-15: a forgotten password is reset by mail (product: Requirements/Beta).
 ```
 
-No paths. Paths are per machine and live in the machine file. The first role that enters a project without a brief writes the header from its audit and asks only what the audit could not answer.
+No paths. Paths are per machine and live in the machine file. The first role that enters a project without a brief writes the header from its audit and asks only what the audit could not answer. A Fact that changes a product document carries the pointer `(product: <section>)`, such as `(product: Requirements/Beta)`, and shrinks to one line once the product document holds the text. The format of the product document follows.
+
+## Product: `projects/<project>/product.md`
+
+```markdown
+project: myapp
+family: shop
+stage: beta
+updated: 2026-09-15
+voice: docs/voice.md
+board: docs/flows/boards/index.json
+
+## Problem and audience
+Owners of small shops who write a blog and have no developer: changing a post or recovering a lost password means asking someone.
+
+## Value
+The owner edits posts and recovers access alone, from /admin.
+
+## Requirements
+
+### Alpha
+- APP-A-01: the owner creates, edits and deletes a post from /admin. Accepted when: a post created in /admin shows on the public blog after a reload and is gone after deletion.
+
+### Beta
+- APP-B-04: a user who forgot the password sets a new one by mail. Accepted when: a reset request sends one mail, its link opens the form once, and the new password logs in.
+
+### Release
+- APP-R-01: every post reads with scripts blocked. Accepted when: each post opens and shows its full text in a browser with scripts disabled.
+
+## Out of scope
+- Comments from readers.
+
+## Plans
+Free and Plus. The prices are in the price table of `projects/shop/product.md`.
+
+## Floors
+- Local first: a draft survives a lost connection and is saved when it returns.
+- Privacy: no third-party script on the public blog.
+- Weak devices: the public blog is usable on a five-year-old phone.
+- Platforms: current desktop and phone browsers.
+
+## Depends on
+- Products: shop-checkout
+- Shared contracts: sign-in
+
+## Open questions
+- Does a reset link expire after one hour or after a day?
+
+## Annexes
+- architecture: annexes/architecture.md
+```
+
+The product document is the current truth about a product: what it is, for whom, and what it must do at each stage. Every project has one, written and kept by that project's own seat. It holds what is true now; status and order of work never enter it. `project` is the product's project name. `family` is the project of the family the product belongs to, whose own product document is `projects/<family>/product.md`; the family product document names itself in `family`. A field with nothing to point at, such as a product with no family or no board yet, is written `none`. `stage` is `alpha`, `beta` or `release`, the release stage the product is in now, apart from the working stage in the brief. `updated` is the date, `YYYY-MM-DD`, of the last edit. `voice` and `board` are paths relative to the repository, as in the brief: the product document points to the voice specification and to the boards and never copies them.
+
+A product document has these sections, in this order:
+
+- Problem and audience: who the product is for and what they cannot do, or do badly, today.
+- Value: what changes for them, in plain nouns.
+- Requirements: one group per stage, `### Alpha`, `### Beta` and `### Release`, and one line per requirement with its ID and its acceptance criterion. The ID is `<CODE>-<A|B|R>-<NN>`, such as `APP-B-04`: `CODE` is the product's short uppercase code, which never changes, the letter is the stage and `NN` is a number within the stage. An ID is never reused for another requirement, and a requirement that changes stage takes a new ID. The criterion is something a reviewer can observe, such as a screen state, a figure, a file or the output of a command, never a quality word such as fast or simple.
+- Out of scope: what the product deliberately does not do, one line each.
+- Plans: the names of the plans the product is offered in. Prices are not repeated here; they are in the price table of the family product document.
+- Floors: what holds at every stage, one line each for local first, privacy, weak devices and platforms.
+- Depends on: two lines, `- Products: <project>, <project>` for the products of the family it needs and `- Shared contracts: <name>, <name>` for the contracts it uses, each written `none` when empty.
+- Open questions: what is not decided yet. A question leaves the list when it is answered, and the answer goes into the section it belongs to.
+- Annexes: the last section, one line per annex, `- <name>: <path>`, or `none` when the product has no annex. An annex lives in `projects/<project>/annexes/<name>.md`, beside the product document and written by the same seat, and its path is relative to the product document, such as `annexes/architecture.md`; one that already lives in the repository is named by its repository path instead, as `voice` and `board` are, and is not copied. An annex holds the how, such as the architecture, the data model and the integrations, and the product document holds the what and for whom. An annex never restates a requirement; it cites its ID.
+
+The family product document has the same sections, where Requirements are the ones every product of the family meets, under the family's own code, and adds four: Rules, what holds for every product and is never restated in a product document; Product map, one line per product with its name, its code and what it is for, its stage staying in its own product document; Stages, what alpha, beta and release mean in the family; and Design direction, the path of the design document, never a copy of it. The family product document holds the price table once, in Plans, with one row per plan and every price written with currency and period.
+
+One home per fact. Each fact is written once, in the file that owns it, and every other file refers to it by ID or by section instead of restating it:
+
+- Product document: what the product is and for whom, now.
+- Brief: the dated why, and the technical header.
+- Scope file in `user/manager/`, or brainstorm file: open questions only, while a topic is being defined. Agreed text leaves it in the same turn, into the product document or, for a project with a seat, into the brief Fact and the Relay note that hand it to the seat, and an empty file is deleted.
+- Survey and plan in `user/manager/`: status and order of work.
+- Boards: the UI.
+- Annex: the how of the product, such as its architecture, data model and integrations.
+- Task: the how of one piece of work, in its Architecture section when it has one.
+
+The seat of the project, its Executor or the unit that works in that project, writes and keeps the project's product document and its annexes, one writer per file. It drafts the product document from the records and edits it in the turn a product decision is taken, with `updated` set and the brief Fact left as one line with its pointer. A requirement changes only on a decision of the user. The coordinator, the Manager unit when the mind has one and otherwise the environment's Overlord, reviews each product document against the user's decisions and approves it with the user. It drafts a product document only for a project that has no seat, and it owns the family product document, which it drafts part by part with the user. A product decision taken with the coordinator is written by the coordinator as a brief Fact with its `(product: <section>)` pointer plus a Relay note to the project's seat, subject `Product decision: <project>`, one line naming the section, normal priority, no reply requested. The seat edits the product document, and the check reports the gap until it does. A seat that edits its product document sends the coordinator its `User decisions` note, so that the change is reviewed. The `product-requirements` protocol of the `product` knowledge module writes a product document, and `/brainstorm` drafts its text.
+
+Depends on is data. After a change to a product document that touches a shared contract, whoever edited it, the seat or the coordinator, sends one Relay note to each product listed in that product document's Depends on: subject `Product change: <project>`, one line naming the sections or IDs changed, normal priority, no reply requested. The unit of each product comes from its state file, and a missing or ambiguous unit is reported to the user, never guessed. No code sends it; the roles do.
+
+The check reports a project with a `brief.md` and no `product.md`. When the working directory resolves to a project, one line names that project; when it resolves to none, as for an executive seat at the mind root, one line gives the number of such projects and is absent at zero. `--json` carries the full list, each project with its brief path, under `mind.product.missing`. The check also compares `updated` with the date of the newest Fact in the same project's brief that carries a pointer, and a product document older than that Fact is reported. A Fact without a pointer never triggers it, however new, and a product document updated on the day of the Fact or later is not reported. A product document over 20 KB is listed for `/cleaner`.
 
 ## Log: `log/<YYYYMMDD-HHMM>-<unit>.md`
 

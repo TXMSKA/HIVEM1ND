@@ -5,6 +5,7 @@ import path from "node:path";
 // and below the ones that make a session read pages of history before it can start.
 export const PREFERENCES_MAX_BYTES = 20 * 1024;
 export const BRIEF_MAX_BYTES = 15 * 1024;
+export const PRODUCT_MAX_BYTES = 20 * 1024;
 export const STATE_IN_MAX_DAYS = 3;
 export const MIND_FILES_MAX_BYTES = 500 * 1024 * 1024;
 export const MACHINE_FILE_MAX_BYTES = 15 * 1024;
@@ -22,6 +23,7 @@ export function mindThresholds(overrides = {}) {
   return {
     preferencesBytes: PREFERENCES_MAX_BYTES,
     briefBytes: BRIEF_MAX_BYTES,
+    productBytes: PRODUCT_MAX_BYTES,
     stateInDays: STATE_IN_MAX_DAYS,
     filesBytes: MIND_FILES_MAX_BYTES,
     machineFileBytes: MACHINE_FILE_MAX_BYTES,
@@ -66,6 +68,37 @@ function parseStateDate(value) {
 
 function headerValue(content, name) {
   return content.match(new RegExp(`^${name}:[ \\t]*(.*)$`, "im"))?.[1]?.trim() ?? "";
+}
+
+async function readText(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// Only a Fact that carries a `(product: <section>)` pointer says the product document should have
+// changed with it, so a newer Fact without one, however recent, never makes a product document stale.
+function newestPointedFact(brief) {
+  let inFacts = false;
+  let newest = "";
+  for (const line of brief.split(/\r?\n/)) {
+    if (/^##\s/.test(line)) {
+      inFacts = /^##\s+Facts\s*$/i.test(line);
+    } else if (inFacts) {
+      const fact = /^\s*-\s+(\d{4}-\d{2}-\d{2})\b.*\(product:[^)]*\)/i.exec(line)?.[1];
+      if (fact && fact > newest) newest = fact;
+    }
+  }
+  return newest;
+}
+
+// Dates are compared as YYYY-MM-DD text. A product document without a readable `updated` date sorts
+// before any Fact, because nothing shows that it is current.
+function productUpdated(content) {
+  const header = content.split(/\r?\n[ \t]*\r?\n/, 1)[0];
+  return /\d{4}-\d{2}-\d{2}/.exec(headerValue(header, "updated"))?.[0] ?? "";
 }
 
 async function stateScopes(userPath) {
@@ -175,7 +208,8 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
   const limits = mindThresholds(thresholds);
   const userPath = path.join(mindPath, "user");
   const items = [];
-  const sizes = { preferences: [], briefs: [], machines: [] };
+  const sizes = { preferences: [], briefs: [], products: [], machines: [] };
+  const product = { stale: [], missing: [] };
 
   const globalPreferences = await sizeOf(path.join(userPath, "preferences.md"));
   if (globalPreferences !== null) sizes.preferences.push({ path: "user/preferences.md", bytes: globalPreferences });
@@ -184,8 +218,24 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
     const project = path.join(userPath, "projects", entry.name);
     const preferences = await sizeOf(path.join(project, "preferences.md"));
     if (preferences !== null) sizes.preferences.push({ path: relative(mindPath, path.join(project, "preferences.md")), bytes: preferences });
-    const brief = await sizeOf(path.join(project, "brief.md"));
-    if (brief !== null) sizes.briefs.push({ path: relative(mindPath, path.join(project, "brief.md")), bytes: brief });
+    const briefPath = path.join(project, "brief.md");
+    const brief = await sizeOf(briefPath);
+    if (brief !== null) sizes.briefs.push({ path: relative(mindPath, briefPath), bytes: brief });
+    const productPath = path.join(project, "product.md");
+    const productSize = await sizeOf(productPath);
+    if (productSize !== null) sizes.products.push({ path: relative(mindPath, productPath), bytes: productSize });
+
+    // Every project with a brief is expected to have a product document written by its seat, so a
+    // missing one is reported with or without a pointer Fact. A folder with no brief is not counted:
+    // the brief is what makes it a project.
+    if (brief !== null && productSize === null) product.missing.push({ project: entry.name, brief: relative(mindPath, briefPath) });
+
+    const fact = brief === null || productSize === null ? "" : newestPointedFact(await readText(briefPath) ?? "");
+    const content = fact ? await readText(productPath) : null;
+    if (content !== null) {
+      const updated = productUpdated(content);
+      if (updated < fact) product.stale.push({ project: entry.name, path: relative(mindPath, productPath), updated: updated || null, fact });
+    }
   }
   for (const entry of await names(path.join(userPath, "machines"))) {
     const lower = entry.name.toLowerCase();
@@ -199,6 +249,9 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
   }
   for (const item of sizes.briefs) {
     if (item.bytes > limits.briefBytes) items.push({ kind: "brief", ...item });
+  }
+  for (const item of sizes.products) {
+    if (item.bytes > limits.productBytes) items.push({ kind: "product", ...item });
   }
   for (const item of sizes.machines) {
     if (item.bytes > limits.machineFileBytes) items.push({ kind: "machine", ...item });
@@ -222,9 +275,11 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
     count: items.length,
     largest: items[0] ? { kind: items[0].kind, path: items[0].path, bytes: items[0].bytes } : null,
     items,
+    product,
     sizes: {
       preferences: sizes.preferences,
       briefs: sizes.briefs,
+      products: sizes.products,
       machines: sizes.machines,
       states: { in: states.count, stale: states.stale.length },
       files: { bytes: files.bytes, folders: files.folders, entries: files.entries, truncated: files.truncated },
