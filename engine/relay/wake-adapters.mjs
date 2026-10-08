@@ -2,7 +2,7 @@ import { wakeAdapter as claude } from './claude-wake.mjs';
 import { wakeAdapter as codex } from './codex-wake.mjs';
 import { wakeAdapter as cursor } from './cursor-wake.mjs';
 import { wakeAdapter as opencode } from './opencode-wake.mjs';
-import { wakeAdapter as nova } from './host-wake.mjs';
+import { wakeAdapter as host } from './host-wake.mjs';
 import { wakeAdapter as antigravity } from './antigravity-wake.mjs';
 import { wakeAdapter as copilot } from './copilot-wake.mjs';
 
@@ -13,7 +13,7 @@ export const WAKE_ADAPTERS = Object.freeze({
   get codex() { return codex; },
   get cursor() { return cursor; },
   get opencode() { return opencode; },
-  get nova() { return nova; },
+  get host() { return host; },
   get antigravity() { return antigravity; },
   get copilot() { return copilot; },
 });

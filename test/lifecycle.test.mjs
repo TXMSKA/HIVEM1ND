@@ -789,14 +789,14 @@ test("check reports a role added to the mind until evolve installs it and writes
   await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["roles/"] })}\n`);
   await write(path.join(kitPath, "roles", "executor.md"), "---\nname: executor\ndescription: Executor\n---\n\n# /executor\n");
   await installAgentAssets({ kitPath, mindPath, homeDir, hostname: "TEST", env });
-  await write(path.join(mindPath, "roles", "scout.md"), "---\nname: scout\ndescription: Scout\n---\n\n# /scout\n");
+  await write(path.join(mindPath, "roles", "helper.md"), "---\nname: helper\ndescription: Helper\n---\n\n# /helper\n");
   const options = { kitPath, mindPath, homeDir, hostname: "TEST", env, cwd: root };
 
   const before = await snapshot(root);
   const pending = await check(options);
   assert.deepEqual(await snapshot(root), before);
   assert.equal(pending.machineRecord, true);
-  assert.deepEqual(pending.missing, [{ name: "scout", type: "role", agents: ["codex"] }]);
+  assert.deepEqual(pending.missing, [{ name: "helper", type: "role", agents: ["codex"] }]);
   assert.equal(pending.update.updateAvailable, true);
   assert.equal(pending.update.latestVersion, "1.0.0");
 

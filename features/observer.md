@@ -18,4 +18,4 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 1. Read the brief and the stack. Pick the conditions that apply: slow connection, lost signal, weak device, low storage, large data sets, concurrent users, malformed input, and any the user adds.
 2. For each condition, simulate it where the tooling allows (network throttling, device emulation, offline mode) and reason from the code where it does not. Every finding cites evidence.
 3. Write the findings as task files, `status: open`, one per weakness, with what was observed, where and how to reproduce it. Together they are the QA plan; `/qa` runs them when the user wants.
-4. Niko runs the feature and may add a light remark to a finding, such as "Whoops! I really don't know how I managed to catch that", never in place of the evidence.
+4. The run may add a light remark to a finding, such as "Whoops! I really don't know how I managed to catch that", never in place of the evidence.

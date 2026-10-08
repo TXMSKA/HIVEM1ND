@@ -1,7 +1,7 @@
 unit: executor-myapp
 user: me
 state: out
-machine: SCOUT
+machine: LAPTOP
 branch: feat/login
 commit: 3f2a9c1
 tree: clean
