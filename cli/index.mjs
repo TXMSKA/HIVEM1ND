@@ -350,6 +350,10 @@ function prdTexts(mind) {
   return [...stale, ...missing];
 }
 
+function modelTexts(mind) {
+  return (mind?.models?.unregistered ?? []).map((item) => `Models: the row "${item.work}" names the client "${item.client}", which is not a Relay wake adapter or subagent; correct user/models.md.`);
+}
+
 function formatStatus(result) {
   const lines = [];
   if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
@@ -365,6 +369,7 @@ function formatStatus(result) {
   const mind = mindText(result.mind);
   if (mind) lines.push(mind);
   lines.push(...prdTexts(result.mind));
+  lines.push(...modelTexts(result.mind));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }

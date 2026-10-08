@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { getWakeAdapter } from "./relay/wake-adapters.mjs";
+
 // Where a mind starts to be worth cleaning. The defaults sit above the sizes of a healthy mind
 // and below the ones that make a session read pages of history before it can start.
 export const PREFERENCES_MAX_BYTES = 20 * 1024;
@@ -99,6 +101,38 @@ function newestPointedFact(brief) {
 function prdUpdated(content) {
   const header = content.split(/\r?\n[ \t]*\r?\n/, 1)[0];
   return /\d{4}-\d{2}-\d{2}/.exec(headerValue(header, "updated"))?.[0] ?? "";
+}
+
+function tableCells(line) {
+  const text = line.trim();
+  return text.startsWith("|") ? text.slice(1).replace(/\|$/, "").split("|").map((cell) => cell.trim()) : null;
+}
+
+// The columns are found by their header names, so a table with its columns reordered still reads.
+// Only the first table is read, and a table without a Client column has nothing to judge.
+function modelRows(content) {
+  const lines = content.split(/\r?\n/).map(tableCells);
+  const rule = lines.findIndex((cells, index) => index > 0 && lines[index - 1] && cells?.every((cell) => /^:?-{3,}:?$/.test(cell)));
+  if (rule < 0) return [];
+  const header = lines[rule - 1].map((cell) => cell.toLowerCase());
+  const client = header.indexOf("client");
+  const work = header.indexOf("work");
+  if (client < 0) return [];
+  const rows = [];
+  for (let index = rule + 1; lines[index]; index += 1) rows.push({ work: lines[index][work] ?? "", client: lines[index][client] ?? "" });
+  return rows;
+}
+
+// A Client is the key of a Relay wake adapter or `subagent`, then an optional note in parentheses
+// such as `(seat)`, so only its first word is compared, against the registry the wake itself reads.
+async function measureModels(userPath) {
+  const content = await readText(path.join(userPath, "models.md"));
+  const unregistered = [];
+  for (const row of content === null ? [] : modelRows(content)) {
+    const client = row.client.split(/\s+/)[0];
+    if (client !== "subagent" && getWakeAdapter(client) === null) unregistered.push({ work: row.work, client });
+  }
+  return { unregistered };
 }
 
 async function stateScopes(userPath) {
@@ -256,6 +290,7 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
   const states = await measureStates({ mindPath, userPath, hostname, now, limits });
   for (const item of states.stale) items.push({ kind: "state", ...item });
 
+  const models = await measureModels(userPath);
   const files = await walkFiles(mindPath, userPath);
   if (files.bytes > limits.filesBytes) {
     const [largest] = files.folders;
@@ -272,6 +307,7 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
     largest: items[0] ? { kind: items[0].kind, path: items[0].path, bytes: items[0].bytes } : null,
     items,
     prd,
+    models,
     sizes: {
       preferences: sizes.preferences,
       briefs: sizes.briefs,

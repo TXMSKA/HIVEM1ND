@@ -40,6 +40,14 @@ OpenCode is detected by `~/.config/opencode/` or the `opencode` binary. It reads
 
 VS Code is detected by the `code` binary or its user data folder. It reads both skill folders, the same copy as Cursor. Rules folder: `~/.copilot/instructions/`, one `.instructions.md` file per rule; the rules line goes into `~/.copilot/instructions/hivem1nd.instructions.md`, with a frontmatter of two keys, `description:` (one line saying what the rule is) and `applyTo: "**"`, followed by the line as the body.
 
+Model tiers. Each client fills the strong, mid and light tiers of the `delegation` category with the model families below, without version numbers, and its key in parentheses is what the Client column of `user/models.md` holds:
+
+- Claude Code (`claude`): Opus for strong, Sonnet for mid, Haiku for light.
+- Codex (`codex`): its largest GPT family for strong, its standard GPT family for mid, its mini GPT family for light.
+- Cursor (`cursor`), OpenCode (`opencode`) and VS Code (`copilot`) run the models of several providers. Each takes the families of the provider the user enabled in it: the Claude families above for Claude models, the GPT families above for GPT models, and otherwise the largest, the middle and the smallest family that provider offers.
+
+On setup, when `user/models.md` does not exist, the installing agent writes it, in the format of `files.md`, from this mapping for the agents attached on the machine, every row `candidate` with Tested `not yet` except what the setup actually ran.
+
 ## Attach prompt
 
 Copy the markdown files of `roles/`, `commands/` and `features/` of the mind, except `README.md`, into the folder this agent reads commands from: one folder per file, named after the file's `name`, with the file inside as `SKILL.md`, keeping the frontmatter and replacing `{{mind}}` with the mind path. If there is no such folder, paste the body of a role file as the first message of a chat instead. For auto mode, add this line to the agent's rules file: `HIVEM1ND: the mind is at <path>. Read <path>/rules.md first, then the role or command asked for.`

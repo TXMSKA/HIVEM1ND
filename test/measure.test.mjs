@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { check } from "../engine/lifecycle.mjs";
 import { BRIEF_MAX_BYTES, PREFERENCES_MAX_BYTES, PRD_MAX_BYTES, formatBytes, measureMind, mindThresholds } from "../engine/measure.mjs";
 import { runCli } from "../cli/index.mjs";
+import { WAKE_ADAPTERS } from "../engine/relay/wake-adapters.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +60,22 @@ function prd(project, updated) {
 
 async function projectFiles(mindPath, name, files) {
   for (const [file, content] of Object.entries(files)) await write(path.join(mindPath, "user", "projects", name, file), content);
+}
+
+const MODELS_HEADER = "| Work | Client | Model | Effort | Status | Tested | Result |\n| --- | --- | --- | --- | --- | --- | --- |\n";
+
+function models(...rows) {
+  const table = rows.map(([work, client]) => `| ${work} | ${client} | strong model | high | active | 2030-01-02 | held up |\n`).join("");
+  return `updated: 2030-01-02\n\n# Models\n\nWhich model does which kind of work.\n\n${MODELS_HEADER}${table}\nFallback order for builds: mid model on subagent, then mid model on codex.\n`;
+}
+
+function checkRunner(root, mindPath) {
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  return async (...extra) => (await execFileAsync(
+    process.execPath,
+    [cliPath, "check", "--kit-path", path.join(root, "kit"), "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST", ...extra],
+    { cwd: root, encoding: "utf8" },
+  )).stdout;
 }
 
 test("a small mind crosses no threshold", async (t) => {
@@ -306,4 +323,113 @@ test("the example brief and PRD of the fixtures agree, so the check stays silent
   const mind = await measureMind({ mindPath, hostname: "TEST" });
   assert.deepEqual(mind.prd, { stale: [], missing: [] });
   assert.deepEqual(mind.sizes.prds.map((item) => item.path), ["user/projects/myapp/prd.md"]);
+});
+
+test("a models.md row whose client is neither a Relay wake adapter nor subagent is reported, and valid rows are not", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  await write(path.join(mindPath, "user", "models.md"), models(
+    ["Plan", "claude (seat)"],
+    ["Build", "subagent"],
+    ["Build", "codex"],
+    ["Build", "cursor"],
+    ["Edits", "subagent (fallback)"],
+    // The registry itself is the list of valid clients, so every key it holds passes.
+    ...Object.keys(WAKE_ADAPTERS).map((key) => [`Through ${key}`, key]),
+    ["Build through a tool", "gpt"],
+    ["Gathering", "mystery (seat)"],
+    ["Seat work", ""],
+  ));
+
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.models.unregistered, [
+    { work: "Build through a tool", client: "gpt" },
+    { work: "Gathering", client: "mystery" },
+    { work: "Seat work", client: "" },
+  ]);
+  assert.equal(mind.crossed, false);
+  assert.equal(mind.count, 0);
+});
+
+test("a missing models.md, a file without a table, and a table with nothing to judge stay silent", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  const file = path.join(mindPath, "user", "models.md");
+  const silent = { unregistered: [] };
+
+  assert.deepEqual((await measureMind({ mindPath, hostname: "TEST" })).models, silent);
+
+  const cases = {
+    "only prose": "updated: 2030-01-02\n\n# Models\n\nNothing is decided yet. A pipe | in prose is not a table.\n",
+    "a header row and no separator": "| Work | Client |\n| Plan | gpt |\n",
+    "a header and a separator and no rows": MODELS_HEADER,
+    "no Client column": "| Work | Model |\n| --- | --- |\n| Plan | gpt |\n",
+    "rows after the table ended": `${MODELS_HEADER}\n| Build | gpt | strong model | high | active | not yet | |\n`,
+  };
+  for (const [name, content] of Object.entries(cases)) {
+    await write(file, content);
+    assert.deepEqual((await measureMind({ mindPath, hostname: "TEST" })).models, silent, name);
+  }
+
+  await fs.rm(file);
+  await fs.mkdir(file);
+  assert.deepEqual((await measureMind({ mindPath, hostname: "TEST" })).models, silent, "a folder where the file should be");
+});
+
+test("a table shaped like a real models.md, with its notes, qualifiers and gaps, stays silent", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  await write(path.join(mindPath, "user", "models.md"), [
+    "updated: 2030-01-02",
+    "",
+    "# Models",
+    "",
+    "Which model does which kind of work, at which effort, for every seat and every delegation of this mind. It is the default when the user has not said otherwise; the user's call in the moment overrides it for that session and is not written here. A row changes only when a test changes it.",
+    "",
+    "| Work | Client | Model | Effort | Status | Tested | Result |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Plan, scope, PRD, deep review | claude (seat) | strong model | max | active | 2030-01-01, 2030-01-02 | plans held up in review |",
+    "| Seat work: conversation, coordination, review, design, boards, copy for people | claude (seat) | strong model | high | active | 2030-01-02 | never delegated |",
+    "| Build from an approved plan | subagent | mid model | high; xhigh for hard pieces | active | 2030-01-02 | test counts held when the seat reran them |",
+    "| Build from an approved plan | codex | mid model | high; xhigh for hard pieces | active while paid | 2030-01-02 | two tasks built |",
+    "| Read-only gathering: research, inventories, status rounds | subagent | light model | low | active | 2030-01-02 | sources cited |",
+    "| Mechanical edits from a written list | subagent | mid model | low | candidate | not yet | |",
+    "| Mechanical edits, fallback | subagent | light model | low | candidate | not yet | |",
+    "| Hardest decisions | claude | strong model | max | candidate | not yet | has its own weekly quota |",
+    "| Build through Relay | cursor | mid model | to set | candidate | not yet | after Relay works there |",
+    "",
+    "Fallback order for builds: mid model on subagent, then mid model on codex.",
+    "",
+  ].join("\r\n"));
+
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.models, { unregistered: [] });
+  assert.equal(mind.count, 0);
+});
+
+test("the check prints one line per unregistered client, silent on valid rows, carries the findings in the JSON and writes nothing", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  const run = checkRunner(root, mindPath);
+  const file = path.join(mindPath, "user", "models.md");
+
+  assert.equal(await run(), "");
+  await write(file, models(["Plan", "claude (seat)"], ["Build", "subagent"], ["Build", "codex"], ["Build", "cursor"]));
+  assert.equal(await run(), "");
+  assert.deepEqual(JSON.parse(await run("--json")).mind.models, { unregistered: [] });
+
+  await write(file, models(["Plan", "claude (seat)"], ["Build from an approved plan", "gpt"], ["Read-only gathering", "mystery (seat)"]));
+  const before = await snapshot(root);
+  assert.equal(
+    await run(),
+    'Models: the row "Build from an approved plan" names the client "gpt", which is not a Relay wake adapter or subagent; correct user/models.md.\n'
+    + 'Models: the row "Read-only gathering" names the client "mystery", which is not a Relay wake adapter or subagent; correct user/models.md.\n',
+  );
+  const json = JSON.parse(await run("--json"));
+  assert.deepEqual(json.mind.models.unregistered, [
+    { work: "Build from an approved plan", client: "gpt" },
+    { work: "Read-only gathering", client: "mystery" },
+  ]);
+  assert.equal(json.mind.crossed, false);
+  assert.deepEqual(await snapshot(root), before);
 });
