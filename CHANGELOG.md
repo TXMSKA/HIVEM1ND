@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1 - 2026-10-08
+
+- Examples, fixtures and feature texts use generic machine, project and person names.
+- The package author, the license and the installer copyright name TXMSKA, and the repository links point at TXMSKA/HIVEM1ND.
+
 ## 1.2.0 - 2026-09-21
 
 - An install is never reported as done over files it did not write: a symbolic link or a Windows junction standing where files belong stops the run and asks, replacing the link by default and keeping the folder it points at, with omitting available as an explicit choice.
