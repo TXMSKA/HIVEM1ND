@@ -1,3 +1,4 @@
 [
-  { "id": "void", "letter": "VO", "short": "Void", "title": "Void: the text editor and viewer base" }
+  { "id": "void", "letter": "VO", "short": "Void", "title": "Void: the text editor and viewer base" },
+  { "id": "hivem1nd-view", "letter": "HV", "short": "View", "title": "HIVEM1ND view: the mind as a person sees it" }
 ]
