@@ -280,7 +280,11 @@ function formatEvolve(result) {
   const lines = [];
   if (!result.completed) {
     lines.push("Evolution needs conflict choices before it can continue.");
-    for (const conflict of result.conflicts ?? []) lines.push(`${conflict.path}: ${conflict.reason}`);
+    for (const conflict of result.conflicts ?? []) {
+      lines.push(`${conflict.path}: ${conflict.reason}`);
+      lines.push(`  Choices: ${(conflict.choices ?? ["keep", "replace"]).join(", ")}`);
+    }
+    lines.push("Run evolve again with --conflict <path>=<choice> for each file.");
     return lines.join("\n");
   }
   lines.push(result.changed
@@ -344,10 +348,22 @@ function mindText(mind) {
   return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
 }
 
-function prdTexts(mind) {
-  const stale = (mind?.prd?.stale ?? []).map((item) => `PRD of ${item.project}: ${item.updated ? `updated ${item.updated}` : "undated"}, older than the Fact of ${item.fact} that points to it; /protocol product-requirements brings it up to date.`);
-  const missing = (mind?.prd?.missing ?? []).map((item) => `PRD of ${item.project}: the Fact of ${item.fact} points to a PRD and ${item.path} does not exist; /protocol product-requirements writes it.`);
-  return [...stale, ...missing];
+// A seat is told about its own project only. A session that resolves to no project, such as an
+// executive seat at the mind root, gets the count instead of a line per project.
+function missingProductText({ project, mind }) {
+  const missing = mind?.product?.missing ?? [];
+  if (project) {
+    const own = missing.some((item) => item.project.toLowerCase() === project.name.toLowerCase());
+    return own ? `Product document missing for ${project.name}; its seat writes it from the records before other work.` : "";
+  }
+  if (missing.length === 0) return "";
+  const plural = missing.length === 1 ? "" : "s";
+  return `Product document${plural} missing in ${missing.length} project${plural}.`;
+}
+
+function productTexts(result) {
+  const stale = (result.mind?.product?.stale ?? []).map((item) => `Product document of ${item.project}: ${item.updated ? `updated ${item.updated}` : "undated"}, older than the Fact of ${item.fact} that points to it; /protocol product-requirements brings it up to date.`);
+  return [...stale, missingProductText(result)].filter(Boolean);
 }
 
 function modelTexts(mind) {
@@ -368,7 +384,7 @@ function formatStatus(result) {
   if (executive) lines.push(`Executive roles: ${executive}.`);
   const mind = mindText(result.mind);
   if (mind) lines.push(mind);
-  lines.push(...prdTexts(result.mind));
+  lines.push(...productTexts(result));
   lines.push(...modelTexts(result.mind));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
@@ -834,7 +850,10 @@ async function runLifecycle(command, options, dependencies, output) {
     result = options.checkOnly
       ? await lifecycle.checkForUpdates(common)
       : await lifecycle.evolve({ ...common, conflicts: options.conflicts ?? {} });
-    if (!options.checkOnly && !options.json && result.completed === false && result.conflicts?.length) {
+    // An agent runs this without a terminal, where a prompt would wait forever; the conflicts are
+    // listed instead and the exit code reports the incomplete run.
+    const interactive = (dependencies.stdin ?? process.stdin).isTTY === true && output.isTTY === true;
+    if (!options.checkOnly && !options.json && interactive && result.completed === false && result.conflicts?.length) {
       const prompts = dependencies.prompts ?? await import("@clack/prompts");
       const conflicts = { ...(options.conflicts ?? {}) };
       for (const conflict of result.conflicts) {

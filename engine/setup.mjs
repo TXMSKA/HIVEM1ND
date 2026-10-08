@@ -21,6 +21,7 @@ import {
   planKitCopy,
   planManagedFileRemovals,
   publicPreview,
+  readPeerHashes,
   registerLinkConflicts,
   retiredKitSources,
   writeInstallReport,
@@ -762,6 +763,7 @@ class SetupSession {
 
   async buildPlan() {
     const existingManaged = this.machineRecord?.managedFiles ?? {};
+    const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
     // An attach writes what belongs to this machine. The kit copy, the preferences and the
     // recorded version belong to the mind and stay as the mind already has them.
     const attach = this.answers.attach === true;
@@ -771,6 +773,7 @@ class SetupSession {
       managedFiles: existingManaged,
       excluded: this.excludedItems(),
       language: this.answers.language,
+      peerHashes,
     });
     const packageJson = JSON.parse(await readFile(path.join(this.kitPath, 'package.json'), 'utf8'));
     const versionPath = path.join(this.mindPath, 'user', 'VERSION');
@@ -825,6 +828,7 @@ class SetupSession {
       mindPath: this.mindPath,
       retainedPaths: attach ? kitPlan.items.map((item) => item.path) : [],
       skillsRoots: this.adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir: this.homeDir, env: this.env }).skillsRoot),
+      peerHashes,
     });
   }
 
