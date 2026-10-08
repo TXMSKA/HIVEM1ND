@@ -4,11 +4,11 @@ import { validWakeBinding, validWakePointer, explicitWakeAttach, spawnLocalWakeW
 
 export const wakeAdapter = Object.freeze({
   moduleUrl: import.meta.url,
-  label: 'nova', capability: hostWakeCapability, sendPointer: sendHostWake,
-  attachIdentity: ({ nativeSessionId }) => explicitWakeAttach('nova', nativeSessionId),
+  label: 'host', capability: hostWakeCapability, sendPointer: sendHostWake,
+  attachIdentity: ({ nativeSessionId }) => explicitWakeAttach('host', nativeSessionId),
   validateRuntime: async () => {}, spawnWorker: spawnLocalWakeWorker, workerDependency: 'spawnLocalWakeWorker',
   workerEnvKeys: Object.freeze(['RELAY_HOST_SOCKET', 'RELAY_HOST_TOKEN']), acceptsDeferred: true,
-  helpLines: Object.freeze(['Host: set RELAY_HOST_SOCKET and RELAY_HOST_TOKEN; Nova must implement relay-host-v1.']),
+  helpLines: Object.freeze(['Host: set RELAY_HOST_SOCKET and RELAY_HOST_TOKEN; the host application must implement relay-host-v1.']),
 });
 
 export function hostWakeCapability({ env = process.env, platform = process.platform } = {}) {
@@ -27,7 +27,7 @@ export async function sendHostWake({ binding, text, env = process.env, platform 
   const no = (reason) => ({ status: 'not_submitted', reason });
   const capability = hostWakeCapability({ env, platform });
   if (!capability.available) return no(capability.reason);
-  if (!validWakeBinding(binding, 'nova')) return no('native_binding_mismatch');
+  if (!validWakeBinding(binding, 'host')) return no('native_binding_mismatch');
   if (!validWakePointer(text, binding.unit)) return no('invalid_pointer');
   if (signal?.aborted) return no('cancelled_before_submit');
   return new Promise((resolve) => {

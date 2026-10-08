@@ -26,7 +26,7 @@ The owner edits posts and recovers access alone, from /admin.
 - Comments from readers.
 
 ## Plans
-Free and Plus. The prices are in the price table of `projects/shop/prd.md`.
+Free and Plus. The prices are in the price table of `projects/shop/product.md`.
 
 ## Floors
 - Local first: a draft survives a lost connection and is saved when it returns.
@@ -40,3 +40,6 @@ Free and Plus. The prices are in the price table of `projects/shop/prd.md`.
 
 ## Open questions
 - Does a reset link expire after one hour or after a day?
+
+## Annexes
+- architecture: annexes/architecture.md

@@ -103,7 +103,8 @@ test("evolve cancellation does not claim migrations were untouched", async () =>
   let cancellation = "";
   const cancelled = Symbol("cancelled");
   const code = await runCli(["evolve", "--mind-path", "."], {
-    stdout: sink().stream,
+    stdin: { isTTY: true },
+    stdout: { ...sink().stream, isTTY: true },
     stderr: sink().stream,
     lifecycle: {
       async evolve() {
@@ -122,6 +123,41 @@ test("evolve cancellation does not claim migrations were untouched", async () =>
   });
   assert.equal(code, 130);
   assert.equal(cancellation, "Update cancelled.");
+});
+
+test("evolve without a terminal lists the conflicts and never prompts", async () => {
+  const conflicts = [
+    { path: "C:/mind/rules.md", reason: "An unowned file already exists at this path.", choices: ["keep", "replace"] },
+    { path: "C:/home/.agents/skills/report", reason: "A link stands here.", choices: ["replace", "omit"], link: true },
+  ];
+  let prompted = false;
+  const prompts = new Proxy({}, { get() { prompted = true; return () => {}; } });
+  const lifecycle = { async evolve() { return { action: "evolve", completed: false, conflicts }; } };
+  for (const [stdin, stdout] of [
+    [{ isTTY: false }, sink().stream],
+    [{ isTTY: true }, sink().stream],
+    [{ isTTY: false }, { ...sink().stream, isTTY: true }],
+  ]) {
+    assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin, stdout, stderr: sink().stream, lifecycle, prompts }), 1);
+  }
+  assert.equal(prompted, false);
+
+  const output = sink();
+  assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin: { isTTY: false }, stdout: output.stream, stderr: sink().stream, lifecycle, prompts }), 1);
+  assert.equal(output.read(), [
+    "Evolution needs conflict choices before it can continue.",
+    "C:/mind/rules.md: An unowned file already exists at this path.",
+    "  Choices: keep, replace",
+    "C:/home/.agents/skills/report: A link stands here.",
+    "  Choices: replace, omit",
+    "Run evolve again with --conflict <path>=<choice> for each file.",
+    "",
+  ].join("\n"));
+
+  const json = sink();
+  assert.equal(await runCli(["evolve", "--mind-path", ".", "--json"], { stdin: { isTTY: false }, stdout: json.stream, stderr: sink().stream, lifecycle, prompts }), 1);
+  assert.deepEqual(JSON.parse(json.read()).conflicts, conflicts);
+  assert.equal(prompted, false);
 });
 
 test("Electron renderer has no Node access and uses a sandbox", () => {
@@ -363,7 +399,7 @@ test("check output has one line per finding and JSON remains opt-in", async () =
     action: "status",
     machine: "TEST",
     machineRecord: true,
-    missing: [{ name: "scout", type: "role", agents: ["codex"] }],
+    missing: [{ name: "helper", type: "role", agents: ["codex"] }],
     update: { checked: false, currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true },
     cwd: "C:/private/repos/app",
     project: { name: "app", path: "C:/private/repos/app", unread: 2, open: 1 },
@@ -376,7 +412,7 @@ test("check output has one line per finding and JSON remains opt-in", async () =
   assert.equal(await runCli(["check", "--mind-path", "."], { stdout: human.stream, stderr: sink().stream, lifecycle }), 0);
   assert.equal(
     human.read(),
-    "Not installed on this machine: scout. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
+    "Not installed on this machine: helper. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
   );
 
   const quiet = sink();

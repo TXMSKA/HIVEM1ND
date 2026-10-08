@@ -8,7 +8,7 @@ Applies when: a piece of work is about to start or to be handed to a subagent or
 
 Options:
 
-- **Plan, scope, PRD and deep review**: strong tier, max effort. A wrong plan costs every build after it, so these get the most reasoning available.
+- **Plan, scope, product document and deep review**: strong tier, max effort. A wrong plan costs every build after it, so these get the most reasoning available.
 - **Seat work**: strong tier, high effort, never delegated. Conversation, coordination, review of delegated output, design, boards and copy for people stay in the seat's own chat, since they depend on what the user said there.
 - **Build from an approved plan**: mid tier, high effort, and xhigh for a hard piece, such as a change that crosses modules or a defect with no known cause.
 - **Read-only gathering**: light tier, low effort. Research, inventories and status rounds only read and report, with their sources.

@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { check } from "../engine/lifecycle.mjs";
-import { BRIEF_MAX_BYTES, PREFERENCES_MAX_BYTES, PRD_MAX_BYTES, formatBytes, measureMind, mindThresholds } from "../engine/measure.mjs";
+import { BRIEF_MAX_BYTES, PREFERENCES_MAX_BYTES, PRODUCT_MAX_BYTES, formatBytes, measureMind, mindThresholds } from "../engine/measure.mjs";
 import { runCli } from "../cli/index.mjs";
 import { WAKE_ADAPTERS } from "../engine/relay/wake-adapters.mjs";
 
@@ -54,7 +54,7 @@ function brief(project, ...facts) {
   return `project: ${project}\nenv: web\n\n## Facts\n${facts.map((fact) => `- ${fact}\n`).join("")}`;
 }
 
-function prd(project, updated) {
+function product(project, updated) {
   return `project: ${project}\nfamily: shop\nstage: beta\n${updated ? `updated: ${updated}\n` : ""}voice: docs/voice.md\nboard: none\n\n## Problem and audience\nupdated: 2099-01-01 in the body is not the header.\n`;
 }
 
@@ -118,9 +118,9 @@ test("a state left in is stale when it is old, or when its machine relayed out a
   const states = path.join(mindPath, "user", "projects", "app", "state");
   await write(path.join(states, "old.md"), state("old", { state: "in", machine: "TEST", date: "2030-01-01 10:00" }));
   await write(path.join(states, "fresh.md"), state("fresh", { state: "in", machine: "TEST", date: "2030-01-09 09:00" }));
-  await write(path.join(states, "away.md"), state("away", { state: "in", machine: "SCOUT", date: "2030-01-09 08:00" }));
-  await write(path.join(states, "away-out.md"), state("away-out", { state: "out", machine: "SCOUT", date: "2030-01-09 11:45" }));
-  await write(path.join(states, "running.md"), state("running", { state: "in", machine: "SCOUT", date: "2030-01-09 12:00" }));
+  await write(path.join(states, "away.md"), state("away", { state: "in", machine: "LAPTOP", date: "2030-01-09 08:00" }));
+  await write(path.join(states, "away-out.md"), state("away-out", { state: "out", machine: "LAPTOP", date: "2030-01-09 11:45" }));
+  await write(path.join(states, "running.md"), state("running", { state: "in", machine: "LAPTOP", date: "2030-01-09 12:00" }));
   await write(path.join(states, "dateless.md"), "unit: dateless\nstate: in\nmachine: TEST\n\nContext.\n");
 
   const mind = await measureMind({ mindPath, hostname: "TEST", now: new Date("2030-01-09T13:00:00") });
@@ -174,6 +174,9 @@ test("the check carries the measurements, prints one line and writes nothing", a
   assert.equal(await run(), "");
   await write(path.join(mindPath, "user", "projects", "app", "brief.md"), "y".repeat(BRIEF_MAX_BYTES + 1));
   await write(path.join(mindPath, "user", "projects", "web", "brief.md"), "y".repeat(BRIEF_MAX_BYTES + 2000));
+  // Both projects have a product document, so the only line is the size one.
+  await projectFiles(mindPath, "app", { "product.md": product("app", "2030-01-01") });
+  await projectFiles(mindPath, "web", { "product.md": product("web", "2030-01-01") });
 
   const before = await snapshot(root);
   assert.equal(await run(), "Mind: 2 items to clean (user/projects/web/brief.md, 17 KB); /cleaner offers the cleanup.\n");
@@ -206,76 +209,82 @@ test("the human line names the count and the largest item, and stays silent belo
   assert.equal(formatBytes(800), "800 B");
 });
 
-test("a PRD older than the newest Fact with a prd pointer is reported, and nothing else is", async (t) => {
+test("a product document older than the newest Fact with a product pointer is reported as stale, and a brief with no product document as missing", async (t) => {
   const root = await temporaryDirectory(t);
   const mindPath = await makeMind(root);
   // The newest Fact of "stale" has no pointer and is ignored; the newest pointer Fact is the 2030-01-02 one.
   await projectFiles(mindPath, "stale", {
-    "brief.md": brief("stale", "2030-01-03: sessions stay in cookies.", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2029-12-30: the blog lives in MySQL (prd: Requirements/Alpha)."),
-    "prd.md": prd("stale", "2030-01-01"),
+    "brief.md": brief("stale", "2030-01-03: sessions stay in cookies.", "2030-01-02: a reset is sent by mail (product: Requirements/Beta).", "2029-12-30: the blog lives in MySQL (product: Requirements/Alpha)."),
+    "product.md": product("stale", "2030-01-01"),
   });
   // Updated on the day of the newest pointer Fact, with a technical Fact that is newer still.
   await projectFiles(mindPath, "level", {
-    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
-    "prd.md": prd("level", "2030-01-02"),
+    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (product: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
+    "product.md": product("level", "2030-01-02"),
   });
   await projectFiles(mindPath, "ahead", {
-    "brief.md": brief("ahead", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
-    "prd.md": prd("ahead", "2030-03-01"),
+    "brief.md": brief("ahead", "2030-01-02: a reset is sent by mail (product: Requirements/Beta)."),
+    "product.md": product("ahead", "2030-03-01"),
   });
   // No pointer anywhere in the Facts: a dated bullet under another heading does not count.
   await projectFiles(mindPath, "technical", {
-    "brief.md": `${brief("technical", "2030-05-01: the cache lives in memory.")}\n## Notes\n- 2030-06-01: seen in the admin (prd: Out of scope).\n`,
-    "prd.md": prd("technical", "2020-01-01"),
+    "brief.md": `${brief("technical", "2030-05-01: the cache lives in memory.")}\n## Notes\n- 2030-06-01: seen in the admin (product: Out of scope).\n`,
+    "product.md": product("technical", "2020-01-01"),
   });
   await projectFiles(mindPath, "undated", {
-    "brief.md": brief("undated", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
-    "prd.md": prd("undated", ""),
+    "brief.md": brief("undated", "2030-01-02: a reset is sent by mail (product: Requirements/Beta)."),
+    "product.md": product("undated", ""),
   });
+  // A brief with no product document is missing it, pointer or not.
   await projectFiles(mindPath, "orphan", {
-    "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (prd: Requirements/Beta).", "2030-01-06: the queue is retried (prd: Requirements/Alpha)."),
+    "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (product: Requirements/Beta).", "2030-01-06: the queue is retried (product: Requirements/Alpha)."),
   });
   await projectFiles(mindPath, "plain", { "brief.md": brief("plain", "2030-01-04: the cache lives in memory.") });
-  await projectFiles(mindPath, "no-brief", { "prd.md": prd("no-brief", "2020-01-01") });
+  // Without a brief a folder is not a project: it is never counted, whether it holds a product document or not.
+  await projectFiles(mindPath, "no-brief", { "product.md": product("no-brief", "2020-01-01") });
+  await projectFiles(mindPath, "no-brief-either", { "preferences.md": "- 2030-01-01: short answers. Why: noise.\n" });
 
   const mind = await measureMind({ mindPath, hostname: "TEST" });
-  assert.deepEqual(mind.prd.stale.sort((left, right) => left.project.localeCompare(right.project)), [
-    { project: "stale", path: "user/projects/stale/prd.md", updated: "2030-01-01", fact: "2030-01-02" },
-    { project: "undated", path: "user/projects/undated/prd.md", updated: null, fact: "2030-01-02" },
+  assert.deepEqual(mind.product.stale.sort((left, right) => left.project.localeCompare(right.project)), [
+    { project: "stale", path: "user/projects/stale/product.md", updated: "2030-01-01", fact: "2030-01-02" },
+    { project: "undated", path: "user/projects/undated/product.md", updated: null, fact: "2030-01-02" },
   ]);
-  assert.deepEqual(mind.prd.missing, [{ project: "orphan", path: "user/projects/orphan/prd.md", fact: "2030-01-06" }]);
+  assert.deepEqual(mind.product.missing.sort((left, right) => left.project.localeCompare(right.project)), [
+    { project: "orphan", brief: "user/projects/orphan/brief.md" },
+    { project: "plain", brief: "user/projects/plain/brief.md" },
+  ]);
   assert.equal(mind.crossed, false);
   assert.equal(mind.count, 0);
 });
 
-test("a prd.md that cannot be read as a file counts as missing and never fails the measurement", async (t) => {
+test("a product.md that cannot be read as a file counts as missing and never fails the measurement", async (t) => {
   const root = await temporaryDirectory(t);
   const mindPath = await makeMind(root);
-  await projectFiles(mindPath, "app", { "brief.md": brief("app", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).") });
-  await fs.mkdir(path.join(mindPath, "user", "projects", "app", "prd.md"), { recursive: true });
+  await projectFiles(mindPath, "app", { "brief.md": brief("app", "2030-01-02: a reset is sent by mail (product: Requirements/Beta).") });
+  await fs.mkdir(path.join(mindPath, "user", "projects", "app", "product.md"), { recursive: true });
 
   const mind = await measureMind({ mindPath, hostname: "TEST" });
-  assert.deepEqual(mind.prd.missing.map((item) => item.project), ["app"]);
-  assert.deepEqual(mind.sizes.prds, []);
+  assert.deepEqual(mind.product, { stale: [], missing: [{ project: "app", brief: "user/projects/app/brief.md" }] });
+  assert.deepEqual(mind.sizes.products, []);
 });
 
-test("a PRD over its size threshold is listed with the sizes, and one at it is not", async (t) => {
+test("a product document over its size threshold is listed with the sizes, and one at it is not", async (t) => {
   const root = await temporaryDirectory(t);
   const mindPath = await makeMind(root);
-  assert.equal(mindThresholds().prdBytes, 20480);
-  await write(path.join(mindPath, "user", "projects", "app", "prd.md"), "x".repeat(PRD_MAX_BYTES));
-  await write(path.join(mindPath, "user", "projects", "web", "prd.md"), "y".repeat(PRD_MAX_BYTES + 1));
+  assert.equal(mindThresholds().productBytes, 20480);
+  await write(path.join(mindPath, "user", "projects", "app", "product.md"), "x".repeat(PRODUCT_MAX_BYTES));
+  await write(path.join(mindPath, "user", "projects", "web", "product.md"), "y".repeat(PRODUCT_MAX_BYTES + 1));
 
   const mind = await measureMind({ mindPath, hostname: "TEST" });
-  assert.deepEqual(mind.items.map((item) => [item.kind, item.path, item.bytes]), [["prd", "user/projects/web/prd.md", PRD_MAX_BYTES + 1]]);
-  assert.deepEqual(mind.sizes.prds.map((item) => [item.path, item.bytes]).sort(), [
-    ["user/projects/app/prd.md", PRD_MAX_BYTES],
-    ["user/projects/web/prd.md", PRD_MAX_BYTES + 1],
+  assert.deepEqual(mind.items.map((item) => [item.kind, item.path, item.bytes]), [["product", "user/projects/web/product.md", PRODUCT_MAX_BYTES + 1]]);
+  assert.deepEqual(mind.sizes.products.map((item) => [item.path, item.bytes]).sort(), [
+    ["user/projects/app/product.md", PRODUCT_MAX_BYTES],
+    ["user/projects/web/product.md", PRODUCT_MAX_BYTES + 1],
   ]);
-  assert.equal(mind.thresholds.prdBytes, PRD_MAX_BYTES);
+  assert.equal(mind.thresholds.productBytes, PRODUCT_MAX_BYTES);
 });
 
-test("the check prints one line per PRD finding, carries the PRD sizes in the JSON and writes nothing", async (t) => {
+test("the check prints one line per product document finding, carries the product document sizes in the JSON and writes nothing", async (t) => {
   const root = await temporaryDirectory(t);
   const mindPath = await makeMind(root);
   const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
@@ -286,43 +295,108 @@ test("the check prints one line per PRD finding, carries the PRD sizes in the JS
   )).stdout;
 
   await projectFiles(mindPath, "level", {
-    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
-    "prd.md": prd("level", "2030-01-02"),
+    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (product: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
+    "product.md": product("level", "2030-01-02"),
   });
   assert.equal(await run(), "");
 
   await projectFiles(mindPath, "stale", {
-    "brief.md": brief("stale", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
-    "prd.md": prd("stale", "2030-01-01"),
+    "brief.md": brief("stale", "2030-01-02: a reset is sent by mail (product: Requirements/Beta)."),
+    "product.md": product("stale", "2030-01-01"),
   });
-  await projectFiles(mindPath, "orphan", { "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (prd: Requirements/Beta).") });
+  await projectFiles(mindPath, "orphan", { "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (product: Requirements/Beta).") });
   const before = await snapshot(root);
+  // The working directory resolves to no project, so the missing product documents are one count.
   assert.equal(
     await run(),
-    "PRD of stale: updated 2030-01-01, older than the Fact of 2030-01-02 that points to it; /protocol product-requirements brings it up to date.\n"
-    + "PRD of orphan: the Fact of 2030-01-04 points to a PRD and user/projects/orphan/prd.md does not exist; /protocol product-requirements writes it.\n",
+    "Product document of stale: updated 2030-01-01, older than the Fact of 2030-01-02 that points to it; /protocol product-requirements brings it up to date.\n"
+    + "Product document missing in 1 project.\n",
   );
   assert.deepEqual(await snapshot(root), before);
 
-  await write(path.join(mindPath, "user", "projects", "big", "prd.md"), "z".repeat(PRD_MAX_BYTES + 2000));
+  await write(path.join(mindPath, "user", "projects", "big", "product.md"), "z".repeat(PRODUCT_MAX_BYTES + 2000));
   const lines = (await run()).split("\n");
-  assert.equal(lines[0], "Mind: 1 item to clean (user/projects/big/prd.md, 22 KB); /cleaner offers the cleanup.");
+  assert.equal(lines[0], "Mind: 1 item to clean (user/projects/big/product.md, 22 KB); /cleaner offers the cleanup.");
   assert.equal(lines.length, 4);
   const json = JSON.parse(await run("--json"));
-  assert.equal(json.mind.thresholds.prdBytes, 20480);
-  assert.deepEqual(json.mind.sizes.prds.map((item) => item.path).sort(), [
-    "user/projects/big/prd.md",
-    "user/projects/level/prd.md",
-    "user/projects/stale/prd.md",
+  assert.equal(json.mind.thresholds.productBytes, 20480);
+  assert.deepEqual(json.mind.sizes.products.map((item) => item.path).sort(), [
+    "user/projects/big/product.md",
+    "user/projects/level/product.md",
+    "user/projects/stale/product.md",
   ]);
-  assert.deepEqual(json.mind.prd.stale.map((item) => [item.project, item.updated, item.fact]), [["stale", "2030-01-01", "2030-01-02"]]);
+  assert.deepEqual(json.mind.product.stale.map((item) => [item.project, item.updated, item.fact]), [["stale", "2030-01-01", "2030-01-02"]]);
+  assert.deepEqual(json.mind.product.missing, [{ project: "orphan", brief: "user/projects/orphan/brief.md" }]);
 });
 
-test("the example brief and PRD of the fixtures agree, so the check stays silent on them", async () => {
+test("the check names the project of the working directory when its brief has no product document, and counts them at the mind root", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  const repositories = { app: path.join(root, "repos", "app"), shop: path.join(root, "repos", "shop") };
+  await Promise.all(Object.values(repositories).map((directory) => fs.mkdir(directory, { recursive: true })));
+  await write(
+    path.join(mindPath, "user", "machines", "TEST.md"),
+    `machine: TEST\nmind: ${mindPath}\nupdate-check: off\nlast-check: \nsetup: done\n\n## Agents\n\n## Paths\n- app: ${repositories.app}\n- shop: ${repositories.shop}\n\n## Excluded\n`,
+  );
+  const run = async (cwd, ...extra) => (await execFileAsync(
+    process.execPath,
+    [cliPath, "check", "--kit-path", path.join(root, "kit"), "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST", ...extra],
+    { cwd, encoding: "utf8" },
+  )).stdout;
+
+  await projectFiles(mindPath, "app", { "brief.md": brief("app", "2030-01-02: the cache lives in memory.") });
+  await projectFiles(mindPath, "idle", { "brief.md": brief("idle") });
+  await projectFiles(mindPath, "shop", { "brief.md": brief("shop"), "product.md": product("shop", "2030-01-01") });
+  // A folder with no brief is never counted.
+  await projectFiles(mindPath, "ghost", { "preferences.md": "- 2030-01-01: short answers. Why: noise.\n" });
+
+  assert.equal(await run(repositories.app), "Product document missing for app; its seat writes it from the records before other work.\n");
+  assert.equal(await run(repositories.shop), "");
+  assert.equal(await run(root), "Product documents missing in 2 projects.\n");
+  const json = JSON.parse(await run(repositories.shop, "--json"));
+  assert.equal(json.project.name, "shop");
+  assert.deepEqual(json.mind.product.missing.sort((left, right) => left.project.localeCompare(right.project)), [
+    { project: "app", brief: "user/projects/app/brief.md" },
+    { project: "idle", brief: "user/projects/idle/brief.md" },
+  ]);
+
+  await projectFiles(mindPath, "idle", { "product.md": product("idle", "2030-01-01") });
+  assert.equal(await run(root), "Product document missing in 1 project.\n");
+  await projectFiles(mindPath, "app", { "product.md": product("app", "2030-01-01") });
+  assert.equal(await run(root), "");
+  assert.equal(await run(repositories.app), "");
+  assert.deepEqual(JSON.parse(await run(root, "--json")).mind.product.missing, []);
+});
+
+test("the human line for missing product documents follows the project the session resolves to", async () => {
+  const lines = [];
+  const stdout = { write(text) { lines.push(text); } };
+  const status = (project, missing) => ({
+    action: "status", machine: "TEST", machineRecord: true, missing: [], update: null, project, repository: null,
+    executive: { unread: 0, open: 0 }, warnings: [], mind: { count: 0, largest: null, product: { stale: [], missing } },
+  });
+  const one = [{ project: "app", brief: "user/projects/app/brief.md" }];
+  const two = [...one, { project: "web", brief: "user/projects/web/brief.md" }];
+  for (const result of [
+    status({ name: "App", unread: 0, open: 0 }, two),
+    status({ name: "shop", unread: 0, open: 0 }, two),
+    status(null, one),
+    status(null, two),
+    status(null, []),
+  ]) await runCli(["check", "--mind-path", "."], { stdout, stderr: stdout, lifecycle: { async check() { return result; } } });
+  assert.deepEqual(lines, [
+    "Product document missing for App; its seat writes it from the records before other work.\n",
+    "Product document missing in 1 project.\n",
+    "Product documents missing in 2 projects.\n",
+  ]);
+});
+
+test("the example brief and product document of the fixtures agree, so the check stays silent on them", async () => {
   const mindPath = path.resolve(import.meta.dirname, "..", "fixtures", "mind");
   const mind = await measureMind({ mindPath, hostname: "TEST" });
-  assert.deepEqual(mind.prd, { stale: [], missing: [] });
-  assert.deepEqual(mind.sizes.prds.map((item) => item.path), ["user/projects/myapp/prd.md"]);
+  assert.deepEqual(mind.product, { stale: [], missing: [] });
+  assert.deepEqual(mind.sizes.products.map((item) => item.path), ["user/projects/myapp/product.md"]);
 });
 
 test("a models.md row whose client is neither a Relay wake adapter nor subagent is reported, and valid rows are not", async (t) => {
@@ -388,7 +462,7 @@ test("a table shaped like a real models.md, with its notes, qualifiers and gaps,
     "",
     "| Work | Client | Model | Effort | Status | Tested | Result |",
     "| --- | --- | --- | --- | --- | --- | --- |",
-    "| Plan, scope, PRD, deep review | claude (seat) | strong model | max | active | 2030-01-01, 2030-01-02 | plans held up in review |",
+    "| Plan, scope, product document, deep review | claude (seat) | strong model | max | active | 2030-01-01, 2030-01-02 | plans held up in review |",
     "| Seat work: conversation, coordination, review, design, boards, copy for people | claude (seat) | strong model | high | active | 2030-01-02 | never delegated |",
     "| Build from an approved plan | subagent | mid model | high; xhigh for hard pieces | active | 2030-01-02 | test counts held when the seat reran them |",
     "| Build from an approved plan | codex | mid model | high; xhigh for hard pieces | active while paid | 2030-01-02 | two tasks built |",

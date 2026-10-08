@@ -1,11 +1,11 @@
 ## Environments
 - web: myapp, shop
-- unity: vigilum
+- unity: mygame
 
 ## Projects
 - myapp (web)
 - shop (web)
-- vigilum (unity)
+- mygame (unity)
 - tool
 
 ## Minds
