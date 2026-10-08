@@ -280,7 +280,11 @@ function formatEvolve(result) {
   const lines = [];
   if (!result.completed) {
     lines.push("Evolution needs conflict choices before it can continue.");
-    for (const conflict of result.conflicts ?? []) lines.push(`${conflict.path}: ${conflict.reason}`);
+    for (const conflict of result.conflicts ?? []) {
+      lines.push(`${conflict.path}: ${conflict.reason}`);
+      lines.push(`  Choices: ${(conflict.choices ?? ["keep", "replace"]).join(", ")}`);
+    }
+    lines.push("Run evolve again with --conflict <path>=<choice> for each file.");
     return lines.join("\n");
   }
   lines.push(result.changed
@@ -822,7 +826,10 @@ async function runLifecycle(command, options, dependencies, output) {
     result = options.checkOnly
       ? await lifecycle.checkForUpdates(common)
       : await lifecycle.evolve({ ...common, conflicts: options.conflicts ?? {} });
-    if (!options.checkOnly && !options.json && result.completed === false && result.conflicts?.length) {
+    // An agent runs this without a terminal, where a prompt would wait forever; the conflicts are
+    // listed instead and the exit code reports the incomplete run.
+    const interactive = (dependencies.stdin ?? process.stdin).isTTY === true && output.isTTY === true;
+    if (!options.checkOnly && !options.json && interactive && result.completed === false && result.conflicts?.length) {
       const prompts = dependencies.prompts ?? await import("@clack/prompts");
       const conflicts = { ...(options.conflicts ?? {}) };
       for (const conflict of result.conflicts) {
