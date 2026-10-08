@@ -103,7 +103,8 @@ test("evolve cancellation does not claim migrations were untouched", async () =>
   let cancellation = "";
   const cancelled = Symbol("cancelled");
   const code = await runCli(["evolve", "--mind-path", "."], {
-    stdout: sink().stream,
+    stdin: { isTTY: true },
+    stdout: { ...sink().stream, isTTY: true },
     stderr: sink().stream,
     lifecycle: {
       async evolve() {
@@ -122,6 +123,41 @@ test("evolve cancellation does not claim migrations were untouched", async () =>
   });
   assert.equal(code, 130);
   assert.equal(cancellation, "Update cancelled.");
+});
+
+test("evolve without a terminal lists the conflicts and never prompts", async () => {
+  const conflicts = [
+    { path: "C:/mind/rules.md", reason: "An unowned file already exists at this path.", choices: ["keep", "replace"] },
+    { path: "C:/home/.agents/skills/report", reason: "A link stands here.", choices: ["replace", "omit"], link: true },
+  ];
+  let prompted = false;
+  const prompts = new Proxy({}, { get() { prompted = true; return () => {}; } });
+  const lifecycle = { async evolve() { return { action: "evolve", completed: false, conflicts }; } };
+  for (const [stdin, stdout] of [
+    [{ isTTY: false }, sink().stream],
+    [{ isTTY: true }, sink().stream],
+    [{ isTTY: false }, { ...sink().stream, isTTY: true }],
+  ]) {
+    assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin, stdout, stderr: sink().stream, lifecycle, prompts }), 1);
+  }
+  assert.equal(prompted, false);
+
+  const output = sink();
+  assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin: { isTTY: false }, stdout: output.stream, stderr: sink().stream, lifecycle, prompts }), 1);
+  assert.equal(output.read(), [
+    "Evolution needs conflict choices before it can continue.",
+    "C:/mind/rules.md: An unowned file already exists at this path.",
+    "  Choices: keep, replace",
+    "C:/home/.agents/skills/report: A link stands here.",
+    "  Choices: replace, omit",
+    "Run evolve again with --conflict <path>=<choice> for each file.",
+    "",
+  ].join("\n"));
+
+  const json = sink();
+  assert.equal(await runCli(["evolve", "--mind-path", ".", "--json"], { stdin: { isTTY: false }, stdout: json.stream, stderr: sink().stream, lifecycle, prompts }), 1);
+  assert.deepEqual(JSON.parse(json.read()).conflicts, conflicts);
+  assert.equal(prompted, false);
 });
 
 test("Electron renderer has no Node access and uses a sandbox", () => {
