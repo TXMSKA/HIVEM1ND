@@ -5,6 +5,7 @@ import path from "node:path";
 // and below the ones that make a session read pages of history before it can start.
 export const PREFERENCES_MAX_BYTES = 20 * 1024;
 export const BRIEF_MAX_BYTES = 15 * 1024;
+export const PRD_MAX_BYTES = 20 * 1024;
 export const STATE_IN_MAX_DAYS = 3;
 export const MIND_FILES_MAX_BYTES = 500 * 1024 * 1024;
 export const MACHINE_FILE_MAX_BYTES = 15 * 1024;
@@ -22,6 +23,7 @@ export function mindThresholds(overrides = {}) {
   return {
     preferencesBytes: PREFERENCES_MAX_BYTES,
     briefBytes: BRIEF_MAX_BYTES,
+    prdBytes: PRD_MAX_BYTES,
     stateInDays: STATE_IN_MAX_DAYS,
     filesBytes: MIND_FILES_MAX_BYTES,
     machineFileBytes: MACHINE_FILE_MAX_BYTES,
@@ -66,6 +68,37 @@ function parseStateDate(value) {
 
 function headerValue(content, name) {
   return content.match(new RegExp(`^${name}:[ \\t]*(.*)$`, "im"))?.[1]?.trim() ?? "";
+}
+
+async function readText(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// Only a Fact that carries a `(prd: <section>)` pointer says the PRD should have changed with it,
+// so a newer Fact without one, however recent, never makes a PRD stale.
+function newestPointedFact(brief) {
+  let inFacts = false;
+  let newest = "";
+  for (const line of brief.split(/\r?\n/)) {
+    if (/^##\s/.test(line)) {
+      inFacts = /^##\s+Facts\s*$/i.test(line);
+    } else if (inFacts) {
+      const fact = /^\s*-\s+(\d{4}-\d{2}-\d{2})\b.*\(prd:[^)]*\)/i.exec(line)?.[1];
+      if (fact && fact > newest) newest = fact;
+    }
+  }
+  return newest;
+}
+
+// Dates are compared as YYYY-MM-DD text. A PRD without a readable `updated` date sorts before any
+// Fact, because nothing shows that it is current.
+function prdUpdated(content) {
+  const header = content.split(/\r?\n[ \t]*\r?\n/, 1)[0];
+  return /\d{4}-\d{2}-\d{2}/.exec(headerValue(header, "updated"))?.[0] ?? "";
 }
 
 async function stateScopes(userPath) {
@@ -175,7 +208,8 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
   const limits = mindThresholds(thresholds);
   const userPath = path.join(mindPath, "user");
   const items = [];
-  const sizes = { preferences: [], briefs: [], machines: [] };
+  const sizes = { preferences: [], briefs: [], prds: [], machines: [] };
+  const prd = { stale: [], missing: [] };
 
   const globalPreferences = await sizeOf(path.join(userPath, "preferences.md"));
   if (globalPreferences !== null) sizes.preferences.push({ path: "user/preferences.md", bytes: globalPreferences });
@@ -184,8 +218,20 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
     const project = path.join(userPath, "projects", entry.name);
     const preferences = await sizeOf(path.join(project, "preferences.md"));
     if (preferences !== null) sizes.preferences.push({ path: relative(mindPath, path.join(project, "preferences.md")), bytes: preferences });
-    const brief = await sizeOf(path.join(project, "brief.md"));
-    if (brief !== null) sizes.briefs.push({ path: relative(mindPath, path.join(project, "brief.md")), bytes: brief });
+    const briefPath = path.join(project, "brief.md");
+    const brief = await sizeOf(briefPath);
+    if (brief !== null) sizes.briefs.push({ path: relative(mindPath, briefPath), bytes: brief });
+    const prdPath = path.join(project, "prd.md");
+    const prdSize = await sizeOf(prdPath);
+    if (prdSize !== null) sizes.prds.push({ path: relative(mindPath, prdPath), bytes: prdSize });
+
+    const fact = brief === null ? "" : newestPointedFact(await readText(briefPath) ?? "");
+    if (fact) {
+      const content = prdSize === null ? null : await readText(prdPath);
+      const updated = content === null ? "" : prdUpdated(content);
+      if (content === null) prd.missing.push({ project: entry.name, path: relative(mindPath, prdPath), fact });
+      else if (updated < fact) prd.stale.push({ project: entry.name, path: relative(mindPath, prdPath), updated: updated || null, fact });
+    }
   }
   for (const entry of await names(path.join(userPath, "machines"))) {
     const lower = entry.name.toLowerCase();
@@ -199,6 +245,9 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
   }
   for (const item of sizes.briefs) {
     if (item.bytes > limits.briefBytes) items.push({ kind: "brief", ...item });
+  }
+  for (const item of sizes.prds) {
+    if (item.bytes > limits.prdBytes) items.push({ kind: "prd", ...item });
   }
   for (const item of sizes.machines) {
     if (item.bytes > limits.machineFileBytes) items.push({ kind: "machine", ...item });
@@ -222,9 +271,11 @@ export async function measureMind({ mindPath, hostname = "", now = new Date(), t
     count: items.length,
     largest: items[0] ? { kind: items[0].kind, path: items[0].path, bytes: items[0].bytes } : null,
     items,
+    prd,
     sizes: {
       preferences: sizes.preferences,
       briefs: sizes.briefs,
+      prds: sizes.prds,
       machines: sizes.machines,
       states: { in: states.count, stale: states.stale.length },
       files: { bytes: files.bytes, folders: files.folders, entries: files.entries, truncated: files.truncated },
