@@ -3,14 +3,14 @@ purpose: Write or update the product document of a product or a family from the 
 scope: the product document of one product or one family of products, a first product document included, and any change to what a product is for or must do
 trigger: manual, run by the seat of the project, or by the coordinator for a family product document or a project with no seat, when a product has no product document, when the check reports a product document missing or older than its brief, or when a product decision changes one
 repeat: once per product document, and again whenever the check reports it behind its brief or a product decision changes it
-inputs: the brief of the project, the scope file in `user/manager/` and the brainstorm files of the topic, the boards named in the `board` header, the Architecture sections of the project's tasks, the annexes the product document lists, the voice specification named in the `voice` header, the family product document for a product
+inputs: the brief of the project, the scope file in `user/overseer/` and the brainstorm files of the topic, the boards named in the `board` header, the Architecture sections of the project's tasks, the annexes the product document lists, the voice specification named in the `voice` header, the family product document for a product
 stop: the user does not approve a part, in which case the run stops there, reports it and leaves `updated` as it was; a source that does not exist is recorded as missing and never filled in with a guess; a step with nothing to act on ends as not applicable with its reason
 report: the path of the product document and its `updated` date, the sources read and the ones missing, the requirements per stage, the out-of-scope lines, the open questions, the annexes, the screens with no requirement, the brief Facts shrunk to one line, the Relay notes sent, and what the user approved
 
 ## Steps
 
 1. Gather the sources.
-   Task: read `user/projects/<project>/product.md` first when it exists, with the annexes it lists. Then read the brief whole, noting every Fact that carries a `(product: <section>)` pointer, the scope file in `user/manager/` and the brainstorm files of the topic, the boards (the path in `board`, else `docs/flows/boards/index.json` of the repository), the Architecture sections of the project's tasks, and the voice specification (the path in `voice`). For a product, read the family product document named in `family` as well.
+   Task: read `user/projects/<project>/product.md` first when it exists, with the annexes it lists. Then read the brief whole, noting every Fact that carries a `(product: <section>)` pointer, the scope file in `user/overseer/` and the brainstorm files of the topic, the boards (the path in `board`, else `docs/flows/boards/index.json` of the repository), the Architecture sections of the project's tasks, and the voice specification (the path in `voice`). For a product, read the family product document named in `family` as well.
    Time: 20 minutes; a source not read in time is recorded as unread and the run continues.
    Result: a list of the sources, each with its path and date or marked missing, the `updated` date of the existing product document, and the date of the newest Fact with a pointer.
 

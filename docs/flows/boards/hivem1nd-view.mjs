@@ -231,12 +231,12 @@ function swarm(cw, ch, { sel = "", ghost = false, states = false } = {}) {
   const b = (x, y, props) => node(x, y, { ...props, selected: sel === props.id });
   return [
     grid(cw, ch),
-    // structure: the person, the manager and one quiet trunk to each squad
+    // structure: the person, the overseer and one quiet trunk to each squad
     youNode(cx + 74, 24),
     curve(cx + 108, 60, cx + 108, 92, { tone: EDGE }),
     curve(cx + 108, 184, 310, 232, { tone: EDGE }),
     curve(cx + 108, 184, 714, 264, { tone: EDGE }),
-    b(cx, 92, { id: "manager", title: "Manager", kind: "lead", tag: "", model: "strong", state: states ? "working" : "waiting", status: states ? "Ordering the release" : "Asks: which ships first?" }),
+    b(cx, 92, { id: "overseer", title: "Overseer", kind: "lead", tag: "", model: "strong", state: states ? "working" : "waiting", status: states ? "Ordering the release" : "Asks: which ships first?" }),
     // the myapp squad, open
     squadBox(20, 232, 580, squadH, "myapp", states ? [roll(4, "need attention", AMBER)] : [roll(2, "working", GREEN), roll(1, "waiting", GOLD), roll(1, "idle", GREY)], { ref: "squad-myapp" }),
     b(202, 280, { id: "overlord-myapp", title: "Plans and reviews", kind: "lead", model: "strong", state: states ? "lost" : "waiting", status: states ? "Stopped answering 12 min ago" : "Approved 014 for you" }),
@@ -360,22 +360,22 @@ const composer = (to, { copyLead } = {}) =>
     ),
   );
 
-function managerInspector() {
+function overseerInspector() {
   return col(
     { w: RIGHT, fill: "#0b0b0b", name: "inspector", label: "Inspector" },
-    inspectorHead({ id: "manager", title: "Manager", model: "strong", role: "coordinates the mind", where: "LAPTOP", state: "waiting" }),
+    inspectorHead({ id: "overseer", title: "Overseer", model: "strong", role: "coordinates the mind", where: "LAPTOP", state: "waiting" }),
     tabsRow("Chat", ["Chat", "Tasks", "State"]),
     box({ h: 1, fill: "#1c1c1c" }),
     col(
       { grow: 1, pad: [14, 18], gap: 14 },
-      bubble("manager", "overlord-myapp approved 014 and overlord-shop approved 007; both are in your tray.", { model: "strong", time: "10:58" }),
-      bubble("manager", "Shop 007 and the mygame demo both want Friday. Which ships first?", {
+      bubble("overseer", "overlord-myapp approved 014 and overlord-shop approved 007; both are in your tray.", { model: "strong", time: "10:58" }),
+      bubble("overseer", "Shop 007 and the mygame demo both want Friday. Which ships first?", {
         model: "strong",
         time: "11:04",
         extra: row({ gap: 6 }, button("shop first", { kind: "gold", h: 28 }), button("mygame first", { h: 28 })),
       }),
     ),
-    composer("manager"),
+    composer("overseer"),
   );
 }
 
@@ -447,8 +447,8 @@ function shell({ top = {}, leftOn = true, inspector, canvas, overlay, menu = {} 
 
 const home = () =>
   shell({
-    inspector: managerInspector(),
-    canvas: (cw, ch) => [...swarm(cw, ch, { sel: "manager" }), ...canvasChrome(cw, ch)],
+    inspector: overseerInspector(),
+    canvas: (cw, ch) => [...swarm(cw, ch, { sel: "overseer" }), ...canvasChrome(cw, ch)],
   });
 
 // ---- 2. A builder, with its lead in the loop ---------------------------------------------
@@ -476,8 +476,8 @@ const trayItem = ({ glyph, title, from, report, actions, ref, first = false }) =
 const tray = () =>
   shell({
     top: { trayOpen: true },
-    inspector: managerInspector(),
-    canvas: (cw, ch) => [...swarm(cw, ch, { sel: "manager" }), ...canvasChrome(cw, ch)],
+    inspector: overseerInspector(),
+    canvas: (cw, ch) => [...swarm(cw, ch, { sel: "overseer" }), ...canvasChrome(cw, ch)],
     overlay: stack(
       { w: W, h: H, place: { x: 0, y: 0 } },
       col(
@@ -485,7 +485,7 @@ const tray = () =>
         row({ gap: 8 }, text("Waiting on you", { size: 15, weight: 700, color: INK, grow: 1 }), text("blocking first", { size: 11, color: MUTE })),
         trayItem({
           glyph: "messageCircle", title: "Which ships first: shop or the mygame demo?", ref: "tray-question", first: true,
-          from: row({ gap: 6 }, label("asked by"), target("strong", "manager"), label("· 10 min")),
+          from: row({ gap: 6 }, label("asked by"), target("strong", "overseer"), label("· 10 min")),
           actions: [button("shop first", { kind: "gold", h: 28 }), button("mygame first", { h: 28 }), button("Open chat", { kind: "quiet", h: 28 })],
         }),
         trayItem({
@@ -557,9 +557,9 @@ const menuBox = (x, y, w, items, { ref, title } = {}) =>
 
 const rightClick = () =>
   shell({
-    inspector: managerInspector(),
+    inspector: overseerInspector(),
     canvas: (cw, ch) => [
-      ...swarm(cw, ch, { sel: "manager" }),
+      ...swarm(cw, ch, { sel: "overseer" }),
       ...canvasChrome(cw, ch),
       box({ w: 5, h: 5, radius: "pill", fill: INK, place: { x: 118, y: 562 } }),
       menuBox(124, 568, 250, [
@@ -588,7 +588,7 @@ const rightClick = () =>
 const ghost = () =>
   shell({
     top: { crumb: ["Mind", "myapp"] },
-    inspector: managerInspector(),
+    inspector: overseerInspector(),
     canvas: (cw, ch) => [...swarm(cw, ch, { ghost: true }), ...canvasChrome(cw, ch), newAgentCard(450, 214)],
   });
 
@@ -606,7 +606,7 @@ const memberRow = (role, model, effort, n, ref) =>
 
 const squadSheet = () =>
   shell({
-    inspector: managerInspector(),
+    inspector: overseerInspector(),
     canvas: (cw, ch) => [...swarm(cw, ch), ...canvasChrome(cw, ch)],
     overlay: stack(
       { w: W, h: H, place: { x: 0, y: 0 } },
@@ -675,7 +675,7 @@ const focus = () =>
         grid(cw, ch),
         youNode(mid - 34, 40),
         curve(mid, 76, mid, 112, { tone: EDGE }),
-        node(mid - 108, 112, { id: "manager", title: "Manager", kind: "lead", tag: "", model: "strong", state: "waiting", status: "Asks: which ships first?" }),
+        node(mid - 108, 112, { id: "overseer", title: "Overseer", kind: "lead", tag: "", model: "strong", state: "waiting", status: "Asks: which ships first?" }),
         ...pills.slice(0, across).map((_, i) => curve(mid, 204, px(i) + Math.round(pw / 2), py(i) - 6, { tone: EDGE })),
         ...pills.map(([title, models, rollup, waiting], i) => squadPill(px(i), py(i), pw, title, models, rollup, { waiting, solo: models.length === 1 })),
         row(
@@ -762,9 +762,9 @@ const firstRun = () =>
 export default board({
   id: "hivem1nd-view",
   title: "HIVEM1ND view: the swarm",
-  note: "The mind as a graph of chats: the person at the top, the manager below, squads of a lead and its builders under it. Work goes down from a lead and comes back up through it, so what reaches the person has been reviewed once. Gold means waiting on the person and nothing else; every gold ring is one item of the tray. Zoom and pan, right-click to create, open any chat in the inspector.",
+  note: "The mind as a graph of chats: the person at the top, the overseer below, squads of a lead and its builders under it. Work goes down from a lead and comes back up through it, so what reaches the person has been reviewed once. Gold means waiting on the person and nothing else; every gold ring is one item of the tray. Zoom and pan, right-click to create, open any chat in the inspector.",
   screens: [
-    { id: "home", title: "Swarm", col: 0, row: 0, root: home, note: "The home, fitted with both panels open. The manager's chat is in the inspector because it is the person's main conversation. Arrows show work in flight with its task: 015 going down to a builder, 014 coming back up to the lead. Other lines are quiet structure. Shop and mygame are folded into pills with their roll-up." },
+    { id: "home", title: "Swarm", col: 0, row: 0, root: home, note: "The home, fitted with both panels open. The overseer's chat is in the inspector because it is the person's main conversation. Arrows show work in flight with its task: 015 going down to a builder, 014 coming back up to the lead. Other lines are quiet structure. Shop and mygame are folded into pills with their roll-up." },
     { id: "builder", title: "A builder, its lead in the loop", col: 1, row: 0, root: builder, note: "Selecting a builder: its chat, who it reports to, and a Copy-the-lead switch on by default so a message to a builder never splits the plan. The last state replaces asking for status." },
     { id: "tray", title: "Waiting on you", col: 2, row: 0, root: tray, note: "Blocking questions first, then reviews a lead already approved, each with its report line, tests and one action. The target button frames the node; W walks the gold rings. Accept is one click with an undo toast." },
     { id: "send-back", title: "Send back, through the lead", col: 3, row: 0, root: sendBack, note: "The review in the inspector: the criterion, tests, files and branch. What is missing goes to the lead, who hands it to its builder." },

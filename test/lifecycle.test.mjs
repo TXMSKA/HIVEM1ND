@@ -128,7 +128,7 @@ test("evolve records successful migrations across an installation conflict", asy
 test("bundled migrations are idempotent and preserve existing private files", async (t) => {
   const root = await temporaryDirectory(t, "bundled-migrations");
   const userPath = path.join(root, "user");
-  const versions = ["0.2.0", "0.3.0", "1.0.0", "1.1.0"];
+  const versions = ["0.2.0", "0.3.0", "1.0.0", "1.1.0", "2.0.0-experimental.4"];
   for (const version of versions) {
     const migration = await import(`../migrations/${version}.mjs`);
     assert.equal(migration.idempotent, true);
@@ -144,6 +144,33 @@ test("bundled migrations are idempotent and preserve existing private files", as
   assert.equal(await fs.readFile(path.join(userPath, "roles", "private.md"), "utf8"), "private role\n");
   assert.equal(await fs.readFile(path.join(userPath, "knowledge", "private.md"), "utf8"), "private knowledge\n");
   assert.equal(await fs.readFile(path.join(userPath, "protocols", "private.md"), "utf8"), "private protocol\n");
+});
+
+test("the 2.0.0-experimental.4 migration moves the Manager records to Overseer", async (t) => {
+  const root = await temporaryDirectory(t, "overseer-migration");
+  const userPath = path.join(root, "user");
+  const migration = await import("../migrations/2.0.0-experimental.4.mjs");
+  assert.equal(migration.version, "2.0.0-experimental.4");
+  assert.equal(migration.idempotent, true);
+  await write(path.join(userPath, "manager", "survey.md"), "survey\n");
+  await write(path.join(userPath, "overseer", "notes.md"), "notes\n");
+  await write(path.join(userPath, "state", "manager.md"), "unit: manager\nstate: out\ndate: 2026-10-08 09:55\n\nCurrent work.\n");
+  await write(path.join(userPath, "state", "manager2.md"), "unit: manager2\nstate: out\n\nSecond seat.\n");
+  await write(path.join(userPath, "state", "overseer.md"), "unit: overseer\nstate: out\ndate: 2026-10-01 17:42\n\nEarlier role.\n");
+  await write(path.join(userPath, "inbox", "manager", "20261008-0900-a.md"), "from: executor-app\nto: manager\n\nBody naming the manager.\n");
+
+  await migration.migrate({ userPath });
+  await migration.migrate({ userPath });
+
+  assert.equal(await fs.readFile(path.join(userPath, "overseer", "survey.md"), "utf8"), "survey\n");
+  assert.equal(await fs.readFile(path.join(userPath, "overseer", "notes.md"), "utf8"), "notes\n");
+  assert.equal(await fs.readFile(path.join(userPath, "state", "overseer.md"), "utf8"), "unit: overseer\nstate: out\ndate: 2026-10-08 09:55\n\nCurrent work.\n");
+  assert.equal(await fs.readFile(path.join(userPath, "state", "overseer2.md"), "utf8"), "unit: overseer2\nstate: out\n\nSecond seat.\n");
+  assert.match(await fs.readFile(path.join(userPath, "log", "20261001-1742-overseer-retired.md"), "utf8"), /Earlier role\./);
+  assert.equal(await fs.readFile(path.join(userPath, "inbox", "overseer", "20261008-0900-a.md"), "utf8"), "from: executor-app\nto: overseer\n\nBody naming the manager.\n");
+  assert.deepEqual((await fs.readdir(userPath)).sort(), ["inbox", "log", "overseer", "state"]);
+  assert.deepEqual(await fs.readdir(path.join(userPath, "inbox")), ["overseer"]);
+  assert.deepEqual((await fs.readdir(path.join(userPath, "state"))).sort(), ["overseer.md", "overseer2.md"]);
 });
 
 test("the 1.1.0 migration creates the private protocols folder", async (t) => {

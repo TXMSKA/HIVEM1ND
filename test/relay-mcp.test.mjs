@@ -32,21 +32,21 @@ test('stdio MCP negotiates supported version and binds explicit native identity 
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 'future-version' } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'native-1', client: 'codex' } } },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' } } },
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'reminder', arguments: { nativeSessionId: 'native-1', client: 'codex' } } },
     { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'reminder', arguments: {} } },
   ]);
   assert.equal(lines[0].result.protocolVersion, '2025-11-25');
   assert.ok(lines[1].result.tools.some((tool) => tool.name === 'register'));
-  assert.equal(lines[2].result.structuredContent.unit, 'manager');
-  assert.deepEqual(lines[3].result.structuredContent, { unit: 'manager', unread: 0, from: [], text: '', registered: true });
-  assert.deepEqual(lines[4].result.structuredContent, { unit: 'manager', unread: 0, from: [], text: '', registered: true });
+  assert.equal(lines[2].result.structuredContent.unit, 'overseer');
+  assert.deepEqual(lines[3].result.structuredContent, { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
+  assert.deepEqual(lines[4].result.structuredContent, { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
 });
 
 test('OpenCode identifies itself as a supported Relay MCP registration client', async (context) => {
   const mindPath = await fixture(context);
   const { lines } = await run(mindPath, [
-    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'opencode-session-1', client: 'opencode' } } },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'opencode-session-1', client: 'opencode' } } },
   ], 'opencode');
   assert.equal(lines[0].result.structuredContent.client, 'opencode');
   assert.equal(lines[0].result.structuredContent.nativeSessionId, 'opencode-session-1');
@@ -55,7 +55,7 @@ test('OpenCode identifies itself as a supported Relay MCP registration client', 
 test('Copilot identifies itself as a supported Relay MCP registration client', async (context) => {
   const mindPath = await fixture(context);
   const { lines } = await run(mindPath, [
-    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'copilot-session-1', client: 'copilot' } } },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'copilot-session-1', client: 'copilot' } } },
   ], 'copilot');
   assert.equal(lines[0].result.structuredContent.client, 'copilot');
   assert.equal(lines[0].result.structuredContent.nativeSessionId, 'copilot-session-1');
@@ -66,8 +66,8 @@ test('invalid MCP JSON, primitives, extra fields, unknown tools and oversized li
   const requests = [
     '{bad json',
     42,
-    { jsonrpc: '2.0', id: 'primitive', method: 'tools/call', params: { name: 'register', arguments: 'manager' } },
-    { jsonrpc: '2.0', id: 'extra', method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'x', extra: 'bypass' } } },
+    { jsonrpc: '2.0', id: 'primitive', method: 'tools/call', params: { name: 'register', arguments: 'overseer' } },
+    { jsonrpc: '2.0', id: 'extra', method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'x', extra: 'bypass' } } },
     { jsonrpc: '2.0', id: 'unknown', method: 'tools/call', params: { name: 'unknown_tool', arguments: {} } },
     'x'.repeat(1_048_577),
     { jsonrpc: '2.0', id: 'after', method: 'ping' },
@@ -93,7 +93,7 @@ test('unbound MCP server does not register itself from its correlation ID', asyn
 
 test('stdio UTF-8 decoder preserves a code point split across stream chunks', async (context) => {
   const mindPath = await fixture(context);
-  const request = Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'manager', nativeSessionId: 'native-雪', client: 'codex' } } })}\n`);
+  const request = Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'native-雪', client: 'codex' } } })}\n`);
   const split = request.indexOf(Buffer.from('雪')) + 1;
   const stdin = Readable.from([request.subarray(0, split), request.subarray(split)]);
   const stdout = new PassThrough();
