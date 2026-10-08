@@ -23,4 +23,6 @@ contacts the network only under the daily update check rule.
 
 Human-readable summaries are the default. `--json` prints the complete result
 for scripts. Evolution conflicts can be supplied with repeatable
-`--conflict <path>=keep|replace` options.
+`--conflict <path>=keep|replace` options. Without a terminal, `evolve` never
+prompts: it lists each unresolved conflict with its allowed choices and exits
+with code 1.
