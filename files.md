@@ -8,6 +8,7 @@ Layout inside the mind, all generated, all under `user/` (git-ignored):
 user/
   VERSION                     base version this user/ was created or migrated with
   preferences.md              global preferences
+  models.md                   which model does which kind of work, at which effort
   routes.md                   environments, projects and other minds, names only
   machines/<host>.md          one per machine
   machines/<host>.managed.json  the files installed on that machine and their hashes
@@ -90,6 +91,7 @@ date: 2026-09-15 13:40
 depends: 002
 design: docs/design.md
 requirements: APP-B-04
+work: build from an approved plan
 
 ## Request
 Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not touch src/auth/session.ts. Done means: a user receives the mail, the link opens the form, the new password works, all three seen in the browser.
@@ -97,7 +99,7 @@ Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not t
 ## Report
 ```
 
-`id` is sequential per project, three digits. `status` moves from `open` to `review` when the executor appends the report and the work waits for the requester's look, to `done` when the requester accepts it, and to `closed` when the requester archives it. A task sent back from `review` returns to `open` with what is missing in its Report. Each change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends`, `design` and `requirements` are optional; `design` comes from the brief, and `requirements` lists, comma separated, the IDs of the PRD requirements the task delivers.
+`id` is sequential per project, three digits. `status` moves from `open` to `review` when the executor appends the report and the work waits for the requester's look, to `done` when the requester accepts it, and to `closed` when the requester archives it. A task sent back from `review` returns to `open` with what is missing in its Report. Each change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends`, `design`, `requirements` and `work` are optional; `design` comes from the brief, `requirements` lists, comma separated, the IDs of the PRD requirements the task delivers, and `work` names the kind of work the task is, as the `delegation` category lists it, so that the executor takes the row of `models.md` for that kind of work.
 
 ## Brief: `projects/<project>/brief.md`
 
@@ -291,6 +293,35 @@ One file per machine, replaced by every install, attach and update, so what a ru
 ```
 
 One line per preference, with the date and the reason. The global file applies everywhere; a project file applies to that project and overrides the global one.
+
+## Models: `models.md`
+
+```markdown
+updated: 2026-09-15
+
+# Models
+
+Which model does which kind of work, at which effort, for every seat and every delegation of this mind. It is the default when the user has not said otherwise.
+
+| Work | Client | Model | Effort | Status | Tested | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| Plan, scope, PRD, deep review | <client> (seat) | strong model | max | active | 2026-09-12 | plans held up in review |
+| Seat work | <client> (seat) | strong model | high | active | 2026-09-12 | every seat; never delegated |
+| Build from an approved plan | subagent | mid model | high; xhigh for hard pieces | active | 2026-09-14 | test counts held when the seat reran them |
+| Build from an approved plan | <client> | mid model | high | active while paid | 2026-09-14 | two tasks built, counts held |
+| Read-only gathering | subagent | light model | low | active | 2026-09-14 | sources cited, conflicts found |
+| Mechanical edits from a written list | subagent | mid model | low | candidate | not yet | |
+
+Fallback order for builds: mid model on subagent, then mid model on <client>.
+```
+
+The table says which model, at which effort, does each kind of work. `updated` is the date, `YYYY-MM-DD`, of the last edit. The kit speaks in tiers, strong, mid and light, and never in model names: the example holds tier words in the Model column, and the mind's file holds the concrete model of each row. The `delegation` category lists the kinds of work with the tier and effort of each, and the Adapters section of `roles/genesis.md` maps the tiers to the models of each client.
+
+There is one row per kind of work and client, so a kind of work has several rows when several clients can do it. Work is the kind of work, worded as in the `delegation` category. Client is the key of a Relay wake adapter, or `subagent` for a subagent of the seat's own client, optionally followed by a note in parentheses, such as `(seat)` for work done in the user's own chat. Effort is `low`, `medium`, `high`, `xhigh` or `max`, with a note after a semicolon where hard pieces differ. Status is `active`, `paused` or `candidate`, optionally followed by a short qualifier, such as `active while paid`. Tested is the date, `YYYY-MM-DD`, of the test that last changed the row, several dates comma separated, or `not yet`, and Result is one line of what the test showed. The last line, `Fallback order for <work>: <row>, then <row>.`, names for one kind of work the rows to take in order when the first is not available, each row written as its model on its client.
+
+A row changes only when a test changes it. A tool moves from `candidate` to `active` only after a real test: a piece the seat has verified first-hand and, for a client other than the seat's, a Relay live trial. A tool that stops being available, such as a subscription that ends, is `paused`, never deleted, and keeps its history. Prices never enter the table; they stay in the mind's cost notes. The user's call in the moment, which client, model or effort to use now, overrides the table for that session and is never written into it.
+
+When `models.md` does not exist, setup writes it from the Adapters mapping; after that the coordinator, the Manager unit when the mind has one and otherwise the environment's Overlord, edits it in the turn a test changes a row. The check reads the Client column: a row whose first word is neither the key of a Relay wake adapter nor `subagent` is reported with its Work and its client. A missing file, a file without a table and a valid row stay silent, and the measurement never fails the check.
 
 ## Knowledge module: `knowledge/<module>/`
 
