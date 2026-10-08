@@ -101,9 +101,9 @@ test("a state left in is stale when it is old, or when its machine relayed out a
   const states = path.join(mindPath, "user", "projects", "app", "state");
   await write(path.join(states, "old.md"), state("old", { state: "in", machine: "TEST", date: "2030-01-01 10:00" }));
   await write(path.join(states, "fresh.md"), state("fresh", { state: "in", machine: "TEST", date: "2030-01-09 09:00" }));
-  await write(path.join(states, "away.md"), state("away", { state: "in", machine: "SCOUT", date: "2030-01-09 08:00" }));
-  await write(path.join(states, "away-out.md"), state("away-out", { state: "out", machine: "SCOUT", date: "2030-01-09 11:45" }));
-  await write(path.join(states, "running.md"), state("running", { state: "in", machine: "SCOUT", date: "2030-01-09 12:00" }));
+  await write(path.join(states, "away.md"), state("away", { state: "in", machine: "LAPTOP", date: "2030-01-09 08:00" }));
+  await write(path.join(states, "away-out.md"), state("away-out", { state: "out", machine: "LAPTOP", date: "2030-01-09 11:45" }));
+  await write(path.join(states, "running.md"), state("running", { state: "in", machine: "LAPTOP", date: "2030-01-09 12:00" }));
   await write(path.join(states, "dateless.md"), "unit: dateless\nstate: in\nmachine: TEST\n\nContext.\n");
 
   const mind = await measureMind({ mindPath, hostname: "TEST", now: new Date("2030-01-09T13:00:00") });
