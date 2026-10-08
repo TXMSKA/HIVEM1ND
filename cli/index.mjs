@@ -32,6 +32,7 @@ Usage:
   hivem1nd check [options]
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
+  hivem1nd view [--project <name>] [options]
   hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
 
@@ -41,7 +42,8 @@ Commands:
   check      Report what a new chat should know, without writing
   pylon      Attach a repository to the shared mind
   swarm      Show units, tasks and unread messages
-  relay      Send and read messages, register sessions, or configure Relay clients
+  view       Show chats, squads, what waits on the person, tasks, inbox and products
+  relay     Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
 
 Relay options:
@@ -88,6 +90,9 @@ Pylon options:
   --no-ai-trailers      Disallow AI commit trailers (default)
   --environment <name>  Environment name for the repository route
 
+View options:
+  --project <name>      Show one project and the units that lead it
+
 Shared path options:
   --kit-path <path>     Path to the HIVEM1ND kit (default: installed kit)
   --mind-path <path>    Path to the private mind
@@ -108,6 +113,7 @@ const VALUE_FLAGS = new Map([
   ["--language", "language"],
   ["--environment", "environment"],
   ["--state", "state"],
+  ["--project", "project"],
 ]);
 
 const BOOLEAN_FLAGS = new Map([
@@ -129,6 +135,7 @@ const ALLOWED_FLAGS = {
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
+  view: new Set(["json", "project", "kitPath", "mindPath", "homeDir", "hostname"]),
   uninstall: new Set(["dryRun", "removeMind", "json", "mindPath", "homeDir", "hostname"]),
 };
 
@@ -336,6 +343,21 @@ function formatSwarm(result) {
   return lines.join("\n");
 }
 
+function tally(items, key, names) {
+  return names.map((name) => `${name} ${items.filter((item) => item[key] === name).length}`).join(", ");
+}
+
+function formatView(result) {
+  const blocking = result.waiting.filter((item) => item.kind !== "review").length;
+  return [
+    `Waiting on the person: ${result.counts.waiting} (${blocking} to answer, ${result.counts.waiting - blocking} to review)`,
+    `Chats: ${result.counts.chats} (${tally(result.chats, "status", ["waiting", "working", "idle", "out", "quota", "unknown"])})`,
+    `Tasks: open ${result.counts.open}, review ${result.counts.review}, done ${result.counts.done}, closed ${result.counts.closed}`,
+    `Unread: ${result.counts.unread}`,
+    `Issues: ${result.counts.issues}${result.counts.issues ? "; --json lists them" : ""}`,
+  ].join("\n");
+}
+
 function waitingText({ unread, open }) {
   return [
     unread ? `${unread} unread message${unread === 1 ? "" : "s"}` : "",
@@ -405,6 +427,7 @@ function formatHumanResult(result) {
   if (result.action === "evolve") return formatEvolve(result);
   if (result.action === "pylon") return formatPylon(result);
   if (result.action === "swarm") return formatSwarm(result);
+  if (result.contract === "hivem1nd-view-v1") return formatView(result);
   if (result.action === "status") return formatStatus(result);
   if (result.action === "uninstall") return formatUninstall(result);
   return formatResult(result);
@@ -875,6 +898,9 @@ async function runLifecycle(command, options, dependencies, output) {
     }
   } else if (command === "swarm") {
     result = await lifecycle.swarm(common);
+  } else if (command === "view") {
+    const { readView } = dependencies.view ?? await import("../engine/view.mjs");
+    result = await readView({ mindPath: common.mindPath, hostname: common.hostname, ...(options.project ? { project: options.project } : {}) });
   } else if (command === "check") {
     result = await lifecycle.check(common);
   } else {

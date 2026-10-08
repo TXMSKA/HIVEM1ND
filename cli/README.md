@@ -9,6 +9,7 @@ hivem1nd evolve [--check-only]
 hivem1nd check
 hivem1nd pylon <repo> [--state branch|main] [--environment <name>]
 hivem1nd swarm
+hivem1nd view [--json] [--project <name>]
 ```
 
 Every command also accepts `--kit-path`, `--mind-path`, `--home-dir` and

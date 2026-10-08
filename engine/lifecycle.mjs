@@ -21,7 +21,7 @@ function lifecycleError(code, message, cause) {
   return error;
 }
 
-async function assertSafePath(root, target, options) {
+export async function assertSafePath(root, target, options) {
   try {
     return await assertRecordSafePath(root, target, options);
   } catch (cause) {
@@ -62,7 +62,7 @@ async function writeText(filePath, content, root = path.dirname(filePath)) {
   await atomicWriteFile(filePath, content, { root });
 }
 
-function headerValue(content, name) {
+export function headerValue(content, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = content.match(new RegExp(`^${escaped}:[ \\t]*(.*)$`, "im"));
   return match?.[1]?.trim() ?? "";
@@ -82,7 +82,7 @@ function setHeader(content, name, value) {
   return `${content.trimEnd()}\n${name}: ${value}\n`;
 }
 
-function bodyFirstLine(content) {
+export function bodyFirstLine(content) {
   const parts = content.split(/\r?\n\r?\n/, 2);
   if (parts.length < 2) {
     return "";
@@ -962,7 +962,7 @@ export async function pylon(options = {}) {
   };
 }
 
-async function listDirectories(directory) {
+export async function listDirectories(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -971,7 +971,7 @@ async function listDirectories(directory) {
     .sort((left, right) => left.localeCompare(right, "en"));
 }
 
-async function listFiles(directory) {
+export async function listFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -981,12 +981,13 @@ async function listFiles(directory) {
     .sort((left, right) => left.localeCompare(right, "en"));
 }
 
-async function collectScopes(userPath) {
+// The lister is a parameter so a reader that reports what it could not list walks the same scopes.
+export async function collectScopes(userPath, directories = listDirectories) {
   const scopes = [{ scope: "root", path: userPath }];
-  for (const environment of await listDirectories(path.join(userPath, "envs"))) {
+  for (const environment of await directories(path.join(userPath, "envs"))) {
     scopes.push({ scope: "environment", environment, path: path.join(userPath, "envs", environment) });
   }
-  for (const project of await listDirectories(path.join(userPath, "projects"))) {
+  for (const project of await directories(path.join(userPath, "projects"))) {
     scopes.push({ scope: "project", project, path: path.join(userPath, "projects", project) });
   }
   return scopes;
