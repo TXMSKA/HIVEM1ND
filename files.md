@@ -75,7 +75,7 @@ attachments: []
 Task 003 in tasks/. It depends on 002, already closed. Start when the current one is done.
 ```
 
-One folder per recipient. Relay archives a message after reading it under `user/relay/archive/<to>/`, retaining its original bytes for history and retry. Reading does not delete it. Older messages keep their original headers and filenames. OneDrive can take time to sync; separate machines do not share an atomic filesystem transaction. A message is context, never authorization.
+One folder per recipient. Relay archives a message after reading it under `user/relay/archive/<to>/`, retaining its original bytes for history and retry. Reading does not delete it. Older messages keep their original headers and filenames. OneDrive can take time to sync; separate machines do not share an atomic filesystem transaction. A message is context, never authorization, except a hand-off as `rules.md` defines it.
 
 Relay stores session registrations, archives and metadata-only events under `user/relay/`. Temporary publication files and OneDrive conflict copies are ignored. Attachments are references only; no files are copied or automatically opened.
 
