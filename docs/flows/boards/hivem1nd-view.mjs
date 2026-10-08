@@ -4,8 +4,8 @@
 // once already. The graph is the home: zoom, pan, right-click to create, a left menu and a
 // right inspector that both hide. Gold means one thing only, waiting on the person, and every
 // gold ring on the graph is one item of the Waiting tray.
-// The kit owns the contract hivem1nd-view-v1 and its reader, `hivem1nd view --json`; host applications and
-// other apps draw these screens in their own stack and map their tokens onto the roles used here.
+// The kit owns the contract hivem1nd-view-v1 and its reader, `hivem1nd view --json`; each host
+// application draws these screens in its own stack and maps its tokens onto the roles used here.
 // The view never writes a file itself: every action is an intent the host applies after the
 // person confirms it. Sample data is invented: projects myapp, shop and mygame.
 
@@ -199,7 +199,32 @@ const youNode = (x, y) =>
 
 // ---- the sample swarm, fitted to the canvas -------------------------------------------
 
-/** The home graph: `sel` names the selected chat; `ghost` adds a new builder being named. */
+const field = (title, value, { h = 34, mono = false, hint } = {}) =>
+  col(
+    { gap: 5 },
+    label(title, { size: 10, weight: 700, track: 0.06 }),
+    col({ h, pad: [0, 10], radius: 8, fill: "#151515", stroke: "#2e2e2e", justify: "center" }, text(value, { size: 12, lh: 1.45, color: INK, face: mono ? "mono" : undefined })),
+    hint ? label(hint, { size: 10 }) : null,
+  );
+
+const pick = (options, active) =>
+  row({ gap: 4 }, ...options.map((option) => row({ h: 26, pad: [0, 10], gap: 6, radius: "pill", fill: option === active ? INK : "#1a1a1a" }, text(option, { size: 11, weight: option === active ? 700 : 400, color: option === active ? "#000000" : SOFT }))));
+
+// A chat made in one step, like a custom agent: a name, what it always does, and its model.
+function newAgentCard(x, y) {
+  return col(
+    { w: 356, pad: [16, 16], gap: 12, radius: 16, fill: "#0f0f0f", stroke: "#3a3a3a", place: { x, y }, shadow: true, name: "new-agent", label: "New chat" },
+    row({ gap: 8 }, text("New chat in myapp", { size: 14, weight: 700, color: INK, grow: 1 }), row({ gap: 6 }, label("reports to"), avatar("strong", 16), text("overlord-myapp", { size: 11, color: INK, face: "mono" }))),
+    field("NAME", "Archiver"),
+    field("WHAT IT DOES", "Reads every delivered task, checks its tests and archives the logs of finished work.", { h: 54 }),
+    col({ gap: 6 }, label("JOB", { size: 10, weight: 700, track: 0.06 }), pick(["Builder", "Reader", "Reviewer", "Custom"], "Reader")),
+    col({ gap: 6 }, label("MODEL", { size: 10, weight: 700, track: 0.06 }), row({ gap: 10 }, pick(["strong", "mid", "light"], "light"), text("effort low", { size: 11, color: MUTE }))),
+    row({ gap: 8 }, box({ w: 16, h: 16, radius: 4, fill: INK }), text("Save as an agent to reuse", { size: 12, color: INK, grow: 1 })),
+    row({ gap: 8 }, kbd("Enter"), label("starts it", { grow: 1 }), button("Cancel", { kind: "quiet", h: 30 }), button("Start chat", { kind: "primary", h: 30, ref: "start-chat" })),
+  );
+}
+
+/** The home graph: `sel` names the selected chat; `ghost` adds a new chat being made. */
 function swarm(cw, ch, { sel = "", ghost = false, states = false } = {}) {
   const cx = Math.round(cw / 2) - 108;
   const squadH = ghost ? 430 : 330;
@@ -213,7 +238,7 @@ function swarm(cw, ch, { sel = "", ghost = false, states = false } = {}) {
     curve(cx + 108, 184, 714, 264, { tone: EDGE }),
     b(cx, 92, { id: "manager", title: "Manager", kind: "lead", tag: "", model: "strong", state: states ? "working" : "waiting", status: states ? "Ordering the release" : "Asks: which ships first?" }),
     // the myapp squad, open
-    squadBox(20, 232, 580, squadH, "myapp", [roll(2, "working", GREEN), roll(1, "waiting", GOLD), roll(1, "idle", GREY)], { ref: "squad-myapp" }),
+    squadBox(20, 232, 580, squadH, "myapp", states ? [roll(4, "need attention", AMBER)] : [roll(2, "working", GREEN), roll(1, "waiting", GOLD), roll(1, "idle", GREY)], { ref: "squad-myapp" }),
     b(202, 280, { id: "overlord-myapp", title: "Plans and reviews", kind: "lead", model: "strong", state: states ? "lost" : "waiting", status: states ? "Stopped answering 12 min ago" : "Approved 014 for you" }),
     ...(states ? [] : [...flow(282, 372, 126, 452, "015"), ...flow(338, 452, 330, 372, "014")]),
     b(38, 452, { id: "executor-myapp", title: "Offline drafts", model: "mid", state: states ? "unreachable" : "working", status: states ? "Offline · seen 14 min ago" : "Building 015 · 4 min" }),
@@ -221,14 +246,13 @@ function swarm(cw, ch, { sel = "", ghost = false, states = false } = {}) {
     b(426, 452, { id: "executor-myapp-3", title: "Markdown export", model: "tool", state: states ? "unknown" : "idle", status: states ? "State file unreadable" : "Idle since 10:40" }),
     ghost
       ? col(
-          { w: 176, h: 84, pad: [10, 12], gap: 8, radius: 13, fill: "#111111", stroke: INK, dash: "4 4", place: { x: 38, y: 552 }, name: "ghost", label: "New builder" },
-          row({ gap: 8 }, avatar("mid", 24), col({ grow: 1, h: 26, pad: [0, 8], radius: 7, fill: "#1a1a1a", stroke: "#4a4a4a", justify: "center" }, text("Export as PDF|", { size: 11, color: INK }))),
-          row({ gap: 6 }, chip("Builder · mid model · high", { glyph: "chevronDown" })),
+          { w: 176, h: 84, pad: [10, 12], gap: 7, radius: 13, fill: "#111111", stroke: INK, dash: "4 4", place: { x: 38, y: 552 }, name: "ghost", label: "New chat" },
+          row({ gap: 9 }, avatar("light", 28), col({ grow: 1, gap: 2 }, text("Archiver", { size: 12, weight: 700, color: INK }), text("reader · new", { size: 10, color: MUTE, face: "mono" }))),
+          row({ gap: 7 }, dot(MUTE, 7), text("Starting…", { size: 11, color: SOFT })),
         )
       : null,
-    ghost ? text("Enter starts the chat · Esc cancels · Tab picks the model", { size: 11, color: MUTE, place: { x: 230, y: 586 }, w: 340 }) : null,
     // folded squads
-    squadPill(620, 270, 188, "shop", ["strong", "mid"], [roll(1, "waiting", GOLD), roll(1, "out", OUT)], { waiting: !states, ref: "squad-shop" }),
+    squadPill(620, 270, 188, "shop", ["strong", "mid"], [roll(1, "waiting", GOLD), roll(1, "out", OUT)], { waiting: true, ref: "squad-shop" }),
     squadPill(620, 382, 188, "mygame", ["light"], [roll(1, "out", OUT)], { ref: "squad-mygame", solo: true }),
   ];
 }
@@ -259,7 +283,7 @@ function topBar({ crumb = ["Mind"], waiting = 3, trayOpen = false, left = true, 
   );
 }
 
-function leftMenu({ active = "swarm", empty = false } = {}) {
+function leftMenu({ active = "swarm", empty = false, waiting = 3, states = false } = {}) {
   const item = (id, glyph, title, n, gold = false) =>
     row(
       { h: 34, pad: [0, 10], gap: 10, radius: 9, fill: id === active ? "#1c1c1c" : undefined, name: `nav-${id}`, label: title },
@@ -276,11 +300,11 @@ function leftMenu({ active = "swarm", empty = false } = {}) {
     row({ h: 34, pad: [0, 10], gap: 8, radius: 9, fill: "#141414", stroke: "#262626", name: "search", label: "Search" }, icon("search", { size: 14, color: MUTE }), text("Search or jump", { size: 12, color: MUTE, grow: 1 }), kbd("Ctrl K")),
     space(8),
     item("swarm", "network", "Swarm"),
-    item("waiting", "hand", "Waiting on you", empty ? 0 : 3, true),
+    item("waiting", "hand", "Waiting on you", empty ? 0 : waiting, true),
     space(14),
     empty ? null : label("SQUADS", { size: 10, weight: 700, track: 0.1 }),
     empty ? null : space(4),
-    empty ? null : squadRow("myapp", "strong", row({ gap: 8 }, roll(2, "working", GREEN), roll(1, "waiting", GOLD))),
+    empty ? null : squadRow("myapp", "strong", states ? row({ gap: 8 }, roll(4, "need attention", AMBER)) : row({ gap: 8 }, roll(2, "working", GREEN), roll(1, "waiting", GOLD))),
     empty ? null : squadRow("shop", "strong", row({ gap: 8 }, roll(1, "waiting", GOLD), roll(1, "out", OUT))),
     empty ? null : squadRow("mygame", "light", row({ gap: 8 }, text("solo", { size: 11, color: MUTE }), roll(1, "out", OUT))),
     fill(),
@@ -375,7 +399,9 @@ function builderInspector() {
 
 // ---- canvas chrome -------------------------------------------------------------------
 
-function canvasChrome(cw, ch, { zoom = "Fit", filters = true } = {}) {
+const FILTERS = [["Waiting", 3, GOLD], ["Working", 2, GREEN], ["Idle", 1, GREY], ["Out", 2, OUT]];
+
+function canvasChrome(cw, ch, { zoom = "Fit", filters = true, counts = FILTERS } = {}) {
   return [
     row(
       { h: 36, pad: [0, 6], gap: 2, radius: 10, fill: "#0e0e0e", stroke: "#262626", place: { x: 16, y: ch - 52 }, name: "zoom", label: "Zoom" },
@@ -389,10 +415,7 @@ function canvasChrome(cw, ch, { zoom = "Fit", filters = true } = {}) {
       ? row(
           { h: 36, pad: [0, 6], gap: 4, radius: 10, fill: "#0e0e0e", stroke: "#222222", place: { x: 176, y: ch - 52 }, name: "filters", label: "Filters" },
           chip("All 8", { tone: "#1f1f1f", color: INK }),
-          chip("Waiting 3", { color: GOLD, glyph: "circle", tone: "#0e0e0e" }),
-          chip("Working 2", { color: GREEN, glyph: "circle", tone: "#0e0e0e" }),
-          chip("Idle 1", { color: GREY, glyph: "circle", tone: "#0e0e0e" }),
-          chip("Out 2", { color: OUT, glyph: "circle", tone: "#0e0e0e" }),
+          ...counts.map(([name, n, color]) => chip(`${name} ${n}`, { color, glyph: "circle", tone: "#0e0e0e" })),
         )
       : null,
   ];
@@ -409,7 +432,7 @@ function shell({ top = {}, leftOn = true, inspector, canvas, overlay, menu = {} 
       box({ h: 1, fill: "#1c1c1c" }),
       row(
         { h: ch, align: "stretch" },
-        leftOn ? leftMenu(menu) : null,
+        leftOn ? leftMenu({ waiting: top.waiting ?? 3, ...menu }) : null,
         leftOn ? box({ w: 1, fill: "#1c1c1c" }) : null,
         stack({ w: cw, h: ch, fill: "#030303", clip: true, name: "canvas", label: "Canvas" }, ...canvas(cw, ch)),
         inspector ? box({ w: 1, fill: "#1c1c1c" }) : null,
@@ -541,7 +564,8 @@ const rightClick = () =>
       box({ w: 5, h: 5, radius: "pill", fill: INK, place: { x: 118, y: 562 } }),
       menuBox(124, 568, 250, [
         row({ h: 26, pad: [0, 10] }, label("Canvas · nearest squad: myapp")),
-        menuItem("plus", "New builder here", { hint: "N", active: true, ref: "menu-new-builder" }),
+        menuItem("plus", "New chat here", { hint: "N", active: true, ref: "menu-new-builder" }),
+        menuItem("bookmark", "From your agents: Archiver, Reviewer", { hint: "G" }),
         menuItem("link", "Attach an open chat", { hint: "A" }),
         box({ h: 1, fill: "#262626" }),
         menuItem("boxes", "Squad for a solo repository", { ref: "menu-new-squad" }),
@@ -565,7 +589,7 @@ const ghost = () =>
   shell({
     top: { crumb: ["Mind", "myapp"] },
     inspector: managerInspector(),
-    canvas: (cw, ch) => [...swarm(cw, ch, { ghost: true }), ...canvasChrome(cw, ch)],
+    canvas: (cw, ch) => [...swarm(cw, ch, { ghost: true }), ...canvasChrome(cw, ch), newAgentCard(450, 214)],
   });
 
 // ---- 7. A squad for a solo chat ---------------------------------------------------------------------
@@ -594,7 +618,7 @@ const squadSheet = () =>
           text("Give mygame a squad", { size: 20, weight: 700, color: INK }),
           text("Its builder stays; a lead plans and reviews, and new builders take its tasks.", { size: 12, lh: 1.5, color: MUTE }),
           memberRow("Lead", "strong", "max", undefined, "squad-lead"),
-          memberRow("New builders", "mid", "high", 2, "squad-builders"),
+          memberRow("New members, any model", "mid", "high", 2, "squad-builders"),
           col(
             { gap: 6 },
             label("First goal, from mygame's open requirements"),
@@ -693,10 +717,11 @@ function lostInspector() {
 const states = () =>
   shell({
     inspector: lostInspector(),
-    top: { crumb: ["Mind", "myapp"], waiting: 2 },
+    top: { crumb: ["Mind", "myapp"], waiting: 1 },
+    menu: { states: true },
     canvas: (cw, ch) => [
       ...swarm(cw, ch, { sel: "overlord-myapp", states: true }),
-      ...canvasChrome(cw, ch),
+      ...canvasChrome(cw, ch, { counts: [["Attention", 4, AMBER], ["Waiting", 1, GOLD], ["Working", 1, GREEN], ["Out", 2, OUT]] }),
       row({ h: 32, pad: [0, 12], gap: 8, radius: 10, fill: "#1f1414", stroke: "#4a2a2a", place: { x: cw - 236, y: 14 }, name: "issues-pill", label: "Read issues" }, icon("triangleAlert", { size: 14, color: RED }), text("1 file could not be read", { size: 12, color: INK }), text("Show", { size: 12, weight: 700, color: RED })),
     ],
   });
@@ -744,7 +769,7 @@ export default board({
     { id: "tray", title: "Waiting on you", col: 2, row: 0, root: tray, note: "Blocking questions first, then reviews a lead already approved, each with its report line, tests and one action. The target button frames the node; W walks the gold rings. Accept is one click with an undo toast." },
     { id: "send-back", title: "Send back, through the lead", col: 3, row: 0, root: sendBack, note: "The review in the inspector: the criterion, tests, files and branch. What is missing goes to the lead, who hands it to its builder." },
     { id: "right-click", title: "Right-click", col: 0, row: 1, root: rightClick, note: "On the canvas: a new builder where the click was, attach a chat, a squad for a solo repository. On a chat: open, give it a task, wake, stop." },
-    { id: "ghost", title: "Name the new builder", col: 1, row: 1, root: ghost, note: "The new builder appears in place as a card with its name field; Enter starts it with the model table's default, Tab changes the model. A full row of builders wraps to the next." },
+    { id: "ghost", title: "A new chat in one step", col: 1, row: 1, root: ghost, note: "A chat made like a custom agent: its name, what it always does, its job and its model, any tier. It reports to the squad's lead. Saved as an agent, it comes back from the right-click menu and the New chat button. The node appears in place and starts with Enter." },
     { id: "squad", title: "Give a solo chat a squad", col: 2, row: 1, root: squadSheet, note: "A solo repository gains a lead and builders in one step; the first goal comes from its open requirements, and the cost in sessions is said before starting." },
     { id: "focus", title: "Focus and scale", col: 3, row: 1, root: focus, note: "Both panels hidden and zoomed out: squads fold into pills with their roll-up, the ones waiting on the person keep their gold ring. A list view shows the same hierarchy for the keyboard and the phone." },
     { id: "states", title: "States that need attention", col: 4, row: 0, root: states, note: "Lost, unreachable, out of quota and unknown each say what happened and what to do; nothing on a node is guessed." },
@@ -755,7 +780,7 @@ export default board({
     { from: "home", to: "tray", at: "waiting-pill", label: "Waiting on you" },
     { from: "tray", to: "send-back", at: "tray-send-back", label: "Send back" },
     { from: "home", to: "right-click", at: "canvas", label: "Right-click" },
-    { from: "right-click", to: "ghost", at: "menu-new-builder", label: "New builder here" },
+    { from: "right-click", to: "ghost", at: "menu-new-builder", label: "New chat here" },
     { from: "right-click", to: "squad", at: "menu-new-squad", label: "Squad for a solo repository" },
     { from: "home", to: "focus", at: "toggle-left", label: "Hide panels, zoom out" },
     { from: "send-back", to: "states", label: "A chat stops answering" },
