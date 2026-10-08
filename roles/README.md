@@ -1,1 +1,1 @@
-One markdown file per role, five. Each works on a machine with a shell: the Executor and the Incubator in one folder, the Overlord across the repos of one environment, the Manager across every project of the mind, and Genesis on the mind itself.
+One markdown file per role, five. Each works on a machine with a shell: the Executor and the Incubator in one folder, the Overlord as the lead of a squad, one environment or the chats of one repository, the Manager across every project of the mind, and Genesis on the mind itself.
