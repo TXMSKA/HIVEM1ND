@@ -91,7 +91,8 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       if (length > 65536) throw new Error('Hook input exceeds the maximum size.');
       chunks.push(value);
     }
-    const raw = Buffer.concat(chunks).toString('utf8').trim();
+    // Some hook runners prefix the payload with a byte order mark.
+    const raw = Buffer.concat(chunks).toString('utf8').replace(/^﻿/, '').trim();
     if (raw) input = JSON.parse(raw);
   } catch (error) {
     stderr.write(`Relay hook input unavailable: ${error.message}\n`);

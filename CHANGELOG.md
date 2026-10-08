@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Relay hooks for Cursor and Codex on Windows read the hook payload as UTF-8 and pass it to node as UTF-8, and the hook strips a leading byte order mark, so the Cursor stop hook no longer fails with "Unexpected token" and accented text survives. Existing hooks pick this up with `relay configure --client cursor` or `--client codex`.
 - A mind runs Relay setup on its own: an install or an update copies the kit's runtime dependencies into the mind's `node_modules`, resolved the way Node resolves them, so `relay configure`, `relay unconfigure` and `relay diagnose` work from the mind without a kit checkout. A dependency missing next to the kit is reported as a warning.
 - Claude wake attach marks the session busy only when the Relay Stop hook is configured, since only that hook turns it idle again. Without the hooks the activity stays unknown, normal messages wake the session at once, and attach prints how to add the hooks.
 - The Manager role is now called Overseer, the name the coordinator of the whole mind had before. The role, its skill, its unit `overseer` and its folder `user/overseer/` change name and nothing else. The `2.0.0-experimental.4` migration moves a mind's `user/manager/` folder, its `state/manager*.md` files and its root inbox to the new name and readdresses unread messages; a state file already named `overseer` is kept as a log entry, and logs and archived messages stay as written. An update removes the old skill as it removes any file the kit no longer ships.

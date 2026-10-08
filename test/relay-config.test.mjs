@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -402,4 +403,16 @@ test('Antigravity configure blocks invalid or unsafe settings and paths without 
   await writeFile(file, '{}');
   await assert.rejects(configureRelayClient({ ...opts, mindPath: path.join(root, 'my mind') }), /without whitespace/);
   assert.equal(await readFile(file, 'utf8'), '{}');
+});
+
+test('the Windows hook command hands a payload with a byte order mark and accents to node intact', { skip: process.platform !== 'win32' && 'runs Windows PowerShell' }, async (context) => {
+  const mind = await mkdtemp(path.join(os.tmpdir(), 'relay-hook-encoding-'));
+  context.after(() => rm(mind, { recursive: true, force: true }));
+  const kitPath = path.resolve(import.meta.dirname, '..');
+  const cursor = buildClientConfig({ client: 'cursor', existing: {}, kitPath, mindPath: mind, platform: 'win32', nodePath: process.execPath });
+  const command = JSON.parse(cursor.hooks).hooks.stop[0].command;
+  const payload = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify({ conversation_id: 'acción-1', hook_event_name: 'stop', status: 'completed', loop_count: 0 }), 'utf8')]);
+  const result = spawnSync(command, { shell: true, input: payload, encoding: 'utf8', timeout: 60000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /input unavailable/);
 });

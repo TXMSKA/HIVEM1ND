@@ -48,7 +48,11 @@ function hookCommand({ client, event, mindPath, kitPath, unit, nodePath, platfor
 function windowsHookCommand(args) {
   const literal = (value) => `'${String(value).replaceAll("'", "''")}'`;
   const command = `& ${args.map(literal).join(' ')}`;
-  const script = `$ErrorActionPreference = 'Stop'\n$relayInput = [Console]::In.ReadToEnd()\n$relayInput | ${command}\nexit $LASTEXITCODE`;
+  // Windows PowerShell reads stdin in the console code page and pipes to native
+  // commands in ASCII; both are set to UTF-8 so the hook payload reaches node intact.
+  const script = "$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n"
+    + '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n'
+    + `$relayInput = [Console]::In.ReadToEnd()\n$relayInput | ${command}\nexit $LASTEXITCODE`;
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
