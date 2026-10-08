@@ -5,11 +5,11 @@
 
   One mind for every coding agent.
 
-  [![Release](https://img.shields.io/github/v/release/txmska742/HIVEM1ND?label=release)](https://github.com/txmska742/HIVEM1ND/releases/latest)
-  [![License](https://img.shields.io/github/license/txmska742/HIVEM1ND)](LICENSE)
-  [![CI](https://img.shields.io/github/actions/workflow/status/txmska742/HIVEM1ND/ci.yml?branch=master&label=CI)](https://github.com/txmska742/HIVEM1ND/actions/workflows/ci.yml)
+  [![Release](https://img.shields.io/github/v/release/TXMSKA/HIVEM1ND?label=release)](https://github.com/TXMSKA/HIVEM1ND/releases/latest)
+  [![License](https://img.shields.io/github/license/TXMSKA/HIVEM1ND)](LICENSE)
+  [![CI](https://img.shields.io/github/actions/workflow/status/TXMSKA/HIVEM1ND/ci.yml?branch=master&label=CI)](https://github.com/TXMSKA/HIVEM1ND/actions/workflows/ci.yml)
 
-  [Download](https://github.com/txmska742/HIVEM1ND/releases/latest) &middot;
+  [Download](https://github.com/TXMSKA/HIVEM1ND/releases/latest) &middot;
   [Quick start](#quick-start) &middot;
   [Commands](#commands) &middot;
   [Docs](files.md) &middot;
@@ -29,7 +29,7 @@ HIVEM1ND is a folder of plain markdown that any coding agent can read and write.
 
 | Method | Steps |
 | --- | --- |
-| Windows | Download `HIVEM1ND-<version>-x64.zip` from [Releases](https://github.com/txmska742/HIVEM1ND/releases/latest), extract it, run `HIVEM1ND\HIVEM1ND.exe`. |
+| Windows | Download `HIVEM1ND-<version>-x64.zip` from [Releases](https://github.com/TXMSKA/HIVEM1ND/releases/latest), extract it, run `HIVEM1ND\HIVEM1ND.exe`. |
 | npx | `npx hivem1nd init` opens the terminal wizard; add `--gui` for the browser wizard. |
 | Clone | Clone this repository into the folder that will hold the mind. That is the install, with no setup step. |
 | Genesis | Paste the [setup prompt](roles/genesis.md) into any agent chat and it runs the setup in plain language. |
