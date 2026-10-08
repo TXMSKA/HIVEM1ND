@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
+import { lstat, readdir, readFile, rmdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverContent, loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import {
@@ -318,7 +318,55 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
   const distributableRoots = new Set(['package.json', ...(packageJson.files ?? []).map(topLevelEntry).filter(Boolean)]);
   const owner = { id: 'mind', label: text(language, 'ownerMind') };
   await walk(sourceRoot, '');
+  await copyRuntimeDependencies();
   return { items, conflicts, warnings, linkComponents };
+
+  // The mind runs the CLI from its own copy, so the runtime dependencies of the
+  // kit travel with it into the mind's node_modules, resolved the way Node would.
+  async function copyRuntimeDependencies() {
+    const found = new Map();
+    const pending = Object.keys(packageJson.dependencies ?? {}).map((name) => [name, sourceRoot]);
+    while (pending.length > 0) {
+      const [name, from] = pending.shift();
+      if (found.has(name)) continue;
+      const directory = await resolvePackageDirectory(name, from);
+      if (!directory) {
+        warnings.push(text(language, 'warningDependencyMissing', { name }));
+        continue;
+      }
+      found.set(name, directory);
+      const manifest = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+      for (const dependency of Object.keys(manifest.dependencies ?? {})) pending.push([dependency, directory]);
+    }
+    for (const [name, directory] of found) await walkDependency(directory, path.join('node_modules', ...name.split('/')));
+  }
+
+  async function walkDependency(directory, relativeDirectory) {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === 'node_modules' || entry.isSymbolicLink()) continue;
+      const source = path.join(directory, entry.name);
+      const relativePath = path.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await walkDependency(source, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const destination = path.join(destinationRoot, relativePath);
+      await addPlannedFile({
+        items,
+        conflicts,
+        linkComponents,
+        destination,
+        content: await readFile(source),
+        root: destinationRoot,
+        kind: 'kit',
+        managedHash: managedFiles[destination],
+        peerHashes,
+        owned: true,
+        owner,
+      });
+    }
+  }
 
   async function walk(directory, relativeDirectory) {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -1025,6 +1073,22 @@ function skillName(content, fallback) {
   const name = parsed.attributes.name || path.basename(fallback, path.extname(fallback));
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) throw new Error(`Invalid skill name: ${name}`);
   return name;
+}
+
+// Looks for node_modules/<name> from the given folder up to the root, as Node does.
+async function resolvePackageDirectory(name, from) {
+  let directory = path.resolve(from);
+  for (;;) {
+    const candidate = path.join(directory, 'node_modules', ...name.split('/'));
+    try {
+      if ((await stat(path.join(candidate, 'package.json'))).isFile()) return candidate;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
 }
 
 async function isDirectory(directory) {
