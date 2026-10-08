@@ -344,6 +344,12 @@ function mindText(mind) {
   return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
 }
 
+function prdTexts(mind) {
+  const stale = (mind?.prd?.stale ?? []).map((item) => `PRD of ${item.project}: ${item.updated ? `updated ${item.updated}` : "undated"}, older than the Fact of ${item.fact} that points to it; /protocol product-requirements brings it up to date.`);
+  const missing = (mind?.prd?.missing ?? []).map((item) => `PRD of ${item.project}: the Fact of ${item.fact} points to a PRD and ${item.path} does not exist; /protocol product-requirements writes it.`);
+  return [...stale, ...missing];
+}
+
 function formatStatus(result) {
   const lines = [];
   if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
@@ -358,6 +364,7 @@ function formatStatus(result) {
   if (executive) lines.push(`Executive roles: ${executive}.`);
   const mind = mindText(result.mind);
   if (mind) lines.push(mind);
+  lines.push(...prdTexts(result.mind));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }

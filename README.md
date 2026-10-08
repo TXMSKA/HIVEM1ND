@@ -54,7 +54,7 @@ Any agent attaches in one of two modes. In on-demand mode nothing loads by itsel
 
 ### Knowledge packs and protocols
 
-Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
+Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design`, `copy` and `product` ship with the kit; the first three each install a command (`/cyberattack`, `/uify`, `/humanize`), and `product` holds the protocol that writes a product's requirements document (PRD). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
 
 Packs are read while planning. Asked for a contact page with a form, the executor reads each index, opens only the categories the work touches, such as forms, interface copy and API security, and writes their `Build:` lines into the plan as requirements, each naming the file it came from. A large pack costs a few hundred words to consult instead of all of it, and a task that touches no category reads nothing more.
 
@@ -151,7 +151,7 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 
 ## Files
 
-Everything in the mind is stored as files, one record per file: a brief per project, a state file per unit, a message per inbox entry, a task per request, a log per repo, environment and mind, plus preferences and knowledge modules. The full layout and every record format are in [files.md](files.md).
+Everything in the mind is stored as files, one record per file: a brief per project, a PRD per product, a state file per unit, a message per inbox entry, a task per request, a log per repo, environment and mind, plus preferences and knowledge modules. The full layout and every record format are in [files.md](files.md).
 
 ## Working together
 

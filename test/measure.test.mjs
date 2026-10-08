@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { check } from "../engine/lifecycle.mjs";
-import { BRIEF_MAX_BYTES, PREFERENCES_MAX_BYTES, formatBytes, measureMind, mindThresholds } from "../engine/measure.mjs";
+import { BRIEF_MAX_BYTES, PREFERENCES_MAX_BYTES, PRD_MAX_BYTES, formatBytes, measureMind, mindThresholds } from "../engine/measure.mjs";
 import { runCli } from "../cli/index.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +47,18 @@ async function snapshot(directory) {
 
 function state(unit, values) {
   return `unit: ${unit}\nstate: ${values.state}\nmachine: ${values.machine}\ndate: ${values.date}\n\nContext.\n`;
+}
+
+function brief(project, ...facts) {
+  return `project: ${project}\nenv: web\n\n## Facts\n${facts.map((fact) => `- ${fact}\n`).join("")}`;
+}
+
+function prd(project, updated) {
+  return `project: ${project}\nfamily: shop\nstage: beta\n${updated ? `updated: ${updated}\n` : ""}voice: docs/voice.md\nboard: none\n\n## Problem and audience\nupdated: 2099-01-01 in the body is not the header.\n`;
+}
+
+async function projectFiles(mindPath, name, files) {
+  for (const [file, content] of Object.entries(files)) await write(path.join(mindPath, "user", "projects", name, file), content);
 }
 
 test("a small mind crosses no threshold", async (t) => {
@@ -175,4 +187,123 @@ test("the human line names the count and the largest item, and stays silent belo
   assert.deepEqual(lines, ["Mind: 1 item to clean (user/projects/app/brief.md, 16 KB); /cleaner offers the cleanup.\n"]);
   assert.equal(formatBytes(5_362_389_374), "5.0 GB");
   assert.equal(formatBytes(800), "800 B");
+});
+
+test("a PRD older than the newest Fact with a prd pointer is reported, and nothing else is", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  // The newest Fact of "stale" has no pointer and is ignored; the newest pointer Fact is the 2030-01-02 one.
+  await projectFiles(mindPath, "stale", {
+    "brief.md": brief("stale", "2030-01-03: sessions stay in cookies.", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2029-12-30: the blog lives in MySQL (prd: Requirements/Alpha)."),
+    "prd.md": prd("stale", "2030-01-01"),
+  });
+  // Updated on the day of the newest pointer Fact, with a technical Fact that is newer still.
+  await projectFiles(mindPath, "level", {
+    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
+    "prd.md": prd("level", "2030-01-02"),
+  });
+  await projectFiles(mindPath, "ahead", {
+    "brief.md": brief("ahead", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
+    "prd.md": prd("ahead", "2030-03-01"),
+  });
+  // No pointer anywhere in the Facts: a dated bullet under another heading does not count.
+  await projectFiles(mindPath, "technical", {
+    "brief.md": `${brief("technical", "2030-05-01: the cache lives in memory.")}\n## Notes\n- 2030-06-01: seen in the admin (prd: Out of scope).\n`,
+    "prd.md": prd("technical", "2020-01-01"),
+  });
+  await projectFiles(mindPath, "undated", {
+    "brief.md": brief("undated", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
+    "prd.md": prd("undated", ""),
+  });
+  await projectFiles(mindPath, "orphan", {
+    "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (prd: Requirements/Beta).", "2030-01-06: the queue is retried (prd: Requirements/Alpha)."),
+  });
+  await projectFiles(mindPath, "plain", { "brief.md": brief("plain", "2030-01-04: the cache lives in memory.") });
+  await projectFiles(mindPath, "no-brief", { "prd.md": prd("no-brief", "2020-01-01") });
+
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.prd.stale.sort((left, right) => left.project.localeCompare(right.project)), [
+    { project: "stale", path: "user/projects/stale/prd.md", updated: "2030-01-01", fact: "2030-01-02" },
+    { project: "undated", path: "user/projects/undated/prd.md", updated: null, fact: "2030-01-02" },
+  ]);
+  assert.deepEqual(mind.prd.missing, [{ project: "orphan", path: "user/projects/orphan/prd.md", fact: "2030-01-06" }]);
+  assert.equal(mind.crossed, false);
+  assert.equal(mind.count, 0);
+});
+
+test("a prd.md that cannot be read as a file counts as missing and never fails the measurement", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  await projectFiles(mindPath, "app", { "brief.md": brief("app", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).") });
+  await fs.mkdir(path.join(mindPath, "user", "projects", "app", "prd.md"), { recursive: true });
+
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.prd.missing.map((item) => item.project), ["app"]);
+  assert.deepEqual(mind.sizes.prds, []);
+});
+
+test("a PRD over its size threshold is listed with the sizes, and one at it is not", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  assert.equal(mindThresholds().prdBytes, 20480);
+  await write(path.join(mindPath, "user", "projects", "app", "prd.md"), "x".repeat(PRD_MAX_BYTES));
+  await write(path.join(mindPath, "user", "projects", "web", "prd.md"), "y".repeat(PRD_MAX_BYTES + 1));
+
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.items.map((item) => [item.kind, item.path, item.bytes]), [["prd", "user/projects/web/prd.md", PRD_MAX_BYTES + 1]]);
+  assert.deepEqual(mind.sizes.prds.map((item) => [item.path, item.bytes]).sort(), [
+    ["user/projects/app/prd.md", PRD_MAX_BYTES],
+    ["user/projects/web/prd.md", PRD_MAX_BYTES + 1],
+  ]);
+  assert.equal(mind.thresholds.prdBytes, PRD_MAX_BYTES);
+});
+
+test("the check prints one line per PRD finding, carries the PRD sizes in the JSON and writes nothing", async (t) => {
+  const root = await temporaryDirectory(t);
+  const mindPath = await makeMind(root);
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  const run = async (...extra) => (await execFileAsync(
+    process.execPath,
+    [cliPath, "check", "--kit-path", path.join(root, "kit"), "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST", ...extra],
+    { cwd: root, encoding: "utf8" },
+  )).stdout;
+
+  await projectFiles(mindPath, "level", {
+    "brief.md": brief("level", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta).", "2030-02-01: the cache lives in memory."),
+    "prd.md": prd("level", "2030-01-02"),
+  });
+  assert.equal(await run(), "");
+
+  await projectFiles(mindPath, "stale", {
+    "brief.md": brief("stale", "2030-01-02: a reset is sent by mail (prd: Requirements/Beta)."),
+    "prd.md": prd("stale", "2030-01-01"),
+  });
+  await projectFiles(mindPath, "orphan", { "brief.md": brief("orphan", "2030-01-04: orders carry a paid mark (prd: Requirements/Beta).") });
+  const before = await snapshot(root);
+  assert.equal(
+    await run(),
+    "PRD of stale: updated 2030-01-01, older than the Fact of 2030-01-02 that points to it; /protocol product-requirements brings it up to date.\n"
+    + "PRD of orphan: the Fact of 2030-01-04 points to a PRD and user/projects/orphan/prd.md does not exist; /protocol product-requirements writes it.\n",
+  );
+  assert.deepEqual(await snapshot(root), before);
+
+  await write(path.join(mindPath, "user", "projects", "big", "prd.md"), "z".repeat(PRD_MAX_BYTES + 2000));
+  const lines = (await run()).split("\n");
+  assert.equal(lines[0], "Mind: 1 item to clean (user/projects/big/prd.md, 22 KB); /cleaner offers the cleanup.");
+  assert.equal(lines.length, 4);
+  const json = JSON.parse(await run("--json"));
+  assert.equal(json.mind.thresholds.prdBytes, 20480);
+  assert.deepEqual(json.mind.sizes.prds.map((item) => item.path).sort(), [
+    "user/projects/big/prd.md",
+    "user/projects/level/prd.md",
+    "user/projects/stale/prd.md",
+  ]);
+  assert.deepEqual(json.mind.prd.stale.map((item) => [item.project, item.updated, item.fact]), [["stale", "2030-01-01", "2030-01-02"]]);
+});
+
+test("the example brief and PRD of the fixtures agree, so the check stays silent on them", async () => {
+  const mindPath = path.resolve(import.meta.dirname, "..", "fixtures", "mind");
+  const mind = await measureMind({ mindPath, hostname: "TEST" });
+  assert.deepEqual(mind.prd, { stale: [], missing: [] });
+  assert.deepEqual(mind.sizes.prds.map((item) => item.path), ["user/projects/myapp/prd.md"]);
 });
