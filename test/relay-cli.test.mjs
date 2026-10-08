@@ -170,9 +170,14 @@ test('Codex attach refuses a missing or differently routed target registration w
   assert.equal(registered, false);
 });
 
-test('wake attach reports success only after worker readiness and rolls back on startup failure', async () => {
+test('wake attach reports success only after worker readiness and rolls back on startup failure', async (context) => {
   const nativeSessionId = 'native-attach-session';
+  const configDir = await mkdtemp(path.join(os.tmpdir(), 'relay-claude-hooks-'));
+  context.after(() => rm(configDir, { recursive: true, force: true }));
+  await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node',
+    args: ['C:/kit/cli/index.mjs', 'relay', 'hook', '--client', 'claude', '--event', 'Stop', '--mind-path', 'C:/mind'] }] }] } }));
   const env = {
+    CLAUDE_CONFIG_DIR: configDir,
     CLAUDE_CODE_SESSION_ID: nativeSessionId,
     CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\attach-test',
     CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral-secret',
@@ -299,4 +304,29 @@ test('real CLI attach stays alive through worker readiness and always disables i
     assert.equal(workerStopped, true, 'disposable wake worker did not stop after policy revocation');
   }
   assert.ok(root);
+});
+
+test('Claude wake attach without Relay hooks leaves activity unknown and says how to add them', async (context) => {
+  const nativeSessionId = 'native-no-hooks';
+  const configDir = await mkdtemp(path.join(os.tmpdir(), 'relay-claude-nohooks-'));
+  context.after(() => rm(configDir, { recursive: true, force: true }));
+  await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ permissions: { allow: [] } }));
+  const env = { CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_SESSION_ID: nativeSessionId,
+    CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\no-hooks', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral-secret' };
+  const calls = [];
+  const stderr = new PassThrough();
+  const errors = [];
+  stderr.on('data', (chunk) => errors.push(chunk));
+  const code = await runCli(['relay', 'wake', 'attach', '--mind-path', 'C:/isolated-mind', '--unit', 'overseer'], {
+    stdout: new PassThrough(), stderr, env, platform: 'win32',
+    createRelayWakeController: async () => ({
+      async enable() { return { enabled: true, deadlineAt: 'bounded', maxHandoffs: 20 }; },
+      async observeActivity(value, activity) { calls.push(activity); }, async disable() {},
+    }),
+    createRelay: async () => ({ async register() {} }),
+    spawnClaudeWakeWorker: () => ({ ready: Promise.resolve({ state: 'running', ownsLease: true }) }),
+  });
+  assert.equal(code, 0, Buffer.concat(errors).toString('utf8'));
+  assert.deepEqual(calls, []);
+  assert.match(Buffer.concat(errors).toString('utf8'), /relay configure --client claude/);
 });

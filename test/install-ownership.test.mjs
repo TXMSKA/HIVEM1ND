@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { installAgentAssets } from '../engine/install.mjs';
+import { installAgentAssets, planKitCopy } from '../engine/install.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { hashContent, machineManagedPath, machineRecordPath, readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
@@ -288,4 +288,37 @@ test('setup previews no conflict for a kit file another machine installed', asyn
   const planned = await preview();
   assert.deepEqual(planned.conflicts, []);
   assert.equal(planned.files.find((file) => file.path === rulesPath)?.action, 'update');
+});
+
+test('the kit copy carries the runtime dependency closure into the mind and warns on a missing one', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-deps-'));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
+  const kitPath = path.join(root, 'cache', 'node_modules', 'hivem1nd');
+  const mindPath = path.join(root, 'mind');
+  const write = async (relative, content) => {
+    const destination = path.join(root, ...relative.split('/'));
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, content);
+  };
+  await write('cache/node_modules/hivem1nd/package.json', JSON.stringify({ name: 'hivem1nd', files: ['cli/'], dependencies: { alpha: '1.0.0', '@scope/beta': '1.0.0', missing: '1.0.0' } }));
+  await write('cache/node_modules/hivem1nd/cli/index.mjs', 'export {};\n');
+  await write('cache/node_modules/hivem1nd/node_modules/alpha/package.json', JSON.stringify({ name: 'alpha', dependencies: { gamma: '1.0.0' } }));
+  await write('cache/node_modules/hivem1nd/node_modules/alpha/dist/index.js', 'alpha\n');
+  await write('cache/node_modules/hivem1nd/node_modules/alpha/node_modules/skip/package.json', '{}');
+  await write('cache/node_modules/@scope/beta/package.json', JSON.stringify({ name: '@scope/beta' }));
+  await write('cache/node_modules/gamma/package.json', JSON.stringify({ name: 'gamma' }));
+  await mkdir(mindPath, { recursive: true });
+
+  const plan = await planKitCopy({ kitPath, mindPath });
+  const planned = plan.items.map((item) => path.relative(mindPath, item.path ?? item.destination).split(path.sep).join('/')).sort();
+  assert.deepEqual(planned, [
+    'cli/index.mjs',
+    'node_modules/@scope/beta/package.json',
+    'node_modules/alpha/dist/index.js',
+    'node_modules/alpha/package.json',
+    'node_modules/gamma/package.json',
+    'package.json',
+  ]);
+  assert.equal(plan.warnings.length, 1);
+  assert.match(plan.warnings[0], /missing/);
 });

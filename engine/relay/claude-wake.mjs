@@ -1,6 +1,8 @@
 import { createConnection } from 'node:net';
 import { fork } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 export const wakeAdapter = Object.freeze({
   moduleUrl: import.meta.url,
@@ -10,7 +12,11 @@ export const wakeAdapter = Object.freeze({
     if (typeof nativeSessionId !== 'string' || !nativeSessionId) {
       throw new Error('Claude wake attach requires CLAUDE_CODE_SESSION_ID from the target session.');
     }
-    return { nativeSessionId, sessionId: nativeSessionId, requireRegistration: false, activity: 'busy' };
+    // Only the Relay Stop hook turns the attach turn's busy mark back to idle;
+    // without it the activity stays unknown so normal messages are not held back.
+    if (claudeStopHookInstalled(env)) return { nativeSessionId, sessionId: nativeSessionId, requireRegistration: false, activity: 'busy' };
+    return { nativeSessionId, sessionId: nativeSessionId, requireRegistration: false, activity: null,
+      warning: 'Relay hooks are not configured for Claude Code, so busy and idle are unknown and every message wakes the session. Run relay configure --client claude to add them.' };
   },
   validateRuntime: async ({ binding, env }) => {
     if (binding && env.CLAUDE_CODE_SESSION_ID !== binding.nativeSessionId) {
@@ -19,6 +25,21 @@ export const wakeAdapter = Object.freeze({
   },
   spawnWorker: spawnClaudeWakeWorker, workerDependency: 'spawnClaudeWakeWorker', helpLines: Object.freeze([]),
 });
+
+// Reads the user settings that relay configure writes and looks for its Stop hook.
+export function claudeStopHookInstalled(env) {
+  const home = env.USERPROFILE || env.HOME;
+  const root = env.CLAUDE_CONFIG_DIR || (home ? path.join(home, '.claude') : null);
+  if (!root) return false;
+  let settings;
+  try { settings = JSON.parse(readFileSync(path.join(root, 'settings.json'), 'utf8')); } catch { return false; }
+  const groups = Array.isArray(settings?.hooks?.Stop) ? settings.hooks.Stop : [];
+  return groups.some((group) => (group?.hooks ?? []).some((handler) => {
+    const args = Array.isArray(handler?.args) ? handler.args : String(handler?.command ?? '').split(/\s+/).map((part) => part.replace(/^['"]|['"]$/g, ''));
+    return args.includes('relay') && args.includes('hook') && args[args.indexOf('--client') + 1] === 'claude'
+      && args[args.indexOf('--event') + 1] === 'Stop';
+  }));
+}
 
 const MAX_POINTER_BYTES = 8 * 1024;
 const DEFAULT_TIMEOUT_MS = 4_000;
