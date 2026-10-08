@@ -122,31 +122,42 @@ function openCodeMcpMerge(text, options) {
   return editJsonc(initial, ['mcp', OWNED_SERVER], intended);
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Antigravity CLI settings.json holds permission rules, not an MCP server; the
 // generic "mcp" slot of the config API carries that single file. A plain
 // command(...) rule cannot match a Windows command line with backslashes, so
 // the rules use the documented regex form: each whitespace-separated token is an
-// anchored regular expression, and the tokens end at the mind path, which allows
-// only the kit's relay read and relay send for that mind.
+// anchored regular expression, and the tokens end at the mind path plus one
+// token for the remaining arguments, which allows only the kit's relay read and
+// relay send for that mind. A line Antigravity cannot split into commands
+// (substitution, redirection, PowerShell or Command Prompt syntax) is matched
+// against the whole rule, where a trailing wildcard would also accept a chained
+// or substituted command, so the final token refuses shell control characters.
+// It is a negated class, which Go RE2 and JavaScript read the same way.
 const ANTIGRAVITY_ACTIONS = ['read', 'send'];
 const ANTIGRAVITY_CLI_TOKEN_END = String.raw`cli[\\/]index\.mjs`;
-const ANTIGRAVITY_OWNED_RULE = /^command\(regex:node (\S+) relay (?:read|send) --mind-path (\S+) \.\*\)$/;
+const ANTIGRAVITY_ARGS_TOKEN = '[^;&|<>()$`{}\\r\\n]*';
+const ANTIGRAVITY_LEGACY_ARGS_TOKEN = '.*';
+const ANTIGRAVITY_OWNED_RULE = new RegExp(String.raw`^command\(regex:node (\S+) relay (?:read|send) --mind-path (\S+) (?:${escapeRegex(ANTIGRAVITY_LEGACY_ARGS_TOKEN)}|${escapeRegex(ANTIGRAVITY_ARGS_TOKEN)})\)$`);
 
 function antigravityPathPattern(value) {
   const drive = /^([A-Za-z]):(?=[\\/])/.exec(value);
   const body = (drive ? value.slice(2) : value).split(/[\\/]/)
-    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(String.raw`[\\/]`);
+    .map(escapeRegex).join(String.raw`[\\/]`);
   return drive ? `(?:${drive[1]}:)?${body}` : body;
 }
 
-function antigravityRules({ kitPath, mindPath }) {
+function antigravityRules({ kitPath, mindPath }, argsToken = ANTIGRAVITY_ARGS_TOKEN) {
   const cliPath = path.join(kitPath, 'cli', 'index.mjs');
   for (const value of [cliPath, mindPath]) {
     if (/[\s"'()]/.test(value)) throw new Error('Antigravity permission rules need kit and mind paths without whitespace, quotes or parentheses.');
   }
   const cli = `${antigravityPathPattern(kitPath)}${String.raw`[\\/]`}${ANTIGRAVITY_CLI_TOKEN_END}`;
   const mind = antigravityPathPattern(mindPath);
-  return ANTIGRAVITY_ACTIONS.map((action) => `command(regex:node ${cli} relay ${action} --mind-path ${mind} .*)`);
+  return ANTIGRAVITY_ACTIONS.map((action) => `command(regex:node ${cli} relay ${action} --mind-path ${mind} ${argsToken})`);
 }
 
 function antigravityAllowList(text) {
@@ -164,9 +175,11 @@ function antigravityAllowList(text) {
 function antigravityMerge(text, options) {
   const initial = text.trim() ? text : '{}\n';
   const allow = antigravityAllowList(initial) ?? [];
-  const missing = antigravityRules(options).filter((rule) => !allow.includes(rule));
-  if (!missing.length) return initial;
-  return editJsonc(initial, ['permissions', 'allow'], [...allow, ...missing]);
+  const legacy = antigravityRules(options, ANTIGRAVITY_LEGACY_ARGS_TOKEN);
+  const kept = allow.filter((rule) => !legacy.includes(rule));
+  const missing = antigravityRules(options).filter((rule) => !kept.includes(rule));
+  if (kept.length === allow.length && !missing.length) return initial;
+  return editJsonc(initial, ['permissions', 'allow'], [...kept, ...missing]);
 }
 
 function antigravityRemove(text, mindPath) {
