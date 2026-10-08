@@ -17,4 +17,4 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 
 1. Open `brainstorm/<topic>.md` in the project or at the root of `user/`, with two sections, Agreed and Open. Create it when it does not exist.
 2. The user tells the vision. Ask one question per message, through the native Q&A when it has one. Draft a piece of text only after a yes on its substance, show it, and write it only after a yes on the text.
-3. Every decision goes into Agreed with its date; every pending question into Open. Drafted text follows the impersonal style.
+3. Every decision goes into Agreed with its date; every pending question into Open. Drafted text follows the impersonal style. On a product topic the writer of the product document (the seat of the project, or the coordinator for a family or a project with no seat) writes the agreed text into it in the same turn, so that Open keeps only the questions. The coordinator hands a project with a seat the agreed text as a brief Fact with its `(product: <section>)` pointer plus a Relay note; any other unit keeps it in Agreed and hands it to the coordinator.

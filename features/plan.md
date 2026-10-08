@@ -15,7 +15,7 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 
 ## Steps
 
-1. Read the routes and the briefs of the projects the request touches.
-2. Split the request into task files, one per piece that can fail on its own, with `depends` set in dependency order and `to` set to the unit that owns each piece.
+1. Read the routes, and the briefs and product documents of the projects the request touches.
+2. Split the request into task files, one per piece that can fail on its own, with `depends` set in dependency order and `to` set to the unit that owns each piece. When the project has a product document, each task cites in its `requirements` header the IDs of the requirements it delivers.
 3. Read the `INDEX.md` of every installed knowledge module, in `knowledge/` and `user/knowledge/` of the mind, and for each piece open only the categories it touches. The `Build:` lines of those subcategories go into that task file's request as requirements, each one naming the file it came from, and the same request lists only the protocols the piece actually uses: of those the categories name, the global ones in `user/protocols/` and the local ones of the piece's project in `user/projects/<project>/protocols/`, one is kept only when something the piece builds falls inside its scope, named next to it.
 4. Write them and notify each unit by message. No implementation.
