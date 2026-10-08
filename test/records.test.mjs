@@ -6,10 +6,13 @@ import test from 'node:test';
 
 import { installAgentAssets } from '../engine/install.mjs';
 import {
+  hashContent,
+  hashLineEndingForms,
   machineManagedPath,
   machineRecordPath,
   parseMachineRecord,
   readMachineRecord,
+  readPeerManagedFiles,
   serializeMachineRecord,
   writeMachineRecord,
 } from '../engine/records.mjs';
@@ -123,4 +126,34 @@ test('an install moves a machine file written with the Managed Files section to 
   await installAgentAssets({ kitPath, mindPath, homeDir, hostname: 'BOX', env });
   assert.doesNotMatch(await readFile(filePath, 'utf8'), /Managed Files/);
   assert.deepEqual(JSON.parse(await readFile(machineManagedPath(mindPath, 'BOX'), 'utf8')), written);
+});
+
+test('text hashes the same under either line ending, and binary content has no such forms', () => {
+  const lf = hashLineEndingForms('a\nb\n');
+  assert.deepEqual(lf, hashLineEndingForms(Buffer.from('a\r\nb\r\n')));
+  assert.deepEqual(lf, hashLineEndingForms(Buffer.from('a\nb\r\n')));
+  assert.equal(lf.lf, hashContent('a\nb\n'));
+  assert.equal(lf.crlf, hashContent('a\r\nb\r\n'));
+  const bom = hashLineEndingForms(Buffer.from('\uFEFFa\r\n'));
+  assert.equal(bom.lf, hashContent(Buffer.from('\uFEFFa\n')));
+  assert.equal(hashLineEndingForms(Buffer.from([0x61, 0x00, 0x0d, 0x0a])), null);
+  assert.equal(hashLineEndingForms(Buffer.from([0xff, 0x0d, 0x0a])), null);
+});
+
+test('the other machines of a mind are read from their managed maps, never this one', async (t) => {
+  const { mindPath } = await temporaryMind(t);
+  assert.deepEqual(await readPeerManagedFiles(path.join(mindPath, 'missing'), 'BOX'), []);
+  assert.deepEqual(await readPeerManagedFiles(mindPath, 'BOX'), []);
+
+  await writeFile(machineManagedPath(mindPath, 'BOX'), JSON.stringify({ 'C:\own': 'a'.repeat(64) }));
+  await writeFile(machineManagedPath(mindPath, 'LAPTOP'), JSON.stringify({ 'C:\mind\rules.md': 'b'.repeat(64) }));
+  await writeFile(machineManagedPath(mindPath, 'BROKEN'), '{ not json');
+  await writeFile(machineRecordPath(mindPath, 'NOMAP'), 'machine: NOMAP\n');
+  await writeFile(path.join(mindPath, 'user', 'machines', 'LAPTOP.report.md'), 'machine: LAPTOP\n');
+
+  const peers = await readPeerManagedFiles(mindPath, 'box');
+  assert.deepEqual(peers.sort((left, right) => Object.keys(right).length - Object.keys(left).length), [
+    { 'C:\mind\rules.md': 'b'.repeat(64) },
+    {},
+  ]);
 });

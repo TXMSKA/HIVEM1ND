@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 const FENCE = '```json';
@@ -59,6 +59,25 @@ export function serializeFrontmatter(parsed, { allowedKeys, additions = {} } = {
 
 export function hashContent(content) {
   return createHash('sha256').update(content).digest('hex');
+}
+
+// Machines that share one mind check the kit out with different line endings, so a text file
+// is the same file under either one. Binary content has no such forms and keeps its bytes.
+export function hashLineEndingForms(content) {
+  const text = decodeText(content);
+  if (text === null) return null;
+  const lf = text.replace(/\r\n/g, '\n');
+  return { lf: hashContent(lf), crlf: hashContent(lf.replaceAll('\n', '\r\n')) };
+}
+
+function decodeText(content) {
+  if (typeof content === 'string') return content;
+  if (content.includes(0)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+  } catch {
+    return null;
+  }
 }
 
 export function parseMachineRecord(text) {
@@ -163,6 +182,25 @@ export async function readMachineRecord(mindPath, hostname) {
     if (error?.code === 'ENOENT') return { filePath, record: null };
     throw error;
   }
+}
+
+// The other machines of a mind record the kit copies they installed into it, so a file that
+// matches one of those records was written by an install and is not the user's own.
+export async function readPeerManagedFiles(mindPath, hostname) {
+  const directory = path.dirname(machineManagedPath(mindPath, hostname));
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const own = hostname.toLowerCase();
+  const peers = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => /^(.+)\.managed\.json$/.exec(entry.name)?.[1])
+    .filter((name) => name && name.toLowerCase() !== own);
+  return Promise.all(peers.map((name) => readManagedFiles(path.join(directory, `${name}.md`))));
 }
 
 export async function writeMachineRecord(mindPath, hostname, record) {

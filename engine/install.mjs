@@ -4,9 +4,11 @@ import { discoverContent, loadAdapters, resolveAdapterPaths } from './discovery.
 import {
   atomicWriteFile,
   hashContent,
+  hashLineEndingForms,
   machineReportPath,
   parseFrontmatter,
   readMachineRecord,
+  readPeerManagedFiles,
   removeSymbolicLink,
   restoreSymbolicLink,
   serializeFrontmatter,
@@ -71,12 +73,14 @@ export async function installAgentAssets({
   const { filePath: machinePath, record } = await readMachineRecord(mindPath, hostname);
   if (!record) throw new Error(`Machine record not found for ${hostname}`);
   const adapters = await loadAdapters({ kitPath });
+  const peerHashes = await readPeerHashes(mindPath, hostname);
   const kitPlan = await planKitCopy({
     kitPath,
     mindPath,
     managedFiles: record.managedFiles,
     excluded: record.excluded,
     language,
+    peerHashes,
   });
   const agentPlan = await planAgentAssets({
     kitPath,
@@ -95,6 +99,7 @@ export async function installAgentAssets({
     mindPath,
     managedFiles: record.managedFiles,
     skillsRoots: adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir, env }).skillsRoot),
+    peerHashes,
   });
   const unresolved = plan.conflicts.filter((conflict) => {
     const allowed = conflict.choices ?? ['keep', 'replace'];
@@ -296,7 +301,7 @@ export async function planAgentAssets({
   };
 }
 
-export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, excluded = [], language = 'en' }) {
+export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, excluded = [], language = 'en', peerHashes = new Map() }) {
   const sourceRoot = path.resolve(kitPath);
   const destinationRoot = path.resolve(mindPath);
   if (normalizePath(sourceRoot) === normalizePath(destinationRoot)) {
@@ -351,6 +356,7 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
         root: destinationRoot,
         kind: 'kit',
         managedHash: managedFiles[destination],
+        peerHashes,
         owned: true,
         owner,
       });
@@ -395,7 +401,20 @@ export function retiredKitSources(kitPlan, managedFiles, kitPath, mindPath) {
     && !planned.has(normalizePath(filePath))).map(normalizePath));
 }
 
-export async function planManagedFileRemovals(plan, { managedFiles, mindPath, skillsRoots = [], retainedPaths = [] }) {
+// Keyed by normalized path, so a drive letter another machine recorded in another case still finds its file.
+export async function readPeerHashes(mindPath, hostname) {
+  const peers = new Map();
+  for (const managed of await readPeerManagedFiles(mindPath, hostname)) {
+    for (const [filePath, hash] of Object.entries(managed)) {
+      if (typeof hash !== 'string' || !path.isAbsolute(filePath)) continue;
+      const key = normalizePath(filePath);
+      peers.set(key, [...(peers.get(key) ?? []), hash]);
+    }
+  }
+  return peers;
+}
+
+export async function planManagedFileRemovals(plan, { managedFiles, mindPath, skillsRoots = [], retainedPaths = [], peerHashes = new Map() }) {
   const planned = new Set([...plan.items.map((item) => item.path), ...retainedPaths].map(normalizePath));
   const retired = [];
   const removals = [];
@@ -408,26 +427,27 @@ export async function planManagedFileRemovals(plan, { managedFiles, mindPath, sk
     // Only kit copies and rendered skills are removed; a rule file may hold the user's own lines.
     if (!relativeChild(mindPath, filePath) && !skillsRoots.some((skillsRoot) => relativeChild(skillsRoot, filePath))) continue;
     const root = path.parse(path.resolve(filePath)).root;
-    const reason = await removalReason(filePath, root, expectedHash);
+    const recordedHashes = [expectedHash, ...(peerHashes.get(normalizePath(filePath)) ?? [])];
+    const reason = await removalReason(filePath, root, recordedHashes);
     if (reason) {
       kept.push({ path: filePath, reason });
       continue;
     }
     if ((await currentSnapshot(filePath)).kind === 'missing') continue;
     const cleanupRoot = skillsRoots.find((skillsRoot) => relativeChild(skillsRoot, filePath));
-    removals.push({ path: filePath, root, currentHash: expectedHash, cleanupRoot });
+    removals.push({ path: filePath, root, recordedHashes, cleanupRoot });
   }
   return { ...plan, retired, removals, kept };
 }
 
-async function removalReason(filePath, root, expectedHash) {
+async function removalReason(filePath, root, recordedHashes) {
   if (!path.isAbsolute(filePath)) return `Path escapes the selected destination: ${filePath}`;
   const unsafeReason = await unsafeDestinationReason(root, filePath);
   if (unsafeReason) return unsafeReason;
   const snapshot = await currentSnapshot(filePath);
   if (snapshot.kind === 'missing') return null;
   if (snapshot.kind !== 'file') return 'The destination is a symbolic link or is not a regular file.';
-  if (snapshot.hash !== expectedHash) return 'The HIVEM1ND-managed file was modified after installation.';
+  if (!matchesRecord(snapshot, recordedHashes)) return 'The HIVEM1ND-managed file was modified after installation.';
   return null;
 }
 
@@ -485,17 +505,19 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
         written.push({ item, snapshot: currentByPath.get(item.path) });
         files.push(item.path);
       }
-      if (item.owned) managedFiles[item.path] = hashContent(item.content);
+      // A file that already holds the same text under the other line ending stays as it is, so
+      // two machines never rewrite it back and forth, and it is recorded as it is on disk.
+      if (item.owned) managedFiles[item.path] = item.action === 'unchanged' ? item.currentHash : hashContent(item.content);
     }
     for (const item of plan.removals ?? []) {
-      const reason = await removalReason(item.path, item.root, item.currentHash);
+      const reason = await removalReason(item.path, item.root, item.recordedHashes);
       if (reason) {
         kept.push({ path: item.path, reason });
         continue;
       }
       const snapshot = await currentSnapshot(item.path, true);
       if (snapshot.kind === 'missing') continue;
-      if (snapshot.hash !== item.currentHash) {
+      if (!matchesRecord(snapshot, item.recordedHashes)) {
         kept.push({ path: item.path, reason: 'The HIVEM1ND-managed file was modified after installation.' });
         continue;
       }
@@ -839,6 +861,7 @@ async function addPlannedFile({
   root,
   kind,
   managedHash,
+  peerHashes = new Map(),
   agentName,
   owned,
   owner,
@@ -865,9 +888,9 @@ async function addPlannedFile({
     action = 'conflict';
     reason = 'The destination is a symbolic link or is not a regular file.';
   } else if (snapshot.kind === 'file') {
-    const desiredHash = hashContent(content);
-    if (snapshot.hash === desiredHash) action = 'unchanged';
-    else if (allowExisting || (managedHash && snapshot.hash === managedHash)) action = 'update';
+    const recordedHashes = [managedHash, ...(peerHashes.get(normalizePath(destination)) ?? [])];
+    if (sameContent(snapshot, content)) action = 'unchanged';
+    else if (allowExisting || matchesRecord(snapshot, recordedHashes)) action = 'update';
     else {
       action = 'conflict';
       reason = managedHash
@@ -943,12 +966,26 @@ async function currentSnapshot(filePath, includeContent = false) {
     return {
       kind: 'file',
       hash: hashContent(content),
+      forms: hashLineEndingForms(content),
       content: includeContent ? content : null,
     };
   } catch (error) {
     if (error?.code === 'ENOENT') return { kind: 'missing', hash: null, content: null };
     throw error;
   }
+}
+
+function sameContent(snapshot, content) {
+  if (snapshot.hash === hashContent(content)) return true;
+  const forms = hashLineEndingForms(content);
+  return Boolean(forms && snapshot.forms && forms.lf === snapshot.forms.lf);
+}
+
+// A record holds the hash of the bytes some machine wrote, and that machine may have written
+// the same text under the other line ending.
+function matchesRecord(snapshot, recordedHashes) {
+  return recordedHashes.some((recorded) => recorded
+    && (snapshot.hash === recorded || snapshot.forms?.lf === recorded || snapshot.forms?.crlf === recorded));
 }
 
 async function readFeatureDirectory(directory, fallbackName) {

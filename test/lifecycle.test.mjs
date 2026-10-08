@@ -865,3 +865,30 @@ test("the check command prints nothing for a clean state and one line per findin
   await fs.rm(path.join(mindPath, "user", "inbox"), { recursive: true });
   assert.deepEqual(await snapshot(root), before);
 });
+
+test("the evolve command without a terminal lists the conflicts, never waits and exits 1", async (t) => {
+  const root = await temporaryDirectory(t, "evolve-cli-conflicts");
+  const mindPath = await makeMind(root);
+  const kitPath = path.join(root, "kit");
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  const rulesPath = path.join(mindPath, "rules.md");
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["rules.md"] })}\n`);
+  await write(path.join(kitPath, "rules.md"), "kit rules\n");
+  await write(rulesPath, "locally written rules\n");
+  const args = [cliPath, "evolve", "--kit-path", kitPath, "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST"];
+  // The child's stdin is an open pipe, so a prompt would run into the timeout instead of finishing.
+  const run = (extra = []) => execFileAsync(process.execPath, [...args, ...extra], { cwd: root, encoding: "utf8", timeout: 30_000 });
+
+  const blocked = await run().then(() => assert.fail("evolve should exit with a failure"), (error) => error);
+  assert.equal(blocked.code, 1);
+  assert.equal(blocked.killed, false);
+  assert.match(blocked.stdout, /^Evolution needs conflict choices before it can continue\.$/m);
+  assert.ok(blocked.stdout.includes(`${rulesPath}: An unowned file already exists at this path.\n  Choices: keep, replace\n`));
+  assert.match(blocked.stdout, /--conflict <path>=<choice>/);
+  assert.equal(await fs.readFile(rulesPath, "utf8"), "locally written rules\n");
+  assert.equal(await fs.readFile(path.join(mindPath, "user", "VERSION"), "utf8"), "0.1.0\n");
+
+  const resolved = await run(["--conflict", `${rulesPath}=replace`]);
+  assert.match(resolved.stdout, /^Evolved from 0\.1\.0 to 1\.0\.0\.$/m);
+  assert.equal(await fs.readFile(rulesPath, "utf8"), "kit rules\n");
+});
