@@ -247,6 +247,16 @@ function ruleAllows(rule, line) {
   return words.length >= tokens.length && tokens.every((token, index) => new RegExp(`^(?:${token})$`).test(words[index]));
 }
 
+// A line it cannot split into commands is matched against the whole rule as one anchored expression.
+function ruleAllowsFullLine(rule, line) {
+  const match = /^command\(regex:(.+)\)$/.exec(rule);
+  return match !== null && new RegExp(`^(?:${match[1]})$`).test(line);
+}
+
+const ANTIGRAVITY_ARGS_TOKEN = '[^;&|<>()$`{}\\r\\n]*';
+const antigravityRulesFor = (kitPath, mindPath) => JSON.parse(buildClientConfig({ client: 'antigravity', kitPath, mindPath }).mcp).permissions.allow;
+const legacyAntigravityRule = (rule) => rule.replace(ANTIGRAVITY_ARGS_TOKEN, '.*');
+
 test('Antigravity configure adds only the kit relay read and send allow rules and unconfigure restores the file', async (context) => {
   const root = await temp(context);
   const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
@@ -297,6 +307,85 @@ test('Antigravity unconfigure restores a file that had no permissions, keeps for
   await configureRelayClient(opts);
   await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: opts.mindPath });
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { permissions: { allow: [foreign] } });
+});
+
+test('Antigravity rules end in a token that refuses shell control characters', () => {
+  const rules = antigravityRulesFor(path.join(os.tmpdir(), 'kit'), path.join(os.tmpdir(), 'mind'));
+  assert.equal(rules.length, 2);
+  for (const rule of rules) {
+    assert.ok(rule.endsWith(` ${ANTIGRAVITY_ARGS_TOKEN})`), rule);
+    assert.ok(!rule.includes('.*'), rule);
+  }
+});
+
+test('Antigravity rule text for a Windows kit path', { skip: process.platform !== 'win32' && 'asserts Windows paths, which the host path module only produces on Windows' }, () => {
+  const [read, send] = antigravityRulesFor('C:\\kit', 'C:\\mind');
+  const head = (action) => String.raw`command(regex:node (?:C:)?[\\/]kit[\\/]cli[\\/]index\.mjs relay ${action} --mind-path (?:C:)?[\\/]mind `;
+  assert.equal(read, `${head('read')}${ANTIGRAVITY_ARGS_TOKEN})`);
+  assert.equal(send, `${head('send')}${ANTIGRAVITY_ARGS_TOKEN})`);
+});
+
+test('Antigravity rules allow plain arguments and refuse chained, substituted or redirected lines in both matching modes', () => {
+  const kitPath = path.join(os.tmpdir(), 'kit'), mind = path.join(os.tmpdir(), 'mind');
+  const kit = path.join(kitPath, 'cli', 'index.mjs');
+  const rules = antigravityRulesFor(kitPath, mind);
+  const toForward = (text) => text.replaceAll(path.sep, '/');
+  for (const [cli, where] of [[kit, mind], [toForward(kit), toForward(mind)]]) {
+    const read = `node ${cli} relay read --mind-path ${where} --unit u`;
+    const send = `node ${cli} relay send --mind-path ${where} --to manager --subject "Reply" --body "Read, done."`;
+    for (const text of [read, send]) {
+      assert.ok(rules.some((rule) => ruleAllows(rule, text)), `per token: ${text}`);
+      assert.ok(rules.some((rule) => ruleAllowsFullLine(rule, text)), `full line: ${text}`);
+    }
+    for (const base of [read, send]) {
+      for (const suffix of ['; Remove-Item x', ' ; Remove-Item x', ' && calc', ' & calc', ' || calc', ' | Out-File x', ' > x', ' >> x', ' < x', ' $(whoami)',
+        ' `whoami`', ' (Get-Item x)', ' { x }', '\ncalc', '\r\ncalc', ' $env:USERPROFILE']) {
+        assert.equal(rules.some((rule) => ruleAllowsFullLine(rule, `${base}${suffix}`)), false, JSON.stringify(`${base}${suffix}`));
+      }
+    }
+    assert.equal(rules.some((rule) => ruleAllows(rule, `node ${cli} relay read --mind-path ${where} $(whoami)`)), false);
+  }
+});
+
+test('Antigravity configure replaces the earlier wildcard rules and keeps other rules and comments', async (context) => {
+  const root = await temp(context);
+  const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };
+  const file = path.join(root, '.gemini', 'antigravity-cli', 'settings.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  const current = antigravityRulesFor(opts.kitPath, opts.mindPath);
+  const otherMind = antigravityRulesFor(opts.kitPath, path.join(root, 'other-mind')).map(legacyAntigravityRule);
+  const allow = ['command(git)', ...current.map(legacyAntigravityRule), ...otherMind];
+  await writeFile(file, `{\n  // keep this comment\n  "colorScheme": "tokyo night",\n  "permissions": ${JSON.stringify({ allow })}\n}\n`);
+  assert.deepEqual((await configureRelayClient(opts)).changed, [file]);
+  const configured = await readFile(file, 'utf8');
+  assert.match(configured, /keep this comment/);
+  const { parse } = await import('jsonc-parser');
+  const settings = parse(configured);
+  assert.equal(settings.colorScheme, 'tokyo night');
+  assert.deepEqual(settings.permissions.allow, ['command(git)', ...otherMind, ...current]);
+  assert.deepEqual((await configureRelayClient(opts)).changed, []);
+  assert.equal(await readFile(file, 'utf8'), configured);
+  assert.deepEqual((await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: opts.mindPath })).changed, [file]);
+  assert.deepEqual(parse(await readFile(file, 'utf8')).permissions.allow, ['command(git)', ...otherMind]);
+});
+
+test('Antigravity unconfigure removes the earlier wildcard rules and the current rules, with and without a mind path', async (context) => {
+  const root = await temp(context);
+  const kitPath = path.join(root, 'kit'), mindA = path.join(root, 'mind-a'), mindB = path.join(root, 'mind-b');
+  const file = path.join(root, '.gemini', 'antigravity-cli', 'settings.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  const legacyA = antigravityRulesFor(kitPath, mindA).map(legacyAntigravityRule), currentB = antigravityRulesFor(kitPath, mindB);
+  const original = `${JSON.stringify({ colorScheme: 'tokyo night' }, null, 2)}\n`;
+  const write = (allow) => writeFile(file, `${JSON.stringify({ colorScheme: 'tokyo night', permissions: { allow } }, null, 2)}\n`);
+  await write([...legacyA, 'command(git)', ...currentB]);
+  assert.deepEqual((await unconfigureRelayClient({ client: 'antigravity', homeDir: root, mindPath: mindA })).changed, [file]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).permissions.allow, ['command(git)', ...currentB]);
+  await write([...legacyA, ...currentB]);
+  assert.deepEqual((await unconfigureRelayClient({ client: 'antigravity', homeDir: root })).changed, [file]);
+  assert.equal(await readFile(file, 'utf8'), original);
+  await write([...legacyA, 'command(git)', ...currentB]);
+  await unconfigureRelayClient({ client: 'antigravity', homeDir: root });
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).permissions.allow, ['command(git)']);
 });
 
 test('Antigravity configure blocks invalid or unsafe settings and paths without writing', async (context) => {
