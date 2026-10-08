@@ -9,4 +9,4 @@ repo: github.com/user/myapp
 ## Facts
 - 2026-09-12: the blog is stored in MySQL and edited from /admin; the JSON files are gone.
 - 2026-09-14: sessions stay in cookies; no JWT.
-- 2026-09-15: a forgotten password is reset by mail (prd: Requirements/Beta).
+- 2026-09-15: a forgotten password is reset by mail (product: Requirements/Beta).
