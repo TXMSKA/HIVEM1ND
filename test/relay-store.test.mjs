@@ -303,8 +303,8 @@ test('legacy minute messages keep a stable id through archive and conflict copie
   const recipient = await bind(mind, 'executor-beta', 'legacy-reader');
   const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
   await mkdir(directory, { recursive: true });
-  const legacyPath = path.join(directory, '20261005-1010-manager@SCOUT.md');
-  const legacyBytes = Buffer.from('from: manager@SCOUT\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n', 'utf8');
+  const legacyPath = path.join(directory, '20261005-1010-manager@LAPTOP.md');
+  const legacyBytes = Buffer.from('from: manager@LAPTOP\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n', 'utf8');
   await writeFile(legacyPath, legacyBytes);
   await writeFile(path.join(directory, "20261005-1010-executor-alpha-TESTBOX's conflicted copy.md"), legacyBytes);
   const inbox = await recipient.inbox();
@@ -314,7 +314,7 @@ test('legacy minute messages keep a stable id through archive and conflict copie
   assert.equal(read.messages[0].id, id);
   assert.equal(read.messages[0].body, 'Legacy body\n');
   assert.equal(read.messages[0].from, 'manager');
-  assert.equal(read.messages[0].machine, 'SCOUT');
+  assert.equal(read.messages[0].machine, 'LAPTOP');
   const reply = await recipient.send({ to: 'manager', subject: 'Legacy reply', body: 'Received', replyTo: id });
   assert.equal(reply.threadId, id);
   assert.deepEqual(await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', path.basename(legacyPath))), legacyBytes);
@@ -327,7 +327,7 @@ test('legacy files named after the unit are listed, archived by read and accepte
   const recipient = await bind(mind, 'executor-beta', 'legacy-unit-reader');
   const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
   await mkdir(directory, { recursive: true });
-  const header = 'from: manager@SCOUT\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
+  const header = 'from: manager@LAPTOP\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
   await writeFile(path.join(directory, '20261005-1010-manager.md'), header);
   const inbox = await recipient.inbox();
   assert.equal(inbox.unread, 1);
@@ -345,7 +345,7 @@ test('legacy files with a same-minute suffix are listed and a filename sender th
   const recipient = await bind(mind, 'executor-beta', 'legacy-suffix-reader');
   const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
   await mkdir(directory, { recursive: true });
-  const header = 'from: manager@SCOUT\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
+  const header = 'from: manager@LAPTOP\nto: executor-beta\ndate: 2026-10-05 10:10\nsubject: legacy\n\nLegacy body\n';
   await writeFile(path.join(directory, '20261005-1010-manager-2.md'), header);
   await writeFile(path.join(directory, '20261005-1010-overseer.md'), header);
   const inbox = await recipient.inbox();

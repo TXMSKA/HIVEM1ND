@@ -37,10 +37,10 @@ The coordinator learns the same day of every decision, correction or approval th
 The stable stdio MCP launch command is:
 
 ```text
-node <kit>/cli/index.mjs relay mcp --mind-path <mind> --client <claude|codex|cursor|opencode|copilot|nova> --session-id <stable-relay-instance>
+node <kit>/cli/index.mjs relay mcp --mind-path <mind> --client <claude|codex|cursor|opencode|copilot|host> --session-id <stable-relay-instance>
 ```
 
-Nova may launch one server for a chat before its native ID exists. The MCP server stays unregistered until the agent calls `register` with an explicit `unit`, exact `nativeSessionId`, and client. The server's `--session-id` is the Relay instance identity, not the provider session ID. MCP tools include `register`, `send_message`, `list_inbox`, `read_inbox`, `history`, `threads`, `status`, `events` and `reminder`. All tool arguments are schema checked and extra keys are rejected.
+A host application may launch one server for a chat before its native ID exists. The MCP server stays unregistered until the agent calls `register` with an explicit `unit`, exact `nativeSessionId`, and client. The server's `--session-id` is the Relay instance identity, not the provider session ID. MCP tools include `register`, `send_message`, `list_inbox`, `read_inbox`, `history`, `threads`, `status`, `events` and `reminder`. All tool arguments are schema checked and extra keys are rejected.
 
 In an isolated test home, set `--home-dir <isolated-directory>` on setup; it overrides client home environment variables. Without that option, setup follows `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude MCP/settings, `OPENCODE_CONFIG` for OpenCode when set, or the normal home for clients without an override. Codex uses `config.toml` and `hooks.json` beneath its active config root; Claude uses `.claude.json` and `settings.json` beneath `CLAUDE_CONFIG_DIR` when set, or `~/.claude.json` and `~/.claude/settings.json` by default; Cursor uses `~/.cursor/mcp.json` and `hooks.json`; OpenCode uses its configured JSON/JSONC file, or `~/.config/opencode/opencode.jsonc` by default, preferring an existing `opencode.jsonc`, `opencode.json`, then `config.json`. Copilot uses `mcp-config.json` beneath `COPILOT_HOME`, or `~/.copilot/mcp-config.json` by default, with a `mcpServers.hivem1nd-relay` entry of `type: local`, the same Node command and `tools: ["*"]`; no hooks file is written for it. OpenCode config uses the native `mcp.hivem1nd-relay` local-server entry and the exact command array `[node, <kit>/cli/index.mjs, relay, mcp, --mind-path, <mind>, --client, opencode]`. Its MCP setup is separate from turn reminders: phase 1 does not install an OpenCode plugin, hook, or wake layer. Setup backs up existing files once to `.relay-backup`, merges Relay-owned entries, validates all files before writes, and is idempotent. Reinstall updates recognized Relay-owned launch paths; an unrelated entry occupying the Relay server name is a conflict and remains untouched. Run `relay unconfigure --client <client>` to remove only recognized Relay-owned entries. The uninstaller leaves backups and unrelated configuration in place.
 
@@ -97,7 +97,7 @@ This editor path delivers at the next stop boundary. It returns only the standar
 node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client cursor --unit <unit> --native-session-id <conversation-id> --hours 4 --max-handoffs 20
 ```
 
-The worker starts `agent acp`, checks ACP v1 and `loadSession`, calls `session/load` with that exact ID, then `session/prompt`, and closes the process. It never calls `session/new`, infers an ID, or falls back after a failed load. Each attempt has a 14-second adapter timeout and a 15-second controller bound. A timeout after prompt dispatch is ambiguous, is cancelled, and is not replayed. This short headless turn must finish within the bound; it is not an editor wake or a general long-running agent host. Client capabilities do not offer file or terminal operations, permission requests receive a cancelled decision, and interactive extensions receive an unsupported-method error. Existing native configuration and permissions still apply. Use Nova's own ACP connection when interactive approvals or longer turns are needed.
+The worker starts `agent acp`, checks ACP v1 and `loadSession`, calls `session/load` with that exact ID, then `session/prompt`, and closes the process. It never calls `session/new`, infers an ID, or falls back after a failed load. Each attempt has a 14-second adapter timeout and a 15-second controller bound. A timeout after prompt dispatch is ambiguous, is cancelled, and is not replayed. This short headless turn must finish within the bound; it is not an editor wake or a general long-running agent host. Client capabilities do not offer file or terminal operations, permission requests receive a cancelled decision, and interactive extensions receive an unsupported-method error. Existing native configuration and permissions still apply. Use the host application's own ACP connection when interactive approvals or longer turns are needed.
 
 ## OpenCode server wake
 
@@ -113,21 +113,21 @@ Only plain HTTP on an explicit numeric loopback address and port is accepted, in
 
 Only `{parts: [{type: "text", text: <pointer>}]}` is posted. Model, agent, system instructions, permissions and tools are not overridden. A four-second total request bound and bounded response sizes apply. A 204 response means submitted, not read or delivered. Failures after a post are ambiguous and never replayed. No OpenCode plugin or lifecycle hook is installed. Official API behavior is fixture tested; the installed npm shim and package could not be read in the restricted build sandbox, so compatibility with that installed version remains a live-test prerequisite.
 
-## Host sink for Nova and Nebula
+## Host sink
 
-Nova's provisional `extensions/nova/src/agents/relay.ts` on `feat/relay-phase1` starts the kit through stdio MCP and queries CLI reminders per chat with client `nova`. It has no inbound wake listener. The kit adds `relay-host-v1`: bounded newline-delimited JSON over a local Windows named pipe or an absolute Unix socket. This keeps the existing stdio framing style while allowing an already running host to receive wake pointers. It introduces no TCP server or cloud channel.
+A host application, such as an editor or agent host that runs agents over ACP or CLIs, can start the kit through stdio MCP and query CLI reminders per chat with client `host`. That path has no inbound wake listener. The kit adds `relay-host-v1`: bounded newline-delimited JSON over a local Windows named pipe or an absolute Unix socket. This keeps the existing stdio framing style while allowing an already running host to receive wake pointers. It introduces no TCP server or cloud channel.
 
-The host must create a user-restricted local socket and a fresh authentication token, then launch attachment with `RELAY_HOST_SOCKET` and `RELAY_HOST_TOKEN` inherited in its environment. Windows endpoints must be local flat pipe names such as `\\.\pipe\nova-relay-<instance>`. Tokens are 16 to 512 characters and are never persisted or printed by Relay. Register the exact native session through Nova's existing Relay MCP server, using its existing per-chat correlation ID and client `nova`, then attach:
+The host must create a user-restricted local socket and a fresh authentication token, then launch attachment with `RELAY_HOST_SOCKET` and `RELAY_HOST_TOKEN` inherited in its environment. Windows endpoints must be local flat pipe names such as `\\.\pipe\relay-host-<instance>`. Tokens are 16 to 512 characters and are never persisted or printed by Relay. Register the exact native session through the host's existing Relay MCP server, using its existing per-chat correlation ID and client `host`, then attach:
 
 ```powershell
-node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client nova --unit <unit> --native-session-id <native-id> --hours 4 --max-handoffs 20
+node <kit>\cli\index.mjs relay wake attach --mind-path <mind> --client host --unit <unit> --native-session-id <native-id> --hours 4 --max-handoffs 20
 ```
 
 One connection sends two JSON lines, each ending with a newline:
 
 ```json
 {"type":"auth","token":"<environment-only token>"}
-{"type":"relay-wake","version":1,"binding":{"unit":"<unit>","nativeSessionId":"<exact-id>","client":"nova","machine":"<local-machine>"},"text":"<standard untrusted unread pointer>"}
+{"type":"relay-wake","version":1,"binding":{"unit":"<unit>","nativeSessionId":"<exact-id>","client":"host","machine":"<local-machine>"},"text":"<standard untrusted unread pointer>"}
 ```
 
 After authenticating, the host validates every binding field against its existing per-chat registration and active connection. It delivers `text` through `session/prompt` on its own ACP connection or the matching existing CLI transport, preserving the host's approvals, sandbox and model. It must not resume a competing process or create a conversation. An active target queues or rejects the pointer as busy without interrupting its turn. Reply with one JSON line:
@@ -138,7 +138,7 @@ After authenticating, the host validates every binding field against its existin
 
 `accepted` means queued once on that exact host connection. `busy` means no prompt was queued and permits later polling without spending a retry or handoff. `rejected` also means not queued, but uses the bounded failure retry policy. A missing, oversized or mismatched acknowledgment after sending is ambiguous and will not be replayed. Connections have a four-second bound; replies are limited to 8 KiB. The payload carries no subject, body or attachment content. The host must not log tokens and must revoke the exact policy when its chat or listener ends. Use `relay wake disable` with the same client, unit and native ID.
 
-Nova must implement this listener, map exact bindings to live agent connections, and test idle delivery, busy deferral and shutdown. Nebula can later consume the same host contract with client `nova` as a generic host binding, mapping it to its local phone/sync registration, retaining explicit consent, exact identity and retry safety. Phone transport, push, synchronized thread/read state and product UI are still phase 4 work. Neither host repository was edited, and neither currently has an accepted live sink.
+The host application must implement this listener, map exact bindings to live agent connections, and test idle delivery, busy deferral and shutdown. A sync or phone layer can later consume the same host contract with client `host` as a generic host binding, mapping it to its local registration, retaining explicit consent, exact identity and retry safety. Phone transport, push, synchronized thread/read state and product UI are still phase 4 work. No host currently has an accepted live sink.
 
 ## Antigravity CLI wake
 
@@ -203,7 +203,7 @@ Validate exact local identity and pointer-only text. Bound delivery, retain envi
 
 ## Phase boundary
 
-Relay phase 1 provides durable messages, explicit registration, MCP and CLI access, reminders and reversible client configuration. Phase 2 includes bounded, opt-in Claude Code inbox wake, scoped Codex App Tools wake, Cursor stop/ACP, OpenCode server wake, Antigravity CLI wake, Copilot CLI ACP wake and a local host sink contract. These adapters do not install global configuration automatically, infer a role, change permissions, guarantee delivery receipts, or complete the later notification, Nova, Nebula or phone phases. All clients use exact `relay wake status` and `relay wake disable` bindings; no adapter renews consent automatically.
+Relay phase 1 provides durable messages, explicit registration, MCP and CLI access, reminders and reversible client configuration. Phase 2 includes bounded, opt-in Claude Code inbox wake, scoped Codex App Tools wake, Cursor stop/ACP, OpenCode server wake, Antigravity CLI wake, Copilot CLI ACP wake and a local host sink contract. These adapters do not install global configuration automatically, infer a role, change permissions, guarantee delivery receipts, or complete the later notification, host application, sync or phone phases. All clients use exact `relay wake status` and `relay wake disable` bindings; no adapter renews consent automatically.
 
 Use `relay diagnose` to see whether Claude Code, Codex, Cursor, OpenCode, Copilot CLI and Antigravity CLI executables are present and which config paths setup will target. Missing executables mean configuration files can be prepared but that client UI cannot be tested. If a client does not list Relay tools, check the active config home, verify the configured mind path, restart the client after setup, and inspect its MCP logs. Invalid existing JSON, JSONC or TOML blocks setup before any write. A `.relay-backup` is a one-time recovery copy; it is not overwritten on reinstall.
 

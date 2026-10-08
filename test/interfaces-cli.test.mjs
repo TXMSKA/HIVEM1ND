@@ -363,7 +363,7 @@ test("check output has one line per finding and JSON remains opt-in", async () =
     action: "status",
     machine: "TEST",
     machineRecord: true,
-    missing: [{ name: "scout", type: "role", agents: ["codex"] }],
+    missing: [{ name: "helper", type: "role", agents: ["codex"] }],
     update: { checked: false, currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true },
     cwd: "C:/private/repos/app",
     project: { name: "app", path: "C:/private/repos/app", unread: 2, open: 1 },
@@ -376,7 +376,7 @@ test("check output has one line per finding and JSON remains opt-in", async () =
   assert.equal(await runCli(["check", "--mind-path", "."], { stdout: human.stream, stderr: sink().stream, lifecycle }), 0);
   assert.equal(
     human.read(),
-    "Not installed on this machine: scout. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
+    "Not installed on this machine: helper. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
   );
 
   const quiet = sink();

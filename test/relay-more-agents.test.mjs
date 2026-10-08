@@ -88,7 +88,7 @@ test('Cursor cancellation before and after dispatch is classified and closes the
 
 test('adapters reject arbitrary message content, foreign machines and wrong clients before transport', async () => {
   for (const [send, client, env] of [[sendCursorWake, 'cursor', cursorEnv], [sendOpenCodeWake, 'opencode', { RELAY_OPENCODE_URL: 'http://127.0.0.1:1' }],
-    [sendHostWake, 'nova', { RELAY_HOST_SOCKET: '\\\\.\\pipe\\fixture', RELAY_HOST_TOKEN: 'fixture-token-123456' }]]) {
+    [sendHostWake, 'host', { RELAY_HOST_SOCKET: '\\\\.\\pipe\\fixture', RELAY_HOST_TOKEN: 'fixture-token-123456' }]]) {
     for (const input of [{ binding: bindingFor(client), text: 'private message body' },
       { binding: { ...bindingFor(client), machine: 'FOREIGN' }, text: pointer },
       { binding: { ...bindingFor(client), client: 'other' }, text: pointer }]) {
@@ -244,9 +244,9 @@ async function hostFixture(context, mode = 'accepted') {
 for (const mode of ['accepted', 'busy', 'rejected', 'wrong-id', 'timeout', 'disconnect', 'oversize']) {
   test(`host local channel handles ${mode} and exposes no body or auth in results`, async (context) => {
     const { received, env } = await hostFixture(context, mode);
-    const result = await sendHostWake({ binding: bindingFor('nova'), text: pointer, env, timeoutMs: mode === 'timeout' ? 150 : 2000 });
+    const result = await sendHostWake({ binding: bindingFor('host'), text: pointer, env, timeoutMs: mode === 'timeout' ? 150 : 2000 });
     assert.equal(result.status, mode === 'accepted' ? 'submitted' : ['busy', 'rejected'].includes(mode) ? 'not_submitted' : 'ambiguous');
-    assert.deepEqual(received, [{ type: 'relay-wake', version: 1, binding: bindingFor('nova'), text: pointer }]);
+    assert.deepEqual(received, [{ type: 'relay-wake', version: 1, binding: bindingFor('host'), text: pointer }]);
     assert.equal(JSON.stringify(result).includes(env.RELAY_HOST_TOKEN), false);
     if (mode === 'busy') assert.equal(result.deferred, true);
   });
@@ -271,7 +271,7 @@ test('local worker copies only its client environment and confirms readiness', a
 
 test('local worker startup failure kills child without revealing environment', async () => {
   const child = new EventEmitter(); child.kill = () => { child.killed = true; }; child.disconnect = () => {};
-  const worker = spawnLocalWakeWorker({ cliPath: 'fixture', mindPath: 'fixture', binding: bindingFor('nova'),
+  const worker = spawnLocalWakeWorker({ cliPath: 'fixture', mindPath: 'fixture', binding: bindingFor('host'),
     env: { RELAY_HOST_TOKEN: 'fixture-sensitive' }, readyTimeoutMs: 20, forkProcess: () => child });
   await assert.rejects(worker.ready, /did not confirm readiness/); assert.equal(child.killed, true);
 });
@@ -283,7 +283,7 @@ async function cli(argv, dependencies) {
   return { code, out: Buffer.concat(out).toString('utf8'), err: Buffer.concat(err).toString('utf8') };
 }
 
-for (const client of ['cursor', 'opencode', 'nova']) {
+for (const client of ['cursor', 'opencode', 'host']) {
   test(`${client} CLI attach needs existing exact registration, never creates one, and rolls back startup failure`, async (context) => {
     const { mind, binding, wake } = await fixture(context, client);
     const env = client === 'cursor' ? cursorEnv : client === 'opencode' ? { RELAY_OPENCODE_URL: 'http://127.0.0.1:4096' }
@@ -337,7 +337,7 @@ test('real disposable ACP subprocess loads the exact session and completes a poi
 });
 
 test('real host worker attaches, sends to the local fixture, and stops after exact disable', async (context) => {
-  const { mind, binding, relay, wake } = await fixture(context, 'nova');
+  const { mind, binding, relay, wake } = await fixture(context, 'host');
   const { received, env } = await hostFixture(context);
   await wake.enable(binding);
   const worker = spawnLocalWakeWorker({ cliPath: path.join(process.cwd(), 'cli', 'index.mjs'), mindPath: mind, binding,

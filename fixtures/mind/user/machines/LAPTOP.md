@@ -1,4 +1,4 @@
-machine: SCOUT
+machine: LAPTOP
 mind: D:\mind
 language: en
 preferences-first: yes
@@ -13,7 +13,7 @@ setup: done
 ## Paths
 - web: C:\Users\me\GitHub
 - myapp: C:\Users\me\GitHub\myapp
-- vigilum: C:\Users\me\Unity\vigilum
+- mygame: C:\Users\me\Unity\mygame
 
 ## Excluded
 - knowledge

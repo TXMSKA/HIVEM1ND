@@ -40,7 +40,7 @@ Team state, in the repo, on the `hivem1nd` branch mounted at `.hivem1nd/state/` 
 ```markdown
 unit: executor-myapp
 state: out
-machine: SCOUT
+machine: LAPTOP
 branch: feat/login
 commit: 3f2a9c1
 tree: clean
@@ -60,7 +60,7 @@ New Relay messages use filenames with seconds, machine name and a random collisi
 id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
 from: manager
 to: executor-myapp
-machine: SCOUT
+machine: LAPTOP
 timestamp: 2026-09-15T14:02:03.000Z
 priority: normal
 subject: task 003 is ready
@@ -134,12 +134,12 @@ One entry per piece of work, written on exit. Nothing loads it by default; it is
 ```markdown
 ## Environments
 - web: myapp, shop
-- unity: vigilum
+- unity: mygame
 
 ## Projects
 - myapp (web)
 - shop (web)
-- vigilum (unity)
+- mygame (unity)
 - tool
 
 ## Minds
@@ -151,7 +151,7 @@ Names only. `Minds` lists other minds this one can read, when there are any.
 ## Machine: `machines/<host>.md`
 
 ```markdown
-machine: SCOUT
+machine: LAPTOP
 mind: D:\mind
 language: en
 preferences-first: yes
@@ -166,7 +166,7 @@ setup: done
 ## Paths
 - web: C:\Users\me\GitHub
 - myapp: C:\Users\me\GitHub\myapp
-- vigilum: C:\Users\me\Unity\vigilum
+- mygame: C:\Users\me\Unity\mygame
 - evidence: D:\evidence
 
 ## Excluded
@@ -183,7 +183,7 @@ The managed files live beside the machine file, in `machines/<host>.managed.json
 ## Install report: `machines/<host>.report.md`
 
 ```markdown
-machine: SCOUT
+machine: LAPTOP
 date: 2026-09-21 10:30
 action: install
 written: 143
