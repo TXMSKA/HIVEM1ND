@@ -63,7 +63,7 @@ SessionStart and supported user-turn hooks supply a brief inbox pointer. An unre
 
 A wake policy is synced: it names a binding of one machine, and the other machines only read it. A worker lease and a lock hold a process id, which means something only on the machine that wrote it, so they live outside the mind, in a folder local to the machine and keyed by the mind:
 
-- Windows: `%USERPROFILE%\.hivem1nd\state\relay\<key>\wake\workers\` and `...\wake\locks\`. Not under AppData, because a packaged app such as the Codex desktop app redirects writes there into its own package folder and would not share leases with the other clients.
+- Windows: `%USERPROFILE%\.hivem1nd-relay\<key>\wake\workers\` and `...\wake\locks\`. Not under AppData, because a packaged app such as the Codex desktop app redirects writes there into its own package folder and would not share leases with the other clients.
 - Other systems: `$XDG_STATE_HOME/hivem1nd/relay/<key>/wake/`, or `~/.local/state/hivem1nd/relay/<key>/wake/` when the variable is unset or not an absolute path.
 - `<key>` is the first 16 hexadecimal digits of the SHA-256 of the mind's resolved path (in lower case on Windows), so two minds on one machine never share a lease. `RELAY_LOCAL_STATE_DIR` replaces everything before `<key>`, and the test suite points it at a temporary folder. Worker processes receive these variables unchanged, so a worker, a hook and a CLI call resolve one folder.
 
