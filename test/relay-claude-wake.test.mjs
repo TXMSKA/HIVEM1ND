@@ -280,3 +280,8 @@ test('cancelled real net.Socket absorbs a delayed ECONNREFUSED without an uncaug
   assert.deepEqual(JSON.parse(Buffer.concat(stdoutChunks).toString('utf8')), { status: 'not_submitted', reason: 'cancelled_before_submit' });
   assert.doesNotMatch(Buffer.concat(stderrChunks).toString('utf8'), /ephemeral/);
 });
+
+test('the Claude worker keeps the variables that decide the machine-local lease folder', () => {
+  const env = { LOCALAPPDATA: 'C:\Users\tom\AppData\Local', USERPROFILE: 'C:\Users\tom', RELAY_LOCAL_STATE_DIR: 'C:\state', ANTHROPIC_API_KEY: 'must-not-inherit' };
+  assert.deepEqual(claudeWakeChildEnv(env), { LOCALAPPDATA: env.LOCALAPPDATA, USERPROFILE: env.USERPROFILE, RELAY_LOCAL_STATE_DIR: env.RELAY_LOCAL_STATE_DIR });
+});

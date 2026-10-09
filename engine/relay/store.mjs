@@ -13,6 +13,11 @@ const MAX_LIST_LIMIT = 500;
 const OBSERVATION_MAX_AGE_MS = 15 * 60 * 1000;
 const UNIT_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const SAFE_FILE_PATTERN = /^\d{8}-\d{6}-[a-zA-Z0-9._-]{1,48}-[a-f0-9-]{8,36}\.md$/i;
+const LOCAL_STATE_ENV = 'RELAY_LOCAL_STATE_DIR';
+const MAX_DELIVERY_IDS = 100;
+const DELIVERY_STATES = new Set(['attempting', 'submitted', 'ambiguous', 'not_submitted', 'failed']);
+// A lock is held for milliseconds, so one this old was left by an older version that is no longer running.
+const LEGACY_LOCK_AGE_MS = 10 * 60 * 1000;
 
 function relayError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
@@ -41,6 +46,17 @@ function safeMachine(value) {
     throw relayError('INVALID_MACHINE', 'The machine name must be a path-safe name of at most 48 characters.');
   }
   return machine;
+}
+
+// Worker leases and locks hold a process id, which means something only on the machine that wrote it, so they live outside the synced mind. The folder is keyed by the mind so two minds on one machine never share a lease.
+export function relayLocalStatePath(mindPath, { env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
+  const lib = platform === 'win32' ? path.win32 : path.posix;
+  const key = createHash('sha256').update(platform === 'win32' ? mindPath.toLowerCase() : mindPath).digest('hex').slice(0, 16);
+  if (env[LOCAL_STATE_ENV]) return lib.join(lib.resolve(env[LOCAL_STATE_ENV]), key);
+  const base = platform === 'win32'
+    ? lib.isAbsolute(env.LOCALAPPDATA ?? '') ? env.LOCALAPPDATA : lib.join(homeDir, 'AppData', 'Local')
+    : lib.isAbsolute(env.XDG_STATE_HOME ?? '') ? env.XDG_STATE_HOME : lib.join(homeDir, '.local', 'state');
+  return lib.join(base, 'hivem1nd', 'relay', key);
 }
 
 function isoNow(value) {
@@ -509,6 +525,7 @@ export async function createRelay(options = {}) {
   const defaultClient = options.client === undefined ? null : scalar(options.client, 'client', 80);
   const instanceId = options.sessionId === undefined ? randomUUID() : scalar(options.sessionId, 'sessionId', 180);
   await assertRoot(mindPath);
+  const canonicalMind = await realpath(mindPath);
 
   const userPath = path.join(mindPath, 'user');
   const relayPath = path.join(userPath, 'relay');
@@ -559,30 +576,44 @@ export async function createRelay(options = {}) {
   }
 
   const wakeRoot = path.join(relayPath, 'wake');
+  const localRoot = relayLocalStatePath(canonicalMind);
   const wakeBuckets = new Set(['policies', 'workers', 'locks']);
+  // A policy describes a binding and is read from other machines; a lease and a lock hold a process id that means something only on the machine that wrote it.
+  const localBuckets = new Set(['workers', 'locks']);
+  function wakeStorage(bucket) {
+    return localBuckets.has(bucket)
+      ? { root: localRoot, directory: path.join(localRoot, 'wake', bucket) }
+      : { root: mindPath, directory: path.join(wakeRoot, bucket) };
+  }
+  async function prepareWakeBucket(bucket) {
+    if (!wakeBuckets.has(bucket)) throw relayError('WAKE_INVALID_KEY', 'Wake storage bucket is invalid.');
+    if (localBuckets.has(bucket)) await mkdir(localRoot, { recursive: true });
+    return wakeStorage(bucket);
+  }
   function wakeRecordPath(bucket, key) {
     if (!wakeBuckets.has(bucket) || typeof key !== 'string' || !/^[a-f0-9]{64}$/i.test(key)) {
       throw relayError('WAKE_INVALID_KEY', 'Wake storage requires a known record bucket and hashed binding key.');
     }
-    return path.join(wakeRoot, bucket, `${key.toLowerCase()}.json`);
+    return path.join(wakeStorage(bucket).directory, `${key.toLowerCase()}.json`);
   }
   async function readWakeRecord(bucket, key) {
     const filePath = wakeRecordPath(bucket, key);
+    const { root } = await prepareWakeBucket(bucket);
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      try { return await readJsonSafe(mindPath, filePath); }
+      try { return await readJsonSafe(root, filePath); }
       catch (error) {
         const atomicReadRace = error?.code === 'UNSAFE_PATH' && /A Relay message changed while it was being (?:opened|read)\./.test(error.message);
         const windowsShareRace = error?.code === 'EPERM';
         if ((!atomicReadRace && !windowsShareRace) || attempt === 3) throw error;
-        await safePath(mindPath, path.dirname(filePath), { missing: false });
+        await safePath(root, path.dirname(filePath), { missing: false });
         await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
       }
     }
     return null;
   }
   async function listWakeRecords(bucket) {
-    if (!wakeBuckets.has(bucket)) throw relayError('WAKE_INVALID_KEY', 'Wake storage bucket is invalid.');
-    const files = await listRegularFiles(mindPath, path.join(wakeRoot, bucket), (name) => /^[a-f0-9]{64}\.json$/i.test(name));
+    const { root, directory } = await prepareWakeBucket(bucket);
+    const files = await listRegularFiles(root, directory, (name) => /^[a-f0-9]{64}\.json$/i.test(name));
     if (files.length > 512) throw relayError('WAKE_STORE_LIMIT', 'Wake storage has reached its safe record limit.');
     const records = [];
     for (const file of files) {
@@ -595,33 +626,34 @@ export async function createRelay(options = {}) {
   }
   async function writeWakeRecord(bucket, key, value) {
     const destination = wakeRecordPath(bucket, key);
+    const { root } = await prepareWakeBucket(bucket);
     const bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
     if (bytes.length > MAX_MESSAGE_BYTES) throw relayError('WAKE_RECORD_TOO_LARGE', 'Wake metadata exceeds its safe storage limit.');
-    await ensureDirectory(mindPath, path.dirname(destination));
-    await safePath(mindPath, destination);
+    await ensureDirectory(root, path.dirname(destination));
+    await safePath(root, destination);
     const prior = await lstatOrNull(destination);
     if (prior && (!prior.isFile() || prior.isSymbolicLink())) throw relayError('UNSAFE_PATH', 'A wake record path is unsafe.');
     const temporary = path.join(path.dirname(destination), `.${key}.${randomBytes(12).toString('hex')}.tmp`);
-    await safePath(mindPath, temporary);
+    await safePath(root, temporary);
     const handle = await open(temporary, 'wx', 0o600);
     try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     try {
       let published = false;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
-          await safePath(mindPath, temporary, { missing: false });
-          await safePath(mindPath, destination);
+          await safePath(root, temporary, { missing: false });
+          await safePath(root, destination);
           await rename(temporary, destination);
           published = true;
           break;
         } catch (error) {
           if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code) || attempt === 4) throw error;
-          await safePath(mindPath, path.dirname(destination), { missing: false });
+          await safePath(root, path.dirname(destination), { missing: false });
           await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
         }
       }
       if (!published) throw relayError('WAKE_STORE_BUSY', 'Wake metadata could not be atomically replaced.');
-      await safePath(mindPath, destination, { missing: false });
+      await safePath(root, destination, { missing: false });
     } catch (error) {
       const tempState = await lstatOrNull(temporary);
       if (tempState?.isFile()) await unlink(temporary).catch(() => {});
@@ -630,13 +662,28 @@ export async function createRelay(options = {}) {
   }
   async function removeWakeRecord(bucket, key) {
     const target = wakeRecordPath(bucket, key);
-    try { await safePath(mindPath, target, { missing: false }); }
+    const { root } = await prepareWakeBucket(bucket);
+    try { await safePath(root, target, { missing: false }); }
     catch (error) { if (isMissingPath(error)) return false; throw error; }
     const state = await lstatOrNull(target);
     if (!state) return false;
     if (state.isSymbolicLink() || !state.isFile()) throw relayError('UNSAFE_PATH', 'A wake record path is unsafe.');
     await unlink(target);
     return true;
+  }
+  // Earlier versions kept leases and locks in the synced mind. They are ignored now; clearing this machine's own leases and the locks nobody can still hold keeps them from looking live to a reader.
+  async function removeLegacyWakeRecords() {
+    for (const bucket of ['workers', 'locks']) {
+      const files = await listRegularFiles(mindPath, path.join(wakeRoot, bucket), (name) => /^[a-f0-9]{64}\.json$/i.test(name));
+      for (const file of files) {
+        try {
+          const clearable = bucket === 'workers'
+            ? (await readJsonSafe(mindPath, file))?.machine === hostname
+            : Date.now() - (await lstat(file)).mtimeMs >= LEGACY_LOCK_AGE_MS;
+          if (clearable) await unlink(file);
+        } catch (error) { if (!isSkippableRecordError(error) && !isMissingPath(error)) throw error; }
+      }
+    }
   }
   async function processIsAlive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -647,16 +694,17 @@ export async function createRelay(options = {}) {
       throw relayError('WAKE_INVALID_LOCK', 'Wake lock key or operation is invalid.');
     }
     const lockKey = createHash('sha256').update(key).digest('hex');
-    const lockPath = path.join(wakeRoot, 'locks', `${lockKey}.json`);
-    await ensureDirectory(mindPath, path.dirname(lockPath));
+    const lockPath = wakeRecordPath('locks', lockKey);
+    const { root } = await prepareWakeBucket('locks');
+    await ensureDirectory(root, path.dirname(lockPath));
     const token = randomUUID();
     for (let attempt = 0; attempt < 80; attempt += 1) {
-      try { await safePath(mindPath, lockPath); }
+      try { await safePath(root, lockPath); }
       catch (error) {
         // A live owner can release the lock between lstat and realpath.
         // Revalidate the parent before retrying only a missing lock path.
         if (!isMissingPath(error) && error?.code !== 'UNSAFE_PATH') throw error;
-        await safePath(mindPath, path.dirname(lockPath), { missing: false });
+        await safePath(root, path.dirname(lockPath), { missing: false });
         if (!isMissingPath(error) && await lstatOrNull(lockPath)) throw error;
         continue;
       }
@@ -697,7 +745,7 @@ export async function createRelay(options = {}) {
       await handle.close();
       try { return await operation(); }
       finally {
-        const current = await readJsonSafe(mindPath, lockPath);
+        const current = await readJsonSafe(root, lockPath);
         if (current?.token === token) await removeWakeRecord('locks', lockKey).catch(() => {});
       }
     }
@@ -705,7 +753,7 @@ export async function createRelay(options = {}) {
   }
 
   const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, read: readWakeRecord, list: listWakeRecords,
-    write: writeWakeRecord, remove: removeWakeRecord, withLock: withWakeLock });
+    write: writeWakeRecord, remove: removeWakeRecord, withLock: withWakeLock, removeLegacy: removeLegacyWakeRecords });
 
   async function currentIdentity() {
     if (currentRegistration) return currentRegistration;
@@ -748,6 +796,14 @@ export async function createRelay(options = {}) {
       if (!previous || previous.registeredAt < item.registeredAt) latestByMachine.set(item.machine, item);
     }
     return [...latestByMachine.values()];
+  }
+
+  // A copy that OneDrive delivers after the message was read leaves an active file beside its archived twin; the archive is the record that it was read.
+  async function isReadCopy(unit, file, raw) {
+    const twinPath = path.join(archivePath, unit, path.basename(file));
+    if (!await lstatOrNull(twinPath)) return false;
+    try { return (await readRegularFileSafe(mindPath, twinPath))?.equals(raw) === true; }
+    catch (error) { if (isTransientFsError(error)) return false; throw error; }
   }
 
   async function locateMessage(id, unit) {
@@ -917,6 +973,7 @@ export async function createRelay(options = {}) {
           if (!raw) continue;
           const parsed = parseMessage(raw, file, false);
           if (!validMessageFilename(path.basename(file), parsed)) continue;
+          if (await isReadCopy(unit, file, raw)) continue;
           if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
         } catch (error) {
           skipMalformed(error);
@@ -964,6 +1021,11 @@ export async function createRelay(options = {}) {
           continue;
         }
         if (!validMessageFilename(path.basename(file), parsed)) continue;
+        if (await isReadCopy(unit, file, raw)) {
+          // The cleanup is best effort: the copy stays hidden from inbox either way.
+          await unlink(file).catch((error) => { if (error?.code !== 'ENOENT' && !isTransientFsError(error)) throw error; });
+          continue;
+        }
         if (selected && !selected.has(parsed.id)) continue;
         if (parsed.to.toLowerCase() !== unit.toLowerCase()) continue;
         await ensureDirectory(mindPath, archiveDirectory);
@@ -1026,6 +1088,56 @@ export async function createRelay(options = {}) {
       }
       threads.sort((a, b) => String(b.latestAt).localeCompare(String(a.latestAt)));
       return { threads };
+    },
+
+    async delivery(args = {}) {
+      validateArgs(args, 'delivery', ['ids']);
+      const sender = await requireRegistration();
+      if (!Array.isArray(args.ids) || !args.ids.length || args.ids.length > MAX_DELIVERY_IDS
+        || args.ids.some((id) => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,180}$/.test(id))) {
+        throw relayError('INVALID_IDS', `ids must be an array of 1 to ${MAX_DELIVERY_IDS} message ids.`);
+      }
+      const text = (value) => typeof value === 'string' ? value : null;
+      const validName = (value) => typeof value === 'string' && UNIT_PATTERN.test(value);
+      const policies = (await listWakeRecords('policies')).map((record) => record.value).filter((policy) => policy?.kind === 'relay-wake-policy'
+        && typeof policy.binding?.unit === 'string' && policy.deliveries && typeof policy.deliveries === 'object');
+      let everything = null;
+      let mailbox = null;
+      // The event is the cheap source; a message whose event never got written is found by scanning, which only an unknown id pays for.
+      async function sentRecord(id) {
+        let event = null;
+        try { event = await readJsonSafe(mindPath, path.join(eventsPath, `${id}.json`)); }
+        catch (error) { if (!isSkippableRecordError(error)) throw error; }
+        if (event?.kind === 'message' && event.id === id && validName(event.from) && validName(event.to)) return event;
+        everything ??= await allMessages({ includeArchived: true });
+        const message = everything.find((candidate) => candidate.id === id);
+        return message ? metadata(message) : null;
+      }
+      const deliveries = [];
+      const unknown = [];
+      for (const id of new Set(args.ids)) {
+        const record = await sentRecord(id);
+        // A message of another unit is reported as unknown, the same as a missing one, so this view never confirms what the unit did not send.
+        if (!record || record.from.toLowerCase() !== sender.unit.toLowerCase()) { unknown.push(id); continue; }
+        const read = (await listRegularFiles(mindPath, path.join(archivePath, record.to), (name) => name.endsWith(`-${id}.md`) && candidateMessageFilename(name))).length > 0;
+        const woken = [];
+        for (const policy of policies) {
+          const entry = Object.hasOwn(policy.deliveries, id) ? policy.deliveries[id] : null;
+          if (policy.binding.unit.toLowerCase() !== record.to.toLowerCase() || !DELIVERY_STATES.has(entry?.state)) continue;
+          woken.push({ client: text(policy.binding.client), machine: text(policy.binding.machine), state: entry.state,
+            attempts: Number.isInteger(entry.attempts) ? entry.attempts : null,
+            at: [entry.submittedAt, entry.ambiguousAt, entry.failedAt, entry.lastAttemptAt].find((value) => typeof value === 'string') ?? null });
+        }
+        mailbox ??= await allMessages({ unit: sender.unit, includeArchived: true });
+        const reply = mailbox.find((candidate) => candidate.replyTo === id && candidate.from.toLowerCase() === record.to.toLowerCase());
+        const replied = reply ? { id: reply.id, timestamp: reply.timestamp } : null;
+        deliveries.push({
+          id, to: record.to, subject: text(record.subject) ?? '', priority: record.priority === 'urgent' ? 'urgent' : 'normal', sentAt: text(record.timestamp),
+          stage: replied ? 'replied' : read ? 'read' : woken.some((item) => item.state === 'submitted') ? 'woken' : 'published',
+          woken, read, replied,
+        });
+      }
+      return { deliveries, unknown };
     },
 
     async status(args = {}) {

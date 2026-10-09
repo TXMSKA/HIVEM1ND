@@ -523,3 +523,121 @@ test('dotted machine names publish discoverable messages', async (context) => {
   await sender.send({ to: 'executor-beta', subject: 'Dotted host', body: 'Still visible' });
   assert.equal((await receiver.inbox()).unread, 1);
 });
+
+test('a late synced copy of a message that was already read stays hidden and read removes it', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'late-alice');
+  const bob = await bind(mind, 'executor-beta', 'late-bob');
+  const sent = await alice.send({ to: 'executor-beta', subject: 'Once', body: 'only once' });
+  const inboxPath = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  const filename = (await readdir(inboxPath)).find((name) => name.includes(sent.id));
+  const original = await readFile(path.join(inboxPath, filename));
+  assert.deepEqual((await bob.read()).messages.map((message) => message.id), [sent.id]);
+
+  await writeFile(path.join(inboxPath, filename), original);
+  assert.deepEqual(await bob.inbox(), { messages: [], unit: 'executor-beta', unread: 0, malformed: [] });
+  assert.deepEqual(await bob.reminder({ nativeSessionId: 'late-bob-native', client: 'codex' }), { unit: 'executor-beta', unread: 0, from: [], text: '', registered: true });
+  assert.deepEqual(await bob.read(), { messages: [], malformed: [] }, 'the stray copy is not returned again');
+  await assert.rejects(readFile(path.join(inboxPath, filename)), code('ENOENT'));
+  assert.deepEqual(await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', filename)), original, 'the archived twin is untouched');
+  assert.deepEqual((await bob.history({ ids: [sent.id] })).messages.map((message) => message.id), [sent.id]);
+});
+
+test('an archived twin with different bytes keeps the message unread and read reports the collision', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'twin-alice');
+  const bob = await bind(mind, 'executor-beta', 'twin-bob');
+  const sent = await alice.send({ to: 'executor-beta', subject: 'Twin', body: 'original' });
+  const inboxPath = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  const filename = (await readdir(inboxPath)).find((name) => name.includes(sent.id));
+  await bob.read();
+  const original = await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', filename));
+  await writeFile(path.join(inboxPath, filename), Buffer.concat([original, Buffer.from(' edited')]));
+
+  assert.equal((await bob.inbox()).unread, 1);
+  await assert.rejects(bob.read(), code('ARCHIVE_COLLISION'));
+  assert.equal((await readFile(path.join(inboxPath, filename), 'utf8')).endsWith(' edited'), true, 'both files are left intact');
+  assert.deepEqual(await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', filename)), original);
+});
+
+test('delivery status follows a sent message from published through woken, read and replied', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'ladder-alice');
+  const bob = await bind(mind, 'executor-beta', 'ladder-bob');
+  const sent = await alice.send({ to: 'executor-beta', subject: 'Ladder', body: 'question', replyRequested: true, priority: 'urgent' });
+
+  const published = await alice.delivery({ ids: [sent.id] });
+  assert.deepEqual(published, { deliveries: [{
+    id: sent.id, to: 'executor-beta', subject: 'Ladder', priority: 'urgent', sentAt: sent.timestamp,
+    stage: 'published', woken: [], read: false, replied: null,
+  }], unknown: [] });
+
+  const at = new Date().toISOString();
+  const policies = path.join(mind, 'user', 'relay', 'wake', 'policies');
+  await mkdir(policies, { recursive: true });
+  const entries = {
+    submitted: { state: 'submitted', attempts: 1, lastAttemptAt: at, submittedAt: at },
+    ambiguous: { state: 'ambiguous', attempts: 1, lastAttemptAt: at, ambiguousAt: at },
+    not_submitted: { state: 'not_submitted', attempts: 1, lastAttemptAt: at, retryAt: at },
+    failed: { state: 'failed', attempts: 3, lastAttemptAt: at, failedAt: at },
+  };
+  const ids = {};
+  for (const state of Object.keys(entries)) ids[state] = (await alice.send({ to: 'executor-beta', subject: state, body: state })).id;
+  await writeFile(path.join(policies, `${'d'.repeat(64)}.json`), JSON.stringify({
+    kind: 'relay-wake-policy', binding: { unit: 'executor-beta', nativeSessionId: 'bob-native', client: 'claude', machine: 'TESTBOX' },
+    deliveries: Object.fromEntries(Object.entries(entries).map(([state, entry]) => [ids[state], entry])),
+  }));
+  const states = await alice.delivery({ ids: Object.values(ids) });
+  for (const [state, id] of Object.entries(ids)) {
+    const delivery = states.deliveries.find((item) => item.id === id);
+    assert.deepEqual(delivery.woken.map((item) => [item.client, item.machine, item.state]), [['claude', 'TESTBOX', state]]);
+    assert.equal(delivery.woken[0].at, at);
+    assert.equal(delivery.stage, state === 'submitted' ? 'woken' : 'published', 'only a pointer submitted to the client counts as woken');
+  }
+
+  await bob.read({ ids: [sent.id] });
+  const read = (await alice.delivery({ ids: [sent.id] })).deliveries[0];
+  assert.equal(read.stage, 'read');
+  assert.equal(read.read, true);
+  assert.equal(read.replied, null);
+
+  const reply = await bob.send({ to: 'executor-alpha', subject: 'Answer', body: 'answer', replyTo: sent.id });
+  const replied = (await alice.delivery({ ids: [sent.id] })).deliveries[0];
+  assert.equal(replied.stage, 'replied');
+  assert.deepEqual(replied.replied, { id: reply.id, timestamp: reply.timestamp });
+});
+
+test('delivery status covers only messages the registered unit sent and tolerates a missing event', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'scope-alice');
+  const bob = await bind(mind, 'executor-beta', 'scope-bob');
+  const own = await alice.send({ to: 'executor-beta', subject: 'Mine', body: 'one' });
+  const others = await bob.send({ to: 'executor-alpha', subject: 'Theirs', body: 'two' });
+  const unknownId = '00000000-0000-4000-8000-000000000000';
+
+  const view = await alice.delivery({ ids: [own.id, others.id, unknownId, own.id] });
+  assert.deepEqual(view.deliveries.map((item) => item.id), [own.id], 'a repeated id is answered once');
+  assert.deepEqual(view.unknown, [others.id, unknownId], 'another unit\'s message is reported like a missing one');
+
+  await rm(path.join(mind, 'user', 'relay', 'events', `${own.id}.json`));
+  assert.equal((await alice.delivery({ ids: [own.id] })).deliveries[0].stage, 'published', 'the inbox file alone shows it was published');
+  await bob.read();
+  assert.equal((await alice.delivery({ ids: [own.id] })).deliveries[0].stage, 'read');
+  await rm(path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta'), { recursive: true, force: true });
+  await rm(path.join(mind, 'user', 'relay', 'archive', 'executor-beta'), { recursive: true, force: true });
+  assert.deepEqual((await alice.delivery({ ids: [own.id] })).unknown, [own.id], 'with no event and no file nothing proves it was published');
+});
+
+test('delivery status validates its input and needs a registered unit', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'input-alice');
+  await assert.rejects(alice.delivery(), code('INVALID_IDS'));
+  await assert.rejects(alice.delivery({ ids: [] }), code('INVALID_IDS'));
+  await assert.rejects(alice.delivery({ ids: ['../escape'] }), code('INVALID_IDS'));
+  await assert.rejects(alice.delivery({ ids: [7] }), code('INVALID_IDS'));
+  await assert.rejects(alice.delivery({ ids: Array.from({ length: 101 }, (_, index) => `id-${index}`) }), code('INVALID_IDS'));
+  await assert.rejects(alice.delivery({ ids: ['a'], unit: 'overseer' }), code('INVALID_INPUT'));
+  assert.equal((await alice.delivery({ ids: Array.from({ length: 100 }, (_, index) => `id-${index}`) })).unknown.length, 100);
+  const stranger = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'unregistered' });
+  await assert.rejects(stranger.delivery({ ids: ['a'] }), code('NOT_REGISTERED'));
+});

@@ -1,3 +1,4 @@
+import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
@@ -366,7 +367,7 @@ test('real host worker attaches, sends to the local fixture, and stops after exa
   const { received, env } = await hostFixture(context);
   await wake.enable(binding);
   const worker = spawnLocalWakeWorker({ cliPath: path.join(process.cwd(), 'cli', 'index.mjs'), mindPath: mind, binding,
-    env: { ...env, SystemRoot: process.env.SystemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir() }, readyTimeoutMs: 10000 });
+    env: { ...env, SystemRoot: process.env.SystemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(), RELAY_LOCAL_STATE_DIR: process.env.RELAY_LOCAL_STATE_DIR }, readyTimeoutMs: 10000 });
   let exited = false; worker.child.once('exit', () => { exited = true; });
   context.after(() => { if (!exited) worker.child.kill(); });
   assert.equal((await worker.ready).state, 'running');
@@ -380,4 +381,9 @@ test('real host worker attaches, sends to the local fixture, and stops after exa
   assert.equal((await relay.inbox()).unread, 1);
   await wake.disable(binding); await until(() => exited);
   assert.equal((await wake.status(binding)).worker.state, 'disabled');
+});
+
+test('a local wake worker keeps the variables that decide the machine-local lease folder', () => {
+  const env = { XDG_STATE_HOME: '/state', RELAY_LOCAL_STATE_DIR: '/tmp/relay-state', HOME: '/home/tom', UNRELATED_SECRET: 'fixture-only' };
+  assert.deepEqual(localWakeChildEnv('cursor', env), { XDG_STATE_HOME: '/state', RELAY_LOCAL_STATE_DIR: '/tmp/relay-state', HOME: '/home/tom' });
 });
