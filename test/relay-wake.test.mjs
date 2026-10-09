@@ -299,6 +299,32 @@ test('repeated attach waits for an old generation to release its lease before re
   assert.equal((await second.status(binding)).enabled, true);
 });
 
+test('enabling again keeps the pointers already submitted or ambiguous and renews nothing else', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable(binding);
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
+  const previous = JSON.parse(await readFile(policyPath, 'utf8'));
+  const at = new Date().toISOString();
+  previous.wakeCount = 3;
+  previous.deliveries = {
+    pointed: { state: 'submitted', attempts: 1, lastAttemptAt: at, submittedAt: at },
+    unsure: { state: 'ambiguous', attempts: 1, lastAttemptAt: at, ambiguousAt: at, reason: 'SINK_AMBIGUOUS' },
+    waiting: { state: 'not_submitted', attempts: 1, lastAttemptAt: at, retryAt: at, reason: 'SINK_NOT_SUBMITTED' },
+    given_up: { state: 'failed', attempts: 3, lastAttemptAt: at, failedAt: at, reason: 'SINK_NOT_SUBMITTED' },
+    in_flight: { state: 'attempting', attempts: 1, lastAttemptAt: at },
+  };
+  await writeFile(policyPath, JSON.stringify(previous));
+
+  const status = await wake.enable(binding);
+  const renewed = JSON.parse(await readFile(policyPath, 'utf8'));
+  assert.notEqual(renewed.generation, previous.generation);
+  assert.equal(renewed.wakeCount, 0);
+  assert.deepEqual(renewed.deliveries, { pointed: previous.deliveries.pointed, unsure: previous.deliveries.unsure });
+  assert.equal(status.submittedCount, 1);
+  assert.equal(status.ambiguousCount, 1);
+});
+
 test('wake lock acquisition retries when an owner releases between lstat and realpath', async (context) => {
   const { mind } = await fixture(context);
   const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'release-probe' });

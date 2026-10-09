@@ -4,25 +4,14 @@ import os from 'node:os';
 import { CURSOR_STOP_LOOP_LIMIT } from './cursor-wake.mjs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { parse as parseToml } from 'smol-toml';
 import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-parser';
 
 const OWNED_SERVER = 'hivem1nd-relay';
 const MARKER = '# HIVEM1ND Relay managed server';
-const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
 // A Cursor stop hook reads the mind through OneDrive and measured 5 to 11 s on Windows.
 const CURSOR_HOOK_TIMEOUT = 30;
 const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot', 'antigravity']);
-
-const CLIENT_PATHS = {
-  claude: (home) => ({ mcp: path.join(home, '.claude.json'), hooks: path.join(home, '.claude', 'settings.json') }),
-  codex: (home) => ({ mcp: path.join(home, '.codex', 'config.toml'), hooks: path.join(home, '.codex', 'hooks.json') }),
-  cursor: (home) => ({ mcp: path.join(home, '.cursor', 'mcp.json'), hooks: path.join(home, '.cursor', 'hooks.json') }),
-  opencode: (home) => ({ mcp: path.join(home, '.config', 'opencode', 'opencode.jsonc') }),
-  copilot: (home) => ({ mcp: path.join(home, '.copilot', 'mcp-config.json') }),
-  antigravity: (home) => ({ mcp: path.join(home, '.gemini', 'antigravity-cli', 'settings.json') }),
-};
 
 function safeString(value, name) {
   if (typeof value !== 'string' || !value.trim() || /[\0\r\n]/.test(value)) throw new Error(`${name} must be a non-empty single-line string.`);

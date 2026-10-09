@@ -375,11 +375,11 @@ async function publishExclusive(root, destination, bytes) {
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
   try {
     await safePath(root, destination);
-    await rename(temporary, destination);
-  } catch (error) {
-    const tmpState = await lstatOrNull(temporary);
-    if (tmpState?.isFile()) await unlink(temporary).catch(() => {});
-    throw error;
+    // A link fails on an existing destination where a rename would replace a file that appeared since the check above.
+    try { await linkFile(temporary, destination); }
+    catch (error) { throw error?.code === 'EEXIST' ? relayError('COLLISION', 'A Relay file already exists at the selected unique path.', error) : error; }
+  } finally {
+    await unlink(temporary).catch(() => {});
   }
 }
 

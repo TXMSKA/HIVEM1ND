@@ -320,10 +320,12 @@ export async function createRelayWakeController(options = {}) {
       manualConsent: args.unlimited === true && args.manualConsent === true,
       registrationId: registration.registrationId,
       disabledAt: null, disabledReason: null, pausedReason: null,
-      activity: { value: null, observedAt: null }, deliveries: {}, wakeCount: 0,
+      activity: { value: null, observedAt: null }, wakeCount: 0,
       retryAt: null, cooldownUntil: null, lastError: null, consecutiveErrors: 0,
     };
-    await mutatePolicy(binding, key, async () => policy);
+    // A new consent renews the window and budgets, not the right to point at a message again; only a pointer that never reached the host may be retried.
+    await mutatePolicy(binding, key, async (previous) => ({ ...policy, deliveries: Object.fromEntries(
+      Object.entries(previous?.deliveries ?? {}).filter(([, entry]) => entry.state === 'submitted' || entry.state === 'ambiguous')) }));
     const worker = workers.get(key);
     if (worker && worker.generation !== policy.generation) await worker.stop('policy-replaced');
     return inspect(binding);

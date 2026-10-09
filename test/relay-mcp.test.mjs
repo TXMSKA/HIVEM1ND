@@ -5,6 +5,7 @@ import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
 import { serveRelayMcp } from '../engine/relay/mcp.mjs';
+import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
 async function fixture(context) {
@@ -59,6 +60,17 @@ test('Copilot identifies itself as a supported Relay MCP registration client', a
   ], 'copilot');
   assert.equal(lines[0].result.structuredContent.client, 'copilot');
   assert.equal(lines[0].result.structuredContent.nativeSessionId, 'copilot-session-1');
+});
+
+test('the register tool offers every wake adapter client, Antigravity included', async (context) => {
+  const mindPath = await fixture(context);
+  const { lines } = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'antigravity-session-1', client: 'antigravity' } } },
+  ], 'antigravity');
+  const offered = lines[0].result.tools.find((tool) => tool.name === 'register').inputSchema.properties.client.enum;
+  for (const client of Object.keys(WAKE_ADAPTERS)) assert.ok(offered.includes(client), client);
+  assert.equal(lines[1].result.structuredContent.client, 'antigravity');
 });
 
 test('invalid MCP JSON, primitives, extra fields, unknown tools and oversized lines return errors and keep serving', async (context) => {

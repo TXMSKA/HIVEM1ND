@@ -1,8 +1,8 @@
 import { createConnection } from 'node:net';
 import { fork } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { validWakeBinding, validWakePointer } from './local-wake.mjs';
 
 export const wakeAdapter = Object.freeze({
   moduleUrl: import.meta.url,
@@ -104,17 +104,14 @@ export async function sendClaudeWake({
   if (signal?.aborted) return notSubmitted('cancelled_before_submit');
   const capability = claudeWakeCapability({ env, platform });
   if (!capability.available) return notSubmitted(capability.reason);
-  if (!binding || binding.client !== 'claude'
-      || typeof binding.nativeSessionId !== 'string' || binding.nativeSessionId !== env.CLAUDE_CODE_SESSION_ID
-      || typeof binding.machine !== 'string' || binding.machine.toLowerCase() !== os.hostname().toLowerCase()) {
-    return notSubmitted('native_binding_mismatch');
-  }
+  if (!validWakeBinding(binding, 'claude') || binding.nativeSessionId !== env.CLAUDE_CODE_SESSION_ID) return notSubmitted('native_binding_mismatch');
+  if (!validWakePointer(text, binding.unit)) return notSubmitted('invalid_pointer');
   const socketPath = env.CLAUDE_CODE_MESSAGING_SOCKET;
   const token = env.CLAUDE_CODE_MESSAGING_TOKEN;
 
   let frames;
   try { frames = claudeWakeFrames(text, token); }
-  catch (error) { return notSubmitted(error instanceof RangeError ? 'pointer_too_large' : 'invalid_pointer'); }
+  catch { return notSubmitted('invalid_pointer'); }
 
   return new Promise((resolve) => {
     let settled = false;
