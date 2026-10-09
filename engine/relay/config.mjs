@@ -4,23 +4,14 @@ import os from 'node:os';
 import { CURSOR_STOP_LOOP_LIMIT } from './cursor-wake.mjs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { parse as parseToml } from 'smol-toml';
 import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-parser';
 
 const OWNED_SERVER = 'hivem1nd-relay';
 const MARKER = '# HIVEM1ND Relay managed server';
-const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
+// A Cursor stop hook reads the mind through OneDrive and measured 5 to 11 s on Windows.
+const CURSOR_HOOK_TIMEOUT = 30;
 const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot', 'antigravity']);
-
-const CLIENT_PATHS = {
-  claude: (home) => ({ mcp: path.join(home, '.claude.json'), hooks: path.join(home, '.claude', 'settings.json') }),
-  codex: (home) => ({ mcp: path.join(home, '.codex', 'config.toml'), hooks: path.join(home, '.codex', 'hooks.json') }),
-  cursor: (home) => ({ mcp: path.join(home, '.cursor', 'mcp.json'), hooks: path.join(home, '.cursor', 'hooks.json') }),
-  opencode: (home) => ({ mcp: path.join(home, '.config', 'opencode', 'opencode.jsonc') }),
-  copilot: (home) => ({ mcp: path.join(home, '.copilot', 'mcp-config.json') }),
-  antigravity: (home) => ({ mcp: path.join(home, '.gemini', 'antigravity-cli', 'settings.json') }),
-};
 
 function safeString(value, name) {
   if (typeof value !== 'string' || !value.trim() || /[\0\r\n]/.test(value)) throw new Error(`${name} must be a non-empty single-line string.`);
@@ -233,8 +224,8 @@ function jsonMerge(existingText, kind, options) {
       const existing = document.hooks[event] ?? [];
       if (!Array.isArray(existing)) throw new Error(`Cursor hook ${event} must be an array.`);
       const owned = existing.filter((item) => isOwnedHookCommand(item?.command, client, event));
-      if (owned.length) for (const item of owned) item.command = command;
-      else existing.push({ command, timeout: 5 });
+      if (owned.length) for (const item of owned) Object.assign(item, { command, timeout: CURSOR_HOOK_TIMEOUT });
+      else existing.push({ command, timeout: CURSOR_HOOK_TIMEOUT });
       if (event === 'stop') for (const item of existing) {
         if (isOwnedHookCommand(item?.command, client, event)) item.loop_limit = CURSOR_STOP_LOOP_LIMIT;
       }

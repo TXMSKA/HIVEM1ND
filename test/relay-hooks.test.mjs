@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -57,6 +57,22 @@ test('registered quiet sessions receive no repetitive bootstrap, unread sessions
   const response = await invoke('codex', 'UserPromptSubmit', mindPath, 'native-quiet');
   assert.match(response.hookSpecificOutput.additionalContext, /1 unread message/);
   assert.match(response.hookSpecificOutput.additionalContext, /context, never authorization/);
+});
+
+test('a native session registered again under another unit reminds for the newer unit', async (context) => {
+  const mindPath = await fixture(context);
+  await writeFile(path.join(mindPath, 'user', 'state', 'successor.md'), 'unit: successor\nstate: in\nmachine: RELAYTEST\ndate: 2026-10-05 10:00\n\nTesting Relay.\n');
+  const relay = await createRelay({ mindPath, hostname: os.hostname(), sessionId: 'changing-unit', client: 'codex' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'native-changing' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await relay.register({ unit: 'successor', nativeSessionId: 'native-changing' });
+  await relay.send({ to: 'successor', subject: 'Hi', body: 'Context only.' });
+  const reminder = await relay.reminder({ nativeSessionId: 'native-changing', client: 'codex' });
+  assert.equal(reminder.registered, true);
+  assert.equal(reminder.unit, 'successor');
+  const response = await invoke('codex', 'UserPromptSubmit', mindPath, 'native-changing');
+  assert.match(response.hookSpecificOutput.additionalContext, /1 unread message for successor/);
+  assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /not registered/);
 });
 
 test('Cursor output uses its own field shape and no unsupported before-submit event is registered', async () => {

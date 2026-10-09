@@ -299,6 +299,32 @@ test('repeated attach waits for an old generation to release its lease before re
   assert.equal((await second.status(binding)).enabled, true);
 });
 
+test('enabling again keeps the pointers already submitted or ambiguous and renews nothing else', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable(binding);
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
+  const previous = JSON.parse(await readFile(policyPath, 'utf8'));
+  const at = new Date().toISOString();
+  previous.wakeCount = 3;
+  previous.deliveries = {
+    pointed: { state: 'submitted', attempts: 1, lastAttemptAt: at, submittedAt: at },
+    unsure: { state: 'ambiguous', attempts: 1, lastAttemptAt: at, ambiguousAt: at, reason: 'SINK_AMBIGUOUS' },
+    waiting: { state: 'not_submitted', attempts: 1, lastAttemptAt: at, retryAt: at, reason: 'SINK_NOT_SUBMITTED' },
+    given_up: { state: 'failed', attempts: 3, lastAttemptAt: at, failedAt: at, reason: 'SINK_NOT_SUBMITTED' },
+    in_flight: { state: 'attempting', attempts: 1, lastAttemptAt: at },
+  };
+  await writeFile(policyPath, JSON.stringify(previous));
+
+  const status = await wake.enable(binding);
+  const renewed = JSON.parse(await readFile(policyPath, 'utf8'));
+  assert.notEqual(renewed.generation, previous.generation);
+  assert.equal(renewed.wakeCount, 0);
+  assert.deepEqual(renewed.deliveries, { pointed: previous.deliveries.pointed, unsure: previous.deliveries.unsure });
+  assert.equal(status.submittedCount, 1);
+  assert.equal(status.ambiguousCount, 1);
+});
+
 test('wake lock acquisition retries when an owner releases between lstat and realpath', async (context) => {
   const { mind } = await fixture(context);
   const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'release-probe' });
@@ -380,4 +406,51 @@ test('atomic store locks serialize overlapping writers and recover a stale parti
   let recovered = false;
   await persistence.withLock('barrier-lock', async () => { recovered = true; });
   assert.equal(recovered, true, 'an old malformed lock from a crashed writer is reclaimed');
+});
+
+test('a wake policy that is unparseable is skipped while the other policies still resolve', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const policies = path.join(mind, 'user', 'relay', 'wake', 'policies');
+  await writeFile(path.join(policies, `${'a'.repeat(64)}.json`), '{"kind":"relay-wake-pol');
+
+  assert.deepEqual(await wake.findEnabledBinding({ nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine }), binding);
+});
+
+test('a transient filesystem error in one worker iteration is recorded and retried without ending the worker', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const policyHash = createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${policyHash}.json`);
+  const handle = wake.start(binding);
+  assert.deepEqual(await handle.ready, { state: 'running', ownsLease: true });
+
+  const originalOpen = fsPromises.open;
+  let busy = 1;
+  fsPromises.open = async (...args) => {
+    if (busy > 0 && typeof args[1] === 'number' && path.resolve(String(args[0])) === path.resolve(policyPath)) {
+      busy -= 1;
+      throw Object.assign(new Error('The file is busy.'), { code: 'EBUSY' });
+    }
+    return originalOpen(...args);
+  };
+  syncBuiltinESMExports();
+  context.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  await until(async () => busy === 0 || busy);
+  await until(async () => {
+    const policy = JSON.parse(await readFile(policyPath, 'utf8'));
+    return policy.consecutiveErrors === 1 && policy.lastError?.code === 'WAKE_STORE_BUSY' || policy.consecutiveErrors;
+  });
+  fsPromises.open = originalOpen;
+  syncBuiltinESMExports();
+
+  const outcome = await Promise.race([handle.done, new Promise((resolve) => setTimeout(() => resolve('running'), 700))]);
+  assert.equal(outcome, 'running', 'the worker polls again instead of ending');
+  assert.equal((await wake.status(binding)).worker.state, 'running');
+  await handle.stop();
+  assert.equal((await handle.done).reason, 'stopped');
 });
