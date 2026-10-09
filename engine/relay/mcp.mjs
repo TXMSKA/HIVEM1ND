@@ -22,6 +22,9 @@ export const RELAY_TOOLS = [
   tool('history', 'Read archived and current messages without changing them.', {
     threadId: { type: 'string', maxLength: 180 }, ids: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 180 } }, limit: { type: 'integer', minimum: 1, maximum: 100 },
   }),
+  tool('delivery_status', 'Show how far each message sent by the registered unit has come: published, woken (submitted to the recipient client, not read), read, replied. Messages of other units are reported as unknown.', {
+    ids: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 180 } },
+  }, ['ids']),
   tool('threads', 'List message threads and requested replies for the registered unit.'),
   tool('status', 'List known unit and registered session status.'),
   tool('events', 'List metadata-only message events.', { limit: { type: 'integer', minimum: 1, maximum: 100 } }),
@@ -45,7 +48,7 @@ function rpcError(id, code, message) {
 async function callMethod(relay, name, args, defaults = {}) {
   const methods = {
     register: 'register', send_message: 'send', list_inbox: 'inbox', read_inbox: 'read', history: 'history',
-    threads: 'threads', status: 'status', events: 'events', reminder: 'reminder',
+    threads: 'threads', status: 'status', events: 'events', reminder: 'reminder', delivery_status: 'delivery',
   };
   const method = methods[name];
   if (!method) throw Object.assign(new Error(`Unknown Relay tool: ${name}`), { code: -32602 });

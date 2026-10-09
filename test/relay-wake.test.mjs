@@ -1,10 +1,11 @@
+import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import fsPromises, { mkdtemp, mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdtemp, mkdir, readFile, readdir, realpath, rm, rmdir, utimes, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
-import { createRelay } from '../engine/relay/store.mjs';
+import { createRelay, relayLocalStatePath } from '../engine/relay/store.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
 
 async function fixture(context) {
@@ -26,6 +27,14 @@ async function fixture(context) {
   const receiver = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'executor-chat', client: 'claude' });
   await receiver.register({ unit: 'executor-alpha', nativeSessionId: 'executor-native' });
   return { mind, sender, receiver, binding: { unit: 'executor-alpha', nativeSessionId: 'executor-native', client: 'claude', machine: 'TESTBOX' } };
+}
+
+async function localWake(mind) {
+  return path.join(relayLocalStatePath(await realpath(mind)), 'wake');
+}
+
+function keyOf(binding) {
+  return createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
 }
 
 async function until(predicate, message = 'condition did not become true') {
@@ -255,7 +264,7 @@ test('old in-flight sink completion cannot settle a replacement policy generatio
   };
   const oldController = await controller(mind, async () => { firstEntered(); await firstGate; return { status: 'submitted' }; }, {
     clock,
-    retryPolicy: { leaseMs: 20_000, sinkTimeoutMs: 15_000, cooldownMs: 1000, baseDelayMs: 100, maxDelayMs: 300 },
+    retryPolicy: { leaseMs: 30_000, sinkTimeoutMs: 15_000, cooldownMs: 1000, baseDelayMs: 100, maxDelayMs: 300 },
   });
   const newController = await controller(mind, async () => ({ status: 'submitted' }));
   context.after(async () => { releaseFirst(); await oldController.stopAll(); await newController.stopAll(); });
@@ -329,7 +338,7 @@ test('wake lock acquisition retries when an owner releases between lstat and rea
   const { mind } = await fixture(context);
   const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'release-probe' });
   const lockKey = 'release-during-check';
-  const lockPath = path.join(mind, 'user', 'relay', 'wake', 'locks', `${createHash('sha256').update(lockKey).digest('hex')}.json`);
+  const lockPath = path.join(await localWake(mind), 'locks', `${createHash('sha256').update(lockKey).digest('hex')}.json`);
   let ownerEntered, releaseOwner, checkEntered, releaseCheck;
   const ownerStarted = new Promise((resolve) => { ownerEntered = resolve; });
   const ownerGate = new Promise((resolve) => { releaseOwner = resolve; });
@@ -365,7 +374,7 @@ test('atomic store locks serialize overlapping writers and recover a stale parti
   const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'lock-probe' });
   const persistence = relay.wakePersistence;
   const lockHash = createHash('sha256').update('barrier-lock').digest('hex');
-  const lockPath = path.join(mind, 'user', 'relay', 'wake', 'locks', `${lockHash}.json`);
+  const lockPath = path.join(await localWake(mind), 'locks', `${lockHash}.json`);
   let enteredWrite;
   const writeEntered = new Promise((resolve) => { enteredWrite = resolve; });
   let releaseWrite;
@@ -453,4 +462,202 @@ test('a transient filesystem error in one worker iteration is recorded and retri
   assert.equal((await wake.status(binding)).worker.state, 'running');
   await handle.stop();
   assert.equal((await handle.done).reason, 'stopped');
+});
+
+test('worker leases and locks live in a machine-local folder keyed by the mind, never in the synced mind', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  const local = await localWake(mind);
+  const leaseFile = path.join(local, 'workers', `${keyOf(binding)}.json`);
+  const lease = JSON.parse(await readFile(leaseFile, 'utf8'));
+  assert.equal(lease.kind, 'relay-wake-worker');
+  assert.equal(lease.pid, process.pid);
+  assert.deepEqual(await readdir(path.join(mind, 'user', 'relay', 'wake')), ['policies'], 'only the policy is synced');
+  await handle.stop();
+  assert.equal((await handle.done).reason, 'stopped');
+  await assert.rejects(readFile(leaseFile), { code: 'ENOENT' });
+  assert.deepEqual(await readdir(path.join(local, 'locks')), [], 'every lock is released');
+});
+
+test('the machine-local folder follows LOCALAPPDATA on Windows, XDG_STATE_HOME elsewhere and the override, keyed by the mind path', () => {
+  const key = (value) => createHash('sha256').update(value).digest('hex').slice(0, 16);
+  assert.equal(relayLocalStatePath('C:\\Mind\\Shared', { env: { LOCALAPPDATA: 'C:\\Users\\tom\\AppData\\Local' }, platform: 'win32', homeDir: 'C:\\Users\\other' }),
+    `C:\\Users\\tom\\AppData\\Local\\hivem1nd\\relay\\${key('c:\\mind\\shared')}`);
+  assert.equal(relayLocalStatePath('C:\\mind', { env: {}, platform: 'win32', homeDir: 'C:\\Users\\tom' }), `C:\\Users\\tom\\AppData\\Local\\hivem1nd\\relay\\${key('c:\\mind')}`);
+  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: '/var/state' }, platform: 'linux', homeDir: '/home/tom' }), `/var/state/hivem1nd/relay/${key('/home/tom/mind')}`);
+  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: 'relative' }, platform: 'linux', homeDir: '/home/tom' }), `/home/tom/.local/state/hivem1nd/relay/${key('/home/tom/mind')}`);
+  assert.equal(relayLocalStatePath('/mind', { env: {}, platform: 'darwin', homeDir: '/Users/tom' }), `/Users/tom/.local/state/hivem1nd/relay/${key('/mind')}`);
+  assert.equal(relayLocalStatePath('/mind', { env: { RELAY_LOCAL_STATE_DIR: '/tmp/relay-test' }, platform: 'linux', homeDir: '/home/tom' }), `/tmp/relay-test/${key('/mind')}`);
+  assert.notEqual(relayLocalStatePath('/mind-a', { env: {}, platform: 'linux', homeDir: '/h' }), relayLocalStatePath('/mind-b', { env: {}, platform: 'linux', homeDir: '/h' }));
+});
+
+test('the lease is renewed about every 5 seconds instead of on every poll, and the liveness note is written at most once a minute', async (context) => {
+  const { mind, binding } = await fixture(context);
+  let now = Date.now();
+  let resumePoll = null;
+  const clock = {
+    now: () => now,
+    sleep: (_ms, signal) => new Promise((resolve) => {
+      if (signal?.aborted) { resolve(); return; }
+      function resume() { resumePoll = null; signal?.removeEventListener('abort', resume); resolve(); }
+      resumePoll = resume;
+      signal?.addEventListener('abort', resume, { once: true });
+    }),
+  };
+  const wake = await controller(mind, async () => ({ status: 'submitted' }), { clock });
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  const leaseFile = path.join(await localWake(mind), 'workers', `${keyOf(binding)}.json`);
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const heartbeats = new Set([JSON.parse(await readFile(leaseFile, 'utf8')).heartbeatAt]);
+  const notes = new Set();
+  async function poll(milliseconds) {
+    await until(() => resumePoll !== null);
+    now += milliseconds;
+    resumePoll();
+    await until(() => resumePoll !== null);
+    heartbeats.add(JSON.parse(await readFile(leaseFile, 'utf8')).heartbeatAt);
+    notes.add(JSON.parse(await readFile(policyFile, 'utf8')).worker.heartbeatAt);
+  }
+  for (let index = 0; index < 40; index += 1) await poll(250);
+  assert.equal(heartbeats.size, 3, 'the start and two renewals cover ten seconds of 250 ms polls');
+  const times = [...heartbeats].map(Date.parse).sort((a, b) => a - b);
+  assert.ok(times.every((time, index) => index === 0 || time - times[index - 1] <= 5000), 'two renewals are never more than 5 seconds apart');
+  assert.equal(notes.size, 1, 'the note is not rewritten within the minute');
+  await poll(60_000);
+  assert.equal(notes.size, 2, 'the note is rewritten after a minute');
+  await handle.stop();
+  assert.equal((await handle.done).reason, 'stopped');
+  const stored = JSON.parse(await readFile(policyFile, 'utf8'));
+  assert.equal(stored.worker.state, 'stopped');
+});
+
+test('leaseMs must outlast the 5 second renewal interval plus the sink timeout', async (context) => {
+  const { mind } = await fixture(context);
+  const sink = async () => ({ status: 'submitted' });
+  await assert.rejects(controller(mind, sink, { retryPolicy: { leaseMs: 6000, sinkTimeoutMs: 1000 } }), { code: 'WAKE_INVALID_RETRY_POLICY' });
+  await assert.doesNotReject(controller(mind, sink, { retryPolicy: { leaseMs: 6001, sinkTimeoutMs: 1000 } }));
+});
+
+test('another machine reads whether a worker is alive from the liveness note in the synced policy', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  const remote = await controller(mind, async () => ({ status: 'submitted' }), { hostname: 'OTHERBOX' });
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  assert.equal((await remote.status(binding)).worker.state, 'idle', 'an enabled policy with no note yet');
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await until(async () => (await remote.status(binding)).worker.state === 'running' || (await remote.status(binding)).worker);
+  const seen = await remote.status(binding);
+  assert.equal(seen.enabled, true);
+  assert.equal(seen.registered, null, 'registrations are checked only on the binding machine');
+  assert.equal(seen.worker.leaseUntil, null);
+  assert.ok(Number.isFinite(Date.parse(seen.worker.heartbeatAt)));
+  await assert.rejects(remote.enable(binding), { code: 'WAKE_WRONG_MACHINE' });
+  await assert.rejects(remote.disable(binding), { code: 'WAKE_WRONG_MACHINE' });
+
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const policy = JSON.parse(await readFile(policyFile, 'utf8'));
+  policy.worker.heartbeatAt = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+  await writeFile(policyFile, JSON.stringify(policy));
+  assert.equal((await remote.status(binding)).worker.state, 'stale', 'a note older than three minutes means the worker is gone');
+  await handle.stop();
+  assert.equal((await remote.status(binding)).worker.state, 'idle', 'a clean stop leaves a stopped note');
+  assert.equal((await wake.status(binding)).worker.state, 'idle');
+});
+
+test('worker and lock files left in the synced mind by an earlier version are ignored and cleared by the worker of the same machine', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const legacy = path.join(mind, 'user', 'relay', 'wake');
+  await mkdir(path.join(legacy, 'workers'), { recursive: true });
+  await mkdir(path.join(legacy, 'locks'), { recursive: true });
+  const live = { kind: 'relay-wake-worker', key: keyOf(binding), ownerId: 'legacy-owner', pid: process.pid, machine: 'TESTBOX', generation: null,
+    heartbeatAt: new Date().toISOString(), expiresAt: Date.now() + 600_000 };
+  const ownWorker = path.join(legacy, 'workers', `${keyOf(binding)}.json`);
+  const foreignWorker = path.join(legacy, 'workers', `${'f'.repeat(64)}.json`);
+  const oldLock = path.join(legacy, 'locks', `${'a'.repeat(64)}.json`);
+  const freshLock = path.join(legacy, 'locks', `${'b'.repeat(64)}.json`);
+  await writeFile(ownWorker, JSON.stringify(live));
+  await writeFile(foreignWorker, JSON.stringify({ ...live, key: 'f'.repeat(64), machine: 'OTHERBOX' }));
+  await writeFile(oldLock, JSON.stringify({ kind: 'wake-lock', pid: process.pid, token: 'old', createdAt: '2026-01-01T00:00:00.000Z' }));
+  await writeFile(freshLock, JSON.stringify({ kind: 'wake-lock', pid: process.pid, token: 'fresh', createdAt: new Date().toISOString() }));
+  const past = new Date(Date.now() - 60 * 60 * 1000);
+  await utimes(oldLock, past, past);
+
+  assert.equal((await wake.status(binding)).worker.state, 'idle', 'a legacy lease that looks alive is not read');
+  const handle = wake.start(binding);
+  assert.deepEqual(await handle.ready, { state: 'running', ownsLease: true });
+  await assert.rejects(readFile(ownWorker), { code: 'ENOENT' });
+  await assert.rejects(readFile(oldLock), { code: 'ENOENT' });
+  assert.equal(JSON.parse(await readFile(foreignWorker, 'utf8')).machine, 'OTHERBOX', 'another machine\'s record is left alone');
+  assert.equal(JSON.parse(await readFile(freshLock, 'utf8')).token, 'fresh', 'a lock that could still be held is left alone');
+  await handle.stop();
+});
+
+test('a stored liveness note is validated with the policy', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable(binding);
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const policy = JSON.parse(await readFile(policyFile, 'utf8'));
+  assert.equal(policy.worker, undefined, 'a policy that no worker has touched carries no note');
+  await writeFile(policyFile, JSON.stringify({ ...policy, worker: { state: 'running', heartbeatAt: new Date().toISOString() } }));
+  assert.equal((await wake.status(binding)).enabled, true);
+  for (const worker of [{ state: 'bogus', heartbeatAt: new Date().toISOString() }, { state: 'running' }, { state: 'running', heartbeatAt: 'yesterday' }, 'running']) {
+    await writeFile(policyFile, JSON.stringify({ ...policy, worker }));
+    await assert.rejects(wake.status(binding), { code: 'WAKE_POLICY_INVALID' }, JSON.stringify(worker));
+  }
+});
+
+test('the worker does not wake for a late synced copy of a message that was already read', async (context) => {
+  const { mind, sender, receiver, binding } = await fixture(context);
+  const first = await sender.send({ to: binding.unit, subject: 'Read already', body: 'once' });
+  const inbox = path.join(mind, 'user', 'projects', 'alpha', 'inbox', binding.unit);
+  const filename = (await readdir(inbox)).find((name) => name.includes(first.id));
+  const bytes = await readFile(path.join(inbox, filename));
+  assert.equal((await receiver.read()).messages.length, 1);
+  await writeFile(path.join(inbox, filename), bytes);
+  const notices = [];
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  assert.equal(notices.length, 0, 'the revived file is not a candidate');
+  const second = await sender.send({ to: binding.unit, subject: 'New', body: 'fresh' });
+  await until(() => notices.length === 1);
+  assert.deepEqual(notices[0].messageIds, [second.id]);
+  await handle.stop();
+});
+
+test('delivery status shows the state the recipient worker recorded, then the read and the reply', async (context) => {
+  const { mind, sender, receiver, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  const sent = await sender.send({ to: binding.unit, subject: 'Ladder', body: 'question', replyRequested: true });
+  await until(async () => (await sender.delivery({ ids: [sent.id] })).deliveries[0].stage === 'woken' || (await sender.delivery({ ids: [sent.id] })).deliveries[0]);
+  const woken = (await sender.delivery({ ids: [sent.id] })).deliveries[0];
+  assert.deepEqual(woken.woken.map(({ client, machine, state }) => ({ client, machine, state })), [{ client: 'claude', machine: 'TESTBOX', state: 'submitted' }]);
+  assert.equal(woken.read, false, 'woken means submitted to the client, not read');
+  await receiver.read();
+  assert.equal((await sender.delivery({ ids: [sent.id] })).deliveries[0].stage, 'read');
+  const reply = await receiver.send({ to: 'overseer', subject: 'Answer', body: 'answer', replyTo: sent.id });
+  const replied = (await sender.delivery({ ids: [sent.id] })).deliveries[0];
+  assert.equal(replied.stage, 'replied');
+  assert.equal(replied.replied.id, reply.id);
+  await handle.stop();
 });

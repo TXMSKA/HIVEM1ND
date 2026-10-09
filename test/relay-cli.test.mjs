@@ -1,3 +1,4 @@
+import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -361,4 +362,41 @@ test('Claude wake attach without Relay hooks leaves activity unknown and says ho
   assert.equal(code, 0, Buffer.concat(errors).toString('utf8'));
   assert.deepEqual(calls, []);
   assert.match(Buffer.concat(errors).toString('utf8'), /relay configure --client claude/);
+});
+
+test('relay delivery reports the stage of messages the registered unit sent and refuses a call that names none', async (context) => {
+  const { mind } = await fixture(context);
+  const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'overseer'])).code, 0);
+  const sent = JSON.parse((await cli(['relay', 'send', ...common, '--to', 'overseer', '--subject', 'Ping', '--body', 'hello'])).stdout);
+  const shown = await cli(['relay', 'delivery', ...common, '--id', sent.id, '--id', 'missing-id']);
+  assert.equal(shown.code, 0, shown.stderr);
+  const result = JSON.parse(shown.stdout);
+  assert.equal(result.deliveries[0].id, sent.id);
+  assert.equal(result.deliveries[0].stage, 'published');
+  assert.deepEqual(result.unknown, ['missing-id']);
+
+  const none = await cli(['relay', 'delivery', ...common]);
+  assert.equal(none.code, 2);
+  assert.match(none.stderr, /at least one --id/);
+  const withUnit = await cli(['relay', 'delivery', ...common, '--id', sent.id, '--unit', 'overseer']);
+  assert.equal(withUnit.code, 2);
+  assert.match(withUnit.stderr, /registered unit/);
+  const anonymous = await cli(['relay', 'delivery', '--mind-path', mind, '--id', sent.id]);
+  assert.equal(anonymous.code, 2);
+  assert.match(anonymous.stderr, /--session-id/);
+});
+
+test('relay wake status reads a binding of another machine only when --machine names it', async () => {
+  const seen = [];
+  const dependencies = { createRelayWakeController: async () => ({ status: async (binding) => { seen.push(binding); return { binding }; } }) };
+  const base = ['relay', 'wake', 'status', '--mind-path', 'C:/isolated-mind', '--unit', 'overseer', '--native-session-id', 'native-1', '--client', 'claude', '--hostname', 'HERE'];
+  assert.equal((await cli([...base, '--machine', 'THERE'], dependencies)).code, 0);
+  assert.equal((await cli(base, dependencies)).code, 0);
+  assert.deepEqual(seen.map((binding) => binding.machine), ['THERE', 'HERE']);
+  for (const argv of [['relay', 'wake', 'disable', ...base.slice(3), '--machine', 'THERE'], ['relay', 'status', '--mind-path', 'C:/isolated-mind', '--machine', 'THERE']]) {
+    const refused = await cli(argv, dependencies);
+    assert.equal(refused.code, 2, argv.join(' '));
+    assert.match(refused.stderr, /--machine is only valid with relay wake status/);
+  }
 });

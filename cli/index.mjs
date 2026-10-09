@@ -33,7 +33,7 @@ Usage:
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
   hivem1nd view [--project <name>] [options]
-  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|mcp|hook|wake|configure|unconfigure|diagnose> [options]
+  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
 
 Commands:
@@ -60,10 +60,12 @@ Relay options:
   --reply-to <id> --thread-id <id> --reply-requested
   --priority <normal|urgent> --attachment <path> (repeatable)
   --id <message-id> (repeatable) --limit <count>
+  relay delivery --id <message-id> [--id ...] shows how far messages sent by the registered unit have come (at most 100)
 
 Relay wake actions:
   relay wake attach --client <${Object.keys(WAKE_ADAPTERS).join('|')}> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--mind-path <path>]
   relay wake enable|disable|status --unit <name> --native-session-id <id> [options]
+  relay wake status ... --machine <name> reads the worker note of a binding that belongs to another machine
   relay wake watch --unit <name> --native-session-id <id> [options] (internal worker)
 ${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line) => '  ' + line).join('\n')}
   Clients other than Claude require an existing exact registration and explicit native ID.
@@ -218,9 +220,9 @@ const RELAY_VALUE_FLAGS = new Map([
   ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
   ["--attachment", "attachments"], ["--id", "ids"],
   ["--hours", "hours"],
-  ["--max-handoffs", "maxHandoffs"],
+  ["--max-handoffs", "maxHandoffs"], ["--machine", "machine"],
 ]);
-const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
+const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
 
 function parseRelayArgs(tokens) {
   let [action, ...rest] = tokens;
@@ -252,6 +254,7 @@ function parseRelayArgs(tokens) {
     index += 1;
   }
   if (options.limit !== undefined && (!/^\d+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) throw new CliUsageError("--limit must be between 1 and 500.");
+  if (options.machine !== undefined && wakeAction !== "status") throw new CliUsageError("--machine is only valid with relay wake status.");
   if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
   if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
   if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
@@ -949,7 +952,7 @@ function relayWakeBinding(options, hostname = os.hostname(), adapters = WAKE_ADA
   if (!options.nativeSessionId) throw new CliUsageError('Relay wake requires --native-session-id.');
   const client = options.client ?? 'claude';
   if (!getWakeAdapter(client, adapters)) throw new CliUsageError('Unsupported Relay wake client.');
-  return { unit: options.unit, nativeSessionId: options.nativeSessionId, client, machine: hostname };
+  return { unit: options.unit, nativeSessionId: options.nativeSessionId, client, machine: options.machine ?? hostname };
 }
 
 async function runRelayWake(options, dependencies, output, errorOutput) {
@@ -1111,6 +1114,8 @@ async function runRelay(options, dependencies, output) {
   if (action !== "reminder" && action !== "status" && !options.sessionId) throw new CliUsageError(`relay ${action} requires --session-id to select its registered instance.`);
   if (action === "read" && options.threadId) throw new CliUsageError("relay read does not accept --thread-id; relay history filters by thread.");
   if (action === "status" && options.limit) throw new CliUsageError("relay status does not accept --limit.");
+  if (action === "delivery" && !options.ids.length) throw new CliUsageError("relay delivery requires at least one --id.");
+  if (action === "delivery" && (options.unit !== undefined || options.limit)) throw new CliUsageError("relay delivery answers for the registered unit and takes only --id.");
 
   const { createRelay } = await import("../engine/relay/store.mjs");
   const relay = await createRelay({
@@ -1143,6 +1148,8 @@ async function runRelay(options, dependencies, output) {
     if (options.threadId && action === "history") args.threadId = options.threadId;
   } else if (action === "reminder") {
     args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
+  } else if (action === "delivery") {
+    args = { ids: options.ids };
   }
   const method = action === "register" ? "register"
     : action === "send" ? "send"
