@@ -8,7 +8,7 @@ Applies when: a transactional email template, an outreach or follow-up email, a 
 
 Options: second person, a conventional frame of one greeting line and one sign-off line where the relationship expects it, one ask per email. First person singular when an individual sends it.
 
-Build: subject that states the point: *Invoice 2041 is due on September 30*; first body line the point; one ask; greeting and sign-off of one line each; the sender and signature as [messages.md](../messages.md#email) sets out.
+Build: subject that states the point: *Invoice 2041 is due on September 30*; first body line the point; one ask; greeting and sign-off of one line each; the sender and signature as [messages.md](../messages.md#email) sets out. A marketing email adds the sender's name and a visible unsubscribe link.
 
 Open: [messages.md, Email](../messages.md#email).
 

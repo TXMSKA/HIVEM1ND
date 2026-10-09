@@ -11,6 +11,7 @@ import {
   discoverProjects,
   envValue,
   loadAdapters,
+  resolveAdapterPaths,
 } from './discovery.mjs';
 import {
   applyInstallPlan,
@@ -18,8 +19,11 @@ import {
   planAgentAssets,
   planDataFile,
   planKitCopy,
+  planManagedFileRemovals,
   publicPreview,
+  readPeerHashes,
   registerLinkConflicts,
+  retiredKitSources,
   writeInstallReport,
 } from './install.mjs';
 import {
@@ -30,7 +34,7 @@ import {
   serializeMachineRecord,
   writeMachineRecord,
 } from './records.mjs';
-import { detectLanguage, LANGUAGES, option, text } from './texts.mjs';
+import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
 
@@ -69,6 +73,7 @@ export async function createSetupSession(options = {}) {
     adapters,
     presets,
     resume: options.resume !== false,
+    relaySetup: options.relaySetup === true,
   });
   await session.initialize();
   return session;
@@ -520,6 +525,7 @@ class SetupSession {
     await this.createMindLayout();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
     const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
+    for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
     }
@@ -542,17 +548,24 @@ class SetupSession {
         written: applied.files.length,
         omitted: applied.omitted,
         replacedLinks: applied.replacedLinks,
-        kept: plan.conflicts
+        removed: applied.removed,
+        kept: [...applied.kept, ...plan.conflicts
           .filter((conflict) => this.answers.conflicts[conflict.path] === 'keep')
-          .map((conflict) => ({ path: conflict.path, reason: conflict.reason })),
+          .map((conflict) => ({ path: conflict.path, reason: conflict.reason }))],
         unwritten,
         warnings: plan.warnings,
       },
     });
+    // Relay points the clients at the mind's own copy of the CLI, so it waits for a complete install.
+    const relay = this.relaySetup && unwritten.length === 0
+      ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.mindPath, mindPath: this.mindPath })
+      : [];
     this.currentStep = 8;
     this.result = this.completionResult(applied.files, plan.warnings, {
+      relay,
       omitted: applied.omitted,
       replacedLinks: applied.replacedLinks,
+      removed: applied.removed,
       unwritten,
       reportPath,
     });
@@ -699,7 +712,11 @@ class SetupSession {
       agents: (this.answers.agents ?? [])
         .filter((agent) => agent.selected !== false)
         .map((agent) => ({ name: agent.id, mode: agent.attach === 'auto' ? 'auto' : 'on-demand' })),
-      paths: buildMachinePaths(this.answers.projectRoots, this.includedProjects()),
+      // The folder /cleaner moves evidence to is recorded by hand and survives a new setup.
+      paths: [
+        ...buildMachinePaths(this.answers.projectRoots, this.includedProjects()),
+        ...(this.machineRecord?.paths ?? []).filter((entry) => entry.name === 'evidence'),
+      ],
       excluded: this.excludedItems(),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       draft: {},
@@ -752,15 +769,17 @@ class SetupSession {
 
   async buildPlan() {
     const existingManaged = this.machineRecord?.managedFiles ?? {};
+    const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
     // An attach writes what belongs to this machine. The kit copy, the preferences and the
     // recorded version belong to the mind and stay as the mind already has them.
     const attach = this.answers.attach === true;
-    const kitPlan = attach ? { items: [], conflicts: [], warnings: [] } : await planKitCopy({
+    const kitPlan = await planKitCopy({
       kitPath: this.kitPath,
       mindPath: this.mindPath,
       managedFiles: existingManaged,
       excluded: this.excludedItems(),
       language: this.answers.language,
+      peerHashes,
     });
     const packageJson = JSON.parse(await readFile(path.join(this.kitPath, 'package.json'), 'utf8'));
     const versionPath = path.join(this.mindPath, 'user', 'VERSION');
@@ -794,6 +813,7 @@ class SetupSession {
       agents: finalRecord.agents,
       excluded: finalRecord.excluded,
       managedFiles: existingManaged,
+      retiredSources: retiredKitSources(kitPlan, existingManaged, this.kitPath, this.mindPath),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       language: this.answers.language,
     });
@@ -806,10 +826,16 @@ class SetupSession {
       owned: false,
       language: this.answers.language,
     });
-    return registerLinkConflicts(
-      combinePlans(kitPlan, ...dataPlans, agentPlan, machinePlan),
+    return planManagedFileRemovals(registerLinkConflicts(
+      combinePlans(attach ? null : kitPlan, ...dataPlans, agentPlan, machinePlan),
       this.answers.language,
-    );
+    ), {
+      managedFiles: existingManaged,
+      mindPath: this.mindPath,
+      retainedPaths: attach ? kitPlan.items.map((item) => item.path) : [],
+      skillsRoots: this.adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir: this.homeDir, env: this.env }).skillsRoot),
+      peerHashes,
+    });
   }
 
   async createMindLayout() {
@@ -841,6 +867,7 @@ class SetupSession {
         kit: this.attachOutdated.kitVersion,
       }));
     }
+    notices.push(...(outcome.relay ?? []).map((item) => relayLine(language, item)));
     return {
       message: text(language, 'step8Description'),
       firstCommand: '/executor <project>',
@@ -851,7 +878,9 @@ class SetupSession {
       notices,
       omitted: outcome.omitted ?? [],
       replacedLinks: outcome.replacedLinks ?? [],
+      removed: outcome.removed ?? [],
       unwritten: outcome.unwritten ?? [],
+      relay: outcome.relay ?? [],
       reportPath: outcome.reportPath ?? null,
       attachPrompts: attachAgents.map((agent) => ({ agent, text: prompt })),
     };

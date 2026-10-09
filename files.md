@@ -1,6 +1,6 @@
 # Files
 
-Every record is one file with one writer. Headers are `key: value` lines, then a blank line, then the body. Dates are `YYYY-MM-DD HH:MM`, local time. Folder names are the same at every level: `state/`, `inbox/`, `tasks/` and `log/` exist per project, per environment and at the root of `user/` for the executive roles.
+Every record is one file with one writer. Headers are `key: value` lines, then a blank line, then the body. State, task and log dates are `YYYY-MM-DD HH:MM`, local time. Relay message timestamps are ISO 8601. Folder names are the same at every level: `state/`, `inbox/`, `tasks/` and `log/` exist per project, per environment and at the root of `user/` for the executive roles.
 
 Layout inside the mind, all generated, all under `user/` (git-ignored):
 
@@ -8,17 +8,21 @@ Layout inside the mind, all generated, all under `user/` (git-ignored):
 user/
   VERSION                     base version this user/ was created or migrated with
   preferences.md              global preferences
+  models.md                   which model does which kind of work, at which effort
   routes.md                   environments, projects and other minds, names only
   machines/<host>.md          one per machine
+  machines/<host>.managed.json  the files installed on that machine and their hashes
   machines/<host>.report.md   what the last install or update on that machine wrote
   knowledge/                  private modules, same format as the base ones
   protocols/<name>.md         global protocols, for every project, one file per protocol
   roles/ commands/ features/  written for this mind, installed like the base ones
-  state/ inbox/ tasks/ log/   executive roles (overseer, technician, genesis)
+  state/ inbox/ tasks/ log/   executive roles (genesis, overseer, adjutant)
   envs/<env>/
     state/ inbox/ tasks/ log/
   projects/<project>/
     brief.md
+    product.md                what the product is and must do, now, written by the project's seat
+    annexes/<name>.md         how the product is built, one file per annex (optional)
     preferences.md            project preferences (optional)
     protocols/<name>.md       local protocols, only for this project (optional)
     state/ inbox/ tasks/ log/
@@ -49,31 +53,48 @@ claims: src/auth/, docs/auth.md
 Login form done and tested in the browser. Password reset half done: the mail template is missing. Next: finish the template, then task 004. Do not re-ask: sessions stay in cookies, decided on 09-14.
 ```
 
-`state` is `in` or `out`. `tree` is `clean` or the output of `git status --porcelain` in one line. `claims` only in team repos. The body is the context, ten lines at most.
+`state` is `in` or `out`. A unit that is `in` is held by one session: a second session of the Executor, the Overlord or the Adjutant takes a numbered unit, such as `executor-myapp-2` or `adjutant-2`, while a second session of the same unit of the Overseer, the Incubator or Genesis stops at its Start unless the user says the first is closed. `tree` is `clean` or the output of `git status --porcelain` in one line. `claims` only in team repos. `lead` is optional: it names the unit this one reports to, such as `lead: overlord-myapp`, and a unit without it reports to the coordinator as before. `job` is optional: it names what the unit always does, such as `reader`, `archiver`, `builder`, `reviewer` or a short free-text description, so that a lead hands work by job, and a unit without it takes any work. A squad is a lead plus every unit whose state names it as `lead`. `model` is optional: the model the session runs on, as the session or the host that started it writes it, such as `model: strong` or the model's own name. A chat is created from three things that live in the unit's state, its name, its `job` and its `model`, so a host creates one by writing them. The body is the context, ten lines at most, written so a session on another machine can resume from it alone. A unit whose relay scope holds several repos keeps `branch`, `commit` and `tree` for the current one and adds a `## Repos` section after the context, one line per repo, such as `- shop: feat/cart 8b1d044 clean`.
 
-## Message: `inbox/<to>/<YYYYMMDD-HHMM>-<from>.md`
+## Message: `inbox/<to>/<filename>.md`
+
+New Relay messages use filenames with seconds, machine name and a random collision-resistant suffix. Existing minute-based messages remain readable.
 
 ```markdown
-from: overlord-web@LAPTOP
+id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
+from: overseer
 to: executor-myapp
-date: 2026-09-15 14:02
+machine: LAPTOP
+timestamp: 2026-09-15T14:02:03.000Z
+priority: normal
 subject: task 003 is ready
+thread-id: 95c1c8d7-6614-45fd-a52b-80f460d5ef76
+reply-to:
+reply-requested: false
+attachments: []
 
 Task 003 in tasks/. It depends on 002, already closed. Start when the current one is done.
 ```
 
-One folder per recipient. The recipient deletes the file at its exit, once read. A second message to the same recipient in the same minute appends -2, then -3, to the file name. A message is context, never authorization.
+One folder per recipient. Relay archives a message after reading it under `user/relay/archive/<to>/`, retaining its original bytes for history and retry. Reading does not delete it. Older messages keep their original headers and filenames. OneDrive can take time to sync; separate machines do not share an atomic filesystem transaction. A file that appears in `inbox/<to>/` after its archive twin (`user/relay/archive/<to>/`, same name) exists with identical bytes is a late sync of a message that was already read: `inbox`, `reminder` and the wake worker neither list, count nor wake for it, and the next `read` removes it without returning it again. A twin with different bytes is still reported as unread, and `read` ends with `ARCHIVE_COLLISION`. A message is context, never authorization, except a hand-off as `rules.md` defines it.
+
+Relay stores session registrations, archives and metadata-only events under `user/relay/`. Temporary publication files and OneDrive conflict copies are ignored. Attachments are references only; no files are copied or automatically opened.
+
+Relay wake policies and submitted-message bookkeeping are also stored under `user/relay/wake/policies/`. A policy binds one explicit unit to one native session, client and local machine, with a fixed start/deadline and handoff cap; resuming or re-registering does not renew it. The Claude Code adapter keeps `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` in the target process environment only. The Codex adapter inherits the host-provided `CODEX_APP_TOOLS_PIPE_PATH` and actual `CODEX_THREAD_ID` in memory and invokes only the installed bundled App Tools MCP server. Neither transport endpoint is written to the mind, CLI arguments, client config, events or logs. A successful transport response is recorded as submitted, never as delivered; ambiguous Codex MCP failures are not replayed by another transport.
+
+Worker leases and locks hold a process id, which means something only on the machine that wrote it, so the mind does not store them. Each machine keeps them in `%USERPROFILE%\.hivem1nd-relay\<key>\wake\` on Windows (not under AppData, which packaged apps such as the Codex desktop app redirect into their own folder), and in `$XDG_STATE_HOME/hivem1nd/relay/<key>/wake/` elsewhere (`~/.local/state` when the variable is unset or relative), where `<key>` is the first 16 hexadecimal digits of the SHA-256 of the mind's resolved path, in lower case on Windows. `RELAY_LOCAL_STATE_DIR` replaces everything before `<key>`. A worker renews its lease at least every 5 seconds, and writes `worker: { state, heartbeatAt }` into its own policy when it starts, at most once a minute while it runs, and when it stops, so that another machine can read whether it is alive; `state` is `running` or `stopped`. `workers/` and `locks/` files that earlier versions left under `user/relay/wake/` are ignored, and the worker of the same machine removes them. The same folder holds `wake/index/`, a cache of the newest registration of each native session on this machine, which hooks and workers read instead of every file in `user/relay/sessions/`; it can be deleted at any time and is rebuilt from those files.
 
 ## Task: `tasks/<id>-<slug>.md`
 
 ```markdown
 id: 003
 status: open
-from: overseer
+from: overlord-web
 to: executor-myapp
 date: 2026-09-15 13:40
 depends: 002
 design: docs/design.md
+requirements: APP-B-04
+work: build from an approved plan
 
 ## Request
 Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not touch src/auth/session.ts. Done means: a user receives the mail, the link opens the form, the new password works, all three seen in the browser.
@@ -81,7 +102,7 @@ Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not t
 ## Report
 ```
 
-`id` is sequential per project, three digits. `status` moves from `open` to `done` when the executor appends the report, and to `closed` when the requester verifies it. That change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends` and `design` are optional; `design` comes from the brief.
+`id` is sequential per project, three digits. `status` moves from `open` to `review` when the executor appends the report and the work waits for the requester's look, to `done` when the requester accepts it, and to `closed` when the requester archives it. A task sent back from `review` returns to `open` with what is missing in its Report. When the state of the executor names a `lead`, the lead reviews the delivery first and appends `Approved for review by <unit> on <date>` to the Report, or sends the task back as above, and the person's review waits for that line; a task of an executor with no `lead` has no such line and is reviewed as before, and no status is added. Each change is the event hooks listen to. While the task is planned, the protocols whose `scope` covers something the plan actually builds, in the mind and in the installed knowledge modules, are listed in the plan, each next to the item that uses it. Before the Report is written, the user is asked in one line whether to run them, each one named; only the confirmed ones run, what each step produced is appended to the Report, and a declined one is recorded as declined. Roles and features follow this the way they follow the rule about commits and pushes: it is a contract in the text, not something the engine enforces. `depends`, `design`, `requirements` and `work` are optional; `design` comes from the brief, `requirements` lists, comma separated, the IDs of the requirements of the product document that the task delivers, and `work` names the kind of work the task is, as the `delegation` category lists it, so that the executor takes the row of `models.md` for that kind of work.
 
 ## Brief: `projects/<project>/brief.md`
 
@@ -97,9 +118,122 @@ repo: github.com/user/myapp
 ## Facts
 - 2026-09-12: the blog is stored in MySQL and edited from /admin; the JSON files are gone.
 - 2026-09-14: sessions stay in cookies; no JWT.
+- 2026-09-15: a forgotten password is reset by mail (product: Requirements/Beta).
 ```
 
-No paths. Paths are per machine and live in the machine file. The first role that enters a project without a brief writes the header from its audit and asks only what the audit could not answer.
+No paths. Paths are per machine and live in the machine file. The first role that enters a project without a brief writes the header from its audit and asks only what the audit could not answer. A Fact that changes a product document carries the pointer `(product: <section>)`, such as `(product: Requirements/Beta)`, and shrinks to one line once the product document holds the text. The format of the product document follows.
+
+## Product: `projects/<project>/product.md`
+
+```markdown
+project: myapp
+family: shop
+stage: beta
+updated: 2026-09-15
+voice: docs/voice.md
+board: docs/flows/boards/index.json
+
+## Problem and audience
+Owners of small shops who write a blog and have no developer: changing a post or recovering a lost password means asking someone.
+
+## Value
+The owner edits posts and recovers access alone, from /admin.
+
+## Requirements
+
+### Alpha
+- APP-A-01: the owner creates, edits and deletes a post from /admin. Accepted when: a post created in /admin shows on the public blog after a reload and is gone after deletion.
+
+### Beta
+- APP-B-04: a user who forgot the password sets a new one by mail. Accepted when: a reset request sends one mail, its link opens the form once, and the new password logs in.
+
+### Release
+- APP-R-01: every post reads with scripts blocked. Accepted when: each post opens and shows its full text in a browser with scripts disabled.
+
+## Out of scope
+- Comments from readers.
+
+## Plans
+Free and Plus. The prices are in the price table of `projects/shop/product.md`.
+
+## Floors
+- Local first: a draft survives a lost connection and is saved when it returns.
+- Privacy: no third-party script on the public blog.
+- Weak devices: the public blog is usable on a five-year-old phone.
+- Platforms: current desktop and phone browsers.
+
+## Depends on
+- Products: shop-checkout
+- Shared contracts: sign-in
+
+## Open questions
+- Does a reset link expire after one hour or after a day?
+
+## Annexes
+- architecture: annexes/architecture.md
+```
+
+The product document is the current truth about a product: what it is, for whom, and what it must do at each stage. Every project has one, written and kept by that project's own seat. It holds what is true now; status and order of work never enter it. `project` is the product's project name. `family` is the project of the family the product belongs to, whose own product document is `projects/<family>/product.md`; the family product document names itself in `family`. A field with nothing to point at, such as a product with no family or no board yet, is written `none`. `stage` is `alpha`, `beta` or `release`, the release stage the product is in now, apart from the working stage in the brief. `updated` is the date, `YYYY-MM-DD`, of the last edit. `voice` and `board` are paths relative to the repository, as in the brief: the product document points to the voice specification and to the boards and never copies them.
+
+A product document has these sections, in this order:
+
+- Problem and audience: who the product is for and what they cannot do, or do badly, today.
+- Value: what changes for them, in plain nouns.
+- Requirements: one group per stage, `### Alpha`, `### Beta` and `### Release`, and one line per requirement with its ID and its acceptance criterion. The ID is `<CODE>-<A|B|R>-<NN>`, such as `APP-B-04`: `CODE` is the product's short uppercase code, which never changes, the letter is the stage and `NN` is a number within the stage. An ID is never reused for another requirement, and a requirement that changes stage takes a new ID. The criterion is something a reviewer can observe, such as a screen state, a figure, a file or the output of a command, never a quality word such as fast or simple.
+- Out of scope: what the product deliberately does not do, one line each.
+- Plans: the names of the plans the product is offered in. Prices are not repeated here; they are in the price table of the family product document.
+- Floors: what holds at every stage, one line each for local first, privacy, weak devices and platforms.
+- Depends on: two lines, `- Products: <project>, <project>` for the products of the family it needs and `- Shared contracts: <name>, <name>` for the contracts it uses, each written `none` when empty.
+- Open questions: what is not decided yet. A question leaves the list when it is answered, and the answer goes into the section it belongs to.
+- Annexes: the last section, one line per annex, `- <name>: <path>`, or `none` when the product has no annex. An annex lives in `projects/<project>/annexes/<name>.md`, beside the product document and written by the same seat, and its path is relative to the product document, such as `annexes/architecture.md`; one that already lives in the repository is named by its repository path instead, as `voice` and `board` are, and is not copied. An annex holds the how, such as the architecture, the data model and the integrations, and the product document holds the what and for whom. An annex never restates a requirement; it cites its ID.
+
+The family product document has the same sections, where Requirements are the ones every product of the family meets, under the family's own code, and adds four: Rules, what holds for every product and is never restated in a product document; Product map, one line per product with its name, its code and what it is for, its stage staying in its own product document; Stages, what alpha, beta and release mean in the family; and Design direction, the path of the design document, never a copy of it. The family product document holds the price table once, in Plans, with one row per plan and every price written with currency and period.
+
+One home per fact. Each fact is written once, in the file that owns it, and every other file refers to it by ID or by section instead of restating it:
+
+- Product document: what the product is and for whom, now.
+- Brief: the dated why, and the technical header.
+- Scope file in `user/overseer/`, or brainstorm file: open questions only, while a topic is being defined. Agreed text leaves it in the same turn, into the product document or, for a project with a seat, into the brief Fact and the Relay note that hand it to the seat, and an empty file is deleted.
+- Survey and plan in `user/overseer/`: status and order of work.
+- Boards: the UI.
+- Annex: the how of the product, such as its architecture, data model and integrations.
+- Task: the how of one piece of work, in its Architecture section when it has one.
+
+The seat of the project, its Executor or the unit that works in that project, writes and keeps the project's product document and its annexes, one writer per file. It drafts the product document from the records and edits it in the turn a product decision is taken, with `updated` set and the brief Fact left as one line with its pointer. A requirement changes only on a decision of the user. The coordinator, the Overseer unit when the mind has one and otherwise the environment's Overlord, reviews each product document against the user's decisions and approves it with the user. It drafts a product document only for a project that has no seat, and it owns the family product document, which it drafts part by part with the user. A product decision taken with the coordinator is written by the coordinator as a brief Fact with its `(product: <section>)` pointer plus a Relay note to the project's seat, subject `Product decision: <project>`, one line naming the section, normal priority, no reply requested. The seat edits the product document, and the check reports the gap until it does. A seat that edits its product document sends the coordinator its `User decisions` note, so that the change is reviewed. The `product-requirements` protocol of the `product` knowledge module writes a product document, and `/brainstorm` drafts its text.
+
+Depends on is data. After a change to a product document that touches a shared contract, whoever edited it, the seat or the coordinator, sends one Relay note to each product listed in that product document's Depends on: subject `Product change: <project>`, one line naming the sections or IDs changed, normal priority, no reply requested. The unit of each product comes from its state file, and a missing or ambiguous unit is reported to the user, never guessed. No code sends it; the roles do.
+
+The check reports a project with a `brief.md` and no `product.md`. When the working directory resolves to a project, one line names that project; when it resolves to none, as for an executive seat at the mind root, one line gives the number of such projects and is absent at zero. `--json` carries the full list, each project with its brief path, under `mind.product.missing`. The check also compares `updated` with the date of the newest Fact in the same project's brief that carries a pointer, and a product document older than that Fact is reported. A Fact without a pointer never triggers it, however new, and a product document updated on the day of the Fact or later is not reported. A product document over 20 KB is listed for `/cleaner`.
+
+## View: hivem1nd-view-v1
+
+`hivem1nd view` reads the states, tasks, inboxes, product documents and Relay records of the mind into one JSON document that a host draws, and writes nothing. A host runs `node <mind>/cli/index.mjs view --json --mind-path <mind>` and parses standard output as one JSON object. The exit code is 0 whenever the mind could be read, with or without issues, and 1 only when the mind itself cannot be read, with the reason on standard error. `--project <name>` limits the document to that project and to the units of the root and of the environments that lead its chats. Without `--json` the command prints five lines: what waits on the person, the chats by status, the tasks by status, the unread messages and the issues. The same document comes from `readView({ mindPath, project, hostname, now })` in `engine/view.mjs`.
+
+```json
+{
+  "contract": "hivem1nd-view-v1",
+  "readAt": "2026-10-08T12:05:00.000Z",
+  "mind": { "version": "2.0.0", "machine": "LAPTOP", "machines": ["DESKTOP", "LAPTOP"], "project": null },
+  "chats": [], "squads": [], "waiting": [], "tasks": [], "inbox": [], "products": [],
+  "counts": { "chats": 0, "waiting": 0, "open": 0, "review": 0, "done": 0, "closed": 0, "unread": 0, "issues": 0 },
+  "issues": []
+}
+```
+
+Every `path` is relative to the mind, with `/` separators. Dates are kept as the file writes them: local `YYYY-MM-DD HH:MM` in state, task and message headers, ISO 8601 in Relay records and in the `timestamp` of a Relay message. A field with nothing to hold is `null` and a list is `[]`. A host ignores a key it does not know, since a minor version may add keys; a key that changes meaning is a new contract name.
+
+- `mind`: `version` is the content of `user/VERSION`; `machine` is the host name that ran the read; `machines` are the host names of `machines/*.md`, without the report files; `project` is the project asked for, as the mind spells it.
+- `chats`: one entry per state file of the root, of every environment and of every project, keyed by `path`, since two files can declare the same `unit`. `unit`, `lead`, `job`, `model`, `machine`, `date` and `branch` are the headers of the state; `scope` is `root`, `environment` or `project`, with `environment` or `project` named when the scope has one; `state` is `in` or `out`; `context` is the first line of the body; `status` and `relay` are derived, as below.
+- `chats[].status` is the first that applies: `unknown`, when the state file cannot be read or its `state` is neither `in` nor `out`, and the chat then reports `state: out` and carries an issue; `out`, when the state is `out`; `quota`, when its Relay quota is exhausted; `waiting`, when an item of `waiting` names the unit; `working`, when its Relay activity is `busy` or `active`; `idle`, otherwise.
+- `chats[].relay` comes from the newest registration under `user/relay/sessions/` for the unit, matched without regard to case: `registered`, `client`, `activity` (`busy`, `idle`, `active` or `inactive`), `activityObservedAt`, `quota` (the object the registration holds) and `wake`. Activity and quota are `null` when observed more than 15 minutes before `readAt`, the window Relay gives its own status. A quota is exhausted when it holds `exhausted: true` or a `remaining` of 0 or less. `wake` is `true` when a wake policy for the unit under `user/relay/wake/policies/` is enabled, not paused and inside its window, or unlimited.
+- `squads`: a lead and every unit whose state names it as `lead`, and the rest grouped by scope: the units that name no lead, and are not a lead, form one squad with `lead: null` per project, per environment and for the root, so a project with one unit is a solo squad. `lead` is the unit as its own state spells it, or as its members spell it when it has no state. `members` are the units that name the lead, without the lead; `rollup` counts the lead and its members by status as `working`, `idle`, `waiting`, `out` and `attention`, which counts `quota` and `unknown`. A unit that leads a squad and names a lead itself is counted in both.
+- `waiting`: what is blocked on the person, blocking items first (`question` and `message`), then `review`, newest `since` first within each. `unit` is the one that waits, `task` is the task id of a review, and `approvedBy` is the lead that approved a review. A `review` is a task in `review` whose requester in the `from` header opens with `user` or a name from an optional comma-separated `person:` header in any `user/machines/<host>.md` file, in any case; without that header, only `user` matches. When the executor named in `to` has a `lead`, the review waits only after that lead appended `Approved for review by <unit> on <date>` to the Report, and then `unit` is the lead and `since` the date of that line; a task of an executor with no lead waits as soon as it is in `review`, with `unit` the executor and `since` the `date` of the task. A `question` is each item, split on `;`, of a `Waiting on user:` line in the body of a state in the root or environment scope, with a `person:` name accepted in place of `user`, in any case, and an optional `the` before either; `unit` is that state's unit and `since` its `date`. A `message` is a file in an inbox that is addressed to `user`, by its `to` header or by the folder it lies in, with `reply-requested` set to `true` or `yes`; `title` is its subject, `unit` its sender and `since` its `timestamp` or `date`.
+- `tasks`: every task in `open`, `review` and `done`, in the root, the environments and the projects, with `project` set to `null` outside a project. `title` is the first level-1 heading of the body, otherwise the slug of the file name with hyphens read as spaces; `to` and `from` are the headers as written; `requirements` are the IDs of the header, split on commas; `approvedBy` is the lead whose approval line the Report holds for an executor that has that lead. A `closed` task is only counted, in `counts.closed`.
+- `inbox`: every file still in an `inbox/<unit>/` folder, which is what unread means since Relay archives a message after reading it. `unit` is the folder, `from` is the sender without a trailing `@<machine>`, `date` is the `timestamp` of a Relay message or else its `date` header, and `priority` is `normal` or `urgent`.
+- `products`: one entry per project with a `product.md`. `stage` is the first of `alpha`, `beta` and `release` in the first clause of the `stage` header, up to the first comma, semicolon, colon, full stop or parenthesis, or `null`; `updated` is the date of the `updated` header. `requirements.alpha`, `beta` and `release` count the lines under `### Alpha`, `### Beta` and `### Release` of `## Requirements` that open with a requirement ID, either `- APP-B-04: ...` or `- APP-B-04 Title: ...`, a heading being allowed a note after the stage word. `total` is the number of IDs and `met` the number that a `done` task of the project lists in its `requirements` header; a `closed` task does not count, since it can be archived without being accepted. `openQuestions` counts the bullets under `## Open questions` other than `none`. `annexes` has one `{ name, path }` per `- <name>: <path>` line under `## Annexes`, the path as the product document writes it.
+- `counts` are the lengths of the lists above, `closed` being the closed tasks, and `unread` the length of `inbox`.
+
+A file that cannot be read or parsed never stops the read: it adds `{ path, reason }` to `issues`, sorted by path, and the rest of the document is complete. A task is refused for a header line that is not `key: value`, a key that appears twice, an `id` that is not digits or a `status` other than `open`, `review`, `done` or `closed`, so a fenced header, a heading in place of the headers, a free-text status or a task with no id each cost one issue; a byte order mark and CRLF line endings are accepted. The reasons are short fixed phrases: `header line <n> is not key: value`, `header <key> appears twice`, `id is missing or not a number`, `status is not open, review, done or closed`, `state is not in or out`, `message has no from header`, `is larger than 128 KB`, `cannot be read (<code>)`, `cannot be listed (<code>)`, `is not a plain file`, `is not a plain folder`, `is a link, not followed`, `holds <n> entries, only the first 2000 were read`, `is not valid JSON`, `is not a Relay record of the expected kind` and `project not found`. A file over 128 KB is not read, a folder over 2000 entries is read up to 2000, and a symbolic link or a Windows junction is never followed.
 
 ## Log: `log/<YYYYMMDD-HHMM>-<unit>.md`
 
@@ -153,17 +287,20 @@ setup: done
 - web: C:\Users\me\GitHub
 - myapp: C:\Users\me\GitHub\myapp
 - mygame: C:\Users\me\Unity\mygame
+- evidence: D:\evidence
 
 ## Excluded
 - knowledge
 - corpo
 ```
 
-`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them.
+`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them. The optional `evidence` path is where `/cleaner` moves large evidence and binary folders out of the mind; the brief keeps the relative path.
+
+The optional `person:` header is a comma-separated list of names the person goes by in the records, used to tell their requests and questions apart.
 
 While `setup` is a number, a temporary `## Setup Draft` section contains a fenced JSON block with the answers collected so far. Every front preserves it when resuming. The section is removed when `setup: done`; completed settings remain in the header and the Agents, Paths and Excluded sections.
 
-The `## Managed Files` section contains a fenced JSON object mapping installed absolute file paths to their SHA-256 content hashes. Setup and updates replace a managed file automatically only while its content still matches the recorded hash. An unowned or locally modified file requires a keep-or-replace choice. Paths and hashes stay private in the machine record. A symbolic link or a Windows junction standing where files have to be written is one choice for every file behind it: replacing it removes the link and keeps the folder it points at, and omitting it leaves those files uninstalled, where the next `check` lists them as missing.
+The managed files live beside the machine file, in `machines/<host>.managed.json`: one JSON object mapping installed absolute file paths to their SHA-256 content hashes, so the machine file keeps only the header, Agents, Paths and Excluded. Setup, attach and updates read and write that file. A machine file from an older install still carries the map in a `## Managed Files` section holding a fenced JSON object; it is read from there while the JSON file does not exist, and the next write moves it out and removes the section. Setup and updates replace a managed file automatically only while its content still matches the recorded hash; a kit copy in the mind also counts as managed while it matches the hash another machine of the mind recorded for the same path. Text matches under either line ending, because machines that share a mind may check the kit out with different ones: a file that already holds the same text as the kit is left as it is and recorded as it is on disk, and binary content is compared byte for byte. An unowned or locally modified file requires a keep-or-replace choice; a run without a terminal lists the choices and exits with code 1 instead of asking. Paths and hashes stay private in the machine record. A symbolic link or a Windows junction standing where files have to be written is one choice for every file behind it: replacing it removes the link and keeps the folder it points at, and omitting it leaves those files uninstalled, where the next `check` lists them as missing.
 
 ## Install report: `machines/<host>.report.md`
 
@@ -196,6 +333,35 @@ One file per machine, replaced by every install, attach and update, so what a ru
 ```
 
 One line per preference, with the date and the reason. The global file applies everywhere; a project file applies to that project and overrides the global one.
+
+## Models: `models.md`
+
+```markdown
+updated: 2026-09-15
+
+# Models
+
+Which model does which kind of work, at which effort, for every seat and every delegation of this mind. It is the default when the user has not said otherwise.
+
+| Work | Client | Model | Effort | Status | Tested | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| Plan, scope, product document, deep review | <client> (seat) | strong model | max | active | 2026-09-12 | plans held up in review |
+| Seat work | <client> (seat) | strong model | high | active | 2026-09-12 | every seat; never delegated |
+| Build from an approved plan | subagent | mid model | high; xhigh for hard pieces | active | 2026-09-14 | test counts held when the seat reran them |
+| Build from an approved plan | <client> | mid model | high | active while paid | 2026-09-14 | two tasks built, counts held |
+| Read-only gathering | subagent | light model | low | active | 2026-09-14 | sources cited, conflicts found |
+| Mechanical edits from a written list | subagent | mid model | low | candidate | not yet | |
+
+Fallback order for builds: mid model on subagent, then mid model on <client>.
+```
+
+The table says which model, at which effort, does each kind of work. `updated` is the date, `YYYY-MM-DD`, of the last edit. The kit speaks in tiers, strong, mid and light, and never in model names: the example holds tier words in the Model column, and the mind's file holds the concrete model of each row. The `delegation` category lists the kinds of work with the tier and effort of each, and the Adapters section of `roles/genesis.md` maps the tiers to the models of each client.
+
+There is one row per kind of work and client, so a kind of work has several rows when several clients can do it. Work is the kind of work, worded as in the `delegation` category. Client is the key of a Relay wake adapter, or `subagent` for a subagent of the seat's own client, optionally followed by a note in parentheses, such as `(seat)` for work done in the user's own chat. Effort is `low`, `medium`, `high`, `xhigh` or `max`, with a note after a semicolon where hard pieces differ. Status is `active`, `paused` or `candidate`, optionally followed by a short qualifier, such as `active while paid`. Tested is the date, `YYYY-MM-DD`, of the test that last changed the row, several dates comma separated, or `not yet`, and Result is one line of what the test showed. The last line, `Fallback order for <work>: <row>, then <row>.`, names for one kind of work the rows to take in order when the first is not available, each row written as its model on its client.
+
+A row changes only when a test changes it. A tool moves from `candidate` to `active` only after a real test: a piece the seat has verified first-hand and, for a client other than the seat's, a Relay live trial. A tool that stops being available, such as a subscription that ends, is `paused`, never deleted, and keeps its history. Prices never enter the table; they stay in the mind's cost notes. The user's call in the moment, which client, model or effort to use now, overrides the table for that session and is never written into it.
+
+When `models.md` does not exist, setup writes it from the Adapters mapping; after that the coordinator, the Overseer unit when the mind has one and otherwise the environment's Overlord, edits it in the turn a test changes a row. The check reads the Client column: a row whose first word is neither the key of a Relay wake adapter nor `subagent` is reported with its Work and its client. A missing file, a file without a table and a valid row stay silent, and the measurement never fails the check.
 
 ## Knowledge module: `knowledge/<module>/`
 

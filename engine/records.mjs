@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 const FENCE = '```json';
@@ -59,6 +59,25 @@ export function serializeFrontmatter(parsed, { allowedKeys, additions = {} } = {
 
 export function hashContent(content) {
   return createHash('sha256').update(content).digest('hex');
+}
+
+// Machines that share one mind check the kit out with different line endings, so a text file
+// is the same file under either one. Binary content has no such forms and keeps its bytes.
+export function hashLineEndingForms(content) {
+  const text = decodeText(content);
+  if (text === null) return null;
+  const lf = text.replace(/\r\n/g, '\n');
+  return { lf: hashContent(lf), crlf: hashContent(lf.replaceAll('\n', '\r\n')) };
+}
+
+function decodeText(content) {
+  if (typeof content === 'string') return content;
+  if (content.includes(0)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+  } catch {
+    return null;
+  }
 }
 
 export function parseMachineRecord(text) {
@@ -136,20 +155,52 @@ export function serializeMachineRecord(record) {
   if (record.setup !== 'done' && Object.keys(record.draft ?? {}).length > 0) {
     lines.push('', '## Setup Draft', FENCE, JSON.stringify(record.draft, null, 2), '```');
   }
-  if (Object.keys(record.managedFiles ?? {}).length > 0) {
-    lines.push('', '## Managed Files', FENCE, JSON.stringify(record.managedFiles, null, 2), '```');
-  }
   return `${lines.join('\n').trimEnd()}\n`;
+}
+
+// The managed map lives beside the machine file. A machine file written before that split
+// still carries it in a `## Managed Files` section, which is read until the next write moves it.
+export async function readManagedFiles(machineFilePath, fallback = {}) {
+  const jsonPath = machineFilePath.replace(/\.md$/i, '') + '.managed.json';
+  const text = await readTextIfPresent(jsonPath);
+  if (text === null) return fallback;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function readMachineRecord(mindPath, hostname) {
   const filePath = machineRecordPath(mindPath, hostname);
   try {
-    return { filePath, record: parseMachineRecord(await readFile(filePath, 'utf8')) };
+    const record = parseMachineRecord(await readFile(filePath, 'utf8'));
+    record.managedFiles = await readManagedFiles(filePath, record.managedFiles);
+    return { filePath, record };
   } catch (error) {
     if (error?.code === 'ENOENT') return { filePath, record: null };
     throw error;
   }
+}
+
+// The other machines of a mind record the kit copies they installed into it, so a file that
+// matches one of those records was written by an install and is not the user's own.
+export async function readPeerManagedFiles(mindPath, hostname) {
+  const directory = path.dirname(machineManagedPath(mindPath, hostname));
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const own = hostname.toLowerCase();
+  const peers = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => /^(.+)\.managed\.json$/.exec(entry.name)?.[1])
+    .filter((name) => name && name.toLowerCase() !== own);
+  return Promise.all(peers.map((name) => readManagedFiles(path.join(directory, `${name}.md`))));
 }
 
 export async function writeMachineRecord(mindPath, hostname, record) {
@@ -161,12 +212,24 @@ export async function writeMachineRecord(mindPath, hostname, record) {
       throw new Error(`Refusing to replace an unrecognized machine record: ${filePath}`);
     }
   }
+  // The map goes first: a run that stops between the two writes leaves a machine file that
+  // still holds the old section, and the map beside it wins when both exist.
+  const managedPath = machineManagedPath(mindPath, hostname);
+  const managed = record.managedFiles ?? {};
+  if (Object.keys(managed).length > 0 || await readTextIfPresent(managedPath) !== null) {
+    await atomicWriteFile(managedPath, `${JSON.stringify(managed, null, 2)}
+`, { root: mindPath });
+  }
   await atomicWriteFile(filePath, serializeMachineRecord(record), { root: mindPath });
   return filePath;
 }
 
 export function machineRecordPath(mindPath, hostname) {
   return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.md`);
+}
+
+export function machineManagedPath(mindPath, hostname) {
+  return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.managed.json`);
 }
 
 export function machineReportPath(mindPath, hostname) {

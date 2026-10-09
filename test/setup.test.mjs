@@ -5,8 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadAdapters } from '../engine/discovery.mjs';
-import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, planDataFile } from '../engine/install.mjs';
-import { assertSafePath, parseMachineRecord } from '../engine/records.mjs';
+import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, planDataFile, planManagedFileRemovals } from '../engine/install.mjs';
+import { evolve } from '../engine/lifecycle.mjs';
+import { assertSafePath, hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 import { text } from '../engine/texts.mjs';
 
@@ -101,7 +102,7 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
   assert.match(preferences, /Existing preference stays first\./);
   assert.match(preferences, /answers stay concise\. Why: chosen at setup\./);
 
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.setup, 'done');
   assert.equal(machine.language, 'en');
   assert.equal(machine.updateCheck, 'off');
@@ -131,7 +132,7 @@ test('simple install mode accepts every default and reaches install directly', a
   const result = await session.install();
   assert.equal(result.firstCommand, '/executor <project>');
 
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.setup, 'done');
   assert.equal(machine.updateCheck, 'daily');
   assert.deepEqual(machine.agents, [{ name: 'codex', mode: 'auto' }]);
@@ -204,7 +205,7 @@ test('the automatic update checkbox on the confirm step survives resume', async 
   const installStep = await resumed.getStep();
   await resumed.answer({ confirm: true });
   await resumed.install();
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(machine.updateCheck, 'daily');
   assert.equal(installStep.number, 7);
 });
@@ -272,6 +273,134 @@ test('mind selection rejects filesystem roots and the kit fixtures tree', async 
     env: { PATH: '' },
   }), SetupValidationError);
 });
+
+test('install and evolve prune retired kit files and skills, and previews leave them on disk', async (context) => {
+  for (const action of ['install', 'evolve']) {
+    const fixture = await makeRetirementFixture(context);
+    const options = { ...fixture, hostname: 'TESTBOX', env: { PATH: '' } };
+    const copyPath = path.join(fixture.mindPath, 'roles', 'retired.md');
+    const skillDirectory = path.join(fixture.homeDir, '.agents', 'skills', 'retired');
+    const skillPath = path.join(skillDirectory, 'SKILL.md');
+    const bundleDirectory = path.join(fixture.homeDir, '.agents', 'skills', 'bundle');
+    const supportPath = path.join(bundleDirectory, 'scripts', 'run.mjs');
+    await rm(path.join(fixture.kitPath, 'roles', 'retired.md'));
+    await rm(path.join(fixture.kitPath, 'features', 'bundle'), { recursive: true });
+    const machinePath = path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md');
+    const before = await readFile(machinePath, 'utf8');
+    const session = action === 'install' ? await completeAnswers(fixture, ['codex']) : null;
+    const preview = session ? await session.preview() : await installAgentAssets({ ...options, previewOnly: true });
+    const removals = session ? preview.files.filter((item) => item.action === 'delete').map((item) => item.path) : preview.removed;
+    assert.ok([copyPath, skillPath, supportPath].every((filePath) => removals.includes(filePath)), action);
+    for (const filePath of [copyPath, skillPath, supportPath]) assert.equal(await pathExists(filePath), true);
+    if (!session) assert.equal(await readFile(machinePath, 'utf8'), before);
+
+    if (session) await session.answer({ confirm: true });
+    const result = session ? await session.install() : await evolve({ ...options, pull: false });
+    for (const filePath of [copyPath, skillPath, supportPath, skillDirectory, bundleDirectory]) {
+      assert.equal(await pathExists(filePath), false, `${action}: ${filePath}`);
+    }
+    assert.ok(result.removed.includes(copyPath));
+    assert.ok(result.removed.includes(skillPath));
+    const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+    for (const filePath of [copyPath, skillPath, supportPath]) assert.equal(record.managedFiles[filePath], undefined);
+    assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')), true);
+    const report = await readFile(result.reportPath, 'utf8');
+    assert.match(report, /## Removed/);
+    assert.ok(report.includes(copyPath));
+  }
+});
+
+test('retired managed files edited by the user are kept, released and reported in both languages', async (context) => {
+  for (const language of ['en', 'es']) {
+    const fixture = await makeRetirementFixture(context);
+    const copyPath = path.join(fixture.mindPath, 'roles', 'retired.md');
+    const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'retired', 'SKILL.md');
+    await rm(path.join(fixture.kitPath, 'roles', 'retired.md'));
+    await writeFile(copyPath, 'edited mind copy\n');
+    await writeFile(skillPath, 'edited skill\n');
+    const result = await installAgentAssets({ ...fixture, hostname: 'TESTBOX', env: { PATH: '' }, language });
+    assert.deepEqual(result.conflicts, []);
+    assert.equal(await readFile(copyPath, 'utf8'), 'edited mind copy\n');
+    assert.equal(await readFile(skillPath, 'utf8'), 'edited skill\n');
+    const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+    const report = await readFile(result.reportPath, 'utf8');
+    assert.ok(report.includes(`## ${text(language, 'reportKept')}`));
+    for (const filePath of [copyPath, skillPath]) {
+      assert.equal(record.managedFiles[filePath], undefined);
+      assert.ok(report.includes(`${filePath}: ${text(language, 'reasonManagedFileModified')}`));
+    }
+  }
+});
+
+test('pruning never removes managed or unowned files under user', async (context) => {
+  const fixture = await makeRetirementFixture(context);
+  const userPath = path.join(fixture.mindPath, 'user');
+  const privatePath = path.join(userPath, 'roles', 'private.md');
+  const trackedPath = path.join(userPath, 'notes.md');
+  const unownedPath = path.join(userPath, 'tasks', '001-private.md');
+  await mkdir(path.dirname(privatePath), { recursive: true });
+  await mkdir(path.dirname(unownedPath), { recursive: true });
+  await writeFile(privatePath, '---\nname: private\ndescription: Private.\n---\n\n# Private\n');
+  await writeFile(trackedPath, 'private notes\n');
+  await writeFile(unownedPath, 'private task\n');
+  const machinePath = path.join(userPath, 'machines', 'TESTBOX.md');
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+  record.managedFiles[privatePath] = hashContent(await readFile(privatePath));
+  record.managedFiles[trackedPath] = hashContent(await readFile(trackedPath));
+  await writeMachineRecord(fixture.mindPath, 'TESTBOX', record);
+  const before = await Promise.all([privatePath, trackedPath, unownedPath].map((filePath) => readFile(filePath, 'utf8')));
+  const result = await installAgentAssets({ ...fixture, hostname: 'TESTBOX', env: { PATH: '' } });
+  assert.deepEqual(await Promise.all([privatePath, trackedPath, unownedPath].map((filePath) => readFile(filePath, 'utf8'))), before);
+  assert.ok(!result.removed.some((filePath) => filePath.startsWith(`${userPath}${path.sep}`)));
+  assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'private', 'SKILL.md')), true);
+});
+
+test('a failed write leaves retired files intact and a late edit is kept during pruning', async (context) => {
+  const fixture = await makeFixture(context);
+  const retiredPath = path.join(fixture.mindPath, 'roles', 'retired.md');
+  const firstPath = path.join(fixture.root, 'first.md');
+  const blockedPath = path.join(fixture.root, 'blocked', 'late.md');
+  await mkdir(path.dirname(retiredPath), { recursive: true });
+  await writeFile(retiredPath, 'retired\n');
+  const plan = await planManagedFileRemovals(combinePlans(
+    await planDataFile({ destination: firstPath, content: 'first\n', root: fixture.root }),
+    await planDataFile({ destination: blockedPath, content: 'late\n', root: fixture.root }),
+  ), { managedFiles: { [retiredPath]: hashContent('retired\n') }, mindPath: fixture.mindPath });
+  plan.items[1].root = path.join(fixture.root, 'outside');
+  await assert.rejects(() => applyInstallPlan(plan), /Path escapes the selected destination/);
+  assert.equal(await pathExists(firstPath), false);
+  assert.equal(await readFile(retiredPath, 'utf8'), 'retired\n');
+
+  const rulePath = path.join(fixture.homeDir, '.codex', 'AGENTS.md');
+  const removalPlan = await planManagedFileRemovals(combinePlans(), {
+    managedFiles: { [retiredPath]: hashContent('retired\n'), [rulePath]: hashContent(await readFile(rulePath, 'utf8')) },
+    mindPath: fixture.mindPath,
+  });
+  await writeFile(retiredPath, 'late edit\n');
+  const result = await applyInstallPlan(removalPlan);
+  assert.deepEqual(result.removed, []);
+  assert.equal(await pathExists(rulePath), true);
+  assert.equal(result.kept[0].path, retiredPath);
+  assert.equal(await readFile(retiredPath, 'utf8'), 'late edit\n');
+});
+
+async function makeRetirementFixture(context) {
+  const fixture = await makeFixture(context);
+  const kitPath = path.join(fixture.root, 'kit');
+  await mkdir(path.join(kitPath, 'roles'), { recursive: true });
+  await mkdir(path.join(kitPath, 'features', 'bundle', 'scripts'), { recursive: true });
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-test","version":"1.0.0","files":["roles/","features/"]}\n');
+  for (const name of ['executor', 'retired']) {
+    await writeFile(path.join(kitPath, 'roles', `${name}.md`), `---\nname: ${name}\ndescription: Test role.\n---\n\n# ${name}\n`);
+  }
+  await writeFile(path.join(kitPath, 'features', 'bundle', 'bundle.md'), '---\nname: bundle\ndescription: Bundle.\n---\n\n# Bundle\n');
+  await writeFile(path.join(kitPath, 'features', 'bundle', 'scripts', 'run.mjs'), 'export const bundled = true;\n');
+  fixture.kitPath = kitPath;
+  const session = await completeAnswers(fixture, ['codex']);
+  await session.answer({ confirm: true });
+  await session.install();
+  return fixture;
+}
 
 test('the default mind path is the user home, never the kit tree or a QA fixture', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-default-'));
@@ -446,7 +575,7 @@ test('a symbolic ancestor becomes one conflict with replace as the default, and 
   const report = await readFile(result.reportPath, 'utf8');
   assert.match(report, new RegExp(`^omitted: ${result.omitted.length}$`, 'm'));
   assert.ok(report.includes(link));
-  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(record.setup, 'done');
   assert.equal(Object.keys(record.managedFiles).some((filePath) => filePath.startsWith(`${link}${path.sep}`)), false);
 });
@@ -492,7 +621,7 @@ test('replacing a junction inside a skills folder removes the link, writes the f
 
   const report = await readFile(result.reportPath, 'utf8');
   assert.match(report, /^links-replaced: 2$/m);
-  const record = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.equal(record.setup, 'done');
   assert.equal(record.managedFiles[path.join(qaLink, 'SKILL.md')] !== undefined, true);
 });
@@ -514,12 +643,12 @@ test('content categories group every feature deterministically and control the i
   assert.equal(contentStep.number, 4);
 
   assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['brainstorm', 'plan', 'report']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report', 'void']);
   assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'docs', 'release']);
+  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'cleaner', 'docs', 'relay-client-setup', 'release']);
   const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
   const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
-    .filter((name) => name.endsWith('.md') && name.toLowerCase() !== 'readme.md').length;
+    .filter((name) => (name.endsWith('.md') || !name.includes('.')) && name.toLowerCase() !== 'readme.md').length;
   assert.equal(new Set(allIds).size, allIds.length);
   assert.equal(allIds.filter((id) => id.startsWith('feature:')).length, featureCount);
 
@@ -652,7 +781,7 @@ test('setup installs a role and a feature added to the mind folder', async (cont
   const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'archivist', 'SKILL.md');
   assert.match(await readFile(skillPath, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
   assert.match(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'tidy', 'SKILL.md'), 'utf8'), /# Tidy/);
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.managedFiles[skillPath]);
 });
 
@@ -675,7 +804,7 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
 
   const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'overmind', 'SKILL.md');
   assert.match(await readFile(privateSkill, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.managedFiles[privateSkill]);
   // The private half never reaches the published folder.
   assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'overmind.md')), false);
@@ -693,6 +822,28 @@ async function pathExists(target) {
     throw error;
   }
 }
+
+test('running setup again keeps the evidence folder recorded in the machine paths', async (context) => {
+  const fixture = await makeFixture(context);
+  const options = { kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', language: 'en', env: { PATH: '' }, resume: false };
+  let session = await createSetupSession(options);
+  await session.answer({ installMode: 'simple' });
+  await session.answer({ confirm: true });
+  await session.install();
+
+  const { record } = await readMachineRecord(fixture.mindPath, 'TESTBOX');
+  record.paths.push({ name: 'evidence', path: path.join(fixture.root, 'evidence') });
+  await writeMachineRecord(fixture.mindPath, 'TESTBOX', record);
+
+  session = await createSetupSession(options);
+  await answerReconfiguration(session, fixture, ['codex']);
+  await session.preview();
+  await session.answer({ confirm: true });
+  await session.install();
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+  assert.ok(machine.paths.some((entry) => entry.name === 'evidence' && entry.path === path.join(fixture.root, 'evidence')));
+  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
+});
 
 test('custom mode alerts about an installed mind, attaches the machine and leaves the mind content alone', async (context) => {
   const fixture = await makeFixture(context);
@@ -745,7 +896,7 @@ test('custom mode alerts about an installed mind, attaches the machine and leave
     '- 2026-01-01: Existing preference stays first. Why: chosen before setup.\n',
   );
   assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Older rules kept.\n');
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'SECOND.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'SECOND')).record;
   assert.equal(machine.setup, 'done');
   assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
 });
@@ -808,7 +959,7 @@ async function makeFixture(context) {
 
 async function completeAnswers(fixture, agents) {
   const session = await createSetupSession({
-    kitPath: KIT_PATH,
+    kitPath: fixture.kitPath ?? KIT_PATH,
     mindPath: fixture.mindPath,
     homeDir: fixture.homeDir,
     hostname: 'TESTBOX',

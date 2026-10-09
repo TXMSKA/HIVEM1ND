@@ -1,12 +1,14 @@
-import { lstat, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
+import { lstat, readdir, readFile, rmdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverContent, loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import {
   atomicWriteFile,
   hashContent,
+  hashLineEndingForms,
   machineReportPath,
   parseFrontmatter,
   readMachineRecord,
+  readPeerManagedFiles,
   removeSymbolicLink,
   restoreSymbolicLink,
   serializeFrontmatter,
@@ -53,6 +55,9 @@ export function autoRuleLine(mindPath) {
   return `HIVEM1ND: the mind is at ${mindPath}. Read ${path.join(mindPath, 'rules.md')} first, then the role or command asked for.`;
 }
 
+// A chat that Relay resumes in the Cursor CLI has nobody to ask, and the MCP process of that turn starts unregistered.
+const CURSOR_WAKE_CONTRACT = 'When a request is a Relay pointer, "[Untrusted Relay context] <n> unread messages for <unit>.", the turn was woken and nobody is at the keyboard. If Relay answers NOT_REGISTERED, call register with this chat\'s native session ID (the CURSOR_CONVERSATION_ID variable, or the ID in the Relay reminder) and the unit named in the pointer. Read the inbox, act only on a hand-off defined in rules.md, reply through Relay and archive what you read.';
+
 export async function installAgentAssets({
   kitPath,
   mindPath,
@@ -71,6 +76,15 @@ export async function installAgentAssets({
   const { filePath: machinePath, record } = await readMachineRecord(mindPath, hostname);
   if (!record) throw new Error(`Machine record not found for ${hostname}`);
   const adapters = await loadAdapters({ kitPath });
+  const peerHashes = await readPeerHashes(mindPath, hostname);
+  const kitPlan = await planKitCopy({
+    kitPath,
+    mindPath,
+    managedFiles: record.managedFiles,
+    excluded: record.excluded,
+    language,
+    peerHashes,
+  });
   const agentPlan = await planAgentAssets({
     kitPath,
     mindPath,
@@ -80,17 +94,16 @@ export async function installAgentAssets({
     agents: record.agents,
     excluded: record.excluded,
     managedFiles: record.managedFiles,
+    retiredSources: retiredKitSources(kitPlan, record.managedFiles, kitPath, mindPath),
     keepExistingPreferences: record.keepExistingPreferences,
     language,
   });
-  const kitPlan = await planKitCopy({
-    kitPath,
+  const plan = await planManagedFileRemovals(registerLinkConflicts(combinePlans(kitPlan, agentPlan), language), {
     mindPath,
     managedFiles: record.managedFiles,
-    excluded: record.excluded,
-    language,
+    skillsRoots: adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir, env }).skillsRoot),
+    peerHashes,
   });
-  const plan = registerLinkConflicts(combinePlans(kitPlan, agentPlan), language);
   const unresolved = plan.conflicts.filter((conflict) => {
     const allowed = conflict.choices ?? ['keep', 'replace'];
     return !allowed.includes(conflictChoices[conflict.path]);
@@ -99,6 +112,8 @@ export async function installAgentAssets({
     ...summarizeAgentPlan(agentPlan, language),
     baseFiles: kitPlan.items.map((item) => item.path),
     warnings: plan.warnings,
+    removed: plan.removals.map((item) => item.path),
+    kept: plan.kept.map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     conflicts: plan.conflicts.map((conflict) => ({
       path: conflict.path,
       reason: localizeReason(conflict.reason, language),
@@ -111,6 +126,7 @@ export async function installAgentAssets({
 
   const applied = await applyInstallPlan(plan, conflictChoices);
   record.managedFiles = { ...record.managedFiles, ...applied.managedFiles };
+  for (const filePath of plan.retired) delete record.managedFiles[filePath];
   for (const conflict of plan.conflicts) {
     if (conflictChoices[conflict.path] === 'keep') delete record.managedFiles[conflict.path];
   }
@@ -122,9 +138,10 @@ export async function installAgentAssets({
     written: applied.files.length,
     omitted: applied.omitted,
     replacedLinks: applied.replacedLinks,
-    kept: plan.conflicts
+    removed: applied.removed,
+    kept: [...applied.kept, ...plan.conflicts
       .filter((conflict) => conflictChoices[conflict.path] === 'keep')
-      .map((conflict) => ({ path: conflict.path, reason: localizeReason(conflict.reason, language) })),
+      .map((conflict) => ({ path: conflict.path, reason: localizeReason(conflict.reason, language) }))],
     warnings: result.warnings,
   };
   const reportPath = await writeInstallReport({ mindPath, hostname, language, report });
@@ -138,6 +155,8 @@ export async function installAgentAssets({
     conflicts: [],
     omitted: applied.omitted,
     replacedLinks: applied.replacedLinks,
+    removed: applied.removed,
+    kept: report.kept.map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     reportPath,
   };
 }
@@ -153,10 +172,12 @@ export async function writeInstallReport({ mindPath, hostname, language = 'en', 
     `omitted: ${report.omitted.length}`,
     `unwritten: ${(report.unwritten ?? []).length}`,
     `links-replaced: ${report.replacedLinks.length}`,
+    `removed: ${(report.removed ?? []).length}`,
   ];
   const sections = [
     ['reportOmitted', report.omitted.map((item) => `${item.path}: ${text(language, 'reportOmittedReason', { path: item.component })}`)],
     ['reportReplacedLinks', report.replacedLinks],
+    ['reportRemoved', report.removed ?? []],
     ['reportKept', (report.kept ?? []).map((item) => `${item.path}: ${localizeReason(item.reason, language)}`)],
     ['reportUnwritten', report.unwritten ?? []],
     ['reportWarnings', report.warnings ?? []],
@@ -183,12 +204,13 @@ export async function planAgentAssets({
   agents,
   excluded = [],
   managedFiles = {},
+  retiredSources = new Set(),
   keepExistingPreferences = true,
   language = 'en',
 }) {
   const available = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   const excludedNames = new Set(excluded);
-  const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames);
+  const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames, retiredSources);
   const items = [];
   const conflicts = [];
   const warnings = [...sourceAssets.warnings];
@@ -282,7 +304,7 @@ export async function planAgentAssets({
   };
 }
 
-export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, excluded = [], language = 'en' }) {
+export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, excluded = [], language = 'en', peerHashes = new Map() }) {
   const sourceRoot = path.resolve(kitPath);
   const destinationRoot = path.resolve(mindPath);
   if (normalizePath(sourceRoot) === normalizePath(destinationRoot)) {
@@ -299,7 +321,55 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
   const distributableRoots = new Set(['package.json', ...(packageJson.files ?? []).map(topLevelEntry).filter(Boolean)]);
   const owner = { id: 'mind', label: text(language, 'ownerMind') };
   await walk(sourceRoot, '');
+  await copyRuntimeDependencies();
   return { items, conflicts, warnings, linkComponents };
+
+  // The mind runs the CLI from its own copy, so the runtime dependencies of the
+  // kit travel with it into the mind's node_modules, resolved the way Node would.
+  async function copyRuntimeDependencies() {
+    const found = new Map();
+    const pending = Object.keys(packageJson.dependencies ?? {}).map((name) => [name, sourceRoot]);
+    while (pending.length > 0) {
+      const [name, from] = pending.shift();
+      if (found.has(name)) continue;
+      const directory = await resolvePackageDirectory(name, from);
+      if (!directory) {
+        warnings.push(text(language, 'warningDependencyMissing', { name }));
+        continue;
+      }
+      found.set(name, directory);
+      const manifest = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+      for (const dependency of Object.keys(manifest.dependencies ?? {})) pending.push([dependency, directory]);
+    }
+    for (const [name, directory] of found) await walkDependency(directory, path.join('node_modules', ...name.split('/')));
+  }
+
+  async function walkDependency(directory, relativeDirectory) {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === 'node_modules' || entry.isSymbolicLink()) continue;
+      const source = path.join(directory, entry.name);
+      const relativePath = path.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await walkDependency(source, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const destination = path.join(destinationRoot, relativePath);
+      await addPlannedFile({
+        items,
+        conflicts,
+        linkComponents,
+        destination,
+        content: await readFile(source),
+        root: destinationRoot,
+        kind: 'kit',
+        managedHash: managedFiles[destination],
+        peerHashes,
+        owned: true,
+        owner,
+      });
+    }
+  }
 
   async function walk(directory, relativeDirectory) {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -337,6 +407,7 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
         root: destinationRoot,
         kind: 'kit',
         managedHash: managedFiles[destination],
+        peerHashes,
         owned: true,
         owner,
       });
@@ -371,6 +442,64 @@ export async function planDataFile({
     owner: { id: 'mind', label: text(language, 'ownerMind') },
   });
   return { items, conflicts, warnings: [], linkComponents };
+}
+
+export function retiredKitSources(kitPlan, managedFiles, kitPath, mindPath) {
+  if (normalizePath(kitPath) === normalizePath(mindPath)) return new Set();
+  const planned = new Set(kitPlan.items.map((item) => normalizePath(item.path)));
+  return new Set(Object.keys(managedFiles).filter((filePath) => relativeChild(mindPath, filePath)
+    && !relativeChild(path.join(mindPath, 'user'), filePath)
+    && !planned.has(normalizePath(filePath))).map(normalizePath));
+}
+
+// Keyed by normalized path, so a drive letter another machine recorded in another case still finds its file.
+export async function readPeerHashes(mindPath, hostname) {
+  const peers = new Map();
+  for (const managed of await readPeerManagedFiles(mindPath, hostname)) {
+    for (const [filePath, hash] of Object.entries(managed)) {
+      if (typeof hash !== 'string' || !path.isAbsolute(filePath)) continue;
+      const key = normalizePath(filePath);
+      peers.set(key, [...(peers.get(key) ?? []), hash]);
+    }
+  }
+  return peers;
+}
+
+export async function planManagedFileRemovals(plan, { managedFiles, mindPath, skillsRoots = [], retainedPaths = [], peerHashes = new Map() }) {
+  const planned = new Set([...plan.items.map((item) => item.path), ...retainedPaths].map(normalizePath));
+  const retired = [];
+  const removals = [];
+  const kept = [];
+  const userPath = path.join(mindPath, 'user');
+  for (const [filePath, expectedHash] of Object.entries(managedFiles)) {
+    if (planned.has(normalizePath(filePath))) continue;
+    retired.push(filePath);
+    if (normalizePath(filePath) === normalizePath(userPath) || relativeChild(userPath, filePath)) continue;
+    // Only kit copies and rendered skills are removed; a rule file may hold the user's own lines.
+    if (!relativeChild(mindPath, filePath) && !skillsRoots.some((skillsRoot) => relativeChild(skillsRoot, filePath))) continue;
+    const root = path.parse(path.resolve(filePath)).root;
+    const recordedHashes = [expectedHash, ...(peerHashes.get(normalizePath(filePath)) ?? [])];
+    const reason = await removalReason(filePath, root, recordedHashes);
+    if (reason) {
+      kept.push({ path: filePath, reason });
+      continue;
+    }
+    if ((await currentSnapshot(filePath)).kind === 'missing') continue;
+    const cleanupRoot = skillsRoots.find((skillsRoot) => relativeChild(skillsRoot, filePath));
+    removals.push({ path: filePath, root, recordedHashes, cleanupRoot });
+  }
+  return { ...plan, retired, removals, kept };
+}
+
+async function removalReason(filePath, root, recordedHashes) {
+  if (!path.isAbsolute(filePath)) return `Path escapes the selected destination: ${filePath}`;
+  const unsafeReason = await unsafeDestinationReason(root, filePath);
+  if (unsafeReason) return unsafeReason;
+  const snapshot = await currentSnapshot(filePath);
+  if (snapshot.kind === 'missing') return null;
+  if (snapshot.kind !== 'file') return 'The destination is a symbolic link or is not a regular file.';
+  if (!matchesRecord(snapshot, recordedHashes)) return 'The HIVEM1ND-managed file was modified after installation.';
+  return null;
 }
 
 export async function applyInstallPlan(plan, conflictChoices = {}) {
@@ -414,6 +543,8 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
   const files = [];
   const managedFiles = {};
   const written = [];
+  const deleted = [];
+  const kept = [...(plan.kept ?? [])];
   try {
     for (const item of plan.items) {
       if (item.linkComponent && omittedComponents.has(item.linkComponent)) continue;
@@ -425,21 +556,64 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
         written.push({ item, snapshot: currentByPath.get(item.path) });
         files.push(item.path);
       }
-      if (item.owned) managedFiles[item.path] = hashContent(item.content);
+      // A file that already holds the same text under the other line ending stays as it is, so
+      // two machines never rewrite it back and forth, and it is recorded as it is on disk.
+      if (item.owned) managedFiles[item.path] = item.action === 'unchanged' ? item.currentHash : hashContent(item.content);
+    }
+    for (const item of plan.removals ?? []) {
+      const reason = await removalReason(item.path, item.root, item.recordedHashes);
+      if (reason) {
+        kept.push({ path: item.path, reason });
+        continue;
+      }
+      const snapshot = await currentSnapshot(item.path, true);
+      if (snapshot.kind === 'missing') continue;
+      if (!matchesRecord(snapshot, item.recordedHashes)) {
+        kept.push({ path: item.path, reason: 'The HIVEM1ND-managed file was modified after installation.' });
+        continue;
+      }
+      await unlink(item.path);
+      deleted.push({ item, snapshot });
+    }
+    for (const { item } of deleted) {
+      if (!item.cleanupRoot) continue;
+      let directory = path.dirname(item.path);
+      while (relativeChild(item.cleanupRoot, directory)) {
+        if (await unsafeDestinationReason(item.root, path.join(directory, '.'))) break;
+        try {
+          await removeEmptyDirectory(directory);
+        } catch (error) {
+          if (error?.code === 'ENOTEMPTY' || error?.code === 'EEXIST') break;
+          throw error;
+        }
+        directory = path.dirname(directory);
+      }
     }
   } catch (error) {
-    const rollbackErrors = await rollbackWrites(written, removedLinks);
+    const rollbackErrors = [];
+    for (const { item, snapshot } of [...deleted].reverse()) {
+      try {
+        await atomicWriteFile(item.path, snapshot.content, { root: item.root, overwrite: false });
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    rollbackErrors.push(...await rollbackWrites(written, removedLinks));
     if (rollbackErrors.length > 0) {
       throw new AggregateError([error, ...rollbackErrors], 'Install failed and one or more files could not be restored');
     }
     throw error;
   }
-  return { files, managedFiles, omitted, replacedLinks: removedLinks.map((link) => link.path) };
+  return { files, managedFiles, omitted, replacedLinks: removedLinks.map((link) => link.path), removed: deleted.map(({ item }) => item.path), kept };
 }
 
 export function publicPreview(plan, language = 'en') {
   return {
-    files: plan.items.map((item) => ({ path: item.path, action: item.action, owner: item.owner })),
+    files: [
+      ...plan.items.map((item) => ({ path: item.path, action: item.action, owner: item.owner })),
+      ...(plan.removals ?? []).map((item) => ({ path: item.path, action: 'delete' })),
+    ],
+    kept: (plan.kept ?? []).map((item) => ({ ...item, reason: localizeReason(item.reason, language) })),
     warnings: [...(plan.warnings ?? [])],
     conflicts: (plan.conflicts ?? []).map((conflict) => ({
       path: conflict.path,
@@ -501,24 +675,26 @@ export function registerLinkConflicts(plan, language = 'en') {
 
 export function installableAssetRoots(kitPath, mindPath) {
   const kitRoot = { path: path.resolve(kitPath), scope: 'kit', sections: ASSET_SECTIONS, mirrorsKit: false };
-  if (!mindPath || normalizePath(mindPath) === normalizePath(kitRoot.path)) return [kitRoot];
+  if (!mindPath) return [kitRoot];
   const mind = path.resolve(mindPath);
-  return [
-    kitRoot,
-    { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true },
-    // The private half installs the same four sections as the kit, so a role written for
-    // this mind alone lives in user/roles and never sits in the published folder.
-    { path: path.join(mind, 'user'), scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: false },
-  ];
+  // The private half installs the same four sections as the kit, so a role written for
+  // this mind alone lives in user/roles and never sits in the published folder.
+  const userRoot = { path: path.join(mind, 'user'), scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: false };
+  if (normalizePath(mind) === normalizePath(kitRoot.path)) return [kitRoot, userRoot];
+  return [kitRoot, { path: mind, scope: 'mind', sections: ASSET_SECTIONS, mirrorsKit: true }, userRoot];
 }
 
-export async function listInstallableAssets(roots, excludedNames = new Set()) {
+export async function listInstallableAssets(roots, excludedNames = new Set(), retiredSources = new Set()) {
   const sources = typeof roots === 'string' ? installableAssetRoots(roots) : roots;
   const assets = [];
   const warnings = [];
   const keptByName = new Map();
   for (const root of sources) {
-    for (const asset of await readRootAssets(root, excludedNames)) addAsset(asset, root);
+    for (const asset of await readRootAssets(root, excludedNames)) {
+      if (retiredSources.has(normalizePath(asset.sourcePath))) continue;
+      asset.supportFiles = asset.supportFiles.filter((support) => !retiredSources.has(normalizePath(path.join(path.dirname(asset.sourcePath), support.relativePath))));
+      addAsset(asset, root);
+    }
   }
   return { assets: assets.sort((left, right) => left.name.localeCompare(right.name)), warnings };
 
@@ -606,12 +782,8 @@ async function readFeatureEntries(directory) {
 
 export function renderSkill(content, name, adapter, mindPath) {
   const parsed = parseFrontmatter(String(content));
-  const additions = name === 'consultant' && adapter.readOnly?.mode === 'frontmatter'
-    ? adapter.readOnly.frontmatter
-    : {};
   const rendered = serializeFrontmatter(parsed, {
     allowedKeys: adapter.skills.frontmatterKeys,
-    additions,
   });
   return rendered.replaceAll('{{mind}}', mindPath);
 }
@@ -656,7 +828,8 @@ async function planRuleFile(adapter, destination, root, line, managedFiles, agen
   }
   if (OWNED_RULE_MODES.has(adapter.rules.mode)) {
     const scope = adapter.rules.mode === 'cursor' ? 'alwaysApply: true' : 'applyTo: "**"';
-    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n`;
+    const wake = adapter.rules.mode === 'cursor' ? `\n${CURSOR_WAKE_CONTRACT}\n` : '';
+    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n${wake}`;
     return singlePlannedFile({
       destination,
       content,
@@ -740,6 +913,7 @@ async function addPlannedFile({
   root,
   kind,
   managedHash,
+  peerHashes = new Map(),
   agentName,
   owned,
   owner,
@@ -766,9 +940,9 @@ async function addPlannedFile({
     action = 'conflict';
     reason = 'The destination is a symbolic link or is not a regular file.';
   } else if (snapshot.kind === 'file') {
-    const desiredHash = hashContent(content);
-    if (snapshot.hash === desiredHash) action = 'unchanged';
-    else if (allowExisting || (managedHash && snapshot.hash === managedHash)) action = 'update';
+    const recordedHashes = [managedHash, ...(peerHashes.get(normalizePath(destination)) ?? [])];
+    if (sameContent(snapshot, content)) action = 'unchanged';
+    else if (allowExisting || matchesRecord(snapshot, recordedHashes)) action = 'update';
     else {
       action = 'conflict';
       reason = managedHash
@@ -844,12 +1018,26 @@ async function currentSnapshot(filePath, includeContent = false) {
     return {
       kind: 'file',
       hash: hashContent(content),
+      forms: hashLineEndingForms(content),
       content: includeContent ? content : null,
     };
   } catch (error) {
     if (error?.code === 'ENOENT') return { kind: 'missing', hash: null, content: null };
     throw error;
   }
+}
+
+function sameContent(snapshot, content) {
+  if (snapshot.hash === hashContent(content)) return true;
+  const forms = hashLineEndingForms(content);
+  return Boolean(forms && snapshot.forms && forms.lf === snapshot.forms.lf);
+}
+
+// A record holds the hash of the bytes some machine wrote, and that machine may have written
+// the same text under the other line ending.
+function matchesRecord(snapshot, recordedHashes) {
+  return recordedHashes.some((recorded) => recorded
+    && (snapshot.hash === recorded || snapshot.forms?.lf === recorded || snapshot.forms?.crlf === recorded));
 }
 
 async function readFeatureDirectory(directory, fallbackName) {
@@ -889,6 +1077,22 @@ function skillName(content, fallback) {
   const name = parsed.attributes.name || path.basename(fallback, path.extname(fallback));
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) throw new Error(`Invalid skill name: ${name}`);
   return name;
+}
+
+// Looks for node_modules/<name> from the given folder up to the root, as Node does.
+async function resolvePackageDirectory(name, from) {
+  let directory = path.resolve(from);
+  for (;;) {
+    const candidate = path.join(directory, 'node_modules', ...name.split('/'));
+    try {
+      if ((await stat(path.join(candidate, 'package.json'))).isFile()) return candidate;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
 }
 
 async function isDirectory(directory) {

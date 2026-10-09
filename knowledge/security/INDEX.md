@@ -20,7 +20,7 @@ The order is the order of coverage in a full pass: what a stranger can reach wit
 - [outbound](categories/outbound.md): requests to URLs taken from input, image proxies, third-party APIs consumed and webhooks the service emits.
 - [files](categories/files.md): upload, storage and serving, download access and the decoders that parse files.
 - [web surface](categories/web-surface.md): headers and the content policy, transport, cookies, cross-site forgery, cross-origin access and framing, rendered content and redirects.
-- [data](categories/data.md): queries, database accounts and privileges, row policies, migrations, sensitive fields, backups and exports.
+- [data](categories/data.md): queries, database accounts and privileges, row policies, migrations, sensitive fields, backups and exports, personal data, consent and notices.
 - [model features](categories/model-features.md): where the model runs, tools and agency, injection through content, the system prompt, spend and generated output.
 - [logging and errors](categories/logging-and-errors.md): failure handling, error responses, security events and alerts, secrets in records and retention.
 
@@ -30,7 +30,7 @@ The protocol steps each category can call for, so a pass over a whole category n
 
 | Category | Protocol steps |
 | --- | --- |
-| dependencies | version-floor 1 to 6; supply-chain 1 to 6 |
+| dependencies | version-floor 1 to 7; supply-chain 1 to 6 |
 | secrets and configuration | secrets 1 to 7; supply-chain 4; deployment-surface 6 |
 | deployment | deployment-surface 1 to 7; injection-and-output 3; [pre-launch.md](pre-launch.md) |
 | API | access-control 1 to 7; injection-and-output 1, 7; resource-limits 1 to 6; payments-and-webhooks 4 |
@@ -39,7 +39,7 @@ The protocol steps each category can call for, so a pass over a whole category n
 | outbound | outbound-requests 1 to 5; logging-and-errors 2 |
 | files | file-upload 1 to 6; deployment-surface 4; access-control 2 |
 | web surface | headers-and-transport 1 to 7; cross-site-requests 1 to 5; injection-and-output 4 to 6; authentication-and-session 1 |
-| data | injection-and-output 1, 2, 7; data-store 1 to 6; resource-limits 3; secrets 3; logging-and-errors 5 |
+| data | injection-and-output 1, 2, 7; data-store 1 to 6; personal-data 1 to 6; resource-limits 3; secrets 3; logging-and-errors 5 |
 | model features | model-exposure 1 to 7; resource-limits 5; injection-and-output 4 |
 | logging and errors | logging-and-errors 1 to 7 |
 
@@ -60,6 +60,7 @@ One line each, for the match made while planning. A category file says which ste
 - [headers-and-transport](protocols/headers-and-transport.md): scope response headers, server and edge configuration, certificates and the HTTPS redirect.
 - [injection-and-output](protocols/injection-and-output.md): scope queries, commands, file paths, templates, rendered content, redirects and deserialisers fed by input.
 - [data-store](protocols/data-store.md): scope stores, their accounts and grants, row policies, migrations, backups and exports.
+- [personal-data](protocols/personal-data.md): scope forms, scripts and SDKs that collect personal data, consent, marketing mail, deletion and export, and the privacy, cookie, terms and refund pages.
 - [resource-limits](protocols/resource-limits.md): scope public endpoints, searches, exports, pagination, metered calls and business flows.
 - [model-exposure](protocols/model-exposure.md): scope model calls, agents, tools, retrieval, system prompts and generated output.
 - [logging-and-errors](protocols/logging-and-errors.md): scope exception handlers, error responses, log sinks, alert rules and retention.

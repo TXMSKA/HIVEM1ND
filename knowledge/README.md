@@ -8,4 +8,4 @@ A `protocols/` folder contains the module's protocols, in the format described i
 
 An optional `features/` folder contains commands installed with the module. Its files and folders use the same format as the base `features/` folder. Excluding the module skips its commands, its protocols and its topics.
 
-The base ships three modules: `security`, `design` and `copy`. A user adds private modules the same way, under `user/knowledge/`.
+The base ships four modules: `security`, `design`, `copy` and `product`. A user adds private modules the same way, under `user/knowledge/`.

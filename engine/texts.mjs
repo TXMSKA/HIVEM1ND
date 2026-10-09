@@ -72,10 +72,16 @@ const COPY = {
     attachHelp: 'Attaching writes this machine\'s record and its agent files. The mind keeps its content, its preferences and its version.',
     unknownVersion: 'of an unknown version',
     attachedMachine: 'This machine is attached to the mind in {mind}.',
+    relayConfigured: '{client}: Relay configured now. Restart it to load Relay.',
+    relayAlready: '{client}: Relay already configured.',
+    relayRefreshed: '{client}: Relay hooks brought up to date. Restart it to load them.',
+    relayNotAvailable: '{client}: not available on this machine.',
+    relayFailed: '{client}: Relay not configured. {reason}',
     attachOutdated: 'The mind holds version {mind} and this kit is {kit}. Run /evolve to bring them together.',
     reportOmitted: 'Omitted',
     reportOmittedReason: 'left uninstalled behind the link {path}',
     reportReplacedLinks: 'Links replaced',
+    reportRemoved: 'Removed',
     reportKept: 'Kept',
     reportUnwritten: 'Not written',
     reportWarnings: 'Warnings',
@@ -106,6 +112,7 @@ const COPY = {
     warningNoRulesFile: '{agent} has no verified global rules file. Use the attach prompt for auto mode.',
     warningSymlinkSkipped: 'Skipped symbolic link in kit: {path}',
     warningUnsupportedEntry: 'Skipped unsupported kit entry: {path}',
+    warningDependencyMissing: 'Runtime dependency not found next to the kit, so the mind cannot run commands that need it: {name}. Run npm install in the kit and update again.',
     reasonLinkComponentOne: 'A symbolic link stands where {count} file has to be written: {path}. Removing the link keeps the folder it points at.',
     reasonLinkComponentOther: 'A symbolic link stands where {count} files have to be written: {path}. Removing the link keeps the folder it points at.',
     replaceLink: 'Remove the link and write the files',
@@ -199,10 +206,16 @@ const COPY = {
     attachHelp: 'Conectar escribe el registro de esta máquina y sus archivos de agente. El mind conserva su contenido, sus preferencias y su versión.',
     unknownVersion: 'de una versión desconocida',
     attachedMachine: 'Esta máquina quedó conectada al mind en {mind}.',
+    relayConfigured: '{client}: Relay configurado. Reiniciarlo para cargar Relay.',
+    relayAlready: '{client}: Relay ya estaba configurado.',
+    relayRefreshed: '{client}: hooks de Relay actualizados. Reiniciarlo para cargarlos.',
+    relayNotAvailable: '{client}: no disponible en esta máquina.',
+    relayFailed: '{client}: Relay no configurado. {reason}',
     attachOutdated: 'El mind tiene la versión {mind} y este kit es {kit}. Ejecutar /evolve para igualarlos.',
     reportOmitted: 'Omitidos',
     reportOmittedReason: 'sin instalar detrás del enlace {path}',
     reportReplacedLinks: 'Enlaces reemplazados',
+    reportRemoved: 'Eliminados',
     reportKept: 'Conservados',
     reportUnwritten: 'No escritos',
     reportWarnings: 'Advertencias',
@@ -233,6 +246,7 @@ const COPY = {
     warningNoRulesFile: '{agent} no tiene un archivo de reglas globales verificado. Usar el attach prompt para el modo automático.',
     warningSymlinkSkipped: 'Se omitió un symlink en el kit: {path}',
     warningUnsupportedEntry: 'Se omitió una entrada no admitida del kit: {path}',
+    warningDependencyMissing: 'No se encontró una dependencia junto al kit, así que la mente no puede correr los comandos que la usan: {name}. Corré npm install en el kit y actualizá de nuevo.',
     reasonLinkComponentOne: 'Hay un enlace simbólico donde se tiene que escribir {count} archivo: {path}. Quitar el enlace conserva la carpeta a la que apunta.',
     reasonLinkComponentOther: 'Hay un enlace simbólico donde se tienen que escribir {count} archivos: {path}. Quitar el enlace conserva la carpeta a la que apunta.',
     replaceLink: 'Quitar el enlace y escribir los archivos',
@@ -265,6 +279,13 @@ export function text(language, key, variables = {}) {
     (result, [name, replacement]) => result.replaceAll(`{${name}}`, String(replacement)),
     value,
   );
+}
+
+const RELAY_KEYS = { configured: 'relayConfigured', refreshed: 'relayRefreshed', 'already-configured': 'relayAlready', 'not-available': 'relayNotAvailable', failed: 'relayFailed' };
+
+// One line per client for the result of ensureRelayClients.
+export function relayLine(language, item) {
+  return text(language, RELAY_KEYS[item.status], { client: item.client, reason: item.reason ?? '' });
 }
 
 export function option(language, value, labelKey, hintKey) {

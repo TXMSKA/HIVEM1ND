@@ -6,7 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { helpText, parseArgs } from '../cli/index.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
-import { parseMachineRecord, writeMachineRecord } from '../engine/records.mjs';
+import { readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { uninstall } from '../engine/uninstall.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,7 +29,11 @@ test('uninstall removes managed skills, the auto rule line and the machine recor
 
   const rulesAfterInstall = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
   assert.match(rulesAfterInstall, /HIVEM1ND: the mind is at/);
-  assert.match(await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'), 'utf8'), /HIVEM1ND: the mind is at/);
+  const cursorRule = await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'), 'utf8');
+  assert.match(cursorRule, /HIVEM1ND: the mind is at/);
+  // The rule carries the contract of a woken turn, which has nobody to ask.
+  assert.match(cursorRule, /woken and nobody is at the keyboard.*NOT_REGISTERED.*CURSOR_CONVERSATION_ID.*only on a hand-off defined in rules\.md/);
+  assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), /NOT_REGISTERED/);
   await lstat(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
 
   const result = await uninstall({ mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' } });
@@ -124,7 +128,7 @@ test('removeMind deletes the mind when this is the only machine', async (context
 test('removeMind keeps the mind when another machine record exists, but this machine still detaches', async (context) => {
   const fixture = await makeFixture(context);
   await installFixture(fixture);
-  const machine = parseMachineRecord(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'));
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   await writeMachineRecord(fixture.mindPath, 'OTHERBOX', { ...machine, machine: 'OTHERBOX' });
 
   const result = await uninstall({

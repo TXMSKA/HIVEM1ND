@@ -1,6 +1,6 @@
 name: forms-and-inputs
 purpose: Make every field, control and menu cost the fewest presses, say why it is blocked, and fail in place.
-scope: forms, fields, selects, menus of options, date and number inputs, search fields and submit flows
+scope: forms, fields, selects, menus of options, date and number inputs, search fields, submit flows, consent boxes and cancellation paths
 trigger: manual, on any change to a form, a field, a select, a menu of options, a date or number input, or a submit path
 repeat: once per form, and again whenever a field or a control is added
 inputs: the form under work, its validation rules, the rendered page at the narrow and the wide width, a keyboard
@@ -25,9 +25,9 @@ report: the control table, the press count for the slowest field, the transcript
    Result: the press count per field recorded, a typed date accepted in the local order, and every list of ten or more rows narrowing as the person types, with a no results state.
 
 4. Keep menus open, anchored and visible.
-   Task: open every menu near the bottom edge of the viewport and at the narrow width, and pick several items in each multi-select.
-   Time: 15 minutes; a form with no custom menu ends this step as not applicable.
-   Result: a screenshot of each menu near the bottom edge, opened upward or fully visible and unclipped by any ancestor; each multi-select stays open, counts the selection and closes with Done.
+   Task: open every menu near the bottom edge of the viewport and at the narrow width, and pick several items in each multi-select. Open every native select of the app as well, all of them whenever one changes, in each theme that ships.
+   Time: 15 minutes; a form with no menu and no select ends this step as not applicable.
+   Result: a screenshot of each menu near the bottom edge, opened upward or fully visible and unclipped by any ancestor; each multi-select stays open, counts the selection and closes with Done; each native select open in the theme's colours with readable options, its chevron at the right edge, as wide as its column and as tall as the other fields.
 
 5. Give every disabled control its reason.
    Task: find every disabled control and write inline what is missing and what unlocks it, with the unblocking action one step away; the reason is a structural word this pass writes and flags for copy. A form that keeps its submit enabled instead lets the incomplete submission run and surfaces the validation, which is the simpler fix when the reasons are several.
@@ -40,11 +40,16 @@ report: the control table, the press count for the slowest field, the transcript
    Result: a keyboard transcript of the failed submission showing focus on the first error and no typed value lost, and a screenshot of each error state with its computed contrast.
 
 7. Show the work and the outcome.
-   Task: submit valid data over a slowed connection. The button keeps its label, gains a spinner and refuses a second press; the form ends in a success state that says what happened and what comes next. Leave a changed form and confirm it asks first.
+   Task: submit valid data over a slowed connection. The button keeps its label, gains a spinner and refuses a second press; the form ends in a success state that says what happened and what comes next. Leave a changed form and confirm it asks first, then press the browser's Back and reload in the middle of a filled form.
    Time: 15 minutes.
-   Result: a screenshot of the loading state with the original label, a screenshot of the success state, a count of one request after a double press, and a transcript of the unsaved changes warning.
+   Result: a screenshot of the loading state with the original label, a screenshot of the success state, a count of one request after a double press, a transcript of the unsaved changes warning, and a transcript of Back and reload returning every typed value.
 
 8. Fit the phone.
    Task: at the narrow width, read the computed input font size, the input type, input mode and autocomplete token of every field, and the size of every control.
    Time: 15 minutes.
-   Result: every input at 16 CSS pixels or more, the numeric fields showing a numeric keyboard, known personal fields carrying an autocomplete token, and every control at least 44 by 44 CSS pixels on touch.
+   Result: every input at 16 CSS pixels or more at the narrow width and on touch, with desktop chrome keeping its compact size, the numeric fields showing a numeric keyboard, known personal fields carrying an autocomplete token, and every control at least 44 by 44 CSS pixels on touch.
+
+9. Keep the choices honest.
+   Task: walk sign-up, checkout, cancellation and the consent banner as a stranger would. Note every box ticked by default, every decline smaller or quieter than its accept, every refusal worded to shame, every timer or scarcity line, and every price that grows after the first screen. Count the presses to cancel against the presses to join.
+   Time: 20 minutes; a surface with none of these ends this step as not applicable.
+   Result: zero boxes ticked by default, a capture showing accept and decline at equal weight, every urgency or scarcity line traced to its data source, the total at the last step equal to the first price shown plus the fees named, and cancel presses at or below join presses.

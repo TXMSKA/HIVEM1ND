@@ -54,7 +54,7 @@ Any agent attaches in one of two modes. In on-demand mode nothing loads by itsel
 
 ### Knowledge packs and protocols
 
-Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design` and `copy` ship with the kit, each with its own command (`/cyberattack`, `/uify`, `/humanize`). A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
+Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design`, `copy` and `product` ship with the kit; the first three each install a command (`/cyberattack`, `/uify`, `/humanize`), and `product` holds the protocol that writes the product document of a product. A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
 
 Packs are read while planning. Asked for a contact page with a form, the executor reads each index, opens only the categories the work touches, such as forms, interface copy and API security, and writes their `Build:` lines into the plan as requirements, each naming the file it came from. A large pack costs a few hundred words to consult instead of all of it, and a task that touches no category reads nothing more.
 
@@ -73,7 +73,7 @@ Protocols are offered, not imposed. While a task is planned, the protocols that 
 | 5 | Projects | Confirms roots, optional environments and repositories. |
 | 6 | Confirm | Optional preferences and whether to check for updates automatically. |
 | 7 | Install | Reviews every change and resolves conflicts before anything is written. |
-| 8 | Done | Prints what was written, the report of the run and the first command to run. |
+| 8 | Done | Prints what was written, the report of the run, one Relay line per client and the first command to run. |
 
 Attaching a second machine to a mind that already exists writes that machine's record and its agent files, and leaves the mind's content, its preferences and its version untouched. Simple mode attaches by itself when it finds a mind on the machine; custom mode asks at step 2.
 
@@ -86,20 +86,16 @@ No install is left half done. A destination that cannot be written stops on that
 A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. See [roles/README.md](roles/README.md).
 
 <details>
-<summary>Executive, operative and chat roles</summary>
+<summary>Executive and operative roles</summary>
 
 | Role | Group | Description |
 | --- | --- | --- |
-| Overseer | Executive | Coordinates the whole swarm as the product owner; talks to the user, decides and distributes the work. |
-| Technician | Executive | Responsible for the machine and the tooling, as the tech lead. |
 | Genesis | Executive | Installs the mind on a machine and maintains it afterward. |
-| Overlord | Operative | Coordinates one environment as the project manager, for a change that spans several repos. |
+| Overlord | Operative | Leads a squad as a mini overseer: one environment, or the chats of one repository. |
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
-| Super executor | Operative | The Executor seat on the strongest model available, for tasks that require it. |
-| Consultant | Operative | Reads, explains and reviews inside one repo and never writes. |
-| Executive | Chat | Decides business questions from the mind alone, on a mid-tier model. |
-| Operator | Chat | The technical counterpart: architecture, integrations and improving what exists, on the strongest model available. |
-| Marketing | Chat | Ideas, campaigns, social and commercial copy, from the mind alone. |
+| Overseer | Executive | Manages the whole mind: knows where every project stands, defines scope with the user and hands work to the executors. |
+| Adjutant | Executive | Takes the user's requests and solves them end to end: documents and manuals, research, reports, texts and analysis. Leaves the Overseer with coordination. |
+| Incubator | Operative | Develops ideas into products inside one folder: brainstorms them, prototypes them fast and sends each one to the product it belongs in. |
 
 </details>
 
@@ -112,7 +108,7 @@ Every role is a command, and a few more operate the system. Every command also w
 
 | Command | Description |
 | --- | --- |
-| `/relay` | Starts and ends a role's session. On entry it reads the state and the inbox; on exit it writes the state and the log. |
+| `/relay` | Starts and ends a role's session. On entry it fetches, aligns the repos with the recorded branches and reads the state and the inbox; on exit it commits and pushes everything, writes the state and the log, and clears the conversation. |
 | `/evolve` | Updates the mind base, applies private migrations in order and reinstalls the included commands for this machine. |
 | `/task` | Creates a task file with the next id for a unit and leaves it a message that the task is ready. |
 | `/msg` | Writes a message into a unit's inbox and, when its agent has a CLI and the unit is in, tells it to read the inbox. |
@@ -127,22 +123,25 @@ Every role is a command, and a few more operate the system. Every command also w
 
 ### Features
 
-A feature is a workflow that runs on a repo, with a start and an end, one markdown file in `features/`. Most are included in the base; the rest are installed with a knowledge module and require it.
+A feature is a workflow that runs on a repo, with a start and an end, one markdown file in `features/`, or a folder with its scripts when the feature has any. Most are included in the base; the rest are installed with a knowledge module and require it.
 
 <details>
-<summary>Fourteen features</summary>
+<summary>Seventeen features</summary>
 
 | Feature | Category | Description |
 | --- | --- | --- |
 | `/report` | Planning | Investigates a defect or request and writes an evidence-backed task for the project executor without changing code. |
 | `/plan` | Planning | Splits a request into ordered task files for the owning units and sends each unit a message without implementing it. |
 | `/brainstorm` | Planning | Develops a topic one approved decision at a time and records agreed text separately from open questions. |
+| `/blueprint` | Planning | Serves the screen-flow boards of every project on the machine in one local viewer and writes the comments left on them into each repo. This is Blueprint Lite; the full editor is [Blueprint](https://blueprint.txmska.com/). |
+| `/void` | Planning | Opens a long text in a quiet reader where the person corrects it in place, and saves every edit into the file on disk, keeping the original and each version, where agents read it. |
 | `/qa` | Quality | Runs every open project task in non-overlapping groups, verifies the results and records what passed or failed. |
 | `/tribunal` | Quality | Convenes three judges, cross-examines their findings and records an evidence-backed verdict without editing code. |
 | `/corpo` | Quality | Stress-tests delivered work with three deliberately difficult reviewers and records every finding for the user. |
 | `/observer` | Quality | Tests a project under adverse conditions and writes reproducible weakness reports as open tasks. |
 | `/conflicts` | Quality | Resolves compatible merge or rebase conflicts, asks about incompatible hunks and verifies the build before completion. |
 | `/catchup` | Continuity | Summarizes changes, authors, open work and unread messages since the unit's recorded state without changing files. |
+| `/cleaner` | Continuity | Measures how bloated the mind is, proposes every cleanup in one list for a single yes, applies it and verifies that nothing was lost. The startup check offers it when a threshold is crossed. |
 | `/docs` | Continuity | Updates only the documentation affected by the current diff or a supplied commit range. |
 | `/release` | Continuity | Prepares a local release from commits since the last tag and reports the commands needed to publish it. |
 | `/cyberattack` | Quality | Audits security, the whole project or one feature, and warns before the full pass. Installed with the `security` module. |
@@ -153,7 +152,7 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 
 ## Files
 
-Everything in the mind is stored as files, one record per file: a brief per project, a state file per unit, a message per inbox entry, a task per request, a log per repo, environment and mind, plus preferences and knowledge modules. The full layout and every record format are in [files.md](files.md).
+Everything in the mind is stored as files, one record per file: a brief per project, a product document per product, a state file per unit, a message per inbox entry, a task per request, a log per repo, environment and mind, plus preferences and knowledge modules. The full layout and every record format are in [files.md](files.md).
 
 ## Working together
 
@@ -161,7 +160,7 @@ Several people can share a repo, each with their own mind. The team's shared sta
 
 ## Updating and uninstalling
 
-`/evolve` pulls the new version into the mind, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Roles, commands and features written inside the mind are installed alongside the ones the kit ships, from the mind folder for what is shared and from `user/roles`, `user/commands` and `user/features` for what stays private to that mind. A name the kit already ships keeps the kit file and reports it. Anything left out at setup stays out on later updates.
+`/evolve` pulls the new version into the mind, joins to Relay any available client that has no Relay entry yet, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Roles, commands and features written inside the mind are installed alongside the ones the kit ships, from the mind folder for what is shared and from `user/roles`, `user/commands` and `user/features` for what stays private to that mind. A name the kit already ships keeps the kit file and reports it. Anything left out at setup stays out on later updates.
 
 To remove what was installed on a machine, run `uninstall.cmd` in the mind folder, `hivem1nd uninstall [--dry-run] [--remove-mind]` from a terminal, or `/uninstall` from an attached agent. A dry run reports the plan before anything is removed.
 

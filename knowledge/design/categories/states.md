@@ -42,7 +42,7 @@ Options:
 - **In place of the failed component** with a retry, leaving the rest of the screen working.
 - **A full page** only when nothing on the screen can work, with a way out.
 
-Build: In place of the failed component: what failed and a retry button, the rest of the screen still working, the message in an alert region, and what was typed kept.
+Build: In place of the failed component: what failed and a retry button, the rest of the screen still working, the message in an alert region, and what was typed kept. The message comes from a table of causes with a written fallback, never from the exception or the response body.
 
 Open: [interface-states](../protocols/interface-states.md), steps 3 and 7; [states.md](../states.md), Error.
 
@@ -76,15 +76,15 @@ Open: [forms-and-inputs](../protocols/forms-and-inputs.md), step 5; [states.md](
 
 ## First use and onboarding
 
-Applies when: a new account lands on an empty product, a tour or tips are added, or a new feature is announced.
+Applies when: a product, game, section or app inside a product opens for the first time, a new account lands on an empty product, a tour or tips are added, or a new feature is announced.
 
 Options:
 
 - **Learning inside the real product**, with example content.
-- **A short tour** of three to seven steps built around one workflow, skippable and replayable.
+- **A short section tour** of three or four key things, with the rest behind a More control that continues the tour, skippable and replayable.
 - **A one-time hint** on a new feature, remembered once dismissed.
 
-Build: The first-use empty state inside the real product, with an example or a template and one primary action; a tour of three to seven steps only when a workflow needs it, with the dismissal remembered.
+Build: Teach each section or app on its first opening: one line on what it does, then three or four key things; the rest waits behind a More control that continues the tour. Keep the section usable while the tour shows, remember the dismissal, and give every menu option a line saying what it does. Show a first-use empty state inside the real product, with an example or a template and one primary action. Never teach everything at once.
 
 Open: [states.md](../states.md), Onboarding; [ux-laws.md](../ux-laws.md), peak-end and goal-gradient.
 

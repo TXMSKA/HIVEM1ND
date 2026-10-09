@@ -30,7 +30,7 @@ report: the keyboard walk transcript, the contrast table, the undersized targets
    Result: every target measures at least 24 by 24 CSS pixels, or falls under an exception: an equivalent control elsewhere on the page that meets the size, a target inline in a sentence whose size the line height constrains, a target sized by the browser and not by the page, a target whose exact presentation is essential, or an undersized target spaced so that a 24 pixel circle centred on it intersects no other target. On touch, 44 by 44 is the working size, and a visual smaller than the target gets its hit area expanded rather than its box.
 
 5. Meet the contrast numbers.
-   Task: take the contrast tables from [colour-and-theming](colour-and-theming.md), or compute them here when that protocol did not run.
+   Task: take the contrast tables from [colour-and-theming](colour-and-theming.md), or compute them here when that protocol did not run. A pair an approved design misses is met by its soft option in [essentials.md](../essentials.md#applying-a-floor-to-a-design), and a fix that changes anything visible is shown beside the board before it ships.
    Time: 15 minutes.
    Result: every text, large text and non-text pair at or above its target in [essentials.md](../essentials.md#floors), Contrast, placeholders included, in each theme that ships, and no message carried by colour alone.
 
@@ -40,6 +40,6 @@ report: the keyboard walk transcript, the contrast table, the undersized targets
    Result: screenshots at both settings with no content lost, no clipping and no second scroll axis, except where a two-dimensional layout such as a data table genuinely needs one. A clamped or truncated value passes only when its full text is reachable on focus, on activation or on a linked page.
 
 7. Give the page its landmarks.
-   Task: add a skip link to the main content, placed so that it covers nothing when it appears on focus, mark the landmark regions, order the headings without skipping a level, and keep the document title matched to the current view. Decorative elements are hidden from assistive technology, media carries captions or a transcript, and its controls work from the keyboard.
+   Task: add a skip link to the main content, placed so that it covers nothing when it appears on focus, mark the landmark regions, order the headings without skipping a level, and keep the document title matched to the current view. Decorative elements are hidden from assistive technology, media carries captions or a transcript, and its controls work from the keyboard. Every meaningful image has an alternative text saying what it shows or does, a linked image's text names the destination, and a decorative image has an empty one.
    Time: 20 minutes.
-   Result: the document outline with one level-one heading and no skipped level, the skip link appearing as the first keyboard stop in the transcript, and the title recorded for each view.
+   Result: the document outline with one level-one heading and no skipped level, the skip link appearing as the first keyboard stop in the transcript, the title recorded for each view, and zero `img` elements without an `alt` attribute in the rendered page, the empty ones listed as decorative.

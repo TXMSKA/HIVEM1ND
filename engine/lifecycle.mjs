@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord } from "./records.mjs";
+import { measureMind } from "./measure.mjs";
+import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord, readManagedFiles } from "./records.mjs";
 
 const execFileAsync = promisify(execFile);
 const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -20,7 +21,7 @@ function lifecycleError(code, message, cause) {
   return error;
 }
 
-async function assertSafePath(root, target, options) {
+export async function assertSafePath(root, target, options) {
   try {
     return await assertRecordSafePath(root, target, options);
   } catch (cause) {
@@ -61,7 +62,7 @@ async function writeText(filePath, content, root = path.dirname(filePath)) {
   await atomicWriteFile(filePath, content, { root });
 }
 
-function headerValue(content, name) {
+export function headerValue(content, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = content.match(new RegExp(`^${escaped}:[ \\t]*(.*)$`, "im"));
   return match?.[1]?.trim() ?? "";
@@ -81,7 +82,7 @@ function setHeader(content, name, value) {
   return `${content.trimEnd()}\n${name}: ${value}\n`;
 }
 
-function bodyFirstLine(content) {
+export function bodyFirstLine(content) {
   const parts = content.split(/\r?\n\r?\n/, 2);
   if (parts.length < 2) {
     return "";
@@ -456,10 +457,21 @@ export async function evolve(options = {}) {
   const baseFiles = installation?.baseFiles ?? [];
   const omitted = installation?.omitted ?? [];
   const replacedLinks = installation?.replacedLinks ?? [];
+  const removed = installation?.removed ?? [];
+  const kept = installation?.kept ?? [];
   const warnings = [...lifecycleWarnings, ...collisionWarnings, ...(installation?.warnings ?? [])];
   const conflicts = installation?.conflicts ?? [];
   const lastCheck = isoDate(resolved.now);
   const completed = conflicts.length === 0;
+  // Relay points the clients at the mind's own copy of the CLI, so it runs after the update wrote it.
+  const relay = completed && resolved.relaySetup === true
+    ? await (await import("./relay/config.mjs")).ensureRelayClients({
+      homeDir: resolved.homeDir,
+      env: resolved.env,
+      kitPath: resolved.mindPath,
+      mindPath: resolved.mindPath,
+    })
+    : [];
 
   if (completed) {
     await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
@@ -473,6 +485,7 @@ export async function evolve(options = {}) {
     changed: compareVersions(fromVersion, toVersion) !== 0
       || migrations.length > 0
       || baseFiles.length > 0
+      || removed.length > 0
       || agents.some((agent) => (agent.files ?? []).length > 0),
     pulled,
     migrations,
@@ -482,6 +495,9 @@ export async function evolve(options = {}) {
     conflicts,
     omitted,
     replacedLinks,
+    removed,
+    kept,
+    relay,
     reportPath: installation?.reportPath ?? null,
     lastCheck: completed ? lastCheck : headerValue(
       await readText(await machineFilePath(resolved.mindPath, resolved.hostname)),
@@ -956,7 +972,7 @@ export async function pylon(options = {}) {
   };
 }
 
-async function listDirectories(directory) {
+export async function listDirectories(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -965,7 +981,7 @@ async function listDirectories(directory) {
     .sort((left, right) => left.localeCompare(right, "en"));
 }
 
-async function listFiles(directory) {
+export async function listFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -975,12 +991,13 @@ async function listFiles(directory) {
     .sort((left, right) => left.localeCompare(right, "en"));
 }
 
-async function collectScopes(userPath) {
+// The lister is a parameter so a reader that reports what it could not list walks the same scopes.
+export async function collectScopes(userPath, directories = listDirectories) {
   const scopes = [{ scope: "root", path: userPath }];
-  for (const environment of await listDirectories(path.join(userPath, "envs"))) {
+  for (const environment of await directories(path.join(userPath, "envs"))) {
     scopes.push({ scope: "environment", environment, path: path.join(userPath, "envs", environment) });
   }
-  for (const project of await listDirectories(path.join(userPath, "projects"))) {
+  for (const project of await directories(path.join(userPath, "projects"))) {
     scopes.push({ scope: "project", project, path: path.join(userPath, "projects", project) });
   }
   return scopes;
@@ -993,7 +1010,7 @@ async function readTasks(taskPath) {
     const filePath = path.join(taskPath, fileName);
     const content = await readText(filePath);
     const status = headerValue(content, "status").toLowerCase();
-    if (status !== "open" && status !== "done") continue;
+    if (status !== "open" && status !== "review" && status !== "done") continue;
     const fileMatch = fileName.match(/^(\d+)-(.*)\.md$/);
     items.push({
       id: headerValue(content, "id") || fileMatch?.[1] || "",
@@ -1051,14 +1068,17 @@ export async function swarm(options = {}) {
 
   const projectSummaries = [];
   let open = 0;
+  let review = 0;
   let done = 0;
   for (const project of await listDirectories(path.join(userPath, "projects"))) {
     const items = await readTasks(path.join(userPath, "projects", project, "tasks"));
     const projectOpen = items.filter((item) => item.status === "open").length;
+    const projectReview = items.filter((item) => item.status === "review").length;
     const projectDone = items.filter((item) => item.status === "done").length;
     open += projectOpen;
+    review += projectReview;
     done += projectDone;
-    projectSummaries.push({ project, open: projectOpen, done: projectDone, items });
+    projectSummaries.push({ project, open: projectOpen, review: projectReview, done: projectDone, items });
   }
 
   units.sort((left, right) => left.unit.localeCompare(right.unit, "en"));
@@ -1066,7 +1086,7 @@ export async function swarm(options = {}) {
   return {
     action: "swarm",
     units,
-    tasks: { open, done, projects: projectSummaries },
+    tasks: { open, review, done, projects: projectSummaries },
     inboxes: {
       unread: inboxUnits.reduce((sum, inbox) => sum + inbox.count, 0),
       units: inboxUnits,
@@ -1129,6 +1149,7 @@ export async function check(options = {}) {
     const machinePath = await machineFilePath(resolved.mindPath, resolved.hostname);
     await assertSafePath(resolved.mindPath, machinePath, { allowMissing: false });
     record = parseMachineRecord(await readText(machinePath));
+    record.managedFiles = await readManagedFiles(machinePath, record.managedFiles);
   } catch (error) {
     if (error.code !== "MACHINE_NOT_FOUND") throw error;
   }
@@ -1167,6 +1188,8 @@ export async function check(options = {}) {
       : null,
     repository,
     executive: await waitingWork(userPath),
+    // The measurement is advice: it never fails the check and never writes.
+    mind: await measureMind({ mindPath: resolved.mindPath, hostname: resolved.hostname, now: resolved.now ? new Date(resolved.now) : new Date() }).catch(() => null),
     warnings,
   };
 }

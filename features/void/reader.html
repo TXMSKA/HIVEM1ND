@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Void Text Reader</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css" rel="stylesheet">
+<style>html,body{margin:0;background:#000}html body #vtr{--h:100vh;border-radius:0}</style></head><body>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+#vtr{--bg:#000;--fg:#e6e3dc;--head:#f4f2ee;--soft:#a9a69e;--mute:#8a877f;--dim:#5f5c55;--line:#262626;--done:#4a4740;--edit:#8f7f55;--panel:#0b0b0b;--hover:#171717;--rule:#6b685f;--ring:#a9a69e;--ok:#6fae7c;--bad:#c9806f;--add:#16311d;--note:#3b3420;--note2:#5a4d2c;--pop:20;--r:999px;--rail:56px;--h:600px;--z:1;position:relative;height:var(--h);overflow:hidden;background:var(--bg);color:var(--fg);border-radius:16px;font-family:'Atkinson Hyperlegible',system-ui,sans-serif;outline:none}
+#vtr-body{position:absolute;top:0;bottom:0;left:0;right:calc(var(--rail) + 16px);display:flex;flex-direction:column;overflow-y:auto;padding:28px 20px 28px calc(var(--rail) + 36px);scrollbar-gutter:stable both-edges;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+#vtr-body .col{position:relative;margin:auto;width:100%;max-width:calc(580px * var(--z))}
+#vtr-body p{font-size:calc(19px * var(--z));line-height:1.8;text-align:justify;hyphens:auto;margin:0 0 1.1em;letter-spacing:.01em}
+#vtr-body p.h{font-size:calc(23px * var(--z));font-weight:700;text-align:center;margin:0 0 1.2em;letter-spacing:.02em;color:var(--head)}
+#vtr-body p.gap{margin-bottom:1.9em}
+#vtr-body .lang{font-size:13px;color:var(--mute);text-align:center;letter-spacing:.12em;margin:0 0 18px}
+#vtr-body hr{border:0;height:1px;background:var(--line);border-radius:var(--r);margin:34px auto;width:80px}
+#vtr-body .ed{outline:none;caret-color:var(--fg);border-radius:12px;padding:4px 10px;margin:0 -10px}
+#vtr-body .ed:focus{background:var(--panel)}
+#vtr-key{font-size:12px;color:var(--dim);text-align:center;letter-spacing:.02em;margin:0 0 22px}
+#vtr-say{font-size:12px;color:var(--mute);text-align:center;letter-spacing:.02em;margin:-14px 0 22px}
+#vtr-say:empty{display:none}
+#vtr-rail{position:absolute;top:8px;bottom:8px;right:8px;width:var(--rail);box-sizing:border-box;padding:16px 0;display:flex;flex-direction:column;align-items:center;background:var(--panel);border-radius:var(--r)}
+.vtr-btn{flex:none;width:36px;height:36px;padding:0;border:0;border-radius:var(--r);background:none;color:var(--mute);font:inherit;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.vtr-btn:hover{background:var(--hover);color:var(--fg)}
+.vtr-btn[hidden],.vtr-sep[hidden]{display:none}
+.vtr-z{font-size:13px;letter-spacing:.04em}
+.vtr-in{flex:none;width:46px;box-sizing:border-box;padding:3px 0;border:0;border-radius:var(--r);background:none;color:var(--fg);font:inherit;text-align:center;cursor:text;outline:none}
+.vtr-in:hover{background:var(--hover)}
+.vtr-in:focus{background:var(--hover);box-shadow:0 0 0 1px var(--dim)}
+.vtr-btn:focus-visible{box-shadow:0 0 0 1px var(--dim)}
+#vtr-chg:focus-visible,#vtr-snd:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+#vtr-chg[aria-pressed=true],#vtr-snd[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+#vtr-snd[aria-disabled=true]{color:var(--dim);cursor:default}
+#vtr-snd[aria-disabled=true]:hover{background:none;color:var(--dim)}
+#vtr-pg{font-size:19px;font-weight:700}
+#vtr-t{flex:none;font-size:12px;color:var(--dim);margin:1px 0 6px}
+#vtr-zin{font-size:12px;color:var(--soft)}
+.vtr-sl{position:relative;width:100%;cursor:pointer;touch-action:none}
+#vtr-track{flex:1;min-height:40px;margin:8px 0}
+#vtr-zs{flex:none;height:84px;margin:8px 0}
+.vtr-ln,.vtr-fl{position:absolute;left:50%;width:3px;margin-left:-1.5px;border-radius:var(--r);pointer-events:none}
+.vtr-ln{top:0;bottom:0;background:var(--line)}
+.vtr-fl{background:var(--done)}
+#vtr-track .vtr-fl{top:0}
+#vtr-zs .vtr-fl{bottom:0}
+.vtr-kn{position:absolute;left:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:var(--r);background:var(--fg);pointer-events:none}
+.vtr-sl:hover .vtr-kn,.vtr-sl.drag .vtr-kn{width:16px;height:16px;margin:-8px 0 0 -8px}
+.vtr-dot{position:absolute;left:calc(50% + 8px);width:5px;height:5px;margin-top:-2.5px;border-radius:var(--r);background:var(--edit);pointer-events:none}
+.vtr-dot.out{left:calc(50% - 13px);background:var(--ok)}
+.vtr-sep{flex:none;width:20px;height:1px;margin:10px 0;background:var(--line);border-radius:var(--r)}
+#vtr-tip{position:absolute;top:0;left:0;transform:translateY(-50%);padding:5px 12px;border-radius:var(--r);background:var(--hover);color:var(--soft);font-size:12px;white-space:nowrap;pointer-events:none;visibility:hidden}
+.vtr-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+ins.new{background:var(--add);color:inherit;text-decoration:underline;text-decoration-color:var(--ok);text-underline-offset:3px;border-radius:4px}
+del.old{color:var(--soft);text-decoration:line-through;text-decoration-color:var(--bad);-webkit-user-select:none;user-select:none}
+::highlight(vtr-c){background-color:var(--note);color:inherit}
+::highlight(vtr-cs){background-color:var(--note2);color:inherit}
+#vtr-marks{position:absolute;left:0;top:0;width:0;height:0}
+#vtr-marks[hidden],#vtr-diff[hidden]{display:none}
+.vtr-mk{position:absolute;left:-42px;width:26px;height:26px;margin:0;padding:0;border:0;border-radius:var(--r);background:var(--note2);color:var(--fg);font:inherit;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.vtr-mk.res{background:none;box-shadow:inset 0 0 0 1px var(--dim);color:var(--mute)}
+.vtr-mk[aria-expanded=true]{background:var(--fg);color:var(--bg)}
+.vtr-mk:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+#vtr-box{position:absolute;z-index:var(--pop);width:min(360px,100%);box-sizing:border-box;padding:14px;border-radius:16px;background:var(--hover);color:var(--fg);font-size:14px;line-height:1.5;text-align:left;letter-spacing:0}
+#vtr-box[hidden]{display:none}
+#vtr-box .q{margin:0 0 10px;color:var(--soft);font-size:13px;font-style:italic;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+#vtr-box .q[hidden]{display:none}
+#vtr-box .ms{list-style:none;margin:0 0 12px;padding:0;max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+#vtr-box .who{font-weight:700}
+#vtr-box time{color:var(--mute);font-size:12px;margin-left:6px}
+#vtr-box .tx{white-space:pre-wrap;overflow-wrap:anywhere}
+#vtr-box .fld{border:1px solid var(--rule);border-radius:12px;background:var(--bg);overflow:hidden}
+#vtr-box .fld:focus-within{outline:2px solid var(--ring);outline-offset:2px}
+#vtr-box textarea{display:block;width:100%;box-sizing:border-box;min-height:72px;padding:10px 12px;border:0;background:none;color:var(--fg);font:inherit;font-size:16px;line-height:1.5;resize:vertical;outline:none}
+#vtr-box .snd{display:flex;align-items:center;gap:8px;min-height:32px;padding:2px 12px;border-top:1px solid var(--line);color:var(--soft);font-size:13px}
+#vtr-box .chk{display:inline-flex;align-items:center;gap:8px;min-height:28px;cursor:pointer}
+#vtr-box .chk input{width:16px;height:16px;margin:0;accent-color:var(--soft)}
+#vtr-box .chk input:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+#vtr-box .to{display:inline-flex;align-items:center;gap:6px;min-width:0;margin-left:auto;white-space:nowrap}
+#vtr-box .un{overflow:hidden;text-overflow:ellipsis}
+#vtr-box .wk{flex:none;width:8px;height:8px;box-sizing:border-box;border:2px solid var(--ok);border-radius:var(--r);background:var(--ok)}
+#vtr-box .wk.off{border-color:var(--mute);background:none}
+#vtr-box .act{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+#vtr-box .bt{min-width:24px;height:32px;padding:0 14px;border:0;border-radius:var(--r);background:none;color:var(--soft);font:inherit;font-size:14px;cursor:pointer}
+#vtr-box .bt:hover{background:var(--line);color:var(--fg)}
+#vtr-box .bt:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+#vtr-box .bt.pri{background:var(--fg);color:var(--bg)}
+#vtr-box .bt.pri:hover{background:var(--head)}
+#vtr-box .bt:disabled{cursor:default;opacity:.6}
+#vtr-box .msg{margin-top:10px;color:var(--soft);font-size:13px}
+#vtr-box .msg:empty{display:none}
+#vtr-box .msg.bad{color:var(--fg);font-weight:700}
+#vtr-diff:focus{outline:none}
+.df-say{font-size:15px;color:var(--soft);text-align:center;margin:40px 0}
+.df-pg{margin:0 0 38px}
+.df-h{margin:0 0 10px;font-size:15px;font-weight:700;color:var(--head)}
+.df-go{padding:2px 10px;margin:0 -10px;border:0;border-radius:var(--r);background:none;color:inherit;font:inherit;cursor:pointer;min-height:28px}
+.df-go:hover{background:var(--hover)}
+.df-go:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.df-t{margin:0 0 18px}
+.df-w{font-size:12px;color:var(--mute);margin:0 0 8px}
+.df-r{white-space:pre-wrap;font-size:calc(17px * var(--z));line-height:1.7;overflow-wrap:anywhere}
+</style>
+<div id="vtr" tabindex="0">
+<div id="vtr-body"><div class="col" id="vtr-wrap"><div id="vtr-key"></div><div id="vtr-say" role="status"></div><div id="vtr-col"></div><div id="vtr-marks"></div><div id="vtr-diff" tabindex="-1" hidden></div></div></div>
+<div id="vtr-rail">
+<input class="vtr-in" id="vtr-pg" inputmode="numeric" autocomplete="off" aria-label="Go to page" title="Go to page">
+<div id="vtr-t"></div>
+<button class="vtr-btn" id="vtr-prev" aria-label="Previous page" title="Previous page (Left or Up arrow)"><i class="ti ti-chevron-up" aria-hidden="true"></i></button>
+<div class="vtr-sl" id="vtr-track" role="slider" aria-label="Page"><div class="vtr-ln"></div><div class="vtr-fl"></div><div id="vtr-dots"></div><div class="vtr-kn"></div></div>
+<button class="vtr-btn" id="vtr-next" aria-label="Next page" title="Next page (Right or Down arrow)"><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+<div class="vtr-sep"></div>
+<input class="vtr-in" id="vtr-zin" inputmode="numeric" autocomplete="off" aria-label="Text size in percent" title="Text size">
+<button class="vtr-btn vtr-z" id="vtr-zi" aria-label="Larger text" title="Larger text (+)">A+</button>
+<div class="vtr-sl" id="vtr-zs" role="slider" aria-label="Text size"><div class="vtr-ln"></div><div class="vtr-fl"></div><div class="vtr-kn"></div></div>
+<button class="vtr-btn vtr-z" id="vtr-zo" aria-label="Smaller text" title="Smaller text (-)">A&minus;</button>
+<div class="vtr-sep" id="vtr-sep2" hidden></div>
+<button class="vtr-btn" id="vtr-chg" aria-label="Changes" aria-pressed="false" title="Changes: each page against its previous version" hidden><i class="ti ti-arrows-diff" aria-hidden="true"></i></button>
+<button class="vtr-btn" id="vtr-snd" aria-label="Send to agent" aria-pressed="false" hidden><i class="ti ti-send" aria-hidden="true"></i></button>
+</div>
+<div id="vtr-tip"></div>
+<div id="vtr-box" role="group" hidden></div>
+</div>
+<script>
+const PAGES=[{"k":"Void.About","en":"<b>Void</b>\nA quiet page for reading and correcting long texts.\n\nEach entry has its own page, with both languages stacked.","es":"<b>Void</b>\nUna página tranquila para leer y corregir textos largos.\n\nCada entrada tiene su propia página, con los dos idiomas uno debajo del otro."},{"k":"Void.Editing","en":"<b>Editing</b>\nClick a text to edit it in place. Esc, or a click elsewhere, leaves editing.\n\nServed by /void, every change is saved into the document on disk, where an agent reads it.","es":"<b>Edición</b>\nUn clic en un texto lo edita en su lugar. Esc, o un clic fuera, sale de la edición.\n\nServido por /void, cada cambio se guarda en el documento en disco, donde lo lee un agente."}];
+const ZMIN=.8,ZMAX=1.8,LANGS=['en','es'];
+const $=id=>document.getElementById(id),root=$('vtr'),body=$('vtr-body'),wrap=$('vtr-wrap'),col=$('vtr-col'),rail=$('vtr-rail'),track=$('vtr-track'),zs=$('vtr-zs'),dots=$('vtr-dots'),tip=$('vtr-tip'),pg=$('vtr-pg'),zin=$('vtr-zin'),keyEl=$('vtr-key'),sayEl=$('vtr-say'),marksEl=$('vtr-marks'),diffEl=$('vtr-diff'),box=$('vtr-box'),chg=$('vtr-chg'),snd=$('vtr-snd');
+const store={get(k){try{return JSON.parse(localStorage.getItem('vtr:'+k))}catch(e){return null}},set(k,v){try{localStorage.setItem('vtr:'+k,JSON.stringify(v))}catch(e){}}};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const FILE=new URLSearchParams(location.search).get('file'),LIVE=!!FILE&&location.protocol.startsWith('http');
+// "Send to agent" is one setting for every comment box and for the toolbar; it starts on.
+let N=0,i=0,z=+store.get('zoom')||1,dirty=new Set(),failed=false,send=store.get('send')!==false,agent=null,threads=[],marks=new Map(),pend={},painted=[],view=null,draft=null,diffOn=false;
+const edits={};
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function attr(s){return esc(s).replace(/"/g,'&quot;')}
+function rich(s){return esc(s).replace(/&lt;(\/?)(b|i)&gt;/g,'<$1$2>')}
+function html(t){const ls=t.split('\n');let h='';ls.forEach((l,n)=>{if(l==='')return;const head=/^<(b|i)>[^<]*<\/(b|i)>$/.test(l.trim());const gap=ls[n+1]==='';h+='<p class="'+(head?(gap?'h hg':'h'):(gap?'gap':''))+'">'+rich(l)+'</p>'});return h}
+function inline(n){let s='';n.childNodes.forEach(c=>{if(c.nodeType===3)s+=c.nodeValue;else if(c.nodeName==='BR')s+='\n';else if(c.nodeName==='B'||c.nodeName==='STRONG')s+='<b>'+inline(c)+'</b>';else if(c.nodeName==='I'||c.nodeName==='EM')s+='<i>'+inline(c)+'</i>';else if(c.nodeName==='DEL')return;else if(c.nodeType===1)s+=inline(c)});return s}
+function text(el){const out=[];el.childNodes.forEach(c=>{if(c.nodeName==='P'||c.nodeName==='DIV')out.push({t:inline(c).replace(/\n$/,''),gap:c.classList.contains('gap')||c.classList.contains('hg')});else{const t=c.nodeType===3?c.nodeValue:inline(c);if(t.trim())out.push({t,gap:false})}});return out.map((b,n)=>b.t+(n<out.length-1?(b.gap?'\n\n':'\n'):'')).join('').replace(/\u00a0/g,' ')}
+function block(k,lang,label,content){return '<div class="lang">'+label+'</div><div class="ed" contenteditable="true" spellcheck="true" lang="'+lang+'" data-l="'+lang+'" data-k="'+esc(k).replace(/"/g,'&quot;')+'">'+content+'</div>'}
+function editOf(k){return LIVE?{}:edits[k]||store.get('edit:'+k)||{}}
+function label(k){return k+(dirty.has(k)?'  ·  edited':'')}
+function keyLine(){keyEl.textContent=label(PAGES[i].k)+(failed?'  ·  not saved':'')}
+function say(s){sayEl.textContent=s||''}
+function ticks(){if(!N)return;const seg=track.clientHeight/N,ln=track.querySelector('.vtr-ln'),fl=track.querySelector('.vtr-fl');if(seg<6){ln.style.background=fl.style.background='';return}const a=(seg-2).toFixed(2)+'px',b=seg.toFixed(2)+'px',g=c=>'repeating-linear-gradient(to bottom,var('+c+') 0 '+a+',transparent '+a+' '+b+')';ln.style.background=g('--line');fl.style.background=g('--done')}
+function paintDots(){dots.innerHTML=PAGES.map((p,n)=>(dirty.has(p.k)?'<div class="vtr-dot" style="top:'+((n+.5)/N*100)+'%"></div>':'')+(marks.has(p.k)?'<div class="vtr-dot out" style="top:'+((n+.5)/N*100)+'%"></div>':'')).join('')}
+function railPos(){
+  if(document.activeElement!==pg)pg.value=i+1;
+  track.querySelector('.vtr-fl').style.height=(i/N*100)+'%';
+  track.querySelector('.vtr-kn').style.top=((i+.5)/N*100)+'%';
+  track.setAttribute('aria-valuenow',i+1);
+}
+function show(){
+  const p=PAGES[i],e=editOf(p.k);
+  closeBox(false);
+  col.innerHTML=block(p.k,'en','ENGLISH',e.en||html(p.en))+'<hr>'+block(p.k,'es','ESPAÑOL',e.es||html(p.es));
+  LANGS.forEach(l=>applyMarks(edOf(l),(marks.get(p.k)||{})[l]));
+  keyLine();
+  railPos();
+  body.scrollTop=0;
+  later();
+}
+function to(n){if(diffOn)closeChanges();n=clamp(n,0,N-1);if(n===i)return;if(editing())document.activeElement.blur();i=n;show()}
+function zoom(v){z=Math.round(clamp(v,ZMIN,ZMAX)*100)/100;root.style.setProperty('--z',z);if(document.activeElement!==zin)zin.value=Math.round(z*100)+'%';const f=(z-ZMIN)/(ZMAX-ZMIN);zs.querySelector('.vtr-fl').style.height=(f*100)+'%';zs.querySelector('.vtr-kn').style.top=((1-f)*100)+'%';zs.setAttribute('aria-valuenow',Math.round(z*100));store.set('zoom',z);if(N)later()}
+function tipAt(n){tip.textContent=(n+1)+'   '+label(PAGES[n].k);const r=track.getBoundingClientRect(),o=root.getBoundingClientRect();tip.style.top=(r.top-o.top+(n+.5)/N*r.height)+'px';tip.style.left=(rail.offsetLeft-tip.offsetWidth-10)+'px';tip.style.visibility='visible'}
+function scrub(el,set,hover){
+  const frac=e=>{const r=el.getBoundingClientRect();return clamp((e.clientY-r.top)/r.height,0,.9999)};
+  el.addEventListener('pointerdown',e=>{if(e.button||!N)return;el.setPointerCapture(e.pointerId);el.classList.add('drag');set(frac(e));e.preventDefault()});
+  el.addEventListener('pointermove',e=>{if(!N)return;const f=frac(e);if(el.classList.contains('drag'))set(f);if(hover)hover(f)});
+  const end=()=>{if(!el.classList.contains('drag'))return;el.classList.remove('drag');root.focus()};
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);
+  el.addEventListener('pointerleave',()=>{if(!el.classList.contains('drag'))tip.style.visibility='hidden'});
+}
+function field(inp,current,commit){
+  inp.addEventListener('focus',()=>{inp.value=current();inp.select()});
+  inp.addEventListener('keydown',e=>{e.stopPropagation();if(e.key!=='Enter'&&e.key!=='Escape')return;if(e.key==='Escape')inp.dataset.cancel=1;e.preventDefault();inp.blur();root.focus()});
+  inp.addEventListener('blur',()=>{const v=parseFloat(inp.value);if(!inp.dataset.cancel&&isFinite(v))commit(v);delete inp.dataset.cancel;pg.value=i+1;zin.value=Math.round(z*100)+'%'});
+}
+function editing(){const a=document.activeElement;return a&&a.classList&&a.classList.contains('ed')}
+const edOf=l=>col.querySelector('.ed[data-l="'+l+'"]');
+// A text being edited is never rewritten under the person's hands.
+const held=(k,l)=>PAGES[i]&&PAGES[i].k===k&&document.activeElement===edOf(l);
+const wants=()=>send&&!!agent;
+let queue=Promise.resolve();
+const bad=(r,d)=>Promise.reject(new Error(d&&d.error||'HTTP '+r.status));
+function get(route){return fetch(route+(route.includes('?')?'&':'?')+'file='+encodeURIComponent(FILE)).then(r=>r.json().catch(()=>({})).then(d=>r.ok?d:bad(r,d)))}
+function api(route,data){const run=queue.then(()=>fetch(route+'?file='+encodeURIComponent(FILE),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json().catch(()=>({})).then(d=>r.ok?d:bad(r,d))));queue=run.catch(()=>{});return run}
+// `base` is the text this one was made from: if the file changed meanwhile, the server joins the two and answers with the result.
+function save(p,lang,t,base){
+  const k=p.k;
+  api('/api/save',{k,lang,text:t,base,send:wants()}).then(res=>{
+    failed=false;if(res.edited)dirty.add(k);else dirty.delete(k);
+    if(res.threads){threads=res.threads;paintMarks()}
+    if(typeof res.text==='string'&&res.text!==t){say('What was typed was joined with the change made outside.');if(held(k,lang))pend[k+lang]=res.text;else{p[lang]=res.text;if(PAGES[i]&&PAGES[i].k===k)paintBlock(lang)}}
+  },()=>{failed=true}).then(()=>{paintDots();if(PAGES[i]&&PAGES[i].k===k)keyLine()});
+}
+
+// ---- the text of a block, in the offsets comments and marks count in ----------
+// The reader's text as the server's plain() makes it: the lines of the block, a blank line after those that have one.
+function flat(el){
+  const segs=[];let t='',sep='';
+  for(const p of el.children){
+    t+=sep;
+    const w=document.createTreeWalker(p,NodeFilter.SHOW_TEXT,{acceptNode:n=>n.parentElement.closest('del')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});
+    for(let n=w.nextNode();n;n=w.nextNode()){segs.push({n,s:t.length});t+=n.nodeValue}
+    sep=p.classList.contains('gap')||p.classList.contains('hg')?'\n\n':'\n';
+  }
+  return{text:t,segs};
+}
+function at(f,o,end){
+  for(const g of f.segs){const l=g.n.nodeValue.length;if(o<g.s+l||(end&&o===g.s+l))return[g.n,Math.max(0,o-g.s)]}
+  const g=f.segs[f.segs.length-1];return g?[g.n,g.n.nodeValue.length]:null;
+}
+function rangeOf(f,s,e){const a=at(f,s,false),b=at(f,e,true);if(!a||!b)return null;const r=document.createRange();r.setStart(a[0],a[1]);r.setEnd(b[0],b[1]);return r}
+// How much of the block's text lies before a point of the selection.
+function offsetOf(f,node,off){
+  const g=f.segs.find(g=>g.n===node);if(g)return g.s+off;
+  const r=document.createRange();r.setStart(node,off);r.collapse(true);
+  let o=0;for(const g of f.segs){if(r.comparePoint(g.n,g.n.nodeValue.length)<=0)o=g.s+g.n.nodeValue.length;else break}
+  return o;
+}
+
+// ---- what changed outside: inserted words underlined, removed words struck through ----------
+function applyMarks(ed,runs){
+  if(!ed||!runs)return;
+  const f=flat(ed);let o=0;const ops=[];
+  runs.forEach(r=>{if(r.kind==='delete')ops.push({s:o,del:r.text});else{if(r.kind==='insert')ops.push({s:o,e:o+r.text.length});o+=r.text.length}});
+  if(f.text!==runs.filter(r=>r.kind!=='delete').map(r=>r.text).join(''))return;
+  // From the end, so the offsets still to be used are not moved by the marks already made.
+  ops.reverse().forEach(op=>{
+    if(op.del!==undefined){
+      const d=document.createElement('del');d.className='old';d.contentEditable='false';d.textContent=op.del;
+      const g=f.segs.find(g=>op.s>=g.s&&op.s<=g.s+g.n.nodeValue.length);
+      if(!g){ed.appendChild(d);return}
+      if(op.s-g.s<g.n.nodeValue.length)g.n.splitText(op.s-g.s);
+      g.n.after(d);return;
+    }
+    f.segs.filter(g=>g.s<op.e&&g.s+g.n.nodeValue.length>op.s).reverse().forEach(g=>{
+      const r=document.createRange();r.setStart(g.n,Math.max(0,op.s-g.s));r.setEnd(g.n,Math.min(g.n.nodeValue.length,op.e-g.s));
+      const m=document.createElement('ins');m.className='new';r.surroundContents(m);
+    });
+  });
+}
+function paintBlock(l){const ed=edOf(l),p=PAGES[i];if(!ed||!p)return;ed.innerHTML=html(p[l]);applyMarks(ed,(marks.get(p.k)||{})[l])}
+function outside(d){
+  marks=new Map();
+  (d.changes||[]).forEach(c=>{const m=marks.get(c.k)||{};m[c.lang]=c.runs;marks.set(c.k,m)});
+  const here=PAGES[i]&&PAGES[i].k,was=new Map(PAGES.map(p=>[p.k,p])),kept=[];
+  const next=d.pages.map(n=>{
+    const p=was.get(n.k);if(!p)return n;
+    LANGS.forEach(l=>{
+      if(typeof n[l]!=='string')return;
+      if(held(n.k,l)){if(n[l]!==p[l]){pend[n.k+l]=n[l];kept.push(l)}else delete pend[n.k+l]}
+      else p[l]=n[l];
+    });
+    return p;
+  });
+  PAGES.splice(0,PAGES.length,...next);N=PAGES.length;
+  dirty=new Set(d.edited||[]);
+  if(d.title)document.title=d.title;
+  if(d.threads)threads=d.threads;
+  const found=PAGES.findIndex(p=>p.k===here);
+  i=found<0?clamp(i,0,N-1):found;
+  $('vtr-t').textContent='/ '+N;track.setAttribute('aria-valuemax',N);ticks();paintDots();
+  if(found<0)show();
+  else{
+    railPos();
+    const hit=new Set((d.changes||[]).filter(c=>c.k===here).map(c=>c.lang));
+    LANGS.forEach(l=>{if(!held(here,l)&&(hit.has(l)||text(edOf(l))!==PAGES[i][l]))paintBlock(l)});
+    paintMarks();
+    if(view&&view.kind==='thread')refreshThread();
+  }
+  const n=(d.changes||[]).length;
+  if(n)say('Changed outside: '+n+(n===1?' text':' texts')+' marked.'+(kept.length?' What is typed in the open text stays.':''));
+  if(diffOn)showChanges();
+}
+
+// ---- comments ----------------------------------------------------------------------------------
+function when(at){const d=new Date(at);return isNaN(d)?'':d.toLocaleString([],{dateStyle:'medium',timeStyle:'short'})}
+function highlight(){
+  if(!window.CSS||!CSS.highlights||!window.Highlight)return;
+  const cur=v=>view&&view.id===v.t.id,open=painted.filter(x=>x.r&&x.t.status==='open'&&!cur(x)).map(x=>x.r);
+  const sel=painted.filter(x=>x.r&&cur(x)).map(x=>x.r);if(draft)sel.push(draft.range);
+  CSS.highlights.set('vtr-c',new Highlight(...open));CSS.highlights.set('vtr-cs',new Highlight(...sel));
+}
+function paintMarks(){
+  if(!LIVE||!N||diffOn)return;
+  marksEl.textContent='';painted=[];
+  const p=PAGES[i];
+  LANGS.forEach(l=>{
+    const ed=edOf(l);if(!ed)return;const f=flat(ed);
+    threads.filter(t=>t.anchor&&t.anchor.k===p.k&&t.anchor.lang===l).sort((a,b)=>(a.place?a.place.start:-1)-(b.place?b.place.start:-1)).forEach(t=>{
+      let r=null;const pl=t.place;
+      if(pl){
+        let s=pl.start,e=pl.end;
+        if(pl.exact&&f.text.slice(s,e)!==t.anchor.quote){s=f.text.indexOf(t.anchor.quote);e=s+t.anchor.quote.length}
+        if(s>=0)r=rangeOf(f,s,e);
+      }
+      painted.push({t,ed,r,n:painted.length+1});
+    });
+  });
+  const top=wrap.getBoundingClientRect().top;let last=-99;
+  painted.forEach(x=>{
+    const rect=x.r?(x.r.getClientRects()[0]||x.r.getBoundingClientRect()):x.ed.getBoundingClientRect();
+    last=Math.max(rect.top-top,last+30);
+    const b=document.createElement('button');b.type='button';b.className='vtr-mk'+(x.t.status==='resolved'?' res':'');b.dataset.id=x.t.id;b.style.top=last+'px';b.textContent=x.n;
+    b.setAttribute('aria-label','Comment '+x.n+(x.t.status==='resolved'?', resolved':'')+(x.r?'':', its text has changed'));
+    b.setAttribute('aria-haspopup','dialog');b.setAttribute('aria-expanded',String(!!view&&view.id===x.t.id));
+    marksEl.appendChild(b);
+  });
+  highlight();
+}
+let frame=0;
+function later(){cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{paintMarks();if(view)put()})}
+const markOf=id=>marksEl.querySelector('.vtr-mk[data-id="'+id+'"]');
+
+// The person's choice to send to the agent: one setting for every box and the toolbar.
+function setSend(v){send=!!v;store.set('send',send);paintSend();if(!send)api('/api/send',{send:false}).catch(()=>{})}
+function paintSend(){
+  const on=wants();
+  snd.setAttribute('aria-pressed',String(on));snd.setAttribute('aria-disabled',String(!agent));
+  snd.title=agent?'Send to agent: '+(on?'on':'off')+'. Corrections are sent to '+agent.unit+' 20 seconds after the last one.':'Send to agent: no agent for this document.';
+  const chk=box.querySelector('#vtr-chk');if(!chk)return;
+  chk.checked=on;chk.disabled=!agent;
+  const to=box.querySelector('#vtr-to');
+  to.innerHTML=agent?'<span class="wk'+(agent.awake?'':' off')+'" aria-hidden="true"></span><span class="un">'+esc(agent.unit)+'</span><span class="vtr-sr">, wake '+(agent.awake?'on':'off')+'</span>':'No agent for this document';
+  to.title=agent?agent.unit+(agent.awake?': its wake is on':': its wake is off'):'';
+  box.querySelector('.pri').textContent=(view.kind==='draft'?'Comment':'Reply')+(on?' and send':'');
+}
+function refreshAgent(){get('/api/agent').then(r=>{agent=r.agent;paintSend()},()=>{})}
+function composer(name,buttons){
+  return '<div class="fld"><textarea rows="3" aria-label="'+name+'"></textarea><div class="snd"><label class="chk"><input type="checkbox" id="vtr-chk" aria-describedby="vtr-to">Send to agent</label><span class="to" id="vtr-to"></span></div></div><div class="act">'+buttons+'</div><div class="msg" role="status"></div>';
+}
+function msg(s,isBad){const m=box.querySelector('.msg');if(!m)return;m.textContent=s;m.className='msg'+(isBad?' bad':'')}
+function threadHtml(x){
+  return '<div class="q" title="'+attr(x.t.anchor.quote)+'">'+esc(x.t.anchor.quote)+'</div><div class="q gone"'+(x.r?' hidden':'')+'>The text this comment was made on has changed.</div><ol class="ms">'+msgs(x.t)+'</ol>'+composer('Reply','<button type="button" class="bt pri" data-act="submit"></button><button type="button" class="bt" data-act="resolve">'+(x.t.status==='resolved'?'Reopen':'Resolve')+'</button><button type="button" class="bt" data-act="close">Close</button>');
+}
+function msgs(t){return t.messages.map(m=>'<li><span class="who">'+esc(m.author==='person'?'You':m.author)+'</span><time>'+esc(when(m.at))+'</time><div class="tx">'+esc(m.text)+'</div></li>').join('')}
+function rectOf(){
+  if(view.kind==='draft')return draft.range.getBoundingClientRect();
+  const x=painted.find(x=>x.t.id===view.id);
+  return x?(x.r||x.ed).getBoundingClientRect():null;
+}
+// Under the words it belongs to, right after their block in the page, so Tab from the text reaches it.
+function put(){
+  const r=rectOf();if(!r)return;
+  const w=wrap.getBoundingClientRect(),ed=view.ed;
+  if(box.previousElementSibling!==ed)ed.after(box);
+  box.hidden=false;
+  box.style.top=(r.bottom-w.top+8)+'px';
+  box.style.left=clamp(r.left-w.left,0,Math.max(0,w.width-box.offsetWidth))+'px';
+}
+function closeBox(back){
+  if(!view)return;
+  const v=view,range=draft&&draft.range,inside=box.contains(document.activeElement);
+  view=null;draft=null;box.hidden=true;box.remove();box.textContent='';
+  marksEl.querySelectorAll('.vtr-mk').forEach(b=>b.setAttribute('aria-expanded','false'));
+  highlight();
+  if(back&&inside){const m=v.id&&markOf(v.id);if(m)m.focus();else if(v.ed.isConnected){v.ed.focus();if(range){const s=getSelection();s.removeAllRanges();s.addRange(range)}}}
+}
+function openThread(id,pinned,note){
+  const x=painted.find(x=>x.t.id===id);if(!x)return;
+  closeBox(false);
+  view={kind:'thread',id,pinned,ed:x.ed};
+  box.setAttribute('aria-label','Comment '+x.n);
+  box.innerHTML=threadHtml(x);
+  put();paintSend();
+  const m=markOf(id);if(m)m.setAttribute('aria-expanded','true');
+  highlight();
+  if(note)msg(note.text,note.bad);
+  box.scrollIntoView({block:'nearest'});
+  if(pinned)box.querySelector('textarea').focus();
+  refreshAgent();
+}
+// The thread changed under an open box: the messages are redrawn, what is being typed is not.
+function refreshThread(){
+  const x=painted.find(x=>x.t.id===view.id);if(!x){closeBox(false);return}
+  box.querySelector('.ms').innerHTML=msgs(x.t);
+  box.querySelector('.gone').hidden=!!x.r;
+  box.querySelector('[data-act=resolve]').textContent=x.t.status==='resolved'?'Reopen':'Resolve';
+  const m=markOf(view.id);if(m)m.setAttribute('aria-expanded','true');
+}
+function pick(){
+  const s=getSelection();if(!s||!s.rangeCount||s.isCollapsed)return null;
+  const r=s.getRangeAt(0),el=n=>n.nodeType===1?n:n.parentElement,a=el(r.startContainer),b=el(r.endContainer);
+  const ed=a&&a.closest('.ed');if(!ed||!b||b.closest('.ed')!==ed)return null;
+  const f=flat(ed);let st=offsetOf(f,r.startContainer,r.startOffset),en=offsetOf(f,r.endContainer,r.endOffset);
+  while(st<en&&/\s/.test(f.text[st]))st++;
+  while(en>st&&/\s/.test(f.text[en-1]))en--;
+  if(en<=st)return null;
+  return{ed,k:ed.dataset.k,lang:ed.dataset.l,start:st,quote:f.text.slice(st,en),prefix:f.text.slice(Math.max(0,st-48),st),suffix:f.text.slice(en,en+48),range:r.cloneRange()};
+}
+const typed=()=>{const t=box.querySelector('textarea');return !!t&&t.value.trim()!==''};
+function startDraft(){
+  if(!LIVE||diffOn)return;
+  const s=pick();if(!s)return;
+  if(view&&(view.pinned||typed()))return;
+  closeBox(false);
+  draft=s;view={kind:'draft',ed:s.ed};
+  box.setAttribute('aria-label','New comment');
+  box.innerHTML='<div class="q" title="'+attr(s.quote)+'">'+esc(s.quote)+'</div>'+composer('Comment','<button type="button" class="bt pri" data-act="submit"></button><button type="button" class="bt" data-act="close">Cancel</button>');
+  put();paintSend();highlight();
+  box.scrollIntoView({block:'nearest'});
+  refreshAgent();
+}
+// A click on words that carry an open comment shows it, without taking the cursor from the text.
+function peek(){
+  if(!LIVE||diffOn)return;
+  const s=getSelection();if(!s||!s.rangeCount||!s.isCollapsed)return;
+  const x=painted.find(x=>x.r&&x.t.status==='open'&&x.r.isPointInRange(s.anchorNode,s.anchorOffset));
+  if(x&&!(view&&view.id===x.t.id)&&!(view&&(view.pinned||typed())))openThread(x.t.id,false);
+}
+function note(s){
+  if(!s)return{text:'Saved.'};
+  if(s.sent)return{text:'Saved and sent to '+s.to+'.'};
+  return{text:'Saved. The message was not sent: '+(s.reason==='no-agent'?'no agent for this document':s.message||s.reason)+'.',bad:true};
+}
+async function submit(){
+  const area=box.querySelector('textarea'),t=area.value.trim();
+  if(!t){msg('Write a comment first.',true);area.focus();return}
+  const pri=box.querySelector('.pri');pri.disabled=true;
+  const data=view.kind==='draft'?{op:'add',k:draft.k,lang:draft.lang,quote:draft.quote,prefix:draft.prefix,suffix:draft.suffix,start:draft.start,text:t,send:wants()}:{op:'reply',id:view.id,text:t,send:wants()};
+  try{const r=await api('/api/comment',data);threads=r.threads;paintMarks();openThread(r.thread.id,true,note(r.sent))}
+  catch(e){pri.disabled=false;msg('Not saved: '+e.message,true)}
+}
+async function resolve(){
+  const x=painted.find(x=>x.t.id===view.id);if(!x)return;
+  const st=x.t.status==='resolved'?'open':'resolved';
+  try{const r=await api('/api/comment',{op:'status',id:x.t.id,status:st});threads=r.threads;paintMarks();refreshThread();msg(st==='resolved'?'Resolved.':'Opened again.')}
+  catch(e){msg('Not changed: '+e.message,true)}
+}
+box.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(!b||b.disabled)return;if(b.dataset.act==='submit')submit();else if(b.dataset.act==='resolve')resolve();else closeBox(true)});
+box.addEventListener('change',e=>{if(e.target.id==='vtr-chk')setSend(e.target.checked)});
+// Once the pointer or the focus has been in the box, the page's selection no longer decides whether it stays.
+const engage=()=>{if(view)view.engaged=true};
+box.addEventListener('pointerdown',engage);box.addEventListener('focusin',engage);
+box.addEventListener('keydown',e=>{
+  e.stopPropagation();
+  if(e.key==='Escape'){e.preventDefault();closeBox(true)}
+  else if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&e.target.tagName==='TEXTAREA'){e.preventDefault();submit()}
+});
+marksEl.addEventListener('click',e=>{const b=e.target.closest('.vtr-mk');if(!b)return;if(view&&view.id===b.dataset.id)closeBox(true);else openThread(b.dataset.id,true)});
+// An empty box that was only a look at the selection goes with the selection.
+document.addEventListener('selectionchange',()=>{
+  if(!view||view.pinned||view.engaged||box.contains(document.activeElement)||typed())return;
+  const s=getSelection();
+  if(view.kind==='draft'){if(!s.rangeCount||s.isCollapsed)closeBox(false);return}
+  const x=painted.find(x=>x.t.id===view.id);
+  if(!x||!x.r||!s.rangeCount||!x.r.isPointInRange(s.anchorNode,s.anchorOffset))closeBox(false);
+});
+document.addEventListener('mouseup',e=>{
+  if(!LIVE||diffOn||box.contains(e.target)||e.target.closest('.vtr-mk'))return;
+  setTimeout(()=>{const s=getSelection();if(s&&s.rangeCount&&!s.isCollapsed)startDraft();else peek()},0);
+});
+// A click away from the box and from the words it belongs to closes a box that was entered and has nothing typed in it.
+document.addEventListener('pointerdown',e=>{
+  if(!view||!view.engaged||view.pinned||box.contains(e.target)||e.target.closest('.vtr-mk')||typed())return;
+  const at=document.caretRangeFromPoint&&document.caretRangeFromPoint(e.clientX,e.clientY),x=view.kind==='thread'&&painted.find(x=>x.t.id===view.id),r=view.kind==='draft'?draft.range:x&&x.r;
+  if(at&&r&&r.isPointInRange(at.startContainer,at.startOffset))return;
+  closeBox(false);
+});
+document.addEventListener('keyup',e=>{
+  if(!LIVE||diffOn||box.contains(e.target))return;
+  if(/^(Shift|Arrow.+|Home|End|Page.+)$/.test(e.key))startDraft();
+});
+
+// ---- the changes view -----------------------------------------------------------------------
+function runsHtml(runs){return runs.map(x=>x.kind==='insert'?'<ins class="new">'+esc(x.text)+'</ins>':x.kind==='delete'?'<del class="old">'+esc(x.text)+'</del>':esc(x.text)).join('')}
+function diffPage(p){
+  return '<section class="df-pg"><h2 class="df-h"><button type="button" class="df-go" data-i="'+p.index+'">'+(p.index+1)+'   '+esc(p.k)+'</button></h2>'+p.texts.map(t=>'<div class="df-t"><div class="lang">'+(t.lang==='es'?'ESPAÑOL':t.lang==='en'?'ENGLISH':esc(t.lang.toUpperCase()))+'</div><div class="df-w">'+(t.by==='outside'?'Changed outside':'Edited here')+', '+esc(when(t.at))+'</div><div class="df-r">'+runsHtml(t.runs)+'</div></div>').join('')+'</section>';
+}
+async function showChanges(){
+  const first=!diffOn;
+  closeBox(false);diffOn=true;
+  chg.setAttribute('aria-pressed','true');col.hidden=true;marksEl.hidden=true;diffEl.hidden=false;
+  keyEl.textContent='Changes against the previous version';
+  if(first){diffEl.innerHTML='<div class="df-say">Loading the changes.</div>';diffEl.focus()}
+  try{
+    const d=await get('/api/changes');if(!diffOn)return;
+    diffEl.innerHTML=d.pages.length?d.pages.map(diffPage).join(''):'<div class="df-say">No changes yet. Corrections made here, and changes made outside while this page was open, are listed once they are saved.</div>';
+  }catch(e){if(diffOn)diffEl.innerHTML='<div class="df-say" role="alert">Could not load the changes: '+esc(e.message)+'</div>'}
+  if(first)body.scrollTop=0;
+}
+function closeChanges(){diffOn=false;chg.setAttribute('aria-pressed','false');diffEl.hidden=true;col.hidden=false;marksEl.hidden=false;keyLine();paintMarks()}
+diffEl.addEventListener('click',e=>{const b=e.target.closest('.df-go');if(!b)return;const n=+b.dataset.i;closeChanges();to(n);root.focus()});
+chg.onclick=()=>diffOn?closeChanges():showChanges();
+snd.onclick=()=>{if(agent)setSend(!send)};
+
+// ---- watching the document ----------------------------------------------------------------------
+function sentSays(d){
+  if(d.sent)say('Corrections sent to '+d.to+'.');
+  else say('Corrections not sent: '+(d.reason==='no-agent'?'no agent for this document':d.message||d.reason)+'.');
+}
+function resync(){get('/api/doc').then(doc=>{agent=doc.agent;outside({...doc,changes:[]});paintSend()},()=>{})}
+function watch(){
+  if(!window.EventSource)return;
+  const es=new EventSource('/api/events?file='+encodeURIComponent(FILE));let first=true;
+  es.addEventListener('ready',()=>{if(!first)resync();first=false});
+  es.addEventListener('doc',e=>outside(JSON.parse(e.data)));
+  es.addEventListener('comments',e=>{threads=JSON.parse(e.data).threads;paintMarks();if(view&&view.kind==='thread')refreshThread()});
+  es.addEventListener('sent',e=>sentSays(JSON.parse(e.data)));
+}
+
+scrub(track,f=>to(Math.floor(f*N)),f=>tipAt(Math.floor(f*N)));
+scrub(zs,f=>zoom(Math.round((ZMAX-f*(ZMAX-ZMIN))*20)/20));
+field(pg,()=>String(i+1),v=>to(Math.round(v)-1));
+field(zin,()=>String(Math.round(z*100)),v=>zoom(v/100));
+col.addEventListener('input',ev=>{if(LIVE)return;const el=ev.target.closest('.ed');if(!el)return;const k=el.dataset.k;const e=edits[k]||(edits[k]=editOf(k));e[el.dataset.l]=el.innerHTML;store.set('edit:'+k,e);if(!dirty.has(k)){dirty.add(k);paintDots();keyLine()}});
+col.addEventListener('focusout',ev=>{
+  if(!LIVE)return;const el=ev.target.closest('.ed');if(!el)return;
+  const p=PAGES.find(x=>x.k===el.dataset.k),lang=el.dataset.l;if(!p)return;
+  const t=text(el);
+  if(t!==p[lang]){
+    // A change from outside to this text is joined with what was typed where they do not touch; where they do, what was typed wins, and the history keeps both.
+    const base=p[lang];
+    p[lang]=t;delete pend[p.k+lang];
+    const m=marks.get(p.k);if(m){delete m[lang];if(!Object.keys(m).length){marks.delete(p.k);paintDots()}}
+    save(p,lang,t,base);
+  }else if(pend[p.k+lang]!==undefined){p[lang]=pend[p.k+lang];delete pend[p.k+lang];paintBlock(lang)}
+  later();
+});
+col.addEventListener('paste',ev=>{if(!ev.target.closest('.ed'))return;ev.preventDefault();document.execCommand('insertText',false,(ev.clipboardData||window.clipboardData).getData('text'))});
+$('vtr-prev').onclick=()=>{to(i-1);root.focus()};
+$('vtr-next').onclick=()=>{to(i+1);root.focus()};
+$('vtr-zi').onclick=()=>zoom(z+.1);
+$('vtr-zo').onclick=()=>zoom(z-.1);
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&diffOn){closeChanges();root.focus();e.preventDefault();return}
+  if(e.key==='Escape'&&view){closeBox(false);e.preventDefault();return}
+  if(e.key==='Escape'&&editing()){document.activeElement.blur();window.getSelection().removeAllRanges();root.focus();e.preventDefault();return}
+  if(editing()||!N||diffOn)return;
+  if(e.key==='ArrowRight'||e.key==='ArrowDown')to(i+1);
+  else if(e.key==='ArrowLeft'||e.key==='ArrowUp')to(i-1);
+  else if(e.key==='Home')to(0);
+  else if(e.key==='End')to(N-1);
+  else if(e.key==='+'||e.key==='=')zoom(z+.1);
+  else if(e.key==='-')zoom(z-.1);
+  else if(e.key==='0')zoom(1);
+  else return;
+  e.preventDefault();
+});
+function start(){
+  N=PAGES.length;
+  track.setAttribute('aria-valuemin',1);track.setAttribute('aria-valuemax',N);
+  zs.setAttribute('aria-valuemin',ZMIN*100);zs.setAttribute('aria-valuemax',ZMAX*100);
+  $('vtr-t').textContent='/ '+N;
+  zoom(z);paintDots();show();ticks();
+  if(window.ResizeObserver){new ResizeObserver(ticks).observe(track);new ResizeObserver(later).observe(wrap)}
+  if(LIVE){$('vtr-sep2').hidden=chg.hidden=snd.hidden=false;paintSend();watch();if(document.fonts)document.fonts.ready.then(later)}
+  root.focus();
+}
+if(LIVE)get('/api/doc').then(doc=>{PAGES.splice(0,PAGES.length,...doc.pages);dirty=new Set(doc.edited);agent=doc.agent;threads=doc.threads||[];if(doc.title)document.title=doc.title;start()},err=>{keyEl.textContent='Could not open '+FILE+': '+err.message});
+else{dirty=new Set(PAGES.filter(p=>{const e=store.get('edit:'+p.k);return e&&(e.en||e.es)}).map(p=>p.k));start()}
+</script>
+</body></html>

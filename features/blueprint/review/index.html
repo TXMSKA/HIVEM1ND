@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#181818" />
+    <title>Blueprint Review</title>
+    <!--importmap-->
+    <!--themes-->
+    <link rel="stylesheet" href="review.css" />
+  </head>
+  <body data-panel="open">
+    <a class="skip" href="#stage">Skip to the board</a>
+
+    <header class="top" id="top">
+      <h1 class="sr-only" id="view-title">Review</h1>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="8" height="6" rx="1.5"/><rect x="13" y="14" width="8" height="6" rx="1.5"/><path d="M11 7h2a3 3 0 0 1 3 3v4"/></svg>
+        <span class="brand-name">Blueprint</span>
+        <span class="brand-mode">Review</span>
+      </div>
+      <span class="top-rule" aria-hidden="true"></span>
+      <nav class="boards" id="boards" aria-label="Boards"></nav>
+      <button type="button" class="btn primary present" id="present" aria-label="Present" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5"/></svg>
+        <span>Present</span>
+      </button>
+    </header>
+
+    <div class="rail" id="rail" role="toolbar" aria-label="Review tools" aria-orientation="vertical">
+      <button type="button" class="item" data-mode="move" aria-pressed="true" aria-label="Move" data-tip="Move" data-key="H">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+      </button>
+      <button type="button" class="item" data-mode="comment" aria-pressed="false" aria-label="Comment" data-tip="Comment" data-key="C">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719"/></svg>
+      </button>
+      <button type="button" class="item" data-mode="sketch" aria-pressed="false" aria-label="Sketch" data-tip="Sketch" data-key="S">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect width="7" height="7" x="3" y="14" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>
+      </button>
+      <button type="button" class="item note-toggle" id="note-toggle" aria-controls="board-note" aria-pressed="false" aria-label="Note" data-tip="Note" data-key="N">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>
+      </button>
+    </div>
+    <div class="edge" id="rail-edge" aria-hidden="true"></div>
+
+    <main class="stage" id="stage" data-mode="move" tabindex="-1" aria-describedby="stage-keys">
+      <p class="sr-only" id="stage-keys">Arrow keys move the board, plus and minus zoom, 0 fits it.</p>
+      <svg class="world" id="world" aria-label="Board" role="img" tabindex="-1"></svg>
+      <svg class="overlay" id="overlay" aria-hidden="true" tabindex="-1"></svg>
+      <details class="note" id="board-note" hidden open>
+        <summary id="board-note-title"></summary>
+        <p id="board-note-text"></p>
+      </details>
+
+      <form class="card composer" id="composer" hidden data-sends>
+        <ol class="crumbs" id="composer-crumbs" aria-label="What the comment is about"></ol>
+        <div class="field">
+          <label class="sr-only" for="composer-text">Comment</label>
+          <textarea id="composer-text" rows="3" placeholder="Write a comment" required></textarea>
+          <div class="send">
+            <label class="send-toggle"><input type="checkbox" data-send aria-describedby="composer-agent" /><span>Send to agent</span></label>
+            <span class="send-agent" id="composer-agent" data-agent></span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <span class="hint">Ctrl + Enter</span>
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+          <button type="submit" class="btn primary" data-submit data-plain="Comment" data-sending="Comment and send">Comment</button>
+        </div>
+      </form>
+
+      <section class="card thread" id="thread" hidden aria-live="polite">
+        <header class="thread-head">
+          <ol class="crumbs" id="thread-crumbs"></ol>
+          <button type="button" class="btn icon" data-close aria-label="Close the thread">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </header>
+        <ol class="messages" id="thread-messages"></ol>
+        <p class="send-note" id="send-note" hidden></p>
+        <form class="reply" id="thread-reply" data-sends>
+          <div class="field">
+            <label class="sr-only" for="reply-text">Reply</label>
+            <textarea id="reply-text" rows="2" placeholder="Reply" required></textarea>
+            <div class="send">
+              <label class="send-toggle"><input type="checkbox" data-send aria-describedby="reply-agent" /><span>Send to agent</span></label>
+              <span class="send-agent" id="reply-agent" data-agent></span>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button type="button" class="btn ghost danger" id="thread-delete">Delete</button>
+            <span class="spacer"></span>
+            <button type="button" class="btn ghost" id="thread-status">Resolve</button>
+            <button type="submit" class="btn primary" data-submit data-plain="Reply" data-sending="Reply and send">Reply</button>
+          </div>
+        </form>
+      </section>
+
+      <form class="card reference" id="reference" hidden data-sends aria-labelledby="reference-title">
+        <h2 class="card-title" id="reference-title">Reference image</h2>
+        <div class="file-pick">
+          <button type="button" class="btn" id="reference-choose">Choose a picture</button>
+          <span class="file-name" id="reference-name">No picture chosen</span>
+          <input type="file" id="reference-file" accept="image/png,image/jpeg,image/webp" hidden />
+        </div>
+        <div class="field">
+          <label class="sr-only" for="reference-text">What to recreate, optional</label>
+          <textarea id="reference-text" rows="2" placeholder="What to recreate (optional)"></textarea>
+          <div class="send">
+            <label class="send-toggle"><input type="checkbox" data-send aria-describedby="reference-agent" /><span>Send to agent</span></label>
+            <span class="send-agent" id="reference-agent" data-agent></span>
+          </div>
+        </div>
+        <p class="field-error" id="reference-error" role="alert"></p>
+        <div class="card-actions">
+          <span class="hint">Ctrl + Enter</span>
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+          <button type="submit" class="btn primary" data-submit data-plain="Add reference" data-sending="Add reference and send">Add reference</button>
+        </div>
+      </form>
+
+      <textarea class="sketch-text" id="sketch-text" rows="1" hidden aria-label="Text"></textarea>
+    </main>
+
+    <div class="sketchbar" id="sketchbar" role="toolbar" aria-label="Sketch tools" hidden></div>
+    <input type="file" id="sketch-file" accept="image/png,image/jpeg,image/webp" hidden />
+
+    <aside class="panel" id="panel" aria-labelledby="panel-title">
+      <header class="panel-head">
+        <h2 id="panel-title" tabindex="-1">Comments</h2>
+        <label class="switch">
+          <input type="checkbox" id="show-resolved" />
+          <span>Show resolved</span>
+        </label>
+        <button type="button" class="btn icon" id="comments-close" aria-controls="panel" aria-label="Fold the comments">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9l6 6l6-6"/></svg>
+        </button>
+      </header>
+      <ol class="threads" id="threads"></ol>
+      <div class="panel-empty" id="panel-empty">
+        <p id="panel-empty-text">Loading comments.</p>
+        <button type="button" class="btn" id="panel-empty-action" hidden>Comment on a screen</button>
+      </div>
+      <footer class="panel-foot" id="panel-foot"></footer>
+    </aside>
+
+    <button type="button" class="bubble" id="comments-open" aria-controls="panel" aria-expanded="false" aria-label="Comments, 0 open">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719"/></svg>
+      <span class="count" id="open-count" aria-hidden="true">0</span>
+    </button>
+
+    <section class="player" id="player" aria-label="Prototype" hidden>
+      <header class="player-bar">
+        <button type="button" class="btn icon" id="player-back" aria-label="Back" aria-keyshortcuts="Backspace" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+        </button>
+        <span class="player-title" id="player-title"></span>
+        <span class="player-next" id="player-next"></span>
+        <button type="button" class="btn ghost" id="player-exit" aria-keyshortcuts="Escape">Exit <span class="hint">Esc</span></button>
+      </header>
+      <div class="player-stage">
+        <svg class="player-screen" id="player-screen" role="img"></svg>
+      </div>
+    </section>
+
+    <div class="tip" id="tip" role="tooltip" hidden></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="fresh" id="fresh" aria-live="polite" hidden>
+      <span>The agent changed this board. Reload to see it.</span>
+      <button type="button" class="btn" id="fresh-reload">Reload</button>
+    </div>
+
+    <script type="module" src="review.js"></script>
+  </body>
+</html>

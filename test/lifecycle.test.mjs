@@ -128,7 +128,7 @@ test("evolve records successful migrations across an installation conflict", asy
 test("bundled migrations are idempotent and preserve existing private files", async (t) => {
   const root = await temporaryDirectory(t, "bundled-migrations");
   const userPath = path.join(root, "user");
-  const versions = ["0.2.0", "0.3.0", "1.0.0", "1.1.0"];
+  const versions = ["0.2.0", "0.3.0", "1.0.0", "1.1.0", "2.0.0-experimental.4"];
   for (const version of versions) {
     const migration = await import(`../migrations/${version}.mjs`);
     assert.equal(migration.idempotent, true);
@@ -144,6 +144,33 @@ test("bundled migrations are idempotent and preserve existing private files", as
   assert.equal(await fs.readFile(path.join(userPath, "roles", "private.md"), "utf8"), "private role\n");
   assert.equal(await fs.readFile(path.join(userPath, "knowledge", "private.md"), "utf8"), "private knowledge\n");
   assert.equal(await fs.readFile(path.join(userPath, "protocols", "private.md"), "utf8"), "private protocol\n");
+});
+
+test("the 2.0.0-experimental.4 migration moves the Manager records to Overseer", async (t) => {
+  const root = await temporaryDirectory(t, "overseer-migration");
+  const userPath = path.join(root, "user");
+  const migration = await import("../migrations/2.0.0-experimental.4.mjs");
+  assert.equal(migration.version, "2.0.0-experimental.4");
+  assert.equal(migration.idempotent, true);
+  await write(path.join(userPath, "manager", "survey.md"), "survey\n");
+  await write(path.join(userPath, "overseer", "notes.md"), "notes\n");
+  await write(path.join(userPath, "state", "manager.md"), "unit: manager\nstate: out\ndate: 2026-10-08 09:55\n\nCurrent work.\n");
+  await write(path.join(userPath, "state", "manager2.md"), "unit: manager2\nstate: out\n\nSecond seat.\n");
+  await write(path.join(userPath, "state", "overseer.md"), "unit: overseer\nstate: out\ndate: 2026-10-01 17:42\n\nEarlier role.\n");
+  await write(path.join(userPath, "inbox", "manager", "20261008-0900-a.md"), "from: executor-app\nto: manager\n\nBody naming the manager.\n");
+
+  await migration.migrate({ userPath });
+  await migration.migrate({ userPath });
+
+  assert.equal(await fs.readFile(path.join(userPath, "overseer", "survey.md"), "utf8"), "survey\n");
+  assert.equal(await fs.readFile(path.join(userPath, "overseer", "notes.md"), "utf8"), "notes\n");
+  assert.equal(await fs.readFile(path.join(userPath, "state", "overseer.md"), "utf8"), "unit: overseer\nstate: out\ndate: 2026-10-08 09:55\n\nCurrent work.\n");
+  assert.equal(await fs.readFile(path.join(userPath, "state", "overseer2.md"), "utf8"), "unit: overseer2\nstate: out\n\nSecond seat.\n");
+  assert.match(await fs.readFile(path.join(userPath, "log", "20261001-1742-overseer-retired.md"), "utf8"), /Earlier role\./);
+  assert.equal(await fs.readFile(path.join(userPath, "inbox", "overseer", "20261008-0900-a.md"), "utf8"), "from: executor-app\nto: overseer\n\nBody naming the manager.\n");
+  assert.deepEqual((await fs.readdir(userPath)).sort(), ["inbox", "log", "overseer", "state"]);
+  assert.deepEqual(await fs.readdir(path.join(userPath, "inbox")), ["overseer"]);
+  assert.deepEqual((await fs.readdir(path.join(userPath, "state"))).sort(), ["overseer.md", "overseer2.md"]);
 });
 
 test("the 1.1.0 migration creates the private protocols folder", async (t) => {
@@ -438,13 +465,14 @@ test("evolve stops before pulling when the kit ships a file the user added", asy
   assert.equal(await git(kitPath, ["status", "--porcelain"], env), "?? features/my-onboarding.md");
 });
 
-test("the actual setup installer parses and installs all eleven feature commands", async (t) => {
+test("the actual setup installer parses and installs all twelve feature commands", async (t) => {
   const root = await temporaryDirectory(t, "feature-install");
   const mindPath = await makeMind(root);
   const homeDir = path.join(root, "home");
   const kitPath = path.resolve(import.meta.dirname, "..");
   const env = { ...process.env, CODEX_HOME: path.join(homeDir, ".codex") };
   const featureNames = [
+    "blueprint",
     "brainstorm",
     "catchup",
     "conflicts",
@@ -469,6 +497,10 @@ test("the actual setup installer parses and installs all eleven feature commands
     assert.match(content, new RegExp(`^---\\nname: ${name}\\n`, "m"));
     assert.match(content, new RegExp(`Mind: ${mindPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.doesNotMatch(content, /\{\{mind\}\}/);
+  }
+  // A feature folder installs its scripts next to the command.
+  for (const support of ["server.mjs", path.join("review", "review.js"), path.join("kit", "kit.mjs")]) {
+    await fs.access(path.join(homeDir, ".agents", "skills", "blueprint", support));
   }
 });
 
@@ -736,21 +768,23 @@ test("empty last-check headers preserve the following machine preferences", asyn
 test("swarm summarizes root, environment and project state", async (t) => {
   const root = await temporaryDirectory(t, "swarm");
   const mindPath = await makeMind(root);
-  await write(path.join(mindPath, "user", "state", "overseer.md"), "unit: overseer\nstate: in\nmachine: TEST\ndate: 2030-01-02 10:00\n\nPlanning releases.\nMore context.\n");
+  await write(path.join(mindPath, "user", "state", "genesis.md"), "unit: genesis\nstate: in\nmachine: TEST\ndate: 2030-01-02 10:00\n\nPlanning releases.\nMore context.\n");
   await write(path.join(mindPath, "user", "envs", "web", "state", "overlord-web.md"), "unit: overlord-web\nstate: out\nmachine: TEST\ndate: 2030-01-02 09:00\n\nWaiting for reports.\n");
   await write(path.join(mindPath, "user", "projects", "app", "state", "executor-app.md"), "unit: executor-app\nstate: in\nmachine: TEST\ndate: 2030-01-02 11:00\n\nBuilding login.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "002-copy.md"), "id: 002\nstatus: done\n\n## Request\nCopy.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "003-old.md"), "id: 003\nstatus: closed\n\n## Request\nOld.\n");
+  await write(path.join(mindPath, "user", "projects", "app", "tasks", "004-reset.md"), "id: 004\nstatus: review\n\n## Request\nReset.\n");
   await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "one.md"), "message\n");
   await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "two.md"), "message\n");
 
   const result = await swarm({ mindPath, kitPath: mindPath, homeDir: root, hostname: "TEST" });
   assert.deepEqual(result.units.map((unit) => unit.scope).sort(), ["environment", "project", "root"]);
-  assert.equal(result.units.find((unit) => unit.unit === "overseer").context, "Planning releases.");
+  assert.equal(result.units.find((unit) => unit.unit === "genesis").context, "Planning releases.");
   assert.equal(result.tasks.open, 1);
+  assert.equal(result.tasks.review, 1);
   assert.equal(result.tasks.done, 1);
-  assert.deepEqual(result.tasks.projects[0].items.map((item) => item.slug), ["login", "copy"]);
+  assert.deepEqual(result.tasks.projects[0].items.map((item) => item.slug), ["login", "copy", "reset"]);
   assert.equal(result.inboxes.unread, 2);
   assert.equal(result.inboxes.units[0].unit, "executor-app");
 });
@@ -808,7 +842,7 @@ test("check names the registered project and the work waiting for it", async (t)
   const appPath = path.join(reposPath, "app");
   await writeMachine(mindPath, { paths: `- web: ${reposPath}\n- app: ${appPath}\n` });
   await write(path.join(mindPath, "user", "routes.md"), "## Environments\n- web: app\n\n## Projects\n- app (web)\n\n## Minds\n");
-  await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "20300102-1000-overseer.md"), "message\n");
+  await write(path.join(mindPath, "user", "projects", "app", "inbox", "executor-app", "20300102-1000-genesis.md"), "message\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "001-login.md"), "id: 001\nstatus: open\n\n## Request\nLogin.\n");
   await write(path.join(mindPath, "user", "projects", "app", "tasks", "002-copy.md"), "id: 002\nstatus: done\n\n## Request\nCopy.\n");
   await write(path.join(mindPath, "user", "tasks", "001-machine.md"), "id: 001\nstatus: open\n\n## Request\nMachine.\n");
@@ -852,9 +886,36 @@ test("the check command prints nothing for a clean state and one line per findin
 
   const before = await snapshot(root);
   assert.equal(await run("TEST"), "");
-  await write(path.join(mindPath, "user", "inbox", "overseer", "20300102-1000-executor-app.md"), "message\n");
+  await write(path.join(mindPath, "user", "inbox", "genesis", "20300102-1000-executor-app.md"), "message\n");
   assert.equal(await run("TEST"), "Executive roles: 1 unread message.\n");
   assert.match(await run("OTHER"), /^This machine \(OTHER\) has no machine record in the mind\./);
   await fs.rm(path.join(mindPath, "user", "inbox"), { recursive: true });
   assert.deepEqual(await snapshot(root), before);
+});
+
+test("the evolve command without a terminal lists the conflicts, never waits and exits 1", async (t) => {
+  const root = await temporaryDirectory(t, "evolve-cli-conflicts");
+  const mindPath = await makeMind(root);
+  const kitPath = path.join(root, "kit");
+  const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
+  const rulesPath = path.join(mindPath, "rules.md");
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["rules.md"] })}\n`);
+  await write(path.join(kitPath, "rules.md"), "kit rules\n");
+  await write(rulesPath, "locally written rules\n");
+  const args = [cliPath, "evolve", "--kit-path", kitPath, "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST"];
+  // The child's stdin is an open pipe, so a prompt would run into the timeout instead of finishing.
+  const run = (extra = []) => execFileAsync(process.execPath, [...args, ...extra], { cwd: root, encoding: "utf8", timeout: 30_000 });
+
+  const blocked = await run().then(() => assert.fail("evolve should exit with a failure"), (error) => error);
+  assert.equal(blocked.code, 1);
+  assert.equal(blocked.killed, false);
+  assert.match(blocked.stdout, /^Evolution needs conflict choices before it can continue\.$/m);
+  assert.ok(blocked.stdout.includes(`${rulesPath}: An unowned file already exists at this path.\n  Choices: keep, replace\n`));
+  assert.match(blocked.stdout, /--conflict <path>=<choice>/);
+  assert.equal(await fs.readFile(rulesPath, "utf8"), "locally written rules\n");
+  assert.equal(await fs.readFile(path.join(mindPath, "user", "VERSION"), "utf8"), "0.1.0\n");
+
+  const resolved = await run(["--conflict", `${rulesPath}=replace`]);
+  assert.match(resolved.stdout, /^Evolved from 0\.1\.0 to 1\.0\.0\.$/m);
+  assert.equal(await fs.readFile(rulesPath, "utf8"), "kit rules\n");
 });

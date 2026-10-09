@@ -3,8 +3,11 @@
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
+import { formatBytes } from '../engine/measure.mjs';
+import { relayLine } from '../engine/texts.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -30,6 +33,8 @@ Usage:
   hivem1nd check [options]
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
+  hivem1nd view [--project <name>] [options]
+  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
 
 Commands:
@@ -38,7 +43,33 @@ Commands:
   check      Report what a new chat should know, without writing
   pylon      Attach a repository to the shared mind
   swarm      Show units, tasks and unread messages
+  view       Show chats, squads, what waits on the person, tasks, inbox and products
+  relay     Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
+
+Relay options:
+  --mind-path <path>       Path to the private mind
+  --kit-path <path>        Path to the HIVEM1ND kit
+  --session-id <id>        Stable Relay instance identifier
+  --native-session-id <id> Native client session identifier
+  --client <name>          Client name: ${Object.keys(WAKE_ADAPTERS).join(', ')} or user
+  --unit <name>            Explicit unit name, including user
+  --event <name>           Native hook event name
+  --hours <4|5|6|7|8|12|24> Bounded wake window (12/24 require --extended)
+  --max-handoffs <1-100> Maximum submitted Relay pointers (default 20)
+  --to <unit> --subject <text> --body <text>
+  --reply-to <id> --thread-id <id> --reply-requested
+  --priority <normal|urgent> --attachment <path> (repeatable)
+  --id <message-id> (repeatable) --limit <count>
+  relay delivery --id <message-id> [--id ...] shows how far messages sent by the registered unit have come (at most 100)
+
+Relay wake actions:
+  relay wake attach --client <${Object.keys(WAKE_ADAPTERS).join('|')}> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--mind-path <path>]
+  relay wake enable|disable|status --unit <name> --native-session-id <id> [options]
+  relay wake status ... --machine <name> reads the worker note of a binding that belongs to another machine
+  relay wake watch --unit <name> --native-session-id <id> [options] (internal worker)
+${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line) => '  ' + line).join('\n')}
+  Clients other than Claude require an existing exact registration and explicit native ID; Cursor attached from inside its CLI chat reads it from CURSOR_CONVERSATION_ID.
 
 Init options:
   --gui                 Open the local browser wizard
@@ -62,6 +93,9 @@ Pylon options:
   --no-ai-trailers      Disallow AI commit trailers (default)
   --environment <name>  Environment name for the repository route
 
+View options:
+  --project <name>      Show one project and the units that lead it
+
 Shared path options:
   --kit-path <path>     Path to the HIVEM1ND kit (default: installed kit)
   --mind-path <path>    Path to the private mind
@@ -82,6 +116,7 @@ const VALUE_FLAGS = new Map([
   ["--language", "language"],
   ["--environment", "environment"],
   ["--state", "state"],
+  ["--project", "project"],
 ]);
 
 const BOOLEAN_FLAGS = new Map([
@@ -103,11 +138,13 @@ const ALLOWED_FLAGS = {
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
+  view: new Set(["json", "project", "kitPath", "mindPath", "homeDir", "hostname"]),
   uninstall: new Set(["dryRun", "removeMind", "json", "mindPath", "homeDir", "hostname"]),
 };
 
 export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
+  if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
   if (argv.length === 1 && ["-h", "--help"].includes(argv[0])) return { help: true };
   if (argv.length === 1 && ["-v", "--version"].includes(argv[0])) return { version: true };
@@ -177,6 +214,62 @@ export function parseArgs(argv) {
   return { command, options };
 }
 
+const RELAY_VALUE_FLAGS = new Map([
+  ["--mind-path", "mindPath"], ["--kit-path", "kitPath"], ["--home-dir", "homeDir"], ["--hostname", "hostname"],
+  ["--session-id", "sessionId"], ["--native-session-id", "nativeSessionId"], ["--client", "client"], ["--unit", "unit"],
+  ["--event", "event"], ["--to", "to"], ["--subject", "subject"], ["--body", "body"], ["--priority", "priority"],
+  ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
+  ["--attachment", "attachments"], ["--id", "ids"],
+  ["--hours", "hours"],
+  ["--max-handoffs", "maxHandoffs"], ["--machine", "machine"],
+]);
+const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
+
+function parseRelayArgs(tokens) {
+  let [action, ...rest] = tokens;
+  let wakeAction;
+  if (action === "wake") {
+    wakeAction = rest.shift();
+    if (!wakeAction || !["attach", "enable", "disable", "status", "watch"].includes(wakeAction)) {
+      throw new CliUsageError("relay wake requires attach, enable, disable, status or watch.");
+    }
+  }
+  if (!action || action === "--help" || action === "-h") return { command: "relay", options: { help: true } };
+  if (!RELAY_ACTIONS.has(action)) throw new CliUsageError(`Unknown relay action: ${action}`);
+  const options = { action: action === "in" ? "register" : action, attachments: [], ids: [] };
+  if (wakeAction) options.wakeAction = wakeAction;
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    if (token === "--reply-requested") { options.replyRequested = true; continue; }
+    if (token === "--body-stdin") { options.bodyStdin = true; continue; }
+    if (token === "--extended") { if (options.extended) throw new CliUsageError("--extended was provided more than once."); options.extended = true; continue; }
+    if (token === "--unlimited") { if (options.unlimited) throw new CliUsageError("--unlimited was provided more than once."); options.unlimited = true; continue; }
+    if (token === "--manual-consent") { if (options.manualConsent) throw new CliUsageError("--manual-consent was provided more than once."); options.manualConsent = true; continue; }
+    const key = RELAY_VALUE_FLAGS.get(token);
+    if (!key) throw new CliUsageError(`Unknown Relay option: ${token}`);
+    const value = rest[index + 1];
+    if (value === undefined || value.startsWith("--")) throw new CliUsageError(`${token} requires a value.`);
+    if (key === "attachments" || key === "ids") options[key].push(value);
+    else if (Object.hasOwn(options, key)) throw new CliUsageError(`${token} was provided more than once.`);
+    else options[key] = value;
+    index += 1;
+  }
+  if (options.limit !== undefined && (!/^\d+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) throw new CliUsageError("--limit must be between 1 and 500.");
+  if (options.machine !== undefined && wakeAction !== "status") throw new CliUsageError("--machine is only valid with relay wake status.");
+  if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
+  if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
+  if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
+  if (["12", "24"].includes(options.hours) && !options.extended) throw new CliUsageError("--hours 12 or --hours 24 requires --extended.");
+  if (options.extended && !["12", "24"].includes(options.hours)) throw new CliUsageError("--extended is only valid with --hours 12 or --hours 24.");
+  if (options.unlimited && (options.hours !== undefined || !options.manualConsent)) throw new CliUsageError("--unlimited requires --manual-consent and cannot be combined with --hours.");
+  if (options.manualConsent && !options.unlimited) throw new CliUsageError("--manual-consent is only valid with --unlimited.");
+  if (options.quota !== undefined) {
+    try { options.quota = JSON.parse(options.quota); }
+    catch { throw new CliUsageError("--quota must be valid JSON."); }
+  }
+  return { command: "relay", options };
+}
+
 function formatResult(result) {
   if (typeof result === "string") return result;
   return JSON.stringify(result, null, 2);
@@ -198,7 +291,11 @@ function formatEvolve(result) {
   const lines = [];
   if (!result.completed) {
     lines.push("Evolution needs conflict choices before it can continue.");
-    for (const conflict of result.conflicts ?? []) lines.push(`${conflict.path}: ${conflict.reason}`);
+    for (const conflict of result.conflicts ?? []) {
+      lines.push(`${conflict.path}: ${conflict.reason}`);
+      lines.push(`  Choices: ${(conflict.choices ?? ["keep", "replace"]).join(", ")}`);
+    }
+    lines.push("Run evolve again with --conflict <path>=<choice> for each file.");
     return lines.join("\n");
   }
   lines.push(result.changed
@@ -213,6 +310,7 @@ function formatEvolve(result) {
   if (result.omitted?.length) {
     lines.push(`Left uninstalled: ${result.omitted.length}. Run evolve again to install them.`);
   }
+  for (const item of result.relay ?? []) lines.push(relayLine("en", item));
   if (result.reportPath) lines.push(`Report: ${result.reportPath}`);
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
@@ -239,7 +337,7 @@ function formatSwarm(result) {
   lines.push("", "Tasks");
   if (!result.tasks?.projects?.length) lines.push("(none)");
   for (const project of result.tasks?.projects ?? []) {
-    lines.push(`${project.project} | open ${project.open} | done ${project.done}`);
+    lines.push(`${project.project} | open ${project.open} | review ${project.review} | done ${project.done}`);
     for (const item of project.items ?? []) lines.push(`${item.id} ${item.slug} | ${item.status}`);
   }
 
@@ -250,11 +348,53 @@ function formatSwarm(result) {
   return lines.join("\n");
 }
 
+function tally(items, key, names) {
+  return names.map((name) => `${name} ${items.filter((item) => item[key] === name).length}`).join(", ");
+}
+
+function formatView(result) {
+  const blocking = result.waiting.filter((item) => item.kind !== "review").length;
+  return [
+    `Waiting on the person: ${result.counts.waiting} (${blocking} to answer, ${result.counts.waiting - blocking} to review)`,
+    `Chats: ${result.counts.chats} (${tally(result.chats, "status", ["waiting", "working", "idle", "out", "quota", "unknown"])})`,
+    `Tasks: open ${result.counts.open}, review ${result.counts.review}, done ${result.counts.done}, closed ${result.counts.closed}`,
+    `Unread: ${result.counts.unread}`,
+    `Issues: ${result.counts.issues}${result.counts.issues ? "; --json lists them" : ""}`,
+  ].join("\n");
+}
+
 function waitingText({ unread, open }) {
   return [
     unread ? `${unread} unread message${unread === 1 ? "" : "s"}` : "",
     open ? `${open} open task${open === 1 ? "" : "s"}` : "",
   ].filter(Boolean).join(", ");
+}
+
+function mindText(mind) {
+  if (!mind?.count) return "";
+  return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
+}
+
+// A seat is told about its own project only. A session that resolves to no project, such as an
+// executive seat at the mind root, gets the count instead of a line per project.
+function missingProductText({ project, mind }) {
+  const missing = mind?.product?.missing ?? [];
+  if (project) {
+    const own = missing.some((item) => item.project.toLowerCase() === project.name.toLowerCase());
+    return own ? `Product document missing for ${project.name}; its seat writes it from the records before other work.` : "";
+  }
+  if (missing.length === 0) return "";
+  const plural = missing.length === 1 ? "" : "s";
+  return `Product document${plural} missing in ${missing.length} project${plural}.`;
+}
+
+function productTexts(result) {
+  const stale = (result.mind?.product?.stale ?? []).map((item) => `Product document of ${item.project}: ${item.updated ? `updated ${item.updated}` : "undated"}, older than the Fact of ${item.fact} that points to it; /protocol product-requirements brings it up to date.`);
+  return [...stale, missingProductText(result)].filter(Boolean);
+}
+
+function modelTexts(mind) {
+  return (mind?.models?.unregistered ?? []).map((item) => `Models: the row "${item.work}" names the client "${item.client}", which is not a Relay wake adapter or subagent; correct user/models.md.`);
 }
 
 function formatStatus(result) {
@@ -269,8 +409,19 @@ function formatStatus(result) {
   if (project) lines.push(`${result.project.name}: ${project}.`);
   const executive = result.executive ? waitingText(result.executive) : "";
   if (executive) lines.push(`Executive roles: ${executive}.`);
+  const mind = mindText(result.mind);
+  if (mind) lines.push(mind);
+  lines.push(...productTexts(result));
+  lines.push(...modelTexts(result.mind));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
+}
+
+function relayUninstallLine({ client, status, reason }) {
+  if (status === "removed") return `${client}: Relay entry removed.`;
+  if (status === "elsewhere") return `${client}: Relay entry points elsewhere, kept.`;
+  if (status === "failed") return `${client}: Relay entry not removed. ${reason}`;
+  return `${client}: no Relay entry.`;
 }
 
 function formatUninstall(result) {
@@ -279,6 +430,7 @@ function formatUninstall(result) {
     : ["Nothing was removed."];
   for (const path of result.updated ?? []) lines.push(`Rule line removed: ${path}`);
   for (const item of result.kept ?? []) lines.push(`Kept: ${item.path} (${item.reason})`);
+  for (const item of result.relay ?? []) lines.push(relayUninstallLine(item));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }
@@ -288,6 +440,7 @@ function formatHumanResult(result) {
   if (result.action === "evolve") return formatEvolve(result);
   if (result.action === "pylon") return formatPylon(result);
   if (result.action === "swarm") return formatSwarm(result);
+  if (result.contract === "hivem1nd-view-v1") return formatView(result);
   if (result.action === "status") return formatStatus(result);
   if (result.action === "uninstall") return formatUninstall(result);
   return formatResult(result);
@@ -308,6 +461,7 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     ...(options.language ? { language: options.language } : {}),
     env,
     resume: options.resume === true,
+    relaySetup: true,
   };
 }
 
@@ -733,7 +887,10 @@ async function runLifecycle(command, options, dependencies, output) {
     result = options.checkOnly
       ? await lifecycle.checkForUpdates(common)
       : await lifecycle.evolve({ ...common, conflicts: options.conflicts ?? {} });
-    if (!options.checkOnly && !options.json && result.completed === false && result.conflicts?.length) {
+    // An agent runs this without a terminal, where a prompt would wait forever; the conflicts are
+    // listed instead and the exit code reports the incomplete run.
+    const interactive = (dependencies.stdin ?? process.stdin).isTTY === true && output.isTTY === true;
+    if (!options.checkOnly && !options.json && interactive && result.completed === false && result.conflicts?.length) {
       const prompts = dependencies.prompts ?? await import("@clack/prompts");
       const conflicts = { ...(options.conflicts ?? {}) };
       for (const conflict of result.conflicts) {
@@ -755,6 +912,9 @@ async function runLifecycle(command, options, dependencies, output) {
     }
   } else if (command === "swarm") {
     result = await lifecycle.swarm(common);
+  } else if (command === "view") {
+    const { readView } = dependencies.view ?? await import("../engine/view.mjs");
+    result = await readView({ mindPath: common.mindPath, hostname: common.hostname, ...(options.project ? { project: options.project } : {}) });
   } else if (command === "check") {
     result = await lifecycle.check(common);
   } else {
@@ -786,6 +946,249 @@ async function runUninstall(options, dependencies, output) {
   return 0;
 }
 
+async function readInput(stream, maximum = 262144) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of stream) {
+    const value = Buffer.from(chunk);
+    length += value.length;
+    if (length > maximum) throw new Error("Relay input exceeds the allowed size.");
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function relayWakeBinding(options, hostname = os.hostname(), adapters = WAKE_ADAPTERS) {
+  if (!options.unit) throw new CliUsageError('Relay wake requires an explicit --unit.');
+  if (!options.nativeSessionId) throw new CliUsageError('Relay wake requires --native-session-id.');
+  const client = options.client ?? 'claude';
+  if (!getWakeAdapter(client, adapters)) throw new CliUsageError('Unsupported Relay wake client.');
+  return { unit: options.unit, nativeSessionId: options.nativeSessionId, client, machine: options.machine ?? hostname };
+}
+
+async function runRelayWake(options, dependencies, output, errorOutput) {
+  if (!options.mindPath) throw new CliUsageError(`relay wake ${options.wakeAction} requires --mind-path.`);
+  const env = dependencies.env ?? process.env;
+  const hostname = options.hostname ?? os.hostname();
+  const client = options.client ?? 'claude';
+  const adapters = dependencies.wakeAdapters ?? WAKE_ADAPTERS;
+  const adapter = getWakeAdapter(client, adapters);
+  if (!adapter) throw new CliUsageError('Unsupported Relay wake client.');
+  const { createRelayWakeController } = dependencies.createRelayWakeController
+    ? { createRelayWakeController: dependencies.createRelayWakeController }
+    : await import('../engine/relay/wake.mjs');
+  const runtime = { env, platform: dependencies.platform ?? process.platform };
+  const sink = (delivery) => adapter.sendPointer({ ...delivery, ...runtime });
+  const controller = await createRelayWakeController({
+    mindPath: options.mindPath,
+    hostname,
+    sink,
+    ...adapter.controllerOptions,
+    ...(dependencies.wakeAdapters ? { adapters } : {}),
+  });
+
+  if (options.wakeAction === 'attach') {
+    if (!options.unit) throw new CliUsageError('relay wake attach requires an explicit --unit.');
+    let identity;
+    try { identity = adapter.attachIdentity({ nativeSessionId: options.nativeSessionId, ...runtime }); }
+    catch (error) { throw new CliUsageError(error.message); }
+    const { nativeSessionId } = identity;
+    const capability = adapter.capability(runtime);
+    if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
+    try { await adapter.validateRuntime(runtime); }
+    catch (error) { throw new CliUsageError(error.message); }
+    const binding = { unit: options.unit, nativeSessionId, client, machine: hostname };
+    const { createRelay } = dependencies.createRelay
+      ? { createRelay: dependencies.createRelay }
+      : await import('../engine/relay/store.mjs');
+    const relay = await createRelay({
+      mindPath: options.mindPath,
+      hostname,
+      sessionId: identity.sessionId,
+      client,
+    });
+    if (identity.requireRegistration) {
+      const existing = await relay.reminder({ nativeSessionId, client });
+      if (!existing.registered || existing.unit !== options.unit) {
+        throw new CliUsageError(adapter.label + ' wake requires an existing exact registration for the selected target and unit.');
+      }
+    } else {
+      await relay.register({ unit: options.unit, nativeSessionId, client });
+    }
+    const policy = await controller.enable({
+      ...binding,
+      ...(options.hours ? { windowHours: Number(options.hours) } : {}),
+      ...(options.extended ? { extended: true } : {}),
+      ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
+      ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+    });
+    if (identity.activity) await controller.observeActivity(binding, { activity: identity.activity });
+    if (identity.warning) errorOutput.write(`${identity.warning}\n`);
+    try {
+      const spawnWorker = dependencies[adapter.workerDependency] ?? adapter.spawnWorker;
+      const worker = spawnWorker({ cliPath: path.join(dependencies.kitPath ?? KIT_PATH, 'cli', 'index.mjs'), mindPath: options.mindPath, binding, env, keepParentAliveUntilReady: true });
+      const readiness = await worker.ready;
+      output.write(`${formatResult({ binding, policy, worker: readiness.state, ownsLease: readiness.ownsLease, delivery: 'not claimed' })}\n`);
+    } catch (error) {
+      await controller.disable(binding).catch(() => {});
+      throw new CliUsageError(client + ' wake watcher could not start: ' + error.message);
+    }
+    return 0;
+  }
+
+  const binding = relayWakeBinding(options, hostname, adapters);
+  if (options.wakeAction === 'watch') {
+    const capability = adapter.capability(runtime);
+    if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
+    try { await adapter.validateRuntime({ ...runtime, binding }); }
+    catch (error) { throw new CliUsageError(error.message); }
+    const handle = controller.start(binding);
+    const terminate = () => handle.stop();
+    process.once('SIGINT', terminate);
+    process.once('SIGTERM', terminate);
+    try {
+      const readiness = await handle.ready;
+      if (process.connected) {
+        try {
+          process.send?.({ type: 'relay-wake-ready', state: readiness.state, ownsLease: readiness.ownsLease }, (error) => {
+            if (error && process.connected) {
+              try { process.disconnect(); } catch { /* parent already exited */ }
+            }
+          });
+        } catch { /* the detached hook parent may have exited */ }
+        try { if (process.connected) process.disconnect(); } catch { /* already disconnected */ }
+      }
+      const result = await handle.done;
+      if (result?.reason === 'error') errorOutput.write('Relay wake watcher stopped after an internal error.\n');
+    } finally {
+      process.removeListener('SIGINT', terminate);
+      process.removeListener('SIGTERM', terminate);
+    }
+    return 0;
+  }
+
+  if (options.wakeAction === 'enable') {
+    const policy = await controller.enable({
+      ...binding,
+      ...(options.hours ? { windowHours: Number(options.hours) } : {}),
+      ...(options.extended ? { extended: true } : {}),
+      ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
+      ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+    });
+    output.write(`${formatResult(policy)}\n`);
+  } else if (options.wakeAction === 'disable') {
+    output.write(`${formatResult(await controller.disable(binding))}\n`);
+  } else {
+    output.write(`${formatResult(await controller.status(binding))}\n`);
+  }
+  return 0;
+}
+
+async function runRelay(options, dependencies, output) {
+  if (options.help) { output.write(`${helpText()}\n`); return 0; }
+  const { action } = options;
+  if (action === "diagnose") {
+    const { diagnoseRelayClients, RELAY_CLIENTS } = await import("../engine/relay/config.mjs");
+    if (options.client && !RELAY_CLIENTS.includes(options.client)) throw new CliUsageError("Unsupported Relay client.");
+    const found = await diagnoseRelayClients({ homeDir: options.homeDir, mindPath: options.mindPath });
+    const result = options.client ? { [options.client]: found[options.client] } : found;
+    // A consent whose worker is not running wakes nothing, and nothing else says so.
+    if (options.mindPath) {
+      try {
+        const { createRelayWakeController } = dependencies.createRelayWakeController
+          ? { createRelayWakeController: dependencies.createRelayWakeController }
+          : await import("../engine/relay/wake.mjs");
+        const controller = await createRelayWakeController({ mindPath: options.mindPath, hostname: options.hostname ?? os.hostname(),
+          sink: async () => ({ status: "not_submitted" }) });
+        for (const { binding, worker } of await controller.workerStates()) {
+          if (!result[binding.client]) continue;
+          (result[binding.client].wake ??= []).push({ unit: binding.unit, nativeSessionId: binding.nativeSessionId,
+            state: worker === "running" ? "enabled" : "enabled, no worker" });
+        }
+      } catch { /* a folder that is not a mind has no consents to report */ }
+    }
+    output.write(`${formatResult(result)}\n`);
+    return 0;
+  }
+  if (action === "configure" || action === "unconfigure") {
+    if (!options.client) throw new CliUsageError(`relay ${action} requires --client.`);
+    if (action === "configure" && !options.mindPath) throw new CliUsageError("relay configure requires --mind-path.");
+    const config = await import("../engine/relay/config.mjs");
+    const result = action === "configure"
+      ? await config.configureRelayClient({ ...options, kitPath: options.kitPath ?? KIT_PATH })
+      : await config.unconfigureRelayClient(options);
+    output.write(`${formatResult(result)}\n`);
+    return 0;
+  }
+  if (!options.mindPath) throw new CliUsageError(`relay ${action} requires --mind-path.`);
+  if (action === "hook") {
+    if (!options.client) throw new CliUsageError("relay hook requires --client.");
+    const { runRelayHook } = await import("../engine/relay/hooks.mjs");
+    await runRelayHook({
+      ...options,
+      stdin: dependencies.stdin ?? process.stdin,
+      stdout: output,
+      stderr: dependencies.stderr ?? process.stderr,
+    });
+    return 0;
+  }
+  if (action === 'wake') return runRelayWake(options, dependencies, output, dependencies.stderr ?? process.stderr);
+  if (action === "mcp") {
+    const { serveRelayMcp } = await import("../engine/relay/mcp.mjs");
+    await serveRelayMcp({ ...options, stdin: dependencies.stdin ?? process.stdin, stdout: output, stderr: dependencies.stderr ?? process.stderr });
+    return 0;
+  }
+  if (action === "reminder" && !options.sessionId && !options.nativeSessionId) throw new CliUsageError("relay reminder requires --session-id or --native-session-id.");
+  if (action !== "reminder" && action !== "status" && !options.sessionId) throw new CliUsageError(`relay ${action} requires --session-id to select its registered instance.`);
+  if (action === "read" && options.threadId) throw new CliUsageError("relay read does not accept --thread-id; relay history filters by thread.");
+  if (action === "status" && options.limit) throw new CliUsageError("relay status does not accept --limit.");
+  if (action === "delivery" && !options.ids.length) throw new CliUsageError("relay delivery requires at least one --id.");
+  if (action === "delivery" && (options.unit !== undefined || options.limit)) throw new CliUsageError("relay delivery answers for the registered unit and takes only --id.");
+
+  const { createRelay } = await import("../engine/relay/store.mjs");
+  const relay = await createRelay({
+    mindPath: options.mindPath,
+    ...(options.hostname ? { hostname: options.hostname } : {}),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.client ? { client: options.client } : {}),
+  });
+  let args = {};
+  if (action === "register") {
+    if (!options.unit) throw new CliUsageError("relay register requires an explicit --unit.");
+    args = {
+      unit: options.unit,
+      ...(options.nativeSessionId ? { nativeSessionId: options.nativeSessionId } : {}),
+      ...(options.client ? { client: options.client } : {}),
+      ...(options.activity ? { activity: options.activity } : {}),
+      ...(options.quota !== undefined ? { quota: options.quota } : {}),
+    };
+  } else if (action === "send") {
+    if (!options.to || !options.subject) throw new CliUsageError("relay send requires --to and --subject.");
+    const body = options.bodyStdin ? await readInput(dependencies.stdin ?? process.stdin) : options.body;
+    if (body === undefined) throw new CliUsageError("relay send requires --body or --body-stdin.");
+    args = { to: options.to, subject: options.subject, body, priority: options.priority, replyTo: options.replyTo, threadId: options.threadId,
+      replyRequested: options.replyRequested, attachments: options.attachments.length ? options.attachments : undefined };
+  } else if (action === "inbox" || action === "read" || action === "history" || action === "status" || action === "events") {
+    // Store methods reject any field they do not accept, even an undefined one.
+    if (options.unit !== undefined) args.unit = options.unit;
+    if (options.limit) args.limit = Number(options.limit);
+    if (options.ids.length && (action === "read" || action === "history")) args.ids = options.ids;
+    if (options.threadId && action === "history") args.threadId = options.threadId;
+  } else if (action === "reminder") {
+    args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
+  } else if (action === "delivery") {
+    args = { ids: options.ids };
+  }
+  const method = action === "register" ? "register"
+    : action === "send" ? "send"
+      : action === "inbox" ? "inbox"
+        : action === "read" ? "read"
+          : action;
+  const result = await relay[method](args);
+  output.write(`${formatResult(result)}\n`);
+  return 0;
+}
+
 export async function runCli(argv, dependencies = {}) {
   const output = dependencies.stdout ?? process.stdout;
   const errorOutput = dependencies.stderr ?? process.stderr;
@@ -803,6 +1206,8 @@ export async function runCli(argv, dependencies = {}) {
       return await runInit(parsed.options, dependencies, output);
     } else if (parsed.command === "uninstall") {
       return await runUninstall(parsed.options, dependencies, output);
+    } else if (parsed.command === "relay") {
+      return await runRelay(parsed.options, dependencies, output);
     } else {
       return await runLifecycle(parsed.command, parsed.options, dependencies, output);
     }
@@ -814,7 +1219,7 @@ export async function runCli(argv, dependencies = {}) {
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
 if (isMain) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

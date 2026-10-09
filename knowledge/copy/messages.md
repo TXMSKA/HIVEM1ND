@@ -8,7 +8,7 @@ Rules for text addressed to a person rather than shown on a page: email, notific
 - The first line of the body is the point. No opening about hoping the message finds anyone well.
 - One ask per email. Two asks are two emails, or a numbered list the reader can answer by number.
 - A greeting and a sign-off of one line each where the relationship expects them, and nothing else around the content.
-- Transactional email carries no promotion.
+- Transactional email carries no promotion. A marketing or newsletter email names its sender and carries a visible unsubscribe link that works without signing in; the mechanics are proved in the security module, personal-data step 5.
 - The sender. Mail the product sends about the reader's own account is sent and signed by the product: the sign-off is the product name, or the missing-fact marker in [essentials.md](essentials.md#missing-facts) until one exists. Mail the product sends on a person's behalf, such as an invoice to their client, is sent in that person's name and signed by them; the product appears only where the recipient needs it to act, such as the address of a payment page.
 - Result to record: the subject and the first line, and the count of asks.
 
