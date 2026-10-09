@@ -424,3 +424,35 @@ test("check output has one line per finding and JSON remains opt-in", async () =
   assert.equal(await runCli(["check", "--mind-path", ".", "--json"], { stdout: json.stream, stderr: sink().stream, lifecycle }), 0);
   assert.deepEqual(JSON.parse(json.read()), result);
 });
+
+test("evolve asks for Relay setup and prints one line per client", async () => {
+  let received;
+  const relay = [
+    { client: "claude", status: "configured", restart: true },
+    { client: "codex", status: "already-configured" },
+    { client: "cursor", status: "not-available" },
+    { client: "opencode", status: "failed", reason: "Client MCP configuration contains invalid JSON; no files were changed." },
+  ];
+  const lifecycle = { async evolve(options) { received = options; return { action: "evolve", completed: true, changed: false, toVersion: "2.0.0", relay }; } };
+  const output = sink();
+  assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin: { isTTY: false }, stdout: output.stream, stderr: sink().stream, lifecycle }), 0);
+  assert.equal(received.relaySetup, true);
+  assert.deepEqual(output.read().split("\n").filter((line) => /^(claude|codex|cursor|opencode):/.test(line)), [
+    "claude: Relay configured now. Restart it to load Relay.",
+    "codex: Relay already configured.",
+    "cursor: not available on this machine.",
+    "opencode: Relay not configured. Client MCP configuration contains invalid JSON; no files were changed.",
+  ]);
+});
+
+test("init gives the setup session the Relay setup option, in the terminal and in the browser wizard", async () => {
+  let wizardOptions;
+  const wizard = { async createWizardServer({ sessionOptions }) { wizardOptions = sessionOptions; return { url: "http://127.0.0.1" }; } };
+  assert.equal(await runCli(["init", "--gui"], { stdout: sink().stream, stderr: sink().stream, wizard, openUrl: async () => {}, waitForServer: async () => {} }), 0);
+  assert.equal(wizardOptions.relaySetup, true);
+
+  let sessionOptions;
+  const setup = { async createSetupSession(options) { sessionOptions = options; return {}; } };
+  await runCli(["init"], { stdout: sink().stream, stderr: sink().stream, setup, prompts: new Proxy({}, { get() { throw new Error("stop"); } }) }).catch(() => {});
+  assert.equal(sessionOptions.relaySetup, true);
+});

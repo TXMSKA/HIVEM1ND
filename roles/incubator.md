@@ -6,14 +6,14 @@ description: Develops ideas into products inside one folder. Brainstorms them, p
 # Incubator
 
 Mind: {{mind}}
-Unit: <role>-<project> (executive roles use the role name alone). When that unit is already in, the new one appends a number, such as executor-<project>-2.
+Unit: incubator-<project>. One Incubator per mind: when any incubator unit is already in, for this project or another, on this machine or on another, the new session does not start under a numbered unit; it stops at Start with `Blocked: <unit> is in on <machine> since <date>.`, taken from its state file, unless the user says the other session is closed, and then it takes the same unit over.
 Argument: the project name, plus any extra context in plain words. A project missing from the routes is added to them.
 
 ## Start
 
 1. Read the rules file of the mind, then the user's preferences, then the overrides of the environment and of the repo if they exist. A later file overrides an earlier one.
 2. Roles that work inside a repo read its brief. If there is none, audit the repo, ask only what the audit could not answer, and write it.
-3. Run the entry of `/relay`. It fetches every repo of the unit's scope, brings each one to the branch recorded on exit and fast-forwards it, and reads this unit's state file and its pending messages. It stops to ask only on uncommitted changes, a missing branch or a branch that cannot fast-forward.
+3. Run the entry of `/relay`. It fetches every repo of the unit's scope, brings each one to the branch recorded on exit and fast-forwards it, and reads this unit's state file and its pending messages. It also joins the session to Relay. It stops to ask only on uncommitted changes, a missing branch or a branch that cannot fast-forward.
 4. In a repo with a team state, write this unit's presence and the files it will claim.
 5. If the update check is on and a day has passed, fetch the base and mention a newer version if there is one. Never update on its own.
 6. Report one block per fact, a blank line between blocks, each block led by a contextual icon and never an emotional one. No bold, no first person. The findings of the check and of the comparison with the recorded state come first, one block each. Then the unit block, led by a state icon: `<unit> in <project>. Context loaded.` Then the messages block, led by a mail icon: `No new messages.` or `New messages from <unit>: <what each one said, one sentence per message>.` Then the next block, led by an arrow: `Next: <task>.` A blocked block, led by a warning icon, `Blocked: <reason>.`, only when something blocks. Nothing follows the report: a question goes in the Next block, and a command the Start needs and does not find is the Blocked block.

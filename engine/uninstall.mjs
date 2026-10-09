@@ -25,7 +25,7 @@ export async function uninstall(options = {}) {
   const { filePath: machinePath, record } = await readMachineRecord(mindPath, hostname);
   if (!record) {
     warnings.push(`No machine record exists for ${hostname} at ${mindPath}.`);
-    return { action: 'uninstall', removed, kept, warnings };
+    return { action: 'uninstall', removed, kept, relay: [], warnings };
   }
 
   const managedFiles = record.managedFiles ?? {};
@@ -71,6 +71,8 @@ export async function uninstall(options = {}) {
     else if (outcome === 'removed') updated.push(rulesPath);
   }
 
+  const relay = await removeRelayEntries({ homeDir, env, mindPath, dryRun });
+
   if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases);
 
   const eligibility = removeMindRequested ? await checkMindRemovable(mindPath, hostname, record) : null;
@@ -95,7 +97,27 @@ export async function uninstall(options = {}) {
     if (eligibility) kept.push({ path: mindPath, reason: eligibility.reason });
   }
 
-  return { action: 'uninstall', removed, updated, kept, warnings };
+  return { action: 'uninstall', removed, updated, kept, relay, warnings };
+}
+
+// Install wrote the Relay entry of each client it found. Only an entry that runs the CLI copy inside this
+// mind goes; an entry that runs another kit, and everything else in the client config, stays.
+async function removeRelayEntries({ homeDir, env, mindPath, dryRun }) {
+  const { RELAY_CLIENTS, relayEntryPointsAt, relayEntryPresent, unconfigureRelayClient } = await import('./relay/config.mjs');
+  const results = [];
+  for (const client of RELAY_CLIENTS) {
+    try {
+      if (await relayEntryPointsAt({ client, homeDir, env, mindPath })) {
+        if (!dryRun) await unconfigureRelayClient({ client, homeDir, env, mindPath });
+        results.push({ client, status: 'removed' });
+      } else {
+        results.push({ client, status: await relayEntryPresent({ client, homeDir, env }) ? 'elsewhere' : 'none' });
+      }
+    } catch (error) {
+      results.push({ client, status: 'failed', reason: error.message });
+    }
+  }
+  return results;
 }
 
 async function planFileRemoval(filePath, expectedHash) {

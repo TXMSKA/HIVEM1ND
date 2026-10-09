@@ -463,6 +463,15 @@ export async function evolve(options = {}) {
   const conflicts = installation?.conflicts ?? [];
   const lastCheck = isoDate(resolved.now);
   const completed = conflicts.length === 0;
+  // Relay points the clients at the mind's own copy of the CLI, so it runs after the update wrote it.
+  const relay = completed && resolved.relaySetup === true
+    ? await (await import("./relay/config.mjs")).ensureRelayClients({
+      homeDir: resolved.homeDir,
+      env: resolved.env,
+      kitPath: resolved.mindPath,
+      mindPath: resolved.mindPath,
+    })
+    : [];
 
   if (completed) {
     await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
@@ -488,6 +497,7 @@ export async function evolve(options = {}) {
     replacedLinks,
     removed,
     kept,
+    relay,
     reportPath: installation?.reportPath ?? null,
     lastCheck: completed ? lastCheck : headerValue(
       await readText(await machineFilePath(resolved.mindPath, resolved.hostname)),
