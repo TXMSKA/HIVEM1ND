@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
-import { createRelayWakePersistence, createRelay } from './store.mjs';
+import { createRelayWakePersistence, createRelay, isTransientFsError } from './store.mjs';
 import { WAKE_ADAPTERS, getWakeAdapter } from './wake-adapters.mjs';
 
 const DEFAULT_WINDOW_HOURS = 4;
@@ -475,6 +475,16 @@ export async function createRelayWakeController(options = {}) {
         consecutiveErrors: (policy.consecutiveErrors ?? 0) + 1,
       } : policy);
     }
+    async function absorbError(error, fallback, generation) {
+      const current = await recordError(stableCode(error.code, fallback), generation);
+      if ((current?.consecutiveErrors ?? 0) >= 5) {
+        await mutatePolicy(binding, key, async (record) => record?.generation === generation ? ({ ...record, pausedReason: 'error-budget-exhausted' }) : record);
+        stopReason = 'error-budget-exhausted';
+        controller.abort();
+        return stopReason;
+      }
+      return 'continue';
+    }
     async function deliverBatch(policy, registration, candidates) {
       const now = nowMs(clock);
       const activity = activityFor(policy, registration, now);
@@ -588,16 +598,7 @@ export async function createRelayWakeController(options = {}) {
       if (lease?.ownerId !== ownerId) return 'lease-lost';
       let inbox;
       try { inbox = await relay.inbox({ unit: binding.unit, limit: MAX_INBOX_MESSAGES }); }
-      catch (error) {
-        const current = await recordError(stableCode(error.code, 'INBOX_ERROR'), policy.generation);
-        if ((current?.consecutiveErrors ?? 0) >= 5) {
-          await mutatePolicy(binding, key, async (record) => record?.generation === policy.generation ? ({ ...record, pausedReason: 'error-budget-exhausted' }) : record);
-          stopReason = 'error-budget-exhausted';
-          controller.abort();
-          return stopReason;
-        }
-        return 'continue';
-      }
+      catch (error) { return absorbError(error, 'INBOX_ERROR', policy.generation); }
       if (controller.signal.aborted) return stopReason ?? 'stopped';
       const messages = inbox.messages.filter((message) => typeof message.id === 'string' && message.id.length <= 180);
       policy = await readPolicy(binding, key);
@@ -668,7 +669,12 @@ export async function createRelayWakeController(options = {}) {
         if (controller.signal.aborted) { terminal = stopReason ?? 'stopped'; resolveReady({ state: terminal, ownsLease: false }); return; }
         resolveReady({ state: 'running', ownsLease: true });
         while (!controller.signal.aborted) {
-          terminal = await iteration();
+          try { terminal = await iteration(); }
+          catch (error) {
+            // A record that OneDrive is still syncing fails one read, not the worker; the next poll retries it within the error budget.
+            if (!isTransientFsError(error)) throw error;
+            terminal = await absorbError(error, 'WAKE_STORE_BUSY', activeGeneration);
+          }
           if (terminal !== 'continue') break;
           await clock.sleep(pollIntervalMs, controller.signal);
         }

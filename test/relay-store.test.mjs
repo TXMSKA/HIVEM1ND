@@ -94,7 +94,7 @@ test('a reply clears only the exact requested message', async (context) => {
   assert.equal(thread.pendingReplies[0].messageId, second.id);
 });
 
-test('oversized external message bodies fail without archiving the original file', async (context) => {
+test('oversized external message bodies are skipped and named without archiving the original file', async (context) => {
   const { mind } = await fixture(context);
   const sender = await bind(mind, 'executor-alpha', 'oversized-sender');
   const recipient = await bind(mind, 'executor-beta', 'oversized-reader');
@@ -106,7 +106,9 @@ test('oversized external message bodies fail without archiving the original file
   const separator = original.indexOf('\n\n');
   await writeFile(messagePath, `${original.slice(0, separator + 2)}${'x'.repeat(256 * 1024 + 1)}`);
 
-  await assert.rejects(recipient.inbox(), code('MESSAGE_TOO_LARGE'));
+  assert.deepEqual(await recipient.inbox(), { messages: [], unit: 'executor-beta', unread: 0, malformed: [filename] });
+  assert.deepEqual(await recipient.read(), { messages: [], malformed: [filename] });
+  await assert.rejects(recipient.read({ ids: [sent.id] }), code('MESSAGE_TOO_LARGE'));
   assert.equal((await readFile(messagePath, 'utf8')).length > 256 * 1024, true);
   await assert.rejects(readdir(path.join(mind, 'user', 'relay', 'archive', 'executor-beta')), code('ENOENT'));
 });
@@ -122,6 +124,57 @@ test('oversized external metadata records fail safely and remain intact', async 
 
   await assert.rejects(relay.status(), code('MESSAGE_TOO_LARGE'));
   assert.equal((await readFile(recordPath, 'utf8')).length, oversized.length);
+});
+
+test('a message with invalid headers is skipped and named while the valid ones are returned', async (context) => {
+  const { mind } = await fixture(context);
+  const sender = await bind(mind, 'executor-alpha', 'malformed-sender');
+  const recipient = await bind(mind, 'executor-beta', 'malformed-reader');
+  const valid = await sender.send({ to: 'executor-beta', subject: 'Valid', body: 'readable body' });
+  const inboxPath = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  const badId = '11111111-2222-4333-8444-555555555555';
+  const filename = `20200101-000000-executor-alpha-${badId}.md`;
+  const badPath = path.join(inboxPath, filename);
+  const bad = `id: ${badId}\nfrom: executor-alpha\nto: executor-beta\nattachments: [projects/x.md]\n\nbroken\n`;
+  await writeFile(badPath, bad);
+
+  const listed = await recipient.inbox();
+  assert.deepEqual(listed.messages.map((message) => message.id), [valid.id]);
+  assert.equal(listed.unread, 1);
+  assert.deepEqual(listed.malformed, [filename]);
+  assert.equal((await recipient.reminder({ nativeSessionId: 'malformed-reader-native', client: 'codex' })).unread, 1);
+  assert.deepEqual((await sender.history({ unit: 'executor-beta' })).messages.map((message) => message.id), [valid.id]);
+  assert.equal((await sender.threads()).threads.length, 1);
+  assert.deepEqual((await sender.events()).events.map((event) => event.id), [valid.id]);
+  const reply = await recipient.send({ to: 'executor-alpha', subject: 'Answer', body: 'Answered', replyTo: valid.id });
+  assert.equal(reply.threadId, valid.threadId);
+
+  await assert.rejects(recipient.read({ ids: [badId] }), code('MALFORMED_MESSAGE'));
+  const read = await recipient.read();
+  assert.deepEqual(read.messages.map((message) => message.id), [valid.id]);
+  assert.deepEqual(read.malformed, [filename]);
+  assert.equal(await readFile(badPath, 'utf8'), bad, 'the malformed file stays where it was written');
+});
+
+test('a session record that is unparseable or briefly unreadable is skipped while the other registrations still list', async (context) => {
+  const { mind } = await fixture(context);
+  const alpha = await bind(mind, 'executor-alpha', 'sync-alpha');
+  const beta = await bind(mind, 'executor-beta', 'sync-beta');
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  const registeredUnits = async () => (await alpha.status()).units.filter((item) => item.registeredSessions.length).map((item) => item.unit);
+  await writeFile(path.join(sessions, '22222222-2222-4222-8222-222222222222.json'), '{"kind":"registration","regis');
+
+  assert.deepEqual(await registeredUnits(), ['executor-alpha', 'executor-beta']);
+  assert.equal((await beta.reminder({ nativeSessionId: 'sync-beta-native', client: 'codex' })).registered, true);
+
+  const { registrationId } = (await beta.status({ unit: 'executor-beta' })).units[0].registeredSessions[0];
+  const restore = await interceptFs('open', async (original, args) => {
+    if (typeof args[1] === 'number' && String(args[0]).endsWith(`${registrationId}.json`)) throw Object.assign(new Error('The file is busy.'), { code: 'EBUSY' });
+    return original(...args);
+  });
+  try { assert.deepEqual(await registeredUnits(), ['executor-alpha']); }
+  finally { restore(); }
+  assert.deepEqual(await registeredUnits(), ['executor-alpha', 'executor-beta'], 'the record is read again once it can be opened');
 });
 
 test('concurrent sends keep every unique message and concurrent reads archive exact bytes once', async (context) => {

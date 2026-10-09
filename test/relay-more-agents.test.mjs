@@ -161,7 +161,12 @@ test('Cursor configure adds a bounded owned stop entry and unconfigure preserves
   const configured = await configureRelayClient(options);
   const hooks = JSON.parse(await readFile(configured.paths[1], 'utf8'));
   assert.equal(hooks.hooks.stop[0].loop_limit, 5);
+  for (const event of ['sessionStart', 'postToolUse', 'stop']) assert.equal(hooks.hooks[event][0].timeout, 30);
   assert.deepEqual((await configureRelayClient(options)).changed, []);
+  hooks.hooks.stop[0].timeout = 5;
+  await writeFile(configured.paths[1], JSON.stringify(hooks));
+  await configureRelayClient(options);
+  assert.equal(JSON.parse(await readFile(configured.paths[1], 'utf8')).hooks.stop[0].timeout, 30);
   await unconfigureRelayClient(options);
   assert.equal(JSON.parse(await readFile(configured.paths[1], 'utf8')).hooks.stop, undefined);
 });

@@ -11,6 +11,8 @@ import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-pa
 const OWNED_SERVER = 'hivem1nd-relay';
 const MARKER = '# HIVEM1ND Relay managed server';
 const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
+// A Cursor stop hook reads the mind through OneDrive and measured 5 to 11 s on Windows.
+const CURSOR_HOOK_TIMEOUT = 30;
 const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot', 'antigravity']);
 
 const CLIENT_PATHS = {
@@ -233,8 +235,8 @@ function jsonMerge(existingText, kind, options) {
       const existing = document.hooks[event] ?? [];
       if (!Array.isArray(existing)) throw new Error(`Cursor hook ${event} must be an array.`);
       const owned = existing.filter((item) => isOwnedHookCommand(item?.command, client, event));
-      if (owned.length) for (const item of owned) item.command = command;
-      else existing.push({ command, timeout: 5 });
+      if (owned.length) for (const item of owned) Object.assign(item, { command, timeout: CURSOR_HOOK_TIMEOUT });
+      else existing.push({ command, timeout: CURSOR_HOOK_TIMEOUT });
       if (event === 'stop') for (const item of existing) {
         if (isOwnedHookCommand(item?.command, client, event)) item.loop_limit = CURSOR_STOP_LOOP_LIMIT;
       }
