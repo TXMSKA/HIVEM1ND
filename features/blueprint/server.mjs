@@ -13,17 +13,24 @@
 // small operations rather than by overwriting the file, so a reply written by
 // hand into the JSON while the page is open is not lost on the next click.
 //
+// Two more things are written for the person: the sketches drawn on a board
+// (docs/flows/sketches/<board>.json, with the pictures in docs/flows/assets/),
+// and the messages a comment can send to the agent of its project, through the
+// kit's own Relay (engine/relay/person.mjs).
+//
 // Run: node server.mjs [--mind <path>] [--hostname <name>] [--port <number>] [--lan]
 // then open http://localhost:3300/, or from a phone on the same network the
 // link with a key that --lan prints.
 
 import { createServer } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir, hostname as machineName, networkInterfaces } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPersonRelay } from "../../engine/relay/person.mjs";
+import { MAX_IMAGE_BYTES, MAX_SKETCH_BYTES, SketchError, newSketch, validateSketch } from "./review/sketch-format.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REVIEW = join(HERE, "review");
@@ -49,6 +56,16 @@ const MAX_TEXT = 4000;
 const MAX_LABEL = 160;
 // The author Review writes on what is typed in the viewer.
 const REVIEWER = "User";
+// What a thread opened by a reference image says when the person wrote no note.
+const REFERENCE_NOTE = "Recreate this reference image as a screen of the board.";
+// The pictures a sketch may hold, by what the first bytes say they are. The
+// type the browser declares must agree, so a file is never served as
+// something it is not.
+const PICTURES = [
+  { type: "image/png", ext: "png", is: (bytes) => bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  { type: "image/jpeg", ext: "jpg", is: (bytes) => bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff },
+  { type: "image/webp", ext: "webp", is: (bytes) => bytes.length > 12 && bytes.toString("latin1", 0, 4) === "RIFF" && bytes.toString("latin1", 8, 12) === "WEBP" },
+];
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -243,13 +260,15 @@ async function readDoc(project, board) {
   }
 }
 
-async function writeDoc(project, board, doc) {
-  await mkdir(join(project.flows, "comments"), { recursive: true });
-  const file = commentsFile(project, board);
-  const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+// Through a temporary file and a rename, so a reader never meets half a file.
+async function writeAtomic(file, data) {
+  await mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(temp, data);
   await rename(temp, file);
 }
+
+const writeDoc = (project, board, doc) => writeAtomic(commentsFile(project, board), `${JSON.stringify(doc, null, 2)}\n`);
 
 function cleanText(value) {
   if (typeof value !== "string") return null;
@@ -391,19 +410,140 @@ function lanPass(req, res) {
 
 // Past the limit the body is read to its end and dropped, so the answer is a
 // 413 the page can show rather than a connection cut halfway.
-function readBody(req) {
+function readBytes(req, limit) {
   return new Promise((done, fail) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size <= MAX_BODY) chunks.push(chunk);
+      if (size <= limit) chunks.push(chunk);
       else chunks.length = 0;
     });
-    req.on("end", () => (size > MAX_BODY ? fail(Object.assign(new Error("too large"), { status: 413 })) : done(Buffer.concat(chunks).toString("utf8"))));
+    req.on("end", () => (size > limit ? fail(Object.assign(new Error("too large"), { status: 413 })) : done(Buffer.concat(chunks))));
     req.on("error", fail);
   });
 }
+
+/** The JSON a request carries, or the answer to give when it is not one. */
+async function readJson(req, res, limit = MAX_BODY) {
+  if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+    send(res, 415, { error: "JSON only." });
+    return undefined;
+  }
+  try {
+    return JSON.parse((await readBytes(req, limit)).toString("utf8"));
+  } catch (error) {
+    if (error.status === 413) send(res, 413, { error: "Too large." });
+    else send(res, 400, { error: "Unreadable request." });
+    return undefined;
+  }
+}
+
+// A page on another site can still send a request to this port; the browser
+// says where it comes from, and only the viewer's own page may change anything.
+const foreign = (req) => {
+  const origin = req.headers.origin;
+  const site = req.headers["sec-fetch-site"];
+  return Boolean((origin && !ORIGINS.has(origin)) || (site && site !== "same-origin" && site !== "none"));
+};
+
+// ---- the agent -----------------------------------------------------------
+
+// The person's channel to the agents, opened on the first use: a server that
+// never sends a message writes nothing to the mind. A failure to open it is
+// not kept, so a mind that appears later is found.
+let person = null;
+function personRelay() {
+  person ??= createPersonRelay({ mindPath: MIND, tool: "blueprint", hostname: HOSTNAME }).catch((error) => {
+    person = null;
+    throw error;
+  });
+  return person;
+}
+
+async function sendToAgent(project, message) {
+  try {
+    return await (await personRelay()).send({ project: project.name, ...message });
+  } catch (error) {
+    console.error(error);
+    // The thing the person wrote is already on disk; only the message failed.
+    return { sent: false, reason: "failed" };
+  }
+}
+
+/** Where a comment sits, for a subject line: the element, else the screen, else the board. */
+function placeOf(anchor) {
+  if (anchor.element) return anchor.label || anchor.element;
+  if (anchor.screen) return anchor.screenTitle || anchor.screen;
+  return "board";
+}
+
+function anchorLines(anchor) {
+  return [
+    `Screen: ${anchor.screen ? `${anchor.screen} (${anchor.screenTitle})` : "none, the comment is on the empty board"}`,
+    `Element: ${anchor.element ? `${anchor.element} (${anchor.label})` : "none"}`,
+  ];
+}
+
+const quote = (text) => text.split("\n").map((line) => `> ${line}`).join("\n");
+
+/** The message a comment or a reply sends: what was written, where, and where to answer. */
+function commentMessage(project, board, thread, text, reply) {
+  const file = resolve(commentsFile(project, board));
+  return {
+    subject: `Blueprint comment: ${board} / ${placeOf(thread.anchor)}`,
+    body: [
+      reply ? `A reply in a comment thread on the board ${board} of ${project.name}.` : `A new comment on the board ${board} of ${project.name}.`,
+      "",
+      quote(text),
+      "",
+      `Project: ${project.name}`,
+      `Board: ${board}`,
+      ...anchorLines(thread.anchor),
+      `Thread: ${thread.id}`,
+      "",
+      `Answer in the thread: open docs/flows/comments/${board}.json of the project (the attached file, ${file}), find the thread ${thread.id} and append a message to its messages with your unit as author, the time in UTC and your answer as text. Change the board only if the comment asks for it.`,
+    ].join("\n"),
+    attachments: [file],
+  };
+}
+
+/** The message a reference image sends: the picture, the screen that holds it and the thread to report in. */
+function referenceMessage(project, board, thread, screen, image, note) {
+  const comments = resolve(commentsFile(project, board));
+  const picture = resolve(project.flows, "assets", image.src.slice("assets/".length));
+  return {
+    subject: `Blueprint reference: ${board} / ${screen.title}`,
+    body: [
+      `The person added a reference image to the sketch of the board ${board} of ${project.name} and asks for it to be recreated as a screen of the board.`,
+      "",
+      quote(note),
+      "",
+      `Project: ${project.name}`,
+      `Board: ${board}`,
+      `Sketch screen: ${screen.id} (${screen.title})`,
+      `Reference image: ${picture}`,
+      `Sketch: ${resolve(sketchFile(project, board))}`,
+      `Thread: ${thread.id}`,
+      "",
+      `Recreate the image as a screen of the board, in the board's own module. Then report in the thread: open docs/flows/comments/${board}.json of the project (the attached file, ${comments}), find the thread ${thread.id} and append a message to its messages with your unit as author, the time in UTC and the id of the screen you added.`,
+    ].join("\n"),
+    attachments: [picture, comments],
+  };
+}
+
+async function agent(res, projects, name) {
+  const project = projects.get(name);
+  if (!project) return send(res, 404, { error: "Unknown project." });
+  try {
+    return send(res, 200, { agent: await (await personRelay()).agentFor(project.name) });
+  } catch (error) {
+    console.error(error);
+    return send(res, 200, { agent: null });
+  }
+}
+
+// ---- the routes of the comments --------------------------------------------
 
 async function comments(req, res, projects, name, board) {
   const project = projects.get(name);
@@ -412,30 +552,156 @@ async function comments(req, res, projects, name, board) {
   if (req.method === "GET") return send(res, 200, await readDoc(project, board));
 
   if (req.method === "POST") {
-    const origin = req.headers.origin;
-    const site = req.headers["sec-fetch-site"];
-    if ((origin && !ORIGINS.has(origin)) || (site && site !== "same-origin" && site !== "none")) {
-      return send(res, 403, { error: "Only the Review page can change comments." });
-    }
-    if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
-      return send(res, 415, { error: "JSON only." });
-    }
-    let op;
-    try {
-      op = JSON.parse(await readBody(req));
-    } catch (error) {
-      return error.status === 413 ? send(res, 413, { error: "Too large." }) : send(res, 400, { error: "Unreadable request." });
-    }
-    return serial(`${name}/${board}`, async () => {
+    if (foreign(req)) return send(res, 403, { error: "Only the Review page can change comments." });
+    const op = await readJson(req, res);
+    if (op === undefined) return undefined;
+    if (op?.send !== undefined && typeof op.send !== "boolean") return send(res, 400, { error: "send must be true or false." });
+    const saved = await serial(`${name}/${board}`, async () => {
       const doc = await readDoc(project, board);
       const problem = apply(doc, op);
-      if (problem) return send(res, 400, { error: problem });
+      if (problem) return { problem };
       await writeDoc(project, board, doc);
-      return send(res, 200, doc);
+      const thread = op.op === "add" ? doc.threads.at(-1) : doc.threads.find((t) => t.id === op.thread);
+      return { doc, thread };
     });
+    if (saved.problem) return send(res, 400, { error: saved.problem });
+    if (op.send !== true || (op.op !== "add" && op.op !== "reply")) return send(res, 200, saved.doc);
+    // The comment is on disk before anything is sent: a message that fails
+    // costs the person a second click, never the words.
+    const text = saved.thread.messages.at(-1).text;
+    const relay = await sendToAgent(project, commentMessage(project, board, saved.thread, text, op.op === "reply"));
+    return send(res, 200, { ...saved.doc, saved: true, relay });
   }
 
   return send(res, 405, { error: "GET or POST." });
+}
+
+// ---- sketches ------------------------------------------------------------
+
+const sketchFile = (project, board) => join(project.flows, "sketches", `${board}.json`);
+
+// A sketch belongs to a board of the index, so a request cannot make files up.
+async function boardEntry(project, board) {
+  try {
+    const entries = JSON.parse(await readFile(join(project.flows, "boards", "index.json"), "utf8"));
+    return Array.isArray(entries) ? (entries.find((entry) => entry?.id === board) ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The revision is the hash of the bytes on disk, so an edit by hand or by an
+// agent is a new revision too.
+const revisionOf = (raw) => createHash("sha256").update(raw).digest("hex").slice(0, 32);
+
+async function readRaw(file) {
+  try {
+    return await readFile(file);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** The sketch of a board as it is on disk: an empty one when there is no file, none and the reason when the file is not a valid sketch. */
+async function readSketch(project, board, entry) {
+  const raw = await readRaw(sketchFile(project, board));
+  if (raw === null) return { revision: "", sketch: newSketch(board, label(entry.title, MAX_LABEL) ?? board), problem: null };
+  const revision = revisionOf(raw);
+  try {
+    return { revision, sketch: validateSketch(JSON.parse(raw.toString("utf8"))), problem: null };
+  } catch (error) {
+    return { revision, sketch: null, problem: error instanceof SketchError ? error.message : "The file is not JSON." };
+  }
+}
+
+async function sketches(req, res, projects, name, board) {
+  const project = projects.get(name);
+  const entry = project && BOARD_ID.test(board) ? await boardEntry(project, board) : null;
+  if (!entry) return send(res, 404, { error: "Unknown board." });
+
+  if (req.method === "GET") return send(res, 200, await readSketch(project, board, entry));
+
+  if (req.method === "PUT") {
+    if (foreign(req)) return send(res, 403, { error: "Only the Review page can change a sketch." });
+    const body = await readJson(req, res, MAX_SKETCH_BYTES);
+    if (body === undefined) return undefined;
+    if (typeof body?.base !== "string") return send(res, 400, { error: "base must be the revision the page was given." });
+    let sketch;
+    try {
+      sketch = validateSketch(body.sketch);
+    } catch (error) {
+      if (error instanceof SketchError) return send(res, 400, { error: error.message });
+      throw error;
+    }
+    return serial(`sketch/${name}/${board}`, async () => {
+      const file = sketchFile(project, board);
+      const current = await readRaw(file);
+      // Someone else wrote the file since the page read it: theirs stands, and the page is told.
+      if ((current === null ? "" : revisionOf(current)) !== body.base) {
+        return send(res, 409, { error: "The sketch changed on disk.", ...(await readSketch(project, board, entry)) });
+      }
+      const text = `${JSON.stringify(sketch, null, 2)}\n`;
+      await writeAtomic(file, text);
+      return send(res, 200, { revision: revisionOf(text), sketch });
+    });
+  }
+
+  return send(res, 405, { error: "GET or PUT." });
+}
+
+/** A picture pasted or picked in the viewer, kept in the repository's docs/flows/assets/. */
+async function images(req, res, projects, name) {
+  const project = projects.get(name);
+  if (!project) return send(res, 404, { error: "Unknown project." });
+  if (req.method !== "POST") return send(res, 405, { error: "POST only." });
+  if (foreign(req)) return send(res, 403, { error: "Only the Review page can add a picture." });
+  const declared = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  const kind = PICTURES.find((picture) => picture.type === declared);
+  if (!kind) return send(res, 415, { error: "A PNG, JPEG or WebP picture only." });
+  let bytes;
+  try {
+    bytes = await readBytes(req, MAX_IMAGE_BYTES);
+  } catch (error) {
+    return error.status === 413 ? send(res, 413, { error: "The picture is over 8 MB." }) : send(res, 400, { error: "Unreadable request." });
+  }
+  if (!kind.is(bytes)) return send(res, 415, { error: "The file is not the kind of picture it says." });
+  const file = `${randomUUID()}.${kind.ext}`;
+  await writeAtomic(join(project.flows, "assets", file), bytes);
+  return send(res, 201, { src: `assets/${file}`, url: `/p/${encodeURIComponent(project.name)}/assets/${file}`, bytes: bytes.length });
+}
+
+/**
+ * The person asks for a reference image to be recreated. The image already sits
+ * on a screen of the sketch; this opens the thread the agent reports in, on
+ * that screen, and sends the agent the request.
+ */
+async function references(req, res, projects, name, board) {
+  const project = projects.get(name);
+  const entry = project && BOARD_ID.test(board) ? await boardEntry(project, board) : null;
+  if (!entry) return send(res, 404, { error: "Unknown board." });
+  if (req.method !== "POST") return send(res, 405, { error: "POST only." });
+  if (foreign(req)) return send(res, 403, { error: "Only the Review page can ask for a reference." });
+  const body = await readJson(req, res);
+  if (body === undefined) return undefined;
+  const note = body?.note === undefined || body.note === "" ? REFERENCE_NOTE : cleanText(body.note);
+  if (typeof body?.screen !== "string" || !note) return send(res, 400, { error: "A screen and a note of at most 4000 characters." });
+  const { sketch } = await readSketch(project, board, entry);
+  const screen = sketch?.screens.find((candidate) => candidate.id === body.screen);
+  const image = screen?.root.kids.find((kid) => kid.t === "image");
+  if (!image) return send(res, 404, { error: "That screen of the sketch has no reference image." });
+  const saved = await serial(`${name}/${board}`, async () => {
+    const doc = await readDoc(project, board);
+    apply(doc, {
+      op: "add",
+      anchor: { screen: screen.id, screenTitle: screen.title, element: null, label: screen.title, path: [screen.title], point: { x: 0, y: 0 } },
+      text: note,
+    });
+    await writeDoc(project, board, doc);
+    return { doc, thread: doc.threads.at(-1) };
+  });
+  const relay = await sendToAgent(project, referenceMessage(project, board, saved.thread, screen, image, note));
+  return send(res, 200, { ...saved.doc, saved: true, thread: saved.thread.id, relay });
 }
 
 /** A file under `root`, by a path that may not climb out of it. */
@@ -538,7 +804,19 @@ async function route(req, res) {
   const comment = pathname.match(/^\/api\/comments\/([^/]+)\/([^/]+)$/);
   if (comment) return comments(req, res, projects, decodeURIComponent(comment[1]), comment[2]);
 
+  const sketch = pathname.match(/^\/api\/sketch\/([^/]+)\/([^/]+)$/);
+  if (sketch) return sketches(req, res, projects, decodeURIComponent(sketch[1]), sketch[2]);
+
+  const reference = pathname.match(/^\/api\/reference\/([^/]+)\/([^/]+)$/);
+  if (reference) return references(req, res, projects, decodeURIComponent(reference[1]), reference[2]);
+
+  const picture = pathname.match(/^\/api\/images\/([^/]+)$/);
+  if (picture) return images(req, res, projects, decodeURIComponent(picture[1]));
+
   if (req.method !== "GET") return send(res, 405, { error: "GET only." });
+
+  const wanted = pathname.match(/^\/api\/agent\/([^/]+)$/);
+  if (wanted) return agent(res, projects, decodeURIComponent(wanted[1]));
 
   if (pathname === "/api/boards") return send(res, 200, await boardIndex(projects));
   if (pathname === "/review" || pathname === "/review/" || pathname === "/review/index.html") return viewer(res, projects);
