@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeWakeCapability, spawnClaudeWakeWorker, sendClaudeWake } from './claude-wake.mjs';
+import { cursorWakeCapability } from './cursor-wake.mjs';
+import { spawnLocalWakeWorker } from './local-wake.mjs';
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -79,6 +81,29 @@ async function runClaudeWakeLifecycle({ event, mindPath, nativeSessionId, env = 
   return binding;
 }
 
+// Nothing else starts the worker of a Cursor chat, so the chat's own session start makes sure the worker of its
+// consent runs; the worker lease keeps a second start from doing anything.
+async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process.env, stderr = process.stderr, wakeControllerFactory, wakeWorkerSpawner }) {
+  const machine = os.hostname();
+  const { createRelayWakeController } = await import('./wake.mjs');
+  const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: machine,
+    sink: async () => ({ status: 'not_submitted' }) });
+  const binding = await controller.findEnabledBinding({ nativeSessionId, client: 'cursor', machine });
+  if (!binding) return null;
+  const capability = cursorWakeCapability({ env });
+  if (!capability.available) {
+    stderr.write(`Relay Cursor wake unavailable: ${capability.reason}.\n`);
+    return null;
+  }
+  try {
+    const child = (wakeWorkerSpawner ?? spawnLocalWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
+    child.ready.catch(() => stderr.write('Relay Cursor wake worker could not start.\n'));
+  } catch {
+    stderr.write('Relay Cursor wake worker could not start.\n');
+  }
+  return binding;
+}
+
 export async function runRelayHook({ client, event, mindPath, nativeSessionId, unit, stdin = process.stdin, stdout = process.stdout,
   stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform }) {
   let input = {};
@@ -117,6 +142,16 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       const response = text ? { followup_message: text } : null;
       if (response) stdout.write(`${JSON.stringify(response)}\n`);
       return response;
+    }
+    if (client === 'cursor' && hookEvent === 'sessionStart') {
+      await ensureCursorWakeWorker({
+        mindPath,
+        nativeSessionId: typeof input.conversation_id === 'string' ? input.conversation_id : nativeSessionId ?? context.nativeSessionId,
+        env,
+        stderr,
+        wakeControllerFactory,
+        wakeWorkerSpawner,
+      }).catch((error) => stderr.write(`Relay Cursor wake unavailable: ${error.message}\n`));
     }
     if (client === 'claude') {
       await runClaudeWakeLifecycle({

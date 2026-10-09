@@ -432,16 +432,18 @@ test("evolve asks for Relay setup and prints one line per client", async () => {
     { client: "codex", status: "already-configured" },
     { client: "cursor", status: "not-available" },
     { client: "opencode", status: "failed", reason: "Client MCP configuration contains invalid JSON; no files were changed." },
+    { client: "copilot", status: "refreshed", restart: true },
   ];
   const lifecycle = { async evolve(options) { received = options; return { action: "evolve", completed: true, changed: false, toVersion: "2.0.0", relay }; } };
   const output = sink();
   assert.equal(await runCli(["evolve", "--mind-path", "."], { stdin: { isTTY: false }, stdout: output.stream, stderr: sink().stream, lifecycle }), 0);
   assert.equal(received.relaySetup, true);
-  assert.deepEqual(output.read().split("\n").filter((line) => /^(claude|codex|cursor|opencode):/.test(line)), [
+  assert.deepEqual(output.read().split("\n").filter((line) => /^(claude|codex|cursor|opencode|copilot):/.test(line)), [
     "claude: Relay configured now. Restart it to load Relay.",
     "codex: Relay already configured.",
     "cursor: not available on this machine.",
     "opencode: Relay not configured. Client MCP configuration contains invalid JSON; no files were changed.",
+    "copilot: Relay hooks brought up to date. Restart it to load them.",
   ]);
 });
 

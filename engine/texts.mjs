@@ -74,6 +74,7 @@ const COPY = {
     attachedMachine: 'This machine is attached to the mind in {mind}.',
     relayConfigured: '{client}: Relay configured now. Restart it to load Relay.',
     relayAlready: '{client}: Relay already configured.',
+    relayRefreshed: '{client}: Relay hooks brought up to date. Restart it to load them.',
     relayNotAvailable: '{client}: not available on this machine.',
     relayFailed: '{client}: Relay not configured. {reason}',
     attachOutdated: 'The mind holds version {mind} and this kit is {kit}. Run /evolve to bring them together.',
@@ -207,6 +208,7 @@ const COPY = {
     attachedMachine: 'Esta máquina quedó conectada al mind en {mind}.',
     relayConfigured: '{client}: Relay configurado. Reiniciarlo para cargar Relay.',
     relayAlready: '{client}: Relay ya estaba configurado.',
+    relayRefreshed: '{client}: hooks de Relay actualizados. Reiniciarlo para cargarlos.',
     relayNotAvailable: '{client}: no disponible en esta máquina.',
     relayFailed: '{client}: Relay no configurado. {reason}',
     attachOutdated: 'El mind tiene la versión {mind} y este kit es {kit}. Ejecutar /evolve para igualarlos.',
@@ -279,7 +281,7 @@ export function text(language, key, variables = {}) {
   );
 }
 
-const RELAY_KEYS = { configured: 'relayConfigured', 'already-configured': 'relayAlready', 'not-available': 'relayNotAvailable', failed: 'relayFailed' };
+const RELAY_KEYS = { configured: 'relayConfigured', refreshed: 'relayRefreshed', 'already-configured': 'relayAlready', 'not-available': 'relayNotAvailable', failed: 'relayFailed' };
 
 // One line per client for the result of ensureRelayClients.
 export function relayLine(language, item) {

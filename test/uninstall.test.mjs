@@ -29,7 +29,11 @@ test('uninstall removes managed skills, the auto rule line and the machine recor
 
   const rulesAfterInstall = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
   assert.match(rulesAfterInstall, /HIVEM1ND: the mind is at/);
-  assert.match(await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'), 'utf8'), /HIVEM1ND: the mind is at/);
+  const cursorRule = await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'), 'utf8');
+  assert.match(cursorRule, /HIVEM1ND: the mind is at/);
+  // The rule carries the contract of a woken turn, which has nobody to ask.
+  assert.match(cursorRule, /woken and nobody is at the keyboard.*NOT_REGISTERED.*CURSOR_CONVERSATION_ID.*only on a hand-off defined in rules\.md/);
+  assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), /NOT_REGISTERED/);
   await lstat(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
 
   const result = await uninstall({ mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' } });

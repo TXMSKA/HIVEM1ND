@@ -373,7 +373,7 @@ export async function createRelayWakeController(options = {}) {
   async function status(bindingValue) { return inspect(makeBinding(bindingValue, { remote: true })); }
 
   // Reserve a hook handoff under the same locks and policy budget as workers.
-  // A live ACP worker owns delivery; an editor stop hook must not compete with it.
+  // A live wake worker owns delivery; an editor stop hook must not compete with it.
   async function cursorStop(bindingValue, { loopCount, generationId } = {}) {
     const binding = makeBinding(bindingValue);
     const stopLoopLimit = getWakeAdapter(binding.client, adapters)?.stopLoopLimit;
@@ -389,7 +389,8 @@ export async function createRelayWakeController(options = {}) {
         const now = nowMs(clock);
         if (!freshPolicy(policy, now) || policy.wakeCount >= policy.maxHandoffs) return null;
         const registration = await persistence.resolveBinding(binding);
-        if (!registration || registration.registrationId !== policy.registrationId) return null;
+        // The consent names the unit and the native session id; a chat that registers again gets a new record id.
+        if (!registration) return null;
         if (generationId && policy.cursorStop?.generationId === generationId && policy.cursorStop.loopCount === loopCount) return null;
         const { messages } = await relay.inbox({ unit: binding.unit, limit: MAX_INBOX_MESSAGES });
         if (!messages.length || !freshPolicy(policy, nowMs(clock))) return null;
@@ -424,6 +425,21 @@ export async function createRelayWakeController(options = {}) {
     }
     if (matches.length > 1) throw wakeError('WAKE_AMBIGUOUS_BINDING', 'More than one enabled Relay wake policy matches this native session.');
     return matches[0] ?? null;
+  }
+
+  // The enabled policies of this machine and whether a worker holds each one, so a diagnosis can name a consent nobody serves.
+  async function workerStates() {
+    const now = nowMs(clock);
+    const states = [];
+    for (const { value: policy } of await persistence.list('policies')) {
+      if (policy?.kind !== 'relay-wake-policy' || policy.enabled !== true || !policy.binding
+        || policy.binding.machine !== hostname || !freshPolicy(policy, now)) continue;
+      try {
+        const binding = makeBinding(policy.binding);
+        states.push({ binding, worker: (await inspect(binding)).worker.state });
+      } catch { /* a malformed policy is reported by status, not by the overview */ }
+    }
+    return states;
   }
 
   async function stop(bindingValue) {
@@ -726,7 +742,7 @@ export async function createRelayWakeController(options = {}) {
     return handle;
   }
 
-  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, observeActivity, endSession, cursorStop });
+  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop });
 }
 
 async function isProcessAlive(pid) {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { diagnoseRelayClients, ensureRelayClients, relayEntryPresent } from '../engine/relay/config.mjs';
+import { buildClientConfig, diagnoseRelayClients, ensureRelayClients, relayEntryPresent } from '../engine/relay/config.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 import { uninstall } from '../engine/uninstall.mjs';
@@ -49,19 +49,101 @@ test('install configures each available client without a Relay entry, once, and 
   assert.equal(await readFile(path.join(homeDir, '.claude', 'settings.json'), 'utf8'), before);
 });
 
-test('a client that already has the Relay entry keeps its hand-edited hooks byte for byte', async (context) => {
-  const { homeDir, mindPath, env } = await fixture(context, ['cursor']);
+const cursorMcp = `${JSON.stringify({ mcpServers: { 'hivem1nd-relay': { type: 'stdio', command: 'node', args: ['C:/mind/cli/index.mjs', 'relay', 'mcp', '--mind-path', 'C:/mind', '--client', 'cursor'] } } }, null, 2)}\n`;
+
+async function cursorFiles(homeDir, hooks) {
   const cursor = path.join(homeDir, '.cursor');
   await mkdir(cursor, { recursive: true });
-  const mcp = `${JSON.stringify({ mcpServers: { 'hivem1nd-relay': { type: 'stdio', command: 'node', args: ['C:/mind/cli/index.mjs', 'relay', 'mcp', '--mind-path', 'C:/mind', '--client', 'cursor'] } } }, null, 2)}\n`;
-  const hooks = `${JSON.stringify({ version: 1, hooks: { stop: [{ command: 'node C:/mind/cli/index.mjs relay hook --client cursor --event stop', timeout: 30 }] } })}\n`;
-  await writeFile(path.join(cursor, 'mcp.json'), mcp);
-  await writeFile(path.join(cursor, 'hooks.json'), hooks);
+  await writeFile(path.join(cursor, 'mcp.json'), cursorMcp);
+  if (hooks !== undefined) await writeFile(path.join(cursor, 'hooks.json'), hooks);
+  return { mcpFile: path.join(cursor, 'mcp.json'), hooksFile: path.join(cursor, 'hooks.json') };
+}
+
+test('a client that already has the Relay entry gets its stale Relay hooks updated in place and nothing else touched', async (context) => {
+  const { homeDir, mindPath, env } = await fixture(context, ['cursor']);
+  const foreign = { command: 'echo keep', timeout: 3 };
+  const gate = { beforeShellExecution: [{ command: './scripts/check', timeout: 9 }] };
+  const stale = { version: 1, hooks: { ...gate, stop: [foreign, { command: 'node C:/mind/cli/index.mjs relay hook --client cursor --event stop --mind-path C:/mind', timeout: 5 }] } };
+  const { mcpFile, hooksFile } = await cursorFiles(homeDir, `${JSON.stringify(stale)}\n`);
+  const intended = JSON.parse(buildClientConfig({ client: 'cursor', kitPath: mindPath, mindPath }).hooks).hooks;
 
   const results = await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath });
-  assert.equal(statuses(results).cursor, 'already-configured');
-  assert.equal(await readFile(path.join(cursor, 'mcp.json'), 'utf8'), mcp);
-  assert.equal(await readFile(path.join(cursor, 'hooks.json'), 'utf8'), hooks);
+  assert.equal(statuses(results).cursor, 'refreshed'); assert.equal(results.find((item) => item.client === 'cursor').restart, true);
+  const hooks = JSON.parse(await readFile(hooksFile, 'utf8')).hooks;
+  assert.deepEqual(hooks.stop[0], foreign); assert.deepEqual(hooks.beforeShellExecution, gate.beforeShellExecution);
+  assert.deepEqual(hooks.stop[1], { command: intended.stop[0].command, timeout: 30, loop_limit: 5 });
+  assert.deepEqual(Object.keys(hooks).sort(), ['beforeShellExecution', 'stop'], 'an event with no Relay entry gets none');
+  assert.equal(await readFile(mcpFile, 'utf8'), cursorMcp);
+
+  const refreshed = await readFile(hooksFile, 'utf8');
+  assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath })).cursor, 'already-configured');
+  assert.equal(await readFile(hooksFile, 'utf8'), refreshed);
+});
+
+test('Relay hooks that are already current are left byte for byte, however they are formatted, and a missing hooks file is not created', async (context) => {
+  const { homeDir, mindPath, env } = await fixture(context, ['cursor']);
+  const current = buildClientConfig({ client: 'cursor', kitPath: mindPath, mindPath }).hooks;
+  const reformatted = `${JSON.stringify(JSON.parse(current), null, 4)}\n`;
+  const { hooksFile } = await cursorFiles(homeDir, reformatted);
+  assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath })).cursor, 'already-configured');
+  assert.equal(await readFile(hooksFile, 'utf8'), reformatted);
+
+  await rm(hooksFile);
+  assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath })).cursor, 'already-configured');
+  assert.equal(await exists(hooksFile), false);
+});
+
+test('stale Relay hooks of Claude Code and Codex are updated in place, and their foreign hooks stay', async (context) => {
+  const { homeDir, mindPath, env } = await fixture(context, ['claude', 'codex']);
+  const options = { homeDir, env, kitPath: mindPath, mindPath };
+  await ensureRelayClients(options);
+  const claudeFile = path.join(homeDir, '.claude', 'settings.json'), codexFile = path.join(homeDir, '.codex', 'hooks.json');
+  const foreign = { type: 'command', command: 'echo keep', timeout: 3 };
+  // Hooks that run an earlier kit, with a hook of the person's own beside them.
+  const earlier = (client) => {
+    const document = JSON.parse(buildClientConfig({ client, kitPath: path.join(homeDir, 'old-kit'), mindPath }).hooks);
+    document.hooks.SessionStart.push({ hooks: [foreign] });
+    return `${JSON.stringify(document, null, 2)}\n`;
+  };
+  await writeFile(claudeFile, earlier('claude')); await writeFile(codexFile, earlier('codex'));
+
+  const results = await ensureRelayClients(options);
+  assert.equal(statuses(results).claude, 'refreshed'); assert.equal(statuses(results).codex, 'refreshed');
+  for (const [client, file] of [['claude', claudeFile], ['codex', codexFile]]) {
+    const document = JSON.parse(await readFile(file, 'utf8'));
+    const current = JSON.parse(buildClientConfig({ client, kitPath: mindPath, mindPath }).hooks);
+    assert.deepEqual(document.hooks.SessionStart[0], current.hooks.SessionStart[0], client);
+    assert.deepEqual(document.hooks.SessionStart[1], { hooks: [foreign] }, client);
+  }
+  assert.equal(statuses(await ensureRelayClients(options)).claude, 'already-configured');
+});
+
+test('diagnose lists the shell and tool hooks Cursor did not get from Relay and warns about a plugin that is not supported here', async (context) => {
+  const { homeDir, env } = await fixture(context, ['cursor']);
+  const cursor = path.join(homeDir, '.cursor');
+  const plugin = async (name, description, hooks) => {
+    const root = path.join(cursor, 'plugins', 'cache', 'market', name, 'abc123');
+    await mkdir(path.join(root, 'hooks'), { recursive: true }); await mkdir(path.join(root, '.cursor-plugin'), { recursive: true });
+    await writeFile(path.join(root, 'hooks', 'hooks.json'), JSON.stringify({ version: 1, hooks }));
+    await writeFile(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name, description }));
+    return path.join(root, 'hooks', 'hooks.json');
+  };
+  const secrets = await plugin('secrets', 'Checks env files. Not supported on Windows.', { beforeShellExecution: [{ command: './check' }] });
+  await plugin('portable', 'Works everywhere.', { preToolUse: [{ command: './audit' }] });
+  await plugin('quiet', 'Not supported on Windows.', { sessionStart: [{ command: './hello' }] });
+  await plugin('linux-only', 'Not supported on macOS.', { beforeShellExecution: [{ command: './mac' }] });
+  await cursorFiles(homeDir, JSON.stringify({ version: 1, hooks: { preToolUse: [{ command: './own-gate' }], stop: [{ command: 'node cli/index.mjs relay hook --client cursor --event stop' }] } }));
+
+  const found = (await diagnoseRelayClients({ homeDir, env, platform: 'win32' })).cursor;
+  assert.deepEqual(found.foreignHooks.map((hook) => [hook.source, hook.plugin ?? null, hook.event, hook.command]).sort(), [
+    ['plugin', 'linux-only', 'beforeShellExecution', './mac'], ['plugin', 'portable', 'preToolUse', './audit'],
+    ['plugin', 'secrets', 'beforeShellExecution', './check'], ['user', null, 'preToolUse', './own-gate'],
+  ]);
+  assert.equal(found.foreignHooks.find((hook) => hook.plugin === 'secrets').file, secrets);
+  assert.equal(found.warnings.length, 1); assert.match(found.warnings[0], /secrets.*not supported on Windows.*beforeShellExecution/);
+  assert.equal((await diagnoseRelayClients({ homeDir, env, platform: 'darwin' })).cursor.warnings.length, 1, 'macOS is named by the other plugin');
+  assert.equal((await diagnoseRelayClients({ homeDir, env, platform: 'linux' })).cursor.warnings.length, 0);
+  assert.equal(Object.hasOwn((await diagnoseRelayClients({ homeDir, env })).claude, 'foreignHooks'), false);
 });
 
 test('a client whose config cannot be read is reported as failed and left untouched', async (context) => {

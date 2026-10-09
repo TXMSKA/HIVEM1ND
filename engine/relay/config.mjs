@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { CURSOR_STOP_LOOP_LIMIT } from './cursor-wake.mjs';
 import path from 'node:path';
@@ -502,6 +502,53 @@ export async function configureRelayClient({ client, homeDir, env = process.env,
   return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: applied.filter((item) => item.changed).map((item) => item.filePath), backups: applied.filter((item) => item.changed && item.prior).map((item) => `${item.filePath}.relay-backup`) };
 }
 
+// Brings the Relay-owned entries of an existing hooks file up to date in place. Foreign entries stay as they are, and an event
+// with no owned entry gets none, since a person may have removed it on purpose.
+function refreshOwnedHooks(text, options) {
+  if (!text.trim()) return text;
+  let document;
+  try { document = JSON.parse(text); }
+  catch { throw Object.assign(new Error('Client hooks configuration contains invalid JSON; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' }); }
+  const { client } = options;
+  let changed = false;
+  const assign = (target, values) => {
+    for (const [key, value] of Object.entries(values)) {
+      if (JSON.stringify(target[key]) === JSON.stringify(value)) continue;
+      target[key] = value;
+      changed = true;
+    }
+  };
+  for (const [event, entries] of Object.entries(document?.hooks ?? {})) {
+    if (!Array.isArray(entries)) continue;
+    const intended = hookHandler({ ...options, event });
+    if (client === 'cursor') {
+      for (const item of entries) {
+        if (isOwnedHookCommand(item?.command, client, event)) assign(item, { command: intended.command, timeout: CURSOR_HOOK_TIMEOUT, ...(event === 'stop' ? { loop_limit: CURSOR_STOP_LOOP_LIMIT } : {}) });
+      }
+    } else {
+      for (const group of entries) {
+        for (const handler of group?.hooks ?? []) {
+          if (isOwnedHookHandler(handler, client, event)) assign(handler, client === 'claude' ? { type: intended.type, command: intended.command, args: intended.args } : { command: intended.command });
+        }
+      }
+    }
+  }
+  return changed ? `${JSON.stringify(document, null, 2)}\n` : text;
+}
+
+export async function refreshRelayHooks({ client, homeDir, env = process.env, kitPath, mindPath, nodePath = process.execPath, platform = process.platform } = {}) {
+  if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
+  if (homeDir !== undefined) homeDir = path.resolve(safeString(homeDir, 'homeDir'));
+  const targets = clientConfigPaths({ client, homeDir, env });
+  if (!targets.hooks) return { client, changed: [] };
+  const existing = await readRegular(targets.hooks);
+  const next = refreshOwnedHooks(existing, { client, kitPath: path.resolve(safeString(kitPath, 'kitPath')),
+    mindPath: path.resolve(safeString(mindPath, 'mindPath')), nodePath: path.resolve(safeString(nodePath, 'nodePath')), platform });
+  if (next === existing) return { client, changed: [] };
+  await atomicConfigWrite(targets.hooks, next, targets.hooksRoot);
+  return { client, changed: [targets.hooks] };
+}
+
 export async function unconfigureRelayClient({ client, homeDir, env = process.env, mindPath } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   const targets = clientConfigPaths({ client, homeDir, env });
@@ -627,7 +674,7 @@ export async function relayEntryPointsAt({ client, homeDir, env = process.env, m
 export const RELAY_CLIENTS = [...SUPPORTED];
 
 // Install and update join every available client to Relay. A client with no Relay entry is
-// configured; a client that has one is only reported, since a person may have edited its hooks.
+// configured; a client that has one keeps everything a person edited, and only its Relay-owned hook entries are brought up to date.
 export async function ensureRelayClients({ homeDir, env = process.env, kitPath, mindPath, executables, platform, nodePath } = {}) {
   const found = await diagnoseRelayClients({ homeDir, env, executables, platform });
   const results = [];
@@ -638,7 +685,8 @@ export async function ensureRelayClients({ homeDir, env = process.env, kitPath, 
     }
     try {
       if (await relayEntryPresent({ client, homeDir, env, mindPath })) {
-        results.push({ client, status: 'already-configured' });
+        const refreshed = await refreshRelayHooks({ client, homeDir, env, kitPath, mindPath, nodePath, platform });
+        results.push(refreshed.changed.length ? { client, status: 'refreshed', restart: true } : { client, status: 'already-configured' });
         continue;
       }
       await configureRelayClient({ client, homeDir, env, kitPath, mindPath, nodePath, platform });
@@ -648,6 +696,59 @@ export async function ensureRelayClients({ homeDir, env = process.env, kitPath, 
     }
   }
   return results;
+}
+
+const CURSOR_GATE_EVENTS = ['beforeShellExecution', 'preToolUse'];
+const PLATFORM_NAMES = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+
+async function readJsonOrNull(file) {
+  try { return JSON.parse(await readFile(file, 'utf8')); } catch { return null; }
+}
+
+function gateHooks(document) {
+  return CURSOR_GATE_EVENTS.flatMap((event) => (Array.isArray(document?.hooks?.[event]) ? document.hooks[event] : [])
+    .map((item) => ({ event, command: typeof item?.command === 'string' ? item.command.slice(0, 160) : null })));
+}
+
+// Plugin hooks live at <plugin>/hooks/hooks.json below the cache; the walk is bounded and never follows a link.
+async function pluginHookFiles(root) {
+  const found = [];
+  async function walk(directory, depth) {
+    if (depth > 6 || found.length >= 64) return;
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+      const next = path.join(directory, entry.name);
+      if (entry.name === 'hooks') {
+        const file = path.join(next, 'hooks.json');
+        if (existsSync(file)) found.push(file);
+      } else await walk(next, depth + 1);
+    }
+  }
+  await walk(root, 0);
+  return found;
+}
+
+// A hook that gates shell calls or tool use can reject every call of a chat, so the ones Relay did not write are listed, and a
+// plugin that says it does not support this platform is called out, since its hook can still run and refuse.
+async function cursorForeignHooks({ homeDir, platform }) {
+  const home = path.resolve(homeDir ?? os.homedir());
+  const foreignHooks = [], warnings = [];
+  const userFile = path.join(home, '.cursor', 'hooks.json');
+  for (const hook of gateHooks(await readJsonOrNull(userFile))) foreignHooks.push({ source: 'user', file: userFile, ...hook });
+  for (const file of await pluginHookFiles(path.join(home, '.cursor', 'plugins', 'cache'))) {
+    const hooks = gateHooks(await readJsonOrNull(file));
+    if (!hooks.length) continue;
+    const manifest = await readJsonOrNull(path.join(path.dirname(file), '..', '.cursor-plugin', 'plugin.json'));
+    const plugin = typeof manifest?.name === 'string' ? manifest.name : path.basename(path.dirname(path.dirname(file)));
+    for (const hook of hooks) foreignHooks.push({ source: 'plugin', plugin, file, ...hook });
+    const name = PLATFORM_NAMES[platform];
+    if (name && new RegExp(`not\\s+supported\\s+on\\s+${name}`, 'i').test(`${manifest?.description ?? ''}`)) {
+      warnings.push(`Cursor plugin ${plugin} says it is not supported on ${name} and still declares ${hooks.map((hook) => hook.event).join(', ')} in ${file}; it can reject shell calls here.`);
+    }
+  }
+  return { foreignHooks, warnings };
 }
 
 export async function diagnoseRelayClients({ homeDir, env = process.env, executables = {}, platform = process.platform, mindPath } = {}) {
@@ -666,7 +767,8 @@ export async function diagnoseRelayClients({ homeDir, env = process.env, executa
     for (const candidate of candidates) { try { await access(candidate); available = true; break; } catch {} }
     // null when the client config cannot be read or parsed, which configure would refuse too.
     const configured = await relayEntryPresent({ client, homeDir, env, mindPath }).catch(() => null);
-    result[client] = { executable: command, available, configured, configPaths: config };
+    result[client] = { executable: command, available, configured, configPaths: config,
+      ...(client === 'cursor' ? await cursorForeignHooks({ homeDir, platform }) : {}) };
   }
   return result;
 }

@@ -39,9 +39,9 @@ test('existing adapter metadata preserves native attachment, timing, loop caps a
     assert.throws(() => WAKE_ADAPTERS[client].attachIdentity({ env }), /explicit --native-session-id/);
   }
   assert.equal(WAKE_ADAPTERS.cursor.stopLoopLimit, 5);
-  assert.deepEqual(WAKE_ADAPTERS.cursor.controllerOptions, { retryPolicy: { sinkTimeoutMs: 15_000, leaseMs: 30_000 } });
-  for (const client of ['claude', 'codex', 'cursor', 'copilot']) assert.notEqual(WAKE_ADAPTERS[client].acceptsDeferred, true);
-  for (const client of ['opencode', 'host']) assert.equal(WAKE_ADAPTERS[client].acceptsDeferred, true);
+  assert.deepEqual(WAKE_ADAPTERS.cursor.controllerOptions, { retryPolicy: { sinkTimeoutMs: 65_000, leaseMs: 90_000 } });
+  for (const client of ['claude', 'codex', 'copilot']) assert.notEqual(WAKE_ADAPTERS[client].acceptsDeferred, true);
+  for (const client of ['opencode', 'host', 'cursor']) assert.equal(WAKE_ADAPTERS[client].acceptsDeferred, true);
 });
 
 test('a new table entry supplies the entire CLI attach and sink path without client-specific controller code', async () => {

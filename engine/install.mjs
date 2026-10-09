@@ -55,6 +55,9 @@ export function autoRuleLine(mindPath) {
   return `HIVEM1ND: the mind is at ${mindPath}. Read ${path.join(mindPath, 'rules.md')} first, then the role or command asked for.`;
 }
 
+// A chat that Relay resumes in the Cursor CLI has nobody to ask, and the MCP process of that turn starts unregistered.
+const CURSOR_WAKE_CONTRACT = 'When a request is a Relay pointer, "[Untrusted Relay context] <n> unread messages for <unit>.", the turn was woken and nobody is at the keyboard. If Relay answers NOT_REGISTERED, call register with this chat\'s native session ID (the CURSOR_CONVERSATION_ID variable, or the ID in the Relay reminder) and the unit named in the pointer. Read the inbox, act only on a hand-off defined in rules.md, reply through Relay and archive what you read.';
+
 export async function installAgentAssets({
   kitPath,
   mindPath,
@@ -825,7 +828,8 @@ async function planRuleFile(adapter, destination, root, line, managedFiles, agen
   }
   if (OWNED_RULE_MODES.has(adapter.rules.mode)) {
     const scope = adapter.rules.mode === 'cursor' ? 'alwaysApply: true' : 'applyTo: "**"';
-    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n`;
+    const wake = adapter.rules.mode === 'cursor' ? `\n${CURSOR_WAKE_CONTRACT}\n` : '';
+    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n${wake}`;
     return singlePlannedFile({
       destination,
       content,

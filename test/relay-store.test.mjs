@@ -641,3 +641,35 @@ test('delivery status validates its input and needs a registered unit', async (c
   const stranger = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'unregistered' });
   await assert.rejects(stranger.delivery({ ids: ['a'] }), code('NOT_REGISTERED'));
 });
+
+test('a chat that registers again as the same unit keeps its record, and a change of unit or an observation writes a new one', async (context) => {
+  const { mind } = await fixture(context);
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  const records = async () => (await readdir(sessions)).filter((name) => name.endsWith('.json')).length;
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const instance = async (sessionId, client = 'cursor') => createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId, client });
+
+  const first = await (await instance('process-a')).register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
+  await tick();
+  // A new MCP process of the same chat registers under a random instance id and finds its record.
+  const second = await instance('process-b');
+  const again = await second.register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
+  assert.equal(again.registrationId, first.registrationId); assert.equal(await records(), 1);
+  assert.equal((await second.inbox()).unit, 'executor-alpha', 'the new process works as that registration');
+
+  await tick();
+  const observed = await second.register({ unit: 'executor-alpha', nativeSessionId: 'chat-1', activity: 'idle' });
+  assert.notEqual(observed.registrationId, first.registrationId); assert.equal(await records(), 2);
+
+  await tick();
+  const moved = await second.register({ unit: 'executor-beta', nativeSessionId: 'chat-1' });
+  await tick();
+  const back = await second.register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
+  assert.equal(new Set([observed.registrationId, moved.registrationId, back.registrationId]).size, 3, 'a unit the chat came back to is a new record');
+  assert.equal(await records(), 4);
+  assert.equal((await second.reminder({ nativeSessionId: 'chat-1', client: 'cursor' })).unit, 'executor-alpha');
+
+  await tick();
+  const other = await (await instance('process-c', 'codex')).register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
+  assert.notEqual(other.registrationId, back.registrationId, 'another client never shares a record');
+});

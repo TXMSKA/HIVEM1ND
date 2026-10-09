@@ -892,6 +892,16 @@ export async function createRelay(options = {}) {
       const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
       const activity = safeActivity(args.activity);
       const quota = safeQuota(args.quota);
+      // A chat registers again whenever its client starts a new MCP process. When it is still registered as the same unit, that
+      // record stays, so the consent that names the chat is not outdated and the registrations do not pile up.
+      if (activity === null && quota === null) {
+        const latest = (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
+          .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
+        if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id) {
+          currentRegistration = latest;
+          return toPublicRegistration(latest);
+        }
+      }
       const observedAt = isoNow();
       const record = {
         kind: 'registration', registrationId: randomUUID(), instanceId, unit,

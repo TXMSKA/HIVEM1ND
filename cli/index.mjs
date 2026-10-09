@@ -69,7 +69,7 @@ Relay wake actions:
   relay wake status ... --machine <name> reads the worker note of a binding that belongs to another machine
   relay wake watch --unit <name> --native-session-id <id> [options] (internal worker)
 ${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line) => '  ' + line).join('\n')}
-  Clients other than Claude require an existing exact registration and explicit native ID.
+  Clients other than Claude require an existing exact registration and explicit native ID; Cursor attached from inside its CLI chat reads it from CURSOR_CONVERSATION_ID.
 
 Init options:
   --gui                 Open the local browser wizard
@@ -1088,8 +1088,25 @@ async function runRelay(options, dependencies, output) {
   if (options.help) { output.write(`${helpText()}\n`); return 0; }
   const { action } = options;
   if (action === "diagnose") {
-    const { diagnoseRelayClients } = await import("../engine/relay/config.mjs");
-    const result = await diagnoseRelayClients({ homeDir: options.homeDir, mindPath: options.mindPath });
+    const { diagnoseRelayClients, RELAY_CLIENTS } = await import("../engine/relay/config.mjs");
+    if (options.client && !RELAY_CLIENTS.includes(options.client)) throw new CliUsageError("Unsupported Relay client.");
+    const found = await diagnoseRelayClients({ homeDir: options.homeDir, mindPath: options.mindPath });
+    const result = options.client ? { [options.client]: found[options.client] } : found;
+    // A consent whose worker is not running wakes nothing, and nothing else says so.
+    if (options.mindPath) {
+      try {
+        const { createRelayWakeController } = dependencies.createRelayWakeController
+          ? { createRelayWakeController: dependencies.createRelayWakeController }
+          : await import("../engine/relay/wake.mjs");
+        const controller = await createRelayWakeController({ mindPath: options.mindPath, hostname: options.hostname ?? os.hostname(),
+          sink: async () => ({ status: "not_submitted" }) });
+        for (const { binding, worker } of await controller.workerStates()) {
+          if (!result[binding.client]) continue;
+          (result[binding.client].wake ??= []).push({ unit: binding.unit, nativeSessionId: binding.nativeSessionId,
+            state: worker === "running" ? "enabled" : "enabled, no worker" });
+        }
+      } catch { /* a folder that is not a mind has no consents to report */ }
+    }
     output.write(`${formatResult(result)}\n`);
     return 0;
   }
