@@ -72,6 +72,10 @@ const COPY = {
     attachHelp: 'Attaching writes this machine\'s record and its agent files. The mind keeps its content, its preferences and its version.',
     unknownVersion: 'of an unknown version',
     attachedMachine: 'This machine is attached to the mind in {mind}.',
+    relayConfigured: '{client}: Relay configured now. Restart it to load Relay.',
+    relayAlready: '{client}: Relay already configured.',
+    relayNotAvailable: '{client}: not available on this machine.',
+    relayFailed: '{client}: Relay not configured. {reason}',
     attachOutdated: 'The mind holds version {mind} and this kit is {kit}. Run /evolve to bring them together.',
     reportOmitted: 'Omitted',
     reportOmittedReason: 'left uninstalled behind the link {path}',
@@ -201,6 +205,10 @@ const COPY = {
     attachHelp: 'Conectar escribe el registro de esta máquina y sus archivos de agente. El mind conserva su contenido, sus preferencias y su versión.',
     unknownVersion: 'de una versión desconocida',
     attachedMachine: 'Esta máquina quedó conectada al mind en {mind}.',
+    relayConfigured: '{client}: Relay configurado. Reiniciarlo para cargar Relay.',
+    relayAlready: '{client}: Relay ya estaba configurado.',
+    relayNotAvailable: '{client}: no disponible en esta máquina.',
+    relayFailed: '{client}: Relay no configurado. {reason}',
     attachOutdated: 'El mind tiene la versión {mind} y este kit es {kit}. Ejecutar /evolve para igualarlos.',
     reportOmitted: 'Omitidos',
     reportOmittedReason: 'sin instalar detrás del enlace {path}',
@@ -269,6 +277,13 @@ export function text(language, key, variables = {}) {
     (result, [name, replacement]) => result.replaceAll(`{${name}}`, String(replacement)),
     value,
   );
+}
+
+const RELAY_KEYS = { configured: 'relayConfigured', 'already-configured': 'relayAlready', 'not-available': 'relayNotAvailable', failed: 'relayFailed' };
+
+// One line per client for the result of ensureRelayClients.
+export function relayLine(language, item) {
+  return text(language, RELAY_KEYS[item.status], { client: item.client, reason: item.reason ?? '' });
 }
 
 export function option(language, value, labelKey, hintKey) {

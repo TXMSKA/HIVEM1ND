@@ -73,7 +73,7 @@ Protocols are offered, not imposed. While a task is planned, the protocols that 
 | 5 | Projects | Confirms roots, optional environments and repositories. |
 | 6 | Confirm | Optional preferences and whether to check for updates automatically. |
 | 7 | Install | Reviews every change and resolves conflicts before anything is written. |
-| 8 | Done | Prints what was written, the report of the run and the first command to run. |
+| 8 | Done | Prints what was written, the report of the run, one Relay line per client and the first command to run. |
 
 Attaching a second machine to a mind that already exists writes that machine's record and its agent files, and leaves the mind's content, its preferences and its version untouched. Simple mode attaches by itself when it finds a mind on the machine; custom mode asks at step 2.
 
@@ -94,6 +94,7 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | Overlord | Operative | Leads a squad as a mini overseer: one environment, or the chats of one repository. |
 | Executor | Operative | Executes tasks inside one repo, one at a time. The default seat for a repo. |
 | Overseer | Executive | Manages the whole mind: knows where every project stands, defines scope with the user and hands work to the executors. |
+| Adjutant | Executive | Takes the user's requests and solves them end to end: documents and manuals, research, reports, texts and analysis. Leaves the Overseer with coordination. |
 | Incubator | Operative | Develops ideas into products inside one folder: brainstorms them, prototypes them fast and sends each one to the product it belongs in. |
 
 </details>
@@ -159,7 +160,7 @@ Several people can share a repo, each with their own mind. The team's shared sta
 
 ## Updating and uninstalling
 
-`/evolve` pulls the new version into the mind, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Roles, commands and features written inside the mind are installed alongside the ones the kit ships, from the mind folder for what is shared and from `user/roles`, `user/commands` and `user/features` for what stays private to that mind. A name the kit already ships keeps the kit file and reports it. Anything left out at setup stays out on later updates.
+`/evolve` pulls the new version into the mind, joins to Relay any available client that has no Relay entry yet, translates roles and features into the format of each attached agent, and migrates `user/` when the structure changed. Roles, commands and features written inside the mind are installed alongside the ones the kit ships, from the mind folder for what is shared and from `user/roles`, `user/commands` and `user/features` for what stays private to that mind. A name the kit already ships keeps the kit file and reports it. Anything left out at setup stays out on later updates.
 
 To remove what was installed on a machine, run `uninstall.cmd` in the mind folder, `hivem1nd uninstall [--dry-run] [--remove-mind]` from a terminal, or `/uninstall` from an attached agent. A dry run reports the plan before anything is removed.
 

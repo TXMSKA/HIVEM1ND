@@ -571,7 +571,86 @@ function removeJsonHooks(text, client) {
   return changed ? `${JSON.stringify(doc, null, 2)}\n` : text;
 }
 
-export async function diagnoseRelayClients({ homeDir, env = process.env, executables = {}, platform = process.platform } = {}) {
+// The hivem1nd-relay MCP server of a client, or undefined when its config has none. Antigravity has no
+// MCP slot, so its entry is the allow rules and it is read apart.
+async function relayMcpEntry({ client, homeDir, env }) {
+  const configText = await readRegular(clientConfigPaths({ client, homeDir, env }).mcp);
+  if (!configText.trim()) return undefined;
+  if (client === 'codex') {
+    let parsed;
+    try { parsed = parseToml(configText); }
+    catch { throw Object.assign(new Error('Codex config.toml is invalid TOML; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' }); }
+    return parsed.mcp_servers?.[OWNED_SERVER];
+  }
+  if (client === 'opencode') return parseJsoncObject(configText, 'OpenCode config').mcp?.[OWNED_SERVER];
+  let document;
+  try { document = JSON.parse(configText); }
+  catch { throw Object.assign(new Error('Client MCP configuration contains invalid JSON; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' }); }
+  return document?.mcpServers?.[OWNED_SERVER];
+}
+
+async function antigravityOwnedRules({ homeDir, env }) {
+  const configText = await readRegular(clientConfigPaths({ client: 'antigravity', homeDir, env }).mcp);
+  return (configText.trim() ? antigravityAllowList(configText) ?? [] : [])
+    .map((rule) => (typeof rule === 'string' ? ANTIGRAVITY_OWNED_RULE.exec(rule) : null))
+    .filter((match) => match !== null && match[1].endsWith(ANTIGRAVITY_CLI_TOKEN_END));
+}
+
+// A client counts as configured when its own config already holds the Relay entry: the
+// hivem1nd-relay MCP server or, for Antigravity, which has no MCP slot, the allow rules of the mind.
+// Nothing else in that config is compared, so a hand-edited hook never makes it unconfigured.
+export async function relayEntryPresent({ client, homeDir, env = process.env, mindPath } = {}) {
+  if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
+  if (client === 'antigravity') {
+    const wanted = mindPath === undefined ? undefined : antigravityPathPattern(path.resolve(mindPath));
+    return (await antigravityOwnedRules({ homeDir, env })).some((match) => wanted === undefined || match[2] === wanted);
+  }
+  return (await relayMcpEntry({ client, homeDir, env })) !== undefined;
+}
+
+// True when the Relay entry of a client runs the CLI copy inside this mind. An entry that runs another
+// kit, and anything else in the client config, is not this mind's to remove.
+export async function relayEntryPointsAt({ client, homeDir, env = process.env, mindPath } = {}) {
+  if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
+  const mind = path.resolve(mindPath);
+  if (client === 'antigravity') {
+    const expected = `${antigravityPathPattern(mind)}${String.raw`[\\/]`}${ANTIGRAVITY_CLI_TOKEN_END}`;
+    return (await antigravityOwnedRules({ homeDir, env })).some((match) => match[1] === expected);
+  }
+  const entry = await relayMcpEntry({ client, homeDir, env });
+  const items = Array.isArray(entry?.args) ? entry.args : Array.isArray(entry?.command) ? entry.command : [];
+  const cli = path.join(mind, 'cli', 'index.mjs');
+  const same = (value) => (process.platform === 'win32' ? value.toLowerCase() === cli.toLowerCase() : value === cli);
+  return items.some((item) => typeof item === 'string' && path.isAbsolute(item) && same(path.resolve(item)));
+}
+
+export const RELAY_CLIENTS = [...SUPPORTED];
+
+// Install and update join every available client to Relay. A client with no Relay entry is
+// configured; a client that has one is only reported, since a person may have edited its hooks.
+export async function ensureRelayClients({ homeDir, env = process.env, kitPath, mindPath, executables, platform, nodePath } = {}) {
+  const found = await diagnoseRelayClients({ homeDir, env, executables, platform });
+  const results = [];
+  for (const [client, info] of Object.entries(found)) {
+    if (!info.available) {
+      results.push({ client, status: 'not-available' });
+      continue;
+    }
+    try {
+      if (await relayEntryPresent({ client, homeDir, env, mindPath })) {
+        results.push({ client, status: 'already-configured' });
+        continue;
+      }
+      await configureRelayClient({ client, homeDir, env, kitPath, mindPath, nodePath, platform });
+      results.push({ client, status: 'configured', restart: true });
+    } catch (error) {
+      results.push({ client, status: 'failed', reason: error.message });
+    }
+  }
+  return results;
+}
+
+export async function diagnoseRelayClients({ homeDir, env = process.env, executables = {}, platform = process.platform, mindPath } = {}) {
   const { access } = await import('node:fs/promises');
   const result = {};
   for (const client of SUPPORTED) {
@@ -585,7 +664,9 @@ export async function diagnoseRelayClients({ homeDir, env = process.env, executa
       ? [command]
       : pathValue.split(path.delimiter).flatMap((entry) => (commandHasExtension ? [path.join(entry, command)] : extensions.map((extension) => path.join(entry, `${command}${extension}`))));
     for (const candidate of candidates) { try { await access(candidate); available = true; break; } catch {} }
-    result[client] = { executable: command, available, configPaths: config };
+    // null when the client config cannot be read or parsed, which configure would refuse too.
+    const configured = await relayEntryPresent({ client, homeDir, env, mindPath }).catch(() => null);
+    result[client] = { executable: command, available, configured, configPaths: config };
   }
   return result;
 }
