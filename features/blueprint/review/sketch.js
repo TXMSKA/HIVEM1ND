@@ -16,6 +16,7 @@ import {
   addLink,
   addScreen,
   boxOf,
+  diffSketch,
   dragHandle,
   ellipseNode,
   findNode,
@@ -257,8 +258,9 @@ export function createSketch(host) {
     }
   }
 
-  /** Takes a sketch that came from the disk in place of the one in memory. */
+  /** Takes a sketch that came from the disk in place of the one in memory, and tells the page what it changed. */
   function adopt(loaded) {
+    const before = doc;
     doc = loaded.sketch;
     revision = loaded.revision;
     problem = loaded.problem ?? "";
@@ -271,6 +273,8 @@ export function createSketch(host) {
     syncAll();
     renderBar();
     stateText(doc ? "Saved" : "");
+    host.stale(false);
+    if (doc) host.changed(before ? diffSketch(before, doc) : []);
   }
 
   async function read(target) {
@@ -283,17 +287,44 @@ export function createSketch(host) {
     }
   }
 
-  /** A sketch written by someone else shows up when the window takes focus, unless this page has changes of its own. */
-  async function refresh() {
-    if (!entry || dirty || writing || drag || editing) return;
+  // Changes of this page that the file on disk would overwrite.
+  const held = () => dirty || Boolean(writing) || Boolean(drag) || Boolean(editing);
+
+  /**
+   * A sketch written by someone else shows up, unless this page has changes of
+   * its own. The window taking focus asks quietly. The server telling of a
+   * change (`notify`) waits for a save in flight to settle, and when the page
+   * still holds changes, keeps them and has the page show the notice.
+   */
+  async function refresh({ notify = false } = {}) {
+    if (!entry || (!notify && held())) return;
     const target = entry;
+    while (notify && writing) await writing;
     const loaded = await read(target);
-    if (!same(target) || dirty || writing || drag || editing || loaded.revision === revision) return;
+    if (!same(target) || loaded.revision === revision) return;
+    if (held()) {
+      if (notify) host.stale(true);
+      return;
+    }
     adopt(loaded);
-    if (loaded.sketch) status("The sketch changed on disk and was reloaded.");
   }
 
-  window.addEventListener("focus", refresh);
+  /** The file on disk over whatever this page holds, as the notice asks. */
+  async function reload() {
+    if (!entry) return;
+    const target = entry;
+    while (writing) await writing;
+    const loaded = await read(target);
+    if (!same(target)) return;
+    clearTimeout(saveTimer);
+    drag = null;
+    draft = null;
+    aiming = null;
+    dropEditor();
+    adopt(loaded);
+  }
+
+  window.addEventListener("focus", () => refresh());
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") refresh();
     else save();
@@ -317,6 +348,7 @@ export function createSketch(host) {
     dropEditor();
     stateText(doc ? "Saved" : "");
     renderBar();
+    host.stale(false);
   }
 
   // ---- the bar --------------------------------------------------------------
@@ -1394,6 +1426,8 @@ export function createSketch(host) {
 
   return {
     read,
+    refresh,
+    reload,
     use,
     enter,
     leave,

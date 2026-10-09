@@ -6,6 +6,7 @@ import {
   addLink,
   addScreen,
   boxOf,
+  diffSketch,
   dragHandle,
   ellipseNode,
   findNode,
@@ -334,4 +335,34 @@ test("a path with curves is drawn stretched whole, with its stroke evened out, a
   assert.ok(svg.includes('d="M0 0 C50 0 100 50 100 100" transform="translate(0 0) scale(2 1)"'));
   assert.match(svg, /stroke-width="2\.83"/);
   assert.ok(svg.includes('stroke-dasharray="4 3"'));
+});
+
+test("what an outside edit changed is told by screen: the screens that are new or moved, and the shapes that are new or differ", () => {
+  const before = sample();
+  const unchanged = structuredClone(before);
+  addLink(unchanged, unchanged.screens[1].id, unchanged.screens[0].id);
+  assert.deepEqual(diffSketch(before, unchanged), [], "an arrow is not a screen");
+
+  const after = structuredClone(before);
+  const [coupon, receipt] = after.screens;
+  const [edited] = coupon.root.kids;
+  edited.w += 10;
+  const added = rectangleNode(after, { x: 700, y: 40, w: 100, h: 60 }, STYLE);
+  coupon.root.kids.push(added);
+  receipt.x += 100;
+  const fresh = addScreen(after, { title: "Thanks", x: 3600, y: 1000 });
+  assert.deepEqual(diffSketch(before, after), [
+    { id: coupon.id, title: "Coupon", nodes: [edited.id, added.id], whole: false },
+    { id: receipt.id, title: "Receipt", nodes: [], whole: true },
+    { id: fresh.id, title: "Thanks", nodes: [], whole: true },
+  ]);
+
+  const lost = structuredClone(before);
+  lost.screens[0].root.kids.pop();
+  assert.deepEqual(diffSketch(before, lost), [{ id: coupon.id, title: "Coupon", nodes: [], whole: true }], "a shape that is gone leaves nothing to point at");
+
+  const inside = structuredClone(before);
+  const group = inside.screens[0].root.kids[0];
+  group.kids.push(rectangleNode(inside, { x: 5, y: 5, w: 20, h: 20 }, STYLE));
+  assert.deepEqual(diffSketch(before, inside), [{ id: coupon.id, title: "Coupon", nodes: [group.id], whole: false }], "a change inside a shape is a change of that shape");
 });

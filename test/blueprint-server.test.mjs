@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createRelay } from "../engine/relay/store.mjs";
+import { watchLive } from "../features/blueprint/review/live.mjs";
 import { addLink, addScreen, newSketch, rectangleNode } from "../features/blueprint/review/sketch-format.mjs";
 
 const SERVER = fileURLToPath(new URL("../features/blueprint/server.mjs", import.meta.url));
@@ -392,4 +393,209 @@ test("the viewer serves the sketch modules to the page, and the format module is
   assert.match(page.text.toString("utf8"), /id="sketchbar"/);
   assert.equal((page.text.toString("utf8").match(/data-sends/g) ?? []).length, 3, "the comment box, the reply box and the reference card each offer Send to agent");
   assert.match(page.headers.get("content-security-policy"), /script-src 'self'/);
+});
+
+// ---- live refresh ----------------------------------------------------------
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function until(check, ms = 5000) {
+  const stop = Date.now() + ms;
+  for (;;) {
+    const value = check();
+    if (value) return value;
+    if (Date.now() > stop) throw new Error("Waited for something that did not happen.");
+    await pause(25);
+  }
+}
+
+/** The server-sent events of /api/live, parsed as they arrive. */
+function listen(w, context) {
+  const events = [];
+  let buffer = "";
+  const request = http.get({ host: "127.0.0.1", port: w.port, path: "/api/live", headers: { Accept: "text/event-stream" } });
+  request.on("response", (response) => {
+    response.setEncoding("utf8");
+    response.on("data", (chunk) => {
+      buffer += chunk;
+      for (let end = buffer.indexOf("\n\n"); end !== -1; end = buffer.indexOf("\n\n")) {
+        const block = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const name = block.match(/^event: (.+)$/m)?.[1];
+        if (name) events.push({ event: name, data: JSON.parse(block.match(/^data: (.+)$/m)[1]) });
+      }
+    });
+  });
+  request.on("error", () => {});
+  context.after(() => request.destroy());
+  return {
+    changes: () => events.filter((event) => event.event === "change").map((event) => event.data),
+    ready: () => until(() => events.find((event) => event.event === "ready")),
+  };
+}
+
+const byKind = (a, b) => a.kind.localeCompare(b.kind);
+
+// What an agent does: it writes the file in the repository, with no call to the server.
+async function agentWrites(w, folder, name, data) {
+  await mkdir(path.join(w.flows, folder), { recursive: true });
+  await writeFile(path.join(w.flows, folder, name), typeof data === "string" || Buffer.isBuffer(data) ? data : JSON.stringify(data));
+}
+
+test("the stream tells a page of each file an agent writes: the index, a board module, a sketch and the comments", async (context) => {
+  const w = await world(context);
+  const live = listen(w, context);
+  const ready = await live.ready();
+  assert.match(ready.data.cursor, /^[a-z0-9]+-0$/);
+
+  await agentWrites(w, "boards", "checkout.mjs", "export default {};\n");
+  await agentWrites(w, "boards", "index.json", [{ id: "checkout", title: "Checkout" }, { id: "pay", title: "Pay" }]);
+  await agentWrites(w, "sketches", "checkout.json", sketchWith());
+  await agentWrites(w, "comments", "checkout.json", { board: "checkout", threads: [] });
+  // None of these is a change to a board.
+  await agentWrites(w, "comments", "checkout.json.4242.ab12cd34.tmp", "half");
+  await agentWrites(w, "comments", "Notes.txt", "x");
+  await agentWrites(w, "assets", "9f0a.png", PNG);
+  await agentWrites(w, "boards", "helper.txt", "x");
+
+  await until(() => live.changes().length >= 4);
+  await pause(900);
+  assert.deepEqual(live.changes().sort(byKind), [
+    { project: "shop", kind: "board", board: "checkout" },
+    { project: "shop", kind: "comments", board: "checkout" },
+    { project: "shop", kind: "index", board: null },
+    { project: "shop", kind: "sketch", board: "checkout" },
+  ]);
+
+  await agentWrites(w, "sketches", "checkout.json", { ...sketchWith(), note: "second" });
+  await until(() => live.changes().length >= 5);
+  assert.deepEqual(live.changes().at(-1), { project: "shop", kind: "sketch", board: "checkout" });
+  await rm(path.join(w.flows, "sketches", "checkout.json"));
+  await until(() => live.changes().length >= 6);
+  assert.deepEqual(live.changes().at(-1), { project: "shop", kind: "sketch", board: "checkout" }, "a file taken away is a change too");
+});
+
+test("a file written in several steps is one event, and one that never stops is told anyway", async (context) => {
+  const w = await world(context);
+  const live = listen(w, context);
+  await live.ready();
+
+  for (let step = 1; step <= 6; step += 1) {
+    await agentWrites(w, "comments", "checkout.json", { board: "checkout", threads: [], step: "x".repeat(step) });
+    await pause(60);
+  }
+  await until(() => live.changes().length >= 1);
+  await pause(1000);
+  assert.equal(live.changes().length, 1, "six writes in under half a second are one event");
+
+  let written = 0;
+  const writer = (async () => {
+    for (; written < 50; written += 1) {
+      await agentWrites(w, "sketches", "checkout.json", { ...sketchWith(), note: "y".repeat(written + 1) });
+      await pause(100);
+    }
+  })();
+  await until(() => live.changes().some((change) => change.kind === "sketch"), 6000);
+  assert.ok(written < 50, "told while the file was still being written");
+  await writer;
+});
+
+test("what the server writes for a page does not come back as an event", async (context) => {
+  const w = await world(context);
+  const live = listen(w, context);
+  await live.ready();
+
+  const sketch = sketchWith();
+  const saved = await w.call("/api/sketch/shop/checkout", { method: "PUT", body: { base: "", sketch } });
+  assert.equal(saved.status, 200);
+  const again = await w.call("/api/sketch/shop/checkout", { method: "PUT", body: { base: saved.json.revision, sketch: { ...sketch, note: "again" } } });
+  assert.equal(again.status, 200);
+  await w.call("/api/comments/shop/checkout", { method: "POST", body: comment("A person wrote this.") });
+  await w.call("/api/comments/shop/checkout", { method: "POST", body: comment("And this, sent.", { send: true }) });
+  await pause(1200);
+  assert.deepEqual(live.changes(), []);
+
+  // The watch is alive: the same file, written by someone else, is told once.
+  const file = path.join(w.flows, "comments", "checkout.json");
+  const onDisk = JSON.parse(await readFile(file, "utf8"));
+  onDisk.threads[0].messages.push({ author: "executor-shop", at: "2026-10-09T10:00:00.000Z", text: "Added the total." });
+  await writeFile(file, JSON.stringify(onDisk, null, 2));
+  await until(() => live.changes().length >= 1);
+  await pause(600);
+  assert.deepEqual(live.changes(), [{ project: "shop", kind: "comments", board: "checkout" }]);
+
+  // What the server writes after that is its own again.
+  await w.call("/api/comments/shop/checkout", { method: "POST", body: comment("One more.") });
+  await pause(900);
+  assert.equal(live.changes().length, 1);
+});
+
+test("a page that cannot hold a stream asks the same route with its cursor", async (context) => {
+  const w = await world(context);
+  const first = await w.call("/api/live");
+  assert.equal(first.status, 200);
+  assert.match(first.json.cursor, /^[a-z0-9]+-0$/);
+  assert.deepEqual([first.json.resync, first.json.events], [false, []]);
+
+  await agentWrites(w, "comments", "checkout.json", { board: "checkout", threads: [] });
+  let next = null;
+  for (let tries = 0; !next && tries < 100; tries += 1) {
+    const answer = (await w.call(`/api/live?after=${first.json.cursor}`)).json;
+    if (answer.events.length) next = answer;
+    else await pause(50);
+  }
+  assert.deepEqual(next.events, [{ project: "shop", kind: "comments", board: "checkout" }]);
+  assert.equal(next.resync, false);
+  assert.notEqual(next.cursor, first.json.cursor);
+
+  const again = (await w.call(`/api/live?after=${first.json.cursor}`)).json;
+  assert.equal(again.events.length, 1, "asked again from the same cursor, the same event");
+  assert.deepEqual((await w.call(`/api/live?after=${next.cursor}`)).json.events, [], "nothing after the newest cursor");
+
+  assert.equal((await w.call("/api/live?after=zz-3")).json.resync, true, "a cursor from another watch");
+  assert.equal((await w.call("/api/live?after=nonsense")).json.resync, true);
+  assert.equal((await w.call("/api/live", { method: "POST", body: {} })).status, 405);
+});
+
+test("the live route answers only the hosts the server knows", async (context) => {
+  const w = await world(context);
+  const status = await new Promise((resolve, reject) => {
+    const request = http.request({ host: "127.0.0.1", port: w.port, path: "/api/live", headers: { Host: "evil.example", Accept: "text/event-stream" } }, (response) => {
+      response.resume();
+      resolve(response.statusCode);
+    });
+    request.on("error", reject);
+    request.end();
+  });
+  assert.equal(status, 421);
+});
+
+test("a project that gains its first board while a page listens is told as a change of the index", async (context) => {
+  const w = await world(context);
+  await rm(path.join(w.flows, "boards", "index.json"));
+  const live = listen(w, context);
+  await live.ready();
+  await agentWrites(w, "boards", "index.json", [{ id: "checkout", title: "Checkout" }]);
+  await until(() => live.changes().length >= 1, 8000);
+  assert.deepEqual(live.changes(), [{ project: "shop", kind: "index", board: null }]);
+});
+
+test("the page's polling fallback hears an agent through the real server", async (context) => {
+  const w = await world(context);
+  const heard = [];
+  const resyncs = [];
+  const watch = watchLive({
+    source: null,
+    fetcher: (route, init) => fetch(`${w.base}${route}`, init),
+    pollMs: 60,
+    onChange: (change) => heard.push(change),
+    onResync: () => resyncs.push(true),
+  });
+  context.after(() => watch.stop());
+  assert.equal(watch.mode(), "poll");
+  await pause(300);
+  await agentWrites(w, "sketches", "checkout.json", sketchWith());
+  await until(() => heard.length >= 1);
+  assert.deepEqual(heard, [{ project: "shop", kind: "sketch", board: "checkout" }]);
+  assert.equal(resyncs.length, 1, "told to read everything once, when polling began");
 });
