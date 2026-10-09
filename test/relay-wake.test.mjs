@@ -381,3 +381,50 @@ test('atomic store locks serialize overlapping writers and recover a stale parti
   await persistence.withLock('barrier-lock', async () => { recovered = true; });
   assert.equal(recovered, true, 'an old malformed lock from a crashed writer is reclaimed');
 });
+
+test('a wake policy that is unparseable is skipped while the other policies still resolve', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const policies = path.join(mind, 'user', 'relay', 'wake', 'policies');
+  await writeFile(path.join(policies, `${'a'.repeat(64)}.json`), '{"kind":"relay-wake-pol');
+
+  assert.deepEqual(await wake.findEnabledBinding({ nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine }), binding);
+});
+
+test('a transient filesystem error in one worker iteration is recorded and retried without ending the worker', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const policyHash = createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${policyHash}.json`);
+  const handle = wake.start(binding);
+  assert.deepEqual(await handle.ready, { state: 'running', ownsLease: true });
+
+  const originalOpen = fsPromises.open;
+  let busy = 1;
+  fsPromises.open = async (...args) => {
+    if (busy > 0 && typeof args[1] === 'number' && path.resolve(String(args[0])) === path.resolve(policyPath)) {
+      busy -= 1;
+      throw Object.assign(new Error('The file is busy.'), { code: 'EBUSY' });
+    }
+    return originalOpen(...args);
+  };
+  syncBuiltinESMExports();
+  context.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  await until(async () => busy === 0 || busy);
+  await until(async () => {
+    const policy = JSON.parse(await readFile(policyPath, 'utf8'));
+    return policy.consecutiveErrors === 1 && policy.lastError?.code === 'WAKE_STORE_BUSY' || policy.consecutiveErrors;
+  });
+  fsPromises.open = originalOpen;
+  syncBuiltinESMExports();
+
+  const outcome = await Promise.race([handle.done, new Promise((resolve) => setTimeout(() => resolve('running'), 700))]);
+  assert.equal(outcome, 'running', 'the worker polls again instead of ending');
+  assert.equal((await wake.status(binding)).worker.state, 'running');
+  await handle.stop();
+  assert.equal((await handle.done).reason, 'stopped');
+});

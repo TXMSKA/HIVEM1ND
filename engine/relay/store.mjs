@@ -220,6 +220,25 @@ function isMissingPath(error) {
   return error?.code === 'ENOENT' || error?.code === 'NOT_FOUND';
 }
 
+const TRANSIENT_FS_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'EIO', 'UNKNOWN', 'EAGAIN']);
+
+// A file that OneDrive is still syncing reads as busy, locked or half written until the sync completes.
+export function isTransientFsError(error) {
+  return TRANSIENT_FS_CODES.has(error?.code);
+}
+
+function isSkippableRecordError(error) {
+  return error?.code === 'MALFORMED_RECORD' || isTransientFsError(error);
+}
+
+// A malformed message cannot report its own id, so the id in its headers or its file name tells whether the caller asked for this very file.
+function skipMalformed(error, ids = [], file = '', raw = null) {
+  if (error?.code !== 'MALFORMED_MESSAGE' && error?.code !== 'MESSAGE_TOO_LARGE') throw error;
+  let named = '';
+  try { named = header(parseHeaders(raw ?? '').headers, 'id'); } catch { /* The headers are what failed, so only the file name is left. */ }
+  for (const id of ids) if (id && (id === named || path.basename(file).endsWith(`-${id}.md`))) throw error;
+}
+
 async function readRegularFileSafe(root, filePath) {
   try { await safePath(root, filePath, { missing: false }); }
   catch (error) {
@@ -510,7 +529,9 @@ export async function createRelay(options = {}) {
     const files = await listRegularFiles(mindPath, sessionsPath, (name) => /^[a-f0-9-]{36}\.json$/i.test(name));
     const result = [];
     for (const file of files) {
-      const record = await readJsonSafe(mindPath, file);
+      let record;
+      try { record = await readJsonSafe(mindPath, file); }
+      catch (error) { if (isSkippableRecordError(error)) continue; throw error; }
       if (record?.kind === 'registration' && typeof record.registrationId === 'string') result.push(record);
     }
     return result;
@@ -565,7 +586,9 @@ export async function createRelay(options = {}) {
     if (files.length > 512) throw relayError('WAKE_STORE_LIMIT', 'Wake storage has reached its safe record limit.');
     const records = [];
     for (const file of files) {
-      const value = await readWakeRecord(bucket, path.basename(file, '.json'));
+      let value;
+      try { value = await readWakeRecord(bucket, path.basename(file, '.json')); }
+      catch (error) { if (isSkippableRecordError(error)) continue; throw error; }
       if (value !== null) records.push({ key: path.basename(file, '.json').toLowerCase(), value });
     }
     return records;
@@ -736,18 +759,21 @@ export async function createRelay(options = {}) {
     for (const [directory, archived] of [[activeDirectory, false], [archiveDirectory, true]]) {
       const files = await listRegularFiles(mindPath, directory, candidateMessageFilename);
       for (const file of files) {
-        let actualPath = file;
-        let actualArchived = archived;
-        let raw = await readRegularFileSafe(mindPath, file);
-        if (!raw && !archived) {
-          actualPath = path.join(archivePath, unit, path.basename(file));
-          actualArchived = true;
-          raw = await readRegularFileSafe(mindPath, actualPath);
-        }
-        if (!raw) continue;
-        const parsed = parseMessage(raw, actualPath, actualArchived);
-        if (!validMessageFilename(path.basename(actualPath), parsed)) continue;
-        if (parsed.id === id) candidates.push({ parsed, raw });
+        let raw = null;
+        try {
+          let actualPath = file;
+          let actualArchived = archived;
+          raw = await readRegularFileSafe(mindPath, file);
+          if (!raw && !archived) {
+            actualPath = path.join(archivePath, unit, path.basename(file));
+            actualArchived = true;
+            raw = await readRegularFileSafe(mindPath, actualPath);
+          }
+          if (!raw) continue;
+          const parsed = parseMessage(raw, actualPath, actualArchived);
+          if (!validMessageFilename(path.basename(actualPath), parsed)) continue;
+          if (parsed.id === id) candidates.push({ parsed, raw });
+        } catch (error) { skipMalformed(error, [id], file, raw); }
       }
     }
     return uniqueMessageEntries(candidates)[0]?.parsed ?? null;
@@ -765,17 +791,19 @@ export async function createRelay(options = {}) {
         if (!UNIT_PATTERN.test(recipient)) continue;
         const active = await listRegularFiles(mindPath, path.join(scope.path, 'inbox', recipient), candidateMessageFilename);
         for (const file of active) {
-          let actualPath = file;
-          let archived = false;
-          let raw = await readRegularFileSafe(mindPath, file);
-          if (!raw) {
-            actualPath = path.join(archivePath, recipient, path.basename(file));
-            archived = true;
-            raw = await readRegularFileSafe(mindPath, actualPath);
-          }
-          if (!raw) continue;
-          const message = parseMessage(raw, actualPath, archived);
-          if (validMessageFilename(path.basename(actualPath), message)) output.push({ parsed: message, raw });
+          try {
+            let actualPath = file;
+            let archived = false;
+            let raw = await readRegularFileSafe(mindPath, file);
+            if (!raw) {
+              actualPath = path.join(archivePath, recipient, path.basename(file));
+              archived = true;
+              raw = await readRegularFileSafe(mindPath, actualPath);
+            }
+            if (!raw) continue;
+            const message = parseMessage(raw, actualPath, archived);
+            if (validMessageFilename(path.basename(actualPath), message)) output.push({ parsed: message, raw });
+          } catch (error) { skipMalformed(error); }
         }
       }
     }
@@ -785,10 +813,12 @@ export async function createRelay(options = {}) {
         if (!UNIT_PATTERN.test(recipient)) continue;
         const files = await listRegularFiles(mindPath, path.join(archivePath, recipient), candidateMessageFilename);
         for (const file of files) {
-          const raw = await readRegularFileSafe(mindPath, file);
-          if (!raw) continue;
-          const message = parseMessage(raw, file, true);
-          if (validMessageFilename(path.basename(file), message)) output.push({ parsed: message, raw });
+          try {
+            const raw = await readRegularFileSafe(mindPath, file);
+            if (!raw) continue;
+            const message = parseMessage(raw, file, true);
+            if (validMessageFilename(path.basename(file), message)) output.push({ parsed: message, raw });
+          } catch (error) { skipMalformed(error); }
         }
       }
     }
@@ -880,15 +910,21 @@ export async function createRelay(options = {}) {
       const directory = path.join(target.scope.path, 'inbox', unit);
       const files = await listRegularFiles(mindPath, directory, candidateMessageFilename);
       const messages = [];
+      const malformed = [];
       for (const file of files) {
-        const raw = await readRegularFileSafe(mindPath, file);
-        if (!raw) continue;
-        const parsed = parseMessage(raw, file, false);
-        if (!validMessageFilename(path.basename(file), parsed)) continue;
-        if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
+        try {
+          const raw = await readRegularFileSafe(mindPath, file);
+          if (!raw) continue;
+          const parsed = parseMessage(raw, file, false);
+          if (!validMessageFilename(path.basename(file), parsed)) continue;
+          if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
+        } catch (error) {
+          skipMalformed(error);
+          malformed.push(path.basename(file));
+        }
       }
       messages.sort(sortByTimestamp);
-      return { messages: messages.slice(0, limit), unit, unread: messages.length };
+      return { messages: messages.slice(0, limit), unit, unread: messages.length, malformed };
     },
 
     async read(args = {}) {
@@ -904,24 +940,33 @@ export async function createRelay(options = {}) {
       const archiveDirectory = path.join(archivePath, unit);
       const files = await listRegularFiles(mindPath, activeDirectory, candidateMessageFilename);
       const messages = [];
+      const malformed = [];
       for (const file of files) {
         if (messages.length >= limit) break;
-        let raw = await readRegularFileSafe(mindPath, file);
+        const archivedPath = path.join(archiveDirectory, path.basename(file));
+        let raw = null;
+        let parsed = null;
+        let archivedEntry = null;
+        try {
+          raw = await readRegularFileSafe(mindPath, file);
+          if (raw) parsed = parseMessage(raw, file, false);
+          else archivedEntry = await readMessageFile(mindPath, archivedPath, true);
+        } catch (error) {
+          skipMalformed(error, selected ?? [], file, raw);
+          malformed.push(path.basename(file));
+          continue;
+        }
         if (!raw) {
-          const archivedPath = path.join(archiveDirectory, path.basename(file));
-          const archivedEntry = await readMessageFile(mindPath, archivedPath, true);
           if (!archivedEntry || selected && !selected.has(archivedEntry.parsed.id)) continue;
           const archived = archivedEntry.parsed;
           if (archived.to.toLowerCase() !== unit.toLowerCase()) continue;
           messages.push({ ...metadata(archived), body: archived.body, archive: { path: path.relative(userPath, archivedPath).replaceAll('\\', '/'), archived: true, alreadyArchived: true } });
           continue;
         }
-        const parsed = parseMessage(raw, file, false);
         if (!validMessageFilename(path.basename(file), parsed)) continue;
         if (selected && !selected.has(parsed.id)) continue;
         if (parsed.to.toLowerCase() !== unit.toLowerCase()) continue;
         await ensureDirectory(mindPath, archiveDirectory);
-        const archivedPath = path.join(archiveDirectory, path.basename(file));
         await archiveOriginal(mindPath, file, archivedPath, raw, parsed);
         parsed.archived = true;
         parsed.sourcePath = archivedPath;
@@ -936,7 +981,7 @@ export async function createRelay(options = {}) {
         }
       }
       messages.sort(sortByTimestamp);
-      return { messages };
+      return { messages, malformed };
     },
 
     async history(args = {}) {
@@ -1057,10 +1102,11 @@ export async function createRelay(options = {}) {
         if (unit) identity = await sessionFor(unit, nativeSessionId, client);
         else {
           const all = await registrations();
-          const matches = all.filter((record) => record.nativeSessionId === nativeSessionId && (client === null || record.client === client) && record.machine === hostname);
-          const units = [...new Set(matches.map((record) => record.unit.toLowerCase()))];
-          if (units.length === 1) {
-            unit = matches[0].unit;
+          // Registering the same native session under another unit is how a chat changes unit, so the newest registration speaks for it.
+          const newest = all.filter((record) => record.nativeSessionId === nativeSessionId && (client === null || record.client === client) && record.machine === hostname)
+            .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
+          if (newest) {
+            unit = newest.unit;
             identity = await sessionFor(unit, nativeSessionId, client);
           } else identity = [];
         }
