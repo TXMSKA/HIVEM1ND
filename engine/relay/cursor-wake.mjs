@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { validWakeBinding, validWakePointer, localWakeChildEnv, explicitWakeAttach, spawnLocalWakeWorker } from './local-wake.mjs';
 
@@ -24,18 +26,47 @@ export function cursorWakeCapability({ env = process.env } = {}) {
   return { available: true };
 }
 
+const CURSOR_VERSION = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(-\d{2}-\d{2}-\d{2})?-[a-f0-9]+$/;
+
+function cursorVersionKey(name) {
+  const [, year, month, day] = CURSOR_VERSION.exec(name);
+  return Number(year) * 10_000 + Number(month) * 100 + Number(day);
+}
+
+// On Windows the Cursor CLI installs as agent.cmd, which spawn cannot run without a shell,
+// so the bundled node.exe runs its index.js the way the launcher script does.
+export async function cursorAgentCommand({ env = process.env, platform = process.platform,
+  exists = existsSync, list = readdir } = {}) {
+  const fallback = { command: env.RELAY_CURSOR_AGENT || 'agent', args: ['acp'] };
+  if (env.RELAY_CURSOR_AGENT || platform !== 'win32' || typeof env.LOCALAPPDATA !== 'string') return fallback;
+  const root = path.win32.join(env.LOCALAPPDATA, 'cursor-agent');
+  let dir = root;
+  if (!exists(path.win32.join(root, 'node.exe'))) {
+    let names;
+    try { names = await list(path.win32.join(root, 'versions')); } catch { return fallback; }
+    const latest = names.filter((name) => CURSOR_VERSION.test(name))
+      .sort((a, b) => cursorVersionKey(b) - cursorVersionKey(a) || b.localeCompare(a))[0];
+    if (!latest) return fallback;
+    dir = path.win32.join(root, 'versions', latest);
+  }
+  const node = path.win32.join(dir, 'node.exe');
+  const script = path.win32.join(dir, 'index.js');
+  return exists(node) && exists(script) ? { command: node, args: [script, 'acp'] } : fallback;
+}
+
 /** Headless resume only. Never attach a conversation open in another client. */
 export async function sendCursorWake({ binding, text, env = process.env, spawnProcess = spawn,
-  timeoutMs = 14_000, signal } = {}) {
+  timeoutMs = 14_000, signal, platform = process.platform, resolveAgent = cursorAgentCommand } = {}) {
   const no = (reason) => ({ status: 'not_submitted', reason });
   const capability = cursorWakeCapability({ env });
   if (!capability.available) return no(capability.reason);
   if (!validWakeBinding(binding, 'cursor')) return no('native_binding_mismatch');
   if (!validWakePointer(text, binding.unit)) return no('invalid_pointer');
+  const agent = await resolveAgent({ env, platform });
   if (signal?.aborted) return no('cancelled_before_submit');
   let child;
   try {
-    child = spawnProcess(env.RELAY_CURSOR_AGENT || 'agent', ['acp'], {
+    child = spawnProcess(agent.command, agent.args, {
       cwd: env.RELAY_CURSOR_CWD, env: localWakeChildEnv('cursor', env),
       shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
     });

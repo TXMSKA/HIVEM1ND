@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { sendCursorWake } from '../engine/relay/cursor-wake.mjs';
+import { cursorAgentCommand, sendCursorWake } from '../engine/relay/cursor-wake.mjs';
 import { sendOpenCodeWake, opencodeWakeCapability } from '../engine/relay/opencode-wake.mjs';
 import { sendHostWake, hostWakeCapability } from '../engine/relay/host-wake.mjs';
 import { localWakeChildEnv, spawnLocalWakeWorker } from '../engine/relay/local-wake.mjs';
@@ -58,6 +58,26 @@ test('Cursor ACP resumes only the registered conversation, denies background app
   assert.deepEqual(child.calls[2].params, { sessionId: 'exact-native', prompt: [{ type: 'text', text: pointer }] });
   assert.equal(child.calls.find((m) => m.id === 'permission').result.outcome.outcome, 'cancelled');
   assert.equal(child.killed, true);
+});
+
+test('Cursor ACP on Windows runs the newest bundled node.exe on index.js instead of agent.cmd', async () => {
+  // A fake Windows layout keeps the test independent of the platform it runs on.
+  const appData = 'C:\\Users\\relay\\AppData\\Local';
+  const versions = path.win32.join(appData, 'cursor-agent', 'versions');
+  const names = ['2026.9.30-aaa111', '2026.10.01-bbb222', 'not-a-version'];
+  const files = new Set(names.flatMap((name) => ['node.exe', 'index.js'].map((file) => path.win32.join(versions, name, file))));
+  const fake = { exists: (file) => files.has(file), list: async (dir) => { if (dir !== versions) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return names; } };
+  const newest = path.win32.join(versions, '2026.10.01-bbb222');
+  const child = acp({}); let launch;
+  const result = await sendCursorWake({ binding: bindingFor('cursor'), text: pointer, platform: 'win32', env: { ...cursorEnv, LOCALAPPDATA: appData },
+    resolveAgent: (options) => cursorAgentCommand({ ...options, ...fake }), spawnProcess: (...args) => { launch = args; return child; } });
+  assert.equal(result.status, 'submitted');
+  assert.deepEqual(launch.slice(0, 2), [path.win32.join(newest, 'node.exe'), [path.win32.join(newest, 'index.js'), 'acp']]);
+  assert.equal(launch[2].shell, false);
+  assert.deepEqual(await cursorAgentCommand({ env: { LOCALAPPDATA: appData, RELAY_CURSOR_AGENT: 'C:\\agent.exe' }, platform: 'win32', ...fake }),
+    { command: 'C:\\agent.exe', args: ['acp'] });
+  assert.deepEqual(await cursorAgentCommand({ env: { LOCALAPPDATA: 'C:\\missing' }, platform: 'win32', ...fake }), { command: 'agent', args: ['acp'] });
+  assert.deepEqual(await cursorAgentCommand({ env: { LOCALAPPDATA: appData }, platform: 'linux', ...fake }), { command: 'agent', args: ['acp'] });
 });
 
 for (const options of [{ failLoad: true }, { loadSupport: false }, { malformed: true }, { hang: 'initialize' }]) {
