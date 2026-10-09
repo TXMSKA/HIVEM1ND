@@ -14,10 +14,11 @@
 //
 // Node built-ins only, bound to 127.0.0.1. Run: node server.mjs [--port <n>]
 // [--lan] [--mind <path>] [--hostname <name>] then open
-// http://localhost:3301/?file=<absolute path, URL-encoded>, or from a phone on
+// http://localhost:3302/?file=<absolute path, URL-encoded>, or from a phone on
 // the same network the link with a key that --lan prints.
 
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
@@ -28,6 +29,9 @@ import { PERSON, addReply, addThread, cleanText, commentMessage, createAnchor, e
 import { createEdits, editsMessage } from './edits.mjs';
 import { projectOf } from './project.mjs';
 import { merge, plain, wordDiff } from './text.mjs';
+
+// The Void product serves on 3301 and Blueprint Lite on 3300, so Void Lite takes the next one and all three can run together.
+export const DEFAULT_PORT = 3302;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data:";
@@ -165,7 +169,7 @@ function findMind() {
 
 // `relay` and `timers` are for tests: a stand-in for the person's Relay channel
 // and a clock moved by hand. Without them the real ones are used.
-export function createVoid({ port = 3301, lan = false, mindPath = findMind(), hostname = machineName(), relay, timers, wait, pollMs = 500 } = {}) {
+export function createVoid({ port = DEFAULT_PORT, lan = false, mindPath = findMind(), hostname = machineName(), relay, timers, wait, pollMs = 500 } = {}) {
   mindPath = path.resolve(mindPath);
   // With lan the server also answers on this machine's home network addresses.
   // It opens any document path it is given, so each of those requests needs the
@@ -480,7 +484,9 @@ export function createVoid({ port = 3301, lan = false, mindPath = findMind(), ho
     server,
     check,
     edits,
-    listen() {
+    async listen() {
+      // On Windows a bind to every address succeeds while another program holds the same port on the loopback, and localhost would then reach that program.
+      if (lan && port !== 0 && await loopbackTaken(port)) throw Object.assign(new Error(`Port ${port} is in use.`), { code: 'EADDRINUSE' });
       return new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', () => {
@@ -498,16 +504,32 @@ export function createVoid({ port = 3301, lan = false, mindPath = findMind(), ho
   };
 }
 
+function loopbackTaken(port) {
+  return new Promise((resolve) => {
+    const probe = net.connect({ port, host: '127.0.0.1' });
+    probe.setTimeout(1000, () => { probe.destroy(); resolve(false); });
+    probe.once('connect', () => { probe.destroy(); resolve(true); });
+    probe.once('error', () => resolve(false));
+  });
+}
+
+// What to tell the person when the server cannot listen, or null for a failure that has no advice. Another program on the port is the usual cause.
+export function startupMessage(error, port) {
+  if (error?.code === 'EADDRINUSE') return `Port ${port} is in use. If Void is already running it answers at http://localhost:${port}/; if another program holds the port, start Void on a free one with --port <number>.`;
+  if (error?.code === 'EACCES') return `Port ${port} cannot be used: the system keeps it for itself. Start Void on another one with --port <number>.`;
+  return null;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const flag = (name) => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : undefined; };
-  const port = Number(flag('--port')) || 3301;
+  const port = Number(flag('--port')) || DEFAULT_PORT;
   const app = createVoid({ port, lan: process.argv.includes('--lan'), mindPath: flag('--mind'), hostname: flag('--hostname') ?? machineName() });
   try {
     const { lanKey, lanHosts } = await app.listen();
     console.log(`Void on http://localhost:${port}/?file=<absolute path to a .json document>`);
     for (const h of lanHosts) console.log(`On the home network: http://${h}/?key=${lanKey}&file=<absolute path to a .json document>`);
   } catch (e) {
-    console.error(e.code === 'EADDRINUSE' ? `Port ${port} is taken. Void may already be running at http://localhost:${port}/` : e);
+    console.error(startupMessage(e, port) ?? e);
     process.exit(1);
   }
 }

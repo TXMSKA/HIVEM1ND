@@ -10,6 +10,7 @@ const DEFAULT_WAKE_HANDOFFS = 20;
 const MAX_DELIVERIES = 1024;
 const MAX_INBOX_MESSAGES = 500;
 const ACTIVITY_MAX_AGE_MS = 15 * 60 * 1000;
+const ACTIVITY_REFRESH_MS = 60_000;
 const DEFAULT_POLL_MS = 2000;
 const DEFAULT_LEASE_MS = 15_000;
 const LEASE_RENEW_MS = 5000;
@@ -356,11 +357,15 @@ export async function createRelayWakeController(options = {}) {
     await registered(binding);
     const key = bindingHash(binding);
     const now = nowMs(clock);
-    await mutatePolicy(binding, key, async (policy) => {
+    // Every tool call of a turn repeats the mark the turn already set. The write takes the policy lock and replaces a file of the synced mind, so a mark that is still the same and recent is left alone.
+    const stored = await readPolicy(binding, key);
+    const age = now - Date.parse(stored?.activity?.observedAt);
+    if (freshPolicy(stored, now) && stored.activity.value === activity && age >= 0 && age < ACTIVITY_REFRESH_MS) return stored.activity;
+    const next = await mutatePolicy(binding, key, async (policy) => {
       if (!freshPolicy(policy, now)) throw wakeError('WAKE_NOT_ENABLED', 'Activity can be observed only for an enabled, unexpired wake policy.');
       return { ...policy, activity: { value: activity, observedAt: iso(now) } };
     });
-    return inspect(binding);
+    return next.activity;
   }
 
   async function endSession(bindingValue) {
@@ -413,18 +418,16 @@ export async function createRelayWakeController(options = {}) {
     const client = safeScalar(args.client, 'client', 80);
     const machine = args.machine === undefined ? hostname : safeScalar(args.machine, 'machine', 48);
     if (machine !== hostname) throw wakeError('WAKE_WRONG_MACHINE', 'A wake controller cannot resolve a different machine.');
-    const now = nowMs(clock);
-    const matches = [];
-    for (const { value: policy } of await persistence.list('policies')) {
-      if (policy?.kind !== 'relay-wake-policy' || policy.enabled !== true || !policy.binding
-        || policy.binding.nativeSessionId !== nativeSessionId || policy.binding.client !== client || policy.binding.machine !== machine
-        || !freshPolicy(policy, now)) continue;
-      const binding = makeBinding(policy.binding);
-      const current = await persistence.resolveBinding(binding);
-      if (current) matches.push(binding);
-    }
-    if (matches.length > 1) throw wakeError('WAKE_AMBIGUOUS_BINDING', 'More than one enabled Relay wake policy matches this native session.');
-    return matches[0] ?? null;
+    // The newest registration of the session names its unit, and the policy of that unit sits under a key computed from the binding, so no other policy is read.
+    const registration = await persistence.latestRegistration({ nativeSessionId, client, machine });
+    if (!registration) return null;
+    const binding = makeBinding({ unit: registration.unit, nativeSessionId, client, machine });
+    const key = bindingHash(binding);
+    let policy;
+    // A record that OneDrive is still syncing, or one that is cut short, is skipped as unreadable instead of failing the hook.
+    try { policy = await persistence.read('policies', key); }
+    catch (error) { if (error?.code === 'MALFORMED_RECORD' || isTransientFsError(error)) return null; throw error; }
+    return policy?.enabled === true && expectedPolicy(policy, binding, key) && freshPolicy(policy, nowMs(clock)) ? binding : null;
   }
 
   // The enabled policies of this machine and whether a worker holds each one, so a diagnosis can name a consent nobody serves.

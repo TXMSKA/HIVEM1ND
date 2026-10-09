@@ -18,8 +18,8 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 ## Steps
 
 1. Name the document. It is the absolute path given in the argument, or one written now in the format below, in any folder the work belongs to: a repository, or the project's folder in the mind. A document already open is read again right before any change, as Writing a document says.
-2. Ask `http://localhost:3301/`. When it answers, the server is already running: there is one per machine, and a second is never started. Otherwise start it in the background and leave it running: `node "{{mind}}/features/void/server.mjs"`. Port 3301 is fixed. The server takes the mind from `--mind <path>`, else the mind it is installed in, else the current folder when that is a mind, else `HIVEM1ND` in the home folder, and this machine's record from `--hostname <name>`, else the host name. To read from a phone on the same network, the server runs with `--lan` added: it then also answers on this machine's network addresses and prints one link per address with a key, which goes to the user with `&file=` and the document's encoded path appended. A server already running without `--lan` is restarted with it only when the user asks.
-3. Open `http://localhost:3301/?file=<absolute path, URL-encoded>` and give the user that link.
+2. Ask `http://localhost:3302/`. When it answers with the Void Text Reader page, the server is already running: there is one per machine, and a second is never started. Otherwise start it in the background and leave it running: `node "{{mind}}/features/void/server.mjs"`. Port 3302 is the default, and the Void product keeps 3301, so the two run together. When another program holds the port, the start prints `Port 3302 is in use` and exits: tell the user, start the server again with `--port <free number>` and use that port in every link that follows. The server takes the mind from `--mind <path>`, else the mind it is installed in, else the current folder when that is a mind, else `HIVEM1ND` in the home folder, and this machine's record from `--hostname <name>`, else the host name. To read from a phone on the same network, the server runs with `--lan` added: it then also answers on this machine's network addresses and prints one link per address with a key, which goes to the user with `&file=` and the document's encoded path appended. A server already running without `--lan` is restarted with it only when the user asks.
+3. Open `http://localhost:3302/?file=<absolute path, URL-encoded>` and give the user that link.
 4. To act on the corrections and comments, read the document itself. The pages that differ from `<name>.orig.json` are the edited ones, `<name>.versions.jsonl` holds every change in order, and `<name>.comments.json` holds the comments. A message from the person arrives through Relay as `user` when the person asked for it, and names the files to read.
 5. To answer a comment, add a message to its thread in `<name>.comments.json`, as Comments says. The open page shows it within a second.
 6. Stop the server only when the user asks. The document, its original, its versions and its comments survive a restart.
@@ -105,7 +105,7 @@ The person's own corrections are sent too, in one message: every save made with 
 
 ## How it is served
 
-One process, Node built-ins only, bound to `127.0.0.1:3301`.
+One process, Node built-ins only, bound to `127.0.0.1:3302` unless `--port` names another.
 
 | URL | What it serves |
 | --- | --- |
@@ -118,7 +118,7 @@ One process, Node built-ins only, bound to `127.0.0.1:3301`.
 | `/api/send?file=<path>` | POST `{ send: false }`: drops the corrections waiting to be sent |
 | `/api/events?file=<path>` | GET: a server-sent event stream: `ready` once the page is being watched, `doc` (the document, with the `changes` as diff runs), `comments` (the threads) and `sent` (the result of sending corrections) |
 
-The path must be absolute and end in `.json`; an `.orig.json` or `.comments.json` file is refused. Requests are accepted only for the hosts `localhost:3301` and `127.0.0.1:3301`, and with `--lan` for this machine's network addresses on port 3301; a POST with a foreign `Origin` or a cross-site fetch is refused. A request on a network address needs the key printed at start, given once in the link and kept as a cookie; the key changes on every start. The reader loads the Atkinson Hyperlegible face from Google Fonts.
+The path must be absolute and end in `.json`; an `.orig.json` or `.comments.json` file is refused. Requests are accepted only for the hosts `localhost:3302` and `127.0.0.1:3302`, and with `--lan` for this machine's network addresses on port 3302; a POST with a foreign `Origin` or a cross-site fetch is refused. A request on a network address needs the key printed at start, given once in the link and kept as a cookie; the key changes on every start. The reader loads the Atkinson Hyperlegible face from Google Fonts.
 
 ## Keys
 

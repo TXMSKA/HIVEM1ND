@@ -641,6 +641,88 @@ test('the worker does not wake for a late synced copy of a message that was alre
   await handle.stop();
 });
 
+test('a session registered under another unit and back is bound again only while its newest registration names the unit', async (context) => {
+  const { mind, receiver, binding } = await fixture(context);
+  await writeFile(path.join(mind, 'user', 'state', 'successor.md'), 'unit: successor\nstate: in\nmachine: TESTBOX\n\nSuccessor.\n');
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable(binding);
+  const query = { nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
+  assert.deepEqual(await wake.findEnabledBinding(query), binding);
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await receiver.register({ unit: 'successor', nativeSessionId: binding.nativeSessionId });
+  assert.equal(await wake.findEnabledBinding(query), null, 'the consent names the old unit');
+  await assert.rejects(wake.observeActivity(binding, { activity: 'busy' }), { code: 'WAKE_REGISTRATION_MISSING' });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await receiver.register({ unit: binding.unit, nativeSessionId: binding.nativeSessionId });
+  assert.deepEqual(await wake.findEnabledBinding(query), binding);
+  await assert.doesNotReject(wake.observeActivity(binding, { activity: 'busy' }));
+});
+
+test('an index entry that does not match its record, or whose record left, never binds a session', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable(binding);
+  const query = { nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
+  assert.deepEqual(await wake.findEnabledBinding(query), binding);
+
+  const indexFolder = path.join(await localWake(mind), 'index');
+  const [indexName] = await readdir(indexFolder);
+  const indexFile = path.join(indexFolder, indexName);
+  const stored = JSON.parse(await readFile(indexFile, 'utf8'));
+  for (const records of Object.values(stored.latest)) {
+    for (const record of records) if (record.nativeSessionId === binding.nativeSessionId) record.unit = 'overseer';
+  }
+  await writeFile(indexFile, JSON.stringify(stored));
+  const reloaded = await controller(mind, async () => ({ status: 'submitted' }));
+  assert.deepEqual(await reloaded.findEnabledBinding(query), binding, 'the record on disk decides, not the index');
+  assert.equal((await reloaded.status(binding)).registered, true);
+
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  for (const name of await readdir(sessions)) {
+    if (JSON.parse(await readFile(path.join(sessions, name), 'utf8')).nativeSessionId === binding.nativeSessionId) await rm(path.join(sessions, name));
+  }
+  assert.equal(await wake.findEnabledBinding(query), null, 'a record that left the folder is forgotten');
+  assert.equal(await reloaded.findEnabledBinding(query), null);
+  await assert.rejects(wake.observeActivity(binding, { activity: 'busy' }), { code: 'WAKE_REGISTRATION_MISSING' });
+});
+
+test('a session whose own policy is unreadable has no binding, and a session without a policy has none either', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  const query = { nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
+  assert.equal(await wake.findEnabledBinding(query), null, 'registered but never enabled');
+  await wake.enable(binding);
+  assert.deepEqual(await wake.findEnabledBinding(query), binding);
+  await writeFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`), '{"kind":"relay-wake-pol');
+  assert.equal(await wake.findEnabledBinding(query), null);
+  assert.equal(await wake.findEnabledBinding({ ...query, nativeSessionId: 'never-registered' }), null);
+});
+
+test('a mark that is still the same and recent is not written again, a changed or old one is', async (context) => {
+  const { mind, binding } = await fixture(context);
+  let now = Date.now();
+  const wake = await controller(mind, async () => ({ status: 'submitted' }), { clock: { now: () => now, sleep: async () => {} } });
+  await wake.enable(binding);
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const stored = async () => JSON.parse(await readFile(policyFile, 'utf8')).activity;
+
+  await wake.observeActivity(binding, { activity: 'busy' });
+  const first = await stored();
+  assert.equal(first.value, 'busy');
+  now += 10_000;
+  await wake.observeActivity(binding, { activity: 'busy' });
+  assert.deepEqual(await stored(), first, 'a tool call inside the turn leaves the mark alone');
+  now += 1000;
+  await wake.observeActivity(binding, { activity: 'idle' });
+  assert.equal((await stored()).value, 'idle', 'a different mark is always written');
+  const idle = await stored();
+  now += 61_000;
+  await wake.observeActivity(binding, { activity: 'idle' });
+  assert.notEqual((await stored()).observedAt, idle.observedAt, 'a mark older than a minute is renewed so it does not go stale');
+});
+
 test('delivery status shows the state the recipient worker recorded, then the read and the reply', async (context) => {
   const { mind, sender, receiver, binding } = await fixture(context);
   const wake = await controller(mind, async () => ({ status: 'submitted' }));

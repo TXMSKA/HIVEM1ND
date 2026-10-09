@@ -165,6 +165,8 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
         platform,
       });
     }
+    // Reading the inbox is the costly part of a hook, and an event that carries no notice would discard its answer.
+    if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
     const relay = await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
     const reminder = await relay.reminder({
       ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),

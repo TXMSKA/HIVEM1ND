@@ -1,3 +1,4 @@
+import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
 import fsPromises, { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';

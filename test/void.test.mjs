@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createPersonRelay } from '../engine/relay/person.mjs';
 import { createAnchor, findAnchor, place } from '../features/void/comments.mjs';
-import { createVoid } from '../features/void/server.mjs';
+import { DEFAULT_PORT, createVoid, startupMessage } from '../features/void/server.mjs';
 import { projectOf } from '../features/void/project.mjs';
 import { merge, plain, wordDiff } from '../features/void/text.mjs';
 
@@ -543,6 +546,43 @@ test('a save made from an older text keeps the change that arrived from outside'
 
   const plainSave = await api('/api/save', { k: 'Intro.Other', lang: 'en', text: 'Straight save', base: PAGES[1].en });
   assert.equal(plainSave.body.text, 'Straight save', 'a text the file still holds as it was needs no joining');
+});
+
+test('Void Lite keeps off the ports of the Void product, Blueprint Lite and the Relay examples, and its document names the same one', async () => {
+  assert.equal(DEFAULT_PORT, 3302);
+  assert.equal([3300, 3301, 4096].includes(DEFAULT_PORT), false);
+  const feature = await readFile(fileURLToPath(new URL('../features/void/void.md', import.meta.url)), 'utf8');
+  const named = [...feature.matchAll(/(?:localhost|127\.0\.0\.1):(\d+)/g)].map((match) => Number(match[1]));
+  assert.ok(named.length > 0);
+  assert.deepEqual([...new Set(named)], [DEFAULT_PORT]);
+});
+
+test('a port that is taken is reported with what to do, on the loopback and with --lan', async (context) => {
+  const holder = net.createServer();
+  await new Promise((resolve) => holder.listen(0, '127.0.0.1', resolve));
+  context.after(() => holder.close());
+  const { port } = holder.address();
+  assert.match(startupMessage(Object.assign(new Error('busy'), { code: 'EADDRINUSE' }), port), new RegExp(`Port ${port} is in use.*--port <number>`));
+  assert.match(startupMessage(Object.assign(new Error('denied'), { code: 'EACCES' }), port), /--port <number>/);
+  assert.equal(startupMessage(new Error('something else'), port), null);
+
+  const { mind } = await fixture(context);
+  for (const lan of [false, true]) {
+    const app = createVoid({ port, lan, mindPath: mind, hostname: 'TESTBOX', relay: fakeRelay() });
+    await assert.rejects(app.listen(), { code: 'EADDRINUSE' }, `lan ${lan}`);
+    await app.close();
+  }
+
+  const server = fileURLToPath(new URL('../features/void/server.mjs', import.meta.url));
+  const child = spawn(process.execPath, [server, '--port', String(port), '--mind', mind], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const [code] = await Promise.race([
+    new Promise((resolve) => child.once('exit', (...args) => resolve(args))),
+    new Promise((_, reject) => setTimeout(() => { child.kill(); reject(new Error('the server neither started nor stopped')); }, 15000)),
+  ]);
+  assert.equal(code, 1);
+  assert.match(stderr, new RegExp(`Port ${port} is in use`));
 });
 
 test('a long text with accents is saved as it was written', async (context) => {
