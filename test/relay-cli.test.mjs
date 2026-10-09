@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,6 +63,38 @@ test('CLI status and events pass only the fields their store methods accept', as
   const misplaced = await cli(['relay', 'events', ...common, '--unit', 'overseer']);
   assert.equal(misplaced.code, 1);
   assert.match(misplaced.stderr, /events does not accept the field unit/);
+});
+
+test('CLI refuses --thread-id on read with a usage error and keeps it for history', async (context) => {
+  const { mind } = await fixture(context);
+  const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'overseer'])).code, 0);
+  const read = await cli(['relay', 'read', ...common, '--thread-id', 'thread-1']);
+  assert.equal(read.code, 2);
+  assert.match(read.stderr, /relay read does not accept --thread-id/);
+  const history = await cli(['relay', 'history', ...common, '--thread-id', 'thread-1']);
+  assert.equal(history.code, 0, history.stderr);
+});
+
+test('CLI refuses --limit on status with a usage error', async (context) => {
+  const { mind } = await fixture(context);
+  const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'overseer'])).code, 0);
+  const status = await cli(['relay', 'status', ...common, '--limit', '5']);
+  assert.equal(status.code, 2);
+  assert.match(status.stderr, /relay status does not accept --limit/);
+});
+
+test('relay configure defaults the kit path to the running kit and requires --mind-path', async (context) => {
+  const { root, mind } = await fixture(context);
+  const home = path.join(root, 'home');
+  const missing = await cli(['relay', 'configure', '--client', 'copilot', '--home-dir', home]);
+  assert.equal(missing.code, 2);
+  assert.match(missing.stderr, /relay configure requires --mind-path/);
+  const configured = await cli(['relay', 'configure', '--client', 'copilot', '--home-dir', home, '--mind-path', mind]);
+  assert.equal(configured.code, 0, configured.stderr);
+  const { mcpServers } = JSON.parse(await readFile(path.join(home, '.copilot', 'mcp-config.json'), 'utf8'));
+  assert.equal(mcpServers['hivem1nd-relay'].args[0], fileURLToPath(new URL('../cli/index.mjs', import.meta.url)));
 });
 
 test('wake command parser requires explicit units and distinguishes bounded extension from unlimited consent', () => {

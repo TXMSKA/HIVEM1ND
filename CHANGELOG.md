@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `relay read --thread-id <id>` ends with a usage error that points to `relay history`, instead of passing the thread to a store method that rejects it; `--thread-id` stays valid for `relay history` and `relay send`.
+- `relay status --limit <count>` ends with a usage error instead of a store failure, because the status list takes only `--unit`.
+- The Relay MCP `register` tool accepts `antigravity` as its `client`, so an Antigravity session can register through MCP like the other wake clients.
+- `relay configure` falls back to the kit the running CLI belongs to when `--kit-path` is missing, and ends with a usage error when `--mind-path` is missing, instead of failing inside the config builder.
+- Running `relay wake enable` or `attach` again no longer lets the wake point at a message it already submitted or could not confirm: the new policy keeps those delivery entries of the previous one beside its fresh window, handoff budget and wake count, and drops the ones that were not submitted, failed or in flight.
+- Relay publishes a message, a session record or an event by linking the finished temporary file to its final name, so a file that appears at that name in the meantime ends the write with a collision instead of being replaced.
+- The Claude wake sink checks the binding and the pointer text shape like the other clients before it writes to the session pipe: text that is not the Relay pointer for the unit is refused as `invalid_pointer`, and a binding whose machine name differs in case or whose session id passes 180 characters as `native_binding_mismatch`.
 - `relay configure --client cursor` writes a 30 second timeout on the Cursor hooks, and raises it on hooks it already owns, because a stop hook that reads the mind through OneDrive measured 5 to 11 seconds on Windows and Cursor killed every one at the earlier 5.
 - A malformed message no longer blocks a Relay inbox. `inbox` and `read` skip a message with invalid headers (an `attachments` header that is not JSON, a missing sender) or an oversized body and name it in `malformed`, and `history`, `threads` and `events` skip it too, so a wake worker no longer fails every poll on one bad file, fills its error budget and pauses the unit. `read` by id still fails for the id of the bad file.
 - A Relay record that OneDrive has not finished syncing no longer ends a wake worker. The scans of `user/relay/sessions/` and of the wake policies skip a record that is malformed or busy (`EBUSY`, `EACCES`, `EPERM`, `EIO`, `UNKNOWN`, `EAGAIN`) and read it on the next poll, and a worker that meets one of those codes in a poll records the error against its budget and polls again.

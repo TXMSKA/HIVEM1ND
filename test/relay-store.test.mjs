@@ -444,6 +444,25 @@ test('archive collision preserves both files and reports a stable error', async 
   assert.equal(await readFile(archiveFile, 'utf8'), 'different bytes');
 });
 
+test('a file that appears while a record is being published is never replaced', async (context) => {
+  const { mind } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'publish-race', client: 'codex' });
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  let destination = null;
+  const restore = await interceptFs('open', async (original, args) => {
+    const temporary = /^\.(.+)\.[a-f0-9]{24}\.tmp$/.exec(path.basename(String(args[0])));
+    if (!destination && args[1] === 'wx' && temporary && path.dirname(String(args[0])) === sessions) {
+      destination = path.join(sessions, temporary[1]);
+      await writeFile(destination, 'competing record');
+    }
+    return original(...args);
+  });
+  try { await assert.rejects(relay.register({ unit: 'executor-alpha', nativeSessionId: 'native-race' }), code('COLLISION')); }
+  finally { restore(); }
+  assert.equal(await readFile(destination, 'utf8'), 'competing record');
+  assert.deepEqual((await readdir(sessions)).filter((name) => name.endsWith('.tmp')), []);
+});
+
 test('a failed metadata event write is reconstructed from durable message files', async (context) => {
   const { mind } = await fixture(context);
   const sender = await bind(mind, 'executor-alpha', 'event-recovery');

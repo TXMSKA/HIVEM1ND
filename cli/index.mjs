@@ -1081,9 +1081,10 @@ async function runRelay(options, dependencies, output) {
   }
   if (action === "configure" || action === "unconfigure") {
     if (!options.client) throw new CliUsageError(`relay ${action} requires --client.`);
+    if (action === "configure" && !options.mindPath) throw new CliUsageError("relay configure requires --mind-path.");
     const config = await import("../engine/relay/config.mjs");
     const result = action === "configure"
-      ? await config.configureRelayClient(options)
+      ? await config.configureRelayClient({ ...options, kitPath: options.kitPath ?? KIT_PATH })
       : await config.unconfigureRelayClient(options);
     output.write(`${formatResult(result)}\n`);
     return 0;
@@ -1108,6 +1109,8 @@ async function runRelay(options, dependencies, output) {
   }
   if (action === "reminder" && !options.sessionId && !options.nativeSessionId) throw new CliUsageError("relay reminder requires --session-id or --native-session-id.");
   if (action !== "reminder" && action !== "status" && !options.sessionId) throw new CliUsageError(`relay ${action} requires --session-id to select its registered instance.`);
+  if (action === "read" && options.threadId) throw new CliUsageError("relay read does not accept --thread-id; relay history filters by thread.");
+  if (action === "status" && options.limit) throw new CliUsageError("relay status does not accept --limit.");
 
   const { createRelay } = await import("../engine/relay/store.mjs");
   const relay = await createRelay({
@@ -1136,10 +1139,8 @@ async function runRelay(options, dependencies, output) {
     // Store methods reject any field they do not accept, even an undefined one.
     if (options.unit !== undefined) args.unit = options.unit;
     if (options.limit) args.limit = Number(options.limit);
-    if (action === "read" || action === "history") {
-      if (options.ids.length) args.ids = options.ids;
-      if (options.threadId) args.threadId = options.threadId;
-    }
+    if (options.ids.length && (action === "read" || action === "history")) args.ids = options.ids;
+    if (options.threadId && action === "history") args.threadId = options.threadId;
   } else if (action === "reminder") {
     args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
   }
