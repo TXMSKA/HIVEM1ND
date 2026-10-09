@@ -35,6 +35,9 @@
       <button type="button" class="item" data-mode="comment" aria-pressed="false" aria-label="Comment" data-tip="Comment" data-key="C">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719"/></svg>
       </button>
+      <button type="button" class="item" data-mode="sketch" aria-pressed="false" aria-label="Sketch" data-tip="Sketch" data-key="S">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect width="7" height="7" x="3" y="14" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>
+      </button>
       <button type="button" class="item note-toggle" id="note-toggle" aria-controls="board-note" aria-pressed="false" aria-label="Note" data-tip="Note" data-key="N">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>
       </button>
@@ -50,14 +53,20 @@
         <p id="board-note-text"></p>
       </details>
 
-      <form class="card composer" id="composer" hidden>
+      <form class="card composer" id="composer" hidden data-sends>
         <ol class="crumbs" id="composer-crumbs" aria-label="What the comment is about"></ol>
-        <label class="sr-only" for="composer-text">Comment</label>
-        <textarea id="composer-text" rows="3" placeholder="Write a comment" required></textarea>
+        <div class="field">
+          <label class="sr-only" for="composer-text">Comment</label>
+          <textarea id="composer-text" rows="3" placeholder="Write a comment" required></textarea>
+          <div class="send">
+            <label class="send-toggle"><input type="checkbox" data-send aria-describedby="composer-agent" /><span>Send to agent</span></label>
+            <span class="send-agent" id="composer-agent" data-agent></span>
+          </div>
+        </div>
         <div class="card-actions">
           <span class="hint">Ctrl + Enter</span>
           <button type="button" class="btn ghost" data-close>Cancel</button>
-          <button type="submit" class="btn primary">Comment</button>
+          <button type="submit" class="btn primary" data-submit data-plain="Comment" data-sending="Comment and send">Comment</button>
         </div>
       </form>
 
@@ -69,18 +78,53 @@
           </button>
         </header>
         <ol class="messages" id="thread-messages"></ol>
-        <form class="reply" id="thread-reply">
-          <label class="sr-only" for="reply-text">Reply</label>
-          <textarea id="reply-text" rows="2" placeholder="Reply" required></textarea>
+        <p class="send-note" id="send-note" hidden></p>
+        <form class="reply" id="thread-reply" data-sends>
+          <div class="field">
+            <label class="sr-only" for="reply-text">Reply</label>
+            <textarea id="reply-text" rows="2" placeholder="Reply" required></textarea>
+            <div class="send">
+              <label class="send-toggle"><input type="checkbox" data-send aria-describedby="reply-agent" /><span>Send to agent</span></label>
+              <span class="send-agent" id="reply-agent" data-agent></span>
+            </div>
+          </div>
           <div class="card-actions">
             <button type="button" class="btn ghost danger" id="thread-delete">Delete</button>
             <span class="spacer"></span>
             <button type="button" class="btn ghost" id="thread-status">Resolve</button>
-            <button type="submit" class="btn primary">Reply</button>
+            <button type="submit" class="btn primary" data-submit data-plain="Reply" data-sending="Reply and send">Reply</button>
           </div>
         </form>
       </section>
+
+      <form class="card reference" id="reference" hidden data-sends aria-labelledby="reference-title">
+        <h2 class="card-title" id="reference-title">Reference image</h2>
+        <div class="file-pick">
+          <button type="button" class="btn" id="reference-choose">Choose a picture</button>
+          <span class="file-name" id="reference-name">No picture chosen</span>
+          <input type="file" id="reference-file" accept="image/png,image/jpeg,image/webp" hidden />
+        </div>
+        <div class="field">
+          <label class="sr-only" for="reference-text">What to recreate, optional</label>
+          <textarea id="reference-text" rows="2" placeholder="What to recreate (optional)"></textarea>
+          <div class="send">
+            <label class="send-toggle"><input type="checkbox" data-send aria-describedby="reference-agent" /><span>Send to agent</span></label>
+            <span class="send-agent" id="reference-agent" data-agent></span>
+          </div>
+        </div>
+        <p class="field-error" id="reference-error" role="alert"></p>
+        <div class="card-actions">
+          <span class="hint">Ctrl + Enter</span>
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+          <button type="submit" class="btn primary" data-submit data-plain="Add reference" data-sending="Add reference and send">Add reference</button>
+        </div>
+      </form>
+
+      <textarea class="sketch-text" id="sketch-text" rows="1" hidden aria-label="Text"></textarea>
     </main>
+
+    <div class="sketchbar" id="sketchbar" role="toolbar" aria-label="Sketch tools" hidden></div>
+    <input type="file" id="sketch-file" accept="image/png,image/jpeg,image/webp" hidden />
 
     <aside class="panel" id="panel" aria-labelledby="panel-title">
       <header class="panel-head">
