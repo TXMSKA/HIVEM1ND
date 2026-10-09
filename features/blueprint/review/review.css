@@ -70,6 +70,12 @@
   --bp-hover: rgba(62, 166, 255, 0.6);
   --bp-hover-fill: rgba(62, 166, 255, 0.08);
   --bp-pin: #ffb020;
+  /* The dot of an agent whose wake is on: 8.9 on the surface. Off, the dot is
+     hollow in the soft text colour. */
+  --bp-awake: #3ddc84;
+  /* The paper a sketch is drawn on and the ink it starts with. */
+  --bp-paper: #ffffff;
+  --bp-ink: #1c1c1c;
   --bp-pin-ink: #1c1300;
   --bp-pin-done: #d9d9d9;
   --bp-pin-shape: 999px 999px 999px 4px;
@@ -100,7 +106,7 @@
   --target-touch: 44px;
 
   --panel-w: 340px;
-  --card-w: 320px;
+  --card-w: 360px;
   /* The band the top pill takes, which the comments card keeps clear of. */
   --top-band: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-item));
 
@@ -223,6 +229,18 @@ svg {
   cursor: crosshair;
 }
 
+.stage[data-mode="sketch"] {
+  cursor: default;
+}
+
+.stage[data-mode="sketch"]:is([data-tool="screen"], [data-tool="rectangle"], [data-tool="ellipse"], [data-tool="line"], [data-tool="pen"], [data-tool="arrow"]) {
+  cursor: crosshair;
+}
+
+.stage[data-mode="sketch"][data-tool="text"] {
+  cursor: text;
+}
+
 .overlay {
   position: absolute;
   inset: 0;
@@ -269,6 +287,30 @@ svg {
   fill: var(--bp-screen-shadow);
 }
 
+/* A screen drawn by hand, in the viewer, is edged with a dashed line. */
+.world .screen-edge.is-sketch {
+  stroke-dasharray: 6 5;
+}
+
+/* What a sketch draws on its screens: a picture of text answers a press over
+   the whole of its box, and a thin line over a wider invisible stroke. */
+.world .sk-hit {
+  fill: transparent;
+}
+
+.world .sk-grab {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+
+.world .sk-text {
+  font-family: var(--bp-font);
+  user-select: none;
+}
+
 #overlay {
   /* Some browser themes force a background on every SVG. The overlay must
      stay clear so it cannot cover the screens in the world beneath it. */
@@ -308,7 +350,8 @@ svg {
 /* Glass, a hairline and a shadow. */
 .top,
 .rail,
-.note {
+.note,
+.sketchbar {
   border: 1px solid var(--bp-line);
   background: var(--bp-surface-glass);
   -webkit-backdrop-filter: blur(16px);
@@ -915,6 +958,13 @@ svg {
   cursor: pointer;
 }
 
+/* While sketching, the note rises over the bar, whatever height the bar has. */
+@media (min-width: 701px) {
+  body[data-sketch="on"] .note {
+    bottom: calc(var(--bp-bar-offset) * 2 + var(--sketch-bar-height, var(--bp-bar-size)));
+  }
+}
+
 .note summary::-webkit-details-marker {
   display: none;
 }
@@ -1026,6 +1076,7 @@ textarea {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-top: 10px;
@@ -1033,6 +1084,7 @@ textarea {
 
 .card-actions .hint {
   margin-right: auto;
+  white-space: nowrap;
   color: var(--bp-text-soft);
   font: var(--type-mono-plain);
 }
@@ -1052,6 +1104,7 @@ textarea {
   border-radius: var(--bp-radius-bar);
   background: var(--bp-surface-2);
   font: var(--type-label);
+  white-space: nowrap;
 }
 
 .btn:hover {
@@ -1634,6 +1687,21 @@ body[data-panel="open"] .bubble {
     bottom: calc(var(--bp-bar-offset) + (var(--bp-bar-size) - var(--bp-main-button)) / 2);
   }
 
+  .sketchbar {
+    right: var(--bp-bar-offset);
+    bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
+    left: var(--bp-bar-offset);
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    width: auto;
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  .sketch-problem {
+    flex: none;
+  }
+
   .panel {
     left: var(--bp-bar-offset);
     bottom: calc(var(--bp-bar-offset) * 2 + var(--bp-bar-size));
@@ -1641,11 +1709,11 @@ body[data-panel="open"] .bubble {
     max-height: calc(100% - var(--top-band) - var(--bp-bar-offset) * 2 - var(--bp-bar-size));
   }
 
-  /* The note is a bubble out of its button, the third and last tool of the
-     centred bar, whose centre sits one tool and one gap right of the middle:
-     the button shows and hides it whole. */
+  /* The note is a bubble out of its button, the fourth and last tool of the
+     centred bar, whose centre sits one and a half tools and gaps right of the
+     middle: the button shows and hides it whole. */
   .note {
-    --note-tail: calc(50% + var(--bp-bar-item) + var(--bp-bar-gap));
+    --note-tail: calc(50% + (var(--bp-bar-item) + var(--bp-bar-gap)) * 1.5);
     left: var(--bp-bar-offset);
     right: var(--bp-bar-offset);
     bottom: calc(var(--bp-bar-offset) + var(--bp-bar-size) + 10px);
@@ -1702,8 +1770,14 @@ body[data-panel="open"] .bubble {
   .btn,
   .crumbs button,
   .switch,
+  .send-toggle,
   .note summary {
     min-height: var(--target-touch);
+  }
+
+  .swatch {
+    width: var(--target-touch);
+    height: var(--target-touch);
   }
 
   .btn.icon {
@@ -1752,6 +1826,12 @@ body[data-panel="open"] .bubble {
 .overlay .wire-inner {
   stroke-dasharray: 2 4;
   opacity: 0.6;
+}
+
+/* An arrow of the sketch picked to be deleted or looked at. */
+.overlay .wire.selected {
+  stroke: var(--bp-select);
+  stroke-width: 3;
 }
 
 .overlay .hot {
@@ -1880,4 +1960,292 @@ body[data-panel="open"] .bubble {
 
 .overlay .play:focus-visible .play-ring {
   display: inline;
+}
+
+/* ---- sending to the agent ----------------------------------------------- */
+
+/* The text field and the choice to send what is written in it are one box: the
+   choice sits at the bottom edge, under a hairline, and the field's focus ring
+   goes round both. */
+.field {
+  border: 1px solid var(--bp-field-edge);
+  border-radius: var(--bp-radius-control);
+  background: var(--bp-bg);
+}
+
+.field:has(textarea:focus-visible) {
+  outline: 2px solid var(--bp-accent);
+  outline-offset: 2px;
+}
+
+.field textarea {
+  border: 0;
+  border-radius: var(--bp-radius-control) var(--bp-radius-control) 0 0;
+  background: none;
+}
+
+.field textarea:focus-visible {
+  outline: none;
+}
+
+.send {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--bp-line);
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.send-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.send-toggle input {
+  margin: 0;
+  accent-color: var(--bp-accent);
+}
+
+.send-toggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* The agent the message goes to, at the right: its unit, and a dot that is
+   solid when the wake is on and hollow when it is off. */
+.send-agent {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.send-unit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.send-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.send-dot[data-on="true"] {
+  border-color: var(--bp-awake);
+  background: var(--bp-awake);
+}
+
+/* Said in the thread when a comment was saved and its message was not sent. */
+.send-note {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--bp-danger);
+  border-radius: var(--bp-radius-control);
+  color: var(--bp-danger);
+  font: var(--type-meta);
+}
+
+.reply .field + .card-actions {
+  margin-top: 10px;
+}
+
+.card-title {
+  margin: 0 0 10px;
+  font: var(--type-title);
+}
+
+.file-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.file-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-error {
+  margin: 8px 0 0;
+  color: var(--bp-danger);
+  font: var(--type-meta);
+}
+
+.field-error:empty {
+  display: none;
+}
+
+/* ---- the sketch ------------------------------------------------------------ */
+
+/* The sketch tools, in a bar of their own along the bottom, clear of the tools
+   bar on the left and of the comments on the right. They wrap before they
+   would run under either. */
+.sketchbar {
+  position: fixed;
+  right: calc(var(--bp-main-button) + var(--bp-bar-offset) * 2);
+  bottom: var(--bp-bar-offset);
+  left: calc(var(--bp-bar-size) + var(--bp-bar-offset) * 2);
+  z-index: var(--bp-z-bar);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--bp-bar-gap) 12px;
+  width: fit-content;
+  margin: 0 auto;
+  padding: calc((var(--bp-bar-size) - var(--bp-bar-item)) / 2) 12px;
+  border-radius: calc(var(--bp-bar-size) / 2);
+}
+
+.sketchbar[hidden] {
+  display: none;
+}
+
+body[data-panel="open"] .sketchbar {
+  right: calc(var(--panel-w) + var(--bp-bar-offset) * 2);
+}
+
+.sketchbar .group {
+  display: flex;
+  align-items: center;
+  gap: var(--bp-bar-gap);
+}
+
+.sketchbar .group + .group {
+  padding-left: 12px;
+  border-left: 1px solid var(--bp-line);
+}
+
+/* A tool in use is marked under it here, the way the phone's bar marks it. */
+.sketchbar .item[aria-pressed="true"]::before {
+  top: auto;
+  bottom: calc((var(--bp-bar-size) - var(--bp-bar-item)) / -2 + 2px);
+  left: 50%;
+  width: 24px;
+  height: 3px;
+  translate: -50% 0;
+}
+
+.sketchbar button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.swatch {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--bp-radius-bar);
+  background: none;
+}
+
+.swatch-chip {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid var(--bp-field-edge);
+  border-radius: 50%;
+  background: var(--chip, transparent);
+}
+
+.swatch:hover .swatch-chip {
+  border-color: var(--bp-text);
+}
+
+/* The one in use is ringed, so it is told apart by a shape and not only a shade. */
+.swatch[aria-pressed="true"] .swatch-chip {
+  outline: 2px solid var(--bp-text);
+  outline-offset: 2px;
+}
+
+/* No fill is a slash through an empty circle. */
+.swatch-chip[data-none]::after {
+  content: "";
+  position: absolute;
+  inset: 50% -2px auto;
+  height: 1.5px;
+  background: var(--bp-text-soft);
+  rotate: -45deg;
+}
+
+.sketch-state {
+  min-width: 6ch;
+  color: var(--bp-text-soft);
+  font: var(--type-meta);
+}
+
+.sketch-problem {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0 4px;
+  color: var(--bp-danger);
+  font: var(--type-meta);
+}
+
+/* The text being typed into a screen, over the place it will have. */
+.sketch-text {
+  position: absolute;
+  z-index: var(--bp-z-popup);
+  min-height: 0;
+  padding: 2px 6px;
+  border: 2px solid var(--bp-select);
+  border-radius: 4px;
+  background: var(--bp-paper);
+  color: var(--bp-ink);
+  font-family: var(--bp-font);
+  font-weight: 500;
+  line-height: 1.3;
+  user-select: text;
+}
+
+.sketch-text[hidden] {
+  display: none;
+}
+
+/* What the sketch draws over the board: the selection, its handles, and the shape being drawn. */
+.overlay .sk-select {
+  fill: none;
+  stroke: var(--bp-select);
+  stroke-width: 1.5;
+}
+
+.overlay .sk-handle {
+  fill: var(--bp-paper);
+  stroke: var(--bp-select);
+  stroke-width: 1.5;
+}
+
+.overlay .sk-draft {
+  fill: var(--bp-hover-fill);
+  stroke: var(--bp-select);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.overlay .sk-pen {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }

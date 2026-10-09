@@ -9,7 +9,7 @@ category: planning
 Mind: {{mind}}
 Argument: [project] [board]
 
-Blueprint Lite is a temporary tool: one local server per machine draws the screen flows of any project and collects review comments on them. It is replaced when the full Blueprint ships.
+Blueprint Lite is a temporary tool: one local server per machine draws the screen flows of any project, collects review comments on them and keeps the sketches people draw on them. It is replaced when the full Blueprint ships.
 
 ## Start
 
@@ -21,7 +21,8 @@ Locate the mind through the Mind line above. Read `machines/<host>.md` in its `u
 2. Open `http://localhost:3300/review/#project=<project>&board=<id>` for the project and board named in the argument, or the current project's first board when none is named. Without an argument, open the viewer and list the projects and boards it shows.
 3. When the current project has no `docs/flows/boards/index.json`, say so and ask before creating the first board. A board is written in the repository, in the formats below, and appears in the viewer on the next reload: nothing is registered anywhere else.
 4. To act on the review, read `docs/flows/comments/<board>.json` in the repository and take the threads whose `status` is `open`. Answer a thread by appending a message to its `messages` with the unit as `author`, and change the board only when the thread asks for it.
-5. Stop the server only when the user asks. The viewer and the comment files survive a restart.
+5. To act on a sketch, read `docs/flows/sketches/<board>.json` in the repository, in the format under Sketches. A person draws screens there to be read and prototyped, and a reference image is a request to recreate it as a screen of the board: its thread in the comments file is where to report. A message from Relay with the subject `Blueprint comment` or `Blueprint reference` names the file and the thread to answer in.
+6. Stop the server only when the user asks. The viewer, the sketches and the comment files survive a restart.
 
 ## How it is served
 
@@ -35,9 +36,13 @@ One process, bound to `127.0.0.1:3300`, Node built-ins only. The projects are th
 | `/p/<project>/kit/...` | `docs/flows/kit/` of the repository: its theme, its extra modules and any kit file it keeps its own copy of. A shared-kit file the repository lacks is answered from the shared kit |
 | `/p/<project>/assets/...` | `docs/flows/assets/` of the repository |
 | `/api/boards` | Every board of every project, with its `project`, `id`, `short`, `title` and `url` |
-| `/api/comments/<project>/<board>` | GET reads, POST changes the comments of that board |
+| `/api/comments/<project>/<board>` | GET reads, POST changes the comments of that board. A POST that adds or replies may carry `send: true`, which also sends the comment to the agent of the project (see Sending to the agent) |
+| `/api/agent/<project>` | GET: `{ "agent": { "unit", "awake" } }` for the unit a comment of that project would go to, `{ "agent": null }` when it has none. Reading it writes nothing to the mind |
+| `/api/sketch/<project>/<board>` | GET reads, PUT saves the sketch of that board (see Sketches). The board must be in `index.json` |
+| `/api/images/<project>` | POST saves a picture, sent as its own bytes, in `docs/flows/assets/` and answers `{ "src", "url", "bytes" }` |
+| `/api/reference/<project>/<board>` | POST asks the agent to recreate the reference image of a screen of the sketch (see Reference images) |
 
-Requests are accepted only for the hosts `localhost:3300` and `127.0.0.1:3300`, and with `--lan` for this machine's network addresses on port 3300; a POST with a foreign `Origin` or a cross-site fetch is refused. A request on a network address needs the key printed at start, given once in the link and kept as a cookie; the key changes on every start. Pages run under a content security policy that allows the server's own scripts, styles and images only.
+Requests are accepted only for the hosts `localhost:3300` and `127.0.0.1:3300`, and with `--lan` for this machine's network addresses on port 3300; a POST with a foreign `Origin` or a cross-site fetch is refused. A request on a network address needs the key printed at start, given once in the link and kept as a cookie; the key changes on every start. Pages run under a content security policy that allows the server's own scripts, styles and images only. Every route that writes (comments, sketches, pictures, references) takes the same checks: it needs the host, the key on a network address, a same-origin request and, where it takes JSON, a JSON content type. A body is read up to its limit and refused with 413 past it: 64 KB for a comment or a reference request, 2 MB for a sketch, 8 MB for a picture. File names are made by the server (a board id from `index.json`, a generated UUID for a picture), so no path comes from the request.
 
 ## Board format
 
@@ -47,10 +52,11 @@ A board lives in the repository, in `docs/flows/boards/`:
 docs/flows/boards/index.json     the list of boards
 docs/flows/boards/<id>.mjs       one module per board
 docs/flows/comments/<id>.json    the comments, written by the server
+docs/flows/sketches/<id>.json    the sketch of the board, written by the server (see Sketches)
 docs/flows/kit/skins.mjs         the theme of this project (see Theme)
 docs/flows/kit/theme.css         optional @font-face rules for its fonts
 docs/flows/kit/<name>.mjs        optional kit modules of this project
-docs/flows/assets/               optional pictures
+docs/flows/assets/               optional pictures, and the ones added in the viewer
 ```
 
 `index.json` is an array. Order is the order in the viewer. `project` is not written: the server takes it from the project's name in the mind.
@@ -149,3 +155,101 @@ Comments live in `docs/flows/comments/<board>.json`, one file per board, created
 - The first message of a thread is the review comment. A reply from the viewer reopens a resolved thread.
 - The server changes the file by small operations (add, reply, status, remove) applied to the file as it is on disk, each written through a temporary file and a rename. A reply appended by hand is therefore kept, and shows in the viewer the next time its window takes focus.
 - Comment text is at most 4000 characters, labels at most 160, and a request body at most 64 KB.
+- A thread may be anchored to a screen of the sketch: `anchor.screen` is its id, and `anchor.element` the id of a shape on it. Ids of a sketch are lowercase for that reason.
+
+## Sending to the agent
+
+The comment box, the reply box and the reference card (see Reference images) end in a choice under a hairline: a checkbox, "Send to agent", and at the right the unit it sends to. A dot before the unit is solid green while that unit's wake is on and hollow while it is off, and screen readers are told "wake on" or "wake off". With the box checked the main button reads "Comment and send", "Reply and send" or "Add reference and send"; unchecked, "Comment", "Reply" or "Add reference".
+
+- The unit is the agent of the project: the unit `in` for that project's scope in Relay, an executor first and, among units of one kind, the one whose state record is newest, as `engine/relay/person.mjs` decides. The wake is on when the unit has an enabled wake policy that is not paused or past its deadline. The page asks `/api/agent/<project>` when a board opens and when its window takes focus.
+- One answer is kept for every box, in the browser's `localStorage` under `review.send`: turned off once, it stays off in the comment box, the reply box and the reference card until it is turned on. The first time it is on. A browser that keeps nothing still keeps the answer for the page.
+- A project with no agent shows the box disabled and "No agent for this project" in place of the unit. What is written is saved without a message.
+- The comment is saved first, exactly as without the box. Then the server sends one Relay message from the unit `user` to the agent: the subject is `Blueprint comment: <board> / <element or screen>` (the element's label, else the screen's title, else `board`), the body quotes the comment and gives the project, the board id, the screen, the element and the thread id, and asks the agent to answer by appending a message to that thread in `docs/flows/comments/<board>.json`; the one attachment is the absolute path of that file.
+- The answer to a POST that sent is the comments document plus `"saved": true` and `"relay"`: `{ "sent": true, "to": "<unit>", "id": "<message id>" }`, or `{ "sent": false, "reason": "no-agent" | "failed" }`. A message that fails never costs the comment, and the page says so under the thread: "Comment saved. The message to the agent was not sent: ...". A POST without `send` answers the comments document as before.
+- The server opens its channel to Relay (`createPersonRelay`) on the first message, registered once as the unit `user` under the tool name `blueprint`, so a server that never sends writes nothing to the mind.
+
+## Sketches
+
+A person draws screens on a board so an agent can read them and prototype. Sketch is a tool of the tools bar, next to Move and Comment (key S). The sketch of a board is one file, `docs/flows/sketches/<board>.json`, saved by the server a moment after every change, and the viewer draws its screens beside the other screens of the board with a dashed edge. The board module and `index.json` are not touched, so a repository's own viewer keeps working. Only screens of the sketch can be edited; the screens of the board can be commented on and be the ends of an arrow.
+
+The bar along the bottom has:
+
+- Select (V), Screen (F), Rectangle (R), Ellipse (O), Line (L), Pen (P), Text (T) and Arrow between screens (A), as tools. Drag to draw; a click draws a standard shape (160 by 100, a screen of 1440 by 900). After a shape the tool goes back to Select, except Pen. Arrow joins two screens: press on one and drag to the other.
+- Add a picture (I), and Reference image (see Reference images). A picture is pasted from the clipboard or picked from a file (PNG, JPEG or WebP, at most 8 MB) and placed in the middle of the selected screen, or of the one most in view.
+- The line colour and the fill, which also change the selected shape.
+- Previous and next item (`[` and `]`), Undo (Ctrl Z), Redo (Ctrl Shift Z or Ctrl Y), Delete (Delete or Backspace), and whether the sketch is saved.
+
+A shape or a screen is selected by a click, or by the keys `[` and `]`, which walk the screens, the shapes on each and the arrows. It moves by dragging, or with the arrow keys (1 pixel, 10 with Shift); it resizes by its handles, or with Ctrl and the arrow keys; a click on the empty paper selects the screen, which moves by its title. A text scales by its corner handles and a picture keeps its proportions. Enter edits a text or renames a screen, and a double click edits a text. Enter with a drawing tool chosen places a standard shape on the selected screen, and with Arrow chosen it takes the selected screen as the start: `[` and `]` then choose the end, and Enter joins them. Escape steps back. Only the pen needs a pointer.
+
+Every change is one step of the history, kept while the page is open. The sketch is read again when the window takes focus, unless the page has changes it has not saved. A save carries the revision the page read (a hash of the file), and the server refuses it with 409 when the file has changed since: an agent's edit is shown and kept, and the page's last change is the one lost.
+
+### Sketch format
+
+The file is Blueprint JSON v1, the format of the full Blueprint, as a board with one page, `sketch`:
+
+```json
+{
+  "formatVersion": 1,
+  "id": "checkout",
+  "title": "Checkout",
+  "note": "",
+  "pages": [{ "id": "sketch", "title": "Sketch", "objects": [], "order": ["s-mufpcst0-d61206"] }],
+  "screens": [
+    {
+      "id": "s-mufpcst0-d61206",
+      "title": "Coupon",
+      "pageId": "sketch",
+      "x": 0,
+      "y": 1320,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "n-mufpcst1-0a1b2c",
+        "name": "Coupon",
+        "t": "box",
+        "dir": "stack",
+        "place": { "x": 0, "y": 0 },
+        "w": 1440,
+        "h": 900,
+        "fill": "#ffffff",
+        "kids": [
+          { "id": "n-mufpd2k4-91c0de", "name": "Rectangle", "t": "box", "dir": "stack", "kind": "rectangle", "place": { "x": 40, "y": 40 }, "w": 300, "h": 80, "stroke": "#1c1c1c", "strokeWidth": 3, "fill": "none", "radius": 0, "kids": [] }
+        ]
+      }
+    }
+  ],
+  "links": [{ "id": "l-mufpe0aa-5d4c3b", "from": "s-mufpcst0-d61206", "to": "pay", "transition": "cut" }],
+  "components": [],
+  "fonts": [],
+  "threads": []
+}
+```
+
+What is drawn is stored as the element v1 has for it. A screen is a `screens` entry whose `root` is a box the size of the screen, and what is drawn on it is the `kids` of that box, later ones on top. Positions are relative to the parent, in design pixels.
+
+| Drawn | v1 element |
+| --- | --- |
+| Rectangle | `box` with `kind: "rectangle"`, `stroke`, `strokeWidth`, `fill`, `radius` |
+| Ellipse | `vector` with `kind: "circle"` and the v1 circle path `M50 0 A50 50 0 1 1 49.99 0 Z`, stretched to its box |
+| Line | `vector` with `kind: "line"`, whose path runs corner to corner of its box in the 100 by 100 system of v1 (`M0 100 L100 0` rises) |
+| Freehand stroke | `vector` with `kind: "pen"`, whose path is the points of the stroke as `M` and `L` in the same system, `fill: "none"` |
+| Text | `text` with `value` (lines are separated by `\n`), `size`, `weight`, `color`, `align` |
+| Picture | `image` with `src: "assets/<uuid>.png"` (or `.jpg`, `.webp`), the file being `docs/flows/assets/<uuid>.<ext>` of the repository |
+| Arrow between screens | an entry of `links`: `{ id, from, to, transition: "cut" }`; `element`, the id of a shape of the `from` screen, makes it start there |
+
+Freehand strokes and arrows between screens are already in v1 (`kind: "pen"` and `links`), so they need nothing added. The one extension is for the arrows: **the `from` and `to` of a link may name a screen of the board module** (`docs/flows/boards/<id>.mjs`) as well as a screen of the sketch, because a screen drawn by hand is usually a step between screens that exist. The full Blueprint keeps links inside one file, so a consumer of plain v1 drops the arrows whose ends are not in the file; the check that Lite runs on a save is v1 with that one allowance, and a sketch whose arrows end inside it passes the full Blueprint's own validation.
+
+Lite reads and writes a subset of v1, and refuses a file outside it with the field that is wrong (the viewer then shows the reason and never overwrites the file):
+
+- Ids (of screens, shapes, arrows and the page) are lowercase letters and digits joined by hyphens, at most 80 characters, and not used twice in the file, because a comment names a screen or a shape by that id. The page makes them as `s-`, `n-` and `l-` plus a base 36 timestamp, a hyphen and six hex digits.
+- A node has the fields `id`, `name`, `t`, `dir`, `place`, `w`, `h`, `fill`, `stroke`, `strokeWidth`, `radius`, `corners`, `clip`, `opacity`, `kind`, `sides`, `d`, `value`, `size`, `weight`, `font`, `color`, `align`, `icon`, `src` and `kids`. Colours are `#rrggbb`, `#rrggbbaa` or `none`. `runs`, `states`, `tokens`, components and the other fields of v1 are not used. An `icon` node is kept and drawn as a placeholder.
+- `components`, `fonts` and `threads` are empty lists, and each page's `objects` is empty: the comments are in `comments/<board>.json`, and nothing is drawn outside a screen.
+- At most 500 screens, 10,000 nodes in 30 levels and 2000 arrows, and a file of at most 2 MB when it is saved from the viewer.
+
+An agent may edit the file by hand, as it edits the comments: keep the ids unique and lowercase, keep each root as wide and tall as its screen, and the viewer shows the change when its window takes focus. `GET /api/sketch/<project>/<board>` answers `{ "revision", "sketch", "problem" }`, with an empty sketch when the file does not exist yet, and `sketch: null` with the reason in `problem` when the file is not valid. `PUT` takes `{ "base": "<revision>", "sketch": {...} }`, with `base` empty for a file that does not exist; it answers `{ "revision", "sketch" }`, `400` with the reason for a sketch outside the format, or `409` with the current `{ "revision", "sketch", "problem" }` when the file changed.
+
+### Reference images
+
+A person gives an image as the reference for a screen with Reference image in the sketch bar: a card takes a picture (PNG, JPEG or WebP, at most 8 MB), an optional note, and the choice to send it to the agent. The picture is saved in `docs/flows/assets/`, and a new sketch screen, titled `Reference: <file name>`, is added with the picture filling it (the size of the picture, scaled down to at most 1440 by 2400), as a node named `Reference`. The sketch is saved before anything is sent.
+
+With the choice on, `POST /api/reference/<project>/<board>` with `{ "screen": "<sketch screen id>", "note": "<text, optional>" }` finds the picture in the saved sketch, opens a thread on that screen (the first message is the note, or "Recreate this reference image as a screen of the board."), and sends the agent one Relay message from `user`: the subject is `Blueprint reference: <board> / <screen title>`, the body names the project, the board, the sketch screen, the absolute paths of the picture and of the sketch file, and the thread, and asks the agent to recreate the picture as a screen of the board's module and to report in that thread, which is where the person reads the answer. The attachments are the absolute paths of the picture and of the comments file. The answer is the comments document plus `thread`, `saved` and `relay`, as for a comment. With the choice off, the picture and its screen are added and nothing is asked.

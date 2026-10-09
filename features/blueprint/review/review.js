@@ -18,6 +18,8 @@
 // docs/flows/kit, and from the shared kit for a file the repository lacks, so
 // the theme (skins.mjs) and the fonts are the repository's. See kitOf().
 
+import { createSketch } from "./sketch.js";
+
 const $ = (selector) => document.querySelector(selector);
 
 const stage = $("#stage");
@@ -84,6 +86,10 @@ const state = {
   comments: "loading",
   // The last screen clicked on the board, where Present starts.
   touched: null,
+  // The agent of the open project, which a comment can be sent to: its unit and
+  // whether its wake is on, null when the project has none, undefined while the
+  // server is being asked.
+  agent: undefined,
 };
 
 // ---- helpers -------------------------------------------------------------
@@ -385,11 +391,15 @@ async function openBoard(project, id) {
     state.index[0];
   const ticket = ++opening;
   assetsOf = entry.project;
+  // What was drawn on the board being left is written before this one opens.
+  await sketch.save();
+  if (ticket !== opening) return;
   // Built apart from what is on the stage, so a board that fails to build
   // leaves the one shown whole: the screens and the titles, links and pins
   // over them always come from the same board.
   let board;
   let kit;
+  let sketched;
   const screens = new Map();
   try {
     kit = await kitOf(entry);
@@ -403,6 +413,7 @@ async function openBoard(project, id) {
       kit.layout(node, def.w, def.h);
       screens.set(def.id, { def, node, rects: new Map() });
     }
+    sketched = await sketch.read(entry);
   } catch (error) {
     console.error(error);
     // A page left open while the boards change keeps their old modules.
@@ -413,6 +424,10 @@ async function openBoard(project, id) {
   closeComposer();
   closeThread();
   state.hot = null;
+  if (state.entry?.project !== entry.project) {
+    state.agent = undefined;
+    renderSend();
+  }
   state.entry = entry;
   countVisit(entry);
   state.kit = kit;
@@ -421,6 +436,9 @@ async function openBoard(project, id) {
   state.touched = null;
   state.screens.clear();
   for (const [key, screen] of screens) state.screens.set(key, screen);
+  sketch.use(entry, sketched);
+  // A screen of the sketch never takes the id of a screen of the board.
+  for (const item of sketch.entries()) if (!state.screens.has(item.def.id)) state.screens.set(item.def.id, item);
   // The last board's comments are not this one's.
   state.doc = { threads: [] };
   state.comments = "loading";
@@ -428,11 +446,12 @@ async function openBoard(project, id) {
   renderTabs();
   showNote(null);
   $("#board-note").hidden = false;
-  $("#present").disabled = board.screens.length === 0;
+  $("#present").disabled = state.screens.size === 0;
   $("#view-title").textContent = `Review: ${state.board.title}`;
   document.title = `${state.board.title} · Review`;
   $("#panel-foot").innerHTML = `<span>Saved to</span> <code>${esc(entry.project)}/docs/flows/comments/${esc(entry.id)}.json</code>`;
   writeHash();
+  loadAgent();
   await loadComments();
   if (ticket === opening) fit(false);
 }
@@ -463,39 +482,44 @@ function fromProject(markup) {
   return markup.replace(/((?:xlink:)?href=["'])\/assets\//g, (_, head) => head + base);
 }
 
+/**
+ * One screen of the board, in a slot of its own which bake() leaves out of the
+ * drawing while the screen lies outside the drawn area. A screen of the sketch
+ * draws itself; the others go through the kit of the repository.
+ */
+function slotHtml(id, screen, skin, ids) {
+  const { def } = screen;
+  const drawn = screen.sketch ? sketch.render(id) : state.kit.draw(screen.node, skin, { ...ids, prefix: `rv-${id}` });
+  // A -motion.svg layer is drawn without its file, so nothing on a board
+  // moves by itself: playing, thirty of them kept the whole board
+  // repainting. The screen's play button gives the file back (togglePlay),
+  // and meanwhile the still ground drawn under it shows.
+  const svg = fromProject(drawn.svg).replace(/(<image\b[^>]*?)\shref="([^"]+-motion\.svg)"/g, '$1 data-motion="$2"');
+  screen.rects = drawn.rects;
+  const r = SCREEN_RADIUS;
+  const ground = screen.sketch ? "none" : skin.color("canvas");
+  return (
+    `<g class="slot" data-slot="${esc(id)}">` +
+    // Two soft plates for a shadow and a hairline round the edge, so a dark
+    // screen still stands off the dark ground. Plates, not a blur: a filter
+    // is redrawn at every zoom step.
+    `<rect class="screen-shadow" x="${def.x - 6}" y="${def.y + 18}" width="${def.w + 12}" height="${def.h + 6}" rx="${r + 6}" opacity="0.3"/>` +
+    `<rect class="screen-shadow" x="${def.x - 18}" y="${def.y + 34}" width="${def.w + 36}" height="${def.h + 18}" rx="${r + 18}" opacity="0.14"/>` +
+    `<svg class="screen" data-screen="${esc(id)}" x="${def.x}" y="${def.y}" width="${def.w}" height="${def.h}" viewBox="0 0 ${def.w} ${def.h}">` +
+    `<clipPath id="clip-${esc(id)}"><rect width="${def.w}" height="${def.h}" rx="${r}"/></clipPath>` +
+    `<g clip-path="url(#clip-${esc(id)})"><rect width="${def.w}" height="${def.h}" fill="${ground}"/>${svg}</g></svg>` +
+    // A screen the board is about, rather than one shown for context, is edged in the accent; one drawn by hand, dashed.
+    `<rect class="screen-edge${def.feature ? " is-feature" : ""}${screen.sketch ? " is-sketch" : ""}" x="${def.x}" y="${def.y}" width="${def.w}" height="${def.h}" rx="${r}"/>` +
+    `</g>`
+  );
+}
+
 function drawWorld() {
-  const { draw, skinDefs, skins } = state.kit;
+  const { skinDefs, skins } = state.kit;
   const skin = skins[state.layer];
   const { ids, svg: defs } = skinDefs("rv");
   const parts = [`<defs>${fromProject(defs)}</defs><g id="camera">`];
-  for (const [id, screen] of state.screens) {
-    const { def } = screen;
-    const drawn = draw(screen.node, skin, { ...ids, prefix: `rv-${id}` });
-    // A -motion.svg layer is drawn without its file, so nothing on a board
-    // moves by itself: playing, thirty of them kept the whole board
-    // repainting. The screen's play button gives the file back (togglePlay),
-    // and meanwhile the still ground drawn under it shows.
-    const svg = fromProject(drawn.svg).replace(/(<image\b[^>]*?)\shref="([^"]+-motion\.svg)"/g, '$1 data-motion="$2"');
-    const { rects } = drawn;
-    screen.rects = rects;
-    const r = SCREEN_RADIUS;
-    parts.push(
-      // Each screen in a slot of its own, which bake() leaves out of the
-      // drawing while the screen lies outside the drawn area.
-      `<g class="slot" data-slot="${esc(id)}">` +
-      // Two soft plates for a shadow and a hairline round the edge, so a dark
-      // screen still stands off the dark ground. Plates, not a blur: a filter
-      // is redrawn at every zoom step.
-      `<rect class="screen-shadow" x="${def.x - 6}" y="${def.y + 18}" width="${def.w + 12}" height="${def.h + 6}" rx="${r + 6}" opacity="0.3"/>` +
-        `<rect class="screen-shadow" x="${def.x - 18}" y="${def.y + 34}" width="${def.w + 36}" height="${def.h + 18}" rx="${r + 18}" opacity="0.14"/>` +
-        `<svg class="screen" data-screen="${esc(id)}" x="${def.x}" y="${def.y}" width="${def.w}" height="${def.h}" viewBox="0 0 ${def.w} ${def.h}">` +
-        `<clipPath id="clip-${esc(id)}"><rect width="${def.w}" height="${def.h}" rx="${r}"/></clipPath>` +
-        `<g clip-path="url(#clip-${esc(id)})"><rect width="${def.w}" height="${def.h}" fill="${skin.color("canvas")}"/>${svg}</g></svg>` +
-        // A screen the board is about, rather than one shown for context, is edged in the accent.
-        `<rect class="screen-edge${def.feature ? " is-feature" : ""}" x="${def.x}" y="${def.y}" width="${def.w}" height="${def.h}" rx="${r}"/>` +
-        `</g>`,
-    );
-  }
+  for (const [id, screen] of state.screens) parts.push(slotHtml(id, screen, skin, ids));
   parts.push("</g>");
   world.innerHTML = parts.join("");
   slots.clear();
@@ -512,6 +536,51 @@ function drawWorld() {
   baked = null;
   // Now, not on the next frame: a new world is never shown without its camera.
   renderOverlay();
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Draws a screen of the sketch again, in the place it has in the world. */
+function redrawSlot(id) {
+  const screen = state.screens.get(id);
+  const camera = world.querySelector("#camera");
+  if (!screen || !camera) return;
+  const holder = document.createElementNS(SVG_NS, "svg");
+  holder.innerHTML = slotHtml(id, screen, null, null);
+  const fresh = holder.firstElementChild;
+  const old = slots.get(id);
+  if (old) old.replaceWith(fresh);
+  else camera.append(fresh);
+  slots.set(id, fresh);
+  // A slot drawn on its own is placed with the next frame, like a new world.
+  baked = null;
+}
+
+/**
+ * The sketch changed: its screens come and go in the board, and the ones named
+ * are drawn again. A screen that is still there keeps the entry it has, with
+ * the boxes of what it holds.
+ */
+function syncSketch(items, changed) {
+  const keep = new Set(items.map((item) => item.def.id));
+  for (const [id, screen] of state.screens) {
+    if (!screen.sketch || keep.has(id)) continue;
+    state.screens.delete(id);
+    slots.get(id)?.remove();
+    slots.delete(id);
+  }
+  const redraw = new Set(changed);
+  for (const item of items) {
+    const old = state.screens.get(item.def.id);
+    if (old?.sketch) Object.assign(old.def, item.def);
+    else if (!old) {
+      state.screens.set(item.def.id, item);
+      redraw.add(item.def.id);
+    }
+  }
+  for (const id of redraw) if (state.screens.get(id)?.sketch) redrawSlot(id);
+  $("#present").disabled = state.screens.size === 0;
+  scheduleOverlay();
 }
 
 // ---- motion --------------------------------------------------------------
@@ -688,6 +757,7 @@ function freeArea() {
   const cover = [rail, $("#top")];
   if (document.body.dataset.panel === "open") cover.push($("#panel"));
   if (!$("#board-note").hidden) cover.push($("#board-note"));
+  if (!$("#sketchbar").hidden) cover.push($("#sketchbar"));
   for (const el of cover) {
     const r = el.getBoundingClientRect();
     if (!r.width || !r.height) continue;
@@ -1032,17 +1102,25 @@ function routesFor(requests) {
   return routes;
 }
 
+// The board's own links and the arrows drawn in the sketch.
+const allLinks = () => [...state.board.links, ...sketch.links()];
+
+// Where each arrow of the sketch runs on the stage, so the sketch can find one under the pointer.
+const linkShapes = new Map();
+
 function linksSvg() {
+  const all = allLinks();
   const incoming = new Map();
   const parts = [];
   const taken = screenBoxes();
-  for (const link of state.board.links) {
+  linkShapes.clear();
+  for (const link of all) {
     const list = incoming.get(link.to) ?? [];
     list.push(link);
     incoming.set(link.to, list);
   }
 
-  const requests = state.board.links.map((link) => {
+  const requests = all.map((link) => {
     const from = state.screens.get(link.from);
     const to = state.screens.get(link.to);
     if (!from || !to) return null;
@@ -1061,7 +1139,7 @@ function linksSvg() {
   });
   const routes = routesFor(requests);
 
-  state.board.links.forEach((link, index) => {
+  all.forEach((link, index) => {
     const from = state.screens.get(link.from);
     const to = state.screens.get(link.to);
     // A link to a screen that is not drawn is left out rather than stopping the overlay.
@@ -1072,6 +1150,7 @@ function linksSvg() {
     const hot = rect ? [a.x + rect.x + rect.w, a.y + rect.y + rect.h / 2] : null;
     const route = routes[index];
     const points = route.map(([x, y]) => toScreen(x, y));
+    if (link.id) linkShapes.set(link.id, points);
     const [px, py] = points[0];
     const [qx, qy] = points[points.length - 1];
 
@@ -1080,7 +1159,7 @@ function linksSvg() {
     // drawn only while the control is hovered. At rest the dot and the line
     // leaving the edge at the same height say the same thing.
     const lit = state.hot === `${link.from}:${link.at}`;
-    const cls = lit ? "wire lit" : "wire";
+    const cls = `${lit ? "wire lit" : "wire"}${link.id && link.id === sketch.selectedLink() ? " selected" : ""}`;
     if (hot) {
       const [hx, hy] = toScreen(hot[0], hot[1]);
       if (lit) {
@@ -1235,6 +1314,7 @@ function renderOverlay() {
     const rect = thread && anchorRect(thread.anchor);
     if (rect && thread.anchor.element) parts.push(outline(rect, "select-box"));
   }
+  parts.push(sketch.overlay());
 
   for (const { thread, number } of visibleThreads()) {
     const [wx, wy] = pinPoint(thread.anchor);
@@ -1349,7 +1429,7 @@ function pick(event) {
 function sourceUnder(found) {
   if (!found?.el) return null;
   const screenId = found.screenEl.dataset.screen;
-  const sources = new Set(state.board.links.filter((l) => l.from === screenId && l.at).map((l) => l.at));
+  const sources = new Set(allLinks().filter((l) => l.from === screenId && l.at).map((l) => l.at));
   for (let el = found.el; el && found.screenEl.contains(el); el = el.parentElement?.closest("[data-name]")) {
     if (sources.has(el.dataset.name)) return `${screenId}:${el.dataset.name}`;
   }
@@ -1478,7 +1558,10 @@ function openThread(id, { from = null } = {}) {
   $("#thread-status").textContent = thread.status === "resolved" ? "Reopen" : "Resolve";
   $("#thread-delete").textContent = "Delete";
   $("#thread-delete").dataset.armed = "false";
-  if (fresh) replyText.value = "";
+  if (fresh) {
+    replyText.value = "";
+    clearSendNote();
+  }
   renderOverlay();
   renderPanel();
   if (from) replyText.focus({ preventScroll: true });
@@ -1486,6 +1569,7 @@ function openThread(id, { from = null } = {}) {
 
 function closeThread() {
   threadCard.hidden = true;
+  clearSendNote();
   state.open = null;
   state.returnFocus = null;
 }
@@ -1494,6 +1578,7 @@ function closeCards() {
   const back = state.returnFocus;
   closeComposer();
   closeThread();
+  sketch.closeReference({ focus: true });
   renderOverlay();
   renderPanel();
   if (back) {
@@ -1547,6 +1632,13 @@ async function loadComments() {
 
 const commentsUrl = (entry) => `/api/comments/${encodeURIComponent(entry.project)}/${encodeURIComponent(entry.id)}`;
 
+/** Takes the comments a request answered with, and what became of the message it asked to send, if it asked. */
+function takeComments(data) {
+  const { relay = null, saved, thread, ...doc } = data;
+  state.doc = doc;
+  return relay;
+}
+
 async function send(op) {
   const response = await fetch(commentsUrl(state.entry), {
     method: "POST",
@@ -1555,7 +1647,96 @@ async function send(op) {
   });
   const data = await response.json().catch(() => ({ error: "The server did not answer." }));
   if (!response.ok) throw new Error(data.error ?? "Could not save.");
-  state.doc = data;
+  return takeComments(data);
+}
+
+// ---- sending to the agent ------------------------------------------------
+
+// One answer for every box that offers it: turned off once, it stays off in
+// the composer, the reply box and the reference card until turned on.
+const SEND = "review.send";
+let remembered = null;
+const wantsSend = () => (remembered ?? store.get(SEND, "on")) !== "off";
+const sendOn = () => Boolean(state.agent) && wantsSend();
+
+function renderSend() {
+  const label = state.agent === undefined ? "Looking for the agent" : "No agent for this project";
+  for (const form of document.querySelectorAll("[data-sends]")) {
+    const box = form.querySelector("[data-send]");
+    box.disabled = !state.agent;
+    box.checked = sendOn();
+    // The dot is green when the agent's wake is on and hollow when it is off; the words say it too.
+    form.querySelector("[data-agent]").innerHTML = state.agent
+      ? `<span class="send-dot" data-on="${state.agent.awake}" aria-hidden="true"></span><span class="send-unit">${esc(state.agent.unit)}</span><span class="sr-only">, wake ${state.agent.awake ? "on" : "off"}</span>`
+      : esc(label);
+    const button = form.querySelector("[data-submit]");
+    button.textContent = box.checked ? button.dataset.sending : button.dataset.plain;
+  }
+}
+
+document.addEventListener("change", (event) => {
+  if (!event.target.matches?.("[data-send]")) return;
+  // Kept in memory too, for a browser that keeps nothing.
+  remembered = event.target.checked ? "on" : "off";
+  store.set(SEND, remembered);
+  renderSend();
+});
+window.addEventListener("storage", (event) => {
+  if (event.key !== SEND) return;
+  remembered = null;
+  renderSend();
+});
+
+async function loadAgent() {
+  const project = state.entry?.project;
+  if (!project) return;
+  let agent = null;
+  try {
+    const response = await fetch(`/api/agent/${encodeURIComponent(project)}`, { cache: "no-store" });
+    if (response.ok) agent = (await response.json()).agent ?? null;
+  } catch {
+    /* Nothing answered: there is no agent to send to. */
+  }
+  // Another board was opened while this was on its way.
+  if (state.entry?.project !== project) return;
+  state.agent = agent;
+  renderSend();
+}
+
+const NOT_SENT = { "no-agent": "the project has no agent", failed: "Relay could not deliver it" };
+
+function clearSendNote() {
+  $("#send-note").hidden = true;
+}
+
+/** Says what became of the message a comment asked to send. What was written is saved either way. */
+function reportSend(relay, what) {
+  const note = $("#send-note");
+  note.hidden = !relay || relay.sent;
+  note.textContent = "";
+  if (!relay) return;
+  if (relay.sent) {
+    status(`${what} saved and sent to ${relay.to}`);
+    return;
+  }
+  const text = `${what} saved. The message to the agent was not sent: ${NOT_SENT[relay.reason] ?? "it failed"}.`;
+  note.textContent = text;
+  status(text, "error");
+}
+
+/** Opens the thread that asks the agent to recreate a reference image, and reports the message. */
+async function askReference(screen, note) {
+  const response = await fetch(`/api/reference/${encodeURIComponent(state.entry.project)}/${encodeURIComponent(state.entry.id)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ screen, note }),
+  });
+  const data = await response.json().catch(() => ({ error: "The server did not answer." }));
+  if (!response.ok) throw new Error(data.error ?? "The agent could not be asked.");
+  const relay = takeComments(data);
+  renderPanel();
+  openThread(data.thread);
+  reportSend(relay, "Reference");
 }
 
 function renderPanel() {
@@ -1652,7 +1833,7 @@ function showTip(item, delay) {
     tip.innerHTML = `<span>${esc(item.dataset.tip)}</span>${item.dataset.key ? `<kbd>${esc(item.dataset.key)}</kbd>` : ""}`;
     tip.hidden = false;
     const box = item.getBoundingClientRect();
-    const bar = rail.getBoundingClientRect();
+    const bar = item.closest("#rail, #sketchbar").getBoundingClientRect();
     if (bar.width > bar.height) {
       const left = clamp(box.left + box.width / 2 - tip.offsetWidth / 2, 8, innerWidth - tip.offsetWidth - 8);
       tip.style.left = `${left}px`;
@@ -1669,19 +1850,22 @@ function hideTip() {
   tip.hidden = true;
 }
 
-rail.addEventListener("pointerover", (event) => {
-  const item = event.target.closest(".item");
-  // Once one name is showing, the next follows the pointer without the wait.
-  if (item) showTip(item, tip.hidden ? 500 : 0);
-});
-rail.addEventListener("pointerleave", hideTip);
-rail.addEventListener("focusin", (event) => {
-  const item = event.target.closest(".item");
-  // A hidden bar is still sliding in: the name waits until it is in place.
-  if (item?.matches(":focus-visible")) showTip(item, rail.hasAttribute("data-hidden") ? 220 : 0);
-});
-rail.addEventListener("focusout", hideTip);
-rail.addEventListener("click", hideTip);
+function bindTips(bar) {
+  bar.addEventListener("pointerover", (event) => {
+    const item = event.target.closest(".item, .swatch");
+    // Once one name is showing, the next follows the pointer without the wait.
+    if (item) showTip(item, tip.hidden ? 500 : 0);
+  });
+  bar.addEventListener("pointerleave", hideTip);
+  bar.addEventListener("focusin", (event) => {
+    const item = event.target.closest(".item, .swatch");
+    // A hidden bar is still sliding in: the name waits until it is in place.
+    if (item?.matches(":focus-visible")) showTip(item, bar.hasAttribute("data-hidden") ? 220 : 0);
+  });
+  bar.addEventListener("focusout", hideTip);
+  bar.addEventListener("click", hideTip);
+}
+bindTips(rail);
 
 for (const item of rail.querySelectorAll(".item")) {
   if (/^[a-z0-9]$/i.test(item.dataset.key ?? "")) item.setAttribute("aria-keyshortcuts", item.dataset.key);
@@ -1770,20 +1954,49 @@ rail.addEventListener("focusout", hideRailSoon);
 sideBar.addEventListener("change", () => placeRail(railShown));
 placeRail(false);
 
+// ---- the sketch ------------------------------------------------------------
+
+const sketch = createSketch({
+  $,
+  stage,
+  status,
+  esc,
+  titleBand: TITLE_BAND,
+  screens: () => state.screens,
+  sync: syncSketch,
+  overlay: scheduleOverlay,
+  toScreen,
+  toWorld,
+  local,
+  view: () => state.view,
+  linkShapes: () => linkShapes,
+  reveal,
+  frame,
+  freeArea,
+  mode: () => state.mode,
+  sendOn,
+  renderSend,
+  askReference,
+  closeCards,
+});
+bindTips($("#sketchbar"));
+
 // ---- input ---------------------------------------------------------------
 
 let panning = null;
 
 function setMode(mode) {
+  if (state.mode === "sketch" && mode !== "sketch") sketch.leave();
   state.mode = mode;
   stage.dataset.mode = mode;
   for (const button of document.querySelectorAll("[data-mode]")) {
     button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
   }
-  if (mode === "move") {
+  if (mode === "move" || mode === "sketch") {
     state.hover = null;
     closeComposer();
   }
+  if (mode === "sketch") sketch.enter();
   renderOverlay();
 }
 
@@ -1800,7 +2013,7 @@ function touchPair() {
 }
 
 stage.addEventListener("pointerdown", (event) => {
-  if (event.pointerType !== "touch" || event.target.closest(".card, .note")) return;
+  if (event.pointerType !== "touch" || event.target.closest(".card, .note, .sketch-text")) return;
   // The primary finger starts a new gesture: a finger lifted off the stage
   // without being seen leaves nothing behind.
   if (event.isPrimary) touches.clear();
@@ -1814,6 +2027,7 @@ stage.addEventListener("pointerdown", (event) => {
   cancelAnimationFrame(tween);
   panning = null;
   stage.dataset.panning = "false";
+  sketch.cancel();
   if (state.mode === "comment") closeComposer();
   pinch = touchPair();
 });
@@ -1851,7 +2065,7 @@ stage.addEventListener("pointerup", endTouch);
 stage.addEventListener("pointercancel", endTouch);
 
 stage.addEventListener("pointerdown", (event) => {
-  if (event.target.closest(".card, .note")) return;
+  if (event.target.closest(".card, .note, .sketch-text")) return;
   const pin = event.target.closest?.(".pin[data-thread]");
   if (pin) {
     event.preventDefault();
@@ -1864,7 +2078,9 @@ stage.addEventListener("pointerdown", (event) => {
     togglePlay(play.dataset.play);
     return;
   }
-  const wantsPan = event.button === 1 || state.space || (state.mode === "move" && event.button === 0);
+  // In the sketch a press is the tool's if it takes it; one it leaves is a pan.
+  if (state.mode === "sketch" && event.button === 0 && !state.space && sketch.pointerDown(event)) return;
+  const wantsPan = event.button === 1 || state.space || ((state.mode === "move" || state.mode === "sketch") && event.button === 0);
   if (wantsPan) {
     event.preventDefault();
     const [x, y] = local(event);
@@ -1883,7 +2099,7 @@ stage.addEventListener("pointerdown", (event) => {
 });
 
 stage.addEventListener("pointermove", (event) => {
-  if (!panning && event.target.closest(".card, .note")) return;
+  if (!panning && event.target.closest(".card, .note, .sketch-text")) return;
   if (panning) {
     const [x, y] = local(event);
     if (Math.abs(x - panning.x) + Math.abs(y - panning.y) > 3) panning.moved = true;
@@ -1931,7 +2147,7 @@ stage.addEventListener("pointerleave", () => {
 stage.addEventListener(
   "wheel",
   (event) => {
-    if (event.target.closest(".card")) return;
+    if (event.target.closest(".card, .sketch-text")) return;
     event.preventDefault();
     const [x, y] = local(event);
     const speed = event.ctrlKey ? 0.01 : 0.0016;
@@ -1966,12 +2182,16 @@ window.addEventListener("keydown", (event) => {
   const typing = event.target.closest?.("textarea, input");
   if (event.key === "Escape") {
     hideTip();
-    // A card closes first; with none open, Escape inside the comments folds them.
-    if (!composer.hidden || !threadCard.hidden) closeCards();
+    // A card closes first; then the sketch steps back; with neither, Escape inside the comments folds them.
+    if (!composer.hidden || !threadCard.hidden || sketch.isOpen()) closeCards();
+    else if (state.mode === "sketch" && sketch.escape()) return;
     else if (event.target.closest?.("#panel")) setPanel(false, { focus: true });
     return;
   }
   if (typing) return;
+  const onBoard = event.target === document.body || Boolean(event.target.closest?.("#stage") && !event.target.closest(".card, .note"));
+  const onControl = Boolean(event.target.closest?.("button, summary, a, [role='button'], select"));
+  if (state.mode === "sketch" && sketch.key(event, { onBoard, onControl })) return;
   // Space pans the canvas, except on a control, where it presses it.
   if (event.key === " " && !event.target.closest?.("button, summary, a, [role='button']")) {
     state.space = true;
@@ -1985,7 +2205,6 @@ window.addEventListener("keydown", (event) => {
   const [cx, cy] = freeCentre();
   // The arrows are the keyboard's way to drag the board, from the board itself.
   const arrows = { arrowleft: [1, 0], arrowright: [-1, 0], arrowup: [0, 1], arrowdown: [0, -1] };
-  const onBoard = event.target === document.body || (event.target.closest?.("#stage") && !event.target.closest(".card, .note"));
   if (arrows[key] && onBoard) {
     event.preventDefault();
     const step = event.shiftKey ? 320 : 80;
@@ -1996,6 +2215,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (key === "h" || key === "v") setMode("move");
   else if (key === "c") setMode("comment");
+  else if (key === "s") setMode("sketch");
   else if (key === "n") toggleNote();
   // A shortcut never animates.
   else if (key === "0") fit(false);
@@ -2063,12 +2283,13 @@ composer.addEventListener("submit", async (event) => {
   const anchor = { ...state.draft };
   delete anchor.chain;
   try {
-    await send({ op: "add", anchor, layer: state.layer, text });
+    const relay = await send({ op: "add", anchor, layer: state.layer, text, send: sendOn() });
     const created = state.doc.threads.at(-1);
     closeComposer();
     renderPanel();
     openThread(created.id, { from: "pin" });
-    status("Comment saved");
+    if (relay) reportSend(relay, "Comment");
+    else status("Comment saved");
   } catch (error) {
     status(error.message, "error");
   }
@@ -2083,7 +2304,7 @@ replyForm.addEventListener("submit", async (event) => {
   const text = replyText.value.trim();
   if (!text || !state.open) return;
   try {
-    await send({ op: "reply", thread: state.open, text });
+    const relay = await send({ op: "reply", thread: state.open, text, send: sendOn() });
     // Sent: the box empties. A redraw of the same thread keeps what is in it,
     // which is right for a half-written reply and wrong for one just sent.
     // A phone keyboard still composing writes its last word back into a
@@ -2091,6 +2312,7 @@ replyForm.addEventListener("submit", async (event) => {
     replyText.blur();
     replyText.value = "";
     openThread(state.open);
+    reportSend(relay, "Reply");
   } catch (error) {
     status(error.message, "error");
   }
@@ -2143,9 +2365,14 @@ window.addEventListener("resize", () => {
   baked = null;
   scheduleOverlay();
 });
-window.addEventListener("focus", loadComments);
+window.addEventListener("focus", () => {
+  loadComments();
+  loadAgent();
+});
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") loadComments();
+  if (document.visibilityState !== "visible") return;
+  loadComments();
+  loadAgent();
 });
 
 // ---- present -------------------------------------------------------------
@@ -2159,8 +2386,8 @@ const playerScreen = $("#player-screen");
 const play = { at: null, back: [], flashTimer: 0 };
 
 function present() {
-  if (!state.board?.screens.length) return;
-  const start = state.screens.has(state.touched) ? state.touched : state.board.screens[0].id;
+  if (!state.screens.size) return;
+  const start = state.screens.has(state.touched) ? state.touched : state.screens.keys().next().value;
   closeCards();
   hideTip();
   play.back = [];
@@ -2190,7 +2417,7 @@ function showScreen(id) {
       .replace(/\sid="([^"]+)"/g, ' id="pl-$1"')
       .replace(/url\(#([^)]+)\)/g, "url(#pl-$1)")
       .replace(/((?:xlink:)?href=")#/g, "$1#pl-");
-  const links = state.board.links.filter((link) => link.from === id && state.screens.has(link.to));
+  const links = allLinks().filter((link) => link.from === id && state.screens.has(link.to));
   const spots = new Map();
   for (const link of links) {
     const rect = link.at ? screen.rects.get(link.at) : null;
@@ -2256,6 +2483,7 @@ async function boot() {
   // On a phone the comments card covers the canvas, so it starts folded there.
   const panel = store.get("review.panel", matchMedia("(max-width: 700px)").matches ? "closed" : "open");
   setPanel(panel !== "closed");
+  renderSend();
   rove(rail.querySelector(".item"));
   paintGround();
   watchDensity();
@@ -2309,7 +2537,7 @@ function showShot(id) {
 }
 
 // For an agent inspecting the page from a browser tool.
-window.__review = { state, openBoard, fit, frame, present };
+window.__review = { state, openBoard, fit, frame, present, sketch };
 
 boot().catch((error) => {
   console.error(error, error?.stack);
