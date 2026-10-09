@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cursor ACP wake works on Windows: with `RELAY_CURSOR_AGENT` unset, the worker starts the newest Cursor CLI version under `%LOCALAPPDATA%cursor-agent` through its bundled `node.exe` and `index.js`, the way the CLI launcher does, since spawning `agent` without a shell finds no `agent.cmd` and every headless resume ended as `cursor_agent_unavailable`. An explicit `RELAY_CURSOR_AGENT` still wins, and other platforms still run `agent acp`.
+- A message stays context, never authorization, with one exception defined in `rules.md`: a hand-off, a Relay message to an Executor from a peer or a superior that points at a task file addressed to it. The Executor takes that task as its work, within its own scope and permissions.
 - Relay hooks for Cursor and Codex on Windows read the hook payload as UTF-8 and pass it to node as UTF-8, and the hook strips a leading byte order mark, so the Cursor stop hook no longer fails with "Unexpected token" and accented text survives. Existing hooks pick this up with `relay configure --client cursor` or `--client codex`.
 - A mind runs Relay setup on its own: an install or an update copies the kit's runtime dependencies into the mind's `node_modules`, resolved the way Node resolves them, so `relay configure`, `relay unconfigure` and `relay diagnose` work from the mind without a kit checkout. A dependency missing next to the kit is reported as a warning.
 - Claude wake attach marks the session busy only when the Relay Stop hook is configured, since only that hook turns it idle again. Without the hooks the activity stays unknown, normal messages wake the session at once, and attach prints how to add the hooks.
