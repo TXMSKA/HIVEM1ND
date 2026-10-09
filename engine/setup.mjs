@@ -34,7 +34,7 @@ import {
   serializeMachineRecord,
   writeMachineRecord,
 } from './records.mjs';
-import { detectLanguage, LANGUAGES, option, text } from './texts.mjs';
+import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
 
@@ -73,6 +73,7 @@ export async function createSetupSession(options = {}) {
     adapters,
     presets,
     resume: options.resume !== false,
+    relaySetup: options.relaySetup === true,
   });
   await session.initialize();
   return session;
@@ -555,8 +556,13 @@ class SetupSession {
         warnings: plan.warnings,
       },
     });
+    // Relay points the clients at the mind's own copy of the CLI, so it waits for a complete install.
+    const relay = this.relaySetup && unwritten.length === 0
+      ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.mindPath, mindPath: this.mindPath })
+      : [];
     this.currentStep = 8;
     this.result = this.completionResult(applied.files, plan.warnings, {
+      relay,
       omitted: applied.omitted,
       replacedLinks: applied.replacedLinks,
       removed: applied.removed,
@@ -861,6 +867,7 @@ class SetupSession {
         kit: this.attachOutdated.kitVersion,
       }));
     }
+    notices.push(...(outcome.relay ?? []).map((item) => relayLine(language, item)));
     return {
       message: text(language, 'step8Description'),
       firstCommand: '/executor <project>',
@@ -873,6 +880,7 @@ class SetupSession {
       replacedLinks: outcome.replacedLinks ?? [],
       removed: outcome.removed ?? [],
       unwritten: outcome.unwritten ?? [],
+      relay: outcome.relay ?? [],
       reportPath: outcome.reportPath ?? null,
       attachPrompts: attachAgents.map((agent) => ({ agent, text: prompt })),
     };

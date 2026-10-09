@@ -7,6 +7,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
 import { formatBytes } from '../engine/measure.mjs';
+import { relayLine } from '../engine/texts.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -306,6 +307,7 @@ function formatEvolve(result) {
   if (result.omitted?.length) {
     lines.push(`Left uninstalled: ${result.omitted.length}. Run evolve again to install them.`);
   }
+  for (const item of result.relay ?? []) lines.push(relayLine("en", item));
   if (result.reportPath) lines.push(`Report: ${result.reportPath}`);
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
@@ -412,12 +414,20 @@ function formatStatus(result) {
   return lines.join("\n");
 }
 
+function relayUninstallLine({ client, status, reason }) {
+  if (status === "removed") return `${client}: Relay entry removed.`;
+  if (status === "elsewhere") return `${client}: Relay entry points elsewhere, kept.`;
+  if (status === "failed") return `${client}: Relay entry not removed. ${reason}`;
+  return `${client}: no Relay entry.`;
+}
+
 function formatUninstall(result) {
   const lines = result.removed.length
     ? result.removed.map((path) => `Removed: ${path}`)
     : ["Nothing was removed."];
   for (const path of result.updated ?? []) lines.push(`Rule line removed: ${path}`);
   for (const item of result.kept ?? []) lines.push(`Kept: ${item.path} (${item.reason})`);
+  for (const item of result.relay ?? []) lines.push(relayUninstallLine(item));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
   return lines.join("\n");
 }
@@ -448,6 +458,7 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     ...(options.language ? { language: options.language } : {}),
     env,
     resume: options.resume === true,
+    relaySetup: true,
   };
 }
 
@@ -1075,7 +1086,7 @@ async function runRelay(options, dependencies, output) {
   const { action } = options;
   if (action === "diagnose") {
     const { diagnoseRelayClients } = await import("../engine/relay/config.mjs");
-    const result = await diagnoseRelayClients({ homeDir: options.homeDir });
+    const result = await diagnoseRelayClients({ homeDir: options.homeDir, mindPath: options.mindPath });
     output.write(`${formatResult(result)}\n`);
     return 0;
   }

@@ -16,7 +16,7 @@ user/
   knowledge/                  private modules, same format as the base ones
   protocols/<name>.md         global protocols, for every project, one file per protocol
   roles/ commands/ features/  written for this mind, installed like the base ones
-  state/ inbox/ tasks/ log/   executive roles (genesis)
+  state/ inbox/ tasks/ log/   executive roles (genesis, overseer, adjutant)
   envs/<env>/
     state/ inbox/ tasks/ log/
   projects/<project>/
@@ -53,7 +53,7 @@ claims: src/auth/, docs/auth.md
 Login form done and tested in the browser. Password reset half done: the mail template is missing. Next: finish the template, then task 004. Do not re-ask: sessions stay in cookies, decided on 09-14.
 ```
 
-`state` is `in` or `out`. `tree` is `clean` or the output of `git status --porcelain` in one line. `claims` only in team repos. `lead` is optional: it names the unit this one reports to, such as `lead: overlord-myapp`, and a unit without it reports to the coordinator as before. `job` is optional: it names what the unit always does, such as `reader`, `archiver`, `builder`, `reviewer` or a short free-text description, so that a lead hands work by job, and a unit without it takes any work. A squad is a lead plus every unit whose state names it as `lead`. `model` is optional: the model the session runs on, as the session or the host that started it writes it, such as `model: strong` or the model's own name. A chat is created from three things that live in the unit's state, its name, its `job` and its `model`, so a host creates one by writing them. The body is the context, ten lines at most, written so a session on another machine can resume from it alone. A unit whose relay scope holds several repos keeps `branch`, `commit` and `tree` for the current one and adds a `## Repos` section after the context, one line per repo, such as `- shop: feat/cart 8b1d044 clean`.
+`state` is `in` or `out`. A unit that is `in` is held by one session: a second session of the Executor, the Overlord or the Adjutant takes a numbered unit, such as `executor-myapp-2` or `adjutant-2`, while a second session of the same unit of the Overseer, the Incubator or Genesis stops at its Start unless the user says the first is closed. `tree` is `clean` or the output of `git status --porcelain` in one line. `claims` only in team repos. `lead` is optional: it names the unit this one reports to, such as `lead: overlord-myapp`, and a unit without it reports to the coordinator as before. `job` is optional: it names what the unit always does, such as `reader`, `archiver`, `builder`, `reviewer` or a short free-text description, so that a lead hands work by job, and a unit without it takes any work. A squad is a lead plus every unit whose state names it as `lead`. `model` is optional: the model the session runs on, as the session or the host that started it writes it, such as `model: strong` or the model's own name. A chat is created from three things that live in the unit's state, its name, its `job` and its `model`, so a host creates one by writing them. The body is the context, ten lines at most, written so a session on another machine can resume from it alone. A unit whose relay scope holds several repos keeps `branch`, `commit` and `tree` for the current one and adds a `## Repos` section after the context, one line per repo, such as `- shop: feat/cart 8b1d044 clean`.
 
 ## Message: `inbox/<to>/<filename>.md`
 
