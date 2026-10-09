@@ -54,7 +54,7 @@ export function relayLocalStatePath(mindPath, { env = process.env, platform = pr
   const key = createHash('sha256').update(platform === 'win32' ? mindPath.toLowerCase() : mindPath).digest('hex').slice(0, 16);
   if (env[LOCAL_STATE_ENV]) return lib.join(lib.resolve(env[LOCAL_STATE_ENV]), key);
   // Packaged Windows apps such as the Codex desktop app redirect writes under AppData into their own package folder, so two clients on one machine would not see the same leases; the profile root is not redirected.
-  if (platform === 'win32') return lib.join(lib.isAbsolute(env.USERPROFILE ?? '') ? env.USERPROFILE : homeDir, '.hivem1nd', 'state', 'relay', key);
+  if (platform === 'win32') return lib.join(lib.isAbsolute(env.USERPROFILE ?? '') ? env.USERPROFILE : homeDir, '.hivem1nd-relay', key);
   const base = lib.isAbsolute(env.XDG_STATE_HOME ?? '') ? env.XDG_STATE_HOME : lib.join(homeDir, '.local', 'state');
   return lib.join(base, 'hivem1nd', 'relay', key);
 }
