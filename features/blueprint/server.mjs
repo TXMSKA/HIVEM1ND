@@ -18,6 +18,10 @@
 // and the messages a comment can send to the agent of its project, through the
 // kit's own Relay (engine/relay/person.mjs).
 //
+// And one is read for the page: while a page is open the server looks at the
+// files of the boards and tells the page when an agent changes one, so what is
+// written shows without a reload (/api/live).
+//
 // Run: node server.mjs [--mind <path>] [--hostname <name>] [--port <number>] [--lan]
 // then open http://localhost:3300/, or from a phone on the same network the
 // link with a key that --lan prints.
@@ -268,7 +272,18 @@ async function writeAtomic(file, data) {
   await rename(temp, file);
 }
 
-const writeDoc = (project, board, doc) => writeAtomic(commentsFile(project, board), `${JSON.stringify(doc, null, 2)}\n`);
+// The files the server writes for a page, by the digests of what it wrote last.
+// The watcher passes over a change that is one of them, so a page is never told
+// of its own save. The digest is noted before the file lands, and a few are
+// kept, because a pass can read the file between two writes.
+const written = new Map();
+
+function writeOwn(file, data) {
+  written.set(file, [...(written.get(file) ?? []).slice(-7), revisionOf(data)]);
+  return writeAtomic(file, data);
+}
+
+const writeDoc = (project, board, doc) => writeOwn(commentsFile(project, board), `${JSON.stringify(doc, null, 2)}\n`);
 
 function cleanText(value) {
   if (typeof value !== "string") return null;
@@ -642,7 +657,7 @@ async function sketches(req, res, projects, name, board) {
         return send(res, 409, { error: "The sketch changed on disk.", ...(await readSketch(project, board, entry)) });
       }
       const text = `${JSON.stringify(sketch, null, 2)}\n`;
-      await writeAtomic(file, text);
+      await writeOwn(file, text);
       return send(res, 200, { revision: revisionOf(text), sketch });
     });
   }
@@ -702,6 +717,206 @@ async function references(req, res, projects, name, board) {
   });
   const relay = await sendToAgent(project, referenceMessage(project, board, saved.thread, screen, image, note));
   return send(res, 200, { ...saved.doc, saved: true, thread: saved.thread.id, relay });
+}
+
+// ---- live refresh --------------------------------------------------------
+
+// A page with a board open is told when an agent writes a file of its boards.
+// The files are looked at by their size and time, the way Void Lite looks at its
+// document, and not through fs.watch: sketches/ and comments/ do not exist until
+// the first write, and a watch on a synced folder or on a file that is replaced
+// loses events. Nothing is looked at while no page is listening.
+const WATCH_MS = 200;
+// A file is told once it has been still for this long, so an agent that writes
+// it in several steps is one event, not one for each step...
+const QUIET_MS = 300;
+// ...unless it never stops, and then it is told anyway.
+const MAX_WAIT_MS = 3000;
+// How often the projects of the mind are read again.
+const PROJECTS_MS = 2000;
+// A page that asks on a timer keeps the watch going this long after each ask.
+const POLL_GRACE_MS = 15000;
+const BEAT_MS = 20000;
+// The events kept for a page that polls.
+const KEPT_EVENTS = 200;
+// What is looked at in docs/flows/ of each project.
+const WATCHED = ["boards", "sketches", "comments"];
+
+const live = {
+  clients: new Set(),
+  timer: null,
+  started: null,
+  busy: false,
+  baselined: false,
+  // The watch begins afresh when the last page leaves; a cursor from before is
+  // told apart by its epoch, and that page is asked to read everything again.
+  epoch: "",
+  seq: 0,
+  recent: [],
+  projects: new Map(),
+  projectsAt: 0,
+  polledAt: 0,
+  beatAt: 0,
+  // Each project's files as last seen, and the changes waiting to be told.
+  seen: new Map(),
+  pending: new Map(),
+};
+
+/** What a file of docs/flows/ stands for: the index, a board module, a sketch or the comments of a board. Anything else, such as a temporary file, is not a change. */
+function describe(folder, name) {
+  if (folder === "boards" && name === "index.json") return { kind: "index", board: null };
+  const board = name.slice(0, name.lastIndexOf("."));
+  if (!BOARD_ID.test(board)) return null;
+  if (folder === "boards") return name.endsWith(".mjs") ? { kind: "board", board } : null;
+  return name.endsWith(".json") ? { kind: folder === "sketches" ? "sketch" : "comments", board } : null;
+}
+
+async function scan(project) {
+  const files = new Map();
+  for (const folder of WATCHED) {
+    const directory = join(project.flows, folder);
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      const what = entry.isFile() && describe(folder, entry.name);
+      if (!what) continue;
+      const file = join(directory, entry.name);
+      try {
+        const info = await stat(file);
+        files.set(file, { ...what, stamp: `${info.mtimeMs}:${info.size}` });
+      } catch {
+        /* Gone since the listing: the next pass sees it. */
+      }
+    }
+  }
+  return files;
+}
+
+/** Whether a file now holds what the server wrote itself. */
+async function mine(file) {
+  const digests = written.get(file);
+  if (!digests) return false;
+  const raw = await readRaw(file).catch(() => null);
+  if (raw !== null && digests.includes(revisionOf(raw))) return true;
+  // Someone else wrote it: what the server wrote before no longer says anything.
+  written.delete(file);
+  return false;
+}
+
+function touch(now, change) {
+  const key = `${change.project}/${change.kind}/${change.board ?? ""}`;
+  live.pending.set(key, { ...change, first: live.pending.get(key)?.first ?? now, last: now });
+}
+
+async function look(project, now) {
+  const files = await scan(project);
+  const before = live.seen.get(project.name);
+  live.seen.set(project.name, files);
+  if (!live.baselined) return;
+  // A project that gains its first board while pages are open is one change: the list of boards.
+  if (!before) return touch(now, { project: project.name, kind: "index", board: null });
+  for (const [file, item] of files) {
+    if (before.get(file)?.stamp === item.stamp || (await mine(file))) continue;
+    touch(now, { project: project.name, kind: item.kind, board: item.board });
+  }
+  for (const [file, item] of before) if (!files.has(file)) touch(now, { project: project.name, kind: item.kind, board: item.board });
+}
+
+function tell(change) {
+  live.seq += 1;
+  live.recent.push({ seq: live.seq, ...change });
+  if (live.recent.length > KEPT_EVENTS) live.recent.shift();
+  const message = `event: change\ndata: ${JSON.stringify(change)}\n\n`;
+  // A stalled page must not pile up an unbounded queue of events.
+  for (const client of live.clients) if (!client.write(message)) client.destroy();
+}
+
+function flush(now) {
+  for (const [key, change] of live.pending) {
+    if (now - change.last < QUIET_MS && now - change.first < MAX_WAIT_MS) continue;
+    live.pending.delete(key);
+    tell({ project: change.project, kind: change.kind, board: change.board });
+  }
+}
+
+function stop() {
+  clearInterval(live.timer);
+  Object.assign(live, { timer: null, started: null, baselined: false, projectsAt: 0 });
+  live.seen.clear();
+  live.pending.clear();
+}
+
+async function tick() {
+  if (live.busy) return;
+  live.busy = true;
+  try {
+    const now = Date.now();
+    if (!live.clients.size && now - live.polledAt > POLL_GRACE_MS) return stop();
+    if (now - live.projectsAt > PROJECTS_MS) {
+      live.projects = await discover();
+      live.projectsAt = now;
+    }
+    for (const name of live.seen.keys()) if (!live.projects.has(name)) live.seen.delete(name);
+    for (const project of live.projects.values()) await look(project, now);
+    live.baselined = true;
+    flush(now);
+    if (now - live.beatAt > BEAT_MS) {
+      live.beatAt = now;
+      for (const client of live.clients) client.write(": still here\n\n");
+    }
+  } catch {
+    /* A file caught half written, or a mind that is not there yet, is looked at again on the next pass. */
+  } finally {
+    live.busy = false;
+  }
+}
+
+// The first page starts the watch and waits for its first look, which is what
+// later changes are told against.
+function watching() {
+  if (!live.timer) {
+    Object.assign(live, { epoch: Date.now().toString(36), seq: 0, recent: [] });
+    live.timer = setInterval(tick, WATCH_MS);
+    live.started = tick();
+  }
+  return live.started;
+}
+
+const cursor = () => `${live.epoch}-${live.seq}`;
+
+/** What a page that asks on a timer has missed since its cursor, or that it has to read everything again. */
+function since(after) {
+  if (after === null) return { cursor: cursor(), resync: false, events: [] };
+  const [epoch, seq] = after.split("-");
+  const known = Number(seq);
+  const missed = live.recent.filter((event) => event.seq > known);
+  const lost = epoch !== live.epoch || !(known >= 0) || known > live.seq || (missed.length > 0 && missed[0].seq > known + 1);
+  return { cursor: cursor(), resync: lost, events: lost ? [] : missed.map(({ seq: _, ...change }) => change) };
+}
+
+/**
+ * The one route of the live refresh. With Accept: text/event-stream it is a
+ * stream of server-sent events: `ready` once the watch has looked, then
+ * `change` with { project, kind, board } for each file an agent wrote, where
+ * kind is index, board, sketch or comments. Any other GET answers the events
+ * since `?after=<cursor>` for a page that cannot hold a stream open.
+ */
+async function follow(req, res) {
+  if (!String(req.headers.accept ?? "").includes("text/event-stream")) {
+    live.polledAt = Date.now();
+    await watching();
+    return send(res, 200, since(new URL(req.url ?? "/", "http://localhost").searchParams.get("after")));
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": policy(),
+    "X-Frame-Options": "DENY",
+  });
+  res.flushHeaders();
+  live.clients.add(res);
+  res.once("close", () => live.clients.delete(res));
+  await watching();
+  if (!res.destroyed) res.write(`event: ready\ndata: ${JSON.stringify({ cursor: cursor() })}\n\n`);
 }
 
 /** A file under `root`, by a path that may not climb out of it. */
@@ -814,6 +1029,8 @@ async function route(req, res) {
   if (picture) return images(req, res, projects, decodeURIComponent(picture[1]));
 
   if (req.method !== "GET") return send(res, 405, { error: "GET only." });
+
+  if (pathname === "/api/live") return follow(req, res);
 
   const wanted = pathname.match(/^\/api\/agent\/([^/]+)$/);
   if (wanted) return agent(res, projects, decodeURIComponent(wanted[1]));

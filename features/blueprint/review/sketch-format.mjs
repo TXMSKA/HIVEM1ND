@@ -467,6 +467,32 @@ export function freeSpot(doc, boardScreens, size = DEFAULT_SCREEN, gap = { x: 36
   return { x: Math.min(...all.map((box) => box.x)), y: Math.max(...all.map((box) => box.y + box.h)) + gap.y };
 }
 
+/**
+ * What an outside edit changed, by screen of `after`: its id and title, the ids
+ * of the shapes that are new or differ, and `whole` when the screen itself is
+ * new, was moved, resized or renamed, or lost a shape, so there is no shape to
+ * point at. A shape is compared with what it holds, so a change inside a group
+ * is a change of the group. An arrow is not a screen and is not listed.
+ */
+export function diffSketch(before, after) {
+  const was = new Map(before.screens.map((screen) => [screen.id, screen]));
+  const changed = [];
+  for (const screen of after.screens) {
+    const old = was.get(screen.id);
+    if (!old) {
+      changed.push({ id: screen.id, title: screen.title, nodes: [], whole: true });
+      continue;
+    }
+    const kept = new Map(old.root.kids.map((kid) => [kid.id, JSON.stringify(kid)]));
+    const nodes = screen.root.kids.filter((kid) => kept.get(kid.id) !== JSON.stringify(kid)).map((kid) => kid.id);
+    const ids = new Set(screen.root.kids.map((kid) => kid.id));
+    const frame = (item) => [item.title, item.x, item.y, item.w, item.h].join("|");
+    const whole = frame(old) !== frame(screen) || old.root.kids.some((kid) => !ids.has(kid.id));
+    if (whole || nodes.length) changed.push({ id: screen.id, title: screen.title, nodes, whole });
+  }
+  return changed;
+}
+
 // ---- drawing ---------------------------------------------------------------
 
 const esc = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

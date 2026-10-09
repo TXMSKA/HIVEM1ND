@@ -1508,6 +1508,35 @@ body[data-panel="open"] .bubble {
   color: var(--bp-danger);
 }
 
+/* The sketch on disk differs from the one being changed here, and the page will
+   not replace the person's work: a quiet notice under the status, with the one
+   way forward. The dot is the agent's violet, as in a thread. */
+.fresh {
+  position: fixed;
+  top: calc(var(--top-band) + 48px);
+  left: 50%;
+  z-index: var(--bp-z-toast);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - var(--bp-bar-offset) * 2);
+  padding: 6px 6px 6px 16px;
+  border: 1px solid var(--bp-line);
+  border-radius: var(--bp-radius-popup);
+  background: var(--bp-surface);
+  box-shadow: 0 12px 32px var(--bp-shadow);
+  translate: -50% 0;
+}
+
+.fresh::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bp-agent);
+}
+
 /* ---- present: the board played as a prototype ------------------------- */
 
 .present {
@@ -1878,6 +1907,15 @@ body[data-panel="open"] .bubble {
   fill: none;
   stroke: var(--bp-select);
   stroke-width: 2;
+}
+
+/* Where an outside change landed. It fades in review.js, from an opacity
+   attribute, because the overlay is drawn again on every move and an animation
+   would start over each time. */
+.overlay .changed-box {
+  fill: none;
+  stroke: var(--bp-agent);
+  stroke-width: 3;
 }
 
 .overlay .hover-box {

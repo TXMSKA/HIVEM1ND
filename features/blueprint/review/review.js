@@ -10,7 +10,9 @@
 // /p/<project>/boards/<id>.mjs, and its comments go to the same server, which
 // writes docs/flows/comments/<board>.json in that project's repository. That
 // file is what an agent reads; a reply written into it by hand shows up here
-// the next time the window takes focus.
+// the next time the window takes focus. While the page is open the server also
+// tells it of such a change (live.mjs), and the board, the sketch or the
+// comments are read again in place.
 
 // The page carries an import map, served with it, that points "blueprint/" at
 // the shared kit. The kit a board is drawn with is its repository's: the
@@ -18,6 +20,7 @@
 // docs/flows/kit, and from the shared kit for a file the repository lacks, so
 // the theme (skins.mjs) and the fonts are the repository's. See kitOf().
 
+import { watchLive } from "./live.mjs";
 import { createSketch } from "./sketch.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -86,6 +89,12 @@ const state = {
   comments: "loading",
   // The last screen clicked on the board, where Present starts.
   touched: null,
+  // The screen whose note is shown in place of the board's, if any.
+  noted: null,
+  // What an outside change touched and is outlined for a few seconds: { screen, element, at }.
+  marks: [],
+  // True while no project has a board, so the first one that appears is opened.
+  empty: false,
   // The agent of the open project, which a comment can be sent to: its unit and
   // whether its wake is on, null when the project has none, undefined while the
   // server is being asked.
@@ -379,6 +388,34 @@ function writeHash() {
   history.replaceState(null, "", `#${params}`);
 }
 
+// What a screen is made of, to tell which ones a board written again changed.
+// Taken before the layout writes its measures into the tree.
+function signature(def, node) {
+  try {
+    return JSON.stringify([def.title, def.x, def.y, def.w, def.h, node]);
+  } catch {
+    return "";
+  }
+}
+
+/** A board built from its module: its kit, the board and a laid-out entry for each screen. Nothing on the stage is touched. */
+async function buildBoard(entry) {
+  const kit = await kitOf(entry);
+  await fontsReady(kit.skins[pickLayer(kit)]);
+  // A repository engine older than useSkin measures in its own faces.
+  kit.useSkin?.(kit.skins[pickLayer(kit)]);
+  kit.activate();
+  const board = (await import(`${entry.url}?v=${Date.now()}`)).default;
+  const screens = new Map();
+  for (const def of board.screens) {
+    const node = def.root();
+    const sig = signature(def, node);
+    kit.layout(node, def.w, def.h);
+    screens.set(def.id, { def, node, rects: new Map(), sig });
+  }
+  return { kit, board, screens };
+}
+
 // The last tab asked for wins: a board that finishes loading after another
 // was asked for is dropped.
 let opening = 0;
@@ -397,22 +434,10 @@ async function openBoard(project, id) {
   // Built apart from what is on the stage, so a board that fails to build
   // leaves the one shown whole: the screens and the titles, links and pins
   // over them always come from the same board.
-  let board;
-  let kit;
+  let built;
   let sketched;
-  const screens = new Map();
   try {
-    kit = await kitOf(entry);
-    await fontsReady(kit.skins[pickLayer(kit)]);
-    // A repository engine older than useSkin measures in its own faces.
-    kit.useSkin?.(kit.skins[pickLayer(kit)]);
-    kit.activate();
-    board = (await import(`${entry.url}?v=${Date.now()}`)).default;
-    for (const def of board.screens) {
-      const node = def.root();
-      kit.layout(node, def.w, def.h);
-      screens.set(def.id, { def, node, rects: new Map() });
-    }
+    built = await buildBoard(entry);
     sketched = await sketch.read(entry);
   } catch (error) {
     console.error(error);
@@ -421,9 +446,11 @@ async function openBoard(project, id) {
     return;
   }
   if (ticket !== opening) return;
+  const { kit, board, screens } = built;
   closeComposer();
   closeThread();
   state.hot = null;
+  state.marks = [];
   if (state.entry?.project !== entry.project) {
     state.agent = undefined;
     renderSend();
@@ -446,9 +473,7 @@ async function openBoard(project, id) {
   renderTabs();
   showNote(null);
   $("#board-note").hidden = false;
-  $("#present").disabled = state.screens.size === 0;
-  $("#view-title").textContent = `Review: ${state.board.title}`;
-  document.title = `${state.board.title} · Review`;
+  nameBoard();
   $("#panel-foot").innerHTML = `<span>Saved to</span> <code>${esc(entry.project)}/docs/flows/comments/${esc(entry.id)}.json</code>`;
   writeHash();
   loadAgent();
@@ -459,6 +484,7 @@ async function openBoard(project, id) {
 // A screen with a note of its own explains itself in the note card while it is
 // the one clicked; the canvas, or a screen without a note, shows the board's.
 function showNote(id) {
+  state.noted = id;
   const def = state.screens.get(id)?.def;
   const own = def?.note ? def : null;
   $("#board-note-title").textContent = own ? (own.title ?? own.id) : state.board.title;
@@ -1303,6 +1329,7 @@ function renderOverlay() {
   }
 
   parts.push(linksSvg());
+  parts.push(marksSvg());
 
   if (state.hover && state.mode === "comment") parts.push(outline(state.hover, "hover-box"));
   if (state.draft) {
@@ -1964,6 +1991,8 @@ const sketch = createSketch({
   titleBand: TITLE_BAND,
   screens: () => state.screens,
   sync: syncSketch,
+  changed: sketchChanged,
+  stale,
   overlay: scheduleOverlay,
   toScreen,
   toWorld,
@@ -2375,6 +2404,192 @@ document.addEventListener("visibilitychange", () => {
   loadAgent();
 });
 
+// ---- live refresh --------------------------------------------------------
+
+// A file of the board that an agent writes reaches the page through live.mjs.
+// The board module, the sketch or the comments are read again where they
+// stand, with the camera, the selection and the open cards as they were. A
+// sketch the person has changed and not yet saved is never replaced: a notice
+// offers the reload instead.
+
+/** The board's title, in the page, the tab and the Present button. */
+function nameBoard() {
+  $("#present").disabled = state.screens.size === 0;
+  $("#view-title").textContent = `Review: ${state.board.title}`;
+  document.title = `${state.board.title} · Review`;
+}
+
+// What an outside change touched is outlined where it landed, and said in
+// words. The outline holds, then fades; with less motion asked for, it holds
+// and goes.
+const MARK_MS = 6000;
+const MARK_FADE_MS = 2500;
+const MARK_LIMIT = 24;
+let markTimer = 0;
+
+/** "Cart", "Cart and Payment", "Cart, Payment and 2 more". */
+function listOf(names) {
+  const shown = names.slice(0, 3);
+  const more = names.length - shown.length;
+  if (more) return `${shown.join(", ")} and ${more} more`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}` : shown[0];
+}
+
+function markChanged(places, words) {
+  const at = performance.now();
+  for (const { screen, element } of places.slice(0, MARK_LIMIT)) state.marks.push({ screen, element, at });
+  status(words);
+  scheduleOverlay();
+}
+
+/** The outlines of the marks still showing; the overlay draws them again as they fade, and once more when the last is due to go. */
+function marksSvg() {
+  const now = performance.now();
+  state.marks = state.marks.filter((mark) => now - mark.at < MARK_MS);
+  clearTimeout(markTimer);
+  markTimer = 0;
+  if (!state.marks.length) return "";
+  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const left = Math.min(...state.marks.map((mark) => MARK_MS - (now - mark.at)));
+  markTimer = setTimeout(scheduleOverlay, calm ? left + 20 : Math.min(left + 20, 120));
+  return state.marks
+    .map((mark) => {
+      const rect = anchorRect(mark);
+      if (!rect) return "";
+      const [x1, y1] = toScreen(rect.x, rect.y);
+      const [x2, y2] = toScreen(rect.x + rect.w, rect.y + rect.h);
+      const element = Boolean(mark.element && state.screens.get(mark.screen)?.rects.has(mark.element));
+      const age = now - mark.at;
+      const opacity = calm || age < MARK_MS - MARK_FADE_MS ? 1 : (MARK_MS - age) / MARK_FADE_MS;
+      return `<rect class="changed-box" x="${x1 - 4}" y="${y1 - 4}" width="${x2 - x1 + 8}" height="${y2 - y1 + 8}" rx="${element ? 6 : SCREEN_RADIUS * state.view.k + 4}" opacity="${opacity.toFixed(2)}"/>`;
+    })
+    .join("");
+}
+
+/** The sketch was replaced by one from the disk: its screens and shapes that differ are outlined. */
+function sketchChanged(diff) {
+  const places = diff.flatMap(({ id, nodes, whole }) => [
+    ...(whole || !nodes.length ? [{ screen: id, element: null }] : []),
+    ...nodes.map((node) => ({ screen: id, element: node })),
+  ]);
+  markChanged(places, diff.length ? `The agent changed ${listOf(diff.map((item) => item.title))} in the sketch.` : "The agent changed the sketch.");
+}
+
+/** The notice that the sketch on disk differs from the one the person is changing. */
+function stale(on) {
+  $("#fresh").hidden = !on;
+}
+
+/** The board module was written again: the screens are drawn from the new one, and a screen it left alone is not outlined. */
+async function reloadBoard() {
+  const entry = state.entry;
+  if (!entry) return;
+  const refused = "The board changed on disk but cannot be drawn yet. The last version that drew is shown.";
+  let built;
+  try {
+    built = await buildBoard(entry);
+  } catch (error) {
+    console.error(error);
+    if (sameBoard(state.entry, entry)) status(refused, "error");
+    return;
+  }
+  if (!sameBoard(state.entry, entry)) return;
+  const last = { board: state.board, screens: new Map(state.screens) };
+  const changed = [...built.screens].filter(([id, screen]) => last.screens.get(id)?.sig !== screen.sig).map(([id, screen]) => ({ id, title: screen.def.title }));
+  const arrange = (board, screens) => {
+    state.board = board;
+    state.screens.clear();
+    for (const [id, screen] of screens) state.screens.set(id, screen);
+    // The sketch's screens stay, unless the new board took their ids.
+    for (const screen of last.screens.values()) if (screen.sketch && !state.screens.has(screen.def.id)) state.screens.set(screen.def.id, screen);
+  };
+  arrange(built.board, built.screens);
+  try {
+    drawWorld();
+  } catch (error) {
+    // A board that builds but does not draw, with a colour its theme lacks, leaves the last one that did.
+    console.error(error);
+    arrange(last.board, last.screens);
+    drawWorld();
+    status(refused, "error");
+    return;
+  }
+  nameBoard();
+  showNote(state.noted);
+  if (changed.length) markChanged(changed.map(({ id }) => ({ screen: id, element: null })), `The agent changed ${listOf(changed.map((item) => item.title))}.`);
+}
+
+/** The threads that are new, or hold a message they did not, since `before`. */
+function grownThreads(before, after) {
+  const known = new Map(before.map((thread) => [thread.id, thread.messages.length]));
+  return after.filter((thread) => (known.get(thread.id) ?? 0) < thread.messages.length);
+}
+
+async function refreshComments() {
+  const before = state.doc.threads;
+  await loadComments();
+  if (state.comments !== "ready") return;
+  const grown = grownThreads(before, state.doc.threads);
+  if (!grown.length) return;
+  const words = grown.length === 1 ? "a comment thread" : `${grown.length} comment threads`;
+  markChanged(grown.map(({ anchor }) => ({ screen: anchor.screen, element: anchor.element })), `The agent added to ${words}.`);
+}
+
+/** The list of boards, for a board that was added or taken out; the first board of a viewer that had none is opened. */
+async function refreshIndex() {
+  let list;
+  try {
+    const response = await fetch("/api/boards", { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    list = await response.json();
+  } catch {
+    return;
+  }
+  state.index = list;
+  if (menuTab) renderBoardList();
+  if (state.entry || !state.empty || !list.length) return;
+  state.empty = false;
+  const params = new URLSearchParams(location.hash.slice(1));
+  await openBoard(params.get("project"), params.get("board"));
+}
+
+const REFRESHES = {
+  index: [refreshIndex],
+  board: [reloadBoard],
+  sketch: [() => sketch.refresh({ notify: true })],
+  comments: [refreshComments],
+  // Events may have been missed, as after a reconnect.
+  all: [refreshIndex, reloadBoard, () => sketch.refresh({ notify: true }), refreshComments],
+  // The person asked for the files as they are, over what the page holds.
+  reload: [reloadBoard, () => sketch.reload(), refreshComments],
+};
+
+// One at a time, and a kind asked for again while it waits is done once.
+const waiting = new Set();
+let refreshing = false;
+
+async function refresh(kind) {
+  waiting.add(kind);
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    while (waiting.size) {
+      const [next] = waiting;
+      waiting.delete(next);
+      for (const task of REFRESHES[next]) await task().catch((error) => console.error(error));
+    }
+  } finally {
+    refreshing = false;
+  }
+}
+
+function onLive({ project, kind, board }) {
+  if (kind === "index") refresh("index");
+  else if (["board", "sketch", "comments"].includes(kind) && project === state.entry?.project && board === state.entry.id) refresh(kind);
+}
+
+$("#fresh-reload").addEventListener("click", () => refresh("reload"));
+
 // ---- present -------------------------------------------------------------
 
 // Present plays the board as a prototype: one screen at a time, fitted to the
@@ -2480,6 +2695,8 @@ function toggleNote() {
 // ---- boot ----------------------------------------------------------------
 
 async function boot() {
+  // Listening starts before the first board is read, so a file written while it loads is not missed.
+  watchLive({ onChange: onLive, onResync: () => refresh(state.entry ? "all" : "index") });
   // On a phone the comments card covers the canvas, so it starts folded there.
   const panel = store.get("review.panel", matchMedia("(max-width: 700px)").matches ? "closed" : "open");
   setPanel(panel !== "closed");
@@ -2509,6 +2726,7 @@ async function boot() {
 
 // No project on this machine has a board yet: say how to add one.
 function showEmpty() {
+  state.empty = true;
   $("#panel-empty-text").textContent = "No project has a board yet. A project appears here once its repository has docs/flows/boards/index.json.";
   $("#panel-empty").hidden = false;
   status("No boards found.");
@@ -2537,7 +2755,7 @@ function showShot(id) {
 }
 
 // For an agent inspecting the page from a browser tool.
-window.__review = { state, openBoard, fit, frame, present, sketch };
+window.__review = { state, openBoard, fit, frame, present, sketch, refresh };
 
 boot().catch((error) => {
   console.error(error, error?.stack);
