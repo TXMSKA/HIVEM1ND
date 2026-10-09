@@ -14,7 +14,8 @@ export function validWakePointer(text, unit) {
   return Boolean(match && Number(match[1]) > 0 && match[2] === unit);
 }
 
-const BASE_ENV = ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'PATH', 'Path', 'PATHEXT', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
+// The state variables must reach the worker unchanged: it and every hook process have to resolve the same machine-local lease and lock folder.
+const BASE_ENV = ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'PATH', 'Path', 'PATHEXT', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'XDG_STATE_HOME', 'RELAY_LOCAL_STATE_DIR'];
 
 export function explicitWakeAttach(client, nativeSessionId) {
   if (typeof nativeSessionId !== 'string' || !nativeSessionId) {

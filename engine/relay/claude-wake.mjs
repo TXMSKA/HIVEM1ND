@@ -48,7 +48,7 @@ export function claudeStopHookInstalled(env) {
 const MAX_POINTER_BYTES = 8 * 1024;
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CHILD_ENV_KEYS = [
-  'SystemRoot', 'WINDIR', 'TEMP', 'TMP',
+  'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA', 'RELAY_LOCAL_STATE_DIR',
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ID',
 ];
 

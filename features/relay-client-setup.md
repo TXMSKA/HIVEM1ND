@@ -20,7 +20,18 @@ hivem1nd relay read --mind-path <mind> --session-id <relay-instance> --native-se
 hivem1nd relay reminder --mind-path <mind> --session-id <relay-instance> --native-session-id <native-session> --client codex
 ```
 
-`--session-id` identifies the Relay instance across process launches; `--native-session-id` is the exact ID supplied by the agent client. Manual sessions may use the same ID for both when that client has no distinct correlation ID. Registration always needs an explicit `--unit`. `user` is a valid recipient/role. `relay history`, `threads`, `status` and `events` expose archived history, reply state, observed state and metadata. `relay send --body-stdin` accepts a bounded body from stdin.
+`--session-id` identifies the Relay instance across process launches; `--native-session-id` is the exact ID supplied by the agent client. Manual sessions may use the same ID for both when that client has no distinct correlation ID. Registration always needs an explicit `--unit`. `user` is a valid recipient/role. `relay history`, `threads`, `status` and `events` expose archived history, reply state, observed state and metadata. `relay delivery --id <message-id>` (repeatable) shows how far the messages the unit sent have come, as described under Delivery ladder. `relay send --body-stdin` accepts a bounded body from stdin.
+
+## Delivery ladder
+
+`relay delivery --id <message-id> [--id ...]` (MCP tool `delivery_status`, store method `delivery`) shows a sender where its messages have got to. It is read-only, takes at most 100 ids and answers only for messages the registered unit sent. An id that does not exist, or that another unit sent, is listed under `unknown` and nothing else, so the view never confirms what the unit did not send. Every other message appears under `deliveries` with its `stage` and the facts behind it:
+
+- `published`: the message event, or its inbox or archive file, exists. A listed message has reached at least this stage.
+- `woken`: a wake policy of the recipient unit holds a delivery entry for the message. The `woken` list has one item per policy with `client`, `machine`, `state`, `attempts` and `at`; `state` is `attempting`, `submitted`, `ambiguous`, `not_submitted` or `failed`. The stage is `woken` only for `submitted`, which means the pointer was handed to the client. It does not mean the client showed it or that anyone read the message. An `ambiguous` entry may or may not have reached the client and is never replayed.
+- `read`: the archive twin `user/relay/archive/<to>/<same name>` exists, which only `read` creates. This is the first stage that shows the recipient fetched the message.
+- `replied`: a message from the recipient carries `reply-to` with this id; `replied` holds its id and timestamp.
+
+`stage` is the furthest of `replied`, `read`, `woken` and `published` that applies. A message can be read without any wake, since a session may read its inbox on its own, so `woken` is not a precondition of `read`. Wake entries and archive twins reach another machine through OneDrive, so a stage reached there shows after the sync delay.
 
 ## Same-day awareness
 
@@ -40,13 +51,27 @@ The stable stdio MCP launch command is:
 node <kit>/cli/index.mjs relay mcp --mind-path <mind> --client <claude|codex|cursor|opencode|copilot|host> --session-id <stable-relay-instance>
 ```
 
-A host application may launch one server for a chat before its native ID exists. The MCP server stays unregistered until the agent calls `register` with an explicit `unit`, exact `nativeSessionId`, and client. The server's `--session-id` is the Relay instance identity, not the provider session ID. MCP tools include `register`, `send_message`, `list_inbox`, `read_inbox`, `history`, `threads`, `status`, `events` and `reminder`. All tool arguments are schema checked and extra keys are rejected.
+A host application may launch one server for a chat before its native ID exists. The MCP server stays unregistered until the agent calls `register` with an explicit `unit`, exact `nativeSessionId`, and client. The server's `--session-id` is the Relay instance identity, not the provider session ID. MCP tools include `register`, `send_message`, `list_inbox`, `read_inbox`, `history`, `threads`, `status`, `events`, `delivery_status` and `reminder`. All tool arguments are schema checked and extra keys are rejected.
 
 In an isolated test home, set `--home-dir <isolated-directory>` on setup; it overrides client home environment variables. Without that option, setup follows `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude MCP/settings, `OPENCODE_CONFIG` for OpenCode when set, or the normal home for clients without an override. Codex uses `config.toml` and `hooks.json` beneath its active config root; Claude uses `.claude.json` and `settings.json` beneath `CLAUDE_CONFIG_DIR` when set, or `~/.claude.json` and `~/.claude/settings.json` by default; Cursor uses `~/.cursor/mcp.json` and `hooks.json`; OpenCode uses its configured JSON/JSONC file, or `~/.config/opencode/opencode.jsonc` by default, preferring an existing `opencode.jsonc`, `opencode.json`, then `config.json`. Copilot uses `mcp-config.json` beneath `COPILOT_HOME`, or `~/.copilot/mcp-config.json` by default, with a `mcpServers.hivem1nd-relay` entry of `type: local`, the same Node command and `tools: ["*"]`; no hooks file is written for it. OpenCode config uses the native `mcp.hivem1nd-relay` local-server entry and the exact command array `[node, <kit>/cli/index.mjs, relay, mcp, --mind-path, <mind>, --client, opencode]`. Its MCP setup is separate from turn reminders: phase 1 does not install an OpenCode plugin, hook, or wake layer. Setup backs up existing files once to `.relay-backup`, merges Relay-owned entries, validates all files before writes, and is idempotent. Reinstall updates recognized Relay-owned launch paths; an unrelated entry occupying the Relay server name is a conflict and remains untouched. Run `relay unconfigure --client <client>` to remove only recognized Relay-owned entries. The uninstaller leaves backups and unrelated configuration in place.
 
 OpenCode exposes native session IDs with `opencode session list --format json --max-count <count>`. Select the exact session being used, then call Relay's MCP `register` tool with its `nativeSessionId` and explicit `unit`. Never choose the newest ID automatically when multiple sessions are listed. The OpenCode MCP server starts without a role binding; register before sending or reading role-scoped messages.
 
 SessionStart and supported user-turn hooks supply a brief inbox pointer. An unregistered manual session receives one bootstrap reminder naming its native session ID and asking it to register its explicit role. A registered quiet session receives no repeated setup prompt. Claude additionally supports PostToolUse; Codex uses SessionStart and UserPromptSubmit; Cursor uses sessionStart and postToolUse, plus the opt-in stop follow-up described below. Cursor's beforeSubmitPrompt event does not support the context return shape, so Relay does not configure it.
+
+## Wake records on each machine
+
+A wake policy is synced: it names a binding of one machine, and the other machines only read it. A worker lease and a lock hold a process id, which means something only on the machine that wrote it, so they live outside the mind, in a folder local to the machine and keyed by the mind:
+
+- Windows: `%LOCALAPPDATA%\hivem1nd\relay\<key>\wake\workers\` and `...\wake\locks\`.
+- Other systems: `$XDG_STATE_HOME/hivem1nd/relay/<key>/wake/`, or `~/.local/state/hivem1nd/relay/<key>/wake/` when the variable is unset or not an absolute path.
+- `<key>` is the first 16 hexadecimal digits of the SHA-256 of the mind's resolved path (in lower case on Windows), so two minds on one machine never share a lease. `RELAY_LOCAL_STATE_DIR` replaces everything before `<key>`, and the test suite points it at a temporary folder. Worker processes receive these variables unchanged, so a worker, a hook and a CLI call resolve one folder.
+
+A worker renews its lease when the next poll would land 5 seconds or more after the last renewal, which is every 4 seconds at the default 2 second poll, instead of on every poll. The lease lasts `leaseMs` (15 seconds by default), and `leaseMs` must exceed 5 seconds plus the sink timeout, so a renewal is never late while a delivery is in flight.
+
+So that another machine can still see whether the worker of a binding is alive, the worker writes `worker: { state, heartbeatAt }` into its own policy when it starts, at most once a minute while it runs, and when it stops. `relay wake status` reads the local lease for a binding of this machine. For a binding of another machine, `relay wake status ... --machine <name>` reads the note instead: `worker.state` is `running` while the note is under three minutes old, `stale` after that, and `idle` after a clean stop or when there is no note. `leaseUntil` and `registered` are null there, since neither can be checked from another machine. Enabling, disabling and starting a worker stay limited to the local machine.
+
+`workers/` and `locks/` files that earlier versions wrote under `user/relay/wake/` are ignored. When it starts, the worker of a machine removes its own old lease files and the old locks that are over ten minutes old.
 
 ## Claude Code Desktop wake
 
@@ -197,7 +222,7 @@ The shared interface is:
 - `validateRuntime({env, platform, binding?})`: check attach/watch prerequisites; watch supplies `binding`.
 - `sendPointer({binding, text, env, platform, signal})`: return `{status: 'submitted'|'not_submitted'|'ambiguous', reason?, transport?, deferred?}`.
 - `spawnWorker(options)`: return `{child, ready}`, with readiness `{state, ownsLease}`. `workerDependency` names the test injection; shared `spawnLocalWakeWorker` reads `workerEnvKeys`.
-- Optional `controllerOptions` sets retry/lease bounds. `acceptsDeferred` releases busy `not_submitted` claims with `deferred: true` without spending budgets. `stopLoopLimit` sets hook reservation limits.
+- Optional `controllerOptions` sets retry/lease bounds; `leaseMs` must exceed the 5 second lease renewal interval plus `sinkTimeoutMs`. `acceptsDeferred` releases busy `not_submitted` claims with `deferred: true` without spending budgets. `stopLoopLimit` sets hook reservation limits.
 
 Validate exact local identity and pointer-only text. Bound delivery, retain environment-only credentials, and classify uncertain dispatch as ambiguous without fallback. Test identity, isolation, refusal, cancellation, timeouts, readiness and shutdown with isolated minds/homes. Existing named exports remain compatible.
 

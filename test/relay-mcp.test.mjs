@@ -115,3 +115,30 @@ test('stdio UTF-8 decoder preserves a code point split across stream chunks', as
   const response = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   assert.equal(response.result.structuredContent.nativeSessionId, 'native-雪');
 });
+
+test('delivery_status answers for messages the registered unit sent and rejects arguments it does not take', async (context) => {
+  const mindPath = await fixture(context);
+  const first = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'send_message', arguments: { to: 'overseer', subject: 'Self', body: 'note' } } },
+  ]);
+  const { id } = first.lines[1].result.structuredContent;
+  const { lines } = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'delivery_status', arguments: { ids: [id, 'someone-elses'] } } },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'delivery_status', arguments: {} } },
+    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'delivery_status', arguments: { ids: Array.from({ length: 101 }, (_, index) => `id-${index}`) } } },
+    { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'delivery_status', arguments: { ids: [id], limit: 5 } } },
+  ]);
+  const definition = lines[0].result.tools.find((tool) => tool.name === 'delivery_status');
+  assert.deepEqual(definition.inputSchema.required, ['ids']);
+  assert.equal(definition.inputSchema.properties.ids.maxItems, 100);
+  const answer = lines[1].result.structuredContent;
+  assert.equal(answer.deliveries[0].id, id);
+  assert.equal(answer.deliveries[0].stage, 'published');
+  assert.deepEqual(answer.unknown, ['someone-elses']);
+  for (const line of lines.slice(2)) {
+    assert.equal(line.result.isError, true);
+    assert.equal(line.result.structuredContent.code, 'INVALID_ARGUMENTS');
+  }
+});

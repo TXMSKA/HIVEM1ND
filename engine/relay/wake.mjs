@@ -12,6 +12,10 @@ const MAX_INBOX_MESSAGES = 500;
 const ACTIVITY_MAX_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_POLL_MS = 2000;
 const DEFAULT_LEASE_MS = 15_000;
+const LEASE_RENEW_MS = 5000;
+// Another machine reads the note from the synced policy, so it is written rarely; three missed notes mean the worker is gone.
+const WORKER_NOTE_MS = 60_000;
+const WORKER_NOTE_STALE_MS = 3 * WORKER_NOTE_MS;
 const DEFAULT_COOLDOWN_MS = 30_000;
 const DEFAULT_SINK_TIMEOUT_MS = 5000;
 
@@ -30,7 +34,7 @@ function safeScalar(value, label, max = 180) {
   return value;
 }
 
-function normalizeBinding(value, machine) {
+function normalizeBinding(value, machine, { remote = false } = {}) {
   if (!plainObject(value)) throw wakeError('WAKE_INVALID_BINDING', 'Wake operations require an explicit binding object.');
   const unknown = Object.keys(value).find((key) => !['unit', 'nativeSessionId', 'client', 'machine'].includes(key));
   if (unknown) throw wakeError('WAKE_INVALID_BINDING', `Wake binding does not accept ${unknown}.`);
@@ -46,8 +50,8 @@ function normalizeBinding(value, machine) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$/.test(selectedMachine) || selectedMachine.endsWith('.')) {
     throw wakeError('WAKE_INVALID_BINDING', 'machine must be a path-safe host name.');
   }
-  if (selectedMachine !== machine) throw wakeError('WAKE_WRONG_MACHINE', 'A wake controller cannot target a different machine.');
-  return { unit, nativeSessionId, client, machine };
+  if (selectedMachine !== machine && !remote) throw wakeError('WAKE_WRONG_MACHINE', 'A wake controller cannot target a different machine.');
+  return { unit, nativeSessionId, client, machine: selectedMachine };
 }
 
 function bindingHash(binding) {
@@ -163,6 +167,7 @@ function validStoredPolicy(policy, binding, key) {
     || typeof policy.unlimited !== 'boolean' || typeof policy.extended !== 'boolean' || typeof policy.manualConsent !== 'boolean'
     || !Number.isInteger(policy.consecutiveErrors) || policy.consecutiveErrors < 0 || policy.consecutiveErrors > 5
     || policy.pausedReason !== null && !['handoff-budget-exhausted', 'dedupe-budget-exhausted', 'error-budget-exhausted'].includes(policy.pausedReason)
+    || policy.worker !== undefined && (!plainObject(policy.worker) || !['running', 'stopped'].includes(policy.worker.state) || !Number.isFinite(Date.parse(policy.worker.heartbeatAt)))
     || !plainObject(policy.activity) || ![null, 'busy', 'idle'].includes(policy.activity.value)
     || policy.activity.observedAt !== null && !Number.isFinite(Date.parse(policy.activity.observedAt))
     || policy.lastError !== null && (!plainObject(policy.lastError) || !SAFE_ERROR_CODES.has(policy.lastError.code) || !Number.isFinite(Date.parse(policy.lastError.at)))) return false;
@@ -215,14 +220,14 @@ export async function createRelayWakeController(options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 5000) throw wakeError('WAKE_INVALID_OPTIONS', 'pollIntervalMs must be between 250 and 5000 ms.');
   const retry = parseRetryPolicy(options.retryPolicy);
-  if (retry.leaseMs <= pollIntervalMs + retry.sinkTimeoutMs) throw wakeError('WAKE_INVALID_RETRY_POLICY', 'leaseMs must exceed pollIntervalMs plus sinkTimeoutMs.');
+  if (retry.leaseMs <= LEASE_RENEW_MS + retry.sinkTimeoutMs) throw wakeError('WAKE_INVALID_RETRY_POLICY', 'leaseMs must exceed the 5 second renewal interval plus sinkTimeoutMs.');
   const clock = options.clock ?? makeDefaultClock();
   if (typeof clock?.now !== 'function' || typeof clock?.sleep !== 'function') throw wakeError('WAKE_INVALID_CLOCK', 'clock requires now() and sleep(ms, signal).');
   const persistence = await createRelayWakePersistence({ mindPath: options.mindPath, hostname });
   const relay = await createRelay({ mindPath: options.mindPath, hostname });
   const workers = new Map();
 
-  function makeBinding(value) { return normalizeBinding(value, hostname); }
+  function makeBinding(value, options) { return normalizeBinding(value, hostname, options); }
   async function registered(binding) {
     const current = await persistence.resolveBinding(binding);
     if (!current) throw wakeError('WAKE_REGISTRATION_MISSING', 'No current Relay registration matches this exact wake binding.');
@@ -256,19 +261,25 @@ export async function createRelayWakeController(options = {}) {
     if (wake.value) return wake;
     return activityObservation(registration?.activity, registration?.activityObservedAt, now);
   }
-  async function inspect(value) {
-    const binding = makeBinding(value);
+  async function inspect(binding) {
     const key = bindingHash(binding);
     const policy = await readPolicy(binding, key);
     let registration = null;
     try { registration = await persistence.resolveBinding(binding); }
     catch (error) { if (error.code !== 'WAKE_AMBIGUOUS_BINDING') throw error; }
     const now = nowMs(clock);
-    const worker = await readWorker(key);
+    // A lease is a process id, so it can be checked only where the worker runs; for another machine the policy's own liveness note is all there is.
+    const local = binding.machine === hostname;
+    const worker = local ? await readWorker(key) : null;
+    const note = policy?.worker;
     const deliveries = policy?.deliveries ?? {};
     const entries = Object.values(deliveries);
-    const workerRunning = Boolean(worker && worker.expiresAt > now && await isProcessAlive(worker.pid));
+    const workerRunning = local && Boolean(worker && worker.expiresAt > now && await isProcessAlive(worker.pid));
     const windowExpired = policy && !policy.unlimited && Date.parse(policy.deadlineAt) <= now;
+    const workerState = local
+      ? workerRunning ? 'running' : !policy || policy.enabled !== true ? 'disabled' : windowExpired ? 'expired' : worker ? 'stale' : 'idle'
+      : !policy || policy.enabled !== true ? 'disabled' : windowExpired ? 'expired'
+        : note?.state === 'running' ? now - Date.parse(note.heartbeatAt) <= WORKER_NOTE_STALE_MS ? 'running' : 'stale' : 'idle';
     return {
       binding,
       enabled: freshPolicy(policy, now),
@@ -277,9 +288,9 @@ export async function createRelayWakeController(options = {}) {
       durationHours: policy?.durationHours ?? null,
       extended: policy?.extended === true,
       unlimited: policy?.unlimited === true,
-      registered: Boolean(registration),
+      registered: local ? Boolean(registration) : null,
       activity: activityFor(policy, registration, now),
-      worker: { state: workerRunning ? 'running' : !policy || policy.enabled !== true ? 'disabled' : windowExpired ? 'expired' : worker ? 'stale' : 'idle', leaseUntil: workerRunning ? worker.expiresAt : null },
+      worker: { state: workerState, leaseUntil: workerRunning ? worker.expiresAt : null, heartbeatAt: (local ? worker?.heartbeatAt : note?.heartbeatAt) ?? null },
       pendingCount: entries.filter((entry) => entry.state === 'not_submitted').length,
       submittedCount: entries.filter((entry) => entry.state === 'submitted').length,
       ambiguousCount: entries.filter((entry) => entry.state === 'ambiguous' || entry.state === 'attempting').length,
@@ -359,7 +370,7 @@ export async function createRelayWakeController(options = {}) {
     return inspect(binding);
   }
 
-  async function status(bindingValue) { return inspect(makeBinding(bindingValue)); }
+  async function status(bindingValue) { return inspect(makeBinding(bindingValue, { remote: true })); }
 
   // Reserve a hook handoff under the same locks and policy budget as workers.
   // A live ACP worker owns delivery; an editor stop hook must not compete with it.
@@ -442,6 +453,8 @@ export async function createRelayWakeController(options = {}) {
     let stopReason = null;
     const ownerId = randomUUID();
     let activeGeneration = null;
+    let leasedAt = 0;
+    let notedAt = null;
     const handle = {
       stop: (reason = 'stopped') => {
         stopReason ??= reason;
@@ -470,6 +483,10 @@ export async function createRelayWakeController(options = {}) {
     }
     async function leaseRelease() {
       await mutateWorker(key, async (current) => current?.ownerId === ownerId ? null : current).catch(() => {});
+    }
+    async function noteWorker(state) {
+      await mutatePolicy(binding, key, async (policy) => policy?.generation === activeGeneration
+        ? { ...policy, worker: { state, heartbeatAt: iso(nowMs(clock)) } } : policy);
     }
     async function recordError(code, generation) {
       return mutatePolicy(binding, key, async (policy) => policy && policy.generation === generation ? {
@@ -596,8 +613,17 @@ export async function createRelayWakeController(options = {}) {
       if (policy.generation !== activeGeneration) return 'policy-replaced';
       const registration = await persistence.resolveBinding(binding);
       if (!registration) return 'registration-lost';
-      const lease = await leaseRenew();
-      if (lease?.ownerId !== ownerId) return 'lease-lost';
+      // The lease outlives several polls, so it is renewed only when the next poll would land past the renewal interval; the gap between renewals then stays within the interval plus one iteration, which leaseMs is validated to cover.
+      if (now + pollIntervalMs - leasedAt >= LEASE_RENEW_MS) {
+        const lease = await leaseRenew();
+        if (lease?.ownerId !== ownerId) return 'lease-lost';
+        leasedAt = now;
+      }
+      if (notedAt === null || now - notedAt >= WORKER_NOTE_MS) {
+        notedAt = now;
+        // The note is advisory, so a policy that OneDrive is still syncing skips this minute's note instead of counting against the error budget.
+        await noteWorker('running').catch(() => {});
+      }
       let inbox;
       try { inbox = await relay.inbox({ unit: binding.unit, limit: MAX_INBOX_MESSAGES }); }
       catch (error) { return absorbError(error, 'INBOX_ERROR', policy.generation); }
@@ -642,6 +668,7 @@ export async function createRelayWakeController(options = {}) {
         }
         const registration = await persistence.resolveBinding(binding);
         if (!registration) { terminal = 'registration-lost'; resolveReady({ state: terminal, ownsLease: false }); return; }
+        await persistence.removeLegacy().catch(() => {});
         const handoffDeadline = nowMs(clock) + retry.leaseMs;
         const maxHandoffWaits = Math.ceil(retry.leaseMs / pollIntervalMs) + 1;
         let handoffWaits = 0;
@@ -669,6 +696,7 @@ export async function createRelayWakeController(options = {}) {
           await clock.sleep(Math.min(pollIntervalMs, Math.max(1, handoffDeadline - nowMs(clock))), controller.signal);
         }
         if (controller.signal.aborted) { terminal = stopReason ?? 'stopped'; resolveReady({ state: terminal, ownsLease: false }); return; }
+        leasedAt = nowMs(clock);
         resolveReady({ state: 'running', ownsLease: true });
         while (!controller.signal.aborted) {
           try { terminal = await iteration(); }
@@ -688,6 +716,7 @@ export async function createRelayWakeController(options = {}) {
         resolveReady({ state: 'error', ownsLease: false, code });
       } finally {
         resolveReady({ state: terminal, ownsLease: false });
+        if (notedAt !== null) await noteWorker('stopped').catch(() => {});
         await leaseRelease();
         if (workers.get(key) === worker) workers.delete(key);
         resolveDone({ reason: terminal });
