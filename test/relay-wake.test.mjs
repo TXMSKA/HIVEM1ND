@@ -483,11 +483,11 @@ test('worker leases and locks live in a machine-local folder keyed by the mind, 
   assert.deepEqual(await readdir(path.join(local, 'locks')), [], 'every lock is released');
 });
 
-test('the machine-local folder follows LOCALAPPDATA on Windows, XDG_STATE_HOME elsewhere and the override, keyed by the mind path', () => {
+test('the machine-local folder follows the profile on Windows, XDG_STATE_HOME elsewhere and the override, keyed by the mind path', () => {
   const key = (value) => createHash('sha256').update(value).digest('hex').slice(0, 16);
-  assert.equal(relayLocalStatePath('C:\\Mind\\Shared', { env: { LOCALAPPDATA: 'C:\\Users\\tom\\AppData\\Local' }, platform: 'win32', homeDir: 'C:\\Users\\other' }),
-    `C:\\Users\\tom\\AppData\\Local\\hivem1nd\\relay\\${key('c:\\mind\\shared')}`);
-  assert.equal(relayLocalStatePath('C:\\mind', { env: {}, platform: 'win32', homeDir: 'C:\\Users\\tom' }), `C:\\Users\\tom\\AppData\\Local\\hivem1nd\\relay\\${key('c:\\mind')}`);
+  assert.equal(relayLocalStatePath('C:\\Mind\\Shared', { env: { USERPROFILE: 'C:\\Users\\tom', LOCALAPPDATA: 'C:\\Users\\tom\\AppData\\Local\\Packages\\App\\LocalCache\\Local' }, platform: 'win32', homeDir: 'C:\\Users\\other' }),
+    `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind\\shared')}`);
+  assert.equal(relayLocalStatePath('C:\\mind', { env: {}, platform: 'win32', homeDir: 'C:\\Users\\tom' }), `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind')}`);
   assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: '/var/state' }, platform: 'linux', homeDir: '/home/tom' }), `/var/state/hivem1nd/relay/${key('/home/tom/mind')}`);
   assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: 'relative' }, platform: 'linux', homeDir: '/home/tom' }), `/home/tom/.local/state/hivem1nd/relay/${key('/home/tom/mind')}`);
   assert.equal(relayLocalStatePath('/mind', { env: {}, platform: 'darwin', homeDir: '/Users/tom' }), `/Users/tom/.local/state/hivem1nd/relay/${key('/mind')}`);
