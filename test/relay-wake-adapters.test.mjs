@@ -26,7 +26,8 @@ test('every registered wake module exposes the same interface and supplies CLI h
 
 test('existing adapter metadata preserves native attachment, timing, loop caps and deferral behavior', () => {
   const env = { CLAUDE_CODE_SESSION_ID: 'native-claude', CODEX_THREAD_ID: 'caller-codex' };
-  const { warning, ...claudeIdentity } = WAKE_ADAPTERS.claude.attachIdentity({ nativeSessionId: 'ignored', env });
+  assert.throws(() => WAKE_ADAPTERS.claude.attachIdentity({ nativeSessionId: 'another-session', env }), /runs inside the target session/);
+  const { warning, ...claudeIdentity } = WAKE_ADAPTERS.claude.attachIdentity({ nativeSessionId: 'native-claude', env });
   assert.deepEqual(claudeIdentity, {
     nativeSessionId: 'native-claude', sessionId: 'native-claude', requireRegistration: false, activity: null,
   });

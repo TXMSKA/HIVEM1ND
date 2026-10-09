@@ -7,10 +7,14 @@ import { validWakeBinding, validWakePointer } from './local-wake.mjs';
 export const wakeAdapter = Object.freeze({
   moduleUrl: import.meta.url,
   label: 'claude', capability: claudeWakeCapability, sendPointer: sendClaudeWake,
-  attachIdentity: ({ env }) => {
+  attachIdentity: ({ nativeSessionId: requested, env }) => {
     const nativeSessionId = env.CLAUDE_CODE_SESSION_ID;
     if (typeof nativeSessionId !== 'string' || !nativeSessionId) {
       throw new Error('Claude wake attach requires CLAUDE_CODE_SESSION_ID from the target session.');
+    }
+    // The worker can only reach the pipe of the session that runs attach, so a request for another session would bind this one.
+    if (requested !== undefined && requested !== nativeSessionId) {
+      throw new Error(`Claude wake attach runs inside the target session: --native-session-id ${requested} is not this session (${nativeSessionId}).`);
     }
     // Only the Relay Stop hook turns the attach turn's busy mark back to idle;
     // without it the activity stays unknown so normal messages are not held back.
