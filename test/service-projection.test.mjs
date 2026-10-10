@@ -372,3 +372,68 @@ test('a loopback projection read returns the same list shape', async (t) => {
   const direct = await readCollection({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, principal: { unitId: 'root:master' } }, 'units');
   assert.deepEqual(listed.data.items, direct.items);
 });
+
+test('scoped records, terminal sessions and chat fields stay in the projection', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const sessionId = '20c58b80-4d93-88cd-83b3-39d78f1d9d5d';
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'state'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'tasks'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'session-status', sessionId), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'room'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'room', 'read', 'master'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'product.json'), JSON.stringify({ format: 'hivem1nd-product-v1', title: 'Shop' }));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'state', 'builder.md'), stateFile({
+    unit: 'builder', role: 'executor', state: 'in', machine: 'DESKTOP', 'lead-id': 'root:overseer',
+  }));
+  await writeFile(path.join(root, 'user', 'state', 'overseer.md'), stateFile({
+    unit: 'overseer', 'unit-id': 'root:overseer', role: 'overseer', state: 'in', machine: 'DESKTOP',
+  }));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'tasks', '002.md'), stateFile({
+    id: '002', title: 'Scoped', status: 'open', 'from-id': 'root:master', 'to-id': 'project:shop:builder', date: '2026-10-10',
+  }, '## Request\nDo the work.\n## Report\nStarted.\n'));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder', 'note.md'), stateFile({
+    'from-id': 'root:master', 'to-id': 'project:shop:builder', 'thread-id': 'thread-1', timestamp: '2026-10-10T12:00:00.000Z',
+    attachments: '["docs/note.txt"]',
+  }));
+  const messageId = path.basename('note.md', '.md');
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'older.json'), JSON.stringify({
+    kind: 'registration', sessionId, unitId: 'project:shop:builder', client: 'codex', machine: 'DESKTOP',
+    nativeSessionId: 'native-1', registeredAt: '2026-10-10T11:00:00.000Z', activity: 'idle', activityObservedAt: '2026-10-10T11:50:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'newer.json'), JSON.stringify({
+    kind: 'registration', sessionId, unitId: 'project:shop:builder', client: 'codex', machine: 'DESKTOP',
+    nativeSessionId: 'native-1', registeredAt: '2026-10-10T11:30:00.000Z', activity: 'busy', activityObservedAt: '2026-10-10T11:50:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'blank.json'), '{}\n');
+  await writeFile(path.join(root, 'user', 'relay', 'session-status', sessionId, 'stop.json'), JSON.stringify({
+    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'DESKTOP', at: '2026-10-10T11:40:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'room', 'chat.md'), stateFile({
+    id: 'room', title: 'Room', kind: 'group', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'room', 'read', 'master', 'receipt.json'), JSON.stringify({ messageId: 'note' }));
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW });
+  const builder = view.units.find((unit) => unit.id === 'project:shop:builder');
+  assert.ok(builder);
+  assert.deepEqual(builder.sessionIds, []);
+  assert.equal(view.projects[0].title, 'Shop');
+  assert.equal(view.counts.projects, 1);
+  const task = view.tasks.find((item) => item.id === 'project:shop:002');
+  assert.equal(task.request, 'Do the work.');
+  assert.equal(task.report, 'Started.');
+  const note = view.messages.find((item) => item.path.endsWith('note.md'));
+  assert.equal(note.id, messageId);
+  assert.equal(note.threadId, 'thread-1');
+  assert.deepEqual(note.attachments, ['docs/note.txt']);
+  assert.equal(note.read, true);
+  assert.equal(view.sessions.length, 1);
+  assert.equal(view.sessions[0].id, sessionId);
+  assert.equal(view.sessions[0].state, 'stopped');
+  assert.equal(view.sessions.some((session) => session.id === undefined), false);
+  const chat = view.chats.find((item) => item.id === 'room');
+  assert.deepEqual(chat.members, ['root:master', 'project:shop:builder']);
+  assert.equal(chat.createdAt, '2026-10-10T10:00:00.000Z');
+  assert.equal(view.issues.some((issue) => issue.path.endsWith('blank.json')), true);
+});
