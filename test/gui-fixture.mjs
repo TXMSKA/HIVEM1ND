@@ -1,0 +1,2476 @@
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  FIXTURE_HOME_CODE,
+  FIXTURE_HOME_KEY,
+  LOCAL_MACHINE,
+  canonical,
+  createFixtureTree,
+  seedRecords,
+  sha256,
+  stableJson,
+} from "./gui-data.mjs";
+
+// Isolated GUI contract fixture. It does not import the service, CLI, or feature servers.
+// The home listener is a loopback transport simulation, not a production subnet check.
+// Stdin commands: advance <ms>, emit <name> <json>, disconnect, quit.
+
+const CONTRACT = "hivem1nd-gui-v3";
+const EVENTS = "hivem1nd-events-v3";
+const HOST = "127.0.0.1";
+const DAY_MS = 86400000;
+const HOME_MS = 12 * 3600_000;
+const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
+const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
+const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
+const APP_FILES = ["index.html", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs"];
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+class HttpError extends Error {
+  constructor(status, code, message, details = {}, retryAt = null) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+    this.retryAt = retryAt;
+  }
+}
+
+class CrashError extends Error {
+  constructor() {
+    super("Fixture crash after data and before receipt.");
+    this.crash = true;
+  }
+}
+
+function clock(fx) {
+  return new Date(fx.nowMs);
+}
+
+function uuid() {
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function hashBody(body) {
+  return sha256(JSON.stringify(canonical(body)));
+}
+
+function success(fx, data, requestId, eventCursor, sync = "local") {
+  return {
+    contract: CONTRACT,
+    data,
+    meta: { requestId, readAt: clock(fx).toISOString(), eventCursor, sync },
+  };
+}
+
+function safeEqual(actual, expected) {
+  const left = Buffer.from(String(actual));
+  const right = Buffer.from(String(expected));
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+function principalHash(id) {
+  return sha256(id);
+}
+
+function cursorNow(fx) {
+  return `${fx.serviceId}:${fx.eventSeq}`;
+}
+
+function planCursor(fx, count) {
+  return `${fx.serviceId}:${fx.eventSeq + count}`;
+}
+
+function enqueue(fx, task) {
+  const run = fx.tail.then(task, task);
+  fx.tail = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function invalidate(fx) {
+  fx.cache = null;
+}
+
+async function writeAtomic(file, bytes) {
+  await mkdir(dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${uuid()}.tmp`;
+  await writeFile(temporary, bytes);
+  await rename(temporary, file);
+}
+
+async function hashExisting(file) {
+  try {
+    const info = await lstat(file);
+    if (info.isSymbolicLink() || !info.isFile()) return null;
+    return sha256(await readFile(file));
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function listDir(directory) {
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    return entries.filter((entry) => !entry.isSymbolicLink());
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return [];
+    throw error;
+  }
+}
+
+function relMind(mind, file) {
+  return relative(mind, file).replaceAll("\\", "/");
+}
+
+function parseRecord(text) {
+  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const splitAt = normalized.indexOf("\n\n");
+  const header = splitAt === -1 ? normalized : normalized.slice(0, splitAt);
+  const body = splitAt === -1 ? "" : normalized.slice(splitAt + 2).replace(/\n$/, "");
+  const fields = new Map();
+  let broken = false;
+  for (const line of header.split("\n")) {
+    if (!line.trim()) continue;
+    const index = line.indexOf(":");
+    if (index <= 0) {
+      broken = true;
+      continue;
+    }
+    const key = line.slice(0, index).trim();
+    let value = line.slice(index + 1).trim();
+    if (value.startsWith("{") || value.startsWith("[")) {
+      try {
+        value = JSON.parse(value);
+      } catch {
+        broken = true;
+      }
+    }
+    fields.set(key, value);
+  }
+  return { fields, body, broken };
+}
+
+function field(fields, key) {
+  const value = fields.get(key);
+  return value === undefined || value === "" ? null : value;
+}
+
+function boolField(value, fallback = false) {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return fallback;
+}
+
+function scopeOf(id) {
+  const parts = String(id).split(":");
+  if (parts[0] === "root") return { kind: "root", name: null };
+  if (parts[0] === "env") return { kind: "environment", name: parts[1] ?? null };
+  if (parts[0] === "project") return { kind: "project", name: parts[1] ?? null };
+  return { kind: "root", name: null };
+}
+
+function section(body, heading) {
+  const pattern = new RegExp(`^## ${heading}\\n([\\s\\S]*?)(?=^## |$)`, "m");
+  return pattern.exec(body)?.[1]?.replace(/\n$/, "") ?? "";
+}
+
+function serviceSource() {
+  return { kind: "service", id: "fixture", unitId: null };
+}
+
+function limits() {
+  return {
+    messages: { used: 0, max: 60, windowSeconds: 60 },
+    messageBytes: { max: 1000000 },
+    syncBytes: { used: 0, max: 50000000, windowSeconds: 3600 },
+    state: "normal",
+    retryAt: null,
+  };
+}
+
+async function readJsonFile(file) {
+  const bytes = await readFile(file);
+  const text = bytes.toString("utf8").replace(/^\uFEFF/, "");
+  return { bytes, value: JSON.parse(text), hash: sha256(bytes) };
+}
+
+function answersOf(machine, now) {
+  if (machine.state !== "running" || !machine.heartbeatAt) return false;
+  const beat = Date.parse(machine.heartbeatAt);
+  if (!Number.isFinite(beat)) return false;
+  return now - beat <= 180000 && beat - now <= 30000;
+}
+
+function activityOf(session, now) {
+  if (!session.activity || !session.activityObservedAt) return null;
+  const observed = Date.parse(session.activityObservedAt);
+  if (!Number.isFinite(observed) || now - observed > 15 * 60_000) return null;
+  return session.activity;
+}
+
+function quotaOf(session, now) {
+  if (!session.quota || !session.quotaObservedAt) return session.quota ?? null;
+  const observed = Date.parse(session.quotaObservedAt);
+  if (!Number.isFinite(observed) || now - observed > 15 * 60_000) return null;
+  return session.quota;
+}
+
+async function buildProjection(fx) {
+  const user = fx.tree.user;
+  const issues = [];
+  const unitFiles = new Map();
+  const units = [];
+  const scopes = [{ kind: "root", name: null, path: user }];
+  for (const entry of await listDir(join(user, "envs"))) {
+    if (entry.isDirectory()) scopes.push({ kind: "environment", name: entry.name, path: join(user, "envs", entry.name) });
+  }
+  for (const entry of await listDir(join(user, "projects"))) {
+    if (entry.isDirectory()) scopes.push({ kind: "project", name: entry.name, path: join(user, "projects", entry.name) });
+  }
+
+  for (const scope of scopes) {
+    for (const entry of await listDir(join(scope.path, "state"))) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const file = join(scope.path, "state", entry.name);
+      let text;
+      try {
+        text = (await readFile(file)).toString("utf8");
+      } catch {
+        issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The state record could not be read." });
+        continue;
+      }
+      const parsed = parseRecord(text);
+      const id = field(parsed.fields, "unit-id");
+      const role = field(parsed.fields, "role");
+      const state = field(parsed.fields, "state");
+      const malformed = parsed.broken || !id || !ROLES.has(role) || (state !== "in" && state !== "out");
+      if (!id) {
+        issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The state record could not be read." });
+        continue;
+      }
+      if (malformed) {
+        issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The state record is malformed." });
+      }
+      const revision = malformed ? null : sha256(Buffer.from(text));
+      unitFiles.set(id, file);
+      units.push({
+        id,
+        unit: field(parsed.fields, "unit") ?? entry.name.replace(/\.md$/, ""),
+        role: ROLES.has(role) ? role : role,
+        scope: scope.kind === "root" ? { kind: "root", name: null } : { kind: scope.kind, name: scope.name },
+        leadId: field(parsed.fields, "lead-id"),
+        job: field(parsed.fields, "job"),
+        model: field(parsed.fields, "model"),
+        machine: field(parsed.fields, "machine"),
+        state: state === "out" ? "out" : "in",
+        context: parsed.body,
+        date: field(parsed.fields, "date"),
+        branch: field(parsed.fields, "branch"),
+        revision,
+        approvalGrants: Array.isArray(parsed.fields.get("approvals")) ? parsed.fields.get("approvals") : [],
+        malformed,
+        file,
+      });
+    }
+  }
+  for (const extra of units.filter((unit) => unit.role === "overseer" && unit.unit !== "overseer")) {
+    issues.push({ path: relMind(fx.tree.mind, extra.file), code: "duplicate_overseer", message: "Only one Overseer is used." });
+  }
+
+  const byId = new Map(units.map((unit) => [unit.id, unit]));
+  const sessions = await loadSessions(fx, byId);
+  const tasks = await loadTasks(fx, byId, issues);
+  const chats = await loadChats(fx, issues);
+  const mailboxes = await loadMail(fx, byId, issues);
+  const approvals = await loadApprovals(fx, issues);
+  const editors = await loadEditors(fx, issues);
+  const machines = await loadMachines(fx);
+  const waiting = buildWaiting(units, tasks, mailboxes, approvals);
+  const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
+  for (const unit of units) {
+    unit.sessionIds = sessions.filter((session) => session.unitId === unit.id).map((session) => session.id);
+    unit.status = unit.malformed ? "unknown" : statusOf(unit, sessions, waitingUnits);
+    unit.position = null;
+  }
+  const layout = await loadLayout(fx);
+  for (const unit of units) unit.position = layout.layout.nodes[unit.id] ?? null;
+  const settings = await loadSettings(fx);
+  const projects = await loadProjects(fx, units);
+  const squads = buildSquads(units);
+  const leads = buildLeads(units);
+  sortUnits(units);
+  const publicUnits = units.map(publicUnit);
+  return {
+    units: publicUnits,
+    files: { units: unitFiles, layout: join(fx.tree.user, "gui", "layout.json"), settings: join(fx.tree.user, "gui", "settings.json") },
+    issues,
+    sessions,
+    tasks,
+    chats: chats.chats,
+    messages: chats.messages,
+    mailboxes,
+    approvals,
+    editors,
+    machines,
+    waiting,
+    layout,
+    settings,
+    projects,
+    squads,
+    leads,
+    byId,
+  };
+}
+
+function publicUnit(unit) {
+  return {
+    id: unit.id,
+    unit: unit.unit,
+    role: unit.role,
+    scope: unit.scope,
+    leadId: unit.leadId,
+    job: unit.job,
+    model: unit.model,
+    machine: unit.machine,
+    state: unit.state,
+    status: unit.status,
+    context: unit.context,
+    date: unit.date,
+    branch: unit.branch,
+    revision: unit.revision,
+    sessionIds: unit.sessionIds,
+    approvalGrants: unit.approvalGrants,
+    position: unit.position,
+  };
+}
+
+function statusOf(unit, sessions, waitingUnits) {
+  if (unit.state === "out") return "out";
+  const live = sessions.find((session) => session.unitId === unit.id && session.state !== "stopped");
+  if (live?.quota && (live.quota.exhausted === true || (typeof live.quota.remaining === "number" && live.quota.remaining <= 0))) return "quota";
+  if (waitingUnits.has(unit.id)) return "waiting";
+  if (live?.activity === "busy" || live?.activity === "active") return "working";
+  return "idle";
+}
+
+function sortUnits(units) {
+  const rank = (unit) => (unit.status === "idle" || unit.status === "out" ? 1 : 0);
+  units.sort((left, right) => rank(left) - rank(right) || left.unit.localeCompare(right.unit, "en") || left.id.localeCompare(right.id, "en"));
+}
+
+function buildLeads(units) {
+  const ids = new Set(units.filter((unit) => unit.role === "overseer" && unit.unit === "overseer").map((unit) => unit.id));
+  for (const unit of units) if (unit.leadId) ids.add(unit.leadId);
+  return [...ids].filter((id) => units.some((unit) => unit.id === id));
+}
+
+function buildSquads(units) {
+  const squads = [];
+  const byLead = new Map();
+  for (const unit of units) {
+    if (!unit.leadId || unit.malformed) continue;
+    if (!byLead.has(unit.leadId)) byLead.set(unit.leadId, []);
+    byLead.get(unit.leadId).push(unit);
+  }
+  for (const [leadId, members] of byLead) {
+    const lead = units.find((unit) => unit.id === leadId);
+    squads.push({
+      id: `lead:${leadId}`,
+      leadId,
+      scope: lead?.scope ?? scopeOf(leadId),
+      members: members.map((unit) => unit.id).sort(),
+      rollup: rollup(members),
+    });
+  }
+  const loose = new Map();
+  for (const unit of units) {
+    if (unit.leadId || unit.malformed || byLead.has(unit.id)) continue;
+    const key = unit.scope.kind === "root" ? "loose:root:root" : `loose:${unit.scope.kind}:${unit.scope.name}`;
+    if (!loose.has(key)) loose.set(key, []);
+    loose.get(key).push(unit);
+  }
+  for (const [id, members] of loose) {
+    squads.push({
+      id,
+      leadId: null,
+      scope: members[0].scope,
+      members: members.map((unit) => unit.id).sort(),
+      rollup: rollup(members),
+    });
+  }
+  return squads.sort((left, right) => left.id.localeCompare(right.id, "en"));
+}
+
+function rollup(units) {
+  const counts = { working: 0, idle: 0, waiting: 0, out: 0, attention: 0 };
+  for (const unit of units) {
+    if (unit.status === "quota" || unit.status === "unknown") counts.attention += 1;
+    else if (counts[unit.status] !== undefined) counts[unit.status] += 1;
+  }
+  return counts;
+}
+
+async function loadSessions(fx, byId) {
+  const now = fx.nowMs;
+  const registrations = [];
+  for (const entry of await listDir(join(fx.tree.user, "relay", "sessions"))) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    try {
+      const { value } = await readJsonFile(join(fx.tree.user, "relay", "sessions", entry.name));
+      registrations.push(value);
+    } catch {
+      // A bad registration is ignored as an inaccessible session file.
+    }
+  }
+  const newest = new Map();
+  for (const record of registrations) {
+    const current = newest.get(record.sessionId);
+    if (!current || Date.parse(record.registeredAt) >= Date.parse(current.registeredAt)) newest.set(record.sessionId, record);
+  }
+  const statuses = new Map();
+  const statusRoot = join(fx.tree.user, "relay", "session-status");
+  for (const entry of await listDir(statusRoot)) {
+    if (!entry.isDirectory()) continue;
+    const files = (await listDir(join(statusRoot, entry.name))).filter((item) => item.isFile());
+    let winner = null;
+    for (const file of files) {
+      try {
+        const { value } = await readJsonFile(join(statusRoot, entry.name, file.name));
+        if (!winner || Date.parse(value.at) >= Date.parse(winner.at)) winner = value;
+      } catch {
+        // Skip an unreadable status file.
+      }
+    }
+    if (winner) statuses.set(entry.name, winner);
+  }
+  const policies = [];
+  for (const entry of await listDir(join(fx.tree.user, "relay", "wake", "policies"))) {
+    if (!entry.isFile()) continue;
+    try {
+      policies.push((await readJsonFile(join(fx.tree.user, "relay", "wake", "policies", entry.name))).value);
+    } catch {
+      // Skip an unreadable policy.
+    }
+  }
+  return [...newest.values()].map((record) => {
+    const status = statuses.get(record.sessionId);
+    const policy = policies.find((item) => item.binding?.unitId === record.unitId && item.binding?.nativeSessionId === record.nativeSessionId);
+    const session = {
+      id: record.sessionId,
+      unitId: byId.has(record.unitId) ? record.unitId : record.unitId,
+      client: record.client,
+      machine: record.machine,
+      nativeSessionId: record.nativeSessionId,
+      registeredAt: record.registeredAt,
+      activity: activityOf(record, now),
+      quota: quotaOf(record, now),
+      wake: {
+        enabled: Boolean(policy?.enabled) && !policy?.pausedReason && (policy?.unlimited === true || Date.parse(policy?.deadlineAt) > now),
+        deadlineAt: policy?.deadlineAt ?? null,
+        pausedReason: policy?.pausedReason ?? null,
+      },
+      state: status?.state ?? "registered",
+    };
+    return session;
+  }).sort((left, right) => right.registeredAt.localeCompare(left.registeredAt) || left.id.localeCompare(right.id, "en"));
+}
+
+async function loadTasks(fx, byId, issues) {
+  const tasks = [];
+  const roots = [{ kind: "root", name: null, path: fx.tree.user }];
+  for (const name of await names(join(fx.tree.user, "envs"))) roots.push({ kind: "environment", name, path: join(fx.tree.user, "envs", name) });
+  for (const name of await names(join(fx.tree.user, "projects"))) roots.push({ kind: "project", name, path: join(fx.tree.user, "projects", name) });
+  for (const scope of roots) {
+    const base = scope.path;
+    const scopeKind = scope.kind;
+    const scopeName = scope.name;
+    for (const entry of await listDir(join(base, "tasks"))) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const file = join(base, "tasks", entry.name);
+      try {
+        const bytes = await readFile(file);
+        const parsed = parseRecord(bytes.toString("utf8"));
+        const number = String(field(parsed.fields, "id") ?? "");
+        const id = field(parsed.fields, "task-id") ?? (scopeKind === "root" ? `root:${number}` : `${scope}:${number}`);
+        const report = section(parsed.body, "Report");
+        const toId = field(parsed.fields, "to-id") ?? resolveName(byId, field(parsed.fields, "to"), scopeKind, scopeName);
+        const executor = byId.get(toId);
+        const approval = /Approved for review by\s+(\S+)\s+on\s+(\S.*?)\s*$/m.exec(report);
+        const approvedBy = executor?.leadId && approval && approval[1] === executor.leadId.split(":").at(-1) ? executor.leadId : null;
+        const fromId = field(parsed.fields, "from-id") ?? (["master", "user"].includes(String(field(parsed.fields, "from") ?? "").toLowerCase()) ? "root:master" : null);
+        const status = field(parsed.fields, "status");
+        tasks.push({
+          id,
+          number,
+          scope: { kind: scopeKind, name: scopeName },
+          title: field(parsed.fields, "title") ?? section(parsed.body, "Request").split("\n")[0] ?? "",
+          status,
+          fromId,
+          toId,
+          date: field(parsed.fields, "date"),
+          requirements: String(field(parsed.fields, "requirements") ?? "").split(",").map((item) => item.trim()).filter(Boolean),
+          approvedBy,
+          reviewable: status === "review" && fromId === "root:master" && (!executor?.leadId || Boolean(approvedBy)),
+          revision: sha256(bytes),
+          request: section(parsed.body, "Request"),
+          report,
+          undoAvailable: false,
+          file,
+        });
+      } catch {
+        issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The task record could not be read." });
+      }
+    }
+  }
+  return tasks;
+}
+
+async function names(directory) {
+  return (await listDir(directory)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+function resolveName(byId, name, scopeKind, scopeName) {
+  if (!name) return null;
+  if (["master", "user"].includes(String(name).toLowerCase())) return "root:master";
+  const matches = [...byId.values()].filter((unit) => unit.unit.toLowerCase() === String(name).toLowerCase());
+  const local = matches.find((unit) => unit.scope.kind === scopeKind && unit.scope.name === scopeName);
+  return local?.id ?? matches[0]?.id ?? null;
+}
+
+async function loadChats(fx, issues) {
+  const chats = [];
+  const messages = [];
+  const root = join(fx.tree.user, "relay", "chats");
+  for (const entry of await listDir(root)) {
+    if (!entry.isDirectory()) continue;
+    const file = join(root, entry.name, "chat.md");
+    try {
+      const bytes = await readFile(file);
+      const parsed = parseRecord(bytes.toString("utf8"));
+      const readIds = new Set();
+      for (const receipt of await walkJson(join(root, entry.name, "read"))) {
+        for (const id of receipt.messageIds ?? []) readIds.add(id);
+      }
+      const ownMessages = [];
+      for (const child of await listDir(join(root, entry.name))) {
+        if (!child.isFile() || !child.name.endsWith(".md") || child.name === "chat.md") continue;
+        const messageFile = join(root, entry.name, child.name);
+        const messageBytes = await readFile(messageFile);
+        ownMessages.push(messageFrom(parseRecord(messageBytes.toString("utf8")), sha256(messageBytes), readIds));
+      }
+      ownMessages.sort(messageOrder);
+      messages.push(...ownMessages.map((message) => ({ ...message, chatId: field(parsed.fields, "id") })));
+      const last = ownMessages.at(-1) ?? null;
+      chats.push({
+        id: field(parsed.fields, "id"),
+        title: field(parsed.fields, "title") ?? "",
+        kind: field(parsed.fields, "kind"),
+        members: parsed.fields.get("members") ?? [],
+        pinned: boolField(field(parsed.fields, "pinned")),
+        listed: boolField(field(parsed.fields, "listed"), true),
+        createdAt: field(parsed.fields, "created"),
+        revision: sha256(bytes),
+        lastMessage: last ? publicMessage(last) : null,
+        unread: ownMessages.filter((message) => !message.read).length,
+        file,
+      });
+    } catch {
+      issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The chat record could not be read." });
+    }
+  }
+  return { chats, messages };
+}
+
+function messageOrder(left, right) {
+  const leftTime = left.timestamp ?? left.date ?? "";
+  const rightTime = right.timestamp ?? right.date ?? "";
+  return leftTime.localeCompare(rightTime) || left.id.localeCompare(right.id, "en");
+}
+
+function messageFrom(parsed, hash, readIds) {
+  const id = field(parsed.fields, "id");
+  const kind = field(parsed.fields, "kind") ?? "message";
+  const resourceId = field(parsed.fields, "resource-id");
+  return {
+    id,
+    fromId: field(parsed.fields, "from-id"),
+    toId: field(parsed.fields, "to-id") ?? field(parsed.fields, "to"),
+    machine: field(parsed.fields, "machine"),
+    timestamp: field(parsed.fields, "timestamp"),
+    date: field(parsed.fields, "date"),
+    priority: field(parsed.fields, "priority") ?? "normal",
+    subject: field(parsed.fields, "subject") ?? "",
+    body: parsed.body,
+    threadId: field(parsed.fields, "thread-id") ?? "",
+    replyTo: field(parsed.fields, "reply-to"),
+    replyRequested: boolField(field(parsed.fields, "reply-requested")),
+    attachments: Array.isArray(parsed.fields.get("attachments")) ? parsed.fields.get("attachments") : [],
+    kind,
+    read: readIds.has(id),
+    notice: resourceId ? { resourceId, key: field(parsed.fields, "notice-key") } : null,
+    hash,
+  };
+}
+
+async function walkJson(directory) {
+  const found = [];
+  for (const entry of await listDir(directory)) {
+    const file = join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...await walkJson(file));
+    else if (entry.isFile() && entry.name.endsWith(".json")) {
+      try {
+        found.push((await readJsonFile(file)).value);
+      } catch {
+        // Skip an unreadable receipt.
+      }
+    }
+  }
+  return found;
+}
+
+async function loadMail(fx, byId, issues) {
+  const boxes = new Map();
+  const ensure = (unitId) => {
+    if (!boxes.has(unitId)) boxes.set(unitId, { unitId, messages: [] });
+    return boxes.get(unitId);
+  };
+  const roots = [{ unitScope: "root", path: join(fx.tree.user, "inbox"), scopeKind: "root", scopeName: null }];
+  for (const name of await names(join(fx.tree.user, "projects"))) {
+    roots.push({ path: join(fx.tree.user, "projects", name, "inbox"), scopeKind: "project", scopeName: name });
+  }
+  for (const name of await names(join(fx.tree.user, "envs"))) {
+    roots.push({ path: join(fx.tree.user, "envs", name, "inbox"), scopeKind: "environment", scopeName: name });
+  }
+  for (const root of roots) {
+    for (const entry of await listDir(root.path)) {
+      if (!entry.isDirectory()) continue;
+      const unitId = resolveName(byId, entry.name, root.scopeKind, root.scopeName);
+      if (!unitId) continue;
+      const box = ensure(unitId);
+      for (const file of await listDir(join(root.path, entry.name))) {
+        if (!file.isFile() || !file.name.endsWith(".md")) continue;
+        const full = join(root.path, entry.name, file.name);
+        try {
+          const bytes = await readFile(full);
+          const message = messageFrom(parseRecord(bytes.toString("utf8")), sha256(bytes), new Set());
+          message.read = false;
+          message.location = "inbox";
+          message.file = full;
+          message.fileName = file.name;
+          box.messages.push(message);
+        } catch {
+          issues.push({ path: relMind(fx.tree.mind, full), code: "malformed_record", message: "The mailbox record could not be read." });
+        }
+      }
+    }
+  }
+  const legacy = join(fx.tree.user, "relay", "archive");
+  for (const entry of await listDir(legacy)) {
+    if (!entry.isDirectory() || entry.name === "by-unit") continue;
+    const unitId = resolveName(byId, entry.name, "root", null);
+    if (!unitId) continue;
+    await readArchiveDir(join(legacy, entry.name), ensure(unitId), issues, fx);
+  }
+  for (const entry of await listDir(join(legacy, "by-unit"))) {
+    if (!entry.isDirectory()) continue;
+    const unitId = Buffer.from(entry.name, "base64url").toString("utf8");
+    await readArchiveDir(join(legacy, "by-unit", entry.name), ensure(unitId), issues, fx);
+  }
+  for (const box of boxes.values()) {
+    box.unread = box.messages.filter((message) => !message.read).length;
+    box.total = box.messages.length;
+  }
+  return [...boxes.values()];
+}
+
+async function readArchiveDir(directory, box, issues, fx) {
+  for (const file of await listDir(directory)) {
+    if (!file.isFile() || !file.name.endsWith(".md")) continue;
+    const full = join(directory, file.name);
+    try {
+      const bytes = await readFile(full);
+      const message = messageFrom(parseRecord(bytes.toString("utf8")), sha256(bytes), new Set());
+      message.read = true;
+      message.location = "archive";
+      message.file = full;
+      message.fileName = file.name;
+      box.messages.push(message);
+    } catch {
+      issues.push({ path: relMind(fx.tree.mind, full), code: "malformed_record", message: "The archive record could not be read." });
+    }
+  }
+}
+
+async function loadApprovals(fx, issues) {
+  const approvals = [];
+  const root = join(fx.tree.user, "relay", "approvals");
+  for (const entry of await listDir(root)) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const requestFile = await readJsonFile(join(root, entry.name, "request.json"));
+      const answers = [];
+      for (const answer of await listDir(join(root, entry.name, "answers"))) {
+        if (answer.isFile()) answers.push(await readJsonFile(join(root, entry.name, "answers", answer.name)));
+      }
+      const outcomes = [];
+      for (const outcome of await listDir(join(root, entry.name, "answer-results"))) {
+        if (outcome.isFile()) outcomes.push((await readJsonFile(join(root, entry.name, "answer-results", outcome.name))).value);
+      }
+      let result = null;
+      try {
+        result = await readJsonFile(join(root, entry.name, "result.json"));
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      const request = requestFile.value;
+      const answerHashes = answers.map((item) => item.hash).sort();
+      const revision = sha256(JSON.stringify([requestFile.hash, answerHashes, result?.hash ?? null]));
+      let state = "pending";
+      if (answers.length && !result) state = "answering";
+      if (result) state = result.value.state;
+      else if (Date.parse(request.expiresAt) <= fx.nowMs) state = "expired";
+      approvals.push({
+        ...request,
+        state,
+        revision,
+        answer: answers.at(-1)?.value ?? null,
+        grantId: result?.value.grantId ?? null,
+        answerOutcomes: outcomes,
+      });
+    } catch {
+      issues.push({ path: `user/relay/approvals/${entry.name}`, code: "malformed_record", message: "The approval record could not be read." });
+    }
+  }
+  return approvals;
+}
+
+async function loadMachines(fx) {
+  const clients = await readJsonFile(join(fx.local, "clients.json")).then((item) => item.value).catch(() => ({}));
+  const machines = [];
+  for (const entry of await listDir(join(fx.tree.user, "machines"))) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const { value } = await readJsonFile(join(fx.tree.user, "machines", entry.name, "service.json"));
+      const answers = answersOf(value, fx.nowMs);
+      const issues = answers ? [] : [{ path: null, code: "machine_unavailable", message: "The machine does not answer." }];
+      machines.push({
+        id: value.machine,
+        state: value.state === "running" || value.state === "stopped" ? value.state : "unknown",
+        version: value.version ?? null,
+        heartbeatAt: value.heartbeatAt ?? null,
+        answers,
+        clients: clients[value.machine] ?? [],
+        issues,
+      });
+    } catch {
+      machines.push({
+        id: entry.name, state: "unknown", version: null, heartbeatAt: null, answers: false, clients: [],
+        issues: [{ path: null, code: "malformed_record", message: "The machine record could not be read." }],
+      });
+    }
+  }
+  return machines.sort((left, right) => left.id.localeCompare(right.id, "en"));
+}
+
+async function loadLayout(fx) {
+  const file = join(fx.tree.user, "gui", "layout.json");
+  try {
+    const { value, hash } = await readJsonFile(file);
+    return { layout: value, revision: hash };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return {
+      layout: { format: "hivem1nd-layout-v1", nodes: {}, groups: {}, updatedAt: null, machine: null },
+      revision: null,
+    };
+  }
+}
+
+async function loadSettings(fx) {
+  const file = join(fx.tree.user, "gui", "settings.json");
+  try {
+    const { value, hash } = await readJsonFile(file);
+    return { settings: value, revision: hash };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return { settings: { format: "hivem1nd-settings-v1", look: "modern", language: "en" }, revision: null };
+  }
+}
+
+async function loadProjects(fx, units) {
+  const projects = [];
+  for (const entry of await listDir(join(fx.tree.user, "projects"))) {
+    if (!entry.isDirectory()) continue;
+    let title = entry.name;
+    let environment = null;
+    try {
+      const parsed = parseRecord((await readFile(join(fx.tree.user, "projects", entry.name, "brief.md"))).toString("utf8"));
+      title = field(parsed.fields, "title") ?? title;
+      environment = field(parsed.fields, "environment");
+    } catch {
+      // A project without a brief still appears.
+    }
+    let available = false;
+    try {
+      const info = await lstat(join(fx.tree.root, "repositories", entry.name));
+      available = info.isDirectory();
+    } catch {
+      available = false;
+    }
+    projects.push({
+      id: entry.name,
+      environment,
+      title,
+      unitIds: units.filter((unit) => unit.scope.kind === "project" && unit.scope.name === entry.name).map((unit) => unit.id),
+      available,
+      product: null,
+    });
+  }
+  return projects.sort((left, right) => left.id.localeCompare(right.id, "en"));
+}
+
+function buildWaiting(units, tasks, mailboxes, approvals) {
+  const items = [];
+  for (const approval of approvals) {
+    if (approval.state !== "pending" && approval.state !== "answering") continue;
+    items.push({
+      id: `approval:${approval.id}`,
+      kind: "approval",
+      unitId: approval.unitId,
+      title: approval.display,
+      since: approval.requestedAt,
+      chatId: approval.chatId ?? null,
+      approvalId: approval.id,
+      taskId: null,
+      messageId: null,
+      blocking: true,
+    });
+  }
+  for (const task of tasks) {
+    if (!task.reviewable) continue;
+    items.push({
+      id: `review:${task.id}`,
+      kind: "review",
+      unitId: task.approvedBy ?? task.toId,
+      title: task.title,
+      since: task.date ?? "",
+      chatId: null,
+      approvalId: null,
+      taskId: task.id,
+      messageId: null,
+      blocking: false,
+    });
+  }
+  for (const unit of units) {
+    if (unit.scope.kind === "project") continue;
+    for (const match of unit.context.matchAll(/^\s*Waiting on (?:the )?(?:master|user)\s*:\s*(.*)$/gim)) {
+      const title = match[1].trim();
+      items.push({
+        id: `question:${unit.id}:${sha256(title)}`,
+        kind: "question",
+        unitId: unit.id,
+        title,
+        since: unit.date ?? "",
+        chatId: null,
+        approvalId: null,
+        taskId: null,
+        messageId: null,
+        blocking: true,
+      });
+    }
+  }
+  for (const box of mailboxes) {
+    if (box.unitId !== "root:master") continue;
+    for (const message of box.messages) {
+      if (!message.replyRequested || message.read) continue;
+      items.push({
+        id: `message:${message.id}`,
+        kind: "message",
+        unitId: message.fromId,
+        title: message.subject,
+        since: message.timestamp ?? message.date ?? "",
+        chatId: null,
+        approvalId: null,
+        taskId: null,
+        messageId: message.id,
+        blocking: true,
+      });
+    }
+  }
+  const seen = new Set();
+  return items.filter((item) => (seen.has(item.id) ? false : seen.add(item.id))).sort((left, right) => Number(right.blocking) - Number(left.blocking) || String(right.since).localeCompare(String(left.since)) || left.id.localeCompare(right.id, "en"));
+}
+
+async function loadEditors(fx, issues) {
+  let catalog = { resources: [] };
+  try {
+    catalog = (await readJsonFile(join(fx.tree.user, "gui", "resources.json"))).value;
+  } catch (error) {
+    if (error.code !== "ENOENT") issues.push({ path: "user/gui/resources.json", code: "malformed_record", message: "The editor catalog could not be read." });
+  }
+  const editors = [];
+  for (const resource of catalog.resources ?? []) {
+    const repo = join(fx.tree.root, "repositories", resource.project);
+    const file = join(repo, ...resource.path.split("/"));
+    const readOnly = resource.path.endsWith(".mjs");
+    let revision = null;
+    let document = null;
+    try {
+      const bytes = await readFile(file);
+      revision = sha256(bytes);
+      if (!readOnly) document = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      issues.push({ path: `${resource.project}/${resource.path}`, code: "malformed_record", message: "The editor resource could not be read." });
+    }
+    const commentsFile = resource.kind === "void"
+      ? file.replace(/\.json$/, ".comments.json")
+      : join(repo, "docs", "flows", "comments", `${resource.legacyId ?? document?.id}.json`);
+    let commentsRevision = null;
+    let threads = [];
+    try {
+      const loaded = await readJsonFile(commentsFile);
+      commentsRevision = loaded.hash;
+      threads = (loaded.value.threads ?? []).map((thread) => ({
+        ...thread,
+        place: resource.kind === "void" ? { start: thread.anchor?.start ?? 0, end: thread.anchor?.end ?? 0, exact: true } : (thread.anchor?.screen ? { screenId: thread.anchor.screen, nodeId: thread.anchor.element ?? null, x: thread.anchor.point?.x ?? 0, y: thread.anchor.point?.y ?? 0 } : null),
+        revision: loaded.hash,
+        notifications: [],
+      }));
+    } catch (error) {
+      if (error.code !== "ENOENT") issues.push({ path: `${resource.project}/${resource.path}`, code: "corrupt_resource", message: "The comment sidecar is unreadable." });
+    }
+    let attachmentRevision = null;
+    let attached = [];
+    const binding = join(fx.tree.user, "relay", "editors", `${resource.id}.json`);
+    try {
+      const loaded = await readJsonFile(binding);
+      attachmentRevision = loaded.hash;
+      attached = loaded.value.attached ?? [];
+    } catch (error) {
+      if (error.code !== "ENOENT") attachmentRevision = null;
+    }
+    const title = document?.title ?? resource.legacyId ?? resource.path;
+    editors.push({
+      id: resource.id,
+      kind: resource.kind,
+      project: resource.project,
+      title,
+      path: resource.path,
+      readOnly,
+      revision,
+      attached,
+      openThreads: threads.filter((thread) => thread.status === "open").length,
+      activity: null,
+      document: readOnly ? null : document,
+      legacy: readOnly ? { id: resource.legacyId, path: resource.path, reason: "conversion_required" } : null,
+      attachmentRevision,
+      commentsRevision,
+      threads,
+      proposals: threads.flatMap((thread) => (thread.messages ?? []).flatMap((message) => (message.proposal ? [{ ...message.proposal, resourceId: resource.id, threadId: thread.id, commentsRevision }] : []))),
+    });
+  }
+  return editors;
+}
+
+async function projection(fx) {
+  if (!fx.cache) fx.cache = await buildProjection(fx);
+  return fx.cache;
+}
+
+function snapshotHash(items) {
+  return sha256(JSON.stringify(canonical(items.map((item) => [item.id, item.revision ?? null]).sort((left, right) => left[0].localeCompare(right[0], "en")))));
+}
+
+function page(items, query, allowed, filter, issues) {
+  const unknown = [...query.keys()].filter((key) => !allowed.includes(key));
+  if (unknown.length) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  const limit = limitOf(query.get("limit"));
+  const q = query.get("q");
+  if (q !== undefined && q.length > 200) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  const filtered = q ? items.filter((item) => filter(item, q.toLowerCase())) : items;
+  const snapshot = snapshotHash(items);
+  const filterHash = sha256(JSON.stringify(canonical({ q: q ?? null, extra: allowed.filter((key) => !["q", "limit", "cursor"].includes(key)).map((key) => [key, query.get(key) ?? null]) })));
+  const position = readCursor(query.get("cursor"), filterHash, snapshot);
+  const slice = filtered.slice(position, position + limit);
+  const next = position + limit < filtered.length ? Buffer.from(JSON.stringify({ contract: CONTRACT, filter: filterHash, snapshot, position: position + limit })).toString("base64url") : null;
+  return { items: slice, total: filtered.length, nextCursor: next, issues };
+}
+
+function limitOf(value) {
+  if (value === undefined || value === null) return 50;
+  if (!/^\d+$/.test(value)) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  const limit = Number(value);
+  if (limit < 1 || limit > 200) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  return limit;
+}
+
+function readCursor(raw, filterHash, snapshot) {
+  if (raw === undefined || raw === null) return 0;
+  if (raw.length > 1024) throw new HttpError(400, "invalid_cursor", "The page cursor is not valid.");
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    throw new HttpError(400, "invalid_cursor", "The page cursor is not valid.");
+  }
+  if (!parsed || parsed.contract !== CONTRACT || parsed.filter !== filterHash || !Number.isInteger(parsed.position) || parsed.position < 0) {
+    throw new HttpError(400, "invalid_cursor", "The page cursor is not valid.");
+  }
+  if (parsed.snapshot !== snapshot) throw new HttpError(409, "cursor_expired", "The page cursor has expired.");
+  return parsed.position;
+}
+
+function includes(value, q) {
+  return String(value ?? "").toLowerCase().includes(q);
+}
+
+function syncState(fx) {
+  const offline = fx.scenario === "offline";
+  return {
+    state: offline ? "error" : "idle",
+    pendingChanges: 0,
+    limits: limits(),
+    incoming: [],
+    retryAt: null,
+    error: offline ? { code: "origin_unavailable", message: "The origin is not reachable." } : null,
+  };
+}
+
+function homeStatus(fx) {
+  if (!fx.home || fx.nowMs >= Date.parse(fx.home.expiresAt)) {
+    return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
+  }
+  return {
+    enabled: true,
+    openedAt: fx.home.openedAt,
+    expiresAt: fx.home.expiresAt,
+    addresses: fx.home.addresses,
+    remainingSeconds: Math.max(0, Math.ceil((Date.parse(fx.home.expiresAt) - fx.nowMs) / 1000)),
+  };
+}
+
+function viewData(fx, snap, project) {
+  let units = snap.units;
+  let tasks = snap.tasks;
+  if (project) {
+    const local = new Set(units.filter((unit) => unit.scope.kind === "project" && unit.scope.name === project).map((unit) => unit.id));
+    const leads = new Set(units.filter((unit) => local.has(unit.id) && unit.leadId).map((unit) => unit.leadId));
+    units = units.filter((unit) => local.has(unit.id) || leads.has(unit.id) || unit.id === "root:master" || unit.role === "overseer");
+    tasks = tasks.filter((task) => task.scope.kind === "project" && task.scope.name === project);
+  }
+  const chats = snap.chats.filter((chat) => chat.listed);
+  const counts = {
+    units: units.length,
+    leads: snap.leads.length,
+    squads: snap.squads.length,
+    projects: snap.projects.length,
+    machines: snap.machines.length,
+    sessions: snap.sessions.length,
+    chats: chats.length,
+    waiting: snap.waiting.length,
+    open: snap.tasks.filter((task) => task.status === "open").length,
+    review: snap.tasks.filter((task) => task.status === "review").length,
+    done: snap.tasks.filter((task) => task.status === "done").length,
+    closed: snap.tasks.filter((task) => task.status === "closed").length,
+    unread: chats.reduce((sum, chat) => sum + chat.unread, 0) + (snap.mailboxes.find((box) => box.unitId === "root:master")?.unread ?? 0),
+    issues: snap.issues.length,
+  };
+  return {
+    mind: { version: "3.0.0", machine: LOCAL_MACHINE, project: project ?? null },
+    units, leads: snap.leads, squads: snap.squads, projects: snap.projects, machines: snap.machines,
+    sessions: snap.sessions, chats: chats.map(publicChat), tasks: tasks.map(publicTask), waiting: snap.waiting, counts, issues: snap.issues,
+  };
+}
+
+function present(principal, data) {
+  if (!data || principal?.audience !== "phone") return data;
+  return JSON.parse(JSON.stringify(data), function revive(key, value) {
+    if (key === "nativeSessionId") return null;
+    return value;
+  });
+}
+
+async function ledger(fx) {
+  const file = join(fx.local, "event-ledger.json");
+  try {
+    return { file, value: (await readJsonFile(file)).value };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return { file, value: { format: "hivem1nd-fixture-ledger-v1", records: [] } };
+  }
+}
+
+async function saveLedger(fx, value) {
+  await writeAtomic(join(fx.local, "event-ledger.json"), Buffer.from(stableJson(value)));
+}
+
+async function receiptFor(fx, principalId, key) {
+  const memory = fx.memoryReceipts.get(principalId)?.get(key);
+  if (memory) return memory;
+  const file = join(fx.local, "receipts", principalHash(principalId), `${key}.json`);
+  try {
+    const value = (await readJsonFile(file)).value;
+    if (Date.parse(value.expiresAt) <= fx.nowMs) return null;
+    return value;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function saveReceipt(fx, principalId, key, identity, status, response) {
+  const file = join(fx.local, "receipts", principalHash(principalId), `${key}.json`);
+  await writeAtomic(file, Buffer.from(stableJson({
+    principalHash: principalHash(principalId),
+    method: identity.method,
+    path: identity.path,
+    bodyHash: identity.bodyHash,
+    status,
+    response,
+    createdAt: clock(fx).toISOString(),
+    expiresAt: new Date(fx.nowMs + DAY_MS).toISOString(),
+  })));
+}
+
+function saveMemoryReceipt(fx, principalId, key, identity, status, response) {
+  if (!fx.memoryReceipts.has(principalId)) fx.memoryReceipts.set(principalId, new Map());
+  fx.memoryReceipts.get(principalId).set(key, {
+    method: identity.method, path: identity.path, bodyHash: identity.bodyHash, status, response,
+    createdAt: clock(fx).toISOString(), expiresAt: new Date(fx.nowMs + DAY_MS).toISOString(),
+  });
+}
+
+async function saveIntent(fx, intent) {
+  await writeAtomic(join(fx.local, "transactions", `${intent.id}.json`), Buffer.from(stableJson(intent)));
+}
+
+async function finishIntent(fx, intent) {
+  for (const write of intent.writes) {
+    const current = await hashExisting(write.path);
+    if (current === write.afterRevision) continue;
+    if (current !== write.beforeRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
+    const bytes = Buffer.from(write.afterBytesBase64, "base64");
+    if (sha256(bytes) !== write.afterRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
+    await writeAtomic(write.path, bytes);
+  }
+  for (const removal of intent.removes ?? []) {
+    const current = await hashExisting(removal.path);
+    if (current === null) continue;
+    if (current !== removal.beforeRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
+    await rm(removal.path, { force: true });
+  }
+  if (faultMatches(fx, intent.identity.method, intent.identity.path) && fx.fault.crashAfterDataBeforeReceipt) {
+    fx.fault = null;
+    throw new CrashError();
+  }
+  const receiptFile = join(fx.local, "receipts", principalHash(intent.principalId), `${intent.key}.json`);
+  if (await hashExisting(receiptFile) === null) {
+    await writeAtomic(receiptFile, Buffer.from(stableJson({
+      principalHash: principalHash(intent.principalId),
+      ...intent.identity,
+      status: intent.receipt.status,
+      response: intent.receipt.response,
+      createdAt: intent.receipt.createdAt,
+      expiresAt: intent.receipt.expiresAt,
+    })));
+  }
+  const book = await ledger(fx);
+  let changed = false;
+  for (const event of intent.events) {
+    if (book.value.records.some((record) => record.key === event.key)) continue;
+    book.value.records.push(event);
+    changed = true;
+  }
+  if (changed) await saveLedger(fx, book.value);
+  intent.phase = "committed";
+  await saveIntent(fx, intent);
+  invalidate(fx);
+}
+
+async function recoverIntents(fx) {
+  for (const entry of await listDir(join(fx.local, "transactions"))) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const intent = (await readJsonFile(join(fx.local, "transactions", entry.name))).value;
+    if (intent.phase === "prepared") await finishIntent(fx, intent);
+  }
+}
+
+function faultMatches(fx, method, path) {
+  return Boolean(fx.fault && fx.fault.method === method && fx.fault.path === path);
+}
+
+function publish(fx, events, principal) {
+  let last = cursorNow(fx);
+  for (const event of events) {
+    fx.eventSeq += 1;
+    last = `${fx.serviceId}:${fx.eventSeq}`;
+    const record = {
+      id: last,
+      seq: fx.eventSeq,
+      name: event.name,
+      envelope: {
+        contract: EVENTS,
+        at: clock(fx).toISOString(),
+        machine: LOCAL_MACHINE,
+        source: event.source ?? { kind: principal?.audience === "phone" ? "phone" : "gui", id: principal?.viewerId ?? "fixture", unitId: "root:master" },
+        data: event.data,
+      },
+      viewerId: event.viewerId ?? null,
+      unitId: event.unitId ?? event.data?.unit?.id ?? null,
+      chatId: event.chatId ?? event.data?.chat?.id ?? event.data?.chatId ?? null,
+      resourceId: event.resourceId ?? event.data?.resourceId ?? null,
+      global: Boolean(event.global) || ["service.changed", "settings.changed", "sync.changed", "stream.reset", "home.changed"].includes(event.name),
+      at: Date.now(),
+    };
+    fx.ring.push(record);
+    const cutoff = Date.now() - 10 * 60_000;
+    while (fx.ring.length > 1000 || (fx.ring[0] && fx.ring[0].at < cutoff)) fx.ring.shift();
+    for (const stream of fx.streams) writeStream(stream, record);
+  }
+  return last;
+}
+
+function visible(stream, record) {
+  if (record.viewerId && record.viewerId !== stream.principal.viewerId) return false;
+  if (record.global || record.name === "stream.ready") return true;
+  if (stream.filters.unitId && record.unitId && stream.filters.unitId !== record.unitId) return false;
+  if (stream.filters.chatId && record.chatId && stream.filters.chatId !== record.chatId) return false;
+  if (stream.filters.resourceId && record.resourceId && stream.filters.resourceId !== record.resourceId) return false;
+  return true;
+}
+
+function writeStream(stream, record) {
+  if (stream.closed || !visible(stream, record)) return;
+  const data = stream.principal.audience === "phone" ? present(stream.principal, record.envelope) : record.envelope;
+  stream.response.write(`id: ${record.id}\nevent: ${record.name}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function publishNewEventRecords(fx, intent, principal) {
+  const fresh = intent.events.filter((event) => !fx.broadcast.has(event.key));
+  for (const event of fresh) fx.broadcast.add(event.key);
+  if (!fresh.length) return cursorNow(fx);
+  return publish(fx, fresh.map((event) => ({
+    name: event.name,
+    data: event.data,
+    source: event.source,
+    unitId: event.unitId,
+    chatId: event.chatId,
+    resourceId: event.resourceId,
+    global: event.global,
+  })), principal);
+}
+
+async function mutate(fx, request, route, body, principal, requestId) {
+  authorize(principal, route);
+  route.validate(body);
+  const key = String(request.headers["idempotency-key"] ?? "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(key)) {
+    throw new HttpError(400, "invalid_body", "The idempotency key must be a lowercase UUID.");
+  }
+  return enqueue(fx, async () => {
+    if (faultMatches(fx, request.method, route.requestPath) && fx.fault.status && !fx.fault.crashAfterDataBeforeReceipt && !fx.fault.dropAfterCommit) {
+      const fault = fx.fault;
+      if (fault.once !== false) fx.fault = null;
+      const error = new HttpError(fault.status, fault.code, fault.message ?? "The request was rejected.", fault.details ?? {}, fault.retryAt ?? null);
+      if (fault.status === 429) error.retryAfter = fault.retryAfter ?? 1;
+      throw error;
+    }
+    const identity = { method: request.method, path: route.requestPath, bodyHash: hashBody(body) };
+    const previous = await receiptFor(fx, principal.id, key);
+    if (previous) {
+      if (previous.method !== identity.method || previous.path !== identity.path || previous.bodyHash !== identity.bodyHash) {
+        throw new HttpError(409, "idempotency_conflict", "The idempotency key was already used.");
+      }
+      return { status: previous.status, response: previous.response };
+    }
+    await route.checkPreconditions(body);
+    const prepared = await route.prepare(body, principal);
+    const response = prepared.status === 204 ? null : success(fx, prepared.data, requestId, planCursor(fx, prepared.events.length), prepared.sync ?? "local");
+    const createdAt = clock(fx).toISOString();
+    const expiresAt = new Date(fx.nowMs + DAY_MS).toISOString();
+    if (route.runtime) {
+      if (route.homeGrant) saveMemoryReceipt(fx, principal.id, key, identity, prepared.status, response);
+      else await saveReceipt(fx, principal.id, key, identity, prepared.status, response);
+      prepared.apply?.();
+      publish(fx, prepared.events, principal);
+    } else {
+      const intent = {
+        id: uuid(),
+        principalId: principal.id,
+        key,
+        identity,
+        writes: prepared.writes,
+        removes: prepared.removes ?? [],
+        receipt: { status: prepared.status, response, createdAt, expiresAt },
+        events: prepared.events.map((event, index) => ({
+          key: `${intentIdPlaceholder(index)}`,
+          name: event.name,
+          data: event.data,
+          source: event.source ?? null,
+          unitId: event.unitId ?? null,
+          chatId: event.chatId ?? null,
+          resourceId: event.resourceId ?? null,
+          global: Boolean(event.global),
+        })),
+        phase: "prepared",
+      };
+      const transactionId = intent.id;
+      intent.events = intent.events.map((event, index) => ({ ...event, key: `${transactionId}:${index}` }));
+      await saveIntent(fx, intent);
+      await finishIntent(fx, intent);
+      publishNewEventRecords(fx, intent, principal);
+    }
+    const dropped = faultMatches(fx, request.method, route.requestPath) && fx.fault?.dropAfterCommit;
+    if (dropped) fx.fault = null;
+    return { status: prepared.status, response, drop: Boolean(dropped) };
+  });
+}
+
+function intentIdPlaceholder() {
+  return "pending";
+}
+
+function authorize(principal, route) {
+  const names = [route.capability, ...(route.allow ?? [])].filter(Boolean);
+  if (names.length && !names.some((name) => principal.capabilities.includes(name))) {
+    if (principal.audience === "phone") throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
+    throw new HttpError(403, "forbidden", "This credential cannot do that.");
+  }
+  if (principal.audience === "phone" && route.mailboxUnit && route.mailboxUnit !== "root:master" && route.method !== "GET") {
+    throw new HttpError(403, "phone_read_only", "The phone can acknowledge only the person's mailbox.");
+  }
+}
+
+function requireObject(body, fields) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  for (const key of Object.keys(body)) {
+    if (!fields.includes(key)) throw new HttpError(400, "unknown_field", "The request contains an unknown field.");
+  }
+}
+
+function requireKeys(body, keys) {
+  for (const key of keys) if (!(key in body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+}
+
+function revisionField(value) {
+  if (value === null) return;
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new HttpError(422, "invalid_body", "The revision is not valid.");
+}
+
+function coordinate(value, key) {
+  if (!value || typeof value !== "object" || Object.keys(value).some((item) => !["x", "y"].includes(item))) {
+    throw new HttpError(422, "invalid_body", "The position is not valid.");
+  }
+  for (const axis of ["x", "y"]) {
+    if (typeof value[axis] !== "number" || !Number.isFinite(value[axis]) || value[axis] < -100000 || value[axis] > 100000) {
+      throw new HttpError(422, "invalid_body", `The ${key} position is not valid.`);
+    }
+  }
+}
+
+function validateLayout(body) {
+  requireObject(body, ["nodes", "groups", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!body.nodes && !body.groups) throw new HttpError(422, "invalid_body", "A layout change is required.");
+  if (body.nodes) {
+    if (typeof body.nodes !== "object" || Array.isArray(body.nodes)) throw new HttpError(422, "invalid_body", "The layout change is not valid.");
+    for (const position of Object.values(body.nodes)) coordinate(position, "node");
+  }
+  if (body.groups) {
+    if (typeof body.groups !== "object" || Array.isArray(body.groups)) throw new HttpError(422, "invalid_body", "The layout change is not valid.");
+    for (const [id, group] of Object.entries(body.groups)) {
+      if (!/^(project|env):[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new HttpError(422, "invalid_body", "The group is not valid.");
+      coordinate(group, "group");
+      if (typeof group.collapsed !== "boolean" || Object.keys(group).some((key) => !["x", "y", "collapsed"].includes(key))) {
+        throw new HttpError(422, "invalid_body", "The group is not valid.");
+      }
+    }
+  }
+}
+
+async function prepareLayout(fx, body) {
+  const current = await loadLayout(fx);
+  const next = structuredClone(current.layout);
+  next.format = "hivem1nd-layout-v1";
+  next.nodes ??= {};
+  next.groups ??= {};
+  const snap = await projection(fx);
+  if (body.nodes) {
+    for (const [id, position] of Object.entries(body.nodes)) {
+      const unit = snap.units.find((item) => item.id === id);
+      if (!unit || unit.revision === null) throw new HttpError(422, "unknown_unit", "The unit is unknown.");
+      next.nodes[id] = { x: position.x, y: position.y };
+    }
+  }
+  if (body.groups) {
+    for (const [id, group] of Object.entries(body.groups)) next.groups[id] = { x: group.x, y: group.y, collapsed: group.collapsed };
+  }
+  next.updatedAt = clock(fx).toISOString();
+  next.machine = LOCAL_MACHINE;
+  const bytes = Buffer.from(stableJson(next));
+  const afterRevision = sha256(bytes);
+  return {
+    status: 200,
+    data: { layout: next, revision: afterRevision },
+    writes: [{ path: join(fx.tree.user, "gui", "layout.json"), beforeRevision: current.revision, afterRevision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "layout.changed", global: true, data: { layout: next, revision: afterRevision } }],
+  };
+}
+
+function validateMessage(body) {
+  requireObject(body, ["body", "subject", "replyTo", "attachments", "priority", "replyRequested"]);
+  requireKeys(body, ["body"]);
+  if (typeof body.body !== "string") throw new HttpError(422, "invalid_body", "The message body is not valid.");
+}
+
+function validateRead(body) {
+  requireObject(body, ["messageIds"]);
+  requireKeys(body, ["messageIds"]);
+  if (!Array.isArray(body.messageIds) || body.messageIds.length > 200 || body.messageIds.some((id) => typeof id !== "string")) {
+    throw new HttpError(422, "invalid_body", "The message list is not valid.");
+  }
+}
+
+async function prepareChatPost(fx, body, principal, chatId) {
+  const snap = await projection(fx);
+  const chat = snap.chats.find((item) => item.id === chatId);
+  if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+  if (!chat.members.includes(principal.unitId)) throw new HttpError(403, "not_chat_member", "The sender is not a member of the chat.");
+  const id = uuid();
+  const now = clock(fx).toISOString();
+  const document = markdownMessage({
+    id, from: "master", "from-id": principal.unitId, to: `chat:${chatId}`, "to-id": `chat:${chatId}`,
+    machine: LOCAL_MACHINE, timestamp: now, priority: body.priority ?? "normal", subject: body.subject ?? "",
+    "thread-id": chatId, "reply-to": body.replyTo ?? null, "reply-requested": "false", attachments: body.attachments ?? [], kind: "message",
+  }, body.body);
+  const bytes = Buffer.from(document);
+  const writes = [{ path: join(fx.tree.user, "relay", "chats", chatId, `${id}.md`), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }];
+  const message = {
+    id, fromId: principal.unitId, toId: `chat:${chatId}`, machine: LOCAL_MACHINE, timestamp: now, date: null,
+    priority: body.priority ?? "normal", subject: body.subject ?? "", body: body.body, threadId: chatId,
+    replyTo: body.replyTo ?? null, replyRequested: false, attachments: body.attachments ?? [], kind: "message", read: false, notice: null,
+  };
+  return {
+    status: 201,
+    data: { message, notifications: chat.members.filter((unitId) => unitId !== principal.unitId).map((unitId) => ({ unitId, state: "pending" })) },
+    writes,
+    events: [{ name: "message.created", chatId, data: { chatId, mailboxId: null, message } }],
+  };
+}
+
+function markdownMessage(fields, body) {
+  const lines = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === "") continue;
+    lines.push(`${key}: ${typeof value === "string" ? value : JSON.stringify(canonical(value))}`);
+  }
+  return `${lines.join("\n")}\n\n${body.replace(/\n$/, "")}\n`;
+}
+
+async function prepareChatRead(fx, body, principal, chatId) {
+  const snap = await projection(fx);
+  const chat = snap.chats.find((item) => item.id === chatId);
+  if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+  const known = new Set(snap.messages.filter((message) => message.chatId === chatId).map((message) => message.id));
+  if (body.messageIds.some((id) => !known.has(id))) throw new HttpError(422, "invalid_body", "A message was not found in the chat.");
+  const receiptId = uuid();
+  const record = {
+    format: "hivem1nd-chat-read-v1", chatId, unitId: principal.unitId, machine: LOCAL_MACHINE,
+    messageIds: body.messageIds, at: clock(fx).toISOString(),
+  };
+  const bytes = Buffer.from(stableJson(record));
+  const encoded = Buffer.from(principal.unitId).toString("base64url");
+  const unread = snap.messages.filter((message) => message.chatId === chatId && !message.read && !body.messageIds.includes(message.id)).length;
+  return {
+    status: 200,
+    data: { chatId, readIds: body.messageIds, unread },
+    writes: [{
+      path: join(fx.tree.user, "relay", "chats", chatId, "read", encoded, LOCAL_MACHINE, `${receiptId}.json`),
+      beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64"),
+    }],
+    events: body.messageIds.length ? [{ name: "message.read", chatId, data: { chatId, mailboxId: null, readerId: principal.unitId, messageIds: body.messageIds, unread } }] : [],
+  };
+}
+
+async function prepareMailboxRead(fx, body, unitId) {
+  const snap = await projection(fx);
+  const box = snap.mailboxes.find((item) => item.unitId === unitId);
+  const messages = box?.messages ?? [];
+  if (body.messageIds.some((id) => !messages.some((message) => message.id === id))) {
+    throw new HttpError(404, "message_not_found", "The message was not found.");
+  }
+  const writes = [];
+  const removes = [];
+  const readIds = [];
+  const alreadyReadIds = [];
+  for (const id of body.messageIds) {
+    const message = messages.find((item) => item.id === id);
+    if (message.read) {
+      alreadyReadIds.push(id);
+      continue;
+    }
+    const archiveDir = unitId === "root:master"
+      ? join(fx.tree.user, "relay", "archive", "master")
+      : join(fx.tree.user, "relay", "archive", "by-unit", Buffer.from(unitId).toString("base64url"));
+    const target = join(archiveDir, message.fileName);
+    const existing = await hashExisting(target);
+    if (existing && existing !== message.hash) throw new HttpError(409, "archive_collision", "The archived copy differs.");
+    if (!existing) {
+      const bytes = await readFile(message.file);
+      writes.push({ path: target, beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") });
+    }
+    removes.push({ path: message.file, beforeRevision: message.hash });
+    readIds.push(id);
+  }
+  return {
+    status: 200,
+    data: { unitId, readIds, alreadyReadIds },
+    writes,
+    removes,
+    events: readIds.length ? [{ name: "message.read", data: { chatId: null, mailboxId: unitId, readerId: "root:master", messageIds: readIds, unread: (box?.unread ?? 0) - readIds.length } }] : [],
+  };
+}
+
+function queryMap(url) {
+  const map = new Map();
+  for (const key of url.searchParams.keys()) {
+    if (map.has(key)) throw new HttpError(400, "invalid_query", "The query is not valid.");
+    map.set(key, url.searchParams.get(key));
+  }
+  return map;
+}
+
+function noneQuery(query) {
+  if (query.size) throw new HttpError(400, "invalid_query", "The query is not valid.");
+}
+
+function matchPath(pattern, pathname) {
+  const expected = pattern.split("/").filter(Boolean);
+  const actual = pathname.split("/").filter(Boolean);
+  if (expected.length !== actual.length) return null;
+  const params = {};
+  for (let index = 0; index < expected.length; index += 1) {
+    if (expected[index].startsWith(":")) {
+      let value = actual[index];
+      try {
+        value = decodeURIComponent(value);
+      } catch {
+        return null;
+      }
+      if (value.includes("/") || value.includes("\\") || value.includes("\0")) return null;
+      params[expected[index].slice(1)] = value;
+    }
+    else if (expected[index] !== actual[index]) return null;
+  }
+  return params;
+}
+
+function routeTable() {
+  return [
+    { pattern: "/view", GET: { query: ["project"] } },
+    { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status"] } },
+    { pattern: "/units/:unitId", GET: { query: [] } },
+    { pattern: "/leads", GET: { query: ["q", "limit", "cursor", "project"] } },
+    { pattern: "/squads", GET: { query: ["q", "limit", "cursor", "project", "leadId"] } },
+    { pattern: "/projects", GET: { query: ["q", "limit", "cursor"] } },
+    { pattern: "/machines", GET: { query: ["q", "limit", "cursor"] } },
+    { pattern: "/sessions", GET: { query: ["q", "limit", "cursor", "unitId", "machine", "state"] } },
+    { pattern: "/sync", GET: { query: [] } },
+    { pattern: "/layout", GET: { query: [] }, PATCH: { capability: "layout.write", validate: validateLayout } },
+    { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned"] } },
+    { pattern: "/chats/:chatId", GET: { query: [] } },
+    { pattern: "/chats/:chatId/messages", GET: { query: ["q", "limit", "cursor", "before"] }, POST: { capability: "chat.post", validate: validateMessage } },
+    { pattern: "/chats/:chatId/read", POST: { capability: "master.read", allow: ["read", "master.read"], validate: validateRead } },
+    { pattern: "/mailboxes", GET: { query: ["q", "limit", "cursor"] } },
+    { pattern: "/mailboxes/:unitId/messages", GET: { query: ["q", "limit", "cursor", "state"] }, POST: { capability: "chat.post", validate: validateMessage } },
+    { pattern: "/mailboxes/:unitId/messages/:messageId", GET: { query: [] } },
+    { pattern: "/mailboxes/:unitId/read", POST: { capability: "mailbox.read", allow: ["mailbox.read", "master.read"], validate: validateRead } },
+    { pattern: "/approvals", GET: { query: ["q", "limit", "cursor", "unitId", "state"] } },
+    { pattern: "/approvals/:approvalId", GET: { query: [] } },
+    { pattern: "/approvals/:approvalId/answers/:answerId", GET: { query: [] } },
+    { pattern: "/units/:unitId/approval-grants", GET: { query: ["q", "limit", "cursor"] } },
+    { pattern: "/tasks", GET: { query: ["q", "limit", "cursor", "project", "unitId", "status"] } },
+    { pattern: "/tasks/:taskId", GET: { query: [] } },
+    { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
+    { pattern: "/settings", GET: { query: [] } },
+    { pattern: "/viewer", GET: { capability: "viewer.write", query: [] } },
+    { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] } },
+    { pattern: "/blueprint/boards/:resourceId", GET: { query: [] } },
+    { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] } },
+    { pattern: "/void/texts/:resourceId", GET: { query: [] } },
+    { pattern: "/void/texts/:resourceId/proposals", GET: { query: ["q", "limit", "cursor", "state"] } },
+    { pattern: "/editors/:resourceId/attachments", GET: { query: [] } },
+    { pattern: "/editors/:resourceId/comments", GET: { query: ["q", "limit", "cursor", "status"] } },
+    { pattern: "/editors/:resourceId/assets/:assetId", GET: { query: [] } },
+    { pattern: "/events", GET: { query: ["unitId", "chatId", "resourceId"] } },
+    { pattern: "/auth/logout", POST: { capability: "read", validate: validateEmpty, runtime: true } },
+  ];
+}
+
+function validateEmpty(body) {
+  requireObject(body, []);
+}
+
+function capabilityAllows(principal, route) {
+  if (!route.capability) return principal.capabilities.includes("read");
+  if (principal.capabilities.includes(route.capability)) return true;
+  return (route.allow ?? []).some((item) => principal.capabilities.includes(item));
+}
+
+async function handleRead(fx, principal, spec, params, query, requestId) {
+  if (!capabilityAllows(principal, spec)) {
+    if (principal.audience === "phone") throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
+    throw new HttpError(403, "forbidden", "This credential cannot do that.");
+  }
+  const snap = await projection(fx);
+  const cursor = cursorNow(fx);
+    spec.principal = principal;
+    const data = await readData(fx, snap, spec, params, query);
+  return success(fx, present(principal, data), requestId, cursor);
+}
+
+async function readData(fx, snap, spec, params, query) {
+  const pattern = spec.pattern;
+  if (pattern === "/view") {
+    if ([...query.keys()].some((key) => key !== "project")) throw new HttpError(400, "invalid_query", "The query is not valid.");
+    const data = viewData(fx, snap, query.get("project") ?? null);
+    if (Buffer.byteLength(JSON.stringify(data)) > 16_000_000) throw new HttpError(413, "view_too_large", "The view is too large. Request each collection instead.");
+    return data;
+  }
+  if (pattern === "/units") {
+    return page(filterUnits(snap.units, query), query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.job, q) || includes(unit.context, q), snap.issues.filter((issue) => issue.path?.includes("/state/")));
+  }
+  if (pattern === "/units/:unitId") {
+    noneQuery(query);
+    const unit = snap.units.find((item) => item.id === params.unitId);
+    if (!unit) throw new HttpError(404, "unit_not_found", "The unit was not found.");
+    return unit;
+  }
+  if (pattern === "/leads") {
+    const leads = snap.units.filter((unit) => snap.leads.includes(unit.id));
+    const project = query.get("project");
+    const filtered = project ? leads.filter((unit) => unit.scope.name === project || unit.scope.kind !== "project") : leads;
+    return page(filtered, query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.job, q), []);
+  }
+  if (pattern === "/squads") return page(snap.squads.filter((squad) => (!query.get("project") || squad.scope.name === query.get("project")) && (!query.get("leadId") || squad.leadId === query.get("leadId"))), query, spec.GET.query, (squad, q) => includes(squad.id, q), []);
+  if (pattern === "/projects") return page(snap.projects, query, spec.GET.query, (project, q) => includes(project.id, q) || includes(project.title, q), []);
+  if (pattern === "/machines") return page(snap.machines, query, spec.GET.query, (machine, q) => includes(machine.id, q), []);
+  if (pattern === "/sessions") {
+    const items = snap.sessions.filter((session) => (!query.get("unitId") || session.unitId === query.get("unitId")) && (!query.get("machine") || session.machine === query.get("machine")) && (!query.get("state") || session.state === query.get("state")));
+    return page(items, query, spec.GET.query, (session, q) => includes(session.unitId, q) || includes(session.client, q) || includes(session.machine, q), []);
+  }
+  if (pattern === "/sync") {
+    noneQuery(query);
+    return syncState(fx);
+  }
+  if (pattern === "/layout") {
+    noneQuery(query);
+    return snap.layout;
+  }
+  if (pattern === "/chats") {
+    let items = snap.chats;
+    const listed = query.get("listed");
+    if (listed !== undefined && listed !== "true" && listed !== "false") throw new HttpError(400, "invalid_query", "The query is not valid.");
+    items = items.filter((chat) => chat.listed === (listed === undefined ? true : listed === "true"));
+    if (query.get("pinned") !== undefined) items = items.filter((chat) => chat.pinned === (query.get("pinned") === "true"));
+    if (query.get("unitId")) items = items.filter((chat) => chat.members.includes(query.get("unitId")));
+    items = [...items].sort((left, right) => Number(right.pinned) - Number(left.pinned) || String(right.lastMessage?.timestamp ?? "").localeCompare(String(left.lastMessage?.timestamp ?? "")) || left.id.localeCompare(right.id, "en"));
+    return page(items.map(publicChat), query, spec.GET.query, (chat, q) => includes(chat.title, q) || chat.members.some((id) => includes(id, q)), []);
+  }
+  if (pattern === "/chats/:chatId") {
+    noneQuery(query);
+    const chat = snap.chats.find((item) => item.id === params.chatId);
+    if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+    return publicChat(chat);
+  }
+  if (pattern === "/chats/:chatId/messages" && spec.method === "GET") return messagePage(snap, params.chatId, query, spec.GET.query);
+  if (pattern === "/mailboxes") {
+    const items = snap.mailboxes.map((box) => ({ id: box.unitId, unitId: box.unitId, unread: box.unread, total: box.total })).sort((left, right) => left.unitId.localeCompare(right.unitId, "en"));
+    return page(items, query, spec.GET.query, (box, q) => includes(box.unitId, q), []);
+  }
+  if (pattern === "/mailboxes/:unitId/messages" && spec.method === "GET") {
+    const state = query.get("state") ?? "unread";
+    if (!["unread", "read", "all"].includes(state)) throw new HttpError(400, "invalid_query", "The query is not valid.");
+    const box = snap.mailboxes.find((item) => item.unitId === params.unitId);
+    let items = box?.messages ?? [];
+    if (state === "unread") items = items.filter((message) => !message.read);
+    if (state === "read") items = items.filter((message) => message.read);
+    items = [...items].sort((left, right) => String(right.timestamp ?? "").localeCompare(String(left.timestamp ?? "")) || left.id.localeCompare(right.id, "en"));
+    return page(items.map(publicMessage), query, spec.GET.query, (message, q) => includes(message.subject, q) || includes(message.body, q) || includes(message.fromId, q), []);
+  }
+  if (pattern === "/mailboxes/:unitId/messages/:messageId") {
+    noneQuery(query);
+    const message = snap.mailboxes.find((item) => item.unitId === params.unitId)?.messages.find((item) => item.id === params.messageId);
+    if (!message) throw new HttpError(404, "message_not_found", "The message was not found.");
+    return publicMessage(message);
+  }
+  if (pattern === "/approvals") {
+    const state = query.get("state") ?? "pending";
+    let items = snap.approvals.filter((item) => item.state === state);
+    if (query.get("unitId")) items = items.filter((item) => item.unitId === query.get("unitId"));
+    items = [...items].sort((left, right) => Number(right.state === "pending") - Number(left.state === "pending") || right.requestedAt.localeCompare(left.requestedAt) || left.id.localeCompare(right.id, "en"));
+    return page(items, query, spec.GET.query, (item, q) => includes(item.display, q) || includes(item.action, q) || includes(item.unitId, q), []);
+  }
+  if (pattern === "/approvals/:approvalId") {
+    noneQuery(query);
+    const approval = snap.approvals.find((item) => item.id === params.approvalId);
+    if (!approval) throw new HttpError(404, "not_found", "The approval was not found.");
+    return approval;
+  }
+  if (pattern === "/approvals/:approvalId/answers/:answerId") {
+    noneQuery(query);
+    const approval = snap.approvals.find((item) => item.id === params.approvalId);
+    const outcome = approval?.answerOutcomes.find((item) => item.answerId === params.answerId);
+    if (!outcome) throw new HttpError(404, "not_found", "The answer was not found.");
+    return { answerId: outcome.answerId, approvalId: outcome.approvalId, state: outcome.state, resultAnswerId: outcome.resultAnswerId ?? null, at: outcome.at ?? null };
+  }
+  if (pattern === "/units/:unitId/approval-grants") {
+    const unit = snap.units.find((item) => item.id === params.unitId);
+    if (!unit) throw new HttpError(404, "unit_not_found", "The unit was not found.");
+    const items = [...unit.approvalGrants].sort((left, right) => right.grantedAt.localeCompare(left.grantedAt) || left.id.localeCompare(right.id, "en"));
+    return page(items, query, spec.GET.query, (grant, q) => includes(grant.action, q) || includes(JSON.stringify(grant.pattern), q), []);
+  }
+  if (pattern === "/tasks") {
+    const allowed = new Set((query.get("status") ?? "open,review,done").split(","));
+    let items = snap.tasks.filter((task) => allowed.has(task.status));
+    if (query.get("project")) items = items.filter((task) => task.scope.name === query.get("project"));
+    if (query.get("unitId")) items = items.filter((task) => task.toId === query.get("unitId") || task.fromId === query.get("unitId"));
+    const rank = { review: 0, open: 1, done: 2, closed: 3 };
+    items = [...items].sort((left, right) => rank[left.status] - rank[right.status] || String(right.date ?? "").localeCompare(String(left.date ?? "")) || left.id.localeCompare(right.id, "en"));
+    return page(items.map(publicTask), query, spec.GET.query, (task, q) => includes(task.number, q) || includes(task.title, q) || includes(task.report, q), []);
+  }
+  if (pattern === "/tasks/:taskId") {
+    noneQuery(query);
+    const task = snap.tasks.find((item) => item.id === params.taskId);
+    if (!task) throw new HttpError(404, "task_not_found", "The task was not found.");
+    return publicTask(task);
+  }
+  if (pattern === "/waiting") {
+    let items = snap.waiting;
+    if (query.get("unitId")) items = items.filter((item) => item.unitId === query.get("unitId"));
+    if (query.get("kind")) items = items.filter((item) => item.kind === query.get("kind"));
+    return page(items, query, spec.GET.query, (item, q) => includes(item.title, q) || includes(item.unitId, q), []);
+  }
+  if (pattern === "/settings") {
+    noneQuery(query);
+    return { settings: snap.settings.settings, revision: snap.settings.revision, service: { machine: LOCAL_MACHINE, version: "3.0.0", originKind: "folder", syncState: syncState(fx).state }, home: homeStatus(fx) };
+  }
+  if (pattern === "/viewer") {
+    noneQuery(query);
+    return viewerData(spec.principal);
+  }
+  if (pattern === "/blueprint/boards" || pattern === "/void/texts") {
+    const kind = pattern.startsWith("/blueprint") ? "blueprint" : "void";
+    let items = snap.editors.filter((editor) => editor.kind === kind);
+    if (query.get("project")) items = items.filter((editor) => editor.project === query.get("project"));
+    items = [...items].sort((left, right) => left.project.localeCompare(right.project, "en") || left.title.localeCompare(right.title, "en") || left.id.localeCompare(right.id, "en"));
+    return page(items.map(summary), query, spec.GET.query, (editor, q) => includes(editor.title, q) || includes(editor.project, q) || includes(editor.path, q), []);
+  }
+  if (pattern === "/blueprint/boards/:resourceId" || pattern === "/void/texts/:resourceId") {
+    noneQuery(query);
+    return requireEditor(snap, params.resourceId);
+  }
+  if (pattern === "/void/texts/:resourceId/proposals") {
+    const editor = requireEditor(snap, params.resourceId);
+    const state = query.get("state") ?? "pending";
+    const items = editor.proposals.filter((item) => item.state === state);
+    return page(items, query, spec.GET.query, () => true, []);
+  }
+  if (pattern === "/editors/:resourceId/attachments") {
+    noneQuery(query);
+    const editor = requireEditor(snap, params.resourceId);
+    return { attached: editor.attached, revision: editor.attachmentRevision };
+  }
+  if (pattern === "/editors/:resourceId/comments") {
+    const editor = requireEditor(snap, params.resourceId);
+    const status = query.get("status") ?? "all";
+    const items = editor.threads.filter((thread) => status === "all" || thread.status === status);
+    const result = page(items, query, spec.GET.query, (thread, q) => JSON.stringify(thread).toLowerCase().includes(q), []);
+    return { ...result, commentsRevision: editor.commentsRevision };
+  }
+  if (pattern === "/editors/:resourceId/assets/:assetId") throw new HttpError(404, "asset_not_found", "The asset was not found.");
+  throw new HttpError(404, "not_found", "The route was not found.");
+}
+
+function filterUnits(units, query) {
+  return units.filter((unit) => (!query.get("project") || (unit.scope.kind === "project" && unit.scope.name === query.get("project")))
+    && (!query.get("machine") || unit.machine === query.get("machine"))
+    && (!query.get("leadId") || unit.leadId === query.get("leadId"))
+    && (!query.get("status") || unit.status === query.get("status")));
+}
+
+function publicChat(chat) {
+  const { file, ...rest } = chat;
+  return rest;
+}
+
+function publicTask(task) {
+  const { file, ...rest } = task;
+  return rest;
+}
+
+function publicMessage(message) {
+  return {
+    id: message.id, fromId: message.fromId, toId: message.toId, machine: message.machine, timestamp: message.timestamp,
+    date: message.date, priority: message.priority, subject: message.subject, body: message.body, threadId: message.threadId,
+    replyTo: message.replyTo, replyRequested: message.replyRequested, attachments: message.attachments, kind: message.kind,
+    read: message.read, notice: message.notice,
+  };
+}
+
+function messagePage(snap, chatId, query, allowed) {
+  if (query.get("before") && query.get("cursor")) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  const chat = snap.chats.find((item) => item.id === chatId);
+  if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+  let ordered = snap.messages.filter((message) => message.chatId === chatId).sort(messageOrder);
+  const q = query.get("q");
+  if (q) ordered = ordered.filter((message) => includes(message.subject, q.toLowerCase()) || includes(message.body, q.toLowerCase()) || includes(message.fromId, q.toLowerCase()));
+  const total = ordered.length;
+  let end = ordered.length;
+  if (query.get("before")) {
+    const index = ordered.findIndex((message) => message.id === query.get("before"));
+    if (index < 0) throw new HttpError(422, "invalid_body", "The message was not found in the chat.");
+    end = index;
+  }
+  const snapshot = snapshotHash(snap.messages.filter((message) => message.chatId === chatId));
+  const filterHash = sha256(JSON.stringify(canonical({ chatId, q: q ?? null })));
+  if (query.get("cursor")) end = readCursor(query.get("cursor"), filterHash, snapshot);
+  const limit = limitOf(query.get("limit"));
+  const start = Math.max(0, end - limit);
+  const nextCursor = start > 0 ? Buffer.from(JSON.stringify({ contract: CONTRACT, filter: filterHash, snapshot, position: start })).toString("base64url") : null;
+  return { items: ordered.slice(start, end).map(publicMessage), total, nextCursor, issues: [] };
+}
+
+function summary(editor) {
+  return {
+    id: editor.id, kind: editor.kind, project: editor.project, title: editor.title, path: editor.path, readOnly: editor.readOnly,
+    revision: editor.revision, attached: editor.attached, openThreads: editor.openThreads, activity: editor.activity,
+  };
+}
+
+function requireEditor(snap, id) {
+  const editor = snap.editors.find((item) => item.id === id);
+  if (!editor) throw new HttpError(404, "not_found", "The editor was not found.");
+  return editor;
+}
+
+function viewerData(viewer) {
+  return { viewerId: viewer.viewerId, embedded: viewer.embedded, hostOrigin: viewer.hostOrigin, look: viewer.look, language: viewer.language, dirty: viewer.dirty };
+}
+
+function contentType(name) {
+  if (name.endsWith(".html")) return "text/html; charset=utf-8";
+  if (name.endsWith(".css")) return "text/css; charset=utf-8";
+  return "text/javascript; charset=utf-8";
+}
+
+function sendJson(response, status, body, extra = {}) {
+  const payload = Buffer.from(JSON.stringify(body));
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": payload.length,
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    ...extra,
+  });
+  response.end(payload);
+}
+
+function sendError(response, error, requestId) {
+  const known = error instanceof HttpError;
+  if (error.retryAfter) response.setHeader("Retry-After", String(error.retryAfter));
+  sendJson(response, known ? error.status : 500, {
+    error: {
+      code: known ? error.code : "internal_error",
+      message: known ? error.message : "The service could not complete the request.",
+      requestId,
+      details: known ? error.details : {},
+      retryAt: known ? error.retryAt : null,
+    },
+  });
+}
+
+async function readBody(request) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > 2_000_000) throw new HttpError(413, "body_too_large", "The request body is too large.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function staticHeaders(frameAncestors, deny) {
+  const headers = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}`,
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (deny) headers["X-Frame-Options"] = "DENY";
+  return headers;
+}
+
+async function serveStatic(fx, request, response, audience) {
+  const url = new URL(request.url, audience.origin);
+  let fileName = null;
+  let viewer = null;
+  if (url.pathname === "/" || url.pathname === "/index.html") fileName = "index.html";
+  const viewerMatch = /^\/gui\/([0-9a-f-]{36})\/?$/.exec(url.pathname);
+  if (viewerMatch) {
+    fileName = "index.html";
+    viewer = [...fx.viewers.values()].find((item) => item.viewerId === viewerMatch[1]);
+  }
+  const assetMatch = /^\/app\/([^/]+)$/.exec(url.pathname);
+  if (assetMatch) {
+    if (!APP_FILES.includes(assetMatch[1])) throw new HttpError(404, "not_found", "The route was not found.");
+    fileName = assetMatch[1];
+  }
+  if (!fileName) return false;
+  if (request.method !== "GET" && request.method !== "HEAD") throw new HttpError(405, "method_not_allowed", "The method is not allowed.");
+  const frame = viewer?.embedded && viewer.hostOrigin ? viewer.hostOrigin : "'none'";
+  const headers = staticHeaders(frame, frame === "'none'");
+  let bytes;
+  try {
+    bytes = await readFile(join(repoRoot, "gui", "app", fileName));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      response.writeHead(404, headers);
+      response.end();
+      return true;
+    }
+    throw error;
+  }
+  response.writeHead(200, { ...headers, "Content-Type": contentType(fileName), "Content-Length": bytes.length });
+  response.end(request.method === "HEAD" ? undefined : bytes);
+  return true;
+}
+
+function findRoute(pathname, method) {
+  const path = pathname.startsWith("/api/v1") ? (pathname.slice("/api/v1".length) || "/") : pathname;
+  let found = null;
+  for (const route of routeTable()) {
+    const params = matchPath(route.pattern, path);
+    if (!params) continue;
+    found = { route, params, path };
+    if (route[method]) return { route, params, path, allowed: true };
+  }
+  return found ? { ...found, allowed: false } : null;
+}
+
+async function handleApi(fx, request, response, audience) {
+  const requestId = uuid();
+  const rawPath = request.url.split("?")[0];
+  if (/%2f|%5c|%2e%2e|\.\.|\\/i.test(rawPath)) throw new HttpError(400, "invalid_path", "The path is not valid.");
+  if ((request.url?.length ?? 0) > 2048) throw new HttpError(414, "uri_too_long", "The request URL is too long.");
+  const remote = request.socket.remoteAddress;
+  if (![HOST, `::ffff:${HOST}`].includes(remote)) throw new HttpError(403, "peer_not_allowed", "The peer is not allowed.");
+  if (request.headers.host !== `${HOST}:${audience.port}`) throw new HttpError(400, "invalid_host", "The Host header is invalid.");
+  if (request.method === "OPTIONS") throw new HttpError(403, "invalid_origin", "Cross-origin requests are rejected.");
+  const url = new URL(request.url, audience.origin);
+  if ([...url.searchParams.keys()].some((key) => key === "token" || key === "access_token")) {
+    throw new HttpError(400, "invalid_query", "The query is not valid.");
+  }
+  if (await serveStatic(fx, request, response, audience)) return;
+  if (!url.pathname.startsWith("/api/v1/")) throw new HttpError(404, "not_found", "The route was not found.");
+  const origin = request.headers.origin;
+  if (origin !== undefined && origin !== audience.origin) throw new HttpError(403, "invalid_origin", "The request origin is invalid.");
+  const writing = !["GET", "HEAD"].includes(request.method);
+  if (writing && origin !== audience.origin) throw new HttpError(403, "invalid_origin", "The request origin is required.");
+  const apiPath = url.pathname.slice("/api/v1".length);
+  if (apiPath === "/auth/local" || apiPath === "/auth/home") {
+    await handleAuth(fx, request, response, audience, apiPath, requestId);
+    return;
+  }
+  const matched = findRoute(apiPath, request.method);
+  if (!matched) throw new HttpError(404, "not_found", "The route was not found.");
+  if (!matched.allowed) {
+    const allow = Object.keys(matched.route).filter((key) => key === key.toUpperCase());
+    response.setHeader("Allow", allow.join(", "));
+    throw new HttpError(405, "method_not_allowed", "The method is not allowed.");
+  }
+  const token = bearer(request);
+  const principal = fx.tokens.get(token);
+  if (!principal || !safeEqual(principal.token, token)) throw new HttpError(401, "invalid_session", "The session is invalid.");
+  if (audience.kind === "home" && principal.audience !== "phone") throw new HttpError(403, "forbidden", "This credential is not accepted on the home listener.");
+  if (principal.expiresAt && Date.parse(principal.expiresAt) <= fx.nowMs) throw new HttpError(410, "home_expired", "Home access has expired.");
+  const spec = { ...matched.route, ...matched.route[request.method], pattern: matched.route.pattern, method: request.method, token };
+  if (apiPath === "/events" && request.method === "GET") {
+    await handleEvents(fx, request, response, principal, url, requestId);
+    return;
+  }
+  const query = queryMap(url);
+  if (request.method === "GET" || request.method === "HEAD") {
+    const body = await handleRead(fx, principal, spec, matched.params, query, requestId);
+    sendJson(response, 200, body);
+    return;
+  }
+  const raw = await readBody(request);
+  const type = String(request.headers["content-type"] ?? "");
+  if (!type.includes("application/json")) throw new HttpError(415, "unsupported_media_type", "JSON is required.");
+  let body;
+  try {
+    body = JSON.parse(raw.toString("utf8") || "null");
+  } catch {
+    throw new HttpError(400, "invalid_json", "The JSON body is not valid.");
+  }
+  const concrete = `/api/v1${apiPath.split("/").map((part, index) => index === 0 ? part : decodeOnce(part)).join("/")}`;
+  const route = {
+    ...spec,
+    requestPath: concrete,
+    mailboxUnit: matched.params.unitId,
+    validate: spec.validate,
+    checkPreconditions: async (input) => checkMutation(fx, spec.pattern, matched.params, input),
+    prepare: async (input, actor) => prepareMutation(fx, spec.pattern, matched.params, input, actor),
+    runtime: Boolean(spec.runtime),
+    apply: spec.pattern === "/auth/logout" ? () => revokeViewer(fx, principal.viewerId) : undefined,
+  };
+  if (spec.pattern === "/auth/logout") {
+    route.prepare = async () => ({ status: 204, data: null, writes: [], events: [], apply: () => revokeViewer(fx, principal.viewerId) });
+    route.runtime = true;
+  }
+  const result = await mutate(fx, request, route, body, principal, requestId);
+  if (result.drop) {
+    request.socket.destroy();
+    return;
+  }
+  if (result.status === 204) {
+    response.writeHead(204, { "Cache-Control": "no-store" });
+    response.end();
+    return;
+  }
+  sendJson(response, result.status, result.response);
+}
+
+function decodeOnce(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    throw new HttpError(400, "invalid_path", "The path is not valid.");
+  }
+}
+
+function bearer(request) {
+  const header = String(request.headers.authorization ?? "");
+  if (!header.startsWith("Bearer ")) throw new HttpError(401, "invalid_session", "The session is invalid.");
+  return header.slice(7);
+}
+
+async function checkMutation(fx, pattern, params, body) {
+  if (pattern === "/layout") {
+    const current = await loadLayout(fx);
+    if ((body.expectedRevision ?? null) !== current.revision) {
+      throw new HttpError(409, "revision_conflict", "The layout was changed elsewhere.", { currentRevision: current.revision });
+    }
+  }
+  if (pattern === "/chats/:chatId/messages") {
+    const snap = await projection(fx);
+    if (body.replyTo && !snap.messages.some((message) => message.chatId === params.chatId && message.id === body.replyTo)) {
+      throw new HttpError(422, "invalid_reply", "The reply target was not found.");
+    }
+  }
+}
+
+async function prepareMutation(fx, pattern, params, body, principal) {
+  if (pattern === "/layout") return prepareLayout(fx, body);
+  if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId);
+  if (pattern === "/chats/:chatId/read") return prepareChatRead(fx, body, principal, params.chatId);
+  if (pattern === "/mailboxes/:unitId/read") return prepareMailboxRead(fx, body, params.unitId);
+  if (pattern === "/mailboxes/:unitId/messages") return prepareMailboxPost(fx, body, principal, params.unitId);
+  throw new HttpError(404, "not_found", "The route was not found.");
+}
+
+async function prepareMailboxPost(fx, body, principal, unitId) {
+  const id = uuid();
+  const now = clock(fx).toISOString();
+  const stamp = now.replace(/[-:]/g, "").replace(/\.\d+Z$/, "").replace("T", "-");
+  const document = markdownMessage({
+    id, from: "master", "from-id": principal.unitId, to: unitId.split(":").at(-1), "to-id": unitId,
+    machine: LOCAL_MACHINE, timestamp: now, priority: body.priority ?? "normal", subject: body.subject ?? "",
+    "thread-id": id, "reply-to": body.replyTo ?? null, "reply-requested": body.replyRequested ? "true" : "false",
+    attachments: body.attachments ?? [], kind: "message",
+  }, body.body);
+  const bytes = Buffer.from(document);
+  const scope = unitId.startsWith("project:") ? join(fx.tree.user, "projects", unitId.split(":")[1], "inbox", unitId.split(":").at(-1))
+    : unitId.startsWith("env:") ? join(fx.tree.user, "envs", unitId.split(":")[1], "inbox", unitId.split(":").at(-1))
+      : join(fx.tree.user, "inbox", unitId.split(":").at(-1));
+  const message = publicMessage({
+    id, fromId: principal.unitId, toId: unitId, machine: LOCAL_MACHINE, timestamp: now, date: null,
+    priority: body.priority ?? "normal", subject: body.subject ?? "", body: body.body, threadId: id,
+    replyTo: body.replyTo ?? null, replyRequested: Boolean(body.replyRequested), attachments: body.attachments ?? [],
+    kind: "message", read: false, notice: null,
+  });
+  return {
+    status: 201,
+    data: message,
+    writes: [{ path: join(scope, `${stamp}-${LOCAL_MACHINE}-${id}.md`), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "message.created", data: { chatId: null, mailboxId: unitId, message } }],
+  };
+}
+
+async function handleAuth(fx, request, response, audience, path, requestId) {
+  const raw = await readBody(request);
+  if (!String(request.headers["content-type"] ?? "").includes("application/json")) throw new HttpError(415, "unsupported_media_type", "JSON is required.");
+  let body;
+  try {
+    body = JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new HttpError(400, "invalid_json", "The JSON body is not valid.");
+  }
+  if (path === "/auth/local") {
+    if (audience.kind !== "desktop") throw new HttpError(403, "forbidden", "Local exchange is only available on the desktop listener.");
+    const secret = bearer(request);
+    const bootstrap = JSON.parse(await readFile(join(fx.local, "bootstrap.json"), "utf8"));
+    if (!safeEqual(secret, bootstrap.secret)) throw new HttpError(401, "invalid_bootstrap", "The bootstrap secret is invalid.");
+    requireObject(body, ["embedded", "hostOrigin", "look", "language"]);
+    requireKeys(body, ["embedded", "hostOrigin", "look", "language"]);
+    if (typeof body.embedded !== "boolean") throw new HttpError(422, "invalid_body", "The request body is not valid.");
+    if (body.embedded && (typeof body.hostOrigin !== "string" || !/^https?:\/\/[^/]+$/.test(body.hostOrigin))) {
+      throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
+    }
+    if (!body.embedded && body.hostOrigin !== null) throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
+    const viewer = createViewer(fx, { embedded: body.embedded, hostOrigin: body.hostOrigin, look: body.look, language: body.language, audience: "desktop" });
+    sendJson(response, 201, success(fx, {
+      token: viewer.token, viewerId: viewer.viewerId, origin: fx.desktop.origin, url: viewer.url,
+      capabilities: viewer.capabilities, expiresAt: null,
+    }, requestId, cursorNow(fx)));
+    return;
+  }
+  if (audience.kind !== "home") throw new HttpError(403, "forbidden", "Home exchange is only available on the home listener.");
+  const keys = Object.keys(body);
+  if (!(keys.length === 1 && (keys[0] === "key" || keys[0] === "code"))) throw new HttpError(422, "invalid_body", "A home key or code is required.");
+  if (!fx.home || fx.nowMs >= Date.parse(fx.home.expiresAt)) throw new HttpError(410, "home_expired", "Home access has expired.");
+  const presented = String(body.key ?? body.code ?? "");
+  const expected = body.key ? fx.home.key : fx.home.code;
+  const normalized = body.code ? presented.toUpperCase() : presented;
+  if (!safeEqual(normalized, expected)) {
+    noteHomeFailure(fx, request.socket.remoteAddress);
+    throw new HttpError(401, "invalid_home_key", "The home key is not valid.");
+  }
+  const viewer = createViewer(fx, { embedded: false, hostOrigin: null, look: null, language: null, audience: "phone", expiresAt: fx.home.expiresAt });
+  sendJson(response, 200, success(fx, {
+    token: viewer.token, audience: "phone", expiresAt: fx.home.expiresAt, capabilities: viewer.capabilities,
+  }, requestId, cursorNow(fx)));
+}
+
+function noteHomeFailure(fx, remote) {
+  const now = Date.now();
+  const bucket = fx.homeFailures.get(remote) ?? [];
+  const recent = bucket.filter((at) => now - at < 60_000);
+  recent.push(now);
+  fx.homeFailures.set(remote, recent);
+  const grantFailures = (fx.homeGrantFailures ?? []).filter((at) => now - at < 60_000);
+  grantFailures.push(now);
+  fx.homeGrantFailures = grantFailures;
+  if (recent.length > 5 || grantFailures.length > 30) {
+    const error = new HttpError(429, "auth_rate_limited", "Too many home attempts.", {}, new Date(now + 60_000).toISOString());
+    error.retryAfter = 60;
+    throw error;
+  }
+}
+
+function createViewer(fx, input) {
+  const token = randomBytes(32).toString("base64url");
+  const viewerId = uuid();
+  const principal = {
+    id: input.audience === "phone" ? "phone-user" : "desktop-user",
+    audience: input.audience,
+    capabilities: input.audience === "phone" ? PHONE_CAPS : DESKTOP_CAPS,
+    viewerId,
+    token,
+    embedded: input.embedded,
+    hostOrigin: input.hostOrigin,
+    look: input.look,
+    language: input.language,
+    dirty: false,
+    unitId: "root:master",
+    expiresAt: input.expiresAt ?? null,
+  };
+  principal.url = `${fx.desktop.origin}/gui/${viewerId}/#session=${token}`;
+  fx.tokens.set(token, principal);
+  fx.viewers.set(viewerId, principal);
+  return principal;
+}
+
+function revokeViewer(fx, viewerId) {
+  const viewer = fx.viewers.get(viewerId);
+  if (!viewer) return;
+  fx.tokens.delete(viewer.token);
+  fx.viewers.delete(viewerId);
+  for (const stream of [...fx.streams]) {
+    if (stream.principal.viewerId === viewerId) endStream(stream);
+  }
+}
+
+function revokeAudience(fx, audience) {
+  for (const viewer of [...fx.viewers.values()]) if (viewer.audience === audience) revokeViewer(fx, viewer.viewerId);
+}
+
+async function handleEvents(fx, request, response, principal, url, requestId) {
+  const query = queryMap(url);
+  for (const key of query.keys()) if (!["unitId", "chatId", "resourceId"].includes(key)) throw new HttpError(400, "invalid_query", "The query is not valid.");
+  await enqueue(fx, async () => {
+    const open = [...fx.streams].filter((stream) => stream.principal.id === principal.id && !stream.closed);
+    if (open.length >= 4) {
+      const error = new HttpError(429, "request_rate_limited", "Too many event streams are open.");
+      error.retryAfter = 1;
+      throw error;
+    }
+    const stream = {
+      response, principal, closed: false, requestId,
+      filters: { unitId: query.get("unitId") ?? null, chatId: query.get("chatId") ?? null, resourceId: query.get("resourceId") ?? null },
+    };
+    fx.streams.add(stream);
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+      "X-Content-Type-Options": "nosniff",
+    });
+    const last = request.headers["last-event-id"];
+    const known = last ? fx.ring.find((record) => record.id === last) : null;
+    if (last && (!known || !last.startsWith(`${fx.serviceId}:`))) {
+      const reason = last.startsWith(`${fx.serviceId}:`) ? "cursor_expired" : "service_restarted";
+      publish(fx, [{ name: "stream.reset", global: true, viewerId: principal.viewerId, data: { reason, cursor: cursorNow(fx) } }], principal);
+    } else if (known) {
+      for (const record of fx.ring) {
+        if (record.seq <= known.seq || record.name === "stream.ready" || record.name === "stream.reset") continue;
+        writeStream(stream, record);
+      }
+    }
+    publish(fx, [{
+      name: "stream.ready", global: true, viewerId: principal.viewerId,
+      data: { cursor: planCursor(fx, 1), readAt: clock(fx).toISOString(), capabilities: principal.capabilities },
+    }], principal);
+    stream.done = new Promise((resolve) => {
+      stream.finish = resolve;
+    });
+  });
+  const stream = [...fx.streams].find((item) => item.response === response);
+  request.on("close", () => endStream(stream));
+  await stream?.done;
+}
+
+function endStream(stream) {
+  if (!stream || stream.closed) return;
+  stream.closed = true;
+  stream.response.end();
+  stream.finish?.();
+}
+
+function disconnectStreams(fx) {
+  for (const stream of [...fx.streams]) endStream(stream);
+  fx.streams.clear();
+}
+
+async function listen(fx, kind) {
+  const sockets = new Set();
+  const server = http.createServer({ maxHeaderSize: 8192, requestTimeout: 15_000 }, async (request, response) => {
+    const requestId = uuid();
+    try {
+      await handleApi(fx, request, response, fx[kind]);
+    } catch (error) {
+      if (error instanceof CrashError || error?.crash) {
+        request.socket.destroy();
+        return;
+      }
+      if (!response.headersSent) sendError(response, error, requestId);
+      else response.end();
+    }
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, HOST, resolve));
+  const port = server.address().port;
+  fx[kind] = { server, sockets, port, kind: kind === "homeListener" ? "home" : kind, origin: `http://${HOST}:${port}` };
+}
+
+async function writeBootstrap(fx) {
+  const secret = randomBytes(32).toString("base64url");
+  await writeAtomic(join(fx.local, "bootstrap.json"), Buffer.from(stableJson({
+    format: "hivem1nd-bootstrap-v1",
+    origin: fx.desktop?.origin ?? null,
+    secret,
+    startedAt: clock(fx).toISOString(),
+  })));
+  await chmod(join(fx.local, "bootstrap.json"), 0o600).catch(() => undefined);
+  fx.bootstrapSecret = secret;
+}
+
+function openHome(fx) {
+  const duration = fx.scenario === "home-expiry" ? 1000 : HOME_MS;
+  fx.home = {
+    key: FIXTURE_HOME_KEY,
+    code: FIXTURE_HOME_CODE,
+    openedAt: clock(fx).toISOString(),
+    expiresAt: new Date(fx.nowMs + duration).toISOString(),
+    addresses: [{ origin: fx.homeListener.origin }],
+  };
+}
+
+async function boot(fx, { seedHome = false } = {}) {
+  await recoverIntents(fx);
+  await listen(fx, "desktop");
+  await listen(fx, "homeListener");
+  await writeBootstrap(fx);
+  if (seedHome) openHome(fx);
+  const embedded = fx.scenario === "embedded";
+  const viewer = createViewer(fx, {
+    embedded, hostOrigin: embedded ? "https://embed.example" : null, look: null, language: null, audience: "desktop",
+  });
+  fx.primary = viewer;
+}
+
+export async function createGuiFixture(options = {}) {
+  const tree = await createFixtureTree();
+  const seeded = await seedRecords(tree, options);
+  const fx = {
+    tree,
+    local: seeded.local,
+    scenario: options.scenario ?? "standard",
+    nowMs: Date.parse(options.now ?? seeded.data.now),
+    serviceId: uuid(),
+    eventSeq: 0,
+    ring: [],
+    broadcast: new Set(),
+    tokens: new Map(),
+    viewers: new Map(),
+    streams: new Set(),
+    memoryReceipts: new Map(),
+    homeFailures: new Map(),
+    home: null,
+    fault: null,
+    cache: null,
+    tail: Promise.resolve(),
+    closed: false,
+    desktop: null,
+    homeListener: null,
+  };
+  try {
+    await boot(fx, { seedHome: fx.scenario !== "empty" });
+  } catch (error) {
+    await tree.cleanup();
+    throw error;
+  }
+  const api = {
+    get origin() { return fx.desktop.origin; },
+    get desktopUrl() { return fx.primary.url; },
+    get phoneUrl() { return `${fx.homeListener.origin}/#home=${FIXTURE_HOME_KEY}`; },
+    get headers() { return { Authorization: `Bearer ${fx.primary.token}`, Origin: fx.desktop.origin }; },
+    get root() { return tree.root; },
+    control: {
+      emit(name, data, source) {
+        return enqueue(fx, async () => publish(fx, [{ name, data, source: source ?? serviceSource(), global: true }], fx.primary));
+      },
+      advance(ms) {
+        return enqueue(fx, async () => {
+          fx.nowMs += ms;
+          if (fx.home && fx.nowMs >= Date.parse(fx.home.expiresAt)) {
+            const home = homeStatus(fx);
+            fx.home = null;
+            revokeAudience(fx, "phone");
+            publish(fx, [{ name: "home.changed", global: true, data: { home: { ...home, enabled: false, remainingSeconds: 0 }, reason: "expired" } }], fx.primary);
+          }
+        });
+      },
+      changeResource(id, change) {
+        return enqueue(fx, async () => {
+          const snap = await projection(fx);
+          const file = snap.files.units.get(id);
+          if (!file) throw new Error("Unknown fixture resource.");
+          const text = await readFile(file, "utf8");
+          await writeAtomic(file, Buffer.from(`${text.replace(/\s*$/, "")}\n\n${String(change ?? "changed")}\n`));
+          invalidate(fx);
+          const unit = (await projection(fx)).units.find((item) => item.id === id);
+          publish(fx, [{ name: "unit.changed", unitId: id, data: { unit } }], fx.primary);
+        });
+      },
+      setFault(fault) { fx.fault = fault; },
+      disconnectStreams() { disconnectStreams(fx); },
+      async restart() {
+        await fx.tail;
+        disconnectStreams(fx);
+        await closeServers(fx);
+        fx.tokens.clear();
+        fx.viewers.clear();
+        fx.home = null;
+        fx.memoryReceipts.clear();
+        fx.ring = [];
+        fx.serviceId = uuid();
+        fx.eventSeq = 0;
+        fx.broadcast = new Set();
+        invalidate(fx);
+        await boot(fx);
+      },
+      revokeViewer(id) { revokeViewer(fx, id); },
+    },
+    async close() {
+      if (fx.closed) return;
+      fx.closed = true;
+      disconnectStreams(fx);
+      await closeServers(fx);
+      await tree.cleanup();
+    },
+  };
+  fx.api = api;
+  return api;
+}
+
+async function closeServers(fx) {
+  for (const slot of [fx.desktop, fx.homeListener]) {
+    if (!slot?.server) continue;
+    for (const socket of slot.sockets) socket.destroy();
+    await new Promise((resolve) => slot.server.close(() => resolve()));
+  }
+}
+
+async function main() {
+  const index = process.argv.indexOf("--scenario");
+  const scenario = index >= 0 ? process.argv[index + 1] : "standard";
+  const fixture = await createGuiFixture({ scenario });
+  const linksPath = join(fixture.root, "links.json");
+  await writeFile(linksPath, JSON.stringify({ desktop: fixture.desktopUrl, phone: fixture.phoneUrl }, null, 2));
+  await chmod(linksPath, 0o600).catch(() => undefined);
+  process.stdout.write(`${fixture.origin}\n`);
+  const shutdown = async () => {
+    await fixture.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => { shutdown().catch(() => process.exit(1)); });
+  process.stdin.setEncoding("utf8");
+  process.stdin.resume();
+  let buffer = "";
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const [command, ...rest] = line.trim().split(/\s+/);
+      if (command === "quit") shutdown().catch(() => process.exit(1));
+      else if (command === "advance") fixture.control.advance(Number(rest[0] ?? 0)).catch(() => undefined);
+      else if (command === "disconnect") fixture.control.disconnectStreams();
+      else if (command === "emit") fixture.control.emit(rest[0], JSON.parse(rest.slice(1).join(" ") || "{}")).catch(() => undefined);
+    }
+  });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  });
+}
