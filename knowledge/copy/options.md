@@ -66,10 +66,11 @@ Yes or no, decided once per project. *Can't* reads warmer than *cannot*, and a m
 
 For any Spanish column. Register is decided once per product, written in its voice file (see [voice-specification](protocols/voice-specification.md)), and re-read before strings are called done, because a writer slips into their own dialect when writing fast (Practice).
 
-- **Neutral tú.** *Crea*, *mira*. The default for public copy read across regions (Practice: regional voseo and the impersonal infinitive as body text were both rejected for such an audience).
-- **Usted.** Pick for legal, financial, health or institutional products, and for audiences that expect it.
+- **Neutral impersonal.** Sentences use *se* or the third person (*Se guarda al instante*, *El informe muestra cada cambio*); actions are infinitives (*Guardar*, *Volver a intentarlo*); no form of address at all, so no *tú*, *vos* or *usted* and no regional words. The default for every product (Practice: voseo and tuteo were both rejected as unprofessional in public products).
+- **Usted.** Pick only when a product must address the reader directly and its audience expects formality, such as legal, financial, health or institutional products.
+- **Neutral tú.** *Crea*, *mira*. Pick only when the product's owner chooses it on purpose; never the default.
 - **Regional form.** Pick only when the whole audience is in one region and the product speaks its dialect on purpose.
-- **Infinitive.** Correct on buttons and menu items (*Guardar*, *Cancelar*), and for English gerund titles (*Empezar*, not *Empezando*). Not a register for sentences.
+- **Infinitive.** The form of every action in the neutral impersonal register: buttons, menu items and instructions (*Guardar*, *Cancelar*), and English gerund titles (*Empezar*, not *Empezando*).
 
 ## Numbers, dates, currency and quotation marks
 

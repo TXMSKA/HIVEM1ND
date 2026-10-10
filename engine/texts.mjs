@@ -246,7 +246,7 @@ const COPY = {
     warningNoRulesFile: '{agent} no tiene un archivo de reglas globales verificado. Usar el attach prompt para el modo automático.',
     warningSymlinkSkipped: 'Se omitió un symlink en el kit: {path}',
     warningUnsupportedEntry: 'Se omitió una entrada no admitida del kit: {path}',
-    warningDependencyMissing: 'No se encontró una dependencia junto al kit, así que la mente no puede correr los comandos que la usan: {name}. Corré npm install en el kit y actualizá de nuevo.',
+    warningDependencyMissing: 'No se encontró una dependencia junto al kit, así que la mente no puede correr los comandos que la usan: {name}. Ejecutar npm install en el kit y actualizar de nuevo.',
     reasonLinkComponentOne: 'Hay un enlace simbólico donde se tiene que escribir {count} archivo: {path}. Quitar el enlace conserva la carpeta a la que apunta.',
     reasonLinkComponentOther: 'Hay un enlace simbólico donde se tienen que escribir {count} archivos: {path}. Quitar el enlace conserva la carpeta a la que apunta.',
     replaceLink: 'Quitar el enlace y escribir los archivos',

@@ -790,8 +790,8 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
   await mkdir(path.join(fixture.mindPath, 'user', 'roles'), { recursive: true });
   await mkdir(path.join(fixture.mindPath, 'user', 'commands'), { recursive: true });
   await writeFile(
-    path.join(fixture.mindPath, 'user', 'roles', 'overmind.md'),
-    ['---', 'name: overmind', 'description: Private role.', '---', '', '# Overmind', '', 'Mind: {{mind}}', ''].join('\n'),
+    path.join(fixture.mindPath, 'user', 'roles', 'curator.md'),
+    ['---', 'name: curator', 'description: Private role.', '---', '', '# Curator', '', 'Mind: {{mind}}', ''].join('\n'),
   );
   await writeFile(
     path.join(fixture.mindPath, 'user', 'commands', 'relay.md'),
@@ -802,12 +802,12 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
   await session.answer({ confirm: true });
   const result = await session.install();
 
-  const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'overmind', 'SKILL.md');
+  const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'curator', 'SKILL.md');
   assert.match(await readFile(privateSkill, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
   const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.managedFiles[privateSkill]);
   // The private half never reaches the published folder.
-  assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'overmind.md')), false);
+  assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'curator.md')), false);
   // A name the kit already ships keeps the kit file and says so.
   assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'relay', 'SKILL.md'), 'utf8'), /# Local relay/);
   assert.ok(result.warnings.some((warning) => warning.includes(path.join('user', 'commands', 'relay.md'))));

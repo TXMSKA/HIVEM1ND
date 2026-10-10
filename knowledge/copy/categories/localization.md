@@ -16,9 +16,9 @@ Open: [bilingual.md, Declare the base](../bilingual.md#declare-the-base), [bilin
 
 Applies when: Spanish or another language with several forms of address, "the Spanish sounds regional", a mix of forms of address across screens.
 
-Options: the Spanish register option in [options.md](../options.md), neutral tú by default for public copy across regions, infinitives on buttons and menu items.
+Options: the Spanish register option in [options.md](../options.md), neutral impersonal Spanish by default for every product, infinitives for every action.
 
-Build: the register from the voice file applied to every sentence, infinitives on buttons (*Guardar factura*), gender-free address to an unknown person (*Hola de nuevo*), then a re-read of every string for register.
+Build: the register from the voice file applied to every sentence, *se* or the third person in descriptions (*Se guarda al instante*), infinitives on buttons and instructions (*Guardar factura*), no form of address to the reader (*Hola de nuevo* as a greeting), then a re-read of every string for register, voseo and tuteo included.
 
 Open: [bilingual.md, Register](../bilingual.md#register) and [bilingual.md, Spanish conventions](../bilingual.md#spanish-conventions).
 
