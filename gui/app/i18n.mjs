@@ -130,6 +130,22 @@ const COPY = {
   unresolved: ["Unresolved link", "Enlace sin destino"],
   acceptChange: ["Accept change", "Aceptar el cambio"],
   discard: ["Discard", "Descartar"],
+  modern: ["Modern", "Moderno"],
+  english: ["English", "Inglés"],
+  spanish: ["Spanish", "Español"],
+  versionLabel: ["Version {version}", "Versión {version}"],
+  originKind: ["Origin {kind}", "Origen {kind}"],
+  limitsNormal: ["Limits are normal.", "Los límites están normales."],
+  homeAccess: ["Home access", "Acceso de casa"],
+  homeOpen: ["Open home access", "Abrir el acceso de casa"],
+  homeReplace: ["Replace home access", "Reemplazar el acceso de casa"],
+  homeReplaceBody: ["Replacing home access revokes the current key, code, and phone sessions.", "Reemplazar el acceso de casa revoca la clave de acceso, el código y las sesiones del teléfono actuales."],
+  homeClose: ["Close home access", "Cerrar el acceso de casa"],
+  homeActive: ["Home access is open until {time}.", "El acceso de casa está abierto hasta {time}."],
+  homeClosed: ["Home access is closed.", "El acceso de casa está cerrado."],
+  homeRemaining: ["{count} seconds remaining", "{count} segundos restantes"],
+  noGrantSecret: ["Open home access on this screen to show a new code.", "Abrir el acceso de casa en esta pantalla para mostrar un código nuevo."],
+  qrTitle: ["Home access code", "Código de acceso de casa"],
 };
 
 const DICTIONARIES = {

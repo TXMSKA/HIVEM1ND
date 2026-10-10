@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { dirname, join, relative, resolve } from "node:path";
@@ -22,6 +22,8 @@ import {
 const CONTRACT = "hivem1nd-gui-v3";
 const EVENTS = "hivem1nd-events-v3";
 const HOST = "127.0.0.1";
+const HOME_ADDRESSES = ["192.168.1.23", "192.168.1.24"];
+const HOME_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const DAY_MS = 86400000;
 const HOME_MS = 12 * 3600_000;
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
@@ -1408,6 +1410,82 @@ function validateLayout(body) {
   }
 }
 
+async function prepareSettings(fx, body) {
+  const current = await loadSettings(fx);
+  const next = { ...current.settings, format: "hivem1nd-settings-v1" };
+  if (body.look) next.look = body.look;
+  if (body.language) next.language = body.language;
+  const bytes = Buffer.from(stableJson(next));
+  const afterRevision = sha256(bytes);
+  return {
+    status: 200,
+    data: { settings: next, revision: afterRevision },
+    writes: [{ path: join(fx.tree.user, "gui", "settings.json"), beforeRevision: current.revision, afterRevision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "settings.changed", global: true, data: { settings: next, revision: afterRevision } }],
+  };
+}
+
+function prepareHomeNetwork(fx, body, principal) {
+  if (body.enabled === false) {
+    const wasOpen = Boolean(fx.home);
+    const home = { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
+    return {
+      status: 200,
+      data: home,
+      events: wasOpen ? [{ name: "home.changed", global: true, data: { home, reason: "closed" } }] : [],
+      apply() {
+        fx.home = null;
+        revokeAudience(fx, "phone");
+      },
+    };
+  }
+  const selected = selectedHomeAddresses(body.addresses);
+  if (fx.scenario === "home-bind-failure") {
+    fx.home = null;
+    revokeAudience(fx, "phone");
+    publish(fx, [{ name: "home.changed", global: true, data: { home: homeStatus(fx), reason: "closed" } }], principal);
+    throw new HttpError(503, "listener_unavailable", "The home listener is unavailable.");
+  }
+  const replacing = Boolean(fx.home);
+  const duration = fx.scenario === "home-expiry" ? 1000 : HOME_MS;
+  const openedAt = clock(fx).toISOString();
+  const expiresAt = new Date(fx.nowMs + duration).toISOString();
+  const key = randomBytes(32).toString("base64url");
+  const code = homeCode();
+  const port = fx.homeListener.port;
+  const addresses = selected.map((address) => ({ origin: `http://${address}:${port}` }));
+  const links = selected.map((address) => `http://${address}:${port}/#home=${key}`);
+  const home = { enabled: true, openedAt, expiresAt, addresses, remainingSeconds: Math.ceil(duration / 1000) };
+  return {
+    status: 201,
+    data: { ...home, key, shortCode: code, links, qrPayloads: links.slice() },
+    events: [{ name: "home.changed", global: true, data: { home, reason: replacing ? "replaced" : "opened" } }],
+    apply() {
+      revokeAudience(fx, "phone");
+      fx.home = { key, code, openedAt, expiresAt, addresses };
+    },
+  };
+}
+
+function selectedHomeAddresses(input) {
+  if (input === undefined) return [HOME_ADDRESSES[0]];
+  if (!Array.isArray(input) || input.length === 0) throw new HttpError(422, "invalid_home_address", "The home address is not valid.");
+  const seen = new Set();
+  for (const address of input) {
+    if (typeof address !== "string" || !HOME_ADDRESSES.includes(address) || seen.has(address)) {
+      throw new HttpError(422, "invalid_home_address", "The home address is not valid.");
+    }
+    seen.add(address);
+  }
+  return input;
+}
+
+function homeCode() {
+  let code = "";
+  for (let index = 0; index < 6; index += 1) code += HOME_CODE_ALPHABET[randomInt(HOME_CODE_ALPHABET.length)];
+  return code;
+}
+
 async function prepareLayout(fx, body) {
   const current = await loadLayout(fx);
   const next = structuredClone(current.layout);
@@ -1629,7 +1707,8 @@ function routeTable() {
     { pattern: "/units/:unitId/approval-grants/:grantId", DELETE: { capability: "grant.revoke", validate: validateRevoke } },
     { pattern: "/grant-revocations/:requestId", GET: { query: [] } },
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
-    { pattern: "/settings", GET: { query: [] } },
+    { pattern: "/settings", GET: { query: [] }, PATCH: { capability: "settings.write", validate: validateSettings } },
+    { pattern: "/settings/home-network", POST: { capability: "home.manage", validate: validateHome, runtime: true } },
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
     { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
     { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateBoard } },
@@ -1658,6 +1737,23 @@ function routeTable() {
 
 function validateEmpty(body) {
   requireObject(body, []);
+}
+
+function validateSettings(body) {
+  requireObject(body, ["look", "language", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  if (!("look" in body) && !("language" in body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if ("look" in body && !["modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if ("language" in body && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+function validateHome(body) {
+  requireObject(body, ["enabled", "addresses"]);
+  requireKeys(body, ["enabled"]);
+  if (typeof body.enabled !== "boolean") throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if (body.enabled === false && "addresses" in body) throw new HttpError(400, "unknown_field", "The request contains an unknown field.");
+  if (body.enabled === true && "addresses" in body && !Array.isArray(body.addresses)) throw new HttpError(422, "invalid_home_address", "The home address is not valid.");
 }
 
 function capabilityAllows(principal, route) {
@@ -2097,6 +2193,7 @@ async function handleApi(fx, request, response, audience) {
     checkPreconditions: async (input) => checkMutation(fx, spec.pattern, matched.params, input),
     prepare: async (input, actor) => prepareMutation(fx, spec.pattern, matched.params, input, actor),
     runtime: Boolean(spec.runtime),
+    homeGrant: spec.pattern === "/settings/home-network",
     apply: spec.pattern === "/auth/logout" ? () => revokeViewer(fx, principal.viewerId) : undefined,
   };
   if (spec.pattern === "/auth/logout") {
@@ -3283,6 +3380,12 @@ async function checkMutation(fx, pattern, params, body) {
       throw new HttpError(409, "revision_conflict", "The layout was changed elsewhere.", { currentRevision: current.revision });
     }
   }
+  if (pattern === "/settings") {
+    const current = await loadSettings(fx);
+    if ((body.expectedRevision ?? null) !== current.revision) {
+      throw new HttpError(409, "revision_conflict", "The settings were changed elsewhere.", { currentRevision: current.revision });
+    }
+  }
   if (pattern === "/chats/:chatId/messages") {
     const snap = await projection(fx);
     if (body.replyTo && !snap.messages.some((message) => message.chatId === params.chatId && message.id === body.replyTo)) {
@@ -3321,6 +3424,8 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/chats") return prepareChat(fx, body, principal);
   if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);
+  if (pattern === "/settings") return prepareSettings(fx, body);
+  if (pattern === "/settings/home-network") return prepareHomeNetwork(fx, body, principal);
   if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId);
   if (pattern === "/chats/:chatId/read") return prepareChatRead(fx, body, principal, params.chatId);
   if (pattern === "/mailboxes/:unitId/read") return prepareMailboxRead(fx, body, params.unitId);
