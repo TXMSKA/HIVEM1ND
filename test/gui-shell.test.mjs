@@ -13,6 +13,7 @@ import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
+import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -490,6 +491,49 @@ test("replaced and expired home codes are rejected and attempts are rate limited
   await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "auth_rate_limited" && error.retryAfter === 60_000);
 });
 
+test("a mounted map persists a drag with the loaded revision and keeps a later in-flight drag", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  let release = null;
+  let held = false;
+  const patches = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (_input, init) => {
+    if (init?.method !== "PATCH" || !String(init.body ?? "").includes("expectedRevision")) return;
+    const body = JSON.parse(init.body);
+    if (!body.nodes) return;
+    const headers = init.headers ?? {};
+    patches.push({ id: headers["Idempotency-Key"], body });
+    if (!held) {
+      held = true;
+      await new Promise((resolve) => { release = resolve; });
+    }
+  });
+  t.after(() => dispose(desktop.app));
+  await until(() => desktop.app.mapState?.authoritative?.revision);
+  const revision = desktop.app.mapState.authoritative.revision;
+  const loaded = await request(desktop.app.api, "GET", "/layout");
+  assert.equal(revision, loaded.data.revision);
+  const map = desktop.app.mapState;
+  const id = "root:master";
+  const origin = map.positions[id];
+  queueLayoutPatch(map, id, { x: origin.x + 20, y: origin.y });
+  const saving = flushLayout(map);
+  await until(() => patches.length === 1);
+  queueLayoutPatch(map, id, { x: origin.x + 40, y: origin.y });
+  release();
+  await saving;
+  await until(() => patches.length === 2);
+  assert.equal(patches[0].body.expectedRevision, revision);
+  assert.equal(patches[0].body.nodes[id].x, origin.x + 20);
+  assert.notEqual(patches[0].id, patches[1].id);
+  assert.equal(patches[1].body.nodes[id].x, origin.x + 40);
+  const stored = await request(desktop.app.api, "GET", "/layout");
+  assert.equal(stored.data.layout.nodes[id].x, origin.x + 40);
+  assert.notEqual(stored.data.revision, revision);
+  assert.notEqual(patches[1].body.expectedRevision, null);
+  assert.notEqual(patches[1].body.expectedRevision, revision);
+});
+
 test("phone boot never calls viewer routes and a narrow desktop token stays desktop", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
@@ -761,7 +805,7 @@ async function until(check) {
   throw new Error("The phone shell did not reach the expected state.");
 }
 
-async function bootApp(url, width, urls) {
+async function bootApp(url, width, urls, onFetch) {
   const { document, root, view } = createTestDocument(width);
   const parsed = new URL(url);
   const app = await mount(root, {
@@ -769,6 +813,7 @@ async function bootApp(url, width, urls) {
     history: { replaceState() {} },
     fetch: async (input, init) => {
       urls.push(String(input));
+      if (onFetch) await onFetch(input, init);
       return fetch(input, init);
     },
   });

@@ -14,8 +14,13 @@ import { isAfterCursor } from "./state.mjs";
 
 export const NODE_RADIUS = 28;
 
+function layoutRecord(saved) {
+  if (saved?.layout) return { layout: saved.layout, revision: saved.revision ?? null };
+  return { layout: saved ?? { nodes: {}, groups: {} }, revision: null };
+}
+
 export function createMap({ units = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
-  const wrapped = saved.layout ? saved : { layout: saved, revision: null };
+  const wrapped = layoutRecord(saved);
   const layout = wrapped.layout ?? { nodes: {}, groups: {} };
   const placed = placeUnits(units, layout);
   return {
@@ -52,6 +57,20 @@ export function createMap({ units = [], saved = { nodes: {}, groups: {} }, api =
     layoutBuffer: [],
     persist: false,
   };
+}
+
+export function adoptInitialLayout(map, saved) {
+  if (!map || map.authoritative?.revision != null || map.pending.size || map.pendingGroups.size || map.inFlight) return false;
+  const wrapped = layoutRecord(saved);
+  if (wrapped.revision == null) return false;
+  const layout = wrapped.layout ?? { nodes: {}, groups: {} };
+  const placed = placeUnits(map.units, layout);
+  map.saved = layout;
+  map.positions = placed.positions;
+  map.origins = placed.origins;
+  map.revision = wrapped.revision;
+  map.authoritative = { layout: structuredClone(layout), revision: wrapped.revision };
+  return true;
 }
 
 export function renderMap(document, host, map, labels = {}) {
@@ -438,6 +457,8 @@ export async function flushLayout(map) {
   if (map.inFlight || map.refreshing || map.pending.size + map.pendingGroups.size === 0) return;
   const batch = new Map(map.pending);
   const groups = new Map(map.pendingGroups);
+  for (const edit of batch.values()) edit.needsRetry = false;
+  for (const edit of groups.values()) edit.needsRetry = false;
   const body = { expectedRevision: map.authoritative.revision };
   if (batch.size) body.nodes = Object.fromEntries([...batch].map(([id, edit]) => [id, edit.position]));
   if (groups.size) body.groups = Object.fromEntries([...groups].map(([id, edit]) => [id, edit.group]));
@@ -466,8 +487,11 @@ export async function flushLayout(map) {
   } finally {
     map.inFlight = null;
   }
-  const dirty = [...map.pending.values()].some((edit) => !edit.retried) || [...map.pendingGroups.values()].some((edit) => !edit.retried);
-  if (!map.layoutConflict && !map.retryOperation && dirty) queueMicrotask(() => flushLayout(map));
+  const followUp = !map.layoutConflict && !map.retryOperation && (
+    [...map.pending.values()].some((edit) => edit.needsRetry || !edit.retried)
+    || [...map.pendingGroups.values()].some((edit) => !edit.retried)
+  );
+  if (followUp) await flushLayout(map);
 }
 
 export function applyRemoteLayout(map, event) {
@@ -553,10 +577,17 @@ async function reconcileLayoutConflict(map, batch) {
   for (const [id, edit] of batch) {
     const incoming = remote.layout?.nodes?.[id];
     const same = incoming && incoming.x === edit.base.x && incoming.y === edit.base.y;
-    if ((!incoming || same) && !edit.retried) {
-      map.editGeneration += 1;
-      map.pending.set(id, { ...edit, generation: map.editGeneration, retried: true });
-    } else if (!same) conflicts.push(id);
+    const current = map.pending.get(id);
+    const unchanged = !incoming || same;
+    if (unchanged && !edit.retried && !(current && current.generation > edit.generation)) {
+      map.pending.set(id, {
+        position: { ...edit.position },
+        generation: edit.generation,
+        base: edit.base,
+        retried: true,
+        needsRetry: true,
+      });
+    } else if (!unchanged) conflicts.push(id);
   }
   renderPositions(map, overlay(remote.layout.nodes, map.pending));
   map.layoutConflict = conflicts.length ? { ids: conflicts, remote } : null;
