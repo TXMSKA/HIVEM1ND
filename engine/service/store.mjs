@@ -328,42 +328,77 @@ async function recoverOne(store, id) {
     const freshBytes = await readBytesRaw(file);
     if (!freshBytes) return null;
     const fresh = JSON.parse(freshBytes.toString('utf8'));
+    if (fresh.phase === 'conflict') return fresh.id;
     if (fresh.phase === 'committed' && fresh.emitted) {
       for (const entry of fresh.entries ?? []) store.hidden.delete(path.resolve(entry.recordPath));
       return null;
     }
-    const conflicts = [];
+    const classified = [];
     for (const entry of fresh.entries ?? []) {
       const recordPath = path.resolve(entry.recordPath);
       const current = await readBytesRaw(recordPath);
       const revision = revisionOf(current);
-      if (revision === entry.afterRevision) {
-        store.hidden.delete(recordPath);
-        continue;
+      let state = 'conflict';
+      if (revision === entry.afterRevision) state = 'applied';
+      else if (revision === entry.beforeRevision) state = 'pending';
+      classified.push({ entry, recordPath, revision, state });
+    }
+    const conflicts = classified.filter((item) => item.state === 'conflict').map((item) => ({
+      resource: item.entry.resource,
+      recordPath: item.recordPath,
+      currentRevision: item.revision,
+    }));
+    if (conflicts.length > 0) {
+      for (const item of classified) store.hidden.delete(item.recordPath);
+      const response = conflictReceiptBody(fresh, conflicts);
+      const receipt = fresh.receipt ? { ...fresh.receipt, status: 409, response } : null;
+      if (receipt) {
+        const existing = await readReceipt(store, receipt.principalHash, receipt.key);
+        if (!existing || existing.status !== 409) await writeReceipt(store, receipt);
       }
-      if (revision === entry.beforeRevision) {
-        await atomicWrite(store, recordPath, Buffer.from(entry.afterBytesBase64, 'base64'));
-        store.hidden.delete(recordPath);
-        continue;
-      }
-      conflicts.push({ resource: entry.resource, recordPath, currentRevision: revision });
-      store.hidden.delete(recordPath);
+      const finished = {
+        ...fresh,
+        receipt: receipt ?? fresh.receipt,
+        phase: 'conflict',
+        conflicts,
+        emitted: false,
+        staged: false,
+      };
+      await atomicWrite(store, file, journalBytes(finished));
+      return finished.id;
+    }
+    for (const item of classified) {
+      if (item.state === 'pending') await atomicWrite(store, item.recordPath, Buffer.from(item.entry.afterBytesBase64, 'base64'));
+      store.hidden.delete(item.recordPath);
     }
     if (fresh.receipt) {
       const existing = await readReceipt(store, fresh.receipt.principalHash, fresh.receipt.key);
       if (!existing) await writeReceipt(store, fresh.receipt);
     }
-    const finished = {
-      ...fresh,
-      phase: conflicts.length > 0 ? 'conflict' : 'committed',
-      conflicts,
-      emitted: true,
-      staged: conflicts.length === 0,
-    };
+    const finished = { ...fresh, phase: 'committed', conflicts: [], emitted: true, staged: true };
     await atomicWrite(store, file, journalBytes(finished));
-    if (!fresh.emitted && conflicts.length === 0) emit(store, fresh.events ?? []);
+    if (!fresh.emitted) emit(store, fresh.events ?? []);
     return finished.id;
   });
+}
+
+function conflictReceiptBody(journal, conflicts) {
+  const requestId = journal.receipt?.requestId ?? journal.id;
+  return {
+    code: 'revision_conflict',
+    message: 'The record changed since it was read.',
+    requestId,
+    operationId: journal.id,
+    details: {
+      currentRevision: conflicts[0]?.currentRevision ?? null,
+      conflicts: conflicts.map((item) => ({
+        resource: item.resource,
+        requestId,
+        operationId: journal.id,
+        currentRevision: item.currentRevision,
+      })),
+    },
+  };
 }
 
 export async function withReceipt(store, input, operation) {
