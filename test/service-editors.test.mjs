@@ -1,11 +1,15 @@
 import { request } from 'node:http';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
-import { addNode, createAsset, createBoard, discoverResources, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, updateNode, validateBoard, writeAttachments } from '../engine/service/editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, writeAttachments } from '../engine/service/editors.mjs';
+import { recoverTransactions } from '../engine/service/store.mjs';
+import { createEventBus } from '../engine/service/events.mjs';
+import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
+import { plain } from '../features/void/text.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -162,6 +166,169 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
   assert.equal(denied.status, 403);
   const editor = await readEditor({ store: fixture.store, projects: [{ name: 'shop', localPath }] }, created.json.data.id);
   assert.equal(editor.document.script, 'from http');
+});
+
+function release() {
+  return {
+    title: 'Release notes',
+    rev: 0,
+    note: 'keep',
+    pages: [{ k: 'Intro.Welcome', en: '<b>Welcome</b>\nA first paragraph.', es: '<b>Bienvenida</b>\nUn primer párrafo.' }],
+  };
+}
+
+test('a Void document keeps orig, one history step and unknown fields', async (t) => {
+  const { context, localPath } = await shop(t);
+  const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release(), attached: ['project:shop:executor'] });
+  assert.equal(created.document.note, 'keep');
+  const orig = await readFile(path.join(localPath, 'docs', 'release.orig.json'), 'utf8');
+  const current = await readFile(path.join(localPath, 'docs', 'release.json'), 'utf8');
+  assert.equal(orig, current);
+  const next = structuredClone(created.document);
+  next.pages[0].es = '<b>Bienvenida</b>\nUn segundo párrafo.';
+  const saved = await replaceText(context, created.id, { document: next, expectedRevision: created.revision });
+  assert.equal(saved.document.rev, 1);
+  assert.equal(saved.document.pages[0].en, created.document.pages[0].en);
+  assert.equal(await readFile(path.join(localPath, 'docs', 'release.orig.json'), 'utf8'), orig);
+  const history = (await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(history.length, 1);
+  assert.equal(JSON.parse(history[0]).lang, 'es');
+  assert.equal(JSON.parse(history[0]).by, undefined);
+  const quiet = await observeExternal(context, created.id);
+  assert.equal(quiet.changed, false);
+  assert.equal((await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n').length, 1);
+});
+
+test('ranges reject split characters and tags, and a proposal accepts once', async (t) => {
+  const { context } = await shop(t);
+  const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release() });
+  const source = created.document.pages[0].en;
+  await assert.rejects(() => replaceRange(context, created.id, { k: 'Intro.Welcome', lang: 'en', start: 1, end: 2, expectedText: source.slice(1, 2), replacement: 'x', expectedRevision: created.revision }), { status: 422, code: 'invalid_range' });
+  const emoji = structuredClone(created.document);
+  emoji.pages[0].en = 'A\u{1F600}B';
+  const withEmoji = await replaceText(context, created.id, { document: emoji, expectedRevision: created.revision });
+  await assert.rejects(() => replaceRange(context, created.id, { k: 'Intro.Welcome', lang: 'en', start: 2, end: 3, expectedText: withEmoji.document.pages[0].en.slice(2, 3), replacement: '', expectedRevision: withEmoji.revision }), { status: 422, code: 'invalid_range' });
+  const removed = await replaceRange(context, created.id, { k: 'Intro.Welcome', lang: 'en', start: 0, end: 1, expectedText: 'A', replacement: '', expectedRevision: withEmoji.revision });
+  assert.equal(removed.editor.document.pages[0].en.startsWith('\u{1F600}'), true);
+  const commented = await createComment(context, created.id, {
+    text: 'Clarify',
+    expectedRevision: removed.editor.revision,
+    expectedCommentsRevision: (await readComments(context, created.id)).commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 1, quote: plain(removed.editor.document.pages[0].en).slice(0, 1) },
+  });
+  const proposed = await replaceRange(context, created.id, {
+    k: 'Intro.Welcome', lang: 'en', start: 0, end: 2, expectedText: removed.editor.document.pages[0].en.slice(0, 2), replacement: 'Hi',
+    expectedRevision: removed.editor.revision, mode: 'propose', threadId: commented.thread.id, expectedCommentsRevision: commented.commentsRevision,
+  });
+  assert.equal(proposed.proposal.state, 'pending');
+  assert.equal((await readEditor(context, created.id)).document.pages[0].en, removed.editor.document.pages[0].en);
+  const accepted = await answerProposal(context, created.id, proposed.proposal.id, { decision: 'accept', expectedRevision: removed.editor.revision, expectedCommentsRevision: proposed.proposal.commentsRevision });
+  assert.equal(accepted.proposal.state, 'accepted');
+  assert.equal(accepted.editor.document.pages[0].en.startsWith('Hi'), true);
+  await assert.rejects(() => answerProposal(context, created.id, proposed.proposal.id, { decision: 'accept', expectedRevision: accepted.editor.revision, expectedCommentsRevision: accepted.proposal.commentsRevision }), { status: 409, code: 'proposal_resolved' });
+  const again = await createComment(context, created.id, {
+    text: 'Another',
+    expectedRevision: accepted.editor.revision,
+    expectedCommentsRevision: accepted.proposal.commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'es', start: 0, end: 10, quote: plain(accepted.editor.document.pages[0].es).slice(0, 10) },
+  });
+  const stale = await replaceRange(context, created.id, {
+    k: 'Intro.Welcome', lang: 'es', start: 0, end: 11, expectedText: accepted.editor.document.pages[0].es.slice(0, 11), replacement: 'Hola',
+    expectedRevision: accepted.editor.revision, mode: 'propose', threadId: again.thread.id, expectedCommentsRevision: again.commentsRevision,
+  });
+  const moved = structuredClone(accepted.editor.document);
+  moved.pages[0].en = `${moved.pages[0].en} more`;
+  const edited = await replaceText(context, created.id, { document: moved, expectedRevision: accepted.editor.revision });
+  await assert.rejects(() => answerProposal(context, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: edited.revision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 409, code: 'proposal_stale' });
+  await assert.rejects(() => answerProposal({ ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } }, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: edited.revision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 403, code: 'forbidden' });
+});
+
+test('comments keep a corrupt sidecar, relocate anchors and notify once', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  context.paths = fixture.paths;
+  const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release(), attached: ['project:shop:executor', 'project:shop:other'] });
+  const commentsFile = path.join(localPath, 'docs', 'release.comments.json');
+  const broken = '{';
+  await writeFile(commentsFile, broken);
+  await assert.rejects(() => readComments(context, created.id), { status: 409, code: 'corrupt_resource' });
+  assert.equal(await readFile(commentsFile, 'utf8'), broken);
+  await writeFile(commentsFile, `${JSON.stringify({ path: 'release.json', threads: [] })}\n`);
+  const comments = await readComments(context, created.id);
+  const rendered = plain(created.document.pages[0].en);
+  const thread = await createComment(context, created.id, {
+    text: 'Clarify the introduction.',
+    expectedRevision: created.revision,
+    expectedCommentsRevision: comments.commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: rendered.slice(0, 7) },
+  });
+  assert.equal(thread.thread.messages[0].author, 'master');
+  const fanout = path.join(fixture.paths.mind, 'user', 'relay', 'fanout', `${thread.thread.messages[0].id}.json`);
+  const notices = JSON.parse(await readFile(fanout, 'utf8')).notices;
+  assert.deepEqual(notices.map((item) => item.unitId).sort(), ['project:shop:executor', 'project:shop:other']);
+  const again = await notifyAttached(context, { messageId: thread.thread.messages[0].id, resourceId: created.id, recipients: ['project:shop:executor'] });
+  assert.deepEqual(again, []);
+  const agentContext = { ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } };
+  const reply = await replyComment(agentContext, created.id, thread.thread.id, { text: 'Done', expectedCommentsRevision: thread.commentsRevision });
+  const agentNotices = JSON.parse(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'fanout', `${reply.thread.messages.at(-1).id}.json`), 'utf8')).notices.map((item) => item.unitId).sort();
+  assert.deepEqual(agentNotices, ['project:shop:other', 'root:master']);
+  await assert.rejects(() => replyComment({ ...context, principal: { audience: 'agent', unitId: 'project:shop:stranger' } }, created.id, thread.thread.id, { text: 'No', expectedCommentsRevision: reply.commentsRevision }), { status: 403, code: 'forbidden' });
+  const changed = structuredClone(created.document);
+  changed.pages[0].en = `Note. ${changed.pages[0].en}`;
+  await replaceText(context, created.id, { document: changed, expectedRevision: created.revision });
+  const placed = (await readComments(context, created.id)).threads[0];
+  assert.equal(placed.anchor.quote, 'Welcome');
+  const { place } = await import('../features/void/comments.mjs');
+  assert.equal(place((await readEditor(context, created.id)).document.pages, placed).exact, true);
+});
+
+test('an external edit is journaled once and a crash still finishes the text files', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release() });
+  const file = path.join(localPath, 'docs', 'release.json');
+  const outside = structuredClone(created.document);
+  outside.pages[0].en = `${outside.pages[0].en} outside`;
+  await writeFile(file, `${JSON.stringify(outside, null, 2)}\n`);
+  assert.equal((await observeExternal(context, created.id)).changed, true);
+  assert.equal((await observeExternal(context, created.id)).changed, false);
+  const lines = (await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).by, 'outside');
+  await writeFile(file, '{');
+  assert.equal((await observeExternal(context, created.id)).issue, true);
+  assert.equal(await readFile(file, 'utf8'), '{');
+  fixture.store.fault = { afterRenames: 1 };
+  await assert.rejects(() => createText(context, { project: 'shop', path: 'docs/other.json', document: release() }), { code: 'injected_crash' });
+  await recoverTransactions(fixture.store);
+  const recovered = await readFile(path.join(localPath, 'docs', 'other.json'), 'utf8');
+  assert.equal(await readFile(path.join(localPath, 'docs', 'other.orig.json'), 'utf8'), recovered);
+});
+
+test('Watch follows only its owner and expires after fifteen minutes', async (t) => {
+  const { context } = await shop(t);
+  const now = Date.parse('2026-10-10T12:00:00.000Z');
+  const bus = createEventBus({ now: () => now });
+  const watch = createWatch({ bus, now: () => now });
+  const owner = bus.subscribe({ stableId: 'owner', viewerId: 'viewer-owner', audience: 'desktop' });
+  const other = bus.subscribe({ stableId: 'other', viewerId: 'viewer-other', audience: 'desktop' });
+  const opened = await startWatch(watch, { viewerId: 'viewer-owner', token: 'owner-token', unitId: 'root:builder' });
+  assert.equal(opened.state, 'waiting');
+  recordActivity(watch, { unitId: 'root:builder', resourceId: 'a', at: '2026-10-10T12:00:00.000Z' });
+  recordActivity(watch, { unitId: 'root:builder', resourceId: 'b', at: '2026-10-10T12:00:00.000Z' });
+  assert.equal(resolveActivity(watch, 'root:builder', now).resourceId, 'b');
+  assert.equal(owner.buffer.some((frame) => frame.name === 'watch.changed'), true);
+  assert.equal(other.buffer.some((frame) => frame.name === 'watch.changed'), false);
+  stopWatch(watch, opened.watchId);
+  const before = owner.buffer.length;
+  recordActivity(watch, { unitId: 'root:builder', resourceId: 'c', at: '2026-10-10T12:00:00.000Z' });
+  assert.equal(owner.buffer.length, before);
+  const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release() });
+  assert.equal(created.document.title, 'Release notes');
+  clearUnit(watch, 'root:builder');
+  assert.equal(resolveActivity(watch, 'root:builder', now), null);
+  recordActivity(watch, { unitId: 'root:builder', resourceId: 'old', at: '2026-10-10T11:40:00.000Z' });
+  assert.equal(resolveActivity(watch, 'root:builder', now), null);
+  assert.equal(disposeViewer(watch, 'owner-token'), true);
+  t.after(() => {});
 });
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

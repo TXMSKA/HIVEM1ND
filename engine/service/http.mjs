@@ -13,7 +13,8 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { enqueueStart, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
-import { addNode, createAsset, createBoard, list as listBoards, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, updateNode, writeAttachments } from './editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
+import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 
 const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
 const STATIC_FILES = new Set([
@@ -78,23 +79,23 @@ const ROUTES = [
   ['POST', '/blueprint/boards/:resourceId/nodes', 'editor.write', 'DA', 'editor'],
   ['PATCH', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
   ['DELETE', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
-  ['GET', '/void/texts', 'editor.read', 'DPA', 'unavailable'],
-  ['GET', '/void/texts/:resourceId', 'editor.read', 'DPA', 'unavailable'],
-  ['POST', '/void/texts', 'editor.write', 'D', 'unavailable'],
-  ['PUT', '/void/texts/:resourceId', 'editor.write', 'DA', 'unavailable'],
-  ['POST', '/void/texts/:resourceId/ranges', 'editor.write', 'DA', 'unavailable'],
-  ['GET', '/void/texts/:resourceId/proposals', 'editor.read', 'DPA', 'unavailable'],
-  ['POST', '/void/texts/:resourceId/proposals/:proposalId/answer', 'proposal.answer', 'D', 'unavailable'],
+  ['GET', '/void/texts', 'editor.read', 'DPA', 'editor'],
+  ['GET', '/void/texts/:resourceId', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/void/texts', 'editor.write', 'D', 'editor'],
+  ['PUT', '/void/texts/:resourceId', 'editor.write', 'DA', 'editor'],
+  ['POST', '/void/texts/:resourceId/ranges', 'editor.write', 'DA', 'editor'],
+  ['GET', '/void/texts/:resourceId/proposals', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/void/texts/:resourceId/proposals/:proposalId/answer', 'proposal.answer', 'D', 'editor'],
   ['GET', '/editors/:resourceId/attachments', 'editor.read', 'DPA', 'editor'],
   ['PUT', '/editors/:resourceId/attachments', 'editor.write', 'D', 'editor'],
-  ['GET', '/editors/:resourceId/comments', 'editor.read', 'DPA', 'unavailable'],
-  ['POST', '/editors/:resourceId/comments', 'comment.write', 'DA', 'unavailable'],
-  ['POST', '/editors/:resourceId/comments/:threadId/replies', 'comment.write', 'DA', 'unavailable'],
-  ['PATCH', '/editors/:resourceId/comments/:threadId', 'comment.write', 'DA', 'unavailable'],
+  ['GET', '/editors/:resourceId/comments', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/editors/:resourceId/comments', 'comment.write', 'DA', 'editor'],
+  ['POST', '/editors/:resourceId/comments/:threadId/replies', 'comment.write', 'DA', 'editor'],
+  ['PATCH', '/editors/:resourceId/comments/:threadId', 'comment.write', 'DA', 'editor'],
   ['GET', '/editors/:resourceId/assets/:assetId', 'editor.read', 'DPA', 'editor'],
   ['POST', '/editors/:resourceId/assets', 'asset.write', 'D', 'editor'],
-  ['POST', '/watch', 'watch', 'D', 'unavailable'],
-  ['DELETE', '/watch/:watchId', 'watch', 'D', 'unavailable'],
+  ['POST', '/watch', 'watch', 'D', 'watch'],
+  ['DELETE', '/watch/:watchId', 'watch', 'D', 'watch'],
   ['GET', '/viewer', 'read', 'D', 'readViewer'],
   ['PATCH', '/viewer', 'viewer.write', 'D', 'patchViewer'],
   ['GET', '/events', 'read', 'DPA', 'events'],
@@ -194,6 +195,8 @@ export async function createHttpServer(options) {
   const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP' });
   const credentials = options.credentials;
   const viewers = new Map();
+  const watch = createWatch({ bus, now: options.now ?? (() => Date.now()) });
+  options.watch = watch;
   const homeMemory = new Map();
   const homeState = {
     grant: null,
@@ -270,7 +273,7 @@ export async function createHttpServer(options) {
       return;
     }
     if (route.handler === 'authLocal' || route.handler === 'authHome' || route.handler === 'logout') {
-      const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress });
+      const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress, watch });
       respond(res, outcome.status, outcome.body ?? undefined, outcome.headers);
       return;
     }
@@ -283,6 +286,10 @@ export async function createHttpServer(options) {
     const outcome = route.method === 'GET'
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
+    if (outcome.status === 204) {
+      respond(res, 204);
+      return;
+    }
     if (outcome.raw) {
       res.writeHead(outcome.status ?? 200, {
         'content-type': outcome.type,
@@ -312,6 +319,7 @@ export async function createHttpServer(options) {
     port: server.address().port,
     viewers,
     async close() {
+      disposeWatch(watch);
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => server.close(() => resolve()));
     },
@@ -472,6 +480,7 @@ function domainContext(options, credential, bus) {
     now: options.now ?? (() => Date.now()),
     bus,
     projects: options.projects ?? [],
+    watch: options.watch ?? null,
     ownedPids: options.ownedPids ?? new Set(),
     aliases: options.aliases ?? [],
     principal: {
@@ -483,18 +492,49 @@ function domainContext(options, credential, bus) {
   };
 }
 
+function noteActivity(domain, resourceId) {
+  if (!domain.watch || !resourceId) return;
+  recordActivity(domain.watch, { unitId: domain.principal?.unitId, resourceId, at: new Date(domain.now()).toISOString() });
+}
+
 async function editorRoute(route, domain, params, query, body) {
   const id = params.resourceId;
-  if (route.template === '/blueprint/boards' && route.method === 'GET') return { status: 200, body: await listBoards(domain, query) };
-  if (route.template === '/blueprint/boards/:resourceId') return { status: 200, body: await readEditor(domain, id) };
+  if (route.template === '/blueprint/boards' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'blueprint' }) };
+  if (route.template === '/void/texts' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'void' }) };
+  if ((route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId') && route.method === 'GET') return { status: 200, body: await readEditor(domain, id) };
   if (route.template === '/editors/register') return { status: 201, body: await registerResource(domain, body) };
   if (route.template === '/blueprint/boards' && route.method === 'POST') return { status: 201, body: await createBoard(domain, body) };
+  if (route.template === '/void/texts' && route.method === 'POST') return { status: 201, body: await createText(domain, body) };
   if (route.template === '/blueprint/boards/:resourceId' && route.method === 'PUT') return { status: 200, body: await replaceBoard(domain, id, body) };
+  if (route.template === '/void/texts/:resourceId' && route.method === 'PUT') {
+    const saved = await replaceText(domain, id, body);
+    noteActivity(domain, id);
+    return { status: 200, body: saved };
+  }
+  if (route.template === '/void/texts/:resourceId/ranges') {
+    const saved = await replaceRange(domain, id, body);
+    noteActivity(domain, id);
+    return { status: 200, body: saved };
+  }
+  if (route.template === '/void/texts/:resourceId/proposals') return { status: 200, body: await listProposals(domain, id, query) };
+  if (route.template === '/void/texts/:resourceId/proposals/:proposalId/answer') return { status: 200, body: await answerProposal(domain, id, params.proposalId, body) };
   if (route.template === '/blueprint/boards/:resourceId/nodes') return { status: 201, body: await addNode(domain, id, body) };
   if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'PATCH') return { status: 200, body: await updateNode(domain, id, params.nodeId, body) };
   if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'DELETE') return { status: 200, body: await removeNode(domain, id, params.nodeId, body) };
   if (route.template === '/editors/:resourceId/attachments' && route.method === 'GET') return { status: 200, body: await readAttachments(domain, id) };
   if (route.template === '/editors/:resourceId/attachments' && route.method === 'PUT') return { status: 200, body: await writeAttachments(domain, id, body) };
+  if (route.template === '/editors/:resourceId/comments' && route.method === 'GET') return { status: 200, body: await listComments(domain, id, query) };
+  if (route.template === '/editors/:resourceId/comments' && route.method === 'POST') {
+    const saved = await createComment(domain, id, body);
+    noteActivity(domain, id);
+    return { status: 201, body: saved };
+  }
+  if (route.template === '/editors/:resourceId/comments/:threadId/replies') {
+    const saved = await replyComment(domain, id, params.threadId, body);
+    noteActivity(domain, id);
+    return { status: 200, body: saved };
+  }
+  if (route.template === '/editors/:resourceId/comments/:threadId') return { status: 200, body: await setCommentStatus(domain, id, params.threadId, body) };
   if (route.template === '/editors/:resourceId/assets') return { status: 201, body: await createAsset(domain, id, body) };
   if (route.template === '/editors/:resourceId/assets/:assetId') {
     const asset = await readAsset(domain, id, params.assetId);
@@ -503,10 +543,35 @@ async function editorRoute(route, domain, params, query, body) {
   throw new CoreError(404, 'not_found', 'The route does not exist.');
 }
 
+async function watchRoute(route, domain, params, body, credential) {
+  if (!domain.watch) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
+  if (route.method === 'DELETE') {
+    stopWatch(domain.watch, params.watchId);
+    return { status: 204, body: null };
+  }
+  let attached = true;
+  if (body?.resourceId) {
+    const editor = await readEditor(domain, body.resourceId).catch(() => null);
+    attached = Boolean(editor && (editor.attached ?? []).includes(body.unitId));
+  }
+  const chatMember = body?.chatId ? await chatContains(domain, body.chatId, body.unitId) : true;
+  const opened = await startWatch(domain.watch, {
+    viewerId: credential.viewerId,
+    token: credential.token,
+    unitId: body?.unitId,
+    resourceId: body?.resourceId ?? null,
+    chatId: body?.chatId ?? null,
+    attached,
+    chatMember,
+  });
+  return { status: 200, body: opened };
+}
+
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
-  if (route.handler === 'editor') return editorRoute(route, domain, params, query, body);
+  if (route.handler === 'editor') return editorRoute(route, domain, params, query, body, credential);
+  if (route.handler === 'watch') return watchRoute(route, domain, params, body, credential);
   if (route.handler === 'unavailable') {
     const injected = options.handlers?.[route.template];
     if (!injected) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
@@ -642,6 +707,7 @@ async function runAuth(route, scope) {
     return { status: 200, body: await exchange(scope.homeState, scope.body, scope.peer) };
   }
   scope.credentials.revoke(scope.credential.token);
+  if (scope.watch) disposeViewer(scope.watch, scope.credential.token);
   scope.bus.closePrincipal(scope.credential.token);
   scope.viewers.delete(scope.credential.viewerId);
   return { status: 204, body: null };

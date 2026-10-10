@@ -80,7 +80,7 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   assert.equal(created.json.data.unit, 'builder');
   const listed = await call(core.http.port, 'GET', '/api/v1/units', { token });
   assert.equal(listed.json.data.items.some((item) => item.unit === 'builder'), true);
-  const future = await call(core.http.port, 'POST', '/api/v1/watch', {
+  const future = await call(core.http.port, 'POST', '/mcp', {
     token,
     body: {},
     headers: { 'idempotency-key': randomUUID() },

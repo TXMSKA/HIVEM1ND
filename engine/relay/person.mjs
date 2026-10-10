@@ -48,7 +48,8 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
     const agent = await agentFor(project);
     if (!agent) return { sent: false, reason: 'no-agent' };
     if (!registered) {
-      await relay.register({ unit: 'master', nativeSessionId: sessionId, client: 'master' });
+      const unit = tool === 'void-lite' ? 'user' : 'master';
+      await relay.register({ unit, nativeSessionId: sessionId, client: 'master' });
       registered = true;
     }
     const result = await relay.send({ to: agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });
