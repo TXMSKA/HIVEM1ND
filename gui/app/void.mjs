@@ -33,9 +33,12 @@ export async function saveRange(api, editor, k, lang, start, end, replacement) {
     body,
   });
   const result = await request(api, "POST", operation.path, { operation });
-  acceptText(editor, result.data);
-  editor.dirty = false;
-  editor.conflict = null;
+  const saved = result.data?.editor;
+  acceptText(editor, saved);
+  if (saved?.document || saved?.revision) {
+    editor.dirty = false;
+    editor.conflict = null;
+  }
   return result;
 }
 
