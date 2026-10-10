@@ -117,7 +117,7 @@ export function authorize(credential, operation, object = {}) {
     return { allowed: true };
   }
   if (credential.audience === 'agent') {
-    if (['approval.answer', 'task.accept', 'task.undo', 'settings.write', 'grant.revoke', 'unit.create', 'session.start'].includes(operation)) {
+    if (['approval.answer', 'task.accept', 'task.undo', 'settings.write', 'grant.revoke', 'unit.create', 'session.start', 'session.stop', 'watch'].includes(operation)) {
       throw new CoreError(403, 'forbidden', 'The agent cannot perform that operation.');
     }
     if (operation === 'read' && object.scope !== 'own') throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
