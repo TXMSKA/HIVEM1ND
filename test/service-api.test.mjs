@@ -899,6 +899,55 @@ test('every contract route has a success result and an authority or boundary fai
   assert.deepEqual(absent, []);
 });
 
+test('lan rejects desktop tokens and an agent cannot read the general mind', async (t) => {
+  const fixture = await makeCoreFixture();
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const core = await composeCore({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+    projects: [],
+    listenerKind: 'lan',
+    bindAddress: '127.0.0.1',
+    netmask: '255.255.255.255',
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  assert.equal(local.status, 403);
+  const desktop = core.credentials.issue({ audience: 'desktop', capabilities: ['read', 'unit.create'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  const phone = core.credentials.issue({ audience: 'phone', expiresAt: '2027-01-01T00:00:00.000Z' });
+  const denied = await call(core.http.port, 'GET', '/api/v1/units', { token: desktop.token });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.json.error.code, 'forbidden');
+  const listed = await call(core.http.port, 'GET', '/api/v1/units', { token: phone.token });
+  assert.equal(listed.status, 200);
+  const write = await call(core.http.port, 'POST', '/api/v1/units', {
+    token: phone.token,
+    body: { unit: 'phone', role: 'executor', scope: 'root', machine: fixture.machine },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(write.status, 403);
+  assert.equal(write.json.error.code, 'phone_read_only');
+  await core.http.close();
+  const loop = await composeCore({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+    projects: [],
+  });
+  t.after(async () => loop.http.close());
+  const agent = loop.credentials.issue({ audience: 'agent', unitId: 'root:executor', capabilities: ['read'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  const general = await call(loop.http.port, 'GET', '/api/v1/units', { token: agent.token });
+  assert.equal(general.status, 403);
+  assert.equal(general.json.error.code, 'forbidden');
+  const foreign = await call(loop.http.port, 'GET', '/api/v1/mailboxes/root:master/messages', { token: agent.token });
+  assert.equal(foreign.status, 403);
+});
+
 test('the package exports the GUI host from the root and from ./gui', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.version, '3.0.0');

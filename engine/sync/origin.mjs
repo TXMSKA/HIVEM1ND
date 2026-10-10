@@ -192,7 +192,7 @@ export async function writeDurable(store, file, bytes, roots) {
   }
   await handle.close();
   try {
-    await rename(temporary, resolved);
+    await renameReplacing(temporary, resolved);
   } catch (error) {
     await unlink(temporary).catch(() => {});
     throw error;
@@ -209,6 +209,21 @@ async function placePack(origin, sequence, bytes, digest) {
     return file;
   }
   return writeDurable(origin.store, file, bytes, originRoots(origin));
+}
+
+async function renameReplacing(temporary, resolved) {
+  let last = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rename(temporary, resolved);
+      return;
+    } catch (error) {
+      last = error;
+      if (error?.code !== 'EPERM' && error?.code !== 'EBUSY') throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  throw last;
 }
 
 async function writeJson(origin, file, value) {
