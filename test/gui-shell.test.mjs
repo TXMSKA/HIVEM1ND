@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus } from "../gui/app/actions.mjs";
@@ -681,6 +681,37 @@ test("embedded viewers accept only their parent and logout is idempotent", async
   await assert.rejects(request(apiFrom(first.url), "POST", "/sessions/none/stop", {
     operation: createOperation({ method: "POST", path: "/sessions/none/stop", body: {} }),
   }), (error) => error.status === 401);
+});
+
+test("the GUI import graph stays inside its ownership table", async () => {
+  const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
+  const section = plan.split("## File ownership")[1].split("\n## ")[0];
+  const owned = new Set([...section.matchAll(/`((?:gui\/app|test)\/[^`]+)`/g)].map((match) => match[1]));
+  assert.equal(owned.has("gui/app/phone.mjs"), true);
+  assert.equal(owned.has("gui/app/embed.mjs"), true);
+  assert.equal(owned.has("test/gui-fixture.mjs"), true);
+  const seen = new Set();
+  async function walk(file) {
+    const rel = relative(process.cwd(), file).replaceAll("\\", "/");
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    assert.equal(owned.has(rel), true, rel);
+    const source = await readFile(file, "utf8");
+    assert.equal(source.includes("import("), false, rel);
+    const specifiers = [...source.matchAll(/from "([^"]+)"/g)].map((match) => match[1]);
+    for (const specifier of specifiers) {
+      assert.equal(specifier.startsWith(".") || specifier.startsWith("node:"), true, specifier);
+      assert.equal(/engine|cli|features|https?:|node_modules/.test(specifier), false, specifier);
+      if (specifier.startsWith("node:")) {
+        assert.equal(rel.startsWith("gui/"), false, specifier);
+        continue;
+      }
+      await walk(resolve(file, "..", specifier));
+    }
+  }
+  await walk(resolve("gui/app/main.mjs"));
+  await walk(resolve("test/gui-fixture.mjs"));
+  await walk(resolve("test/gui-data.mjs"));
 });
 
 function qrDigest(matrix) {
