@@ -85,6 +85,10 @@ export async function ackPublished(sync, ids) {
   });
 }
 
+export async function listStaged(sync) {
+  return stagedChanges(sync);
+}
+
 export async function resolveIncoming(sync, packBytes, provider) {
   const result = await resolveDependencies(packBytes, provider);
   const file = pendingPath(sync, result.decoded.header.machine, result.decoded.header.sequence);
