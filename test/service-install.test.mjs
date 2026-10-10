@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '../cli/index.mjs';
 import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
+import { assertReleaseAssets, assertZipBounds, build, cleanStage, dryRun, main, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -227,4 +229,117 @@ test('service install dry-run is a plan and the wizard opens one viewer', async 
   });
   assert.equal(response.status, 200);
   assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
+});
+
+function independentCrc(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+test('installer archives are reproducible and reject malicious containers', async (context) => {
+  const files = [
+    { name: 'notes/readme.txt', data: Buffer.from('alpha') },
+    { name: 'b.txt', data: Buffer.from('beta') },
+  ];
+  const first = build({ files, runtime: 'unverified' });
+  const second = build({ files, runtime: 'unverified' });
+  assert.equal(first.digest, second.digest);
+  assert.equal(first.zip.equals(second.zip), true);
+  assert.equal(first.zip.readUInt32LE(0), 0x04034b50);
+  assert.equal(first.zip.readUInt32LE(first.zip.length - 22), 0x06054b50);
+  const nameLength = first.zip.readUInt16LE(26);
+  const size = first.zip.readUInt32LE(22);
+  const data = first.zip.subarray(30 + nameLength, 30 + nameLength + size);
+  assert.equal(independentCrc(data), first.zip.readUInt32LE(14));
+  const entries = readArchive(first.zip);
+  assert.deepEqual(entries.map((entry) => entry.name), ['b.txt', 'install.cmd', 'manifest.json', 'notes/readme.txt']);
+  const broken = Buffer.from(first.zip);
+  broken[30 + nameLength] ^= 0xff;
+  assert.throws(() => readArchive(broken), { code: 'zip_rejected' });
+  const traversal = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  const from = Buffer.from('aa.txt');
+  const to = Buffer.from('../a/b');
+  let found = 0;
+  let offset = 0;
+  while (offset >= 0 && found < 2) {
+    offset = traversal.indexOf(from, offset);
+    if (offset < 0) break;
+    to.copy(traversal, offset);
+    found += 1;
+    offset += from.length;
+  }
+  assert.equal(found, 2);
+  assert.throws(() => readArchive(traversal), { code: 'zip_rejected' });
+  assert.throws(() => writeZip([{ name: '../x', data: Buffer.from('no') }]), { code: 'zip_rejected' });
+  assert.throws(() => writeZip([{ name: 'a', data: Buffer.from('1') }, { name: 'a', data: Buffer.from('2') }]), { code: 'zip_rejected' });
+  const odd = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  odd.writeUInt16LE(99, odd.readUInt32LE(odd.length - 6) + 10);
+  assert.throws(() => readArchive(odd), { code: 'zip_rejected' });
+  const shifted = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  const central = shifted.readUInt32LE(shifted.length - 6);
+  shifted.writeUInt32LE(0xfffffff0, central + 42);
+  assert.throws(() => readArchive(shifted), { code: 'zip_rejected' });
+  assert.throws(() => assertZipBounds({ count: 65536, offset: 0, size: 1 }), { code: 'zip_too_large' });
+  const expanded = writeZip([{ name: 'c.txt', data: Buffer.alloc(80, 7), method: 8 }]);
+  assert.throws(() => readArchive(expanded, { maxOutput: 10 }), { code: 'zip_rejected' });
+  const manifest = JSON.parse(entries.find((entry) => entry.name === 'manifest.json').data.toString('utf8'));
+  assert.equal(Object.hasOwn(manifest, 'user'), false);
+  assert.equal(JSON.stringify(manifest).includes('C:\\'), false);
+
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const stage = path.join(root, 'stage');
+  const child = path.join(stage, 'child');
+  await mkdir(child, { recursive: true });
+  await writeFile(path.join(child, 'note.txt'), 'keep');
+  await assert.rejects(() => cleanStage(stage, stage));
+  await assert.rejects(() => cleanStage(path.join(root, '..', 'outside'), stage));
+  const outside = path.join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  await writeFile(path.join(outside, 'safe.txt'), 'safe');
+  const link = path.join(stage, 'link');
+  await symlink(outside, link, 'junction');
+  await assert.rejects(() => cleanStage(link, stage));
+  assert.equal(await readFile(path.join(outside, 'safe.txt'), 'utf8'), 'safe');
+  await cleanStage(child, stage);
+  await assert.rejects(() => access(child), { code: 'ENOENT' });
+
+  const planned = await dryRun({ cliPath: 'C:\\Program Files\\kit\\cli\\index.mjs' });
+  assert.equal(planned.osCalls, 0);
+  assert.equal(planned.activated, false);
+  assert.equal(planned.browserAssets, 'unavailable');
+  assert.match(planned.script, /"%~dp0runtime\\node\.exe"/);
+  assert.match(planned.body, /&quot;C:\\Program Files\\kit\\cli\\index\.mjs&quot;/);
+  assert.throws(() => build({ release: true, browserAssets: 'unavailable' }), /browser assets/);
+  await assert.rejects(() => assertReleaseAssets(root), /browser asset/);
+  const fake = path.join(root, 'fake-node.zip');
+  await writeFile(fake, writeZip([{ name: 'node-v22.23.3-win-x64/node.exe', data: Buffer.from('not-node') }]));
+  const missing = path.join(root, 'artifact.zip');
+  await assert.rejects(() => main(['--node-zip', fake, '--dry-run', '--output', missing]), /digest/);
+  await assert.rejects(() => access(missing), { code: 'ENOENT' });
+  await assert.rejects(() => main(['--output', missing]), /does not download/);
+
+  const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
+  const packages = productionPackages(lock);
+  assert.equal(packages.some((item) => item.name === '@clack/prompts'), true);
+  assert.equal(packages.some((item) => item.name === 'electron'), false);
+  await verifyInstalled(packageRoot, packages);
+  const cached = [process.env.HIVEM1ND_NODE_ZIP, path.join(os.homedir(), 'Downloads', 'node-v22.23.3-win-x64.zip')].filter(Boolean);
+  let runtime = 'pinned node-v22.23.3-win-x64.zip unavailable';
+  for (const candidate of cached) {
+    try {
+      await access(candidate);
+      await verifyRuntime(candidate);
+      runtime = `verified ${candidate}`;
+      break;
+    } catch (error) {
+      if (error?.code === 'runtime_digest') runtime = `pinned node archive digest mismatch at ${candidate}`;
+    }
+  }
+  assert.match(runtime, /unavailable|verified|digest mismatch/);
 });
