@@ -776,10 +776,18 @@ async function invoke(route, scope) {
   if (route.template === '/grant-revocations/:requestId') return { status: 200, body: await readRevocation(domain, params.requestId) };
   if (route.template === '/session-requests/:requestId') return { status: 200, body: await readStartRequest(domain, params.requestId) };
   if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
-  if (route.handler === 'collection') return { status: 200, body: await readCollection(domain, route.collection, numbers(query)) };
+  if (route.handler === 'collection') {
+    const next = numbers(query);
+    if (params.chatId) next.chatId = params.chatId;
+    if (route.template.startsWith('/mailboxes/:unitId')) next.mailboxId = params.unitId;
+    return { status: 200, body: await readCollection(domain, route.collection, next) };
+  }
   if (route.handler === 'detail') {
     const detailId = route.template.endsWith('/:messageId') ? params.messageId : (params.taskId ?? params.approvalId ?? params.requestId ?? params.chatId ?? params.unitId ?? params.messageId);
-    return { status: 200, body: await readDetail(domain, route.collection, detailId) };
+    const scope = {};
+    if (params.chatId) scope.chatId = params.chatId;
+    if (route.template.startsWith('/mailboxes/:unitId')) scope.mailboxId = params.unitId;
+    return { status: 200, body: await readDetail(domain, route.collection, detailId, scope) };
   }
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
   if (route.handler === 'settings') {
@@ -853,7 +861,7 @@ function validateQuery(route, query) {
   const allowed = route.method === 'GET' && route.handler !== 'detail' && route.handler !== 'layout' && route.handler !== 'settings' && route.handler !== 'readViewer' && route.handler !== 'events'
     ? new Set(page)
     : new Set();
-  if (route.template === '/approvals') allowed.add('state');
+  if (route.template === '/approvals' || route.template === '/mailboxes/:unitId/messages') allowed.add('state');
   if (route.handler === 'events') {
     allowed.add('unitId');
     allowed.add('chatId');

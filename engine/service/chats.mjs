@@ -370,7 +370,7 @@ async function unreadChat(context, chatId, reader, extra = []) {
   const directory = path.join(context.paths.mind, 'user', 'relay', 'chats', chatId);
   const names = await readdir(directory);
   const read = new Set(extra);
-  const receiptRoot = path.join(directory, 'read');
+  const receiptRoot = path.join(directory, 'read', Buffer.from(reader).toString('base64url'));
   await collectReceipts(receiptRoot, read);
   return names.filter((name) => name.endsWith('.md') && name !== 'chat.md' && !read.has(name.slice(0, -3))).length;
 }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEventBus, publishDomainEvents, revisionRelation } from '../engine/service/events.mjs';
 import { randomUUID } from 'node:crypto';
-import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
+import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
 import { composeCore } from '../engine/service/service.mjs';
@@ -453,4 +453,110 @@ test('scoped records, terminal sessions and chat fields stay in the projection',
   assert.deepEqual(chat.members, ['root:master', 'project:shop:builder']);
   assert.equal(chat.createdAt, '2026-10-10T10:00:00.000Z');
   assert.equal(view.issues.some((issue) => issue.path.endsWith('blank.json')), true);
+});
+
+test('chat and mailbox reads stay with their reader, archive, and revisions', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  const encoded = Buffer.from('root:master').toString('base64url');
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'direct'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'group'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'direct', 'read', Buffer.from('project:shop:builder').toString('base64url'), 'DESKTOP'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'archive', 'by-unit', encoded), { recursive: true });
+  await mkdir(path.join(root, 'user', 'inbox', 'builder'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'approvals', 'approve-1'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'sessions'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'session-status', '20c58b80-4d93-88cd-83b3-39d78f1d9d5d'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'gui'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'state', 'overseer.md'), stateFile({
+    unit: 'overseer', 'unit-id': 'root:overseer', role: 'overseer', state: 'in', machine: 'DESKTOP', date: '2026-10-10',
+  }, 'Waiting on user: which name; which date\nWaiting on the master: ship it\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'chat.md'), stateFile({
+    id: 'direct', title: 'Direct', kind: 'direct', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'm1.md'), stateFile({
+    id: 'm1', 'from-id': 'user', timestamp: '2026-10-10T11:00:00.000Z', kind: 'chat-notice', 'notice-key': 'direct:m1', 'resource-id': 'board-1',
+  }, 'Earlier\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'm2.md'), stateFile({
+    id: 'm2', 'from-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Later\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'group', 'chat.md'), stateFile({
+    id: 'group', title: 'Group', kind: 'group', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'group', 'g1.md'), stateFile({
+    id: 'g1', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Group only\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'read', Buffer.from('project:shop:builder').toString('base64url'), 'DESKTOP', 'receipt.json'), JSON.stringify({
+    unitId: 'project:shop:builder', messageIds: ['m1', 'm2'],
+  }));
+  await writeFile(path.join(root, 'user', 'inbox', 'master', 'hello.md'), stateFile({
+    id: 'hello', from: 'master', 'to-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Hello\n'));
+  await writeFile(path.join(root, 'user', 'inbox', 'builder', 'secret.md'), stateFile({
+    id: 'secret', 'to-id': 'project:shop:builder', 'reply-requested': 'true', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Other only\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'archive', 'by-unit', encoded, 'old.md'), stateFile({
+    id: 'old', 'to-id': 'root:master', timestamp: '2026-10-09T12:00:00.000Z', read: 'true',
+  }, 'Archived\n'));
+  await writeFile(path.join(root, 'user', 'relay', 'approvals', 'approve-1', 'request.json'), JSON.stringify({
+    id: 'approve-1', unitId: 'root:master', display: 'Publish', requestedAt: '2026-10-10T12:00:00.000Z', action: 'process.run',
+  }));
+  await writeFile(path.join(root, 'user', 'gui', 'resources.json'), JSON.stringify({
+    format: 'hivem1nd-resources-v1',
+    resources: [{ id: 'board-1', kind: 'blueprint', project: 'shop', path: 'boards/one.md', title: 'One' }],
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'older.json'), JSON.stringify({
+    kind: 'registration', sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', unitId: 'root:overseer', client: 'cursor', machine: 'DESKTOP', registeredAt: '2026-10-10T10:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'newer.json'), JSON.stringify({
+    kind: 'registration', sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', unitId: 'root:overseer', client: 'cursor', machine: 'DESKTOP', registeredAt: '2026-10-10T11:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'sessions', 'live.json'), JSON.stringify({
+    kind: 'registration', sessionId: '30c58b80-4d93-88cd-83b3-39d78f1d9d5d', unitId: 'root:overseer', client: 'codex', machine: 'DESKTOP', registeredAt: '2026-10-10T09:00:00.000Z',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'session-status', '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', 'stop.json'), JSON.stringify({
+    format: 'hivem1nd-session-status-v1', sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', state: 'stopped', at: '2026-10-10T11:30:00.000Z',
+  }));
+
+  const direct = await readCollection(context, 'messages', { chatId: 'direct' });
+  assert.deepEqual(direct.items.map((item) => item.id), ['m1', 'm2']);
+  assert.equal(direct.items[0].fromId, 'root:master');
+  assert.deepEqual(direct.items[0].notice, { key: 'direct:m1', resourceId: 'board-1' });
+  const latest = await readCollection(context, 'messages', { chatId: 'direct', limit: 1 });
+  assert.deepEqual(latest.items.map((item) => item.id), ['m2']);
+  const older = await readCollection(context, 'messages', { chatId: 'direct', before: 'm2' });
+  assert.deepEqual(older.items.map((item) => item.id), ['m1']);
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'm2.md'), stateFile({
+    id: 'm2', 'from-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Changed\n'));
+  await assert.rejects(
+    () => readCollection(context, 'messages', { chatId: 'direct', limit: 1, cursor: latest.nextCursor }),
+    (error) => error.code === 'cursor_expired',
+  );
+
+  const unread = await readCollection(context, 'messages', { mailboxId: 'root:master' });
+  assert.deepEqual(unread.items.map((item) => item.id), ['hello']);
+  const read = await readCollection(context, 'messages', { mailboxId: 'root:master', state: 'read' });
+  assert.deepEqual(read.items.map((item) => item.id), ['old']);
+  const archived = await readDetail(context, 'messages', 'old', { mailboxId: 'root:master' });
+  assert.equal(archived.archived, true);
+  assert.equal(archived.body.trim(), 'Archived');
+  const boxes = await readCollection(context, 'mailboxes');
+  const masterBox = boxes.items.find((item) => item.unitId === 'root:master');
+  assert.equal(masterBox.unread, 1);
+  assert.equal(masterBox.total, 2);
+  assert.equal(boxes.items.some((item) => item.unitId === 'project:shop:builder'), true);
+
+  const view = await readProjection(context);
+  assert.equal(view.chats.find((chat) => chat.id === 'direct').unread, 2);
+  assert.equal(view.waiting.some((item) => item.id === 'approval:approve-1'), true);
+  assert.equal(view.waiting.some((item) => item.id === 'question:root:overseer:which name'), true);
+  assert.equal(view.waiting.some((item) => item.kind === 'message' && item.messageId === 'secret'), false);
+  assert.equal(view.sessions.filter((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').length, 1);
+  assert.equal(view.sessions.find((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').state, 'stopped');
+  assert.equal(view.sessions[0].registeredAt >= view.sessions[1].registeredAt, true);
+  assert.equal(view.editors[0].title, 'One');
+  const again = await readProjection(context);
+  assert.equal(again.chats.find((chat) => chat.id === 'direct').unread, view.chats.find((chat) => chat.id === 'direct').unread);
 });
