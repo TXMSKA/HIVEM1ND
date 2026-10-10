@@ -3,6 +3,7 @@ import { announce, element, icon, showError } from "./components.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
+import { centerUnit, createMap, renderMap } from "./map.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { synchronize } from "./stream.mjs";
 
@@ -84,6 +85,7 @@ export function renderShell(app) {
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
   finishList(app);
+  finishMap(app);
 }
 
 export function dispose(app) {
@@ -204,8 +206,13 @@ function renderWorkspace(app, t, view, counts) {
   const side = element(document, "aside", { class: "panel side" }, tabs, summary, issues, collection);
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { text: t(app.mode) }),
-    element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }),
   );
+  if (app.mode === "map") {
+    ensureMap(app);
+    stage.append(element(document, "div", { class: "map" }));
+  } else {
+    stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
+  }
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
     ?? null;
@@ -225,6 +232,12 @@ async function loadLists(app) {
   };
   app.unitList.onUpdate = refresh;
   app.chatList.onUpdate = refresh;
+  try {
+    const layout = await request(app.api, "GET", "/layout");
+    if (!app.disposed) app.store.layout = layout.data;
+  } catch {
+    // Placement still runs when the layout route is unavailable.
+  }
   await Promise.all([loadAll(app.unitList), loadAll(app.chatList)]);
 }
 
@@ -275,6 +288,37 @@ function renderCollection(app, t) {
   app.activeHandlers = handlers;
   block.append(search, total, host);
   return block;
+}
+
+function ensureMap(app) {
+  const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
+  const saved = app.store.layout?.layout ?? { nodes: {}, groups: {} };
+  if (!app.mapState) app.mapState = createMap({ units, saved, api: app.api });
+  else app.mapState.units = units;
+  return app.mapState;
+}
+
+function finishMap(app) {
+  const host = app.root.querySelector?.(".map");
+  if (!host || !app.mapState) return;
+  const rect = host.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 760, height: 700 };
+  if (app.pendingCenter) {
+    centerUnit(app.mapState, app.pendingCenter, rect);
+    app.pendingCenter = null;
+  }
+  app.mapState.labels = {
+    messageGroup: text(app.language, "messageGroup"),
+    connect: text(app.language, "connect"),
+  };
+  renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
+  const view = app.root.ownerDocument.defaultView;
+  if (!host.clientWidth && view?.requestAnimationFrame && !app.mapFramed) {
+    app.mapFramed = true;
+    view.requestAnimationFrame(() => {
+      app.mapFramed = false;
+      if (!app.disposed && host.isConnected) finishMap(app);
+    });
+  }
 }
 
 function finishList(app) {

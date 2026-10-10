@@ -59,7 +59,7 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
 });
 
 test("the shell has no remote assets, token storage, or inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs"];
+  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     assert.equal(source.includes("localStorage"), false, file);
@@ -78,7 +78,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("session="), false);
   const main = sources[1][1];
   const imports = [...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).sort();
-  assert.deepEqual(imports, ["./api.mjs", "./components.mjs", "./hierarchy.mjs", "./i18n.mjs", "./lists.mjs", "./state.mjs", "./stream.mjs"]);
+  assert.deepEqual(imports, ["./api.mjs", "./components.mjs", "./hierarchy.mjs", "./i18n.mjs", "./lists.mjs", "./map.mjs", "./state.mjs", "./stream.mjs"]);
   const css = sources[3][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);

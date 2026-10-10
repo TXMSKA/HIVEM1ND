@@ -69,6 +69,8 @@ const COPY = {
   cycleIssue: ["A reporting cycle was found.", "Se encontró un ciclo de reporte."],
   loadingList: ["Loading the list.", "Cargando la lista."],
   listTotal: ["{count} listed", "{count} en la lista"],
+  connect: ["Connect", "Conectar"],
+  messageGroup: ["Message as group", "Enviar como grupo"],
 };
 
 const DICTIONARIES = {
