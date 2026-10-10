@@ -128,9 +128,21 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   assert.equal(adopted.controller.started, true);
   adopted.controller.close();
   const started = await startService(options);
+  assert.equal(started.bridge.endpoint.startsWith('\\\\.\\pipe\\hivem1nd-'), true);
+  assert.equal(started.bridge.port, undefined);
   const accepted = await dispatchLocal(started.bridge, 'register', { unitId: binding.unitId });
   assert.equal(accepted.accepted, true);
-  await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, nativeSessionId: 'native-1', handshake: false }), (error) => error.code === 'stop_unavailable');
+  await assert.rejects(() => dispatchLocal(started.bridge, 'exec', {}), { code: 'invalid_body' });
+  await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, nativeSessionId: 'native-1', handshake: true }), (error) => error.code === 'stop_unavailable');
+  started.bridge.adapters = {
+    codex: { async confirm(proof) { return proof.nativeSessionId === 'native-1' && proof.machine === fixture.machine; } },
+  };
+  const attached = await attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-1' });
+  assert.equal(started.credentials.verify(attached.token).audience, 'agent');
+  started.bridge.adapters.codex.confirm = async (proof) => proof.nativeSessionId === 'native-2';
+  const replaced = await attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-2' });
+  assert.notEqual(replaced.token, attached.token);
+  assert.throws(() => started.credentials.verify(attached.token), { code: 'unauthorized' });
   await stopService(started);
 });
 

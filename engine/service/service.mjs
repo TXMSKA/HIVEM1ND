@@ -57,7 +57,7 @@ export async function startService(options) {
     const paths = servicePathsFor(options);
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;
-    handle.bridge = await openBridge();
+    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now });
     handle.http = await createHttpServer({
       ...options,
       paths,
@@ -71,6 +71,7 @@ export async function startService(options) {
     bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
     handle.adapters = openNativeAdapters();
+    handle.bridge.adapters = handle.adapters.adapters;
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     handle.beat = await armServiceBeat(handle.runtime);
     return handle;
