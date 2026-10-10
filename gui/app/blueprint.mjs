@@ -49,6 +49,9 @@ export function renderBoard(document, host, editor) {
   const bounds = boardBounds(board);
   svg.setAttribute("viewBox", `${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`);
   const focus = editor.focus?.screenId ?? "";
+  if (editor.panned && editor.focus?.nodeId) {
+    svg.setAttribute("viewBox", `${number(editor.viewport?.x) - 80} ${number(editor.viewport?.y) - 60} 320 240`);
+  }
   for (const link of board.links ?? []) svg.append(renderLink(document, board, link));
   for (const screen of board.screens ?? []) {
     const group = document.createElementNS(SVG, "g");
@@ -65,6 +68,7 @@ export function renderNode(document, node, editor) {
   const group = document.createElementNS(SVG, "g");
   if (!node) return group;
   group.setAttribute("data-node", node.id);
+  if (editor.focus?.nodeId && node.id === editor.focus.nodeId) group.setAttribute("data-highlight", "true");
   if (node.name) group.setAttribute("data-name", String(node.name));
   group.setAttribute("transform", `translate(${number(node.place?.x)} ${number(node.place?.y)})`);
   group.append(drawNode(document, node, editor));

@@ -12,6 +12,11 @@ export function renderDocument(document, host, editor) {
   block.dataset.page = page.k;
   block.dataset.language = editor.language ?? "en";
   const source = page[block.dataset.language] ?? "";
+  if (editor.focus?.k === page.k) {
+    block.dataset.highlight = "true";
+    if (Number.isInteger(editor.focus.start) && Number.isInteger(editor.focus.end)) block.dataset.range = `${editor.focus.start}:${editor.focus.end}`;
+    if (editor.focus.lang) block.dataset.language = editor.focus.lang;
+  }
   block.append(renderMarkup(document, source));
   host.append(block);
 }

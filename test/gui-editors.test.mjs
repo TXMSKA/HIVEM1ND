@@ -111,9 +111,31 @@ test("editor comments, attachments and Watch stay on their own revisions", async
   assert.equal(handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id }).follow, false);
   assert.equal(follow.viewport.x, 1);
   follow.watch = { state: "watching", unitId: "project:shop:executor-shop", resourceId: board.id };
-  const followed = handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id, screenId: "empty", viewport: { x: 4, y: 5 } });
+  const ignored = handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id, screenId: "empty", range: { start: 1 }, viewport: { x: 4, y: 5 } });
+  assert.equal(ignored.follow, true);
+  assert.equal(follow.focus.screenId ?? null, null);
+  assert.equal(follow.viewport.x, 1);
+  follow.current = {
+    resourceId: board.id,
+    authoritative: { document: { screens: [{ id: "empty", x: 10, y: 20, root: { id: "title", place: { x: 5, y: 6 }, kids: [] } }] } },
+  };
+  const followed = handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id, kind: "blueprint", focus: { screenId: "empty", nodeId: "title" } });
   assert.equal(followed.follow, true);
   assert.equal(follow.focus.screenId, "empty");
+  assert.equal(follow.focus.nodeId, "title");
+  assert.equal(follow.viewport.x, 15);
+  assert.equal(follow.viewport.y, 26);
+  const ranged = handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id, kind: "void", focus: { k: "intro", lang: "en", start: 1, end: 4 } });
+  assert.equal(ranged.focus.k, "intro");
+  assert.equal(ranged.focus.lang, "en");
+  assert.equal(ranged.focus.start, 1);
+  assert.equal(ranged.focus.end, 4);
+  assert.equal(follow.current.page, "intro");
+  follow.watch = { watchId: "watch-1", state: "watching", unitId: "project:shop:executor-shop", resourceId: board.id };
+  assert.equal(applyWatch(follow, { watchId: "watch-1", unitId: "project:shop:executor-shop", resourceId: board.id, state: "stopped" }), null);
+  assert.equal(follow.watch, null);
+  assert.equal(applyWatch(follow, { watchId: "watch-1", state: "off" }), null);
+  follow.watch = { state: "watching", unitId: "project:shop:executor-shop", resourceId: board.id };
   follow.pendingStop = true;
   follow.viewport = { x: 3, y: 3, scale: 1 };
   assert.equal(handleActivity(follow, { unitId: "project:shop:executor-shop", resourceId: board.id, viewport: { x: 7, y: 7 } }).follow, false);

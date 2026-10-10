@@ -2499,6 +2499,17 @@ async function dropGrant(fx, unitId, grantId) {
   return (await projection(fx)).units.find((item) => item.id === unitId)?.revision ?? null;
 }
 
+function activityFocus(focus) {
+  if (!focus || typeof focus !== "object") return null;
+  if (typeof focus.screenId === "string" || typeof focus.nodeId === "string") {
+    return { screenId: focus.screenId ?? null, nodeId: focus.nodeId ?? null };
+  }
+  if (typeof focus.k === "string") {
+    return { k: focus.k, lang: focus.lang ?? null, start: focus.start ?? null, end: focus.end ?? null };
+  }
+  return null;
+}
+
 function sessionRequestData(record) {
   return {
     requestId: record.requestId,
@@ -2740,7 +2751,13 @@ function prepareStopWatch(fx, watchId, principal) {
   const current = fx.watches.get(watchId);
   if (!current || current.viewerId !== principal.viewerId) throw new HttpError(404, "not_found", "The watch was not found.");
   fx.watches.delete(watchId);
-  return { status: 204, data: null, writes: [], events: [{ name: "watch.changed", viewerId: principal.viewerId, data: { watchId, state: "off" } }], apply() {} };
+  return {
+    status: 204,
+    data: null,
+    writes: [],
+    events: [{ name: "watch.changed", viewerId: principal.viewerId, data: { watchId, unitId: current.unitId, resourceId: current.resourceId ?? null, state: "stopped" } }],
+    apply() {},
+  };
 }
 
 async function editorFor(fx, resourceId) {
@@ -3863,7 +3880,21 @@ export async function createGuiFixture(options = {}) {
       },
       noteActivity(activity) {
         return enqueue(fx, async () => {
-          const record = { ...activity, at: clock(fx).toISOString() };
+          let kind = activity.kind === "void" || activity.kind === "blueprint" ? activity.kind : null;
+          if (!kind && activity.resourceId) {
+            try {
+              kind = requireEditor(await projection(fx), activity.resourceId).kind === "void" ? "void" : "blueprint";
+            } catch {
+              kind = "blueprint";
+            }
+          }
+          const record = {
+            resourceId: activity.resourceId ?? null,
+            kind: kind ?? "blueprint",
+            unitId: activity.unitId,
+            at: clock(fx).toISOString(),
+            focus: activityFocus(activity.focus),
+          };
           fx.activity.push({ ...record, ms: fx.nowMs });
           const events = [];
           for (const watch of fx.watches.values()) {
