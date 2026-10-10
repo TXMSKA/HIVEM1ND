@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
-import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange } from './pack.mjs';
+import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange, validateHead } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
@@ -76,9 +76,43 @@ export async function preserveConflict(sync, target, bytes, change, roots) {
 export async function applyPack(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null } = {}) {
   const resolvedProjects = projects ?? sync.projects ?? [];
   const incoming = await resolveIncoming(sync, packBytes, provider);
-  const appliedMarker = path.join(sync.paths.localDirectory, 'received', incoming.decoded.header.machine, `${incoming.decoded.header.sequence}.applied.json`);
-  if (await readRegular(appliedMarker)) return { status: 'applied', replayed: true, sequence: incoming.decoded.header.sequence };
   const decoded = incoming.decoded;
+  const appliedMarker = path.join(sync.paths.localDirectory, 'received', decoded.header.machine, `${decoded.header.sequence}.applied.json`);
+  const applied = await readJsonAbsolute(appliedMarker);
+  if (applied) {
+    if (applied.packHash === decoded.packHash) return { status: 'applied', replayed: true, sequence: decoded.header.sequence };
+    throw new CoreError(409, 'revision_conflict', 'An applied pack sequence cannot be reused for different bytes.');
+  }
+  const verified = await readJsonAbsolute(path.join(sync.paths.localDirectory, 'received', decoded.header.machine, 'head.json'));
+  const next = (verified?.sequence ?? 0) + 1;
+  if (decoded.header.sequence !== next) {
+    await writePending(sync, decoded, decoded.packHash, 'sequence_incomplete');
+    return { status: 'pending', code: 'sequence_incomplete', packHash: decoded.packHash };
+  }
+  const remote = await provider.readHead?.(decoded.header.machine);
+  if (remote) {
+    const listed = Array.isArray(remote.packs) && remote.packs.some((item) => item.sequence === decoded.header.sequence);
+    validateHead(remote, {
+      machine: decoded.header.machine,
+      previous: verified ?? undefined,
+      packBytes: listed ? packBytes : null,
+      sequence: listed ? decoded.header.sequence : null,
+    });
+  } else {
+    const packs = [...(verified?.packs ?? []), {
+      sequence: decoded.header.sequence,
+      file: `${String(decoded.header.sequence).padStart(12, '0')}.pack`,
+      hash: decoded.packHash,
+      bytes: Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.byteLength(packBytes),
+    }];
+    validateHead({
+      format: 'hivem1nd-head-v1',
+      machine: decoded.header.machine,
+      sequence: decoded.header.sequence,
+      updatedAt: new Date(sync.now()).toISOString(),
+      packs,
+    }, { machine: decoded.header.machine, previous: verified ?? undefined, packBytes, sequence: decoded.header.sequence });
+  }
   const roots = writeRoots(sync, resolvedProjects);
   if (incoming.status === 'pending') {
     await chargeReceipt(ledger, decoded, packBytes);
@@ -316,8 +350,14 @@ async function checkpoint(sync, decoded, packBytes, ledger) {
   const machine = decoded.header.machine;
   const file = path.join(sync.paths.localDirectory, 'received', machine, 'head.json');
   const current = await readJsonAbsolute(file);
-  const packs = current?.packs ?? [];
+  const packs = [...(current?.packs ?? [])];
+  if ((current?.sequence ?? 0) > 0 && decoded.header.sequence < current.sequence) {
+    throw new CoreError(409, 'revision_conflict', 'The head sequence regressed.');
+  }
   if (!packs.some((item) => item.sequence === decoded.header.sequence && item.hash === decoded.packHash)) {
+    if (packs.some((item) => item.sequence === decoded.header.sequence)) {
+      throw new CoreError(409, 'revision_conflict', 'A committed pack sequence cannot be reused for different bytes.');
+    }
     packs.push({
       sequence: decoded.header.sequence,
       file: `${String(decoded.header.sequence).padStart(12, '0')}.pack`,
@@ -325,13 +365,15 @@ async function checkpoint(sync, decoded, packBytes, ledger) {
       bytes: Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.byteLength(packBytes),
     });
   }
+  packs.sort((left, right) => left.sequence - right.sequence);
   const head = {
     format: 'hivem1nd-head-v1',
     machine,
-    sequence: decoded.header.sequence,
+    sequence: packs.at(-1).sequence,
     updatedAt: new Date(sync.now()).toISOString(),
     packs,
   };
+  validateHead(head, { machine, previous: current ?? undefined, packBytes, sequence: decoded.header.sequence });
   await writeDurable(sync.store, file, Buffer.from(`${canonicalJson(head)}\n`, 'utf8'), writeRoots(sync, sync.projects));
   await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'received', machine, `${decoded.header.sequence}.applied.json`), Buffer.from(`${canonicalJson({ packHash: decoded.packHash, sequence: decoded.header.sequence })}\n`, 'utf8'), writeRoots(sync, sync.projects));
   if (!ledger) return;
