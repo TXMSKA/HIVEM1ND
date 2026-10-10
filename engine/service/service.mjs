@@ -19,6 +19,7 @@ import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './s
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
+import { deliverNotifications } from './chats.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -61,6 +62,11 @@ export async function startService(options) {
       paths,
       now: options.now ?? (() => Date.now()),
       projects: options.projects ?? [],
+    });
+    await deliverNotifications({
+      store: options.store,
+      paths,
+      now: options.now ?? (() => Date.now()),
     });
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;

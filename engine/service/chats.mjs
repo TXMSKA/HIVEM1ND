@@ -71,7 +71,9 @@ export async function postChat(context, chatId, input) {
     ...notices.map((notice) => ({ name: 'notification.changed', data: { noticeKey: notice.key, unitId: notice.unitId, resourceId: message.id, state: 'pending', error: null } })),
     { name: 'chat.changed', data: { chat } },
   ]);
-  return { message: message.projected, notifications: notices.map((notice) => ({ unitId: notice.unitId, state: notice.state })) };
+  const delivered = await deliverNotifications(context);
+  const mine = delivered.filter((notice) => notice.key?.startsWith(`${message.id}:`));
+  return { message: message.projected, notifications: mine.map((notice) => ({ unitId: notice.unitId, state: notice.state, error: notice.error ?? null })) };
 }
 
 export async function postMailbox(context, unitId, input) {
@@ -181,6 +183,75 @@ export async function recoverNotifications(context) {
     }
   }
   return pending;
+}
+
+export async function deliverNotifications(context) {
+  const directory = path.join(context.paths.mind, 'user', 'relay', 'fanout');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const results = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const relative = `user/relay/fanout/${name}`;
+    const bytes = await readBytes(context.store, absolute(context, relative));
+    if (!bytes) continue;
+    const parsed = JSON.parse(bytes.toString('utf8'));
+    let changed = false;
+    for (const notice of parsed.notices ?? []) {
+      if (notice.state === 'submitted' || notice.state === 'ambiguous') {
+        results.push(notice);
+        continue;
+      }
+      const outcome = await attemptNotice(context, notice);
+      if (outcome.state !== notice.state || outcome.error !== (notice.error ?? null)) {
+        notice.state = outcome.state;
+        notice.error = outcome.error;
+        changed = true;
+      }
+      await rememberNotice(context, notice);
+      results.push({ ...notice });
+    }
+    if (changed) {
+      await commitOne(context, relative, revisionOf(bytes), Buffer.from(`${canonicalJson(parsed)}\n`), [
+        { name: 'notification.changed', data: { messageId: parsed.messageId, state: 'updated' } },
+      ]);
+    }
+  }
+  return results;
+}
+
+async function attemptNotice(context, notice) {
+  if (typeof context.wake?.notify !== 'function') return { state: 'pending', error: 'transport_unavailable' };
+  try {
+    const outcome = await context.wake.notify(notice);
+    if (outcome?.state === 'submitted' || outcome?.state === 'ambiguous' || outcome?.state === 'failed' || outcome?.state === 'pending') {
+      return { state: outcome.state, error: outcome.error ?? null };
+    }
+    return { state: 'failed', error: 'delivery_failed' };
+  } catch (error) {
+    return { state: 'failed', error: error?.code || 'delivery_failed' };
+  }
+}
+
+async function rememberNotice(context, notice) {
+  const relative = `user/relay/notices/${Buffer.from(notice.key).toString('base64url')}.json`;
+  if (await readBytes(context.store, absolute(context, relative))) return;
+  const record = {
+    format: 'hivem1nd-notice-v1',
+    key: notice.key,
+    messageId: notice.resourceId ?? notice.key.split(':')[0],
+    recipientId: notice.unitId,
+    state: notice.state,
+    error: notice.error ?? null,
+  };
+  await commitOne(context, relative, null, Buffer.from(`${canonicalJson(record)}\n`), [
+    { name: 'notification.changed', unitId: notice.unitId, data: { noticeKey: notice.key, unitId: notice.unitId, state: notice.state, error: notice.error ?? null } },
+  ]);
 }
 
 export async function recoverMailboxReads(context) {

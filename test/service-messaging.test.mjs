@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat, patchChat, postChat, postMailbox, queueNotice, readChat, readMailbox, recoverMailboxReads, recoverNotifications } from '../engine/service/chats.mjs';
+import { createChat, deliverNotifications, patchChat, postChat, postMailbox, queueNotice, readChat, readMailbox, recoverMailboxReads, recoverNotifications } from '../engine/service/chats.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { recoverTransactions } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -90,6 +90,16 @@ test('fanout is restart-safe and a chat read leaves a late message unread', asyn
   assert.deepEqual(read.readIds, [later.message.id]);
   assert.equal(read.unread, 1);
   assert.equal(early.message.id === later.message.id, false);
+  const quiet = await deliverNotifications(context);
+  assert.equal(quiet.some((item) => item.state === 'submitted'), false);
+  assert.equal(quiet.some((item) => item.error === 'transport_unavailable'), true);
+  let calls = 0;
+  context.wake = { notify: async () => { calls += 1; return { state: 'submitted' }; } };
+  const sent = await deliverNotifications(context);
+  assert.equal(sent.filter((item) => item.state === 'submitted').length > 0, true);
+  const submitted = calls;
+  await deliverNotifications(context);
+  assert.equal(calls, submitted);
 });
 
 test('mailbox reads are atomic, collide on different bytes, and resume after a crash', async (t) => {
