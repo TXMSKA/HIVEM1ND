@@ -283,6 +283,73 @@ test('a registered project imports only cataloged documents, sidecars, and asset
   await assert.rejects(() => readFile(path.join(shop, 'docs', 'flows', 'assets', 'evil.png')));
 });
 
+test('missing owners stay pending and inconsistent owners are rejected', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const requestId = uuidV8(['request']);
+  const sessionId = uuidV8(['session']);
+  const unbound = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-session-result-v1',
+    id: uuidV8(['result']),
+    requestId,
+    machine: 'LAPTOP',
+    state: 'done',
+  }));
+  const pending = await applyPack(desktop, pack([
+    put({ kind: 'mind', path: 'user/relay/results/one.json' }, unbound),
+  ], [{ hash: hashBytes(unbound), raw: unbound }]));
+  assert.equal(pending.status, 'pending');
+  assert.equal(pending.code, 'owner_unavailable');
+  await assert.rejects(() => readFile(path.join(fixture.paths.mind, 'user', 'relay', 'results', 'one.json')));
+  const request = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-session-request-v1', id: requestId, targetMachine: 'DESKTOP',
+  }));
+  const bound = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-session-result-v1', id: uuidV8(['result', 'bound']), requestId, machine: 'LAPTOP', state: 'done',
+  }));
+  await assert.rejects(() => applyPack(desktop, pack([
+    put({ kind: 'mind', path: `user/relay/requests/DESKTOP/${requestId}.json` }, request),
+    put({ kind: 'mind', path: 'user/relay/results/two.json' }, bound, { id: uuidV8(['change', 'bound']) }),
+  ], [
+    { hash: hashBytes(request), raw: request },
+    { hash: hashBytes(bound), raw: bound },
+  ], { sequence: 2 })), (error) => error.code === 'invalid_record_owner');
+  const registration = Buffer.from(JSON.stringify({
+    kind: 'registration', sessionId, unitId: 'project:shop:executor-shop', machine: 'LAPTOP',
+  }));
+  const status = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'LAPTOP', at: AT,
+  }));
+  await applyPack(desktop, pack([
+    put({ kind: 'mind', path: 'user/relay/registrations/one.json' }, registration),
+    put({ kind: 'mind', path: `user/relay/session-status/${sessionId}/one.json` }, status, { id: uuidV8(['change', 'status']) }),
+  ], [
+    { hash: hashBytes(registration), raw: registration },
+    { hash: hashBytes(status), raw: status },
+  ], { sequence: 3 }));
+  const saved = JSON.parse(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', sessionId, 'one.json'), 'utf8'));
+  assert.equal(saved.sessionId, sessionId);
+  const notice = [
+    'id: not-a-notice',
+    'kind: notice',
+    'machine: DESKTOP',
+    'from-id: project:shop:executor-shop',
+    '',
+    'escape',
+  ].join('\n');
+  const noticeBytes = Buffer.from(notice);
+  await assert.rejects(() => applyPack(desktop, pack([
+    put({ kind: 'mind', path: 'user/relay/chats/room/note.md' }, noticeBytes),
+  ], [{ hash: hashBytes(noticeBytes), raw: noticeBytes }], { sequence: 4 }), {
+    bindings: { actors: { 'project:shop:executor-shop': 'LAPTOP' } },
+  }), (error) => error.code === 'invalid_record_owner');
+  const receipt = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-chat-read-v1', chatId: uuidV8(['chat']), unitId: 'root:master', machine: 'DESKTOP', messageIds: [], at: AT,
+  }));
+  await assert.rejects(() => applyPack(desktop, pack([
+    put({ kind: 'mind', path: `user/relay/chats/${uuidV8(['chat'])}/read/${Buffer.from('root:master').toString('base64url')}/DESKTOP/${uuidV8(['receipt'])}.json` }, receipt),
+  ], [{ hash: hashBytes(receipt), raw: receipt }], { sequence: 5 })), (error) => error.code === 'invalid_record_owner');
+});
+
 test('links are not followed and an unregistered project stays pending', async (t) => {
   const { fixture, desktop } = await world(t);
   const outside = path.join(fixture.root, 'outside');
@@ -306,9 +373,10 @@ test('a revocation tombstone blocks an older grant and keeps a new grant id', as
   const { fixture, desktop } = await world(t);
   const revoked = uuidV8(['grant', 'old']);
   const fresh = uuidV8(['grant', 'new']);
+  const requestId = uuidV8(['revoke']);
   const revocation = Buffer.from(JSON.stringify({
     format: 'hivem1nd-grant-revocation-result-v1',
-    requestId: uuidV8(['revoke']),
+    requestId,
     unitId: 'project:shop:executor-shop',
     grantId: revoked,
     state: 'revoked',
@@ -317,7 +385,9 @@ test('a revocation tombstone blocks an older grant and keeps a new grant id', as
   }));
   await applyPack(desktop, pack([
     put({ kind: 'mind', path: 'user/relay/grant-revocation-results/one.json' }, revocation),
-  ], [{ hash: hashBytes(revocation), raw: revocation }]));
+  ], [{ hash: hashBytes(revocation), raw: revocation }]), {
+    bindings: { revocations: { [requestId]: { machine: 'LAPTOP' } } },
+  });
   const state = Buffer.from(JSON.stringify({ grants: [{ id: revoked }, { id: fresh }] }));
   await applyPack(desktop, pack([
     put({ kind: 'mind', path: 'user/grants.json' }, state, { at: '2026-10-10T11:00:00.000Z' }),
