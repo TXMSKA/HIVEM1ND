@@ -51,7 +51,7 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, beginTextEdit, enterFocus, leaveFocus, moveFocus, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
+import { answerProposal, beginTextEdit, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -258,6 +258,17 @@ async function onStream(app, event) {
   const editors = app.editors;
   const data = event?.envelope?.data ?? {};
   if (editors && event?.name === "comment.changed") noteComment(editors, data);
+  if (editors && event?.name === "void.proposal.changed") {
+    noteProposal(editors, data);
+    if (editors.current?.resourceId === data.resourceId) {
+      try {
+        await loadProposals(app.api, editors);
+        noteProposal(editors, data);
+      } catch (error) {
+        editors.error = error;
+      }
+    }
+  }
   if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
     noteRemote(editors, data);
     if (data.resourceId) {
@@ -680,7 +691,7 @@ function voidSurface(app, document, editor, t) {
     type: "button", class: "btn", "data-action": "comment-quote",
     onclick: () => commentOnQuote(app, editor),
   }, t("comment")));
-  const proposals = editor.authoritative.proposals ?? [];
+  const proposals = editor.proposals ?? [];
   const list = element(document, "div", { class: "editor-comments" });
   for (const proposal of proposals) {
     const block = renderProposal(document, proposal);

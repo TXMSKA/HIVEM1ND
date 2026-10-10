@@ -376,7 +376,8 @@ test("void edits keep source boundaries, history and proposals", async (t) => {
   const texts = await loadCatalog(api, editors, "void");
   const release = texts.find((item) => item.title === "Release notes");
   await openEditor(api, editors, release);
-  const proposal = editors.current.authoritative.proposals.find((item) => item.replacement === "Hello");
+  assert.equal(editors.current.authoritative.proposals, undefined);
+  const proposal = editors.current.proposals.find((item) => item.replacement === "Hello");
   await answerProposal(api, editors.current, proposal, "accept");
   const document = editors.current.authoritative.document;
   assert.equal(document.pages[0].en.includes("<b>Hello</b>"), true);
@@ -386,13 +387,15 @@ test("void edits keep source boundaries, history and proposals", async (t) => {
   assert.equal(document.rev, 2);
   assert.deepEqual(await readFile(origPath), original);
   assert.equal((await readFile(historyPath, "utf8")).trim().split(/\n/).length, historyBefore + 1);
-  const second = editors.current.authoritative.proposals.find((item) => item.replacement === "opening");
+  const second = editors.current.proposals.find((item) => item.replacement === "opening");
   await assert.rejects(answerProposal(api, editors.current, second, "accept"), (error) => error.code === "proposal_stale");
   assert.equal(second.state, "pending");
   const revision = editors.current.revision;
   await answerProposal(api, editors.current, second, "discard");
   assert.equal(editors.current.revision, revision);
-  assert.equal(editors.current.authoritative.proposals.find((item) => item.id === second.id).state, "discarded");
+  assert.equal(editors.current.proposals.find((item) => item.id === second.id).state, "discarded");
+  assert.equal(editors.current.proposals.find((item) => item.replacement === "Hello").state, "accepted");
+  assert.equal(editors.current.authoritative.proposals, undefined);
   const next = document.pages.find((page) => page.k === "Notes.Next");
   const applied = await saveRange(api, editors.current, "Notes.Next", "en", 0, next.en.length, "<b>Next 😀</b> <script>no</script>");
   assert.deepEqual(Object.keys(applied.data).sort(), ["editor", "proposal"]);
