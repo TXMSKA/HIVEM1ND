@@ -1,17 +1,21 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { watch } from 'node:fs';
+import { mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { CoreError, canonicalJson } from './identity.mjs';
-import { assertNoLinks } from './paths.mjs';
-import { atomicWrite, readBytes, recoverTransactions } from './store.mjs';
+import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
+import { atomicWrite, createStore, recoverTransactions } from './store.mjs';
 import { applyPack } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
 import { openSync, stageBaselines } from '../sync/store.mjs';
+import { createNativeAdapter } from './adapters.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
-import { createCredentialStore, protectBootstrapFiles } from './security.mjs';
+import { bootstrapConfig } from './install.mjs';
+import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './security.mjs';
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 
@@ -22,18 +26,20 @@ export function guardPortFor(userKey) {
 
 export async function startService(options) {
   assertReady(options);
-  const port = options.guardPort ?? guardPortFor(options.userKey ?? 'user');
+  const userKey = await resolveUserKey(options);
+  const port = options.guardPort ?? guardPortFor(userKey);
   const guard = createServer((socket) => socket.destroy());
   try {
     await listen(guard, port);
   } catch (error) {
     guard.close();
-    if (error?.code === 'EADDRINUSE') return attachOrStart(options, port);
+    if (error?.code === 'EADDRINUSE') return attachOrStart({ ...options, userKey }, port);
     throw error;
   }
   const nonce = randomUUID();
   const handle = {
     options,
+    userKey,
     port,
     guard,
     nonce,
@@ -46,11 +52,10 @@ export async function startService(options) {
     bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
   };
   try {
-    await recoverTransactions(options.store);
     await acquireServiceLock(handle);
+    await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
-    handle.beat = handle.runtime.beat;
     handle.listener = options.listener ? await options.listener() : null;
     handle.bridge = await openBridge();
     handle.http = await createHttpServer({
@@ -65,12 +70,42 @@ export async function startService(options) {
     });
     bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
+    handle.adapters = openNativeAdapters();
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
+    handle.beat = await armServiceBeat(handle.runtime);
     return handle;
   } catch (error) {
     await rollback(handle);
     throw error;
   }
+}
+
+export async function runConfiguredService(options = {}) {
+  const located = await readConfiguredMind(options);
+  const platform = options.platform ?? process.platform;
+  const paths = servicePaths({
+    platform,
+    env: options.env ?? process.env,
+    home: options.home ?? options.homeDir ?? os.homedir(),
+    mindPath: located.mindPath,
+    machine: located.config.machine,
+    originPath: located.config.origin.path,
+  });
+  if (path.resolve(paths.localDirectory) !== path.dirname(located.configFile)) {
+    throw new CoreError(422, 'invalid_path', 'The configured machine directory does not match the mind.');
+  }
+  if (path.resolve(paths.staging) !== path.resolve(located.config.stagingPath)) {
+    throw new CoreError(422, 'invalid_path', 'The configured staging path does not match the mind.');
+  }
+  const store = options.store ?? createRuntimeStore(paths, options);
+  return startService({
+    ...options,
+    store,
+    paths,
+    port: located.config.port,
+    userKey: options.userKey,
+    guardPort: options.guardPort,
+  });
 }
 
 export async function attachOrStart(options, port = options.guardPort) {
@@ -91,21 +126,35 @@ export async function attachOrStart(options, port = options.guardPort) {
   if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
     throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
   }
+  const lock = parseLock(await readFile(lockPath(options)).catch(() => null));
+  const userKey = options.userKey ?? await resolveUserKey(options);
+  const digest = createHash('sha256').update(canonicalJson(identityOf(options, userKey, port, active.pid))).digest('hex');
+  if (!lock || lock.pid !== active.pid || lock.digest !== digest || !pidAlive(active.pid)) {
+    throw new CoreError(503, 'service_unavailable', 'The running service could not be verified.');
+  }
   return { attached: true, port, bootstrap, active, mutated: false };
 }
 
 export async function acquireServiceLock(handle) {
   const file = lockPath(handle.options);
-  const current = await readBytes(handle.options.store, file);
-  const descriptor = descriptorOf(handle);
-  if (current) {
-    const parsed = JSON.parse(current.toString('utf8'));
-    if (parsed.nonce && parsed.pid !== process.pid && handle.options.allowStale !== true) {
-      throw new CoreError(503, 'service_unavailable', 'The service lock is already held.');
-    }
+  const body = lockBody(handle);
+  const bytes = Buffer.from(`${canonicalJson(body)}\n`);
+  try {
+    await writeServiceRootFile(handle.options.store, file, bytes, { exclusive: true });
+    handle.lock = body;
+    return body;
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
   }
-  const body = { nonce: handle.nonce, pid: process.pid, digest: createHash('sha256').update(canonicalJson(descriptor)).digest('hex') };
-  await atomicWrite(handle.options.store, file, Buffer.from(`${canonicalJson(body)}\n`));
+  const first = await readFile(file);
+  const parsed = parseLock(first);
+  const sameProcess = parsed?.pid === process.pid;
+  if (!parsed || (pidAlive(parsed.pid) && !sameProcess)) {
+    throw new CoreError(503, 'service_unavailable', 'The service lock is already held.');
+  }
+  const second = await readFile(file);
+  if (!first.equals(second)) throw new CoreError(503, 'service_unavailable', 'The service lock is already held.');
+  await writeServiceRootFile(handle.options.store, file, bytes, { exclusive: false });
   handle.lock = body;
   return body;
 }
@@ -116,7 +165,7 @@ export async function adoptWake(options, { nonce } = {}) {
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
   } catch (error) {
-    if (error?.code === 'ENOENT') return { policies: [], workersSpawned: 0, signaled: [] };
+    if (error?.code === 'ENOENT') return wakeResult([], nonce);
     throw error;
   }
   const policies = [];
@@ -130,7 +179,7 @@ export async function adoptWake(options, { nonce } = {}) {
     const prior = merged.get(id);
     merged.set(id, prior ? mergePolicy(prior, policy) : policy);
   }
-  return { policies: [...merged.values()], workersSpawned: 0, signaled: [], nonce, controller: nonce ?? null };
+  return wakeResult([...merged.values()], nonce);
 }
 
 export async function writeBeat(options, state) {
@@ -168,6 +217,7 @@ export async function composeCore(options) {
   bindRuntime({ http, runtime });
   try {
     await publishBootstrap({ ...options, paths }, http.port, bootstrap);
+    await armServiceBeat(runtime);
   } catch (error) {
     await http.close();
     throw error;
@@ -177,19 +227,16 @@ export async function composeCore(options) {
 
 export async function stopService(handle) {
   if (!handle || handle.attached) return { stopped: false };
-  if (handle.http) await handle.http.close();
-  else if (handle.runtime) await closeServiceSync(handle.runtime);
-  if (handle.listener?.close) await handle.listener.close();
-  await closeBridge(handle.bridge);
-  const lock = await readBytes(handle.options.store, lockPath(handle.options));
-  const parsed = lock ? JSON.parse(lock.toString('utf8')) : null;
+  await closeOwned(handle, { beat: true });
+  const raw = await readFile(lockPath(handle.options)).catch(() => null);
+  const parsed = parseLock(raw);
   if (handle.bootstrapState) handle.bootstrapState.valid = false;
   if (parsed?.nonce === handle.nonce) {
     await unlink(lockPath(handle.options)).catch(() => {});
     await unlink(bootstrapPath(handle.options)).catch(() => {});
     await unlink(activePath(handle.options)).catch(() => {});
   }
-  await new Promise((resolve) => handle.guard.close(() => resolve()));
+  if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
   return { stopped: true, signaled: handle.signaled };
 }
 
@@ -266,13 +313,7 @@ async function openServiceSync(options, paths) {
         runtime.lastError = error;
       });
     });
-    runtime.beat = await publishServiceBeat(runtime, 'running');
-    runtime.beatTimer = setInterval(() => {
-      publishServiceBeat(runtime, 'running').catch((error) => {
-        runtime.lastError = error;
-      });
-    }, 60000);
-    runtime.beatTimer.unref?.();
+    runtime.unwatchProject = watchProjects(paths.mind);
     return runtime;
   } catch (error) {
     await closeServiceSync(runtime, { beat: false });
@@ -299,6 +340,8 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
   runtime.closed = true;
   if (runtime.beatTimer) clearInterval(runtime.beatTimer);
   runtime.beatTimer = null;
+  if (runtime.unwatchProject) await runtime.unwatchProject();
+  runtime.unwatchProject = null;
   if (beat) {
     try {
       await publishServiceBeat(runtime, 'stopped');
@@ -472,13 +515,17 @@ async function publishBootstrap(options, httpPort, state) {
 }
 
 function descriptorOf(handle) {
+  return identityOf(handle.options, handle.userKey, handle.port, process.pid);
+}
+
+function identityOf(options, userKey, port, pid) {
   return {
     format: 'hivem1nd-service-descriptor-v1',
-    mind: handle.options.paths.mind,
-    machine: handle.options.paths.machine,
-    userKey: handle.options.userKey ?? 'user',
-    port: handle.port,
-    pid: process.pid,
+    mind: path.resolve(options.paths.mind),
+    machine: options.paths.machine,
+    userKey,
+    port,
+    pid,
   };
 }
 
@@ -520,29 +567,15 @@ function contained(parent, child) {
 }
 
 async function writeDescriptor(store, destination, bytes) {
-  const resolved = path.resolve(destination);
-  const serviceRoot = path.resolve(path.dirname(path.dirname(store.localDirectory)));
-  if (path.resolve(serviceRoot, 'active.json') !== resolved) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
-  if (store.confineRoot && !contained(store.confineRoot, resolved)) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
-  await assertNoLinks(resolved, { root: store.confineRoot });
-  await mkdir(path.dirname(resolved), { recursive: true });
-  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${randomBytes(8).toString('hex')}.tmp`);
-  await writeFile(temporary, bytes, { flag: 'wx' });
-  try {
-    await rename(temporary, resolved);
-  } catch (error) {
-    await unlink(temporary).catch(() => {});
-    throw error;
-  }
+  await writeServiceRootFile(store, destination, bytes, { exclusive: false, name: 'active.json' });
 }
 
 async function rollback(handle) {
   if (handle.bootstrapState) handle.bootstrapState.valid = false;
   if (handle.bootstrapState?.file) await unlink(handle.bootstrapState.file).catch(() => {});
-  if (handle.http?.close) await handle.http.close().catch(() => {});
-  if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat: false }).catch(() => {});
-  if (handle.listener?.close) await handle.listener.close().catch(() => {});
-  await closeBridge(handle.bridge).catch(() => {});
+  await closeOwned(handle, { beat: false });
+  const raw = await readFile(lockPath(handle.options)).catch(() => null);
+  if (parseLock(raw)?.nonce === handle.nonce) await unlink(lockPath(handle.options)).catch(() => {});
   if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
 }
 
@@ -562,8 +595,203 @@ function listen(server, port) {
   });
 }
 
+async function resolveUserKey(options) {
+  if (options.userKey) return String(options.userKey);
+  if (process.platform === 'win32') return aclRunnerFrom(options).userSid();
+  if (typeof process.getuid === 'function') return String(process.getuid());
+  throw new CoreError(503, 'bootstrap_unavailable', 'The current user could not be identified.');
+}
+
+async function readConfiguredMind(options) {
+  if (!options.mindPath) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? options.homeDir ?? os.homedir();
+  const cosmic = options.cosmicPath ? path.resolve(options.cosmicPath) : localCosmic({ platform, env, home });
+  const mindPath = path.resolve(options.mindPath);
+  const root = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mindPath, platform));
+  let entries = [];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+    throw error;
+  }
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const file = path.join(root, entry.name, 'config.json');
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(file, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
+    }
+    found.push({ machine: entry.name, file, parsed });
+  }
+  if (found.length === 0) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  const wanted = options.hostname ?? options.machine ?? null;
+  const chosen = wanted ? found.find((item) => item.machine === wanted || item.parsed?.machine === wanted) : found.length === 1 ? found[0] : null;
+  if (!chosen) throw new CoreError(409, 'service_mind_conflict', 'The configured machine does not match.');
+  if (chosen.parsed?.format !== 'hivem1nd-service-config-v1') throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
+  const config = bootstrapConfig(chosen.parsed);
+  if (path.resolve(config.mindPath) !== mindPath || config.machine !== chosen.machine) {
+    throw new CoreError(422, 'invalid_body', 'The configured mind does not match.');
+  }
+  return { cosmic, mindPath, config, configFile: chosen.file };
+}
+
+function createRuntimeStore(paths, options) {
+  const store = createStore({
+    root: paths.cosmic,
+    mindPath: paths.mind,
+    localDirectory: paths.localDirectory,
+    now: options.now ?? (() => Date.now()),
+    confineRoot: options.confineRoot ?? null,
+  });
+  if (options.aclRunner) store.aclRunner = options.aclRunner;
+  return store;
+}
+
+function wakeResult(policies, nonce) {
+  return { policies, workersSpawned: 0, signaled: [], nonce, controller: startWakeController(nonce) };
+}
+
+function startWakeController(nonce) {
+  let timer = setInterval(() => {}, 1000);
+  timer.unref?.();
+  let closed = false;
+  return {
+    started: true,
+    nonce: nonce ?? null,
+    close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(timer);
+      timer = null;
+    },
+  };
+}
+
+function openNativeAdapters() {
+  const adapters = {
+    claude: createNativeAdapter('claude'),
+    codex: createNativeAdapter('codex'),
+    cursor: createNativeAdapter('cursor'),
+  };
+  return {
+    adapters,
+    async close() {
+      await Promise.all(Object.values(adapters).map((adapter) => adapter.close()));
+    },
+  };
+}
+
+async function armServiceBeat(runtime) {
+  if (!runtime || runtime.closed || runtime.beatTimer) return runtime?.beat ?? null;
+  runtime.beat = await publishServiceBeat(runtime, 'running');
+  runtime.beatTimer = setInterval(() => {
+    publishServiceBeat(runtime, 'running').catch((error) => {
+      runtime.lastError = error;
+    });
+  }, 60000);
+  runtime.beatTimer.unref?.();
+  return runtime.beat;
+}
+
+function watchProjects(directory) {
+  let watcher = null;
+  try {
+    watcher = watch(directory, { persistent: false, recursive: process.platform === 'win32' || process.platform === 'darwin' }, () => {});
+    watcher.unref?.();
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  return async () => {
+    watcher?.close();
+    watcher = null;
+  };
+}
+
+async function closeOwned(handle, { beat = true } = {}) {
+  handle.adopted?.controller?.close?.();
+  if (handle.adapters?.close) await handle.adapters.close().catch(() => {});
+  if (handle.http?.close) await handle.http.close().catch(() => {});
+  else if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat }).catch(() => {});
+  if (handle.listener?.close) await handle.listener.close().catch(() => {});
+  await closeBridge(handle.bridge).catch(() => {});
+}
+
+function lockBody(handle) {
+  return {
+    nonce: handle.nonce,
+    pid: process.pid,
+    digest: createHash('sha256').update(canonicalJson(descriptorOf(handle))).digest('hex'),
+  };
+}
+
+function parseLock(bytes) {
+  if (!bytes) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    if (!parsed || typeof parsed.nonce !== 'string' || !Number.isInteger(parsed.pid) || !/^[0-9a-f]{64}$/.test(parsed.digest ?? '')) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function serviceRootOf(options) {
+  return options.paths.serviceRoot ?? path.dirname(path.dirname(options.paths.localDirectory));
+}
+
+async function writeServiceRootFile(store, destination, bytes, { exclusive = false, name = null } = {}) {
+  const resolved = path.resolve(destination);
+  const expected = name ?? path.basename(resolved);
+  if (expected !== 'active.json' && expected !== 'service.lock') {
+    throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
+  }
+  const serviceRoot = path.resolve(path.dirname(path.dirname(store.localDirectory)));
+  if (path.resolve(serviceRoot, expected) !== resolved) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
+  if (store.confineRoot && !contained(store.confineRoot, resolved)) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
+  await assertNoLinks(resolved, { root: store.confineRoot });
+  await mkdir(path.dirname(resolved), { recursive: true });
+  if (exclusive) {
+    const handle = await open(resolved, 'wx');
+    try {
+      await handle.writeFile(bytes);
+    } catch (error) {
+      await handle.close();
+      await unlink(resolved).catch(() => {});
+      throw error;
+    }
+    await handle.close();
+    return resolved;
+  }
+  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${randomBytes(8).toString('hex')}.tmp`);
+  await writeFile(temporary, bytes, { flag: 'wx' });
+  try {
+    await rename(temporary, resolved);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+  return resolved;
+}
+
 function lockPath(options) {
-  return path.join(options.paths.localDirectory, 'service.lock');
+  return options.paths.lockFile ?? path.join(serviceRootOf(options), 'service.lock');
 }
 
 function bootstrapPath(options) {

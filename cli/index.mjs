@@ -1015,8 +1015,33 @@ async function runService(options, dependencies, output) {
     return 0;
   }
   if (options.action === "run") {
-    output.write("Service run did not start. Pass a configured mind to an injected runtime; this command does not discover one.\n");
-    return 1;
+    const { runConfiguredService, stopService } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
+    let handle;
+    try {
+      handle = await runConfiguredService({
+        mindPath,
+        platform: dependencies.platform ?? process.platform,
+        env: dependencies.env ?? process.env,
+        home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
+        cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : undefined,
+        hostname: options.hostname,
+        aclRunner: dependencies.aclRunner,
+        confineRoot: dependencies.confineRoot,
+        now: dependencies.now,
+        userKey: dependencies.userKey,
+        guardPort: dependencies.guardPort,
+      });
+    } catch (error) {
+      output.write(`${error.code ?? "error"}: ${error.message}\n`);
+      return 1;
+    }
+    try {
+      await (dependencies.stop ?? waitForServiceStop());
+    } finally {
+      await stopService(handle);
+    }
+    output.write("Service stopped.\n");
+    return 0;
   }
   const plan = planRegistration(registration);
   if (options.action === "uninstall") {
@@ -1031,6 +1056,14 @@ async function runService(options, dependencies, output) {
   const installed = await installService(registration, { dryRun: true, run: dependencies.registrationRunner });
   output.write(`${JSON.stringify({ dryRun: true, os: false, action: installed.action, commands: installed.commands, digest: installed.digest }, null, 2)}\n`);
   return 0;
+}
+
+function waitForServiceStop() {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
 }
 
 async function runUninstall(options, dependencies, output) {
