@@ -1579,7 +1579,12 @@ function routeTable() {
   return [
     { pattern: "/view", GET: { query: ["project"] } },
     { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status"] } },
+    { pattern: "/units", POST: { capability: "unit.create", validate: validateUnit } },
     { pattern: "/units/:unitId", GET: { query: [] } },
+    { pattern: "/units/:unitId/lead", PUT: { capability: "unit.connect", validate: validateLead } },
+    { pattern: "/units/:unitId/session", POST: { capability: "session.start", validate: validateSession, runtime: true } },
+    { pattern: "/session-requests/:requestId", GET: { query: [] } },
+    { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
     { pattern: "/leads", GET: { query: ["q", "limit", "cursor", "project"] } },
     { pattern: "/squads", GET: { query: ["q", "limit", "cursor", "project", "leadId"] } },
     { pattern: "/projects", GET: { query: ["q", "limit", "cursor"] } },
@@ -1676,6 +1681,12 @@ async function readData(fx, snap, spec, params, query) {
   if (pattern === "/layout") {
     noneQuery(query);
     return snap.layout;
+  }
+  if (pattern === "/session-requests/:requestId") {
+    noneQuery(query);
+    const record = fx.sessionRequests?.get(params.requestId);
+    if (!record) throw new HttpError(404, "request_not_found", "The session request was not found.");
+    return { ...record };
   }
   if (pattern === "/chats") {
     let items = snap.chats;
@@ -2068,7 +2079,268 @@ function bearer(request) {
   return header.slice(7);
 }
 
+function validateUnit(body) {
+  requireObject(body, ["unit", "role", "scope", "machine", "leadId", "job", "model", "position"]);
+  requireKeys(body, ["unit", "role", "scope", "machine"]);
+  if (typeof body.unit !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(body.unit)) throw new HttpError(422, "invalid_body", "The unit name is not valid.");
+  if (!ROLES.has(body.role)) throw new HttpError(422, "invalid_body", "The role is not valid.");
+  if (!body.scope || typeof body.scope !== "object" || !["root", "environment", "project"].includes(body.scope.kind)) {
+    throw new HttpError(422, "invalid_body", "The scope is not valid.");
+  }
+  if (body.scope.kind !== "root" && (typeof body.scope.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(body.scope.name))) {
+    throw new HttpError(422, "invalid_body", "The scope is not valid.");
+  }
+  if (typeof body.machine !== "string" || !body.machine) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+  if (body.position) coordinate(body.position, "unit");
+}
+
+function validateLead(body) {
+  requireObject(body, ["leadId", "confirmed", "expectedRevision"]);
+  requireKeys(body, ["leadId", "confirmed", "expectedRevision"]);
+  if (body.confirmed !== true) throw new HttpError(422, "invalid_body", "The connection is not confirmed.");
+  if (body.leadId !== null && typeof body.leadId !== "string") throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+function validateSession(body) {
+  requireObject(body, ["client", "prompt", "expectedRevision"]);
+  requireKeys(body, ["client", "expectedRevision"]);
+  if (typeof body.client !== "string" || !body.client) throw new HttpError(422, "invalid_body", "The client is not valid.");
+  if (body.prompt !== undefined && body.prompt !== null && typeof body.prompt !== "string") throw new HttpError(422, "invalid_body", "The prompt is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+function validateStop(body) {
+  requireObject(body, ["confirmed"]);
+  requireKeys(body, ["confirmed"]);
+  if (body.confirmed !== true) throw new HttpError(422, "invalid_body", "The stop is not confirmed.");
+}
+
+function unitIdentity(body) {
+  if (body.scope.kind === "project") return `project:${body.scope.name}:${body.unit}`;
+  if (body.scope.kind === "environment") return `env:${body.scope.name}:${body.unit}`;
+  return `root:${body.unit}`;
+}
+
+async function rejectUnit(snap, body) {
+  const machine = snap.machines.find((item) => item.id === body.machine);
+  if (!machine || !machine.answers) {
+    throw new HttpError(409, "machine_unavailable", "The machine is unavailable.", { machine: body.machine, heartbeatAt: machine?.heartbeatAt ?? null });
+  }
+  const id = unitIdentity(body);
+  if (snap.units.some((unit) => unit.id === id)) throw new HttpError(409, "unit_exists", "The unit already exists.");
+  if (body.role === "overseer" && snap.units.some((unit) => unit.role === "overseer" && unit.unit === "overseer" && unit.revision)) {
+    throw new HttpError(409, "overseer_exists", "An Overseer already exists.");
+  }
+  if (body.role === "master" && body.leadId) throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  if (body.leadId && !snap.units.some((unit) => unit.id === body.leadId && unit.revision)) {
+    throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  }
+}
+
+function rejectLead(snap, unitId, body) {
+  const target = snap.units.find((unit) => unit.id === unitId);
+  if (!target || target.revision === null) throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  if (target.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit was changed elsewhere.", { currentRevision: target.revision });
+  if (target.role === "master" || body.leadId === unitId) throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  if (body.leadId && !snap.units.some((unit) => unit.id === body.leadId && unit.revision)) {
+    throw new HttpError(422, "invalid_lead", "The lead is not valid.");
+  }
+  if (body.leadId && leadCycle(snap.units, unitId, body.leadId)) throw new HttpError(409, "lead_cycle", "The connection would cycle.");
+}
+
+async function rejectSession(fx, snap, unitId, body) {
+  const target = snap.units.find((unit) => unit.id === unitId);
+  if (!target || target.revision === null) throw new HttpError(404, "unit_not_found", "The unit was not found.");
+  if (target.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit was changed elsewhere.", { currentRevision: target.revision });
+  const machine = snap.machines.find((item) => item.id === target.machine);
+  if (!machine || !machine.answers) {
+    throw new HttpError(409, "machine_unavailable", "The machine is unavailable.", { machine: target.machine, heartbeatAt: machine?.heartbeatAt ?? null });
+  }
+  const client = (machine.clients ?? []).find((item) => item.id === body.client && item.enabled && item.installed);
+  if (!client) throw new HttpError(422, "client_unavailable", "The client is not available on that machine.");
+  if (snap.sessions.some((session) => session.unitId === unitId && session.state !== "stopped")) {
+    throw new HttpError(409, "unit_in_use", "The unit already has a session.");
+  }
+  if ([...fx.sessionRequests.values()].some((item) => item.unitId === unitId && (item.state === "queued" || item.state === "starting"))) {
+    throw new HttpError(409, "unit_in_use", "The unit already has a session.");
+  }
+}
+
+async function rejectStop(fx, sessionId) {
+  const snap = await projection(fx);
+  const session = snap.sessions.find((item) => item.id === sessionId);
+  if (!session) throw new HttpError(404, "not_found", "The session was not found.");
+  if (session.machine !== LOCAL_MACHINE) throw new HttpError(409, "remote_session", "The session is on another machine.");
+  if (session.state === "stopped" || fx.sessionStops.get(sessionId)?.state === "stopped") {
+    throw new HttpError(409, "stop_unavailable", "The session cannot be stopped.");
+  }
+}
+
+function leadCycle(units, targetId, leadId) {
+  const byId = new Map(units.map((unit) => [unit.id, unit]));
+  const seen = new Set([targetId]);
+  let cursor = leadId;
+  while (cursor) {
+    if (seen.has(cursor)) return true;
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.leadId ?? null;
+  }
+  return false;
+}
+
+function unitFile(user, body, id) {
+  if (body.scope.kind === "project") return join(user, "projects", body.scope.name, "state", `${body.unit}.md`);
+  if (body.scope.kind === "environment") return join(user, "envs", body.scope.name, "state", `${body.unit}.md`);
+  return join(user, "state", `${body.unit}.md`);
+}
+
+function unitRecord(body, id) {
+  const lines = [
+    `unit: ${body.unit}`,
+    `unit-id: ${id}`,
+    `role: ${body.role}`,
+    "state: in",
+    `machine: ${body.machine}`,
+  ];
+  if (body.leadId) {
+    lines.push(`lead: ${body.leadId.split(":").at(-1)}`);
+    lines.push(`lead-id: ${body.leadId}`);
+  }
+  if (body.job) lines.push(`job: ${body.job}`);
+  if (body.model) lines.push(`model: ${body.model}`);
+  lines.push("date: 2026-10-10 09:00");
+  return `${lines.join("\n")}\n\n`;
+}
+
+function replaceLead(text, leadId) {
+  const rows = text.replace(/\s*$/, "").split("\n");
+  const write = (prefix, value) => {
+    const index = rows.findIndex((row) => row.startsWith(prefix));
+    if (!value) {
+      if (index >= 0) rows.splice(index, 1);
+      return;
+    }
+    if (index >= 0) rows[index] = value;
+    else {
+      const blank = rows.findIndex((row) => row === "");
+      rows.splice(blank === -1 ? rows.length : blank, 0, value);
+    }
+  };
+  write("lead:", leadId ? `lead: ${leadId.split(":").at(-1)}` : null);
+  write("lead-id:", leadId ? `lead-id: ${leadId}` : null);
+  return `${rows.join("\n")}\n`;
+}
+
+async function prepareUnit(fx, body) {
+  const snap = await projection(fx);
+  const id = unitIdentity(body);
+  const bytes = Buffer.from(unitRecord(body, id));
+  const file = unitFile(fx.tree.user, body, id);
+  const revision = sha256(bytes);
+  const writes = [{ path: file, beforeRevision: null, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }];
+  const events = [];
+  let position = null;
+  if (body.position) {
+    const current = await loadLayout(fx);
+    const next = structuredClone(current.layout);
+    next.nodes ??= {};
+    next.nodes[id] = { x: body.position.x, y: body.position.y };
+    next.updatedAt = clock(fx).toISOString();
+    next.machine = LOCAL_MACHINE;
+    const layoutBytes = Buffer.from(stableJson(next));
+    const afterRevision = sha256(layoutBytes);
+    writes.push({
+      path: join(fx.tree.user, "gui", "layout.json"),
+      beforeRevision: current.revision,
+      afterRevision,
+      afterBytesBase64: layoutBytes.toString("base64"),
+    });
+    events.push({ name: "layout.changed", global: true, data: { layout: next, revision: afterRevision } });
+    position = body.position;
+  }
+  const unit = {
+    id,
+    unit: body.unit,
+    role: body.role,
+    scope: body.scope.kind === "root" ? { kind: "root", name: null } : { kind: body.scope.kind, name: body.scope.name },
+    leadId: body.leadId ?? null,
+    job: body.job ?? null,
+    model: body.model ?? null,
+    machine: body.machine,
+    state: "in",
+    status: "idle",
+    context: "",
+    date: "2026-10-10 09:00",
+    branch: null,
+    revision,
+    sessionIds: [],
+    approvalGrants: [],
+    position,
+  };
+  events.push({ name: "unit.changed", unitId: id, data: { unit } });
+  return { status: 201, data: unit, writes, events };
+}
+
+async function prepareLead(fx, unitId, body) {
+  const snap = await projection(fx);
+  const target = snap.units.find((unit) => unit.id === unitId);
+  const file = snap.files.units.get(unitId);
+  const next = replaceLead(await readFile(file, "utf8"), body.leadId);
+  const bytes = Buffer.from(next);
+  const revision = sha256(bytes);
+  const unit = { ...target, leadId: body.leadId, revision };
+  return {
+    status: 200,
+    data: unit,
+    writes: [{ path: file, beforeRevision: target.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "unit.changed", unitId, data: { unit } }],
+  };
+}
+
+async function prepareSession(fx, unitId, body) {
+  const snap = await projection(fx);
+  const target = snap.units.find((unit) => unit.id === unitId);
+  const requestId = uuid();
+  const record = {
+    requestId,
+    unitId,
+    machine: target?.machine ?? LOCAL_MACHINE,
+    state: "queued",
+    sessionId: null,
+    error: null,
+    expiresAt: new Date(fx.nowMs + 60_000).toISOString(),
+    prompt: body.prompt ?? null,
+    client: body.client,
+  };
+  return {
+    status: 202,
+    data: { requestId, state: "queued", expiresAt: record.expiresAt },
+    writes: [],
+    events: [{ name: "session.changed", global: true, data: { request: { ...record } } }],
+    apply() { fx.sessionRequests.set(requestId, record); },
+  };
+}
+
+function prepareStop(fx, sessionId) {
+  const record = { sessionId, state: "stopping" };
+  return {
+    status: 202,
+    data: { sessionId, state: "stopping" },
+    writes: [],
+    events: [{ name: "session.changed", global: true, data: { session: { id: sessionId, state: "stopping" } } }],
+    apply() { fx.sessionStops.set(sessionId, record); },
+  };
+}
+
 async function checkMutation(fx, pattern, params, body) {
+  if (pattern === "/units" || pattern === "/units/:unitId/lead" || pattern === "/units/:unitId/session") {
+    const snap = await projection(fx);
+    if (pattern === "/units") await rejectUnit(snap, body);
+    if (pattern === "/units/:unitId/lead") rejectLead(snap, params.unitId, body);
+    if (pattern === "/units/:unitId/session") await rejectSession(fx, snap, params.unitId, body);
+  }
+  if (pattern === "/sessions/:sessionId/stop") await rejectStop(fx, params.sessionId);
   if (pattern === "/layout") {
     const current = await loadLayout(fx);
     if ((body.expectedRevision ?? null) !== current.revision) {
@@ -2084,6 +2356,10 @@ async function checkMutation(fx, pattern, params, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal) {
+  if (pattern === "/units") return prepareUnit(fx, body);
+  if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
+  if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);
+  if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
   if (pattern === "/layout") return prepareLayout(fx, body);
   if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId);
   if (pattern === "/chats/:chatId/read") return prepareChatRead(fx, body, principal, params.chatId);
@@ -2354,6 +2630,8 @@ export async function createGuiFixture(options = {}) {
     homeFailures: new Map(),
     home: null,
     fault: null,
+    sessionRequests: new Map(),
+    sessionStops: new Map(),
     cache: null,
     tail: Promise.resolve(),
     closed: false,
@@ -2400,6 +2678,24 @@ export async function createGuiFixture(options = {}) {
         });
       },
       setFault(fault) { fx.fault = fault; },
+      setSession(requestId, state, error = null) {
+        return enqueue(fx, async () => {
+          const current = fx.sessionRequests.get(requestId);
+          if (!current) throw new Error("Unknown session request.");
+          current.state = state;
+          current.error = error ? { code: error, message: "The launch did not finish." } : null;
+          if (state === "started" && !current.sessionId) current.sessionId = uuid();
+          publish(fx, [{ name: "session.changed", global: true, data: { request: { ...current } } }], fx.primary);
+        });
+      },
+      acknowledgeStop(sessionId) {
+        return enqueue(fx, async () => {
+          const current = fx.sessionStops.get(sessionId);
+          if (!current || current.state !== "stopping") throw new Error("The session is not stopping.");
+          current.state = "stopped";
+          publish(fx, [{ name: "session.changed", global: true, data: { session: { id: sessionId, state: "stopped" } } }], fx.primary);
+        });
+      },
       disconnectStreams() { disconnectStreams(fx); },
       async restart() {
         await fx.tail;
@@ -2464,6 +2760,8 @@ async function main() {
       else if (command === "advance") fixture.control.advance(Number(rest[0] ?? 0)).catch(() => undefined);
       else if (command === "disconnect") fixture.control.disconnectStreams();
       else if (command === "emit") fixture.control.emit(rest[0], JSON.parse(rest.slice(1).join(" ") || "{}")).catch(() => undefined);
+      else if (command === "session") fixture.control.setSession(rest[0], rest[1], rest[2] ?? null).catch(() => undefined);
+      else if (command === "stopped") fixture.control.acknowledgeStop(rest[0]).catch(() => undefined);
     }
   });
 }
