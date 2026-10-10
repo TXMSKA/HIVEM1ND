@@ -1,4 +1,4 @@
-import { createRelay } from './store.mjs';
+import { openRelayOperations } from '../service/client.mjs';
 import os from 'node:os';
 import { claudeWakeCapability, sendClaudeWake } from './claude-wake.mjs';
 import { cursorWakeCapability } from './cursor-wake.mjs';
@@ -86,8 +86,32 @@ async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process
   return binding;
 }
 
+export async function decidePermission({ correlationId = null, binding = null, waitForOwner = null, timeoutMs = 120000 } = {}) {
+  if (!correlationId || binding?.expired === true || typeof waitForOwner !== 'function') {
+    return { decision: 'ask', reason: 'native_fallback' };
+  }
+  let timer;
+  try {
+    const result = await Promise.race([
+      waitForOwner(correlationId),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (!result || result.correlationId !== correlationId || (result.decision !== 'allow' && result.decision !== 'deny')) {
+      return { decision: 'ask', reason: 'unmatched' };
+    }
+    return { decision: result.decision, correlationId };
+  } catch {
+    return { decision: 'ask', reason: 'native_fallback' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function runRelayHook({ client, event, mindPath, nativeSessionId, unit, stdin = process.stdin, stdout = process.stdout,
-  stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform }) {
+  stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform, waitForOwner = null }) {
   let input = {};
   try {
     const chunks = [];
@@ -148,8 +172,17 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       });
     }
     // Reading the inbox is the costly part of a hook, and an event that carries no notice would discard its answer.
+    if (client === 'claude' && hookEvent === 'PreToolUse' && typeof input.tool_name === 'string') {
+      const decision = await decidePermission({
+        correlationId: typeof input.correlation_id === 'string' ? input.correlation_id : null,
+        binding: input.binding ?? null,
+        waitForOwner,
+      });
+      stdout.write(`${JSON.stringify(decision)}\n`);
+      return decision;
+    }
     if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
-    const relay = await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
+    const relay = await openRelayOperations({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
     const reminder = await relay.reminder({
       ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),
       ...(nativeSessionId ?? context.nativeSessionId ? { nativeSessionId: nativeSessionId ?? context.nativeSessionId } : {}),

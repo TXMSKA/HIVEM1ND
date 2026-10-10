@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError } from './identity.mjs';
+import { CoreError, parseUnitId } from './identity.mjs';
 import { runConfiguredService, stopService } from './service.mjs';
 
 const sessions = new Map();
@@ -31,7 +32,7 @@ export async function connectService(options = {}) {
       resolveHandle = resolve;
       rejectHandle = reject;
     });
-    session = { mindPath, pending, handle: null, refs: 0, closes: new Set() };
+    session = { mindPath, pending, handle: null, refs: 0, closes: new Set(), viewers: new Set() };
     sessions.set(key, session);
     runConfiguredService({
       mindPath,
@@ -64,9 +65,23 @@ export async function connectService(options = {}) {
     }
     throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
   }
+  const origin = new URL(record.origin);
+  let viewer;
+  try {
+    viewer = await issueViewer(origin, secret);
+  } catch (error) {
+    if (session.refs === 0 && sessions.get(key) === session) {
+      sessions.delete(key);
+      await stopService(handle);
+    }
+    throw error;
+  }
   session.refs += 1;
+  session.viewers.add(viewer.token);
   return {
-    origin: new URL(record.origin),
+    origin,
+    token: viewer.token,
+    viewerId: viewer.viewerId,
     secret,
     service: handle,
     mindPath,
@@ -76,6 +91,8 @@ export async function connectService(options = {}) {
       return () => session.closes.delete(close);
     },
     async release({ stop = false } = {}) {
+      session.viewers.delete(viewer.token);
+      await logoutViewer(origin, viewer.token);
       session.refs = Math.max(0, session.refs - 1);
       if (stop && session.refs === 0 && sessions.get(key) === session) {
         for (const close of session.closes) close();
@@ -91,10 +108,20 @@ export async function closeAttachedServices() {
   const open = [...sessions.values()];
   sessions.clear();
   for (const session of open) {
+    const origin = session.handle?.bootstrapState?.record?.origin ?? session.handle?.bootstrap?.origin;
+    if (origin) {
+      for (const token of session.viewers) await logoutViewer(new URL(origin), token);
+    }
+    session.viewers?.clear();
     for (const close of session.closes) close();
     session.closes.clear();
     if (session.handle) await stopService(session.handle);
   }
+}
+
+export async function openRelayOperations(options = {}) {
+  const { createRelay } = await import('../relay/store.mjs');
+  return createRelay(options);
 }
 
 export async function request(client, spec) {
@@ -202,13 +229,50 @@ function parseFrame(frame) {
   }
 }
 
-export function bindNative(client, binding) {
-  if (!binding?.verifiedLogin) return { nativeSupport: false, reason: 'native_login_unverified' };
-  return { nativeSupport: true, client };
+export function bindNative(client, binding = {}) {
+  if (!binding.bridge || !binding.proof || Object.hasOwn(binding.proof, 'handshake')) {
+    return { nativeSupport: false, reason: 'native_login_unverified' };
+  }
+  try {
+    const proof = binding.proof;
+    const unit = parseUnitId(proof.unitId);
+    if (!proof.nativeSessionId || !proof.machine || !proof.client) {
+      return { nativeSupport: false, reason: 'native_login_unverified' };
+    }
+    const adapter = binding.bridge.adapters?.[proof.client];
+    if (!adapter || adapter.confirm?.({ ...proof, unitId: unit.id }) !== true) {
+      return { nativeSupport: false, reason: 'native_login_unverified' };
+    }
+    return { nativeSupport: true, client, unitId: unit.id };
+  } catch {
+    return { nativeSupport: false, reason: 'native_login_unverified' };
+  }
 }
 
-export async function legacyOperation(client, name, args) {
-  return request(client, { path: '/mcp', body: { jsonrpc: '2.0', id: args?.requestId ?? 1, method: 'tools/call', params: { name, arguments: args ?? {} } } });
+export async function legacyOperation(client, name, args = {}) {
+  const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
+  const forwarded = { ...args, requestId };
+  if (client?.operations && typeof client.operations[name] === 'function') return client.operations[name](forwarded);
+  return request(client, {
+    path: '/mcp',
+    body: { jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: forwarded } },
+  });
+}
+
+async function issueViewer(origin, secret) {
+  const response = await request({ origin, token: secret, closed: false }, {
+    method: 'POST',
+    path: '/api/v1/auth/local',
+    body: {},
+  });
+  if (response.status !== 200 || typeof response.json?.token !== 'string') {
+    throw new CoreError(503, 'bootstrap_unavailable', 'The local viewer could not be issued.');
+  }
+  return response.json;
+}
+
+async function logoutViewer(origin, token) {
+  await request({ origin, token, closed: false }, { method: 'POST', path: '/api/v1/auth/logout', body: {} }).catch(() => {});
 }
 
 export function close(client) {

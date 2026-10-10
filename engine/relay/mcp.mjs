@@ -1,5 +1,7 @@
-import { createRelay } from './store.mjs';
+import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { openRelayOperations } from '../service/client.mjs';
+import { toolSchemas } from '../service/mcp.mjs';
 
 const MAX_LINE_CHARS = 1_048_576;
 const SUPPORTED_PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
@@ -37,6 +39,20 @@ function tool(name, description, properties = {}, required = []) {
   return { name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } };
 }
 
+function editorTools() {
+  return toolSchemas().map((entry) => ({
+    ...entry,
+    inputSchema: {
+      ...entry.inputSchema,
+      required: (entry.inputSchema.required ?? []).filter((key) => key !== 'requestId'),
+    },
+  }));
+}
+
+function advertisedTools() {
+  return [...RELAY_TOOLS, ...editorTools()];
+}
+
 function result(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
 }
@@ -63,7 +79,7 @@ async function callMethod(relay, name, args, defaults = {}) {
 }
 
 export function validateToolArguments(name, args) {
-  const definition = RELAY_TOOLS.find((candidate) => candidate.name === name);
+  const definition = advertisedTools().find((candidate) => candidate.name === name);
   if (!definition) throw Object.assign(new Error(`Unknown Relay tool: ${name}`), { code: 'INVALID_ARGUMENTS' });
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw Object.assign(new Error('Tool arguments must be an object.'), { code: 'INVALID_ARGUMENTS' });
   const schema = definition.inputSchema;
@@ -121,9 +137,10 @@ async function* boundedLines(stream) {
   else if (pending) yield pending.replace(/\r$/, '');
 }
 
-export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr }) {
+export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, forwardEditor = null }) {
   if (!mindPath) throw new Error('mindPath is required');
-  const relay = await createRelay({ mindPath, hostname, sessionId, client });
+  const relay = await openRelayOperations({ mindPath, hostname, sessionId, client });
+  const editors = new Set(editorTools().map((entry) => entry.name));
   if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }
@@ -147,14 +164,22 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
           stdout.write(`${JSON.stringify(rpcError(id ?? null, -32602, 'Unsupported protocol version'))}\n`);
           continue;
         }
-        response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '1.0.0' } };
+        response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '3.0.0' } };
       } else if (method === 'ping') response = {};
-      else if (method === 'tools/list') response = { tools: RELAY_TOOLS };
+      else if (method === 'tools/list') response = { tools: advertisedTools() };
       else if (method === 'tools/call') {
         if (id === undefined) continue;
         const args = validateToolArguments(params.name, params.arguments ?? {});
-        const value = await callMethod(relay, params.name, args, { sessionId, client });
-        response = result(value);
+        if (editors.has(params.name)) {
+          const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
+          const forwarded = { ...args, requestId };
+          response = typeof forwardEditor === 'function'
+            ? await forwardEditor(params.name, forwarded)
+            : { ...result({ code: 'service_unavailable', message: 'The editor tool is served by the shared service.', requestId }), isError: true };
+        } else {
+          const value = await callMethod(relay, params.name, args, { sessionId, client });
+          response = result(value);
+        }
       } else {
         if (id === undefined) continue;
         stdout.write(`${JSON.stringify(rpcError(id, -32601, 'Method not found'))}\n`);

@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createRelay } from './store.mjs';
+import { openRelayOperations } from '../service/client.mjs';
 
 const MAX_SUBJECT = 240;
 
@@ -31,7 +31,7 @@ async function enabledWakeUnits(mindPath, now) {
 export async function createPersonRelay({ mindPath, tool, hostname = os.hostname(), clock = () => Date.now(), operations = null } = {}) {
   if (typeof tool !== 'string' || !/^[a-z][a-z0-9-]{0,40}$/.test(tool)) throw new TypeError('tool must be a short lowercase name.');
   const sessionId = `${tool}-${hostname}`;
-  const relay = operations ?? await createRelay({ mindPath, hostname, sessionId, client: 'master' });
+  const relay = operations ?? await openRelayOperations({ mindPath, hostname, sessionId, client: 'master' });
   let registered = false;
 
   async function agentFor(project) {
@@ -48,8 +48,7 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
     const agent = await agentFor(project);
     if (!agent) return { sent: false, reason: 'no-agent' };
     if (!registered) {
-      const unit = tool === 'void-lite' ? 'user' : 'master';
-      await relay.register({ unit, nativeSessionId: sessionId, client: 'master' });
+      await relay.register({ unit: 'master', nativeSessionId: sessionId, client: 'master' });
       registered = true;
     }
     const result = await relay.send({ to: agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });

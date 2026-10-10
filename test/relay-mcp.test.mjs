@@ -5,8 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { serveRelayMcp } from '../engine/relay/mcp.mjs';
+import { decidePermission } from '../engine/relay/hooks.mjs';
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
+import { bindNative, closeAttachedServices } from '../engine/service/client.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
+import { runCli } from '../cli/index.mjs';
+import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
 async function fixture(context) {
@@ -144,4 +150,86 @@ test('delivery_status answers for messages the registered unit sent and rejects 
     assert.equal(line.result.isError, true);
     assert.equal(line.result.structuredContent.code, 'INVALID_ARGUMENTS');
   }
+});
+
+test('stdio advertises protocol 3.0.0 and editor tools, and a caller flag is not native proof', async (context) => {
+  const mindPath = await fixture(context);
+  const { lines } = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
+    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
+  ]);
+  assert.equal(lines[0].result.serverInfo.version, '3.0.0');
+  assert.equal(lines[0].result.protocolVersion, '2025-03-26');
+  const names = lines[1].result.tools.map((tool) => tool.name);
+  for (const name of ['register', 'send_message', 'blueprint_open', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_open', 'void_replace_range', 'void_reply_comment']) {
+    assert.equal(names.includes(name), true, name);
+  }
+  assert.equal(lines[2].result.isError, true);
+  assert.match(lines[2].result.structuredContent.requestId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(lines[2].result.structuredContent.requestId, lines[3].result.structuredContent.requestId);
+  assert.equal(bindNative({}, { verifiedLogin: true }).nativeSupport, false);
+  const proof = { unitId: 'project:shop:executor', nativeSessionId: 'native-1', machine: 'DESKTOP', client: 'cursor' };
+  const bridge = { adapters: { cursor: { confirm: () => true } } };
+  assert.equal(bindNative({}, { bridge, proof, verifiedLogin: true }).nativeSupport, true);
+  assert.deepEqual(await decidePermission({ correlationId: 'corr-1' }), { decision: 'ask', reason: 'native_fallback' });
+  assert.deepEqual(await decidePermission({
+    correlationId: 'corr-1',
+    waitForOwner: async () => ({ correlationId: 'corr-1', decision: 'deny' }),
+  }), { decision: 'deny', correlationId: 'corr-1' });
+});
+
+test('task status obtains a master viewer and logs it out', async (context) => {
+  const fixtureMind = await makeCoreFixture();
+  context.after(async () => {
+    await closeAttachedServices();
+    await dispose(fixtureMind);
+  });
+  const originPath = path.join(fixtureMind.root, 'origin');
+  await mkdir(originPath, { recursive: true });
+  await mkdir(path.join(fixtureMind.paths.mind, 'user', 'tasks'), { recursive: true });
+  await writeFile(fixtureMind.paths.configFile, `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath: fixtureMind.paths.mind,
+    machine: fixtureMind.machine,
+    origin: { kind: 'folder', path: originPath },
+    stagingPath: fixtureMind.paths.staging,
+    port: 0,
+  })}\n`);
+  await writeFile(path.join(fixtureMind.paths.mind, 'user', 'tasks', '002.md'), 'id: project:shop:002\ntitle: Ship\nstatus: review\nfrom-id: root:master\nto-id: project:shop:executor\ndate: 2026-10-10\n\n## Request\nShip it.\n## Report\n\n');
+  const dependencies = {
+    platform: fixtureMind.platform,
+    env: fixtureMind.env,
+    aclRunner: stubAclRunner(),
+    confineRoot: fixtureMind.root,
+    now: () => fixtureMind.clock.now,
+    userKey: 'S-1-5-21-1-2-3-1001',
+    guardPort: 0,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  };
+  const stdout = [];
+  const stderr = [];
+  dependencies.stdout.on('data', (chunk) => stdout.push(chunk));
+  dependencies.stderr.on('data', (chunk) => stderr.push(chunk));
+  const usage = await runCli(['task', 'status', 'shop'], dependencies);
+  assert.equal(usage, 2);
+  const changed = await runCli([
+    'task', 'status', 'shop', '002', 'done', '--note', 'Ready',
+    '--mind-path', fixtureMind.paths.mind,
+    '--home-dir', fixtureMind.home,
+    '--hostname', fixtureMind.machine,
+  ], dependencies);
+  assert.equal(changed, 0, Buffer.concat(stderr).toString('utf8'));
+  const payload = JSON.parse(Buffer.concat(stdout).toString('utf8'));
+  assert.equal(payload.body.status, 'done');
+  stdout.length = 0;
+  const conflict = await runCli([
+    'task', 'status', 'shop', '002', 'done',
+    '--mind-path', fixtureMind.paths.mind,
+    '--home-dir', fixtureMind.home,
+    '--hostname', fixtureMind.machine,
+  ], dependencies);
+  assert.equal(conflict, 3);
 });

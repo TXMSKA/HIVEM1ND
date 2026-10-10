@@ -37,6 +37,8 @@ Usage:
   hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
   hivem1nd service <install|uninstall|status|run> [--dry-run] [options]
+  hivem1nd task status <project> <id> <status> [--note <text>]
+  hivem1nd task undo <project> <id>
 
 Commands:
   init       Configure this machine in eight guided steps
@@ -48,6 +50,7 @@ Commands:
   relay     Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
   service    Plan the user login service, or print its status
+  task       Change a task status or undo the last change through the service
 
 Relay options:
   --mind-path <path>       Path to the private mind
@@ -157,6 +160,7 @@ export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
   if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
+  if (argv[0] === "task") return parseTaskArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
   if (argv.length === 1 && ["-h", "--help"].includes(argv[0])) return { help: true };
   if (argv.length === 1 && ["-v", "--version"].includes(argv[0])) return { version: true };
@@ -260,6 +264,57 @@ function parseServiceArgs(tokens) {
     throw new CliUsageError("--origin-kind must be folder or onedrive.");
   }
   return { command: "service", options };
+}
+
+function parseTaskArgs(tokens) {
+  const action = tokens[0];
+  if (action !== "status" && action !== "undo") throw new CliUsageError("task requires status or undo.");
+  const options = { action };
+  const positional = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["-h", "--help"].includes(token)) return { command: "task", help: true };
+    if (token === "--note") {
+      if (action !== "status") throw new CliUsageError("--note is only valid for task status.");
+      if (Object.hasOwn(options, "note")) throw new CliUsageError("--note was provided more than once.");
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError("--note requires a value.");
+      options.note = value;
+      index += 1;
+      continue;
+    }
+    if (VALUE_FLAGS.has(token)) {
+      const key = VALUE_FLAGS.get(token);
+      if (!["mindPath", "homeDir", "hostname", "cosmicPath"].includes(key)) throw new CliUsageError(`${token} is not valid for task.`);
+      if (Object.hasOwn(options, key)) throw new CliUsageError(`${token} was provided more than once.`);
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError(`${token} requires a value.`);
+      options[key] = value;
+      index += 1;
+      continue;
+    }
+    if (token === "--json") {
+      if (options.json === true) throw new CliUsageError("--json was provided more than once.");
+      options.json = true;
+      continue;
+    }
+    if (token.startsWith("-")) throw new CliUsageError(`Unknown option: ${token}`);
+    positional.push(token);
+  }
+  if (action === "status") {
+    if (positional.length !== 3) throw new CliUsageError("task status requires a project, an id and a status.");
+    const [project, taskId, status] = positional;
+    if (!["open", "review", "done", "closed"].includes(status)) throw new CliUsageError("task status must be open, review, done or closed.");
+    options.project = project;
+    options.taskId = taskId.includes(":") ? taskId : `project:${project}:${taskId}`;
+    options.status = status;
+  } else {
+    if (positional.length !== 2) throw new CliUsageError("task undo requires a project and an id.");
+    const [project, taskId] = positional;
+    options.project = project;
+    options.taskId = taskId.includes(":") ? taskId : `project:${project}:${taskId}`;
+  }
+  return { command: "task", options };
 }
 
 const RELAY_VALUE_FLAGS = new Map([
@@ -1303,8 +1358,8 @@ async function runRelay(options, dependencies, output) {
   if (action === "delivery" && !options.ids.length) throw new CliUsageError("relay delivery requires at least one --id.");
   if (action === "delivery" && (options.unit !== undefined || options.limit)) throw new CliUsageError("relay delivery answers for the registered unit and takes only --id.");
 
-  const { createRelay } = await import("../engine/relay/store.mjs");
-  const relay = await createRelay({
+  const { openRelayOperations } = await import("../engine/service/client.mjs");
+  const relay = await openRelayOperations({
     mindPath: options.mindPath,
     ...(options.hostname ? { hostname: options.hostname } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
@@ -1347,6 +1402,71 @@ async function runRelay(options, dependencies, output) {
   return 0;
 }
 
+async function runTask(options, dependencies, output, errorOutput) {
+  if (options.help) {
+    output.write(`${helpText()}\n`);
+    return 0;
+  }
+  if (!options.mindPath) {
+    errorOutput.write("Usage error: task requires --mind-path.\n");
+    return 2;
+  }
+  const { randomUUID } = await import("node:crypto");
+  const { bindNative, connectService, request } = await import("../engine/service/client.mjs");
+  if (dependencies.bridge || dependencies.proof) {
+    const bound = bindNative({}, { bridge: dependencies.bridge, proof: dependencies.proof });
+    if (!bound.nativeSupport) {
+      errorOutput.write("native_login_unverified: Native attachment needs a verified handshake.\n");
+      return 1;
+    }
+  }
+  const service = await connectService({
+    mindPath: options.mindPath,
+    platform: dependencies.platform,
+    env: dependencies.env,
+    home: options.homeDir,
+    cosmicPath: options.cosmicPath,
+    hostname: options.hostname,
+    aclRunner: dependencies.aclRunner,
+    confineRoot: dependencies.confineRoot,
+    now: dependencies.now,
+    userKey: dependencies.userKey,
+    guardPort: dependencies.guardPort,
+  });
+  const caller = { ...service, token: dependencies.agentToken ?? service.token };
+  try {
+    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}` });
+    if (current.status !== 200 || !current.json?.data?.revision) {
+      const code = current.json?.error?.code ?? "error";
+      errorOutput.write(`${code}: The request failed.\n`);
+      return current.status === 409 ? 3 : current.status === 422 ? 2 : 1;
+    }
+    const target = options.action === "undo"
+      ? `/api/v1/tasks/${encodeURIComponent(options.taskId)}/undo`
+      : `/api/v1/tasks/${encodeURIComponent(options.taskId)}/status`;
+    const body = options.action === "undo"
+      ? { expectedRevision: current.json.data.revision }
+      : { status: options.status, note: options.note ?? "", expectedRevision: current.json.data.revision };
+    const result = await request(caller, {
+      method: "POST",
+      path: target,
+      body,
+      headers: { "idempotency-key": randomUUID() },
+    });
+    if (result.status === 200) {
+      output.write(`${JSON.stringify(result.json?.data ?? null)}\n`);
+      return 0;
+    }
+    const code = result.json?.error?.code ?? "error";
+    errorOutput.write(`${code}: The request failed.\n`);
+    if (result.status === 409) return 3;
+    if (result.status === 422) return 2;
+    return 1;
+  } finally {
+    await service.release({ stop: true });
+  }
+}
+
 export async function runCli(argv, dependencies = {}) {
   const output = dependencies.stdout ?? process.stdout;
   const errorOutput = dependencies.stderr ?? process.stderr;
@@ -1364,6 +1484,8 @@ export async function runCli(argv, dependencies = {}) {
       return await runInit(parsed.options, dependencies, output);
     } else if (parsed.command === "service") {
       return await runService(parsed.options, dependencies, output);
+    } else if (parsed.command === "task") {
+      return await runTask(parsed.options, dependencies, output, errorOutput);
     } else if (parsed.command === "uninstall") {
       return await runUninstall(parsed.options, dependencies, output);
     } else if (parsed.command === "relay") {
