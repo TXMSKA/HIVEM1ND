@@ -1,9 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEventBus, revisionRelation } from '../engine/service/events.mjs';
+import { randomUUID } from 'node:crypto';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
+import { revisionOf } from '../engine/service/store.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings } from '../engine/service/units.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const NOW = Date.parse('2026-10-10T12:00:00.000Z');
@@ -226,4 +229,95 @@ test('events replay after a cursor, isolate viewers, and drop expired or duplica
   clock.now += 600001;
   bus.emit({ name: 'issue.changed', resourceId: 'later', revision: 'later', data: { issue: { path: null, code: 'x', message: 'later' }, resolved: false } });
   assert.equal(bus.replay(otherSub, held).reset, true);
+});
+
+function serviceContext(fixture) {
+  return { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now };
+}
+
+async function answeringMachine(fixture) {
+  fixture.paths.origin = path.join(fixture.root, 'origin');
+  await mkdir(path.join(fixture.paths.origin, 'machines', 'DESKTOP'), { recursive: true });
+  await writeFile(path.join(fixture.paths.origin, 'machines', 'DESKTOP', 'service.json'), JSON.stringify({
+    format: 'hivem1nd-service-v1', machine: 'DESKTOP', state: 'running', version: '3.0.0',
+    heartbeatAt: new Date(fixture.clock.now).toISOString(), startedAt: new Date(fixture.clock.now).toISOString(),
+  }));
+}
+
+test('unit, lead, layout, and settings writes are validated before any file changes', async (t) => {
+  const fixture = await mind(t);
+  await answeringMachine(fixture);
+  const context = serviceContext(fixture);
+  await assert.rejects(
+    () => createUnit({ ...context, paths: { ...fixture.paths, origin: path.join(fixture.root, 'missing-origin') } }, {
+      unit: 'executor-shop', role: 'executor', scope: { kind: 'project', name: 'shop' }, machine: 'DESKTOP',
+    }),
+    (error) => error.code === 'machine_unavailable',
+  );
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md')).then(() => true, () => false), false);
+  const receipt = { principal: 'desktop', key: randomUUID(), method: 'POST', path: '/api/v1/units', body: { unit: 'overseer' }, requestId: randomUUID() };
+  await createUnit(context, { unit: 'overseer', role: 'overseer', scope: 'root', machine: 'DESKTOP' }, { receipt });
+  const again = await createUnit(context, { unit: 'overseer', role: 'overseer', scope: 'root', machine: 'DESKTOP' }, { receipt });
+  assert.equal(again.replayed, true);
+  assert.equal(fixture.store.events.filter((event) => event.name === 'unit.changed').length, 1);
+  await assert.rejects(
+    () => createUnit(context, { unit: 'second', role: 'overseer', scope: 'root', machine: 'DESKTOP' }),
+    (error) => error.code === 'overseer_exists',
+  );
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'second.md')).then(() => true, () => false), false);
+  await createUnit(context, {
+    unit: 'overlord-web', role: 'overlord', scope: { kind: 'environment', name: 'web' }, machine: 'DESKTOP', leadId: 'root:overseer',
+  });
+  await createUnit(context, {
+    unit: 'executor-shop', role: 'executor', scope: { kind: 'project', name: 'shop' }, machine: 'DESKTOP', leadId: 'env:web:overlord-web', job: 'builder',
+  });
+  const executorPath = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  const beforeCycle = await readFile(executorPath);
+  const overlordRevision = revisionOf(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'overlord-web.md')));
+  await assert.rejects(
+    () => connectLead(context, 'env:web:overlord-web', { leadId: 'project:shop:executor-shop', confirmed: true, expectedRevision: overlordRevision }),
+    (error) => error.code === 'lead_cycle',
+  );
+  assert.deepEqual(await readFile(executorPath), beforeCycle);
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'master.md'), stateFile({
+    unit: 'master', 'unit-id': 'root:master', role: 'master', state: 'in', machine: 'DESKTOP',
+  }, 'Keep this body.\n'));
+  const masterPath = path.join(fixture.paths.mind, 'user', 'state', 'master.md');
+  const masterBefore = await readFile(masterPath);
+  await assert.rejects(
+    () => connectLead(context, 'root:master', { leadId: 'root:overseer', confirmed: true, expectedRevision: revisionOf(masterBefore) }),
+    (error) => error.code === 'invalid_lead',
+  );
+  assert.deepEqual(await readFile(masterPath), masterBefore);
+  const layoutPath = path.join(fixture.paths.mind, 'user', 'gui', 'layout.json');
+  const layoutBefore = await readFile(layoutPath);
+  const moved = await patchLayout(context, {
+    nodes: { 'root:overseer': { x: 12, y: 24 } },
+    expectedRevision: revisionOf(layoutBefore),
+  });
+  assert.equal(moved.replayed, false);
+  const layoutAfter = JSON.parse(await readFile(layoutPath, 'utf8'));
+  assert.equal(layoutAfter.nodes['root:overseer'].x, 12);
+  assert.equal(layoutAfter.nodes['project:shop:executor-shop'].x, 0);
+  const layoutRevision = revisionOf(await readFile(layoutPath));
+  await assert.rejects(
+    () => patchLayout(context, { nodes: { 'root:overseer': { x: 100001, y: 1 } }, expectedRevision: layoutRevision }),
+    (error) => error.code === 'invalid_body',
+  );
+  assert.equal(JSON.parse(await readFile(layoutPath, 'utf8')).nodes['root:overseer'].x, 12);
+  const settings = await patchSettings(context, { look: 'high-contrast', expectedRevision: null });
+  assert.equal(settings.replayed, false);
+  const settingsPath = path.join(fixture.paths.mind, 'user', 'gui', 'settings.json');
+  const newer = Buffer.from(`${JSON.stringify({ format: 'hivem1nd-settings-v1', look: 'modern', language: 'es' })}\n`);
+  await writeFile(settingsPath, newer);
+  await assert.rejects(
+    () => patchSettings(context, { language: 'en', expectedRevision: revisionOf(Buffer.from('{"format":"hivem1nd-settings-v1","look":"high-contrast","language":"en"}\n')) }),
+    (error) => error.code === 'revision_conflict',
+  );
+  assert.equal(await readFile(settingsPath, 'utf8'), newer.toString('utf8'));
+  const names = fixture.store.events.map((event) => event.name);
+  assert.equal(names.filter((name) => name === 'unit.changed').length >= 1, true);
+  assert.equal(names.includes('layout.changed'), true);
+  assert.equal(names.includes('view.changed'), true);
+  assert.equal(names.includes('settings.changed'), true);
 });
