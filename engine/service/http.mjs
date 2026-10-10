@@ -242,6 +242,11 @@ export async function createHttpServer(options) {
     schedule: options.schedule,
     bucket: { peers: new Map(), grantFailures: [] },
   };
+  homeState.serve = (req, res) => {
+    dispatch(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500).end();
+    });
+  };
   const bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
   const compiled = routeTable().map(compile);
   const sockets = new Set();
@@ -373,6 +378,7 @@ export async function createHttpServer(options) {
     viewers,
     async close() {
       disposeWatch(watch);
+      await closeHome(homeState, { quiet: true }).catch(() => {});
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => server.close(() => resolve()));
     },
