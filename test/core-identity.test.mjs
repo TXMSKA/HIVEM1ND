@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, symlink } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -252,6 +252,45 @@ test('a crash after the first file or before the receipt recovers once', async (
   assert.equal(replay.id, retryRequest);
   assert.equal(replay.replayed, true);
   assert.equal(readEvents(fixture).length, 2);
+  const conflictRequest = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const conflictKey = 'abababab-abab-4aba-8aba-abababababab';
+  const conflictFirst = path.join(fixture.paths.mind, 'user', 'conflict-first.txt');
+  const conflictSecond = path.join(fixture.paths.mind, 'user', 'conflict-second.txt');
+  const external = Buffer.from('external edit');
+  fixture.store.autoRecover = false;
+  fixture.store.fault = { afterRenames: 1 };
+  const conflictInput = { principal: 'os:desktop', key: conflictKey, method: 'POST', path: '/pair', body: { both: true }, requestId: conflictRequest, eventCursor: null };
+  await assert.rejects(withReceipt(fixture.store, conflictInput, async (receipt) => commitTransaction(fixture.store, {
+    id: receipt.requestId,
+    entries: [
+      { resource: 'mind:user/conflict-first.txt', recordPath: conflictFirst, beforeRevision: null, afterBytes: Buffer.from('after'), record: { part: 1 } },
+      { resource: 'mind:user/conflict-second.txt', recordPath: conflictSecond, beforeRevision: null, afterBytes: Buffer.from('after-2'), record: { part: 2 } },
+    ],
+    response: { status: 200, body: { bothFilesWritten: true } },
+    receipt,
+    events: [{ name: 'record.written', id: receipt.requestId }],
+  })), { code: 'injected_crash' });
+  await writeFile(conflictSecond, external);
+  fixture.store.autoRecover = true;
+  const eventsBefore = readEvents(fixture).length;
+  const conflictReplay = await withReceipt(fixture.store, conflictInput, async () => {
+    throw new Error('retry must not run the operation');
+  });
+  assert.equal(conflictReplay.status, 409);
+  assert.equal(conflictReplay.replayed, true);
+  assert.equal(conflictReplay.body.code, 'revision_conflict');
+  assert.equal(conflictReplay.body.requestId, conflictRequest);
+  assert.equal(conflictReplay.body.operationId, conflictRequest);
+  assert.equal(conflictReplay.body.details.currentRevision, hashBytes(external));
+  assert.equal(conflictReplay.body.bothFilesWritten, undefined);
+  assert.equal((await readFile(conflictFirst)).toString(), 'after');
+  assert.equal((await readFile(conflictSecond)).toString(), 'external edit');
+  const conflictJournal = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'transactions', `${conflictRequest}.json`), 'utf8'));
+  assert.equal(conflictJournal.phase, 'conflict');
+  assert.equal(conflictJournal.emitted, false);
+  assert.equal(conflictJournal.staged, false);
+  assert.equal(conflictJournal.entries[1].afterBytesBase64, Buffer.from('after-2').toString('base64'));
+  assert.equal(readEvents(fixture).length, eventsBefore);
   await exclusiveRecord(fixture.store, path.join(fixture.paths.mind, 'user', 'exclusive.txt'), Buffer.from('only'));
   await assert.rejects(exclusiveRecord(fixture.store, path.join(fixture.paths.mind, 'user', 'exclusive.txt'), Buffer.from('again')));
   assert.equal((await readFile(path.join(fixture.paths.mind, 'user', 'exclusive.txt'))).toString(), 'only');
