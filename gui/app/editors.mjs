@@ -248,16 +248,75 @@ export function noteComment(editors, data) {
 }
 
 export function noteRemote(editors, change) {
-  const current = editors.drafts.get(change.resourceId) ?? (editors.current?.resourceId === change.resourceId ? editors.current : null);
-  if (!current) return;
-  if (current.dirty && change.revision && change.revision !== current.baseRevision) {
-    current.conflict = { revision: change.revision };
-    return;
+  const current = editors.drafts.get(change?.resourceId) ?? (editors.current?.resourceId === change?.resourceId ? editors.current : null);
+  if (!current || !change?.revision || change.revision === current.revision) return;
+  current.remoteStale = true;
+  if (current.dirty && change.revision !== current.baseRevision) {
+    current.conflict = { ...(current.conflict ?? {}), revision: change.revision };
   }
-  if (!current.dirty && change.revision) {
-    current.revision = change.revision;
-    current.baseRevision = change.revision;
+}
+
+export async function refreshRemoteEditor(api, editors, resourceId) {
+  const current = editors.drafts.get(resourceId) ?? (editors.current?.resourceId === resourceId ? editors.current : null);
+  if (!current?.remoteStale) return false;
+  const generation = (editors.openTicket ?? 0) + 1;
+  editors.openTicket = generation;
+  editors.tickets.set(resourceId, generation);
+  const route = current.kind === "void" ? "/void/texts/:resourceId" : "/blueprint/boards/:resourceId";
+  const result = await request(api, "GET", route, { params: { resourceId } });
+  return reconcileEditor(editors, result.data, generation);
+}
+
+export function reconcileEditor(editors, record, generation) {
+  const id = record?.id;
+  if (!id || editors.tickets.get(id) !== generation) return false;
+  const current = editors.drafts.get(id) ?? (editors.current?.resourceId === id ? editors.current : null);
+  if (!current) return false;
+  if (current.dirty) {
+    current.conflict = { revision: record.revision, remote: record };
+    current.remoteStale = false;
+    editors.drafts.set(id, current);
+    return true;
   }
+  current.authoritative = record;
+  current.revision = record.revision ?? current.revision;
+  current.baseRevision = record.revision ?? current.baseRevision;
+  current.commentsRevision = record.commentsRevision ?? current.commentsRevision;
+  current.attached = record.attached ?? current.attached;
+  current.threads = record.threads ?? current.threads;
+  current.conflict = null;
+  current.remoteStale = false;
+  editors.drafts.set(id, current);
+  if (editors.current?.resourceId === id) editors.current = current;
+  return true;
+}
+
+export function discardEditorDraft(editors) {
+  const current = editors.current;
+  const remote = current?.conflict?.remote;
+  if (!current || !remote) return false;
+  current.dirty = false;
+  current.draftText = "";
+  current.authoritative = remote;
+  current.revision = remote.revision ?? current.revision;
+  current.baseRevision = remote.revision ?? current.baseRevision;
+  current.commentsRevision = remote.commentsRevision ?? current.commentsRevision;
+  current.conflict = null;
+  current.remoteStale = false;
+  editors.drafts.set(current.resourceId, current);
+  return true;
+}
+
+export function reapplyEditorDraft(editors) {
+  const current = editors.current;
+  const remote = current?.conflict?.remote;
+  if (!current?.dirty || !remote?.revision) return false;
+  current.baseRevision = remote.revision;
+  current.revision = remote.revision;
+  current.conflict = null;
+  current.remoteStale = false;
+  editors.drafts.set(current.resourceId, current);
+  return true;
 }
 
 export function markDirty(api, editors, capabilities, dirty) {

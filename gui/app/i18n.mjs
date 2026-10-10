@@ -36,6 +36,8 @@ const COPY = {
   emptyInspector: ["Select a unit to see its details.", "Seleccionar una unidad para ver sus detalles."],
   emptyList: ["Nothing to show.", "No hay nada para mostrar."],
   outsideChange: ["This document changed elsewhere. The draft is still here.", "Este documento cambió en otro lugar. El borrador sigue aquí."],
+  discardDraft: ["Discard draft", "Descartar el borrador"],
+  reapplyDraft: ["Reapply draft", "Volver a aplicar el borrador"],
   unavailable: ["The service is unavailable.", "El servicio no está disponible."],
   offline: ["This machine is offline.", "Esta máquina está desconectada."],
   confirmAction: ["Confirm this action.", "Confirmar esta acción."],

@@ -30,9 +30,12 @@ import {
   loadCatalog,
   loadComments,
   markDirty,
+  discardEditorDraft,
   noteComment,
   noteRemote,
   openEditor,
+  reapplyEditorDraft,
+  refreshRemoteEditor,
   replyComment,
   resolveComment,
   setAttachments,
@@ -251,7 +254,16 @@ async function onStream(app, event) {
   const editors = app.editors;
   const data = event?.envelope?.data ?? {};
   if (editors && event?.name === "comment.changed") noteComment(editors, data);
-  if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) noteRemote(editors, data);
+  if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
+    noteRemote(editors, data);
+    if (data.resourceId) {
+      try {
+        await refreshRemoteEditor(app.api, editors, data.resourceId);
+      } catch (error) {
+        editors.error = error;
+      }
+    }
+  }
   if (editors && event?.name === "editor.activity") handleActivity(editors, data);
   if (editors && event?.name === "watch.changed") {
     const nextId = applyWatch(editors, data);
@@ -723,7 +735,29 @@ function renderEditor(app, t) {
   const panel = element(document, "div", { class: "editor-panel" });
   panel.append(element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }));
   panel.append(element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }));
-  if (current?.conflict) panel.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
+  if (current?.conflict) {
+    panel.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
+    panel.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "discard-draft",
+      text: t("discardDraft"),
+      onclick: () => {
+        discardEditorDraft(editors);
+        renderShell(app);
+      },
+    }));
+    panel.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "reapply-draft",
+      text: t("reapplyDraft"),
+      onclick: () => {
+        reapplyEditorDraft(editors);
+        renderShell(app);
+      },
+    }));
+  }
   if (current?.kind === "blueprint" && current.authoritative?.document) panel.append(boardSurface(app, document, current, t));
   if (current?.kind === "void" && current.authoritative?.document) panel.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {

@@ -17,6 +17,7 @@ import {
 import {
   applyWatch,
   createComment,
+  discardEditorDraft,
   createEditors,
   createResource,
   handleActivity,
@@ -25,6 +26,9 @@ import {
   markDirty,
   noteRemote,
   openEditor,
+  reapplyEditorDraft,
+  reconcileEditor,
+  refreshRemoteEditor,
   registerResource,
   replyComment,
   resolveComment,
@@ -151,6 +155,59 @@ test("editor comments, attachments and Watch stay on their own revisions", async
   assert.equal(editors.error.code, "corrupt_resource");
   assert.equal(editors.current.draftText, "local draft");
   await writeFile(commentsFile, original);
+});
+
+test("a remote edit replaces clean content with its revision and keeps a dirty draft", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const editors = createEditors();
+  const boards = await loadCatalog(api, editors, "blueprint");
+  const board = boards.find((item) => item.title === "Cart");
+  const opened = await openEditor(api, editors, board);
+  const before = opened.revision;
+  const beforeNote = opened.authoritative.document.note ?? "";
+  noteRemote(editors, { resourceId: board.id, revision: "e".repeat(64) });
+  assert.equal(editors.current.revision, before);
+  assert.equal(editors.current.authoritative.document.note ?? "", beforeNote);
+  assert.equal(editors.current.remoteStale, true);
+  assert.equal(reconcileEditor(editors, { id: board.id, revision: "e".repeat(64), document: { note: "late" } }, 0), false);
+  assert.equal(editors.current.authoritative.document.note ?? "", beforeNote);
+  await fixture.control.editBoard(board.id);
+  assert.equal(await refreshRemoteEditor(api, editors, board.id), true);
+  assert.equal(String(editors.current.authoritative.document.note).includes("outside"), true);
+  assert.notEqual(editors.current.revision, before);
+  assert.equal(editors.current.baseRevision, editors.current.revision);
+  assert.equal(editors.current.remoteStale, false);
+
+  const base = editors.current.revision;
+  editors.current.dirty = true;
+  editors.current.draftText = "local draft";
+  editors.current.baseRevision = base;
+  noteRemote(editors, { resourceId: board.id, revision: "f".repeat(64) });
+  assert.equal(editors.current.revision, base);
+  assert.equal(editors.current.baseRevision, base);
+  assert.equal(editors.current.draftText, "local draft");
+  await fixture.control.editBoard(board.id);
+  assert.equal(await refreshRemoteEditor(api, editors, board.id), true);
+  assert.equal(editors.current.draftText, "local draft");
+  assert.equal(editors.current.baseRevision, base);
+  assert.equal(editors.current.revision, base);
+  assert.equal(String(editors.current.conflict.remote.document.note).includes("outside"), true);
+  const remoteRevision = editors.current.conflict.remote.revision;
+  assert.equal(reapplyEditorDraft(editors), true);
+  assert.equal(editors.current.draftText, "local draft");
+  assert.equal(editors.current.baseRevision, remoteRevision);
+  assert.equal(editors.current.conflict, null);
+  const taken = { ...editors.current.authoritative, revision: "1".repeat(64), document: { ...editors.current.authoritative.document, note: "taken" } };
+  editors.current.dirty = true;
+  editors.current.draftText = "keep me";
+  editors.current.conflict = { revision: taken.revision, remote: taken };
+  assert.equal(discardEditorDraft(editors), true);
+  assert.equal(editors.current.dirty, false);
+  assert.equal(editors.current.draftText, "");
+  assert.equal(editors.current.authoritative.document.note, "taken");
+  assert.equal(editors.current.revision, "1".repeat(64));
 });
 
 test("a late editor read keeps the newer selection and draft", async () => {
