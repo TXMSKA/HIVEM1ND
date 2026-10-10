@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -7,6 +9,7 @@ import assert from 'node:assert/strict';
 import { attachNative, dispatchLocal } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
 import { createChat, postChat } from '../engine/service/chats.mjs';
+import { canonicalJson } from '../engine/service/identity.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
@@ -54,10 +57,15 @@ test('one guard serves one mind and a second contender attaches without replacin
   assert.equal(listeners(), 1);
   assert.equal(owner.children.length, 0);
   assert.equal(owner.adopted.workersSpawned, 0);
+  assert.equal(owner.adopted.controller.started, true);
+  assert.equal(owner.http.port === owner.port, false);
+  assert.equal(owner.userKey, 'lifecycle-user');
+  assert.equal(owner.adapters.adapters.claude.nativeSupport, false);
   const other = { ...options, paths: { ...options.paths, mind: path.join(fixture.root, 'other-mind') } };
   await assert.rejects(() => startService(other), (error) => error.code === 'service_mind_conflict');
-  const lock = await readFile(path.join(fixture.paths.localDirectory, 'service.lock'), 'utf8');
+  const lock = await readFile(fixture.paths.lockFile, 'utf8');
   assert.equal(lock.includes(owner.nonce), true);
+  await assert.equal(await readFile(path.join(fixture.paths.localDirectory, 'service.lock')).then(() => true, () => false), false);
   const beat = JSON.parse(await readFile(path.join(fixture.root, 'origin', 'machines', fixture.machine, 'service.json'), 'utf8'));
   assert.equal(beat.state, 'running');
   const stopped = await stopService(owner);
@@ -76,17 +84,24 @@ test('an unrelated occupant and a stale pid are not signaled or replaced blindly
   t.after(() => new Promise((resolve) => blocker.close(() => resolve())));
   const { options } = await optionsFor(t, port);
   await assert.rejects(() => startService({ ...options, attachTimeoutMs: 40 }), (error) => error.code === 'service_unavailable');
-  await assert.equal(await readFile(path.join(options.paths.localDirectory, 'service.lock')).then(() => true, () => false), false);
+  await assert.equal(await readFile(options.paths.lockFile).then(() => true, () => false), false);
   await new Promise((resolve) => blocker.close(() => resolve()));
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  t.after(() => { if (child.exitCode == null && child.signalCode == null) child.kill(); });
   const started = await startService(options);
-  const lockPath = path.join(options.paths.localDirectory, 'service.lock');
-  const lock = JSON.parse(await readFile(lockPath, 'utf8'));
-  await writeFile(lockPath, JSON.stringify({ ...lock, pid: 4 }));
+  const lock = JSON.parse(await readFile(options.paths.lockFile, 'utf8'));
+  await writeFile(options.paths.lockFile, JSON.stringify({ ...lock, pid: child.pid }));
   await stopService(started);
-  await writeFile(lockPath, JSON.stringify({ nonce: 'old', pid: 4, digest: lock.digest }));
+  assert.equal(child.exitCode, null);
+  const held = JSON.stringify({ nonce: 'old', pid: child.pid, digest: lock.digest });
+  await writeFile(options.paths.lockFile, held);
   await assert.rejects(() => startService(options), (error) => error.code === 'service_unavailable');
-  const replaced = await startService({ ...options, allowStale: true });
+  assert.equal(await readFile(options.paths.lockFile, 'utf8'), held);
+  child.kill();
+  await new Promise((resolve) => child.once('exit', resolve));
+  const replaced = await startService(options);
   assert.equal(replaced.signaled.length, 0);
+  assert.equal(JSON.parse(await readFile(options.paths.lockFile, 'utf8')).pid, process.pid);
   await stopService(replaced);
 });
 
@@ -110,6 +125,8 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   assert.equal(adopted.policies[0].deliveries.one.state, 'ambiguous');
   assert.equal(adopted.policies[0].unlimited, false);
   assert.equal(adopted.workersSpawned, 0);
+  assert.equal(adopted.controller.started, true);
+  adopted.controller.close();
   const started = await startService(options);
   const accepted = await dispatchLocal(started.bridge, 'register', { unitId: binding.unitId });
   assert.equal(accepted.accepted, true);
@@ -256,6 +273,82 @@ test('two machines on one origin replicate a change and one ledger stops a flood
   const names = await readdir(path.join(left.paths.mind, 'user', 'relay', 'chats', created.chat.id));
   assert.equal(names.filter((name) => name !== 'chat.md').length, 60);
   await assert.rejects(postChat({ ...context, ledger: null }, created.chat.id, { body: 'uncomposed' }), { code: 'service_unavailable' });
+});
+
+test('service run reads the configured mind and holds the process until stop', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const { runCli } = await import('../cli/index.mjs');
+  const output = { chunks: [], write(text) { this.chunks.push(text); } };
+  const missing = await runCli(['service', 'run', '--mind-path', fixture.paths.mind, '--cosmic-path', fixture.paths.cosmic], {
+    stdout: output,
+    stderr: output,
+    env: fixture.env,
+    platform: 'win32',
+    aclRunner: stubAclRunner(),
+    confineRoot: fixture.root,
+    guardPort: await freePort(),
+    stop: Promise.resolve(),
+    now: () => fixture.clock.now,
+  });
+  assert.equal(missing, 1);
+  assert.match(output.chunks.join(''), /mind_not_configured/);
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  await writeFile(fixture.paths.configFile, `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath: fixture.paths.mind,
+    machine: fixture.machine,
+    origin: { kind: 'folder', path: origin },
+    stagingPath: fixture.paths.staging,
+    port: 0,
+  }, null, 2)}\n`);
+  let release = () => {};
+  const stop = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  const port = await freePort();
+  const running = runCli(['service', 'run', '--mind-path', fixture.paths.mind, '--cosmic-path', fixture.paths.cosmic], {
+    stdout: output,
+    stderr: output,
+    env: fixture.env,
+    platform: 'win32',
+    aclRunner: stubAclRunner(),
+    confineRoot: fixture.root,
+    guardPort: port,
+    stop,
+    now: () => fixture.clock.now,
+  });
+  const bootstrap = JSON.parse(await waitFor(
+    () => readFile(path.join(fixture.paths.localDirectory, 'bootstrap.json'), 'utf8'),
+    'bootstrap',
+  ));
+  const lock = JSON.parse(await readFile(fixture.paths.lockFile, 'utf8'));
+  const httpPort = Number(new URL(bootstrap.origin).port);
+  assert.equal(httpPort === port, false);
+  assert.equal(lock.pid, process.pid);
+  const userKey = 'S-1-5-21-1-2-3-1001';
+  const digest = createHash('sha256').update(canonicalJson({
+    format: 'hivem1nd-service-descriptor-v1',
+    mind: path.resolve(fixture.paths.mind),
+    machine: fixture.machine,
+    userKey,
+    port,
+    pid: process.pid,
+  })).digest('hex');
+  assert.equal(lock.digest, digest);
+  assert.notEqual(digest, createHash('sha256').update(canonicalJson({
+    format: 'hivem1nd-service-descriptor-v1',
+    mind: path.resolve(fixture.paths.mind),
+    machine: fixture.machine,
+    userKey: 'user',
+    port,
+    pid: process.pid,
+  })).digest('hex'));
+  release();
+  assert.equal(await running, 0);
+  await assert.equal(await readFile(fixture.paths.lockFile).then(() => true, () => false), false);
+  const beat = JSON.parse(await readFile(path.join(origin, 'machines', fixture.machine, 'service.json'), 'utf8'));
+  assert.equal(beat.state, 'stopped');
 });
 
 function serviceOptions(fixture, origin) {
