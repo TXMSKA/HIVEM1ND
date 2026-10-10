@@ -11,7 +11,7 @@ import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishRead
 import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
-import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
+import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
@@ -393,6 +393,46 @@ test("the bounded home QR matches its golden matrices", () => {
   assert.equal(expiry.remainingSeconds, 1);
   assert.equal(expiry.expired, false);
   assert.equal(updateExpiry({ enabled: true, expiresAt: "2026-10-10T12:00:00.000Z" }, Date.parse("2026-10-10T12:00:00.000Z")).expired, true);
+});
+
+test("sync snapshots, service beats, and local expiry do not extend a grant", () => {
+  const synced = applySyncSnapshot({ incoming: [{ machine: "LAPTOP" }] }, {
+    state: "paused",
+    pendingChanges: 4,
+    limits: { state: "slowing", retryAt: "2099-01-01T00:00:10.000Z", messages: { used: 40, max: 60 }, syncBytes: { used: 8, max: 50 } },
+    retryAt: "2099-01-01T00:00:10.000Z",
+    error: null,
+  });
+  assert.equal(synced.state, "paused");
+  assert.equal(synced.pendingChanges, 4);
+  assert.equal(synced.limits.state, "slowing");
+  assert.equal(synced.incoming[0].machine, "LAPTOP");
+  assert.equal(limitsLabel("slowing"), "limitsSlowing");
+  assert.equal(limitsLabel("paused"), "limitsPaused");
+  assert.equal(limitsLabel("normal"), "limitsNormal");
+  const service = applyServiceBeat({ machine: "DESKTOP", originKind: "folder" }, { id: "LAPTOP", version: "3.0.1", state: "running", answers: true });
+  assert.equal(service.machine, "LAPTOP");
+  assert.equal(service.originKind, "folder");
+  assert.equal(applyServiceBeat({ machine: "DESKTOP", originKind: "folder" }, "DESKTOP").originKind, "folder");
+  const issues = applyIssueChange([], { issue: { path: "a", code: "bad_record", message: "Unreadable" }, resolved: false });
+  assert.equal(issues.length, 1);
+  assert.equal(applyIssueChange(issues, { issue: issues[0], resolved: true }).length, 0);
+  const expiresAt = "2099-01-01T00:00:10.000Z";
+  const now = Date.parse("2099-01-01T00:00:00.000Z");
+  const state = { home: { enabled: true, expiresAt }, grant: { key: "secret", shortCode: "1234", links: [], qrPayloads: ["payload"] }, tickMs: null };
+  let scheduled = null;
+  armExpiry(state, now, (fn, ms) => { scheduled = { fn, ms }; return 7; }, () => {});
+  assert.equal(scheduled.ms, 10000);
+  assert.equal(state.grant.key, "secret");
+  state.tickMs = 1000;
+  armExpiry(state, now, (fn, ms) => { scheduled = { fn, ms }; return 8; }, () => {});
+  assert.equal(scheduled.ms, 1000);
+  assert.equal(scheduled.ms <= 10000, true);
+  const expired = { home: { enabled: true, expiresAt: "2020-01-01T00:00:00.000Z" }, grant: { key: "secret", shortCode: "1", links: ["http://127.0.0.1"], qrPayloads: ["payload"] } };
+  let called = false;
+  armExpiry(expired, Date.parse("2020-01-01T00:00:05.000Z"), () => { called = true; return 1; }, () => {});
+  assert.equal(called, false);
+  assert.equal(expired.grant, null);
 });
 
 test("home grants are replaced, expired and kept out of settings storage", async (t) => {
@@ -1660,6 +1700,44 @@ test("mounted map circles use translated status and keep pan", async (t) => {
   desktop.app.mapState.selection = new Set(["root:overseer"]);
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("[data-unit-id='root:overseer']").className.includes("is-selected"), true);
+});
+
+test("settings and the footer follow sync, service, and issue changes", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-settings]"), "Settings did not open.");
+  const retryAt = "2099-01-01T00:00:10.000Z";
+  await fixture.control.emit("sync.changed", {
+    state: "paused",
+    pendingChanges: 4,
+    limits: {
+      state: "paused",
+      retryAt,
+      messages: { used: 61, max: 60, windowSeconds: 60 },
+      syncBytes: { used: 12, max: 50000000, windowSeconds: 3600 },
+    },
+    retryAt,
+    error: null,
+  });
+  await waitFor(() => desktop.root.querySelector("[data-sync='paused']")?.textContent === "Sync is paused", "The paused sync state was not shown.");
+  assert.equal(desktop.root.querySelector("[data-pending-changes]")?.textContent, "4 changes waiting");
+  assert.equal(desktop.root.querySelector("[data-limits='paused']")?.getAttribute("data-retry-at"), retryAt);
+  assert.equal(desktop.root.querySelector("[data-limits='paused']").textContent.includes(retryAt), true);
+  assert.equal(desktop.root.querySelector("[data-limit-usage]")?.textContent.includes("61 of 60"), true);
+  await fixture.control.emit("service.changed", { machine: { id: "LAPTOP", version: "3.0.1", state: "running", answers: true } });
+  await waitFor(() => desktop.root.querySelector("[data-service-machine]")?.getAttribute("data-service-machine") === "LAPTOP", "The service machine was not updated.");
+  await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: false });
+  await waitFor(() => [...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The issue was not shown.");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-sync='paused']")?.textContent, "La sincronización está en pausa");
+  assert.equal(desktop.root.querySelector("[data-limits='paused']").textContent.includes("en pausa"), true);
+  await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: true });
+  await waitFor(() => ![...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The resolved issue remained.");
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {

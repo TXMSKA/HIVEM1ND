@@ -49,6 +49,74 @@ export function noteHomeChange(state, event) {
   return state;
 }
 
+export function limitsLabel(state) {
+  if (state === "slowing") return "limitsSlowing";
+  if (state === "paused") return "limitsPaused";
+  if (state === "error") return "limitsError";
+  return "limitsNormal";
+}
+
+export function applySyncSnapshot(current, data) {
+  const next = { ...(current ?? {}) };
+  if (!data || typeof data !== "object") return next;
+  if (data.state != null) next.state = data.state;
+  if (data.pendingChanges != null) next.pendingChanges = data.pendingChanges;
+  if (data.limits) next.limits = data.limits;
+  if (Object.hasOwn(data, "retryAt")) next.retryAt = data.retryAt ?? null;
+  if (Object.hasOwn(data, "error")) next.error = data.error ?? null;
+  if (data.incoming) next.incoming = data.incoming;
+  return next;
+}
+
+export function applyServiceBeat(service, machine) {
+  const current = { ...(service ?? {}) };
+  if (typeof machine === "string") return { ...current, machine };
+  const beat = machine ?? {};
+  return {
+    ...current,
+    machine: beat.id ?? beat.machine ?? current.machine ?? "",
+    version: beat.version ?? current.version ?? "",
+    state: beat.state ?? current.state,
+    answers: beat.answers ?? current.answers,
+  };
+}
+
+export function applyIssueChange(issues, data) {
+  const list = [...(issues ?? [])];
+  const issue = data?.issue;
+  if (!issue) return list;
+  const index = list.findIndex((item) => item.code === issue.code && item.path === issue.path && item.message === issue.message);
+  if (data.resolved) return index >= 0 ? list.filter((_, item) => item !== index) : list;
+  if (index >= 0) return list;
+  return [...list, issue];
+}
+
+export function armExpiry(state, nowMs, schedule, clearScheduled) {
+  if (state.expiryTimer != null) clearScheduled?.(state.expiryTimer);
+  state.expiryTimer = null;
+  const expiresAt = state.grant?.expiresAt ?? state.home?.expiresAt ?? null;
+  if (!state.home?.enabled || !expiresAt || state.expiredLocally) return null;
+  const remaining = Date.parse(expiresAt) - nowMs;
+  if (!Number.isFinite(remaining)) return null;
+  if (remaining <= 0) {
+    state.expiredLocally = true;
+    clearGrant(state);
+    state.onExpiry?.({ remainingSeconds: 0, expired: true });
+    return null;
+  }
+  const delay = state.tickMs ? Math.min(state.tickMs, remaining) : remaining;
+  state.expiryTimer = schedule(() => {
+    state.expiryTimer = null;
+    const expiry = updateExpiry(state.home, Date.now());
+    if (expiry.expired) {
+      state.expiredLocally = true;
+      clearGrant(state);
+    }
+    state.onExpiry?.(expiry);
+  }, delay);
+  return state.expiryTimer;
+}
+
 export function applySettingsRead(state, data) {
   state.settings = data?.settings ?? state.settings;
   state.revision = data?.revision ?? state.revision;
@@ -110,8 +178,30 @@ export function renderSettings(document, model, t, actions) {
   panel.append(element(document, "p", { "data-machine": service.machine ?? "", text: t("serviceRunning", { machine: service.machine ?? "" }) }));
   panel.append(element(document, "p", { "data-version": service.version ?? "", text: t("versionLabel", { version: service.version ?? "" }) }));
   panel.append(element(document, "p", { "data-origin": service.originKind ?? "", text: t("originKind", { kind: service.originKind ?? "" }) }));
-  panel.append(element(document, "p", { "data-sync": service.syncState ?? "", text: model.syncLabel ?? "" }));
-  if (model.limits) panel.append(element(document, "p", { "data-limits": model.limits.state ?? "", text: t("limitsNormal") }));
+  panel.append(element(document, "p", {
+    "data-sync": model.syncState ?? service.syncState ?? "",
+    "data-pending": String(model.pendingChanges ?? ""),
+    text: model.syncLabel ?? "",
+  }));
+  if (model.limits) {
+    const limits = model.limits;
+    panel.append(element(document, "p", {
+      "data-limits": limits.state ?? "normal",
+      "data-retry-at": limits.retryAt ?? "",
+      text: t(limitsLabel(limits.state), { time: limits.retryAt ?? "" }),
+    }));
+    const messages = limits.messages ?? {};
+    const bytes = limits.syncBytes ?? {};
+    panel.append(element(document, "p", {
+      "data-limit-usage": "true",
+      text: t("limitsUsage", {
+        messages: messages.used ?? 0,
+        max: messages.max ?? 0,
+        bytes: bytes.used ?? 0,
+        byteMax: bytes.max ?? 0,
+      }),
+    }));
+  }
   const issues = element(document, "ul", { "data-issues": "true" });
   for (const issue of model.issues ?? []) issues.append(element(document, "li", { text: issue.message ?? "" }));
   panel.append(issues);

@@ -63,7 +63,7 @@ import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQu
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
-import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
+import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceDocument, saveRange, selectedPlainRange, showTools, sourceReplacement, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
@@ -195,7 +195,11 @@ async function logoutOwnViewer(app) {
     app.editors.watch = null;
     app.editors.current = null;
   }
-  if (app.homeState) clearGrant(app.homeState);
+  if (app.homeState?.expiryTimer != null) clearTimeout(app.homeState.expiryTimer);
+  if (app.homeState) {
+    app.homeState.expiryTimer = null;
+    clearGrant(app.homeState);
+  }
   await logout(app.api);
   app.disposed = true;
   renderSignedOut(app);
@@ -239,6 +243,7 @@ export function renderShell(app) {
   finishList(app);
   finishMap(app);
   syncChatReads(app);
+  armHomeExpiry(app);
 }
 
 function inputDrafts(app) {
@@ -388,7 +393,11 @@ export function dispose(app) {
     if (list.timer) clearTimeout(list.timer);
     list.timer = null;
   }
-  if (app.homeState) clearGrant(app.homeState);
+  if (app.homeState?.expiryTimer != null) clearTimeout(app.homeState.expiryTimer);
+  if (app.homeState) {
+    app.homeState.expiryTimer = null;
+    clearGrant(app.homeState);
+  }
   disposeEmbed(app.embed);
   releaseAssets(app.editors?.current);
   disposeApi(app.api);
@@ -399,6 +408,9 @@ async function onStream(app, event) {
   await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed) return;
   if (event?.name === "home.changed") noteHome(app, dataOf(event));
+  if (event?.name === "sync.changed") noteSync(app, dataOf(event));
+  if (event?.name === "service.changed") noteService(app, dataOf(event));
+  if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
     if (event?.name === "stream.ready") await recheckTracked(app);
@@ -1767,10 +1779,12 @@ function settingsSurface(app, document, t) {
   if (info.home) home.home = { enabled: Boolean(info.home.enabled), openedAt: info.home.openedAt ?? null, expiresAt: info.home.expiresAt ?? null, addresses: info.home.addresses ?? [], remainingSeconds: info.home.remainingSeconds ?? 0 };
   if (!app.settingsSync && !app.settingsSyncLoading) {
     app.settingsSyncLoading = true;
+    const ticket = app.settingsSyncTicket ?? 0;
     request(app.api, "GET", "/sync").then((result) => {
-      app.settingsSync = result.data;
+      if (app.disposed || ticket !== (app.settingsSyncTicket ?? 0)) return;
+      app.settingsSync = applySyncSnapshot(app.settingsSync, result.data);
       app.settingsSyncLoading = false;
-      if (!app.disposed && app.mode === "settings") renderShell(app);
+      if (app.mode === "settings") renderShell(app);
     }).catch(() => {
       app.settingsSyncLoading = false;
     });
@@ -1785,7 +1799,9 @@ function settingsSurface(app, document, t) {
     selected: home.selected ?? 0,
     issues,
     limits: app.settingsSync?.limits,
-    syncLabel: t(info.service?.syncState === "error" ? "syncError" : syncCopy(app.sync)),
+    syncState: app.settingsSync?.state ?? info.service?.syncState ?? app.sync ?? "",
+    pendingChanges: app.settingsSync?.pendingChanges,
+    syncLabel: t(syncCopy(app.settingsSync?.state ?? (info.service?.syncState === "error" ? "error" : app.sync))),
     canWrite: app.store.capabilities.includes("settings.write"),
     canManage: app.store.capabilities.includes("home.manage"),
     now: Date.now(),
@@ -1808,8 +1824,40 @@ function homeState(app) {
 
 function noteHome(app, data) {
   const home = homeState(app);
+  home.expiredLocally = false;
   noteHomeChange(home, data);
   if (data?.home && app.store.settings) app.store.settings.home = home.home;
+}
+
+function noteSync(app, data) {
+  app.settingsSyncTicket = (app.settingsSyncTicket ?? 0) + 1;
+  app.settingsSync = applySyncSnapshot(app.settingsSync, data);
+  app.settingsSyncLoading = false;
+}
+
+function noteService(app, data) {
+  if (!app.store.settings) app.store.settings = {};
+  app.store.settings.service = applyServiceBeat(app.store.settings.service, data?.machine ?? data);
+}
+
+function noteIssue(app, data) {
+  const view = app.store.view ?? {};
+  view.issues = applyIssueChange(view.issues ?? app.unitList?.issues ?? [], data);
+  app.store.view = view;
+}
+
+function armHomeExpiry(app) {
+  const home = homeState(app);
+  home.tickMs = app.mode === "settings" ? 1000 : null;
+  home.onExpiry = () => {
+    if (!app.disposed) renderShell(app);
+  };
+  const timer = armExpiry(home, Date.now(), (fn, ms) => {
+    const handle = setTimeout(fn, ms);
+    handle.unref?.();
+    return handle;
+  }, (handle) => clearTimeout(handle));
+  if (timer && typeof timer === "object") timer.unref?.();
 }
 
 function dataOf(event) {
@@ -1887,13 +1935,18 @@ async function endHome(app) {
 function renderFooter(app, t) {
   const document = app.root.ownerDocument;
   const machine = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine ?? "";
-  const syncKey = app.store.settings?.service?.syncState === "error" ? "syncError" : syncCopy(app.sync);
+  const syncState = app.settingsSync?.state ?? (app.store.settings?.service?.syncState === "error" ? "error" : app.sync);
+  const syncKey = syncCopy(syncState);
   const time = clockText(app.readAt);
-  return element(document, "footer", { class: "foot" },
-    element(document, "span", { text: t("serviceRunning", { machine }) }),
-    element(document, "span", { text: t(syncKey) }),
+  const footer = element(document, "footer", { class: "foot" },
+    element(document, "span", { "data-service-machine": machine, text: t("serviceRunning", { machine }) }),
+    element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
     element(document, "span", { text: t("lastRead", { time }) }),
   );
+  if (Number.isInteger(app.settingsSync?.pendingChanges)) {
+    footer.append(element(document, "span", { "data-pending-changes": String(app.settingsSync.pendingChanges), text: t("pendingChanges", { count: app.settingsSync.pendingChanges }) }));
+  }
+  return footer;
 }
 
 function renderPhoneNav(app, t) {
@@ -1979,7 +2032,10 @@ function brand(document) {
 
 function syncCopy(sync) {
   if (sync === "pending") return "syncPending";
+  if (sync === "publishing") return "syncPublishing";
   if (sync === "published") return "syncPublished";
+  if (sync === "paused") return "syncPaused";
+  if (sync === "idle") return "syncIdle";
   if (sync === "error") return "syncError";
   return "syncLocal";
 }
