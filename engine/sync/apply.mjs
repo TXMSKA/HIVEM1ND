@@ -1,0 +1,470 @@
+import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { CoreError, canonicalJson, hashBytes, uuidV8 } from '../service/identity.mjs';
+import { resolveTarget } from '../service/paths.mjs';
+import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange } from './pack.mjs';
+import { reserveReceipt } from './limits.mjs';
+import { openLedger } from './limits.mjs';
+import { resolveIncoming, targetKey } from './store.mjs';
+import { writeDurable } from './origin.mjs';
+
+const FUTURE_MS = 30000;
+const RESULT_FORMATS = new Set([
+  'hivem1nd-session-result-v1',
+  'hivem1nd-approval-result-v1',
+  'hivem1nd-approval-answer-result-v1',
+  'hivem1nd-grant-revocation-result-v1',
+]);
+
+export function compareVersions(left, right) {
+  const earlier = Date.parse(left?.at);
+  const later = Date.parse(right?.at);
+  if (!Number.isFinite(earlier) || !Number.isFinite(later)) throw new CoreError(422, 'invalid_pack', 'The change time must be UTC.');
+  if (earlier !== later) return earlier < later ? -1 : 1;
+  if (left.machine !== right.machine) return left.machine < right.machine ? -1 : 1;
+  if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+  return 0;
+}
+
+export function validateOwner({ packMachine, target, record = null, headers = null, bindings = {} } = {}) {
+  const format = record?.format ?? null;
+  if (format === 'hivem1nd-session-result-v1') {
+    const owner = bindings.requests?.[record.requestId]?.targetMachine;
+    if ((owner && owner !== packMachine) || (record.machine && record.machine !== packMachine)) ownerError();
+  }
+  if (format === 'hivem1nd-approval-result-v1' || format === 'hivem1nd-approval-answer-result-v1') {
+    const owner = bindings.approvals?.[record.approvalId]?.machine;
+    if ((owner && owner !== packMachine) || (record.machine && record.machine !== packMachine)) ownerError();
+  }
+  if (format === 'hivem1nd-grant-revocation-result-v1') {
+    const owner = bindings.revocations?.[record.requestId]?.machine ?? record.machine;
+    if (owner && owner !== packMachine) ownerError();
+  }
+  if (format === 'hivem1nd-service-v1' && record.machine !== packMachine) ownerError();
+  if (typeof target?.path === 'string' && target.path.includes('/relay/read/')) {
+    const reader = target.path.split('/relay/read/')[1]?.split('/')[0];
+    if (reader && reader !== packMachine) ownerError();
+  }
+  if (headers?.machine && headers.kind !== 'notice' && !isDeterministicNotice(headers) && headers.machine !== packMachine) ownerError();
+  return { packMachine, format };
+}
+
+export async function preserveConflict(sync, target, bytes, change, roots) {
+  const located = await resolveTarget(sync.paths, target, { projects: sync.projects });
+  const chosen = await chooseConflict(located.absolute, bytes, change);
+  if (!chosen.existing) await writeDurable(sync.store, chosen.absolute, bytes, roots);
+  return { absolute: chosen.absolute, relative: locatedRelative(located, chosen.absolute) };
+}
+
+export async function applyPack(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null } = {}) {
+  const resolvedProjects = projects ?? sync.projects ?? [];
+  const incoming = await resolveIncoming(sync, packBytes, provider);
+  const appliedMarker = path.join(sync.paths.localDirectory, 'received', incoming.decoded.header.machine, `${incoming.decoded.header.sequence}.applied.json`);
+  if (await readRegular(appliedMarker)) return { status: 'applied', replayed: true, sequence: incoming.decoded.header.sequence };
+  const decoded = incoming.decoded;
+  const roots = writeRoots(sync, resolvedProjects);
+  if (incoming.status === 'pending') {
+    await chargeReceipt(ledger, decoded, packBytes);
+    return { status: 'pending', missing: incoming.missing, packHash: incoming.packHash };
+  }
+  const prepared = decoded.changes.map((change) => {
+    const raw = change.operation === 'delete' ? null : incoming.objects.get(change.hash);
+    return { change, raw, record: parseRecord(raw), headers: parseHeaders(raw) };
+  });
+  for (const item of prepared) {
+    if (Date.parse(item.change.at) > sync.now() + FUTURE_MS) throw new CoreError(422, 'invalid_pack', 'The change time is too far in the future.');
+    validateOwner({ packMachine: decoded.header.machine, target: item.change.target, record: item.record, headers: item.headers, bindings });
+  }
+  for (const item of prepared) {
+    if (item.change.target.kind !== 'project') continue;
+    const project = resolvedProjects.find((entry) => entry.name === item.change.target.project && entry.localPath && entry.eligible !== false);
+    if (!project) {
+      await writePending(sync, decoded, incoming.packHash, 'project_unavailable');
+      return { status: 'pending', code: 'project_unavailable', packHash: incoming.packHash };
+    }
+  }
+  for (const item of prepared) await resolveTarget(sync.paths, item.change.target, { projects: resolvedProjects });
+  const versions = await readVersions(sync);
+  const tombstones = new Set(await readGrantTombstones(sync));
+  for (const item of prepared) {
+    if (item.record?.format === 'hivem1nd-grant-revocation-result-v1' && item.record.grantId) tombstones.add(item.record.grantId);
+  }
+  const staged = await readStaged(sync);
+  const plans = [];
+  for (const item of prepared) {
+    const key = targetKey(item.change.target);
+    const localVersion = competitor(versions.targets[key], staged.get(key));
+    const located = await resolveTarget(sync.paths, item.change.target, { projects: resolvedProjects });
+    const localBytes = await readRegular(located.absolute);
+    if (isImmutable(item) && localBytes && item.raw && !localBytes.equals(item.raw)) {
+      throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
+    }
+    plans.push(planChange(item, localBytes, localVersion, located, tombstones));
+    if (plans[plans.length - 1].version) versions.targets[key] = plans[plans.length - 1].version;
+  }
+  if (plans.some((plan) => plan.corrupt)) throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
+  await chargeReceipt(ledger, decoded, packBytes);
+  const groups = groupPlans(prepared, plans);
+  let completed = 0;
+  for (const group of groups) {
+    const versionBytes = Buffer.from(`${canonicalJson(versions)}\n`, 'utf8');
+    const ops = [...group.ops];
+    if (group.version) ops.push({ kind: 'write', file: versionPath(sync), bytes: versionBytes.toString('base64') });
+    if (tombstones.size > 0) {
+      ops.push({ kind: 'write', file: grantPath(sync), bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones].sort() })}\n`, 'utf8').toString('base64') });
+    }
+    await runGroup(sync, group.id, ops, group.events, roots);
+    completed += 1;
+  }
+  await checkpoint(sync, decoded, packBytes, ledger);
+  sync.store.events.push({ type: 'sync.applied', machine: decoded.header.machine, sequence: decoded.header.sequence });
+  return { status: 'applied', sequence: decoded.header.sequence, groups: completed };
+}
+
+function planChange(item, localBytes, localVersion, located, tombstones) {
+  const incoming = { at: item.change.at, machine: item.change.machine, id: item.change.id };
+  const wins = !localVersion || compareVersions(incoming, localVersion) > 0;
+  const raw = item.raw ? filterGrants(item.raw, item.record, tombstones) : null;
+  const version = {
+    hash: item.change.operation === 'delete' ? null : hashBytes(raw),
+    at: item.change.at,
+    machine: item.change.machine,
+    id: item.change.id,
+    deleted: item.change.operation === 'delete',
+  };
+  const kept = localVersion ? {
+    hash: localVersion.hash ?? null,
+    at: localVersion.at,
+    machine: localVersion.machine,
+    id: localVersion.id,
+    deleted: Boolean(localVersion.deleted),
+  } : null;
+  if (item.change.operation === 'delete') {
+    if (!wins) return { version: kept, ops: [], events: [] };
+    const ops = [];
+    if (localBytes) ops.push(conflictOp(located, localBytes, item.change));
+    ops.push({ kind: 'remove', file: located.absolute });
+    return { version, ops, events: conflictEvents(item, ops) };
+  }
+  if (localVersion?.deleted && !wins) {
+    const ops = [conflictOp(located, raw, item.change)];
+    return { version: kept, ops, events: conflictEvents(item, ops) };
+  }
+  if (localBytes && raw && localBytes.equals(raw)) {
+    return { version: wins ? version : kept, ops: [], events: [] };
+  }
+  if (!wins) {
+    const ops = [conflictOp(located, raw, item.change)];
+    return { version: kept ?? versionFrom(localBytes, localVersion), ops, events: conflictEvents(item, ops) };
+  }
+  const ops = [];
+  const baseMismatch = item.change.baseHash === null || (localBytes && hashBytes(localBytes) !== item.change.baseHash);
+  if (localBytes && baseMismatch) ops.push(conflictOp(located, localBytes, item.change));
+  ops.push({ kind: 'write', file: located.absolute, bytes: raw.toString('base64') });
+  ops.push(markerOp(item, raw));
+  return { version, ops, events: conflictEvents(item, ops) };
+}
+
+function conflictOp(located, bytes, change) {
+  const stamp = change.at.replace(/[-:]/g, '').replace(/\./g, '');
+  const filename = `${path.basename(located.absolute)}.conflict-${change.machine}-${stamp}`;
+  const absolute = path.join(path.dirname(located.absolute), filename);
+  const slash = located.relative.lastIndexOf('/');
+  const relative = `${slash === -1 ? '' : located.relative.slice(0, slash + 1)}${filename}`;
+  return { kind: 'write', file: absolute, bytes: Buffer.from(bytes).toString('base64'), conflict: true, relative };
+}
+
+function conflictEvents(item, ops) {
+  const conflict = ops.find((op) => op.conflict);
+  if (!conflict) return [];
+  const phase = 'conflict';
+  const window = item.change.at;
+  const subject = targetKey(item.change.target);
+  const id = uuidV8(['notice', phase, window, subject]);
+  const body = `id: ${id}\nfrom: master\nto: master\nkind: notice\nphase: ${phase}\nwindow: ${window}\nsubject: ${subject}\n\n${conflict.relative}\n`;
+  return [{ type: 'sync.conflict', path: conflict.relative, id: item.change.id, noticeId: id, body }];
+}
+
+function markerOp(item, raw) {
+  const key = targetKey(item.change.target);
+  const id = uuidV8(['applied', item.change.machine, key, hashBytes(raw), item.change.at]);
+  return {
+    kind: 'marker',
+    key,
+    bytes: Buffer.from(`${canonicalJson({ hash: hashBytes(raw), deleted: false, at: item.change.at, id })}\n`, 'utf8').toString('base64'),
+  };
+}
+
+function groupPlans(prepared, plans) {
+  const groups = new Map();
+  prepared.forEach((item, index) => {
+    const id = item.change.transactionId ?? item.change.id;
+    const group = groups.get(id) ?? { id, ops: [], events: [], version: false };
+    group.ops.push(...plans[index].ops);
+    group.events.push(...plans[index].events);
+    if (plans[index].version) group.version = true;
+    groups.set(id, group);
+  });
+  return [...groups.values()];
+}
+
+async function runGroup(sync, id, ops, events, roots) {
+  const file = path.join(sync.paths.localDirectory, 'received', 'groups', id + '.json');
+  const existing = await readJsonAbsolute(file);
+  const progress = existing ?? { id, done: 0, emitted: false, ops, events };
+  if (!existing) await writeDurable(sync.store, file, Buffer.from(`${JSON.stringify(progress)}\n`, 'utf8'), roots);
+  while (progress.done < progress.ops.length) {
+    await perform(sync, progress.ops[progress.done], roots);
+    progress.done += 1;
+    await writeDurable(sync.store, file, Buffer.from(`${JSON.stringify(progress)}\n`, 'utf8'), roots);
+    if (sync.applyFault?.afterWrites != null && progress.done >= sync.applyFault.afterWrites) {
+      sync.applyFault = null;
+      throw new CoreError(500, 'injected_crash', 'Injected crash during a transaction group.');
+    }
+  }
+  if (!progress.emitted) {
+    for (const event of progress.events) {
+      sync.store.events.push({ type: event.type, path: event.path, id: event.id });
+      if (event.body) await stageNotice(sync, event, roots);
+    }
+    progress.emitted = true;
+    await writeDurable(sync.store, file, Buffer.from(`${JSON.stringify(progress)}\n`, 'utf8'), roots);
+  }
+}
+
+async function perform(sync, op, roots) {
+  if (op.kind === 'write') {
+    const bytes = Buffer.from(op.bytes, 'base64');
+    if (op.conflict) {
+      const existing = await readRegular(op.file);
+      if (existing?.equals(bytes)) return;
+      if (existing) {
+        op.file = `${op.file}-${hashBytes(existing).slice(0, 8)}`;
+      }
+    }
+    await writeDurable(sync.store, op.file, bytes, roots);
+    return;
+  }
+  if (op.kind === 'marker') {
+    await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'staging', 'applied', `${op.key}.json`), Buffer.from(op.bytes, 'base64'), roots);
+    return;
+  }
+  if (op.kind === 'remove') {
+    const stats = await lstat(op.file).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+    if (!stats) return;
+    if (stats.isSymbolicLink()) throw new CoreError(422, 'unsafe_path', 'Refusing to follow a link.');
+    await unlink(op.file);
+  }
+}
+
+async function stageNotice(sync, event, roots) {
+  const bytes = Buffer.from(event.body, 'utf8');
+  const id = event.noticeId;
+  const at = new Date(sync.now()).toISOString();
+  const change = validateChange({
+    format: 'hivem1nd-change-v1',
+    id,
+    machine: sync.machine,
+    at,
+    target: { kind: 'mind', path: `user/inbox/master/${id}.md` },
+    operation: 'put',
+    hash: hashBytes(bytes),
+    size: bytes.length,
+    baseHash: null,
+    messageId: id,
+    transactionId: null,
+  }, sync.machine);
+  const noticePath = path.join(sync.paths.mind, 'user', 'inbox', 'master', `${id}.md`);
+  await writeDurable(sync.store, noticePath, bytes, roots);
+  await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'staging', 'objects', `${change.hash}.br`), compressObject(bytes), roots);
+  await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'staging', 'changes', `${id}.json`), Buffer.from(`${canonicalJson(change)}\n`, 'utf8'), roots);
+}
+
+async function checkpoint(sync, decoded, packBytes, ledger) {
+  const machine = decoded.header.machine;
+  const file = path.join(sync.paths.localDirectory, 'received', machine, 'head.json');
+  const current = await readJsonAbsolute(file);
+  const packs = current?.packs ?? [];
+  if (!packs.some((item) => item.sequence === decoded.header.sequence && item.hash === decoded.packHash)) {
+    packs.push({
+      sequence: decoded.header.sequence,
+      file: `${String(decoded.header.sequence).padStart(12, '0')}.pack`,
+      hash: decoded.packHash,
+      bytes: Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.byteLength(packBytes),
+    });
+  }
+  const head = {
+    format: 'hivem1nd-head-v1',
+    machine,
+    sequence: decoded.header.sequence,
+    updatedAt: new Date(sync.now()).toISOString(),
+    packs,
+  };
+  await writeDurable(sync.store, file, Buffer.from(`${canonicalJson(head)}\n`, 'utf8'), writeRoots(sync, sync.projects));
+  await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'received', machine, `${decoded.header.sequence}.applied.json`), Buffer.from(`${canonicalJson({ packHash: decoded.packHash, sequence: decoded.header.sequence })}\n`, 'utf8'), writeRoots(sync, sync.projects));
+  if (!ledger) return;
+  const data = await readLedgerFile(ledger);
+  data.applied[machine] = Math.max(data.applied[machine] ?? 0, decoded.header.sequence);
+  await writeDurable(sync.store, ledger.file, Buffer.from(`${canonicalJson(data)}\n`, 'utf8'), writeRoots(sync, sync.projects));
+}
+
+async function chargeReceipt(ledger, decoded, packBytes) {
+  if (!ledger) return;
+  const opened = ledger.file ? ledger : openLedger(ledger);
+  const bytes = Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.from(packBytes).length;
+  await reserveReceipt(opened, {
+    machine: decoded.header.machine,
+    id: `${decoded.header.machine}:${decoded.header.sequence}:${decoded.packHash}`,
+    messages: countLogicalMessages(decoded),
+    bytes,
+  });
+}
+
+async function writePending(sync, decoded, packHash, reason) {
+  const file = path.join(sync.paths.localDirectory, 'received', 'pending', decoded.header.machine, `${decoded.header.sequence}.json`);
+  const existing = await readJsonAbsolute(file);
+  const record = {
+    packHash,
+    dependencies: [],
+    firstSeenAt: existing?.firstSeenAt ?? new Date(sync.now()).toISOString(),
+    reason,
+  };
+  await writeDurable(sync.store, file, Buffer.from(`${canonicalJson(record)}\n`, 'utf8'), writeRoots(sync, sync.projects));
+}
+
+function competitor(recorded, staged) {
+  if (!recorded) return staged ? { hash: staged.hash, at: staged.at, machine: staged.machine, id: staged.id, deleted: staged.operation === 'delete' } : null;
+  if (!staged) return recorded;
+  const stagedVersion = { hash: staged.hash, at: staged.at, machine: staged.machine, id: staged.id, deleted: staged.operation === 'delete' };
+  return compareVersions(stagedVersion, recorded) > 0 ? stagedVersion : recorded;
+}
+
+function versionFrom(localBytes, localVersion) {
+  if (localVersion) return localVersion;
+  if (!localBytes) return null;
+  return null;
+}
+
+function filterGrants(raw, record, tombstones) {
+  if (!record || !Array.isArray(record.grants) || tombstones.size === 0) return raw;
+  const grants = record.grants.filter((grant) => !tombstones.has(grant.id));
+  return Buffer.from(`${canonicalJson({ ...record, grants })}\n`, 'utf8');
+}
+
+function isImmutable(item) {
+  if (RESULT_FORMATS.has(item.record?.format)) return true;
+  if (item.record?.format === 'hivem1nd-session-request-v1' || item.record?.format === 'hivem1nd-approval-v1' || item.record?.format === 'hivem1nd-approval-answer-v1' || item.record?.format === 'hivem1nd-read-v1') return true;
+  return /(^|\/)inbox\/[^/]+\/[^/]+\.md$/.test(item.change.target.path) || /(^|\/)archive\/[^/]+\/[^/]+\.md$/.test(item.change.target.path);
+}
+
+function parseRecord(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw.toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseHeaders(raw) {
+  if (!raw) return null;
+  const text = raw.toString('utf8');
+  if (!text.startsWith('id:') && !text.startsWith('from:')) return null;
+  const headers = {};
+  for (const line of text.split(/\r?\n/)) {
+    if (line === '') break;
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+  }
+  return headers;
+}
+
+async function readStaged(sync) {
+  const map = new Map();
+  const directory = path.join(sync.paths.localDirectory, 'staging', 'changes');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const parsed = await readJsonAbsolute(path.join(directory, name));
+    if (!parsed?.target) continue;
+    map.set(targetKey(parsed.target), parsed);
+  }
+  return map;
+}
+
+async function readVersions(sync) {
+  const parsed = await readJsonAbsolute(versionPath(sync));
+  if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} };
+  parsed.targets ??= {};
+  return parsed;
+}
+
+async function readGrantTombstones(sync) {
+  const parsed = await readJsonAbsolute(grantPath(sync));
+  return Array.isArray(parsed?.ids) ? parsed.ids : [];
+}
+
+async function readLedgerFile(ledger) {
+  const parsed = await readJsonAbsolute(ledger.file);
+  if (!parsed) return { format: 'hivem1nd-sync-ledger-v1', admitted: [], outgoing: [], incoming: {}, applied: {}, notices: [] };
+  parsed.applied ??= {};
+  parsed.incoming ??= {};
+  parsed.admitted ??= [];
+  parsed.outgoing ??= [];
+  parsed.notices ??= [];
+  return parsed;
+}
+
+async function readJsonAbsolute(file) {
+  const bytes = await readRegular(file);
+  if (!bytes) return null;
+  return JSON.parse(bytes.toString('utf8'));
+}
+
+async function readRegular(file) {
+  try {
+    const stats = await lstat(file);
+    if (!stats.isFile() || stats.isSymbolicLink()) return null;
+    return await readFile(file);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function chooseConflict(absolute, bytes, change) {
+  const stamp = change.at.replace(/[-:]/g, '').replace(/\./g, '');
+  let file = path.join(path.dirname(absolute), `${path.basename(absolute)}.conflict-${change.machine}-${stamp}`);
+  const existing = await readRegular(file);
+  if (existing && !existing.equals(Buffer.from(bytes))) file = `${file}-${change.id}`;
+  return { absolute: file, existing: existing && existing.equals(Buffer.from(bytes)) };
+}
+
+function locatedRelative(located, absolute) {
+  const slash = located.relative.lastIndexOf('/');
+  const prefix = slash === -1 ? '' : located.relative.slice(0, slash + 1);
+  return `${prefix}${path.basename(absolute)}`;
+}
+
+function writeRoots(sync, projects) {
+  return [sync.paths.mind, sync.paths.localDirectory, sync.paths.origin, sync.store.confineRoot, ...(projects ?? []).map((project) => project.localPath)];
+}
+
+function versionPath(sync) {
+  return path.join(sync.paths.localDirectory, 'sync-versions.json');
+}
+
+function grantPath(sync) {
+  return path.join(sync.paths.localDirectory, 'grant-tombstones.json');
+}
+
+function ownerError() {
+  throw new CoreError(422, 'invalid_record_owner', 'The record is not owned by the publishing machine.');
+}
