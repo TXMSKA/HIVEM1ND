@@ -1,6 +1,6 @@
 import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, uuidV8 } from '../service/identity.mjs';
+import { CoreError, canonicalJson, hashBytes, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
@@ -378,9 +378,29 @@ function versionFrom(localBytes, localVersion) {
 }
 
 function filterGrants(raw, record, tombstones) {
-  if (!record || !Array.isArray(record.grants) || tombstones.size === 0) return raw;
-  const grants = record.grants.filter((grant) => !tombstones.has(grant.id));
+  if (!raw || tombstones.size === 0) return raw;
+  const parsed = recordHeaders(raw);
+  if (parsed.headers.has('approvals')) {
+    let approvals;
+    try {
+      approvals = JSON.parse(parsed.headers.get('approvals'));
+    } catch {
+      approvals = null;
+    }
+    if (Array.isArray(approvals)) {
+      const filtered = approvals.filter((grant) => !tombstones.has(grantId(grant)));
+      if (filtered.length !== approvals.length) return replaceHeader(raw, 'approvals', canonicalJson(filtered));
+      return raw;
+    }
+  }
+  if (!record || !Array.isArray(record.grants)) return raw;
+  const grants = record.grants.filter((grant) => !tombstones.has(grantId(grant)));
   return Buffer.from(`${canonicalJson({ ...record, grants })}\n`, 'utf8');
+}
+
+function grantId(grant) {
+  if (typeof grant === 'string') return grant;
+  return grant?.id ?? '';
 }
 
 function isImmutable(item) {
