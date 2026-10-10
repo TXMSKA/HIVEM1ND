@@ -5,7 +5,11 @@ import path from 'node:path';
 import { CoreError, canonicalJson } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, readBytes, recoverTransactions } from './store.mjs';
-import { writeDurable } from '../sync/origin.mjs';
+import { applyPack } from '../sync/apply.mjs';
+import { openLedger } from '../sync/limits.mjs';
+import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
+import { createPulse } from '../sync/pulse.mjs';
+import { openSync, stageBaselines } from '../sync/store.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
 import { createCredentialStore, protectBootstrapFiles } from './security.mjs';
 import { createEventBus } from './events.mjs';
@@ -44,16 +48,23 @@ export async function startService(options) {
   try {
     await recoverTransactions(options.store);
     await acquireServiceLock(handle);
+    const paths = servicePathsFor(options);
+    handle.runtime = await openServiceSync({ ...options, paths }, paths);
+    handle.beat = handle.runtime.beat;
     handle.listener = options.listener ? await options.listener() : null;
     handle.bridge = await openBridge();
     handle.http = await createHttpServer({
       ...options,
+      paths,
       bus: options.bus,
       credentials: handle.credentials,
       bootstrap: handle.bootstrapState,
+      ledger: handle.runtime.ledger,
+      sync: handle.runtime.sync,
+      pulse: handle.runtime.pulse,
     });
+    bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
-    handle.beat = await writeBeat(options, 'running');
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     return handle;
   } catch (error) {
@@ -138,23 +149,36 @@ export async function writeBeat(options, state) {
 }
 
 export async function composeCore(options) {
-  const bus = options.bus ?? createEventBus({ now: options.now, machine: options.paths.machine });
+  const paths = servicePathsFor(options);
+  const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine });
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
   const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
-  const http = await createHttpServer({ ...options, bus, credentials, bootstrap, handlers: options.handlers ?? {} });
+  const runtime = await openServiceSync({ ...options, paths }, paths);
+  const http = await createHttpServer({
+    ...options,
+    paths,
+    bus,
+    credentials,
+    bootstrap,
+    handlers: options.handlers ?? {},
+    ledger: runtime.ledger,
+    sync: runtime.sync,
+    pulse: runtime.pulse,
+  });
+  bindRuntime({ http, runtime });
   try {
-    await publishBootstrap(options, http.port, bootstrap);
+    await publishBootstrap({ ...options, paths }, http.port, bootstrap);
   } catch (error) {
     await http.close();
     throw error;
   }
-  return { bus, credentials, http, bootstrap };
+  return { bus, credentials, http, bootstrap, runtime };
 }
 
 export async function stopService(handle) {
   if (!handle || handle.attached) return { stopped: false };
   if (handle.http) await handle.http.close();
-  await writeBeat(handle.options, 'stopped');
+  else if (handle.runtime) await closeServiceSync(handle.runtime);
   if (handle.listener?.close) await handle.listener.close();
   await closeBridge(handle.bridge);
   const lock = await readBytes(handle.options.store, lockPath(handle.options));
@@ -192,6 +216,213 @@ function earlier(left, right) {
   if (!Number.isFinite(a)) return right;
   if (!Number.isFinite(b)) return left;
   return a <= b ? left : right;
+}
+
+function servicePathsFor(options) {
+  const paths = { ...options.paths };
+  if (!paths.origin) paths.origin = path.join(paths.localDirectory, 'origin');
+  return paths;
+}
+
+function quietTimer(fn, ms) {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  return timer;
+}
+
+function bindRuntime(handle) {
+  const closeHttp = handle.http.close.bind(handle.http);
+  handle.http.close = async () => {
+    await closeServiceSync(handle.runtime);
+    await closeHttp();
+  };
+}
+
+async function openServiceSync(options, paths) {
+  await mkdir(path.join(paths.origin, 'machines'), { recursive: true });
+  const now = options.now ?? (() => Date.now());
+  const sync = openSync({ store: options.store, paths, now, projects: options.projects ?? [] });
+  const origin = openOrigin({ store: options.store, paths, now, machine: paths.machine });
+  const ledger = openLedger({ store: options.store, paths, now, machine: paths.machine });
+  const pulse = createPulse({ sync, origin, ledger, now, setTimeout: quietTimer, clearTimeout });
+  const runtime = {
+    sync,
+    origin,
+    ledger,
+    pulse,
+    paths,
+    now,
+    beat: null,
+    beatTimer: null,
+    closed: false,
+    lastError: null,
+    startedAt: new Date(options.startedAt ?? now()).toISOString(),
+  };
+  try {
+    await stageBaselines(sync);
+    await pulse.resume();
+    runtime.unwatch = watchOrigin(origin, () => {
+      reconcileOrigin(runtime).catch((error) => {
+        runtime.lastError = error;
+      });
+    });
+    runtime.beat = await publishServiceBeat(runtime, 'running');
+    runtime.beatTimer = setInterval(() => {
+      publishServiceBeat(runtime, 'running').catch((error) => {
+        runtime.lastError = error;
+      });
+    }, 60000);
+    runtime.beatTimer.unref?.();
+    return runtime;
+  } catch (error) {
+    await closeServiceSync(runtime, { beat: false });
+    throw error;
+  }
+}
+
+async function publishServiceBeat(runtime, state) {
+  const record = {
+    format: 'hivem1nd-service-v1',
+    machine: runtime.paths.machine,
+    state,
+    version: '3.0.0',
+    heartbeatAt: new Date(runtime.now()).toISOString(),
+    startedAt: runtime.startedAt,
+  };
+  const result = await runtime.pulse.beat(record);
+  if (result.published) runtime.beat = result.record;
+  return runtime.beat;
+}
+
+async function closeServiceSync(runtime, { beat = true } = {}) {
+  if (!runtime || runtime.closed) return;
+  runtime.closed = true;
+  if (runtime.beatTimer) clearInterval(runtime.beatTimer);
+  runtime.beatTimer = null;
+  if (beat) {
+    try {
+      await publishServiceBeat(runtime, 'stopped');
+    } catch {
+      // A failed final beat must not leave the watcher or the pulse open.
+    }
+  }
+  runtime.pulse.close();
+  if (runtime.unwatch) await runtime.unwatch();
+  await closeOrigin(runtime.origin);
+}
+
+async function reconcileOrigin(runtime) {
+  const names = await listMachineNames(runtime.origin);
+  const bindings = await ownerBindings(runtime.sync);
+  const provider = {
+    async readHead(machine) { return readHead(runtime.origin, machine); },
+    async readPack(machine, sequence) { return readOriginPack(runtime.origin, machine, sequence); },
+  };
+  for (const machine of names) {
+    await mirrorBeat(runtime, machine);
+    if (machine === runtime.origin.machine) continue;
+    const head = await readHead(runtime.origin, machine);
+    const sequence = head?.sequence ?? 0;
+    for (let index = 1; index <= sequence; index += 1) {
+      const packed = await readOriginPack(runtime.origin, machine, index);
+      if (!packed) continue;
+      await applyPack(runtime.sync, packed, {
+        provider,
+        bindings,
+        ledger: runtime.ledger,
+        projects: runtime.sync.projects,
+      });
+    }
+  }
+  await retryPending(runtime, provider, bindings);
+}
+
+async function retryPending(runtime, provider, bindings) {
+  const root = path.join(runtime.paths.localDirectory, 'received', 'pending');
+  let machines = [];
+  try {
+    machines = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const machine of machines) {
+    if (!machine.isDirectory() || machine.isSymbolicLink()) continue;
+    const names = await readdir(path.join(root, machine.name));
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const sequence = Number(name.slice(0, -'.json'.length));
+      if (!Number.isInteger(sequence)) continue;
+      const packed = await readOriginPack(runtime.origin, machine.name, sequence);
+      if (!packed) continue;
+      await applyPack(runtime.sync, packed, {
+        provider,
+        bindings,
+        ledger: runtime.ledger,
+        projects: runtime.sync.projects,
+      });
+    }
+  }
+}
+
+async function mirrorBeat(runtime, machine) {
+  const source = path.join(runtime.paths.origin, 'machines', machine, 'service.json');
+  let bytes;
+  try {
+    bytes = await readFile(source);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return;
+  }
+  if (parsed?.format !== 'hivem1nd-service-v1') return;
+  const destination = path.join(runtime.paths.mind, 'machines', machine, 'service.json');
+  await atomicWrite(runtime.sync.store, destination, Buffer.from(`${canonicalJson(parsed)}\n`));
+}
+
+async function ownerBindings(sync) {
+  const bindings = { requests: {}, approvals: {}, revocations: {} };
+  await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'requests'), (record) => {
+    if (record?.format === 'hivem1nd-session-request-v1' && record.id) bindings.requests[record.id] = { targetMachine: record.targetMachine };
+  });
+  await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'approvals'), (record) => {
+    if (record?.format === 'hivem1nd-approval-v1' && record.id) bindings.approvals[record.id] = { machine: record.machine };
+    if (record?.format === 'hivem1nd-approval-binding-v1' && record.approvalId) {
+      bindings.approvals[record.approvalId] = { machine: record.machine ?? bindings.approvals[record.approvalId]?.machine };
+    }
+    if (record?.format === 'hivem1nd-grant-revocation-result-v1' && record.requestId) bindings.revocations[record.requestId] = { machine: record.machine };
+  });
+  return bindings;
+}
+
+async function readJsonTree(directory, visit) {
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await readJsonTree(full, visit);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      await visit(JSON.parse(await readFile(full, 'utf8')));
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
 }
 
 function assertReady(options) {
@@ -309,6 +540,7 @@ async function rollback(handle) {
   if (handle.bootstrapState) handle.bootstrapState.valid = false;
   if (handle.bootstrapState?.file) await unlink(handle.bootstrapState.file).catch(() => {});
   if (handle.http?.close) await handle.http.close().catch(() => {});
+  if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat: false }).catch(() => {});
   if (handle.listener?.close) await handle.listener.close().catch(() => {});
   await closeBridge(handle.bridge).catch(() => {});
   if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));

@@ -10,6 +10,7 @@ import { recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
 import { plain } from '../features/void/text.mjs';
+import { openLedger } from '../engine/sync/limits.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -25,7 +26,8 @@ async function shop(t) {
   const fixture = await makeCoreFixture();
   const localPath = path.join(fixture.paths.localDirectory, 'shop');
   await mkdir(localPath, { recursive: true });
-  const context = { store: fixture.store, projects: [{ name: 'shop', localPath }], now: () => fixture.clock.now };
+  const ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, machine: fixture.paths.machine });
+  const context = { store: fixture.store, paths: fixture.paths, projects: [{ name: 'shop', localPath }], now: () => fixture.clock.now, ledger };
   t.after(() => dispose(fixture));
   return { fixture, context, localPath };
 }

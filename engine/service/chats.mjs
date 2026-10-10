@@ -249,7 +249,7 @@ function fanoutFor(message, members, fromId) {
 }
 
 async function charge(context, id, bytes) {
-  if (!context.ledger) return;
+  if (!context.ledger) throw new CoreError(503, 'service_unavailable', 'Message admission is not composed.');
   await admitMessage(context.ledger, { id, record: bytes });
 }
 
@@ -268,8 +268,9 @@ async function commitMany(context, entries, events) {
     })),
     events: [],
   });
-  const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
+  const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
+  const changes = await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
+  if (context.pulse) await context.pulse.changed(changes.map((change) => change.id));
   for (const event of events) context.store.events.push(event);
 }
 

@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8 } from './identity.mjs';
-import { admitMessage, openLedger } from '../sync/limits.mjs';
+import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
 import { commitTransaction } from './store.mjs';
@@ -769,9 +769,8 @@ async function noticePlan(context, messageId, resourceId, recipients) {
 }
 
 async function admitComment(context, id) {
-  if (!context.paths?.localDirectory || !context.paths?.machine) return;
-  const ledger = openLedger({ store: context.store, paths: context.paths, now: context.now, machine: context.paths.machine });
-  await admitMessage(ledger, { id, record: canonicalJson({ id, kind: 'comment' }) });
+  if (!context.ledger) throw new CoreError(503, 'service_unavailable', 'Message admission is not composed.');
+  await admitMessage(context.ledger, { id, record: canonicalJson({ id, kind: 'comment' }) });
 }
 
 export async function notifyAttached(context, input) {

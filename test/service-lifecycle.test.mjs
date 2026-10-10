@@ -1,12 +1,15 @@
 import { createServer } from 'node:net';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { attachNative, dispatchLocal } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
+import { createChat, postChat } from '../engine/service/chats.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
+import { stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function freePort() {
@@ -198,6 +201,101 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
   await mkdir(path.join(otherMind, 'user'), { recursive: true });
   await assert.rejects(startGui({ ...input, mindPath: otherMind }), { code: 'service_mind_conflict' });
 });
+
+test('two machines on one origin replicate a change and one ledger stops a flood', async (t) => {
+  const origin = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-origin-'));
+  const left = await makeCoreFixture({ machine: 'ALPHA' });
+  const right = await makeCoreFixture({ machine: 'BRAVO' });
+  left.store.confineRoot = os.tmpdir();
+  right.store.confineRoot = os.tmpdir();
+  let leftService = null;
+  let rightService = null;
+  t.after(async () => {
+    if (leftService) await stopService(leftService);
+    if (rightService) await stopService(rightService);
+    await dispose(left);
+    await dispose(right);
+    await rm(origin, { recursive: true, force: true });
+  });
+  leftService = await startService(serviceOptions(left, origin));
+  rightService = await startService(serviceOptions(right, origin));
+  assert.deepEqual(await packNames(origin), []);
+  const changes = await stageTransaction(leftService.runtime.sync, [{
+    target: { kind: 'mind', path: 'user/notes/hello.txt' },
+    bytes: Buffer.from('hello\n'),
+  }]);
+  await leftService.runtime.pulse.changed(changes.map((change) => change.id));
+  await leftService.runtime.pulse.flush();
+  const copied = await waitFor(
+    () => readFile(path.join(right.paths.mind, 'user', 'notes', 'hello.txt'), 'utf8'),
+    'replica',
+    rightService.runtime,
+  );
+  assert.equal(copied, 'hello\n');
+  const mirrored = JSON.parse(await waitFor(
+    () => readFile(path.join(right.paths.mind, 'machines', 'ALPHA', 'service.json'), 'utf8'),
+    'mirrored beat',
+    rightService.runtime,
+  ));
+  assert.equal(mirrored.machine, 'ALPHA');
+  assert.equal(mirrored.state, 'running');
+  const context = {
+    store: left.store,
+    paths: leftService.runtime.paths,
+    now: () => Date.now(),
+    principal: { audience: 'desktop', unitId: 'root:master' },
+    ledger: leftService.runtime.ledger,
+    sync: leftService.runtime.sync,
+    pulse: leftService.runtime.pulse,
+  };
+  const created = await createChat(context, { members: ['root:master'], title: 'Flood' });
+  for (let index = 0; index < 60; index += 1) {
+    await postChat(context, created.chat.id, { body: `note ${index}` });
+  }
+  await assert.rejects(postChat(context, created.chat.id, { body: 'overflow' }), { code: 'message_rate_limited' });
+  const names = await readdir(path.join(left.paths.mind, 'user', 'relay', 'chats', created.chat.id));
+  assert.equal(names.filter((name) => name !== 'chat.md').length, 60);
+  await assert.rejects(postChat({ ...context, ledger: null }, created.chat.id, { body: 'uncomposed' }), { code: 'service_unavailable' });
+});
+
+function serviceOptions(fixture, origin) {
+  return {
+    paths: { ...fixture.paths, origin },
+    store: fixture.store,
+    now: () => Date.now(),
+    guardPort: 0,
+    userKey: fixture.machine,
+  };
+}
+
+async function packNames(origin) {
+  const names = [];
+  const machines = path.join(origin, 'machines');
+  for (const machine of await readdir(machines)) {
+    try {
+      for (const name of await readdir(path.join(machines, machine, 'packs'))) {
+        if (name.endsWith('.pack')) names.push(`${machine}/${name}`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return names;
+}
+
+async function waitFor(read, label, runtime) {
+  let last = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      last = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  const detail = runtime?.lastError ? `${runtime.lastError.code ?? ''} ${runtime.lastError.message}` : '';
+  throw new Error(`${label} timed out${detail ? `: ${detail}` : ''}${last ? ` (${last.code ?? last.message})` : ''}`);
+}
 
 function call(origin, token) {
   const url = new URL('/api/v1/viewer', origin);
