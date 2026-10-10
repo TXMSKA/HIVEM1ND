@@ -6,10 +6,13 @@ import { createApi, createOperation, request } from "../gui/app/api.mjs";
 import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundary, validUtf16Boundary } from "../gui/app/markup.mjs";
 import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
+  addNode,
   editedBoard,
   hitBoardNode,
+  loadAssets,
   patchNode,
   removeNode,
+  renderNode,
   replaceBoard,
   updateNodeOperation,
   uploadAsset,
@@ -496,6 +499,93 @@ function jsonResponse(data) {
     data,
     meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: { mode: "snapshot" } },
   }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+test("reopening a board reloads referenced images and draws clipped styled nodes", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const revoked = [];
+  let blobs = 0;
+  api.createObjectURL = () => {
+    blobs += 1;
+    return `blob:asset-${blobs}`;
+  };
+  api.revokeObjectURL = (url) => revoked.push(url);
+  const editors = createEditors();
+  const created = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
+  await openEditor(api, editors, { id: created.data.id, kind: "blueprint" });
+  const asset = await uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Buffer.from(PNG, "base64") });
+  const missingSrc = "docs/flows/assets/11111111-1111-4111-8111-111111111111.png";
+  await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "photo", name: "Photo", t: "image", place: { x: 4, y: 4 }, w: 16, h: 16, src: asset.src } });
+  await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "missing-image", name: "Missing", t: "image", place: { x: 8, y: 8 }, w: 16, h: 16, src: missingSrc } });
+  await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "remote-image", name: "Remote", t: "image", place: { x: 12, y: 12 }, w: 16, h: 16, src: "https://evil.example/pixel.png" } });
+  const seen = [];
+  const baseFetch = api.fetch;
+  api.fetch = async (url, init) => {
+    seen.push({ url: String(url), authorization: init?.headers?.Authorization ?? "" });
+    return baseFetch(url, init);
+  };
+  const firstUrl = editors.current.assets.get(asset.src).url;
+  await openEditor(api, editors, { id: created.data.id, kind: "blueprint" });
+  const reloaded = editors.current.assets.get(asset.src);
+  assert.ok(reloaded.url.startsWith("blob:"));
+  assert.notEqual(reloaded.url, firstUrl);
+  assert.ok(revoked.includes(firstUrl));
+  const assetCalls = seen.filter((item) => item.url.includes("/assets/"));
+  assert.equal(assetCalls.length, 2);
+  assert.ok(assetCalls.every((item) => item.url.startsWith(new URL(fixture.desktopUrl).origin) && item.authorization.startsWith("Bearer ")));
+  assert.equal(assetCalls.some((item) => item.url.includes("evil.example")), false);
+  assert.ok(editors.current.assetIssues.some((item) => item.src === missingSrc && item.code === "asset_not_found"));
+  assert.ok(editors.current.assetIssues.some((item) => item.code === "invalid_asset"));
+  const ready = nodesOf(renderNode(svgDocument(), { id: "photo", name: "Photo", t: "image", place: { x: 0, y: 0 }, w: 16, h: 16, src: asset.src }, editors.current));
+  const image = ready.find((node) => node.tag === "image");
+  assert.equal(image.getAttribute("href"), reloaded.url);
+  assert.equal(image.getAttribute("data-asset"), "ready");
+  assert.equal(String(image.getAttribute("href")).includes("docs/flows"), false);
+  const missing = nodesOf(renderNode(svgDocument(), { id: "gone", name: "Gone", t: "image", place: { x: 0, y: 0 }, w: 16, h: 16, src: missingSrc }, editors.current));
+  assert.equal(missing.find((node) => node.tag === "image").getAttribute("data-asset"), "asset_not_found");
+  assert.equal(missing.find((node) => node.tag === "image").getAttribute("href"), null);
+  editors.current.authoritative = { ...editors.current.authoritative, document: { ...editors.current.authoritative.document, screens: [] } };
+  await loadAssets(api, editors.current);
+  assert.ok(revoked.includes(reloaded.url));
+
+  const clipped = nodesOf(renderNode(svgDocument(), { id: "frame", name: "Frame", t: "box", clip: true, place: { x: 0, y: 0 }, w: 40, h: 20, kids: [] }, {}));
+  assert.ok(clipped.some((node) => node.getAttribute("clip-path")?.startsWith("url(#clip-frame)")));
+  const icon = nodesOf(renderNode(svgDocument(), { id: "mark", name: "Mark", t: "icon", icon: "alert", place: { x: 0, y: 0 }, w: 16, h: 16, fill: "#112233" }, {}));
+  assert.equal(icon.some((node) => node.tag === "rect"), false);
+  assert.equal(icon.find((node) => node.tag === "polygon").getAttribute("data-icon"), "alert");
+  const rule = nodesOf(renderNode(svgDocument(), { id: "rule", name: "Rule", t: "vector", kind: "line", place: { x: 0, y: 0 }, w: 40, h: 8, stroke: "#112233", strokeWidth: 2, fill: "none" }, {}));
+  const line = rule.find((node) => node.tag === "line");
+  assert.equal(line.getAttribute("stroke"), "#112233");
+  assert.equal(line.getAttribute("stroke-width"), "2");
+  assert.equal(line.getAttribute("fill"), "none");
+  const board = {
+    screens: [{ id: "s", x: 0, y: 0, w: 80, h: 80, root: { id: "root", t: "box", place: { x: 0, y: 0 }, w: 80, h: 80, kids: [
+      { id: "caption", t: "text", place: { x: 10, y: 10 }, w: 0, h: 0, value: "Hi" },
+      { id: "trail", t: "vector", kind: "pen", place: { x: 30, y: 30 }, w: 0, h: 0, d: "M0 0h4" },
+    ] } }],
+  };
+  assert.equal(hitBoardNode(board, { x: 12, y: 12 }).nodeId, "caption");
+  assert.equal(hitBoardNode(board, { x: 32, y: 32 }).nodeId, "trail");
+});
+
+function svgDocument() {
+  const create = (tag) => ({
+    tag,
+    attributes: new Map(),
+    children: [],
+    setAttribute(name, value) { this.attributes.set(name, String(value)); },
+    getAttribute(name) { return this.attributes.get(name) ?? null; },
+    append(...kids) { this.children.push(...kids); },
+  });
+  return { createElementNS: (_namespace, tag) => create(tag) };
+}
+
+function nodesOf(node, found = []) {
+  found.push(node);
+  for (const child of node.children ?? []) nodesOf(child, found);
+  return found;
 }
 
 function fakeDocument() {

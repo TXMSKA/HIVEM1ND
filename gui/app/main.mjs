@@ -809,6 +809,9 @@ function boardSurface(app, document, editor, t) {
     onclick: () => commentOnNode(app, editor),
   }, t("comment")));
   if (canEditResources(app)) tools.append(structureTools(app, document, editor, t));
+  for (const issue of editor.assetIssues ?? []) {
+    tools.append(element(document, "p", { "data-asset-issue": issue.code, text: t("assetMissing") }));
+  }
   return element(document, "div", {}, host, tools);
 }
 

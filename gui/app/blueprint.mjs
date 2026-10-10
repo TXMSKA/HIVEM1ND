@@ -71,8 +71,9 @@ export function renderNode(document, node, editor) {
   if (editor.focus?.nodeId && node.id === editor.focus.nodeId) group.setAttribute("data-highlight", "true");
   if (node.name) group.setAttribute("data-name", String(node.name));
   group.setAttribute("transform", `translate(${number(node.place?.x)} ${number(node.place?.y)})`);
-  group.append(drawNode(document, node, editor));
-  for (const child of node.kids ?? []) group.append(renderNode(document, child, editor));
+  const body = node.clip === true ? clippedGroup(document, group, node) : group;
+  body.append(drawNode(document, node, editor));
+  for (const child of node.kids ?? []) body.append(renderNode(document, child, editor));
   return group;
 }
 
@@ -148,6 +149,56 @@ export function releaseAssets(editor) {
   editor?.assets?.clear?.();
 }
 
+const ASSET_SRC = /^docs\/flows\/assets\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.(?:png|jpe?g|webp)$/;
+
+export function collectAssetRefs(document) {
+  const allowed = [];
+  const rejected = [];
+  const seen = new Set();
+  for (const screen of document?.screens ?? []) walk(screen?.root);
+  return { allowed, rejected };
+
+  function walk(node) {
+    if (!node || typeof node !== "object") return;
+    if (node.t === "image" && node.src) {
+      const src = String(node.src);
+      if (!seen.has(src)) {
+        seen.add(src);
+        const match = ASSET_SRC.exec(src);
+        if (match) allowed.push({ src, id: match[1] });
+        else rejected.push(src.slice(0, 200));
+      }
+    }
+    for (const child of node.kids ?? []) walk(child);
+  }
+}
+
+export async function loadAssets(api, editor) {
+  const { allowed, rejected } = collectAssetRefs(editor?.authoritative?.document ?? editor?.document);
+  const previous = editor.assets ?? new Map();
+  const next = new Map();
+  const issues = rejected.map((src) => ({ src, code: "invalid_asset" }));
+  for (const ref of allowed) {
+    const kept = previous.get(ref.src);
+    if (kept?.url?.startsWith("blob:")) {
+      next.set(ref.src, kept);
+      continue;
+    }
+    try {
+      const image = await fetchAsset(api, {
+        url: `/api/v1/editors/${encodeURIComponent(editor.resourceId)}/assets/${encodeURIComponent(ref.id)}`,
+      });
+      next.set(ref.src, image);
+    } catch (error) {
+      issues.push({ src: ref.src, code: error.code || "invalid_asset" });
+    }
+  }
+  for (const [src, image] of previous) if (next.get(src) !== image) image.revoke?.();
+  editor.assets = next;
+  editor.assetIssues = issues;
+  return next;
+}
+
 function acceptBoard(editor, data) {
   if (!data) return;
   editor.revision = data.revision;
@@ -157,7 +208,7 @@ function acceptBoard(editor, data) {
 
 function hitNode(node, point) {
   if (!node) return null;
-  const rect = { x: number(node.place?.x), y: number(node.place?.y), w: number(node.w), h: number(node.h) };
+  const rect = hitRect(node);
   const clip = node.clip ? rect : null;
   if (node.kids?.length) {
     for (let index = node.kids.length - 1; index >= 0; index -= 1) {
@@ -185,34 +236,49 @@ function inEllipse(rect, point) {
   return dx * dx + dy * dy <= 1;
 }
 
+function clippedGroup(document, group, node) {
+  const id = `clip-${String(node.id).replace(/[^a-z0-9-]/gi, "")}`;
+  const clip = document.createElementNS(SVG, "clipPath");
+  clip.setAttribute("id", id);
+  const rect = document.createElementNS(SVG, "rect");
+  rect.setAttribute("x", "0");
+  rect.setAttribute("y", "0");
+  rect.setAttribute("width", String(Math.max(number(node.w), 0)));
+  rect.setAttribute("height", String(Math.max(number(node.h), 0)));
+  clip.append(rect);
+  const inner = document.createElementNS(SVG, "g");
+  inner.setAttribute("clip-path", `url(#${id})`);
+  group.append(clip, inner);
+  return inner;
+}
+
+function hitRect(node) {
+  let w = number(node.w);
+  let h = number(node.h);
+  if ((node.t === "text" || node.t === "vector" || node.t === "icon") && (w < 1 || h < 1)) {
+    w = Math.max(w, 8);
+    h = Math.max(h, 8);
+  }
+  return { x: number(node.place?.x), y: number(node.place?.y), w, h };
+}
+
 function drawNode(document, node, editor) {
   const width = number(node.w);
   const height = number(node.h);
-  if (node.t === "text") {
-    const text = document.createElementNS(SVG, "text");
-    text.textContent = String(node.value ?? "");
-    text.setAttribute("x", "0");
-    text.setAttribute("y", String(Math.min(height, 16)));
-    const color = paint(node.color);
-    if (color) text.setAttribute("fill", color);
-    const font = safeFont(node.font);
-    if (font) text.setAttribute("font-family", font);
-    return text;
-  }
-  if (node.t === "vector" && safePath(node.d)) {
-    const path = document.createElementNS(SVG, "path");
-    path.setAttribute("d", node.d);
-    const fill = paint(node.fill);
-    if (fill) path.setAttribute("fill", fill);
-    return path;
-  }
+  if (node.t === "text") return drawText(document, node, height);
+  if (node.t === "vector") return drawVector(document, node, width, height);
+  if (node.t === "icon") return drawIcon(document, node, width, height);
   if (node.t === "image") {
     const image = document.createElementNS(SVG, "image");
     image.setAttribute("data-src", String(node.src ?? ""));
     image.setAttribute("width", String(width));
     image.setAttribute("height", String(height));
     const stored = editor.assets?.get(node.src);
-    if (stored?.url?.startsWith("blob:")) image.setAttribute("href", stored.url);
+    const issue = editor.assetIssues?.find((item) => item.src === node.src);
+    if (stored?.url?.startsWith("blob:")) {
+      image.setAttribute("href", stored.url);
+      image.setAttribute("data-asset", "ready");
+    } else image.setAttribute("data-asset", issue?.code ?? "missing");
     return image;
   }
   const shape = document.createElementNS(SVG, node.kind === "circle" ? "ellipse" : "rect");
@@ -227,9 +293,109 @@ function drawNode(document, node, editor) {
     shape.setAttribute("width", String(width));
     shape.setAttribute("height", String(height));
   }
+  applyPaint(shape, node);
+  return shape;
+}
+
+function drawText(document, node, height) {
+  const text = document.createElementNS(SVG, "text");
+  text.textContent = String(node.value ?? "");
+  text.setAttribute("x", "0");
+  text.setAttribute("y", String(Math.min(Math.max(height, 8), 16)));
+  const color = paint(node.color);
+  if (color) text.setAttribute("fill", color);
+  const font = safeFont(node.font);
+  if (font) text.setAttribute("font-family", font);
+  if (node.align === "left") text.setAttribute("text-anchor", "start");
+  if (node.align === "center") text.setAttribute("text-anchor", "middle");
+  if (node.align === "right") text.setAttribute("text-anchor", "end");
+  if (Number.isInteger(node.weight) && node.weight >= 100 && node.weight <= 900) text.setAttribute("font-weight", String(node.weight));
+  applyPaint(text, node);
+  return text;
+}
+
+function drawVector(document, node, width, height) {
+  const kind = ["rectangle", "circle", "polygon", "line", "arrow", "pen"].includes(node.kind) ? node.kind : "";
+  if (kind === "pen" || safePath(node.d)) {
+    const path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", safePath(node.d) ? node.d : `M0 0h${Math.max(width, 8)}v${Math.max(height, 8)}h-${Math.max(width, 8)}z`);
+    path.setAttribute("data-kind", kind || "pen");
+    applyPaint(path, node);
+    return path;
+  }
+  if (kind === "circle") return painted(document, node, "ellipse", width, height);
+  if (kind === "polygon") return polygon(document, node, width, height, Number.isInteger(node.sides) && node.sides >= 3 && node.sides <= 64 ? node.sides : 6);
+  if (kind === "line" || kind === "arrow") return strokeLine(document, node, width, height, kind);
+  return painted(document, node, "rect", width, height);
+}
+
+function drawIcon(document, node, width, height) {
+  const name = typeof node.icon === "string" && /^[a-z0-9-]{1,40}$/.test(node.icon) ? node.icon : "unknown";
+  const shape = polygon(document, node, Math.max(width, 8), Math.max(height, 8), 4);
+  shape.setAttribute("data-icon", name);
+  shape.setAttribute("data-kind", "icon");
+  return shape;
+}
+
+function painted(document, node, tag, width, height) {
+  const shape = document.createElementNS(SVG, tag);
+  shape.setAttribute("data-kind", node.kind || tag);
+  if (tag === "ellipse") {
+    shape.setAttribute("cx", String(width / 2));
+    shape.setAttribute("cy", String(height / 2));
+    shape.setAttribute("rx", String(Math.max(width, 8) / 2));
+    shape.setAttribute("ry", String(Math.max(height, 8) / 2));
+  } else {
+    shape.setAttribute("x", "0");
+    shape.setAttribute("y", "0");
+    shape.setAttribute("width", String(Math.max(width, 8)));
+    shape.setAttribute("height", String(Math.max(height, 8)));
+    const radius = Number.isFinite(node.radius) && node.radius >= 0 && node.radius <= 8000 ? node.radius : null;
+    if (radius != null) shape.setAttribute("rx", String(radius));
+  }
+  applyPaint(shape, node);
+  return shape;
+}
+
+function polygon(document, node, width, height, sides) {
+  const shape = document.createElementNS(SVG, "polygon");
+  shape.setAttribute("data-kind", node.kind || "polygon");
+  const points = [];
+  for (let index = 0; index < sides; index += 1) {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / sides;
+    points.push(`${(width / 2 + (width / 2) * Math.cos(angle)).toFixed(2)},${(height / 2 + (height / 2) * Math.sin(angle)).toFixed(2)}`);
+  }
+  shape.setAttribute("points", points.join(" "));
+  applyPaint(shape, node);
+  return shape;
+}
+
+function strokeLine(document, node, width, height, kind) {
+  const group = document.createElementNS(SVG, "g");
+  group.setAttribute("data-kind", kind);
+  const line = document.createElementNS(SVG, "line");
+  line.setAttribute("x1", "0");
+  line.setAttribute("y1", String(height / 2));
+  line.setAttribute("x2", String(width));
+  line.setAttribute("y2", String(height / 2));
+  applyPaint(line, node);
+  group.append(line);
+  if (kind === "arrow") {
+    const head = document.createElementNS(SVG, "polygon");
+    head.setAttribute("points", `${width},${height / 2} ${Math.max(width - 8, 0)},${height / 2 - 4} ${Math.max(width - 8, 0)},${height / 2 + 4}`);
+    applyPaint(head, node);
+    group.append(head);
+  }
+  return group;
+}
+
+function applyPaint(shape, node) {
   const fill = paint(node.fill) ?? paint(node.color);
   if (fill) shape.setAttribute("fill", fill);
-  return shape;
+  const stroke = paint(node.stroke);
+  if (stroke) shape.setAttribute("stroke", stroke);
+  if (Number.isFinite(node.strokeWidth) && node.strokeWidth >= 0 && node.strokeWidth <= 100) shape.setAttribute("stroke-width", String(node.strokeWidth));
+  if (Number.isFinite(node.opacity) && node.opacity >= 0 && node.opacity <= 1) shape.setAttribute("opacity", String(node.opacity));
 }
 
 function renderLink(document, board, link) {

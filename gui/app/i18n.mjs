@@ -147,6 +147,7 @@ const COPY = {
   replaceDocument: ["Replace document", "Reemplazar documento"],
   screenWidth: ["Width", "Ancho"],
   screenHeight: ["Height", "Alto"],
+  assetMissing: ["The image could not be read.", "No se pudo leer la imagen."],
   stopWatch: ["Stop following", "Dejar de seguir"],
   addShape: ["Add shape", "Agregar forma"],
   removeShape: ["Remove shape", "Quitar forma"],

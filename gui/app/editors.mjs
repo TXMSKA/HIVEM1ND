@@ -1,4 +1,5 @@
 import { createOperation, request } from "./api.mjs";
+import { loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
 
@@ -83,11 +84,29 @@ export async function openEditor(api, editors, summary) {
     conflict: saved?.conflict ?? null,
     notices: saved?.notices ?? [],
   };
+  const previousAssets = saved?.assets;
+  next.assets = new Map();
+  next.assetIssues = [];
   editors.drafts.set(summary.id, next);
   editors.current = next;
   editors.error = null;
   if (next.kind === "void") await loadProposals(api, editors);
   await loadComments(api, editors);
+  if (editors.openTicket !== ticket) {
+    if (editors.current !== next) releaseAssets(next);
+    return editors.current;
+  }
+  if (next.kind === "blueprint") await loadAssets(api, next);
+  if (previousAssets) {
+    for (const image of previousAssets.values()) {
+      if (![...next.assets.values()].includes(image)) image.revoke?.();
+    }
+    if (saved) saved.assets = new Map();
+  }
+  if (editors.openTicket !== ticket && editors.current !== next) {
+    releaseAssets(next);
+    return editors.current;
+  }
   return next;
 }
 
@@ -306,7 +325,9 @@ export async function refreshRemoteEditor(api, editors, resourceId) {
   editors.tickets.set(resourceId, generation);
   const route = current.kind === "void" ? "/void/texts/:resourceId" : "/blueprint/boards/:resourceId";
   const result = await request(api, "GET", route, { params: { resourceId } });
-  return reconcileEditor(editors, result.data, generation);
+  const changed = reconcileEditor(editors, result.data, generation);
+  if (changed && current.kind === "blueprint" && current.resourceId === resourceId && !current.dirty) await loadAssets(api, current);
+  return changed;
 }
 
 export function reconcileEditor(editors, record, generation) {
