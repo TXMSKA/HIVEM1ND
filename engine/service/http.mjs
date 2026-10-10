@@ -13,6 +13,7 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { enqueueStart, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
+import { addNode, createAsset, createBoard, list as listBoards, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, updateNode, writeAttachments } from './editors.mjs';
 
 const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
 const STATIC_FILES = new Set([
@@ -69,14 +70,14 @@ const ROUTES = [
   ['POST', '/auth/local', null, '', 'authLocal'],
   ['POST', '/auth/home', null, '', 'authHome'],
   ['POST', '/auth/logout', null, 'DP', 'logout'],
-  ['GET', '/blueprint/boards', 'editor.read', 'DPA', 'unavailable'],
-  ['GET', '/blueprint/boards/:resourceId', 'editor.read', 'DPA', 'unavailable'],
-  ['POST', '/editors/register', 'editor.write', 'D', 'unavailable'],
-  ['POST', '/blueprint/boards', 'editor.write', 'D', 'unavailable'],
-  ['PUT', '/blueprint/boards/:resourceId', 'editor.write', 'DA', 'unavailable'],
-  ['POST', '/blueprint/boards/:resourceId/nodes', 'editor.write', 'DA', 'unavailable'],
-  ['PATCH', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'unavailable'],
-  ['DELETE', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'unavailable'],
+  ['GET', '/blueprint/boards', 'editor.read', 'DPA', 'editor'],
+  ['GET', '/blueprint/boards/:resourceId', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/editors/register', 'editor.write', 'D', 'editor'],
+  ['POST', '/blueprint/boards', 'editor.write', 'D', 'editor'],
+  ['PUT', '/blueprint/boards/:resourceId', 'editor.write', 'DA', 'editor'],
+  ['POST', '/blueprint/boards/:resourceId/nodes', 'editor.write', 'DA', 'editor'],
+  ['PATCH', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
+  ['DELETE', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
   ['GET', '/void/texts', 'editor.read', 'DPA', 'unavailable'],
   ['GET', '/void/texts/:resourceId', 'editor.read', 'DPA', 'unavailable'],
   ['POST', '/void/texts', 'editor.write', 'D', 'unavailable'],
@@ -84,14 +85,14 @@ const ROUTES = [
   ['POST', '/void/texts/:resourceId/ranges', 'editor.write', 'DA', 'unavailable'],
   ['GET', '/void/texts/:resourceId/proposals', 'editor.read', 'DPA', 'unavailable'],
   ['POST', '/void/texts/:resourceId/proposals/:proposalId/answer', 'proposal.answer', 'D', 'unavailable'],
-  ['GET', '/editors/:resourceId/attachments', 'editor.read', 'DPA', 'unavailable'],
-  ['PUT', '/editors/:resourceId/attachments', 'editor.write', 'D', 'unavailable'],
+  ['GET', '/editors/:resourceId/attachments', 'editor.read', 'DPA', 'editor'],
+  ['PUT', '/editors/:resourceId/attachments', 'editor.write', 'D', 'editor'],
   ['GET', '/editors/:resourceId/comments', 'editor.read', 'DPA', 'unavailable'],
   ['POST', '/editors/:resourceId/comments', 'comment.write', 'DA', 'unavailable'],
   ['POST', '/editors/:resourceId/comments/:threadId/replies', 'comment.write', 'DA', 'unavailable'],
   ['PATCH', '/editors/:resourceId/comments/:threadId', 'comment.write', 'DA', 'unavailable'],
-  ['GET', '/editors/:resourceId/assets/:assetId', 'editor.read', 'DPA', 'unavailable'],
-  ['POST', '/editors/:resourceId/assets', 'asset.write', 'D', 'unavailable'],
+  ['GET', '/editors/:resourceId/assets/:assetId', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/editors/:resourceId/assets', 'asset.write', 'D', 'editor'],
   ['POST', '/watch', 'watch', 'D', 'unavailable'],
   ['DELETE', '/watch/:watchId', 'watch', 'D', 'unavailable'],
   ['GET', '/viewer', 'read', 'D', 'readViewer'],
@@ -112,12 +113,12 @@ export function decodeId(raw) {
   return raw;
 }
 
-export async function readJsonBody(req, { expect = 'any' } = {}) {
+export async function readJsonBody(req, { expect = 'any', limit = 1000000 } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1000000) throw new CoreError(413, 'request_too_large', 'The body is too large.');
+    if (size > limit) throw new CoreError(413, 'request_too_large', 'The body is too large.');
     chunks.push(chunk);
   }
   if (size === 0) {
@@ -250,7 +251,8 @@ export async function createHttpServer(options) {
       throw error;
     }
     const params = paramsOf(route, relative);
-    const body = await readJsonBody(req, { expect: bodyExpect(route, req.method) });
+    const bodyLimit = route.template.endsWith('/assets') ? 16000000 : 1000000;
+    const body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
     rejectUnknown(route, body);
     const credential = credentialFor(req, route, credentials, listener);
     const domain = domainContext(options, credential, bus);
@@ -281,6 +283,15 @@ export async function createHttpServer(options) {
     const outcome = route.method === 'GET'
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
+    if (outcome.raw) {
+      res.writeHead(outcome.status ?? 200, {
+        'content-type': outcome.type,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      res.end(outcome.raw);
+      return;
+    }
     const envelope = {
       data: outcome.body,
       meta: { requestId, replayed: outcome.replayed === true },
@@ -472,9 +483,30 @@ function domainContext(options, credential, bus) {
   };
 }
 
+async function editorRoute(route, domain, params, query, body) {
+  const id = params.resourceId;
+  if (route.template === '/blueprint/boards' && route.method === 'GET') return { status: 200, body: await listBoards(domain, query) };
+  if (route.template === '/blueprint/boards/:resourceId') return { status: 200, body: await readEditor(domain, id) };
+  if (route.template === '/editors/register') return { status: 201, body: await registerResource(domain, body) };
+  if (route.template === '/blueprint/boards' && route.method === 'POST') return { status: 201, body: await createBoard(domain, body) };
+  if (route.template === '/blueprint/boards/:resourceId' && route.method === 'PUT') return { status: 200, body: await replaceBoard(domain, id, body) };
+  if (route.template === '/blueprint/boards/:resourceId/nodes') return { status: 201, body: await addNode(domain, id, body) };
+  if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'PATCH') return { status: 200, body: await updateNode(domain, id, params.nodeId, body) };
+  if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'DELETE') return { status: 200, body: await removeNode(domain, id, params.nodeId, body) };
+  if (route.template === '/editors/:resourceId/attachments' && route.method === 'GET') return { status: 200, body: await readAttachments(domain, id) };
+  if (route.template === '/editors/:resourceId/attachments' && route.method === 'PUT') return { status: 200, body: await writeAttachments(domain, id, body) };
+  if (route.template === '/editors/:resourceId/assets') return { status: 201, body: await createAsset(domain, id, body) };
+  if (route.template === '/editors/:resourceId/assets/:assetId') {
+    const asset = await readAsset(domain, id, params.assetId);
+    return { status: 200, raw: asset.bytes, type: asset.type };
+  }
+  throw new CoreError(404, 'not_found', 'The route does not exist.');
+}
+
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
+  if (route.handler === 'editor') return editorRoute(route, domain, params, query, body);
   if (route.handler === 'unavailable') {
     const injected = options.handlers?.[route.template];
     if (!injected) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
@@ -537,8 +569,9 @@ async function invoke(route, scope) {
 }
 
 function validateQuery(route, query) {
+  const page = route.handler === 'editor' ? [...PAGE_QUERY, 'project', 'kind'] : PAGE_QUERY;
   const allowed = route.method === 'GET' && route.handler !== 'detail' && route.handler !== 'layout' && route.handler !== 'settings' && route.handler !== 'readViewer' && route.handler !== 'events'
-    ? new Set(PAGE_QUERY)
+    ? new Set(page)
     : new Set();
   for (const key of Object.keys(query)) {
     if (!allowed.has(key)) throw new CoreError(422, 'invalid_query', 'The query contains an unknown field.');

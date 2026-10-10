@@ -57,6 +57,12 @@ const refused = (mutate, pattern, base = sample()) => {
   assert.throws(() => validateSketch(base), (error) => error instanceof SketchError && pattern.test(error.message), String(pattern));
 };
 
+const kept = (mutate, check, base = sample()) => {
+  mutate(base);
+  const saved = validateSketch(base);
+  assert.equal(check(saved), true);
+};
+
 test("a sketch the page builds is accepted, and what comes back is a copy", () => {
   const sketch = sample();
   const checked = validateSketch(sketch);
@@ -87,20 +93,20 @@ test("every node kind is Blueprint JSON v1: boxes, vectors of kind circle, line 
 
 test("a screen of a sketch that follows v1 is refused when it does not, naming the field", () => {
   refused((s) => (s.formatVersion = 2), /^formatVersion must be 1/);
-  refused((s) => (s.script = "x"), /^script is not part of a Lite sketch/);
   refused((s) => delete s.links, /^links is missing/);
-  refused((s) => s.threads.push({}), /^threads must be an empty list/);
-  refused((s) => s.components.push({}), /^components must be an empty list/);
-  refused((s) => s.fonts.push({}), /^fonts must be an empty list/);
-  refused((s) => (s.title = ""), /^title must be 1 to 200/);
+  kept((s) => (s.script = "x"), (doc) => doc.script === "x");
+  kept((s) => s.threads.push({ id: "t-1" }), (doc) => doc.threads[0].id === "t-1");
+  kept((s) => s.components.push({ id: "c-1" }), (doc) => doc.components[0].id === "c-1");
+  kept((s) => s.fonts.push({ family: "Kept" }), (doc) => doc.fonts[0].family === "Kept");
+  refused((s) => (s.title = ""), /^title must be 1 to 240/);
   refused((s) => (s.pages = []), /^pages must be a list of 1 to 100/);
-  refused((s) => s.pages[0].objects.push({}), /^pages\[0\]\.objects must be an empty list/);
+  kept((s) => s.pages[0].objects.push({ id: "o-1" }), (doc) => doc.pages[0].objects[0].id === "o-1");
   refused((s) => s.pages[0].order.push("nowhere"), /^pages\[0\]\.order names a screen/);
   refused((s) => (s.pages[0].start = "nowhere"), /^pages\[0\]\.start names a screen/);
   refused((s) => (s.screens[0].pageId = "other"), /^screens\[0\]\.pageId must name a page/);
   refused((s) => (s.screens[0].w = 0), /^screens\[0\]\.w and h must be numbers from 1 to 16000/);
   refused((s) => (s.screens[0].x = Number.NaN), /^screens\[0\]\.x and y/);
-  refused((s) => (s.screens[0].build = { url: "https://x.example" }), /^screens\[0\]\.build is not part of a Lite sketch/);
+  kept((s) => (s.screens[0].build = { url: "https://x.example" }), (doc) => doc.screens[0].build.url === "https://x.example");
   refused((s) => (s.screens[0].root.w = 10), /^screens\[0\]\.root must be as wide and tall as its screen/);
   refused((s) => (s.screens[0].root.place = { x: 5, y: 0 }), /^screens\[0\]\.root\.place must be/);
   refused((s) => (s.screens[0].root.t = "text"), /^screens\[0\]\.root\.dir belongs to a box/);
@@ -113,18 +119,23 @@ test("a node is refused for the field that is wrong", () => {
   refused((s) => (kid(s).strokeWidth = 101), /kids\[0\]\.strokeWidth/);
   refused((s) => (kid(s).kind = "star"), /kids\[0\]\.kind must be one of/);
   refused((s) => (kid(s).w = 16001), /kids\[0\]\.w must be a number from 1 to 16000/);
-  refused((s) => (kid(s).place = { x: 1e6, y: 0 }), /kids\[0\]\.place/);
-  refused((s) => (kid(s).name = ""), /kids\[0\]\.name must be 1 to 200/);
+  kept((s) => (kid(s).place = { x: 1e6, y: 0 }), (doc) => doc.screens[0].root.kids[0].place.x === 1e6);
+  refused((s) => (kid(s).name = ""), /kids\[0\]\.name must be 1 to 240/);
   refused((s) => (kid(s).opacity = 2), /kids\[0\]\.opacity/);
   refused((s) => delete kid(s).kids, /kids\[0\]\.kids must be a list on a box/);
   refused((s) => (kid(s).dir = "row"), /kids\[0\]\.dir must be "stack"/);
-  refused((s) => (kid(s, 1).d = 'M0 0" onload="x'), /kids\[1\]\.d must be an SVG path/);
+  kept((s) => (kid(s, 1).d = 'M0 0" onload="x'), (doc) => doc.screens[0].root.kids[1].d.includes("onload"));
+  const quoted = sample();
+  quoted.screens[0].root.kids[1].d = 'M0 0" onload="x';
+  const drawn = renderScreen(quoted.screens[0]).svg;
+  assert.equal(drawn.includes('onload="'), false);
+  assert.equal(drawn.includes('onload=&quot;'), true);
   refused((s) => delete kid(s, 1).d, /kids\[1\]\.d is required on a vector/);
   refused((s) => (kid(s, 4).value = 5), /kids\[4\]\.value/);
   refused((s) => delete kid(s, 4).value, /kids\[4\]\.value is required on text/);
-  refused((s) => (kid(s, 4).font = "A<b>"), /kids\[4\]\.font must be a font family name/);
-  refused((s) => (kid(s, 4).states = { hover: {} }), /kids\[4\]\.states is not part of a Lite sketch/);
-  refused((s) => (kid(s, 4).runs = []), /kids\[4\]\.runs is not part of a Lite sketch/);
+  kept((s) => (kid(s, 4).font = "A<b>"), (doc) => doc.screens[0].root.kids[4].font === "A<b>");
+  kept((s) => (kid(s, 4).states = { hover: { fill: "#ffffff" } }), (doc) => doc.screens[0].root.kids[4].states.hover.fill === "#ffffff");
+  kept((s) => (kid(s, 4).runs = [{ text: "kept" }]), (doc) => doc.screens[0].root.kids[4].runs[0].text === "kept");
   refused((s) => (kid(s, 5).src = "https://evil.example/a.png"), /kids\[5\]\.src must be assets\/<uuid>/);
   refused((s) => (kid(s, 5).src = "assets/../../x.png"), /kids\[5\]\.src must be assets\/<uuid>/);
   refused((s) => (kid(s, 5).src = `assets/${UUID}.svg`), /kids\[5\]\.src must be assets\/<uuid>/);
@@ -152,7 +163,7 @@ test("the limits of v1 hold: nodes, depth, links and the shape of a link", () =>
   assert.doesNotThrow(() => validateSketch(sketch));
   const crowded = sample();
   crowded.screens[0].root.kids = new Array(2001).fill(0).map((_, i) => ({ ...many[0], id: `c-${i}` }));
-  assert.throws(() => validateSketch(crowded), /kids must be a list of at most 2000/);
+  assert.doesNotThrow(() => validateSketch(crowded));
 
   const deep = sample();
   let at = deep.screens[0].root;
@@ -165,8 +176,8 @@ test("the limits of v1 hold: nodes, depth, links and the shape of a link", () =>
 
   refused((s) => (s.links[0].to = s.links[0].from), /^links\[0\] must join two different screens/);
   refused((s) => (s.links[0].transition = "wipe"), /^links\[0\]\.transition must be cut, fade or slide/);
-  refused((s) => (s.links[0].label = "Continue"), /^links\[0\]\.label is not part of a Lite sketch/);
-  refused((s) => (s.links[0].duration = 3000), /^links\[0\]\.duration/);
+  kept((s) => (s.links[0].label = "Continue"), (doc) => doc.links[0].label === "Continue");
+  kept((s) => (s.links[0].duration = 3000), (doc) => doc.links[0].duration === 3000);
   refused((s) => (s.links[0].element = "nowhere"), /^links\[0\]\.element must name a node of the sketch screen the link leaves/);
 });
 

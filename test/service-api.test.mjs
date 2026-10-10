@@ -88,7 +88,8 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   assert.equal(future.status, 503);
   assert.equal(future.json.error.code, 'service_unavailable');
   const asset = await call(core.http.port, 'GET', '/api/v1/editors/board/assets/missing', { token });
-  assert.equal(asset.status, 503);
+  assert.equal(asset.status, 404);
+  assert.equal(asset.json.error.code, 'not_found');
   assert.equal(asset.raw.includes('board'), false);
 });
 
