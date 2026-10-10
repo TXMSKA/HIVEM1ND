@@ -94,7 +94,6 @@ export async function request(api, method, path, options = {}) {
     api.controllers.delete(controller);
   }
   if (operation) api.uncertain.delete(operation.id);
-  if (response.status === 401 || response.status === 410) clearCredentials(api);
   if (response.status === 204) return { status: 204, data: null, meta: null };
   const retryAfter = retryAfterMs(response, api.now);
   let json = null;
@@ -103,9 +102,11 @@ export async function request(api, method, path, options = {}) {
     try {
       json = JSON.parse(text);
     } catch {
+      if (response.status === 401) clearCredentials(api);
       throw new ApiError(response.status, "invalid_response", "The response was not JSON.", {}, null, retryAfter);
     }
   }
+  if (response.status === 401 || json?.error?.code === "home_expired") clearCredentials(api);
   if (response.ok) {
     if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !json.meta.sync) {
       throw new ApiError(response.status, "invalid_response", "The response envelope is not valid.", {}, null, retryAfter);
