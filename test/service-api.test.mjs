@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
@@ -79,13 +80,13 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   assert.equal(created.json.data.unit, 'builder');
   const listed = await call(core.http.port, 'GET', '/api/v1/units', { token });
   assert.equal(listed.json.data.items.some((item) => item.unit === 'builder'), true);
-  const home = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
+  const future = await call(core.http.port, 'POST', '/api/v1/watch', {
     token,
     body: {},
     headers: { 'idempotency-key': randomUUID() },
   });
-  assert.equal(home.status, 503);
-  assert.equal(home.json.error.code, 'service_unavailable');
+  assert.equal(future.status, 503);
+  assert.equal(future.json.error.code, 'service_unavailable');
   const asset = await call(core.http.port, 'GET', '/api/v1/editors/board/assets/missing', { token });
   assert.equal(asset.status, 503);
   assert.equal(asset.raw.includes('board'), false);
@@ -291,4 +292,51 @@ test('event streams replay from a cursor without leaking credentials', async (t)
   assert.equal(loggedOut.status, 204);
   const after = await call(core.http.port, 'GET', '/api/v1/units', { token });
   assert.equal(after.status, 401);
+});
+
+test('home enable is memory-only and loopback cannot exchange it', async (t) => {
+  const fixture = await makeCoreFixture();
+  const listeners = [];
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    interfaces: () => [{ name: 'Ethernet', address: '10.0.0.8', netmask: '255.255.255.0', internal: false }],
+    listen: (address) => new Promise((resolve, reject) => {
+      const server = createServer((socket) => socket.destroy());
+      listeners.push(server);
+      server.unref();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve({
+        address: address.address,
+        netmask: address.netmask,
+        port: server.address().port,
+        close: () => new Promise((done) => server.close(() => done())),
+      }));
+    }),
+  });
+  t.after(async () => {
+    await core.http.close();
+    await Promise.all(listeners.map((server) => new Promise((resolve) => server.close(() => resolve()))));
+    await dispose(fixture);
+  });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { body: {} });
+  const key = randomUUID();
+  const opened = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
+    token: local.json.token,
+    body: { enabled: true },
+    headers: { 'idempotency-key': key },
+  });
+  assert.equal(opened.status, 201);
+  assert.equal(typeof opened.json.data.key, 'string');
+  const again = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
+    token: local.json.token,
+    body: { enabled: true },
+    headers: { 'idempotency-key': key },
+  });
+  assert.equal(again.json.meta.replayed, true);
+  assert.equal(again.json.data.key, opened.json.data.key);
+  const exchanged = await call(core.http.port, 'POST', '/api/v1/auth/home', { body: { key: opened.json.data.key } });
+  assert.equal(exchanged.status, 403);
+  assert.equal(JSON.stringify(opened.json.error ?? {}).includes(opened.json.data.key), false);
 });

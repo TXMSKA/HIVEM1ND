@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createCredentialStore, protectLocalFile, safeError } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -107,4 +108,19 @@ test('a phone token is rejected for a desktop write on the real listener', async
     req.end(payload);
   });
   assert.equal(status, 403);
+  const home = {
+    now: () => fixture.clock.now,
+    credentials: core.credentials,
+    interfaces: () => [{ name: 'Ethernet', address: '10.0.0.8', netmask: '255.255.255.0', internal: false }],
+    listen: async (address) => ({ address: address.address, netmask: address.netmask, port: 43123, close: async () => {} }),
+    bus: { emit() {} },
+  };
+  const grant = await openHome(home, {});
+  await assert.rejects(() => exchange(home, { key: `${grant.key}no` }, '10.0.0.8'), (error) => error.code === 'invalid_home_key');
+  await closeQuiet(home);
 });
+
+async function closeQuiet(home) {
+  const { closeHome } = await import('../engine/service/home.mjs');
+  await closeHome(home);
+}
