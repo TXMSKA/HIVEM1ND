@@ -23,7 +23,10 @@ export async function probeClients(options = {}) {
   const cursor = await cursorAgentCommand({ env, platform: options.platform ?? process.platform });
   const reports = {};
   for (const client of CLIENTS) {
-    const command = client === 'cursor' ? (path.isAbsolute(cursor.command) ? cursor.command : null) : found[client];
+    const located = client === 'cursor' ? null : await unwrapLaunch(found[client], client);
+    const command = client === 'cursor'
+      ? (path.isAbsolute(cursor.command) ? cursor.command : null)
+      : located?.command ?? null;
     const installed = Boolean(command);
     let version = null;
     if (installed && options.spawnVersion === true && !String(command).toLowerCase().endsWith('.cmd')) {
@@ -46,27 +49,51 @@ export function createNativeAdapter(client, options = {}) {
   if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const models = Array.isArray(options.models) ? options.models : [];
   const fixture = options.fixture === true;
-  const nativeSupport = options.verifiedLogin === true && !fixture;
+  const live = options.live === true || Boolean(options.command) || Boolean(options.spawn);
+  const children = new Map();
   return {
     client,
-    nativeSupport,
+    nativeSupport: false,
     capabilities: {
-      create: nativeSupport || fixture,
+      create: fixture || (options.verifiedLogin !== false && live),
       resume: true,
       stop: true,
-      exactApproval: nativeSupport,
+      exactApproval: false,
       modelSelection: models.length > 0,
     },
     models,
     async probe() {
-      return { client, nativeSupport, installed: true };
+      return { client, nativeSupport: this.nativeSupport, installed: this.capabilities.create };
     },
     async create(request) {
       if (!this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       if (request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
       if (fixture) return acceptFixture(client, options.transcript ?? [], request);
-      throw new CoreError(503, 'native_login_unavailable', 'The native login was not verified.');
+      if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
+      const resolved = options.command
+        ? { command: options.command, args: options.args ?? launchArgs(client, request) }
+        : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
+      if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
+      assertNoBypass(resolved.args);
+      const child = (options.spawn ?? spawn)(resolved.command, resolved.args, {
+        shell: false,
+        windowsHide: true,
+        cwd: request.cwd || undefined,
+        env: options.env ?? process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (child?.pid) children.set(child.pid, child);
+      try {
+        const nativeSessionId = await handshake(client, child, request, options.timeoutMs ?? 8000);
+        this.nativeSupport = true;
+        return { nativeSessionId, pid: child.pid, owned: true };
+      } catch (error) {
+        await finishChild(child);
+        if (child?.pid) children.delete(child.pid);
+        if (error instanceof CoreError && error.code === 'client_unavailable') throw error;
+        throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
+      }
     },
     async send() {
       return { submitted: false, ambiguous: true };
@@ -81,10 +108,21 @@ export function createNativeAdapter(client, options = {}) {
     },
     async stop(session) {
       if (!session?.owned) return { acknowledged: false, code: 'stop_unavailable' };
+      const child = children.get(session.pid);
+      if (!child) {
+        if (!fixture) return { acknowledged: false, code: 'stop_unavailable' };
+        options.signaled?.push(session.pid);
+        return { acknowledged: true, exitCode: 0 };
+      }
+      const exitCode = await finishChild(child);
+      children.delete(session.pid);
       options.signaled?.push(session.pid);
-      return { acknowledged: true, exitCode: 0 };
+      return { acknowledged: exitCode !== null, exitCode };
     },
-    async close() {},
+    async close() {
+      await Promise.all([...children.values()].map((child) => finishChild(child)));
+      children.clear();
+    },
   };
 }
 
@@ -427,6 +465,201 @@ function assertNoBypass(argv) {
 
 function assertNoSecret(text) {
   if (/token|pipe|authorization|secret/i.test(text)) throw new CoreError(422, 'invalid_body', 'A session record contains a secret.');
+}
+
+function cleanPath(value) {
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.replaceAll('\\\\', '\\') : normalized;
+}
+
+function launchArgs(client, request = {}) {
+  if (client === 'codex') return ['app-server', '--listen', 'stdio://'];
+  if (client === 'cursor') return ['acp'];
+  return ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--session-id', request.nativeSessionId ?? randomUUID()];
+}
+
+export async function resolveLaunch(client, env = process.env, platform = process.platform, request = {}) {
+  if (client === 'cursor') {
+    const cursor = await cursorAgentCommand({ env, platform });
+    if (!path.isAbsolute(cursor.command)) return null;
+    return { command: cursor.command, args: [...cursor.args, 'acp'] };
+  }
+  return unwrapLaunch(await findExecutable(client, env), client, request);
+}
+
+async function unwrapLaunch(file, client, request = {}) {
+  if (!file) return null;
+  if (!file.toLowerCase().endsWith('.cmd')) return { command: file, args: launchArgs(client, request) };
+  let text = '';
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+  const root = path.dirname(file);
+  const expanded = text.replaceAll('%dp0%', `${root}${path.sep}`).replaceAll('%~dp0', `${root}${path.sep}`);
+  const exe = [...expanded.matchAll(/"([^"\r\n]+\.exe)"/gi)].map((match) => match[1]).find((item) => !/[/\\]node\.exe$/i.test(item) && !item.includes('%'));
+  if (exe) {
+    try {
+      const stats = await lstat(exe);
+      if (stats.isFile() && !stats.isSymbolicLink()) return { command: cleanPath(exe), args: launchArgs(client, request) };
+    } catch {
+      // The wrapper names an executable that is not installed.
+    }
+  }
+  const script = [...expanded.matchAll(/"([^"\r\n]+\.js)"/gi)].map((match) => match[1]).find((item) => !item.includes('%'));
+  if (!script) return null;
+  let node = process.execPath;
+  try {
+    const bundled = path.join(root, 'node.exe');
+    if ((await lstat(bundled)).isFile()) node = bundled;
+  } catch {
+    // Use the Node executable that is already running this service.
+  }
+  return { command: node, args: [script, ...launchArgs(client, request)] };
+}
+
+function unavailable() {
+  return new CoreError(503, 'client_unavailable', 'The native client is not available.');
+}
+
+function loginFailed(text) {
+  return /not logged in|requiresopenaiauth|uv_os_get_passwd|enomem/i.test(text);
+}
+
+async function handshake(client, child, request, timeoutMs) {
+  const incoming = readLines(child, timeoutMs);
+  try {
+    if (client === 'claude') return await claudeHandshake(request, incoming);
+    if (client === 'codex') return await codexHandshake(child, request, incoming);
+    return await cursorHandshake(child, request, incoming);
+  } finally {
+    incoming.close();
+  }
+}
+
+async function claudeHandshake(request, incoming) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const line = await incoming.line();
+    if (loginFailed(line) || loginFailed(incoming.stderr())) throw unavailable();
+    let message;
+    try {
+      message = parseClaudeLine(line);
+    } catch {
+      continue;
+    }
+    if (message?.type === 'result' && message.is_error) throw unavailable();
+    if (message?.type === 'system' && message.subtype === 'init' && message.session_id === request.nativeSessionId) return request.nativeSessionId;
+  }
+  throw unavailable();
+}
+
+async function codexHandshake(child, request, incoming) {
+  sendLine(child, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } } });
+  const init = JSON.parse(await incoming.line());
+  if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
+  sendLine(child, { jsonrpc: '2.0', method: 'initialized' });
+  sendLine(child, { jsonrpc: '2.0', id: 2, method: 'account/read' });
+  const account = JSON.parse(await incoming.line());
+  if (loginFailed(JSON.stringify(account)) || !account.result?.account || account.result.requiresOpenaiAuth === true) throw unavailable();
+  const params = { cwd: request.cwd ?? process.cwd() };
+  if (request.model) params.model = request.model;
+  sendLine(child, { jsonrpc: '2.0', id: 3, method: 'thread/start', params });
+  const thread = JSON.parse(await incoming.line());
+  if (!thread.result?.thread?.id) throw unavailable();
+  return thread.result.thread.id;
+}
+
+async function cursorHandshake(child, request, incoming) {
+  sendLine(child, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+  });
+  const init = JSON.parse(await incoming.line());
+  if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
+  const method = (init.result?.authMethods ?? []).find((item) => /existing|login/i.test(`${item.id ?? ''} ${item.name ?? item}`));
+  if (!method) throw unavailable();
+  sendLine(child, { jsonrpc: '2.0', id: 2, method: 'authenticate', params: { methodId: method.id ?? method } });
+  const auth = JSON.parse(await incoming.line());
+  if (auth.error || loginFailed(JSON.stringify(auth))) throw unavailable();
+  sendLine(child, { jsonrpc: '2.0', id: 3, method: 'session/new', params: { cwd: request.cwd ?? process.cwd(), mcpServers: [] } });
+  const session = JSON.parse(await incoming.line());
+  if (!session.result?.sessionId) throw unavailable();
+  return session.result.sessionId;
+}
+
+function sendLine(child, message) {
+  child.stdin.write(`${JSON.stringify(message)}\n`);
+}
+
+function readLines(child, timeoutMs) {
+  let buffer = '';
+  let stderr = '';
+  const queue = [];
+  const pending = [];
+  const push = (line) => {
+    if (pending.length) pending.shift().resolve(line);
+    else queue.push(line);
+  };
+  child.stdout?.on?.('data', (chunk) => {
+    buffer += chunk.toString('utf8');
+    if (buffer.length > 1000000) child.kill?.();
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      push(buffer.slice(0, newline).replace(/\r$/, ''));
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf('\n');
+    }
+  });
+  child.stderr?.on?.('data', (chunk) => {
+    stderr += chunk.toString('utf8');
+    if (stderr.length > 8000) stderr = stderr.slice(-8000);
+  });
+  child.once?.('exit', () => {
+    if (buffer.trim()) push(buffer.trim());
+    const error = unavailable();
+    while (pending.length) pending.shift().reject(error);
+  });
+  return {
+    stderr: () => stderr,
+    line() {
+      if (queue.length) return Promise.resolve(queue.shift());
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(unavailable()), timeoutMs);
+        pending.push({
+          resolve: (line) => { clearTimeout(timer); resolve(line); },
+          reject: (error) => { clearTimeout(timer); reject(error); },
+        });
+      });
+    },
+    close() {
+      pending.splice(0);
+    },
+  };
+}
+
+function finishChild(child) {
+  if (!child) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    if (child.exitCode != null) {
+      resolve(child.exitCode);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* The process is already gone. */ }
+      resolve(1);
+    }, 2000);
+    child.once?.('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 0);
+    });
+    try { child.kill(); } catch {
+      clearTimeout(timer);
+      resolve(1);
+    }
+  });
 }
 
 async function findExecutable(name, env) {
