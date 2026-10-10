@@ -23,7 +23,7 @@ export function createApi({ location, history, fetch: fetchImpl, clock, createOb
   const credentials = readFragment(location, history);
   const api = {
     location,
-    fetch: fetchImpl ?? globalThis.fetch.bind(globalThis),
+    fetch: (fetchImpl ?? globalThis.fetch).bind(globalThis),
     now: clock ?? (() => Date.now()),
     createObjectURL: createObjectURL ?? globalThis.URL?.createObjectURL?.bind(globalThis.URL),
     revokeObjectURL: revokeObjectURL ?? globalThis.URL?.revokeObjectURL?.bind(globalThis.URL),
@@ -63,10 +63,10 @@ export async function request(api, method, path, options = {}) {
   const encodedBody = payload === undefined ? undefined : JSON.stringify(payload);
   const headers = {
     Accept: options.accept ?? "application/json",
-    Origin: api.location.origin,
     "Cache-Control": "no-store",
     ...(options.headers ?? {}),
   };
+  if (typeof document === "undefined") headers.Origin = api.location.origin;
   if (!authExchange && api.token) headers.Authorization = `Bearer ${api.token}`;
   if (encodedBody !== undefined) headers["Content-Type"] = "application/json";
   if (operation && !authExchange && actualMethod !== "GET" && actualMethod !== "HEAD") {
@@ -131,7 +131,11 @@ export async function fetchAsset(api, asset) {
   if (!api.token) throw new ApiError(401, "sign_in_required", "Open the app again to continue.");
   const url = resolveAssetUrl(api.location.origin, asset?.url);
   const response = await api.fetch(url, {
-    headers: { Authorization: `Bearer ${api.token}`, Accept: asset?.contentType ?? "image/*", Origin: api.location.origin },
+    headers: {
+      Authorization: `Bearer ${api.token}`,
+      Accept: asset?.contentType ?? "image/*",
+      ...(typeof document === "undefined" ? { Origin: api.location.origin } : {}),
+    },
     cache: "no-store",
     redirect: "error",
   });

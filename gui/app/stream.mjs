@@ -122,7 +122,7 @@ export async function subscribe(api, { onEvent, lastEventId, signal, query } = {
       headers: {
         Accept: "text/event-stream",
         Authorization: `Bearer ${api.token}`,
-        Origin: api.location.origin,
+        ...(typeof document === "undefined" ? { Origin: api.location.origin } : {}),
         ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
       },
       cache: "no-store",
