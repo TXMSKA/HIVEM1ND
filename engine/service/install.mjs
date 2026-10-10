@@ -313,7 +313,7 @@ export async function configureOwnedService(options = {}) {
       const temporary = `${configFile}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
       await rename(temporary, configFile);
-      if (options.protect !== false) await protectLocalFile(configFile, options.sid ? { sid: options.sid } : {});
+      if (options.protect !== false) await protectLocalFile(configFile, { aclRunner: options.aclRunner, store: options.store });
     },
   });
   if (result.state?.installed?.action === 'create' && options.dryRun === false) {

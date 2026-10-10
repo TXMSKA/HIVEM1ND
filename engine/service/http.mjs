@@ -4,7 +4,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError, verifyBootstrapFiles } from './security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
@@ -829,12 +829,6 @@ function sameSecret(left, right) {
 async function requireBootstrap(req, options, listener) {
   const state = options.bootstrap;
   if (!state?.valid || !Buffer.isBuffer(state.secretBytes) || state.secretBytes.length !== 32 || !state.file || !state.record) {
-    throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
-  }
-  try {
-    await verifyBootstrapFiles(path.dirname(state.file), state.file);
-  } catch {
-    state.valid = false;
     throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
   }
   let parsed;

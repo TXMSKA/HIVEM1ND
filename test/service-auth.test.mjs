@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore, startService, stopService } from '../engine/service/service.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createCredentialStore, protectLocalFile, safeError } from '../engine/service/security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, protectLocalFile, safeError, stubAclRunner } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const PHONE_FORBIDDEN = ['unit.create', 'chat.manage', 'layout.write', 'settings.write', 'home.manage', 'grant.revoke', 'session.start', 'session.stop', 'task.undo', 'editor.write', 'comment.write', 'asset.write', 'proposal.answer', 'watch', 'viewer.write'];
@@ -75,8 +75,10 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
     await writeFile(file, '{}\n');
   });
   await assert.rejects(() => protectLocalFile(file, { fail: true }), (error) => error.code === 'bootstrap_unavailable' && !String(error.message).includes(secret));
-  const protectedFile = await protectLocalFile(file, { handles: fixture.children });
+  const runner = stubAclRunner();
+  const protectedFile = await protectLocalFile(file, { aclRunner: runner });
   assert.equal(protectedFile.protected, true);
+  if (process.platform === 'win32') assert.equal(runner.calls.filter((call) => call.op === 'protect').length, 1);
   store.revoke(desktop.token);
   await assert.rejects(async () => store.verify(desktop.token), (error) => error.status === 401);
 });

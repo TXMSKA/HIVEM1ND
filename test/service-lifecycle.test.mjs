@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { attachNative, dispatchLocal } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
+import { stubAclRunner } from '../engine/service/security.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -173,7 +174,7 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
     await closeGuiHost();
     await dispose(fixture);
   });
-  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now };
+  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner() };
   await assert.rejects(startGui({ ...input, mindPath: path.join(fixture.root, 'missing') }), { code: 'mind_not_configured' });
   await assert.rejects(startGui({ ...input, embedded: true, hostOrigin: 'file://local' }), { code: 'invalid_body' });
   const first = await startGui({ ...input, look: 'modern' });

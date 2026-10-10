@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CoreError } from '../engine/service/identity.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
 import { createStore } from '../engine/service/store.mjs';
 
 function assertDescendant(root, target) {
@@ -51,6 +52,7 @@ export async function makeCoreFixture(options = {}) {
     events,
     autoRecover: options.autoRecover ?? true,
   });
+  store.aclRunner = options.aclRunner ?? stubAclRunner();
   return {
     root,
     platform,
