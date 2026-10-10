@@ -551,6 +551,7 @@ function renderBar(app, t, counts) {
 }
 
 function renderWorkspace(app, t, view, counts) {
+  if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
   const tabs = element(document, "div", { class: "tabs", role: "tablist" });
   for (const tab of ["hierarchy", "chats"]) {
@@ -780,7 +781,7 @@ function renderCollection(app, t) {
   });
   const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : t("listTotal", { count: list.total ?? 0 });
   const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), text: status });
-  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab) });
+  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
   const rows = collectionRows(app, t, list);
   const handlers = {
     selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.unitId,
@@ -1120,7 +1121,22 @@ function onFocusKey(app, event) {
   renderShell(app);
 }
 
+function renderEditorWorkspace(app, t) {
+  const document = app.root.ownerDocument;
+  const surfaces = renderEditorSurfaces(app, t);
+  return element(document, "div", {
+    class: "workspace workspace-editor",
+    "data-editor-layout": app.mode,
+  }, surfaces.catalog, surfaces.resource, surfaces.comments);
+}
+
 function renderEditor(app, t) {
+  const document = app.root.ownerDocument;
+  const surfaces = renderEditorSurfaces(app, t);
+  return element(document, "div", { class: "editor-panel" }, surfaces.catalog, surfaces.resource, surfaces.comments);
+}
+
+function renderEditorSurfaces(app, t) {
   const document = app.root.ownerDocument;
   const editors = editorsOf(app);
   const kind = app.mode === "blueprint" ? "blueprint" : "void";
@@ -1129,12 +1145,22 @@ function renderEditor(app, t) {
   const title = current?.authoritative?.title ?? current?.authoritative?.legacy?.id ?? t(app.mode);
   const watch = editors.watch;
   const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
-  const panel = element(document, "div", { class: "editor-panel" });
-  panel.append(element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }));
-  panel.append(element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }));
+  const catalog = element(document, "aside", { class: "panel editor-catalog", "data-editor-column": "catalog" },
+    element(document, "h2", { text: t(kind === "blueprint" ? "boards" : "texts") }),
+  );
+  const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
+    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
+  );
+  const commentsColumn = element(document, "aside", { class: "panel editor-comments-column", "data-editor-column": "comments" },
+    element(document, "h2", { text: t("comments") }),
+  );
+  const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
+    element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }),
+  );
+  resource.append(tools);
   if (current?.conflict) {
-    panel.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
-    panel.append(element(document, "button", {
+    resource.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
+    resource.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "discard-draft",
@@ -1150,7 +1176,7 @@ function renderEditor(app, t) {
         renderShell(app);
       },
     }));
-    panel.append(element(document, "button", {
+    resource.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "reapply-draft",
@@ -1161,20 +1187,20 @@ function renderEditor(app, t) {
       },
     }));
   }
-  if (current?.kind === "blueprint" && current.authoritative?.document) panel.append(boardSurface(app, document, current, t));
-  if (current?.kind === "void" && current.authoritative?.document) panel.append(voidSurface(app, document, current, t));
+  if (current?.kind === "blueprint" && current.authoritative?.document) resource.append(boardSurface(app, document, current, t));
+  if (current?.kind === "void" && current.authoritative?.document) resource.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
     const path = current.authoritative.legacy.path ?? "";
-    panel.append(element(document, "p", { "data-legacy": path, text: path }));
-    panel.append(element(document, "p", { text: t("conversionRequired") }));
+    resource.append(element(document, "p", { "data-legacy": path, text: path }));
+    resource.append(element(document, "p", { text: t("conversionRequired") }));
     if (canEditResources(app)) {
-      panel.append(element(document, "button", {
+      resource.append(element(document, "button", {
         type: "button", class: "btn", "data-action": "copy-json",
         onclick: () => submitJsonCopy(app, current),
       }, t("copyJson")));
     }
   }
-  if (editors.error?.code === "corrupt_resource") panel.append(element(document, "p", { text: t("corruptResource") }));
+  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "p", { text: t("corruptResource") }));
   const catalogRows = [];
   for (const group of groupCatalog(editors.catalog)) {
     for (const item of group.items) {
@@ -1195,10 +1221,11 @@ function renderEditor(app, t) {
     selectedId: current?.resourceId,
     onActivate: (row) => selectEditor(app, row.item),
   });
-  panel.append(list);
+  catalog.append(list);
   const forms = resourceForms(app, document, t);
-  if (forms) panel.append(forms);
-  if (!current) return panel;
+  if (forms) catalog.append(forms);
+  const surfaces = { catalog, resource, comments: commentsColumn };
+  if (!current) return surfaces;
   const draft = element(document, "textarea", {
     class: "editor-compose",
     "data-draft": current.resourceId,
@@ -1207,7 +1234,7 @@ function renderEditor(app, t) {
     },
   });
   draft.value = draftMap(app, "auxiliary").get(current.resourceId) ?? "";
-  panel.append(draft);
+  resource.append(draft);
   if (current.attachmentResource !== current.resourceId) {
     current.attachmentChoice = new Set(current.attached ?? []);
     current.attachmentResource = current.resourceId;
@@ -1236,7 +1263,7 @@ function renderEditor(app, t) {
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app) }, t("attach")));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => stopWatch(app.api, editors).then(() => renderShell(app)).catch((error) => noteEditor(app, error)) }, t("stopWatch")));
-  panel.append(picker, actions);
+  tools.append(picker, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
   const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
   for (const thread of (current.threads ?? []).slice(0, commentBound)) {
@@ -1282,14 +1309,14 @@ function renderEditor(app, t) {
     setCommentEnabled(button, commentCanSubmit(app, field.value));
   };
   owner.addEventListener?.("selectionchange", app.onCommentSelection);
-  panel.append(comments, compose, commentButton);
+  commentsColumn.append(comments, compose, commentButton);
   const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
   for (const notice of current.notices ?? []) {
     const key = noticeCopy[notice.state];
     if (!key) continue;
-    panel.append(element(document, "p", { "data-notice": notice.state, text: t(key) }));
+    commentsColumn.append(element(document, "p", { "data-notice": notice.state, text: t(key) }));
   }
-  return panel;
+  return surfaces;
 }
 
 function selectEditor(app, summary) {
@@ -1668,7 +1695,7 @@ function finishMap(app) {
 }
 
 function finishList(app) {
-  const host = app.root.querySelector?.(".list");
+  const host = app.root.querySelector?.("[data-collection]");
   if (!host || !app.activeList) return;
   renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
   const view = app.root.ownerDocument.defaultView;

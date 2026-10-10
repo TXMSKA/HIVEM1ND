@@ -38,6 +38,12 @@ test("English and Spanish use the same copy keys", () => {
   assert.equal(text("es", "sendBack"), "Devolver");
   assert.equal(text("es", "watch"), "Seguir");
   assert.equal(text("es", "document"), "Documento");
+  assert.equal(text("en", "boards"), "Boards");
+  assert.equal(text("es", "boards"), "Tableros");
+  assert.equal(text("en", "texts"), "Texts");
+  assert.equal(text("es", "texts"), "Textos");
+  assert.equal(text("en", "comments"), "Comments");
+  assert.equal(text("es", "comments"), "Comentarios");
   assert.equal(text("es", "focus"), "Concentración");
   assert.equal(text("es", "highContrast"), "Alto contraste");
   assert.equal(text("es", "settings"), "Configuración");
@@ -1458,7 +1464,7 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "Hold!");
   assert.equal(desktop.app.inputDrafts.notes.get("project:shop:030").value, "Fix");
 
-  navigate(desktop.app, "chats");
+  navigate(desktop.app, "map");
   await waitFor(() => desktop.root.querySelector("[data-composer]")?.value === "Hold!", "The chat draft was not restored.");
   typeInput(desktop.root.querySelector("[data-composer]"), "", 0, 0);
   typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "", 0, 0);
@@ -1498,6 +1504,83 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   await delay(40);
   assert.equal(phoneUrls.some((url) => url.includes("/viewer")), false);
   assert.equal(phone.app.inputDrafts.chats.get(phoneChat.id).value, "Local only");
+});
+
+test("Blueprint and Document place the catalog beside the comments", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const layout = desktop.root.querySelector("[data-editor-layout]");
+  assert.equal(layout?.getAttribute("data-editor-layout"), "blueprint");
+  assert.equal(layout.className.includes("workspace-editor"), true);
+  assert.deepEqual([...layout.children].map((node) => node.getAttribute("data-editor-column")), ["catalog", "resource", "comments"]);
+  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Boards");
+  assert.equal(layout.querySelector("[data-editor-column='comments']").querySelector("h2").textContent, "Comments");
+  assert.equal(desktop.root.querySelector("[role='tab']"), null);
+  assert.equal(desktop.root.querySelector(".side"), null);
+  assert.equal(desktop.root.querySelector(".inspector"), null);
+  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("[data-action='register-resource']")?.getAttribute("data-kind"), "blueprint");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Tableros");
+  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").querySelector("h2").textContent, "Comentarios");
+  desktop.app.language = "en";
+  renderShell(desktop.app);
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector(".board-host"), "The board did not open.");
+  const resource = desktop.root.querySelector("[data-editor-column='resource']");
+  const comments = desktop.root.querySelector("[data-editor-column='comments']");
+  const tools = resource.querySelector("[data-editor-tools]");
+  assert.equal(tools.querySelector("[data-watch]")?.getAttribute("data-watch"), "off");
+  assert.equal(tools.querySelector("[data-action='attach']") != null, true);
+  assert.equal(tools.querySelector("[data-action='watch']") != null, true);
+  assert.equal(columnIndex(resource, tools) < columnIndex(resource, resource.querySelector(".board-host")), true);
+  assert.equal(resource.querySelector("[data-node-name]") != null, true);
+  assert.equal(resource.querySelector("[data-comment]"), null);
+  assert.equal(comments.querySelector("[data-comment]") != null, true);
+  assert.equal(comments.querySelector(".board-host"), null);
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const documentLayout = desktop.root.querySelector("[data-editor-layout]");
+  assert.equal(documentLayout.getAttribute("data-editor-layout"), "document");
+  assert.equal(documentLayout.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Texts");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
+  const textResource = desktop.root.querySelector("[data-editor-column='resource']");
+  const textComments = desktop.root.querySelector("[data-editor-column='comments']");
+  const textTools = textResource.querySelector("[data-editor-tools]");
+  assert.equal(columnIndex(textResource, textTools) < columnIndex(textResource, textResource.querySelector("[data-source]")), true);
+  assert.equal(textTools.querySelector("[data-action='watch']") != null, true);
+  assert.equal(textResource.querySelector("[data-source]") != null, true);
+  assert.equal(textResource.querySelector("[data-draft]") != null, true);
+  assert.equal(textResource.querySelector("[data-action='save-range']") != null, true);
+  assert.equal(textComments.querySelector("[data-comment]") != null, true);
+  assert.equal(textComments.querySelector("[data-source]"), null);
+  click(textResource.querySelector("[data-action='enter-focus']"));
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
+  assert.equal(desktop.root.querySelector("[data-editor-layout]"), null);
+  assert.equal(desktop.root.querySelector(".side") != null, true);
+  assert.equal(desktop.root.querySelector(".inspector") != null, true);
+
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const modern = css.split('[data-look="high-contrast"]')[0];
+  const contrast = css.split('[data-look="high-contrast"]')[1];
+  assert.match(modern, /--editor-side:\s*228px/);
+  assert.match(modern, /--editor-comments:\s*368px/);
+  assert.match(contrast, /--editor-side:\s*240px/);
+  assert.match(contrast, /--editor-comments:\s*380px/);
+  assert.match(css, /\.workspace-editor\s*\{[^}]*grid-template-columns:\s*var\(--editor-side\)\s+minmax\(0,\s*1fr\)\s+var\(--editor-comments\)/);
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {
@@ -1584,6 +1667,12 @@ function typeInput(node, value, start, end) {
 
 function click(node) {
   for (const handler of node?.listeners?.get("click") ?? []) handler({ preventDefault() {}, target: node });
+}
+
+function columnIndex(column, node) {
+  let current = node;
+  while (current && current.parent !== column) current = current.parent;
+  return column.children.indexOf(current);
 }
 
 async function waitFor(check, label) {

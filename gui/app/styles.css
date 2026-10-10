@@ -27,6 +27,8 @@
   --footer: 30px;
   --side: 266px;
   --inspector: 366px;
+  --editor-side: 228px;
+  --editor-comments: 368px;
   --font: "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
   --target: 44px;
@@ -58,6 +60,8 @@
   --radius-panel: 10px;
   --radius-control: 8px;
   --radius-pill: 8px;
+  --editor-side: 240px;
+  --editor-comments: 380px;
   --qr-dark: #000000;
   --qr-light: #ffffff;
 }
@@ -195,6 +199,10 @@ button, input { font: inherit; color: inherit; }
   padding: 0 var(--gap) var(--gap);
 }
 
+.workspace-editor {
+  grid-template-columns: var(--editor-side) minmax(0, 1fr) var(--editor-comments);
+}
+
 .panel {
   min-width: 0;
   min-height: 0;
@@ -278,6 +286,9 @@ button, input { font: inherit; color: inherit; }
     width: min(var(--inspector), calc(100% - (var(--gap) * 2)));
   }
   .shell[data-layout="desktop"] .inspector:not(.is-open) { display: none; }
+  .shell[data-layout="desktop"] .workspace.workspace-editor {
+    grid-template-columns: var(--editor-side) minmax(0, 1fr) var(--editor-comments);
+  }
 }
 
 .shell[data-layout="phone"] {
@@ -351,6 +362,13 @@ button, input { font: inherit; color: inherit; }
   background: var(--ring);
 }
 .map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; gap: 8px; }
+.editor-catalog,
+.editor-resource,
+.editor-comments-column { padding: var(--gap) var(--space); gap: 8px; }
+.editor-catalog h2,
+.editor-resource h2,
+.editor-comments-column h2 { margin: 0; color: var(--text); font-size: 16px; }
+.editor-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .editor-panel { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; overflow: auto; }
 .editor-list, .attach-list, .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .editor-comments { display: flex; flex-direction: column; gap: 8px; }
