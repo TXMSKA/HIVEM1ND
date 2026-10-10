@@ -4,6 +4,15 @@ import { join } from "node:path";
 import test from "node:test";
 import { createApi, request } from "../gui/app/api.mjs";
 import {
+  editedBoard,
+  hitBoardNode,
+  patchNode,
+  removeNode,
+  replaceBoard,
+  updateNodeOperation,
+  uploadAsset,
+} from "../gui/app/blueprint.mjs";
+import {
   applyWatch,
   createComment,
   createEditors,
@@ -182,6 +191,129 @@ test("a late editor read keeps the newer selection and draft", async () => {
   assert.equal(calls, 0);
   assert.equal(editors.current.draftText, "second draft");
 });
+
+test("blueprint edits keep unknown fields and refuse a lossy save", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  api.createObjectURL = () => "blob:asset";
+  let revoked = false;
+  api.revokeObjectURL = () => { revoked = true; };
+  const editors = createEditors();
+  const created = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
+  await openEditor(api, editors, { id: created.data.id, kind: "blueprint" });
+  const original = sentinels(editors.current.authoritative.document);
+  assert.ok(original.includes("document-sentinel"));
+  assert.throws(() => updateNodeOperation(editors.current, "label", { id: "other" }), /structural/i);
+  await patchNode(api, editors.current, "label", { name: "Renamed" });
+  const replaced = editedBoard(editors.current.authoritative, (document) => { document.title = "Retitled"; });
+  const saved = await replaceBoard(api, editors.current, replaced.document);
+  const after = sentinels(saved.data.document);
+  for (const value of original) assert.ok(after.includes(value), value);
+  assert.equal(saved.data.document.title, "Retitled");
+  assert.equal(saved.data.document.screens[0].root.kids[0].name, "Renamed");
+  assert.equal(saved.data.document.links[0].easing, "legacy-ease");
+  assert.equal(saved.data.document.links[0].to, "missing-screen");
+  const broken = structuredClone(saved.data.document);
+  delete broken.sentinel;
+  await assert.rejects(replaceBoard(api, editors.current, broken), (error) => error.code === "unsupported_fields_lost");
+  assert.equal((await openEditor(api, editors, { id: created.data.id, kind: "blueprint" })).authoritative.document.sentinel, "document-sentinel");
+  const stale = editors.current.revision;
+  await patchNode(api, editors.current, "label", { value: "Next" });
+  await assert.rejects(patchNode(api, { ...editors.current, revision: stale }, "label", { value: "Race" }), (error) => error.code === "revision_conflict");
+  await assert.rejects(removeNode(api, editors.current, "root"), (error) => error.code === "root_node");
+  const clip = hitBoardNode(fullBoard(), { x: 90, y: 10 });
+  const outside = hitBoardNode(fullBoard(), { x: 110, y: 10 });
+  assert.equal(clip.nodeId, "overflow");
+  assert.equal(outside.nodeId, "root");
+  const circle = hitBoardNode({
+    screens: [{ id: "s", x: 0, y: 0, w: 100, h: 100, root: { id: "root", t: "box", place: { x: 0, y: 0 }, w: 100, h: 100, kids: [
+      { id: "dot", t: "vector", kind: "circle", place: { x: 0, y: 0 }, w: 100, h: 100 },
+    ] } }],
+  }, { x: 1, y: 1 });
+  assert.equal(circle.nodeId, "root");
+  assert.equal(hitBoardNode({
+    screens: [{ id: "s", x: 0, y: 0, w: 100, h: 100, root: { id: "root", t: "box", place: { x: 0, y: 0 }, w: 100, h: 100, kids: [
+      { id: "dot", t: "vector", kind: "circle", place: { x: 0, y: 0 }, w: 100, h: 100 },
+    ] } }],
+  }, { x: 50, y: 50 }).nodeId, "dot");
+  const asset = await uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Buffer.from(PNG, "base64") });
+  assert.match(asset.src, /^docs\/flows\/assets\//);
+  assert.equal(asset.objectUrl, "blob:asset");
+  asset.revoke();
+  assert.equal(revoked, true);
+  await assert.rejects(uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]) }), (error) => error.code === "invalid_asset");
+  await assert.rejects(uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => new Uint8Array(10 * 1024 * 1024 + 1) }), (error) => error.code === "asset_too_large");
+  const boards = await loadCatalog(api, editors, "blueprint");
+  const cart = boards.find((item) => item.title === "Cart");
+  const legacy = boards.find((item) => item.readOnly);
+  const legacyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.mjs");
+  const legacyBytes = await readFile(legacyFile);
+  await openEditor(api, editors, legacy);
+  await assert.rejects(replaceBoard(api, editors.current, fullBoard()), (error) => error.code === "read_only_resource");
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+  await openEditor(api, editors, cart);
+  await removeNode(api, editors.current, "label");
+  const comments = await loadComments(api, editors);
+  const orphan = comments.data.items.find((thread) => thread.anchor?.element === "label");
+  assert.ok(orphan);
+  assert.equal(orphan.place, null);
+  assert.equal(editors.current.authoritative.document.sentinel, "document-sentinel");
+});
+
+function fullBoard() {
+  return {
+    formatVersion: 1,
+    id: "full-board",
+    title: "Full",
+    note: "",
+    sentinel: "document-sentinel",
+    pages: [{ id: "main", title: "Main", objects: [{ sentinel: "object-sentinel" }], order: ["empty"], start: "empty", sentinel: "page-sentinel" }],
+    screens: [{
+      id: "empty",
+      title: "Empty",
+      pageId: "main",
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 200,
+      sentinel: "screen-sentinel",
+      root: {
+        id: "root",
+        name: "Root",
+        t: "box",
+        place: { x: 0, y: 0 },
+        w: 200,
+        h: 200,
+        dir: "stack",
+        sentinel: "node-sentinel",
+        valign: "top",
+        shadows: [{ sentinel: "shadow-sentinel" }],
+        blur: 1,
+        pixelate: 2,
+        kids: [
+          { id: "label", name: "Label", t: "text", place: { x: 12, y: 12, sentinel: "place-sentinel" }, w: 80, h: 24, value: "Cart", color: "#112233", align: "left", sentinel: "text-sentinel" },
+          { id: "clip", name: "Clip", t: "box", place: { x: 0, y: 0 }, w: 100, h: 100, dir: "stack", clip: true, kids: [
+            { id: "overflow", name: "Overflow", t: "box", place: { x: 80, y: 0 }, w: 50, h: 20, dir: "stack", kids: [] },
+          ] },
+        ],
+      },
+    }],
+    links: [{ id: "legacy-link", from: "empty", to: "missing-screen", transition: "cut", easing: "legacy-ease", sentinel: "link-sentinel" }],
+    components: [{ id: "button", sentinel: "component-sentinel" }],
+    fonts: [{ id: "body", sentinel: "font-sentinel" }],
+    threads: [{ id: "thread-doc", sentinel: "thread-sentinel" }],
+  };
+}
+
+function sentinels(value, found = []) {
+  if (typeof value === "string" && value.includes("sentinel")) found.push(value);
+  else if (Array.isArray(value)) for (const item of value) sentinels(item, found);
+  else if (value && typeof value === "object") for (const item of Object.values(value)) sentinels(item, found);
+  return found;
+}
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 function apiFrom(url) {
   const parsed = new URL(url);

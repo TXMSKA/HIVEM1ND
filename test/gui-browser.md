@@ -64,3 +64,12 @@ Chrome at 1440x900 on the modern English shell. Blueprint opened Cart. Two units
 | Viewport | Look | Language | Expected | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1440x900 | modern | en | Attach two units. Add, reply, and resolve a comment. A failed notice is followed by a fixture reply. Watch shows the resource and the following label, then stops. A delayed fetch does not replace the newer selection or its draft. | Attachments were project:shop:executor-shop and env:web:overlord-web. The comment Unplaced note showed failed. The reply was open and then resolved. The header was blueprint Cart. Watch waited for project:shop:executor-shop, then read Watching project:shop:executor-shop, then Following is off. After the delayed read the title stayed Cart and the draft stayed kept locally. The hash was empty and the console was empty. | none | this file |
+
+## Step 10 blueprint
+
+Chrome at 1440x900. Cart rendered its nested nodes and the unresolved legacy link, without drawing the full-editor effects. A nested text edit, an added shape, its removal, an uploaded image, a node comment, a watched focus, and an outside edit were checked on the modern look and again after the high-contrast look.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Render the full board, edit a nested node, add and remove a shape, upload an image, comment on a node, follow a committed focus, and keep a draft when the board changes elsewhere. | The board drew 2 nodes, an unresolved link, and no filter. The nested text became Total. A shape was added and then removed. The image source stayed under docs/flows/assets and its href was a blob URL. The comment read On the label. Focus landed on empty. The conflict read This document changed elsewhere. The draft is still here. The draft stayed local board draft. Background rgb(15, 11, 19). | none | this file |
+| 1440x900 | high-contrast | en | The same board remains on set A. | Background rgb(5, 5, 5). The board still showed 3 nodes after the image was added. The console was empty. | none | this file |
