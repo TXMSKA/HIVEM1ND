@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError, verifyBootstrapFiles } from './security.mjs';
 import { readCollection, readDetail, readProjection } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
@@ -262,8 +262,9 @@ export async function createHttpServer(options) {
     const params = paramsOf(route, relative);
     const bodyLimit = route.template.endsWith('/assets') ? 16000000 : 1000000;
     const body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
+    if (route.handler === 'authLocal') await credentialFor(req, route, credentials, listener, options);
     rejectUnknown(route, body);
-    const credential = credentialFor(req, route, credentials, listener);
+    const credential = route.handler === 'authLocal' ? null : await credentialFor(req, route, credentials, listener, options);
     const domain = domainContext(options, credential, bus);
     const object = await objectFor(route, domain, credential, params, body);
     const operation = operationFor(route, credential, body);
@@ -442,9 +443,10 @@ function parseQuery(search) {
   return query;
 }
 
-function credentialFor(req, route, credentials, listener) {
+async function credentialFor(req, route, credentials, listener, options) {
   if (route.handler === 'authLocal') {
     if (listener.kind !== 'loopback') throw new CoreError(403, 'forbidden', 'Local login is only available on loopback.');
+    await requireBootstrap(req, options, listener);
     return null;
   }
   if (route.handler === 'authHome') return null;
@@ -508,7 +510,7 @@ function allowedBody(handler) {
     patchLayout: ['nodes', 'groups', 'expectedRevision'],
     patchViewer: ['presentation', 'dirty', 'look', 'language'],
     createChat: ['members', 'title'],
-    authLocal: [],
+    authLocal: ['embedded', 'hostOrigin', 'look', 'language'],
     authHome: ['key', 'code'],
     home: ['enabled', 'addresses'],
   };
@@ -751,15 +753,31 @@ async function mutate(options, credential, req, relative, body, requestId, event
 
 async function runAuth(route, scope) {
   if (route.handler === 'authLocal') {
+    const presentation = localPresentation(scope.body);
     const viewerId = randomUUID();
     const issued = scope.credentials.issue({
       audience: 'desktop',
       unitId: 'root:master',
       viewerId,
-      expiresAt: new Date((scope.options.now?.() ?? Date.now()) + 12 * 60 * 60 * 1000).toISOString(),
+      expiresAt: null,
+      embedded: presentation.embedded,
+      hostOrigin: presentation.hostOrigin,
+      look: presentation.look,
+      language: presentation.language,
     });
-    scope.viewers.set(viewerId, { presentation: null, dirty: false });
-    return { status: 200, body: { token: issued.token, capabilities: issued.capabilities, viewerId } };
+    scope.viewers.set(viewerId, { presentation: null, dirty: false, ...presentation });
+    const origin = scope.options.bootstrap?.record?.origin ?? `http://127.0.0.1:${scope.listener.port}`;
+    return {
+      status: 200,
+      body: {
+        token: issued.token,
+        viewerId,
+        origin,
+        url: `${origin}/gui/${viewerId}/#session=${issued.token}`,
+        capabilities: issued.capabilities,
+        expiresAt: null,
+      },
+    };
   }
   if (route.handler === 'authHome') {
     if (scope.listener.kind !== 'lan') throw new CoreError(403, 'forbidden', 'Home exchange is only available on the home network.');
@@ -770,6 +788,82 @@ async function runAuth(route, scope) {
   scope.bus.closePrincipal(scope.credential.token);
   scope.viewers.delete(scope.credential.viewerId);
   return { status: 204, body: null };
+}
+
+function localPresentation(body) {
+  const value = body ?? {};
+  const embedded = value.embedded ?? false;
+  if (typeof embedded !== 'boolean') throw new CoreError(422, 'invalid_body', 'embedded must be a boolean.');
+  const hostOrigin = value.hostOrigin ?? null;
+  if (hostOrigin !== null && typeof hostOrigin !== 'string') throw new CoreError(422, 'invalid_body', 'hostOrigin must be a string or null.');
+  if (hostOrigin !== null && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');
+  if (embedded === true && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');
+  const look = value.look ?? null;
+  if (look !== null && look !== 'modern' && look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
+  const language = value.language ?? null;
+  if (language !== null && language !== 'en' && language !== 'es') throw new CoreError(422, 'invalid_body', 'The language is not supported.');
+  return { embedded, hostOrigin, look, language };
+}
+
+function validHostOrigin(value) {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value;
+  } catch {
+    return false;
+  }
+}
+
+function decodeSecret(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) return null;
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.length !== 32 || bytes.toString('base64url') !== value) return null;
+  return bytes;
+}
+
+function sameSecret(left, right) {
+  const candidate = Buffer.isBuffer(left) && left.length === right.length ? left : Buffer.alloc(right.length);
+  return timingSafeEqual(candidate, right) && Buffer.isBuffer(left) && left.length === right.length;
+}
+
+async function requireBootstrap(req, options, listener) {
+  const state = options.bootstrap;
+  if (!state?.valid || !Buffer.isBuffer(state.secretBytes) || state.secretBytes.length !== 32 || !state.file || !state.record) {
+    throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
+  }
+  try {
+    await verifyBootstrapFiles(path.dirname(state.file), state.file);
+  } catch {
+    state.valid = false;
+    throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(state.file, 'utf8'));
+  } catch {
+    state.valid = false;
+    throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
+  }
+  const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort().join(',') : '';
+  const secret = decodeSecret(parsed?.secret);
+  const expectedOrigin = `http://${listener.address}:${listener.port}`;
+  const record = state.record;
+  const intact = keys === 'format,origin,secret,startedAt'
+    && parsed.format === 'hivem1nd-bootstrap-v1'
+    && parsed.origin === expectedOrigin
+    && parsed.origin === record.origin
+    && parsed.startedAt === record.startedAt
+    && parsed.secret === record.secret
+    && secret
+    && sameSecret(secret, state.secretBytes);
+  if (!intact) {
+    state.valid = false;
+    throw new CoreError(503, 'bootstrap_unavailable', 'Local login is not available.');
+  }
+  const header = headerOne(req, 'authorization') ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
+  const presented = decodeSecret(token);
+  if (!token || !sameSecret(presented, state.secretBytes)) throw new CoreError(401, 'invalid_bootstrap', 'The bootstrap secret is not valid.');
 }
 
 function listenerOf(options, server) {

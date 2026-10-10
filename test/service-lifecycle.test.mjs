@@ -130,6 +130,7 @@ test('the HTTP event stream stays up beside the service guard', async (t) => {
         origin: `http://127.0.0.1:${core.http.port}`,
         'content-type': 'application/json',
         'content-length': String(payload.length),
+        authorization: `Bearer ${core.bootstrap.secret}`,
       },
     }, (res) => {
       const chunks = [];

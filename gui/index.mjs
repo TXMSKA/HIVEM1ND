@@ -43,7 +43,12 @@ export async function startGui(input = {}) {
   if (input.language != null && !['en', 'es'].includes(input.language)) fail(422, 'invalid_body', 'The language is not supported.');
   if (active && path.resolve(active.mindPath) !== mindPath) fail(409, 'service_mind_conflict', 'Another mind owns the service lock.');
   if (!active) active = await boot(mindPath, input);
-  const auth = await call(active.port, 'POST', '/api/v1/auth/local', {});
+  const auth = await call(active.port, 'POST', '/api/v1/auth/local', {
+    embedded,
+    hostOrigin,
+    look: input.look ?? null,
+    language: input.language ?? null,
+  }, active.secret);
   if (auth.status !== 200) fail(auth.status, auth.json?.error?.code ?? 'service_unavailable', 'The viewer could not sign in.');
   const token = auth.json.token;
   const viewerId = auth.json.viewerId;
@@ -98,7 +103,7 @@ async function boot(mindPath, input) {
     now: input.now,
   });
   const core = await composeCore({ store, paths, now: input.now, projects: [] });
-  return { mindPath, port: core.http.port, core };
+  return { mindPath, port: core.http.port, core, secret: core.bootstrap.secret };
 }
 
 export async function closeGuiHost() {

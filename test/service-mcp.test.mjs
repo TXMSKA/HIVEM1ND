@@ -13,7 +13,7 @@ async function boot(t) {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
   return { core, token: local.json.token, port: core.http.port };
 }
 

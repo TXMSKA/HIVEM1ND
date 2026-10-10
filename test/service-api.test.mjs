@@ -29,7 +29,7 @@ async function boot(t, { assetDir = null } = {}) {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
   assert.equal(local.status, 200);
   return { fixture, core, paths, token: local.json.token, viewerId: local.json.viewerId };
 }
@@ -326,7 +326,7 @@ test('home enable is memory-only and loopback cannot exchange it', async (t) => 
     await Promise.all(listeners.map((server) => new Promise((resolve) => server.close(() => resolve()))));
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
   const key = randomUUID();
   const opened = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
     token: local.json.token,
@@ -383,7 +383,7 @@ test('every contract route has a success result and an authority or boundary fai
     await dispose(fixture);
   });
   const port = core.http.port;
-  const local = await call(port, 'POST', '/api/v1/auth/local', { body: {} });
+  const local = await call(port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
   expectStatus(local, 200, 'auth local');
   const token = local.json.token;
   const seen = new Set(['POST /auth/local']);

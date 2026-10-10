@@ -143,7 +143,7 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
   const token = local.json.token;
   const document = sketch();
   document.script = 'from http';

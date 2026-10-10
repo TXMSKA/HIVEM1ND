@@ -10,15 +10,28 @@ const PROTECT_SCRIPT = Buffer.from(`
 $ErrorActionPreference = 'Stop'
 $path = $env:HIVEM1ND_PROTECT_PATH
 $sid = $env:HIVEM1ND_PROTECT_SID
-$acl = [System.IO.File]::GetAccessControl($path)
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+$item = Get-Item -LiteralPath $path -Force
 $identifier = New-Object System.Security.Principal.SecurityIdentifier($sid)
 $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', 'Allow')))
-$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
-[System.IO.File]::SetAccessControl($path, $acl)
-$checked = [System.IO.File]::GetAccessControl($path).Access
+if ($item.PSIsContainer) {
+  $acl = [System.IO.Directory]::GetAccessControl($path)
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+  $flags = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+  $propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', $flags, $propagation, 'Allow')))
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', $flags, $propagation, 'Allow')))
+  [System.IO.Directory]::SetAccessControl($path, $acl)
+  $checked = [System.IO.Directory]::GetAccessControl($path).Access
+} else {
+  $acl = [System.IO.File]::GetAccessControl($path)
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', 'Allow')))
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
+  [System.IO.File]::SetAccessControl($path, $acl)
+  $checked = [System.IO.File]::GetAccessControl($path).Access
+}
 foreach ($rule in $checked) {
   if ($rule.IsInherited) { exit 2 }
   $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
@@ -31,6 +44,7 @@ const SID_SCRIPT = Buffer.from('$ErrorActionPreference = \'Stop\'; [System.Secur
 export async function protectLocalFile(file, options = {}) {
   if (options.fail === true) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
   await mkdir(path.dirname(file), { recursive: true });
+  const info = await stat(file);
   if (process.platform === 'win32') {
     const sid = options.sid ?? await currentSid();
     await runPowerShell(PROTECT_SCRIPT, { HIVEM1ND_PROTECT_PATH: file, HIVEM1ND_PROTECT_SID: sid }, options);
@@ -38,7 +52,7 @@ export async function protectLocalFile(file, options = {}) {
     return { protected: true, sid };
   }
   await chmod(path.dirname(file), 0o700);
-  await chmod(file, 0o600);
+  await chmod(file, info.isDirectory() ? 0o700 : 0o600);
   await verifyLocalPermissions(file);
   return { protected: true };
 }
@@ -49,7 +63,10 @@ export async function verifyLocalPermissions(file, options = {}) {
     const output = await runPowerShell(Buffer.from(`
 $ErrorActionPreference = 'Stop'
 $sid = $env:HIVEM1ND_PROTECT_SID
-$rules = [System.IO.File]::GetAccessControl($env:HIVEM1ND_PROTECT_PATH).Access
+$path = $env:HIVEM1ND_PROTECT_PATH
+$item = Get-Item -LiteralPath $path -Force
+if ($item.PSIsContainer) { $rules = [System.IO.Directory]::GetAccessControl($path).Access }
+else { $rules = [System.IO.File]::GetAccessControl($path).Access }
 if ($rules.Count -lt 1) { exit 4 }
 foreach ($rule in $rules) {
   if ($rule.IsInherited) { exit 2 }
@@ -66,6 +83,106 @@ Write-Output 'ok'
   return { ok: true };
 }
 
+const PAIR_PROTECT_SCRIPT = Buffer.from(`
+$ErrorActionPreference = 'Stop'
+$dir = $env:HIVEM1ND_PROTECT_DIR
+$file = $env:HIVEM1ND_PROTECT_FILE
+$sid = $env:HIVEM1ND_PROTECT_SID
+function Protect-Path([string]$path) {
+  $item = Get-Item -LiteralPath $path -Force
+  $identifier = New-Object System.Security.Principal.SecurityIdentifier($sid)
+  $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+  if ($item.PSIsContainer) {
+    $acl = [System.IO.Directory]::GetAccessControl($path)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+    $flags = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $propagation = [System.Security.AccessControl.PropagationFlags]::None
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', $flags, $propagation, 'Allow')))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', $flags, $propagation, 'Allow')))
+    [System.IO.Directory]::SetAccessControl($path, $acl)
+    return [System.IO.Directory]::GetAccessControl($path).Access
+  }
+  $acl = [System.IO.File]::GetAccessControl($path)
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', 'Allow')))
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
+  [System.IO.File]::SetAccessControl($path, $acl)
+  return [System.IO.File]::GetAccessControl($path).Access
+}
+function Assert-Owned($rules) {
+  if ($rules.Count -lt 1) { exit 4 }
+  foreach ($rule in $rules) {
+    if ($rule.IsInherited) { exit 2 }
+    $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
+  }
+}
+Assert-Owned (Protect-Path $dir)
+Assert-Owned (Protect-Path $file)
+Write-Output 'ok'
+`, 'utf16le').toString('base64');
+
+const PAIR_VERIFY_SCRIPT = Buffer.from(`
+$ErrorActionPreference = 'Stop'
+$dir = $env:HIVEM1ND_PROTECT_DIR
+$file = $env:HIVEM1ND_PROTECT_FILE
+$sid = $env:HIVEM1ND_PROTECT_SID
+function Get-Rules([string]$path) {
+  $item = Get-Item -LiteralPath $path -Force
+  if ($item.PSIsContainer) { return [System.IO.Directory]::GetAccessControl($path).Access }
+  return [System.IO.File]::GetAccessControl($path).Access
+}
+function Assert-Owned($rules) {
+  if ($rules.Count -lt 1) { exit 4 }
+  foreach ($rule in $rules) {
+    if ($rule.IsInherited) { exit 2 }
+    $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
+  }
+}
+Assert-Owned (Get-Rules $dir)
+Assert-Owned (Get-Rules $file)
+Write-Output 'ok'
+`, 'utf16le').toString('base64');
+
+export async function protectBootstrapFiles(directory, file, options = {}) {
+  if (options.fail === true) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  await mkdir(directory, { recursive: true });
+  if (process.platform !== 'win32') {
+    await chmod(directory, 0o700);
+    await chmod(file, 0o600);
+    await verifyLocalPermissions(directory);
+    await verifyLocalPermissions(file);
+    return { protected: true };
+  }
+  const sid = options.sid ?? await currentSid();
+  const output = await runPowerShell(PAIR_PROTECT_SCRIPT, {
+    HIVEM1ND_PROTECT_DIR: directory,
+    HIVEM1ND_PROTECT_FILE: file,
+    HIVEM1ND_PROTECT_SID: sid,
+  }, options);
+  if (!output.includes('ok')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  return { protected: true, sid };
+}
+
+export async function verifyBootstrapFiles(directory, file, options = {}) {
+  if (process.platform !== 'win32') {
+    await verifyLocalPermissions(directory);
+    await verifyLocalPermissions(file);
+    return { ok: true };
+  }
+  const sid = options.sid ?? await currentSid();
+  const output = await runPowerShell(PAIR_VERIFY_SCRIPT, {
+    HIVEM1ND_PROTECT_DIR: directory,
+    HIVEM1ND_PROTECT_FILE: file,
+    HIVEM1ND_PROTECT_SID: sid,
+  }, options);
+  if (!output.includes('ok')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  return { ok: true };
+}
+
 export function createCredentialStore({ now = () => Date.now() } = {}) {
   const records = new Map();
   return {
@@ -78,9 +195,13 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
         unitId: input.unitId ?? null,
         sessionId: input.sessionId ?? null,
         capabilities: input.audience === 'desktop' ? [...DESKTOP] : input.audience === 'phone' ? [...PHONE] : input.capabilities ?? [],
-        expiresAt: input.expiresAt,
+        expiresAt: input.expiresAt ?? null,
         viewerId: input.viewerId ?? null,
         attached: input.attached ?? null,
+        embedded: input.embedded === true,
+        hostOrigin: input.hostOrigin ?? null,
+        look: input.look ?? null,
+        language: input.language ?? null,
       };
       records.set(token, record);
       return { token, capabilities: record.capabilities };
@@ -91,7 +212,8 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
       const supplied = Buffer.from(String(token), 'base64url');
       const left = record.secret;
       const right = supplied.length === left.length ? supplied : left;
-      if (!timingSafeEqual(left, right) || supplied.length !== left.length || now() >= Date.parse(record.expiresAt)) {
+      const expired = record.expiresAt != null && now() >= Date.parse(record.expiresAt);
+      if (!timingSafeEqual(left, right) || supplied.length !== left.length || expired) {
         throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
       }
       return { ...record, secret: undefined, token };

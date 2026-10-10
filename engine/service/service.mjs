@@ -1,12 +1,13 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson } from './identity.mjs';
+import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, readBytes, recoverTransactions } from './store.mjs';
 import { writeDurable } from '../sync/origin.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
-import { createCredentialStore } from './security.mjs';
+import { createCredentialStore, protectBootstrapFiles, verifyBootstrapFiles } from './security.mjs';
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 
@@ -37,16 +38,23 @@ export async function startService(options) {
     listener: null,
     bridge: null,
     beat: null,
+    credentials: options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) }),
+    bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
   };
   try {
     await recoverTransactions(options.store);
     await acquireServiceLock(handle);
     handle.listener = options.listener ? await options.listener() : null;
     handle.bridge = await openBridge();
-    await writeBootstrap(handle);
+    handle.http = await createHttpServer({
+      ...options,
+      bus: options.bus,
+      credentials: handle.credentials,
+      bootstrap: handle.bootstrapState,
+    });
     handle.adopted = await adoptWake(options, { nonce });
     handle.beat = await writeBeat(options, 'running');
-    if (options.serveHttp === true) handle.http = await createHttpServer({ ...options, bus: options.bus, credentials: options.credentials });
+    handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     return handle;
   } catch (error) {
     await rollback(handle);
@@ -57,17 +65,32 @@ export async function startService(options) {
 export async function attachOrStart(options, port = options.guardPort) {
   const deadline = Date.now() + (options.attachTimeoutMs ?? 10000);
   let bootstrap = null;
+  let active = null;
+  let protectedRecord = false;
   while (Date.now() <= deadline) {
-    bootstrap = await readBootstrap(options);
-    if (bootstrap) break;
+    bootstrap = await readOptionalJson(bootstrapPath(options));
+    active = await readOptionalJson(activePath(options));
+    if (bootstrap && active && (!validBootstrap(bootstrap) || !validActive(active))) {
+      throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+    }
+    if (bootstrap && active) {
+      try {
+        await verifyBootstrapFiles(path.dirname(bootstrapPath(options)), bootstrapPath(options));
+        protectedRecord = true;
+        break;
+      } catch {
+        protectedRecord = false;
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 15));
   }
-  if (!bootstrap) throw new CoreError(503, options.attachTimeoutMs == null ? 'service_start_timeout' : 'service_unavailable', 'The guard is occupied by something else.');
-  if (bootstrap.mind !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
-  if (bootstrap.machine !== options.paths.machine || bootstrap.userKey !== (options.userKey ?? 'user')) {
+  if (!bootstrap || !active) throw new CoreError(503, options.attachTimeoutMs == null ? 'service_start_timeout' : 'service_unavailable', 'The guard is occupied by something else.');
+  if (!protectedRecord) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  if (active.mindPath !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
+  if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
     throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
   }
-  return { attached: true, port, bootstrap, mutated: false };
+  return { attached: true, port, bootstrap, active, mutated: false };
 }
 
 export async function acquireServiceLock(handle) {
@@ -126,9 +149,16 @@ export async function writeBeat(options, state) {
 
 export async function composeCore(options) {
   const bus = options.bus ?? createEventBus({ now: options.now, machine: options.paths.machine });
-  const credentials = options.credentials ?? createCredentialStore({ now: options.now });
-  const http = await createHttpServer({ ...options, bus, credentials, handlers: options.handlers ?? {} });
-  return { bus, credentials, http };
+  const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
+  const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
+  const http = await createHttpServer({ ...options, bus, credentials, bootstrap, handlers: options.handlers ?? {} });
+  try {
+    await publishBootstrap(options, http.port, bootstrap);
+  } catch (error) {
+    await http.close();
+    throw error;
+  }
+  return { bus, credentials, http, bootstrap };
 }
 
 export async function stopService(handle) {
@@ -139,10 +169,11 @@ export async function stopService(handle) {
   await closeBridge(handle.bridge);
   const lock = await readBytes(handle.options.store, lockPath(handle.options));
   const parsed = lock ? JSON.parse(lock.toString('utf8')) : null;
+  if (handle.bootstrapState) handle.bootstrapState.valid = false;
   if (parsed?.nonce === handle.nonce) {
-    const { unlink } = await import('node:fs/promises');
     await unlink(lockPath(handle.options)).catch(() => {});
     await unlink(bootstrapPath(handle.options)).catch(() => {});
+    await unlink(activePath(handle.options)).catch(() => {});
   }
   await new Promise((resolve) => handle.guard.close(() => resolve()));
   return { stopped: true, signaled: handle.signaled };
@@ -177,11 +208,42 @@ function assertReady(options) {
   if (!options?.paths?.mind || !options?.store) throw new CoreError(503, 'service_unavailable', 'The service needs a configured mind.');
 }
 
-async function writeBootstrap(handle) {
-  const descriptor = descriptorOf(handle);
-  const body = { ...descriptor, digest: createHash('sha256').update(canonicalJson(descriptor)).digest('hex') };
-  await atomicWrite(handle.options.store, bootstrapPath(handle.options), Buffer.from(`${canonicalJson(body)}\n`));
-  handle.bootstrap = body;
+async function publishBootstrap(options, httpPort, state) {
+  const now = options.now ?? (() => Date.now());
+  const startedAt = new Date(options.startedAt ?? now()).toISOString();
+  const origin = `http://127.0.0.1:${httpPort}`;
+  const secretBytes = randomBytes(32);
+  const secret = secretBytes.toString('base64url');
+  const record = { format: 'hivem1nd-bootstrap-v1', origin, secret, startedAt };
+  const active = {
+    pid: process.pid,
+    mindPath: options.paths.mind,
+    machine: options.paths.machine,
+    localDirectory: options.paths.localDirectory,
+    startedAt,
+  };
+  const local = { format: 'hivem1nd-service-local-v1', pid: process.pid, origin, startedAt };
+  const file = bootstrapPath(options);
+  try {
+    await writeDescriptor(options.store, activePath(options), Buffer.from(`${canonicalJson(active)}\n`));
+    await atomicWrite(options.store, path.join(options.paths.localDirectory, 'service.json'), Buffer.from(`${canonicalJson(local)}\n`));
+    await atomicWrite(options.store, file, Buffer.from(`${canonicalJson(record)}\n`));
+    state.file = file;
+    state.secretBytes = secretBytes;
+    state.secret = secret;
+    state.record = record;
+    state.valid = false;
+    await protectBootstrapFiles(path.dirname(file), file, { handles: options.handles, sid: options.sid, fail: options.bootstrapFail === true });
+    state.valid = true;
+    return record;
+  } catch (error) {
+    state.valid = false;
+    state.secret = null;
+    state.secretBytes = null;
+    state.record = null;
+    if (state.file) await unlink(state.file).catch(() => {});
+    throw error;
+  }
 }
 
 function descriptorOf(handle) {
@@ -195,12 +257,64 @@ function descriptorOf(handle) {
   };
 }
 
-async function readBootstrap(options) {
-  const bytes = await readBytes(options.store, bootstrapPath(options));
-  return bytes ? JSON.parse(bytes.toString('utf8')) : null;
+async function readOptionalJson(file) {
+  let text;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  }
+}
+
+function validBootstrap(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (Object.keys(record).sort().join(',') !== 'format,origin,secret,startedAt') return false;
+  if (record.format !== 'hivem1nd-bootstrap-v1' || typeof record.origin !== 'string' || typeof record.startedAt !== 'string') return false;
+  return /^[A-Za-z0-9_-]{43}$/.test(record.secret) && Buffer.from(record.secret, 'base64url').length === 32;
+}
+
+function validActive(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (Object.keys(record).sort().join(',') !== 'localDirectory,machine,mindPath,pid,startedAt') return false;
+  return typeof record.mindPath === 'string'
+    && typeof record.machine === 'string'
+    && typeof record.localDirectory === 'string'
+    && Number.isInteger(record.pid)
+    && typeof record.startedAt === 'string';
+}
+
+function contained(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+async function writeDescriptor(store, destination, bytes) {
+  const resolved = path.resolve(destination);
+  const serviceRoot = path.resolve(path.dirname(path.dirname(store.localDirectory)));
+  if (path.resolve(serviceRoot, 'active.json') !== resolved) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
+  if (store.confineRoot && !contained(store.confineRoot, resolved)) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
+  await assertNoLinks(resolved, { root: store.confineRoot });
+  await mkdir(path.dirname(resolved), { recursive: true });
+  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${randomBytes(8).toString('hex')}.tmp`);
+  await writeFile(temporary, bytes, { flag: 'wx' });
+  try {
+    await rename(temporary, resolved);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
 }
 
 async function rollback(handle) {
+  if (handle.bootstrapState) handle.bootstrapState.valid = false;
+  if (handle.bootstrapState?.file) await unlink(handle.bootstrapState.file).catch(() => {});
+  if (handle.http?.close) await handle.http.close().catch(() => {});
   if (handle.listener?.close) await handle.listener.close().catch(() => {});
   await closeBridge(handle.bridge).catch(() => {});
   if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
@@ -228,4 +342,8 @@ function lockPath(options) {
 
 function bootstrapPath(options) {
   return path.join(options.paths.localDirectory, 'bootstrap.json');
+}
+
+function activePath(options) {
+  return options.paths.activeFile ?? path.join(path.dirname(path.dirname(options.paths.localDirectory)), 'active.json');
 }
