@@ -92,6 +92,14 @@ const COPY = {
   prompt: ["Prompt", "Indicación"],
   keepLocal: ["Keep local", "Conservar local"],
   useIncoming: ["Use incoming", "Usar entrante"],
+  pin: ["Pin", "Fijar"],
+  removeFromList: ["Remove from list", "Quitar de la lista"],
+  reopenChat: ["Reopen", "Reabrir"],
+  loadOlder: ["Older messages", "Mensajes anteriores"],
+  newMessages: ["New messages", "Mensajes nuevos"],
+  mailbox: ["Mailbox", "Buzón"],
+  send: ["Send", "Enviar"],
+  emptyChat: ["No messages yet.", "Todavía no hay mensajes."],
 };
 
 const DICTIONARIES = {

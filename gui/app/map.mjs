@@ -315,6 +315,7 @@ export function requestConnect(map) {
 
 export function requestGroupMessage(map) {
   map.pendingMessage = [...map.selection];
+  map.onGroupMessage?.(map.pendingMessage);
 }
 
 export function paintNodes(map) {

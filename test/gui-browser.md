@@ -40,3 +40,11 @@ Chrome at 1440x900 on the modern English shell. Dragging the overseer handle ont
 | Viewport | Look | Language | Expected | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1440x900 | modern | en | Confirm and cancel a connection. A group connect keeps one invalid target. An unavailable machine is named. A session goes queued, then failed. A stop goes stopping, then stopped. | Cancel copy was "adjutant will report to overseer." and the note stayed empty. Confirm recorded root:adjutant root:overseer. Group copy named adjutant and master. The result was root:adjutant root:overseer and root:master invalid_lead. The unavailable note was "OFFLINE is unavailable." The session note went from "The session is queued." to "The session failed. Nothing was launched." The stop note went from "The session is stopping." to "The session stopped." | none | this file |
+
+## Step 7 chats
+
+Chrome at 1440x900 on the modern English shell. A hierarchy double-click selected executor-shop on the map and opened its direct chat. A new three-member group was empty. Two replies appeared. Pin, unlist, and reopen completed. Older history for 400 messages kept the anchor in place. Opening a mailbox did not mark it read.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Direct chat from a double-click, a three-member group, two replies, pin, unlist, reopen, older history, and a mailbox inspection that does not mark mail read. | executor-shop was aria-pressed and its direct chat opened. The new group read "No messages yet." and had 3 members. The transcript then showed First reply and Second reply. The chat pinned, left the list, and was listed again. After 400 messages, the total read 400 and the anchor delta was 0. The offline mailbox stayed "0 mailbox" on a second look. The shop mailbox stayed "1 read:false" on a second look. | none | this file |
