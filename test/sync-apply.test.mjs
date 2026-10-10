@@ -396,6 +396,47 @@ test('a revocation tombstone blocks an older grant and keeps a new grant id', as
   assert.deepEqual(saved.grants.map((grant) => grant.id), [fresh]);
 });
 
+test('a state approval header drops tombstoned grants and keeps the rest of the record', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const dropped = uuidV8(['grant', 'dropped']);
+  const kept = uuidV8(['grant', 'kept']);
+  const requestId = uuidV8(['revoke', 'state']);
+  const revocation = Buffer.from(JSON.stringify({
+    format: 'hivem1nd-grant-revocation-result-v1',
+    requestId,
+    unitId: 'project:shop:executor-shop',
+    grantId: dropped,
+    state: 'revoked',
+    at: AT,
+    machine: 'LAPTOP',
+  }));
+  const state = Buffer.from([
+    'unit-id: project:shop:executor-shop',
+    'role: executor',
+    'approvals: [{"id":"earlier-header"}]',
+    'custom: keep-me',
+    `approvals: ${JSON.stringify([{ id: dropped, action: 'process.run' }, { id: kept, action: 'process.run', note: 'stay' }])}`,
+    '',
+    'Ready for the next task.\n',
+  ].join('\n'));
+  await applyPack(desktop, pack([
+    put({ kind: 'mind', path: 'user/relay/grant-revocation-results/state.json' }, revocation),
+    put({ kind: 'mind', path: 'user/state/executor-shop.md' }, state, { id: uuidV8(['change', 'state']) }),
+  ], [
+    { hash: hashBytes(revocation), raw: revocation },
+    { hash: hashBytes(state), raw: state },
+  ]), { bindings: { revocations: { [requestId]: { machine: 'LAPTOP' } } } });
+  const saved = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'), 'utf8');
+  assert.match(saved, /custom: keep-me/);
+  assert.match(saved, /Ready for the next task\./);
+  assert.match(saved, /earlier-header/);
+  assert.equal(saved.includes(dropped), false);
+  assert.match(saved, new RegExp(kept));
+  const versions = JSON.parse(await readFile(path.join(desktop.paths.localDirectory, 'sync-versions.json'), 'utf8'));
+  const fileBytes = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'));
+  assert.ok(Object.values(versions.targets).some((item) => item.hash === hashBytes(fileBytes)));
+});
+
 test('an origin watcher reports a real head change and does not poll while idle', async (t) => {
   const { laptopOrigin } = await world(t);
   const events = [];
