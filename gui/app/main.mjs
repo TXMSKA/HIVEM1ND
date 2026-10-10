@@ -268,11 +268,13 @@ async function onStream(app, event) {
       }
     }
   }
-  if (editors && event?.name === "editor.activity") handleActivity(editors, data);
+  if (editors && event?.name === "editor.activity") {
+    const followed = handleActivity(editors, data);
+    if (followed.follow) await revealWatched(app, editors, data);
+  }
   if (editors && event?.name === "watch.changed") {
     const nextId = applyWatch(editors, data);
-    const summary = nextId ? editors.catalog.find((item) => item.id === nextId) : null;
-    if (summary) await openEditor(app.api, editors, summary);
+    if (data.state === "watching") await revealWatched(app, editors, { ...data, resourceId: nextId ?? data.resourceId });
   }
   if (editors?.current?.commentsStale) {
     try {
@@ -509,6 +511,19 @@ function editorsOf(app) {
   return app.editors;
 }
 
+async function revealWatched(app, editors, activity) {
+  if (app.layout === "phone") return;
+  const resourceId = activity?.resourceId ?? editors.watch?.resourceId ?? null;
+  const summary = resourceId ? editors.catalog.find((item) => item.id === resourceId) : null;
+  const kind = activity?.kind === "void" || summary?.kind === "void" ? "void" : "blueprint";
+  app.mode = kind === "void" ? "document" : "blueprint";
+  if (summary && editors.current?.resourceId !== resourceId) await openEditor(app.api, editors, summary);
+  if (editors.focus?.k) {
+    if (editors.current) editors.current.page = editors.focus.k;
+    if (app.voidState) app.voidState.page = editors.focus.k;
+  }
+}
+
 function queueCatalog(app, kind) {
   const editors = editorsOf(app);
   if (editors.loadedKind === kind || editors.catalogLoading) return;
@@ -527,6 +542,8 @@ function queueCatalog(app, kind) {
 function boardSurface(app, document, editor, t) {
   const host = element(document, "div", { class: "board-host" });
   editor.focus = app.editors.focus;
+  editor.viewport = app.editors.viewport;
+  editor.panned = app.editors.panned === true;
   renderBoard(document, host, editor);
   host.addEventListener("click", (event) => {
     const marked = event.target?.closest?.("[data-node]");
@@ -631,6 +648,7 @@ function boardPoint(svg, event) {
 }
 
 function voidSurface(app, document, editor, t) {
+  editor.focus = app.editors.focus;
   if (!app.voidState) app.voidState = { mode: app.mode, tools: app.mode !== "focus", page: editor.page ?? editor.authoritative.document.pages?.[0]?.k, pages: editor.authoritative.document.pages };
   app.voidState.pages = editor.authoritative.document.pages;
   editor.page = app.voidState.page;

@@ -14,6 +14,7 @@ import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, sav
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
+import { startWatch } from "../gui/app/editors.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -776,6 +777,35 @@ test("session, approval and grant outcomes use the contract events", async (t) =
   const sample = desktop.app.inspectorData.approvals[0];
   await fixture.control.emit("approval.requested", { approval: { ...sample, id: extraId, display: "Extra request", state: "pending" } });
   await waitFor(() => desktop.root.querySelector(`[data-approval="${extraId}"]`), "The requested approval did not appear.");
+});
+
+test("Watch opens the focused board and clears a stopped watch", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const board = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  const opened = await request(desktop.app.api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: board.id } });
+  const screen = opened.data.document.screens[0];
+  const nodeId = screen.root?.id;
+  assert.ok(screen?.id);
+  assert.ok(nodeId);
+  await startWatch(desktop.app.api, desktop.app.editors, { unitId: "project:shop:executor-shop", resourceId: board.id });
+  await fixture.control.noteActivity({
+    unitId: "project:shop:executor-shop",
+    resourceId: board.id,
+    focus: { screenId: screen.id, nodeId },
+  });
+  await waitFor(() => desktop.root.querySelector(".shell")?.getAttribute("data-mode") === "blueprint"
+    && desktop.root.querySelector(`[data-screen="${screen.id}"]`)?.getAttribute("data-focus") === "true"
+    && desktop.root.querySelector(`[data-node="${nodeId}"]`)?.getAttribute("data-highlight") === "true", "Watch did not open the focused board.");
+  const watchId = desktop.app.editors.watch?.watchId;
+  assert.ok(watchId);
+  await fixture.control.emit("watch.changed", { watchId, unitId: "project:shop:executor-shop", resourceId: board.id, state: "stopped" });
+  await waitFor(() => desktop.app.editors.watch == null, "The stopped watch remained.");
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {

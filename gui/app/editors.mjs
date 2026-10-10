@@ -213,19 +213,58 @@ export function handleActivity(editors, activity) {
   editors.activity = activity ?? null;
   const watch = editors.watch;
   const armed = !editors.pendingStop && watch?.state === "watching" && activity?.unitId === watch.unitId && activity?.resourceId === watch.resourceId;
-  if (!armed) return { follow: false, focus: editors.focus, viewport: editors.viewport };
-  editors.focus = { resourceId: activity.resourceId, screenId: activity.screenId ?? null, range: activity.range ?? null };
-  if (activity.viewport) editors.viewport = { ...editors.viewport, ...activity.viewport };
-  return { follow: true, focus: editors.focus, viewport: editors.viewport };
+  if (!armed) return { follow: false, focus: editors.focus, viewport: editors.viewport, kind: activity?.kind ?? null };
+  const focus = activity.focus;
+  if (focus && (typeof focus.screenId === "string" || typeof focus.nodeId === "string")) {
+    editors.focus = { resourceId: activity.resourceId, screenId: focus.screenId ?? null, nodeId: focus.nodeId ?? null };
+    const point = focusPoint(editors, focus.nodeId);
+    if (point) {
+      editors.viewport = { ...editors.viewport, x: point.x, y: point.y };
+      editors.panned = true;
+    }
+  } else if (focus && typeof focus.k === "string") {
+    editors.focus = { resourceId: activity.resourceId, k: focus.k, lang: focus.lang ?? null, start: focus.start ?? null, end: focus.end ?? null };
+    if (editors.current) editors.current.page = focus.k;
+    editors.panned = false;
+  }
+  return { follow: true, focus: editors.focus, viewport: editors.viewport, kind: activity.kind ?? null };
+}
+
+function focusPoint(editors, nodeId) {
+  const document = editors.current?.authoritative?.document ?? editors.current?.document;
+  if (!document || typeof nodeId !== "string") return null;
+  for (const screen of document.screens ?? []) {
+    const point = nodePoint(screen.root, nodeId, finite(screen.x), finite(screen.y));
+    if (point) return point;
+  }
+  return null;
+}
+
+function nodePoint(node, nodeId, x, y) {
+  if (!node) return null;
+  const nextX = x + finite(node.place?.x);
+  const nextY = y + finite(node.place?.y);
+  if (node.id === nodeId) return { x: nextX, y: nextY };
+  for (const child of node.kids ?? []) {
+    const found = nodePoint(child, nodeId, nextX, nextY);
+    if (found) return found;
+  }
+  return null;
+}
+
+function finite(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
 export function applyWatch(editors, data) {
   if (!data?.watchId) return null;
-  if (data.state === "off") {
+  if (data.state === "stopped") {
     if (editors.watch?.watchId === data.watchId) editors.watch = null;
     editors.pendingStop = false;
     return null;
   }
+  if (data.state !== "waiting" && data.state !== "watching") return null;
   if (editors.pendingStop) return null;
   const blocked = editors.current?.dirty && data.resourceId && data.resourceId !== editors.current.resourceId;
   editors.watch = { ...data, held: Boolean(blocked) };
