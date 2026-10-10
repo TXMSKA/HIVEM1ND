@@ -2465,19 +2465,48 @@ async function prepareSession(fx, unitId, body) {
     status: 202,
     data: { requestId, state: "queued", expiresAt: record.expiresAt },
     writes: [],
-    events: [{ name: "session.changed", global: true, data: { request: { ...record } } }],
+    events: [{ name: "session.request.changed", global: true, unitId: record.unitId, data: sessionRequestData(record) }],
     apply() { fx.sessionRequests.set(requestId, record); },
   };
 }
 
-function prepareStop(fx, sessionId) {
+async function prepareStop(fx, sessionId) {
+  const snap = await projection(fx);
+  const current = snap.sessions.find((item) => item.id === sessionId);
+  const session = { ...(current ?? { id: sessionId }), state: "stopping" };
   const record = { sessionId, state: "stopping" };
   return {
     status: 202,
     data: { sessionId, state: "stopping" },
     writes: [],
-    events: [{ name: "session.changed", global: true, data: { session: { id: sessionId, state: "stopping" } } }],
+    events: [{ name: "session.changed", global: true, data: { session } }],
     apply() { fx.sessionStops.set(sessionId, record); },
+  };
+}
+
+async function dropGrant(fx, unitId, grantId) {
+  const snap = await projection(fx);
+  const file = snap.files.units.get(unitId);
+  const current = snap.units.find((item) => item.id === unitId);
+  if (!file) return current?.revision ?? null;
+  const text = await readFile(file, "utf8");
+  const match = text.match(/^approvals: (\[.*\])$/m);
+  if (!match) return current?.revision ?? null;
+  const grants = JSON.parse(match[1]).filter((item) => item.id !== grantId);
+  const next = text.replace(match[0], `approvals: ${JSON.stringify(grants)}`);
+  await writeAtomic(file, Buffer.from(next));
+  invalidate(fx);
+  return (await projection(fx)).units.find((item) => item.id === unitId)?.revision ?? null;
+}
+
+function sessionRequestData(record) {
+  return {
+    requestId: record.requestId,
+    unitId: record.unitId,
+    machine: record.machine,
+    state: record.state,
+    sessionId: record.sessionId ?? null,
+    error: record.error ?? null,
   };
 }
 
@@ -3362,13 +3391,19 @@ async function prepareAnswer(fx, approvalId, body) {
   const answerId = uuid();
   const answer = { decision: body.decision, at: clock(fx).toISOString(), answerId };
   const bytes = Buffer.from(stableJson(answer));
-  const record = { answerId, approvalId, state: "queued", resultAnswerId: null, at: null };
+  const record = { answerId, approvalId, state: "queued", resultAnswerId: null, at: null, decision: body.decision };
   fx.answers.set(answerId, record);
+  const nextApproval = {
+    ...approval,
+    state: "answering",
+    answer,
+    answerOutcomes: [...(approval.answerOutcomes ?? []), { answerId, approvalId, state: "queued", resultAnswerId: null, at: null }],
+  };
   return {
     status: 202,
-    data: { approval: { ...approval, state: "answering" }, answerId },
+    data: { approval: nextApproval, answerId },
     writes: [{ path: join(fx.tree.user, "relay", "approvals", approvalId, "answers", `${answerId}.json`), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
-    events: [{ name: "approval.changed", data: { approval: { ...approval, state: "answering" }, answerId } }],
+    events: [{ name: "approval.answered", global: true, unitId: approval.unitId, data: { approval: nextApproval } }],
   };
 }
 
@@ -3381,7 +3416,7 @@ async function prepareRevoke(fx, params, body) {
   const requestId = uuid();
   const record = { requestId, unitId: unit.id, grantId: grant.id, state: "pending", revision: unit.revision };
   fx.revocations.set(requestId, record);
-  return { status: 202, data: record, writes: [], events: [{ name: "grant.changed", data: record }] };
+  return { status: 202, data: record, writes: [], events: [] };
 }
 
 async function prepareTaskStatus(fx, taskId, body, principal) {
@@ -3865,13 +3900,48 @@ export async function createGuiFixture(options = {}) {
           if (!current) throw new Error("Unknown answer.");
           current.state = state;
           current.at = clock(fx).toISOString();
-          if (state === "applied") {
-            const result = { state: "approved", grantId: null, answerId };
-            const bytes = Buffer.from(stableJson(result));
-            await writeAtomic(join(fx.tree.user, "relay", "approvals", current.approvalId, "result.json"), bytes);
-            invalidate(fx);
+          const approvalState = state === "applied"
+            ? (current.decision === "deny" ? "denied" : "approved")
+            : (state === "expired" ? "expired" : null);
+          if (state === "applied") current.resultAnswerId = answerId;
+          const outcome = {
+            format: "hivem1nd-approval-answer-result-v1",
+            answerId,
+            approvalId: current.approvalId,
+            state,
+            resultAnswerId: state === "applied" ? answerId : null,
+            at: current.at,
+          };
+          await writeAtomic(join(fx.tree.user, "relay", "approvals", current.approvalId, "answer-results", `${answerId}.json`), Buffer.from(stableJson(outcome)));
+          if (approvalState) {
+            const result = {
+              format: "hivem1nd-approval-result-v1",
+              approvalId: current.approvalId,
+              state: approvalState,
+              answerId,
+              grantId: approvalState === "approved" && current.decision === "approve-always" ? uuid() : null,
+              at: current.at,
+            };
+            await writeAtomic(join(fx.tree.user, "relay", "approvals", current.approvalId, "result.json"), Buffer.from(stableJson(result)));
           }
-          publish(fx, [{ name: "approval.changed", global: true, data: { answer: { ...current } } }], fx.primary);
+          invalidate(fx);
+          const approval = (await projection(fx)).approvals.find((item) => item.id === current.approvalId);
+          publish(fx, [{ name: "approval.answered", global: true, unitId: approval?.unitId, data: { approval } }], fx.primary);
+        });
+      },
+      settleRevocation(requestId) {
+        return enqueue(fx, async () => {
+          const current = fx.revocations.get(requestId);
+          if (!current) throw new Error("Unknown revocation.");
+          const revision = await dropGrant(fx, current.unitId, current.grantId);
+          current.state = "revoked";
+          current.revision = revision;
+          publish(fx, [{
+            name: "approval.grant.changed",
+            global: true,
+            unitId: current.unitId,
+            data: { unitId: current.unitId, grantId: current.grantId, operation: "revoked", revision },
+          }], fx.primary);
         });
       },
       editTask(taskId, extra) {
@@ -3902,7 +3972,16 @@ export async function createGuiFixture(options = {}) {
           current.state = state;
           current.error = error ? { code: error, message: "The launch did not finish." } : null;
           if (state === "started" && !current.sessionId) current.sessionId = uuid();
-          publish(fx, [{ name: "session.changed", global: true, data: { request: { ...current } } }], fx.primary);
+          publish(fx, [{ name: "session.request.changed", global: true, unitId: current.unitId, data: sessionRequestData(current) }], fx.primary);
+        });
+      },
+      patchSession(requestId, state, error = null) {
+        return enqueue(fx, async () => {
+          const current = fx.sessionRequests.get(requestId);
+          if (!current) throw new Error("Unknown session request.");
+          current.state = state;
+          current.error = error ? { code: error, message: "The launch did not finish." } : null;
+          if (state === "started" && !current.sessionId) current.sessionId = uuid();
         });
       },
       acknowledgeStop(sessionId) {
@@ -3910,7 +3989,9 @@ export async function createGuiFixture(options = {}) {
           const current = fx.sessionStops.get(sessionId);
           if (!current || current.state !== "stopping") throw new Error("The session is not stopping.");
           current.state = "stopped";
-          publish(fx, [{ name: "session.changed", global: true, data: { session: { id: sessionId, state: "stopped" } } }], fx.primary);
+          const found = (await projection(fx)).sessions.find((item) => item.id === sessionId);
+          const session = { ...(found ?? { id: sessionId }), state: "stopped" };
+          publish(fx, [{ name: "session.changed", global: true, data: { session } }], fx.primary);
         });
       },
       disconnectStreams() { disconnectStreams(fx); },

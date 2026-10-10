@@ -237,8 +237,10 @@ async function onStream(app, event) {
   if (event?.name === "home.changed") noteHome(app, dataOf(event));
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
+    if (event?.name === "stream.ready") await recheckTracked(app);
     return;
   }
+  if (event?.name === "stream.reset") await recheckTracked(app);
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
     if (app.unitList) await reloadList(app.unitList);
   }
@@ -246,8 +248,10 @@ async function onStream(app, event) {
     if (app.chatList) await reloadList(app.chatList);
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
-  if (event?.name === "session.changed") noteSession(app, event.envelope?.data ?? {});
-  if (event?.name === "approval.changed") noteApproval(app, event.envelope?.data ?? {});
+  if (event?.name === "session.request.changed") noteSessionRequest(app, dataOf(event));
+  if (event?.name === "session.changed") noteSession(app, dataOf(event));
+  if (event?.name === "approval.requested" || event?.name === "approval.answered") await noteApproval(app, dataOf(event));
+  if (event?.name === "approval.grant.changed") await noteGrant(app, dataOf(event));
   if (event?.name === "message.created" && app.thread?.chat?.id === event.envelope?.data?.chatId) {
     incomingMessage(app.thread, event.envelope.data.message);
   }
@@ -1348,9 +1352,15 @@ function openFields(app, title, fields, onConfirm) {
 }
 
 function noteSession(app, data) {
-  const state = data.request?.state ?? data.session?.state;
+  const state = data.session?.state;
   if (!state || !SESSION_COPY[state]) return;
-  if (data.request?.requestId) app.sessionRequestId = data.request.requestId;
+  app.actionNote = text(app.language, SESSION_COPY[state]);
+}
+
+function noteSessionRequest(app, data) {
+  const state = data?.state;
+  if (!state || !SESSION_COPY[state]) return;
+  if (data.requestId) app.sessionRequestId = data.requestId;
   app.actionNote = text(app.language, SESSION_COPY[state]);
 }
 
@@ -1520,16 +1530,27 @@ function loadInspector(app, unitId) {
 
 function answerSelected(app, approval, decision) {
   answerApproval(app.api, approval, decision).then((result) => {
-    app.actionNote = text(app.language, "answerQueued");
-    app.answerId = result.data.answerId;
-    app.answerApprovalId = approval.id;
-    if (!app.disposed) renderShell(app);
+    const next = result.data?.approval ?? null;
+    app.answerId = result.data.answerId ?? null;
+    app.answerApprovalId = next?.id ?? approval.id;
+    if (next) replaceApproval(app, next);
+    const label = next ? approvalLabel(app, next) : text(app.language, "answerQueued");
+    if (label) app.actionNote = label;
+    if (finalApprovalState(next?.state)) refreshOwnerSurface(app, next.unitId ?? approval.unitId);
+    else if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }
 
 function revokeSelectedGrant(app, unit, grant) {
   revokeGrant(app.api, unit, grant.id).then((result) => {
-    app.actionNote = result.data.state;
+    app.revocationRequestId = result.data.requestId ?? null;
+    app.revocationUnitId = result.data.unitId ?? unit.id;
+    if (result.data.state === "revoked") {
+      app.actionNote = text(app.language, "grantRevoked");
+      refreshOwnerSurface(app, app.revocationUnitId);
+      return;
+    }
+    app.actionNote = text(app.language, "grantPending");
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }
@@ -1557,10 +1578,91 @@ function refreshWaiting(app) {
   }).catch((error) => noteAction(app, error));
 }
 
-function noteApproval(app, data) {
-  const state = data.answer?.state;
-  if (state === "applied") app.actionNote = text(app.language, "approved");
-  else if (state) app.actionNote = state;
+function replaceApproval(app, approval) {
+  if (!approval?.id || !app.inspectorData) return;
+  const items = app.inspectorData.approvals ?? [];
+  const index = items.findIndex((item) => item.id === approval.id);
+  if (index >= 0) items[index] = approval;
+  else items.push(approval);
+  app.inspectorData.approvals = items;
+}
+
+function finalApprovalState(state) {
+  return state === "approved" || state === "denied" || state === "expired";
+}
+
+function approvalLabel(app, approval) {
+  if (approval?.state === "approved") return text(app.language, "approved");
+  if (approval?.state === "denied") return text(app.language, "denied");
+  if (approval?.state === "expired") return text(app.language, "approvalExpired");
+  if (approval?.state === "answering") return text(app.language, "answerQueued");
+  return null;
+}
+
+async function noteApproval(app, data) {
+  const approval = data?.approval;
+  if (!approval?.id) return;
+  replaceApproval(app, approval);
+  const label = approvalLabel(app, approval);
+  if (label) app.actionNote = label;
+  if (finalApprovalState(approval.state)) await refreshOwnerSurface(app, approval.unitId);
+}
+
+async function noteGrant(app, data) {
+  if (!data?.unitId || (data.operation !== "granted" && data.operation !== "revoked")) return;
+  if (data.operation === "revoked") app.actionNote = text(app.language, "grantRevoked");
+  await refreshOwnerSurface(app, data.unitId);
+}
+
+async function refreshOwnerSurface(app, unitId) {
+  const reads = [request(app.api, "GET", "/waiting", { query: { limit: "50" } })];
+  if (unitId) {
+    reads.push(request(app.api, "GET", "/units/:unitId/approval-grants", {
+      params: { unitId },
+      query: { limit: "50" },
+    }));
+  }
+  const [waiting, grants] = await Promise.all(reads);
+  if (app.inspectorData) {
+    app.inspectorData.waiting = waiting.data.items ?? [];
+    if (grants && (!unitId || app.inspectorData.unitId === unitId)) app.inspectorData.grants = grants.data.items ?? [];
+  }
+  if (!app.disposed) renderShell(app);
+}
+
+async function recheckTracked(app) {
+  const jobs = [];
+  if (app.sessionRequestId) {
+    jobs.push(request(app.api, "GET", "/session-requests/:requestId", {
+      params: { requestId: app.sessionRequestId },
+    }).then((result) => noteSessionRequest(app, result.data)));
+  }
+  if (app.answerId && app.answerApprovalId) {
+    jobs.push((async () => {
+      const answer = await request(app.api, "GET", "/approvals/:approvalId/answers/:answerId", {
+        params: { approvalId: app.answerApprovalId, answerId: app.answerId },
+      });
+      app.answerState = answer.data.state ?? null;
+      const approval = await request(app.api, "GET", "/approvals/:approvalId", {
+        params: { approvalId: app.answerApprovalId },
+      });
+      replaceApproval(app, approval.data);
+      const label = approvalLabel(app, approval.data);
+      if (label) app.actionNote = label;
+      if (finalApprovalState(approval.data.state)) await refreshOwnerSurface(app, approval.data.unitId);
+    })());
+  }
+  if (app.revocationRequestId) {
+    jobs.push(request(app.api, "GET", "/grant-revocations/:requestId", {
+      params: { requestId: app.revocationRequestId },
+    }).then((result) => {
+      if (result.data.state === "revoked") return refreshOwnerSurface(app, result.data.unitId);
+    }));
+  }
+  if (!jobs.length) return;
+  await Promise.all(jobs.map((job) => job.catch((error) => noteAction(app, error))));
+  app.trackedAt = (app.trackedAt ?? 0) + 1;
+  if (!app.disposed) renderShell(app);
 }
 
 function unitById(app, id) {
