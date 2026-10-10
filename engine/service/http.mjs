@@ -241,6 +241,7 @@ export async function createHttpServer(options) {
     const headerBytes = Object.entries(req.headers).reduce((sum, [key, value]) => sum + key.length + String(value).length, 0);
     checkLimits(bucket, { url: req.url ?? '', headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
     if (requested.path === '/mcp') {
+      if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
       return;
     }
@@ -268,7 +269,7 @@ export async function createHttpServer(options) {
     const domain = domainContext(options, credential, bus);
     const object = await objectFor(route, domain, credential, params, body);
     const operation = operationFor(route, credential, body);
-    if (operation) authorize(credential, operation, object);
+    if (operation) authorize(credential, operation, { ...object, listener: listener.kind });
     if (route.handler === 'events') {
       const principal = { ...domain.principal, stableId: credential.token, audience: credential.audience, viewerId: credential.viewerId ?? null };
       const subscriber = serveEvents(res, bus, principal, eventCursor);
@@ -293,6 +294,7 @@ export async function createHttpServer(options) {
     const outcome = route.method === 'GET'
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
+    if (credential?.audience === 'agent') await agentScope(route, domain, credential, params, body);
     if (outcome.status === 204) {
       respond(res, 204);
       return;
@@ -454,10 +456,19 @@ async function credentialFor(req, route, credentials, listener, options) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
   const record = credentials.verify(token);
+  if (listener.kind === 'lan' && record.audience !== 'phone') {
+    throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
+  }
+  if (record.audience === 'phone' && route.method !== 'GET' && route.method !== 'HEAD' && !PHONE_WRITES.has(route.handler)) {
+    throw new CoreError(403, 'phone_read_only', 'Phone cannot change that.');
+  }
   const audiences = expandAudience(route.audience);
   if (audiences.length > 0 && !audiences.includes(record.audience)) throw new CoreError(403, 'forbidden', 'The credential cannot call this route.');
   return record;
 }
+
+const PHONE_WRITES = new Set(['postChat', 'postMailbox', 'readChat', 'readMailbox', 'answerApproval', 'changeStatus', 'logout']);
+const AGENT_COLLECTIONS = new Set(['units', 'leads', 'squads', 'projects', 'machines', 'sync', 'mailboxes', 'sessions', 'waiting', 'tasks', 'approvals']);
 
 function expandAudience(value) {
   return value.split('').map((letter) => ({ D: 'desktop', P: 'phone', A: 'agent' }[letter])).filter(Boolean);
@@ -473,7 +484,7 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
-  if (credential?.audience === 'agent' && route.operation === 'read') return { scope: 'own', unitId: credential.unitId };
+  if (credential?.audience === 'agent') return agentScope(route, domain, credential, params, body);
   if (route.handler === 'changeStatus' && credential?.audience === 'phone') {
     const task = await loadTask(domain, params.taskId);
     const reviewable = reviewAuthority(task).reviewable;
@@ -486,6 +497,63 @@ async function objectFor(route, domain, credential, params, body) {
   if (route.operation === 'approval.request') return { unitId: credential?.unitId };
   if (route.operation === 'editor.write' || route.operation === 'comment.write') return { attached: credential?.attached === true };
   return {};
+}
+
+async function agentScope(route, domain, credential, params, body) {
+  const unitId = credential.unitId;
+  if (route.handler === 'view' || route.template === '/mailboxes' || (route.handler === 'collection' && !params.unitId && !params.chatId && !params.taskId && AGENT_COLLECTIONS.has(route.collection))) {
+    throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
+  }
+  if (route.template === '/blueprint/boards' || route.template === '/void/texts') {
+    throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
+  }
+  if (route.handler === 'events' || route.handler === 'requestApproval') return { scope: 'own', unitId };
+  if (params.unitId && params.unitId !== unitId) throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
+  if (params.chatId) {
+    if (!(await chatContains(domain, params.chatId, unitId))) throw new CoreError(403, 'forbidden', 'The agent is not a member of that chat.');
+    return { scope: 'own', unitId };
+  }
+  if (route.template === '/chats') return { scope: 'member', unitId };
+  if (params.taskId && (route.handler === 'changeStatus' || route.handler === 'detail')) {
+    const task = await loadTask(domain, params.taskId);
+    if (task.toId !== unitId && task.leadId !== unitId) throw new CoreError(403, 'forbidden', 'The agent cannot change that task.');
+    return { scope: 'own', unitId };
+  }
+  if (params.approvalId) {
+    const owner = await approvalOwner(domain, params.approvalId);
+    if (owner !== unitId) throw new CoreError(403, 'forbidden', 'The agent cannot read that approval.');
+    return { scope: 'own', unitId };
+  }
+  if (params.resourceId && (route.operation === 'editor.read' || route.operation === 'editor.write' || route.operation === 'comment.write')) {
+    if (!(await resourceAttached(domain, params.resourceId, unitId))) throw new CoreError(403, 'forbidden', 'The agent is not attached to that resource.');
+    return { scope: 'own', unitId, attached: true };
+  }
+  if (route.operation === 'read') return { scope: 'own', unitId };
+  return { unitId };
+}
+
+async function approvalOwner(domain, approvalId) {
+  try {
+    const bytes = await readFile(path.join(domain.paths.mind, 'user', 'relay', 'approvals', approvalId, 'request.json'), 'utf8');
+    return JSON.parse(bytes).unitId ?? null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function resourceAttached(domain, resourceId, unitId) {
+  for (const project of domain.projects ?? []) {
+    if (!project?.localPath) continue;
+    try {
+      const parsed = JSON.parse(await readFile(path.join(project.localPath, 'docs', 'flows', 'resources.json'), 'utf8'));
+      const entry = (parsed.resources ?? []).find((item) => item.id === resourceId);
+      if (entry) return (entry.attached ?? []).includes(unitId);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return false;
 }
 
 function bodyExpect(route) {

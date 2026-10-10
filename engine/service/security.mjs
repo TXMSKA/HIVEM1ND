@@ -192,10 +192,10 @@ export function authorize(credential, operation, object = {}) {
     if (['approval.answer', 'task.accept', 'task.undo', 'settings.write', 'grant.revoke', 'unit.create', 'session.start', 'session.stop', 'watch'].includes(operation)) {
       throw new CoreError(403, 'forbidden', 'The agent cannot perform that operation.');
     }
-    if (operation === 'read' && object.scope !== 'own') throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
+    if (operation === 'read' && object.scope !== 'own' && object.scope !== 'member') throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
     if (operation === 'mailbox.read' && object.unitId !== credential.unitId) throw new CoreError(403, 'forbidden', 'The agent cannot read that mailbox.');
     if (operation === 'task.status' && object.unitId !== credential.unitId) throw new CoreError(403, 'forbidden', 'The agent cannot change that task.');
-    if (operation === 'editor.write' && credential.attached !== true) throw new CoreError(403, 'forbidden', 'The agent is not attached to that resource.');
+    if ((operation === 'editor.write' || operation === 'comment.write') && object.attached !== true) throw new CoreError(403, 'forbidden', 'The agent is not attached to that resource.');
     if (operation === 'approval.request' && object.unitId !== credential.unitId) throw new CoreError(403, 'forbidden', 'The agent cannot request for another unit.');
     return { allowed: true };
   }
