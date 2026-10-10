@@ -61,7 +61,7 @@ export async function removeOwned(root, target) {
   if (!isInsideRoot(rootReal, targetReal)) {
     throw new Error("Refusing to remove a path outside the fixture root.");
   }
-  await rm(target, { recursive: true, force: true });
+  await rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
 }
 
 export async function createFixtureTree() {

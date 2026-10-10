@@ -16,6 +16,35 @@ export function updateNodeOperation(editor, nodeId, fields) {
   return { changes, expectedRevision: editor.revision, nodeId };
 }
 
+export function boardCommentAnchor(board, target) {
+  if (!board || !target) return null;
+  const point = integerPoint(target.x, target.y);
+  if (!point) return null;
+  if (target.kind === "canvas") {
+    return { screen: null, screenTitle: null, element: null, label: "Board", path: ["Board"], point };
+  }
+  if (target.kind === "screen") {
+    const screen = (board.screens ?? []).find((item) => item.id === target.screenId);
+    if (!screen) return null;
+    const title = typeof screen.title === "string" ? screen.title : screen.id;
+    return { screen: screen.id, screenTitle: title, element: null, label: title, path: [title], point };
+  }
+  if (target.kind === "node") {
+    const indexed = indexNodes(board).get(target.nodeId);
+    if (!indexed) return null;
+    const title = typeof indexed.screen.title === "string" ? indexed.screen.title : indexed.screen.id;
+    const label = indexed.node.name || indexed.node.id;
+    const path = [title, ...indexed.ancestors.map((item) => item.name || item.id), label].slice(0, 10);
+    return { screen: indexed.screen.id, screenTitle: title, element: indexed.node.id, label, path, point };
+  }
+  return null;
+}
+
+function integerPoint(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
 export function indexNodes(document) {
   const nodes = new Map();
   for (const screen of document?.screens ?? []) walk(screen?.root, screen, []);

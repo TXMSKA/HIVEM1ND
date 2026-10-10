@@ -31,7 +31,7 @@ import {
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
-import { addNode, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
+import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import {
@@ -299,6 +299,7 @@ function restoreInputFocus(app) {
 export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
+  app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.api.live && (app.api.live.stopped = true);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
     if (!list) continue;
@@ -773,12 +774,31 @@ function boardSurface(app, document, editor, t) {
   renderBoard(document, host, editor);
   host.addEventListener("click", (event) => {
     const marked = event.target?.closest?.("[data-node]");
+    const screenMarked = event.target?.closest?.("[data-screen]");
     const svg = host.querySelector("svg");
     const point = boardPoint(svg, event);
-    const hit = marked ? { nodeId: marked.getAttribute("data-node"), screenId: marked.closest("[data-screen]")?.getAttribute("data-screen") } : hitBoardNode(editor.authoritative.document, point);
-    if (!hit?.nodeId) return;
-    app.editors.selectedNodeId = hit.nodeId;
-    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: hit.screenId, resourceId: editor.resourceId };
+    const located = { resourceId: editor.resourceId, x: point.x, y: point.y };
+    if (marked?.getAttribute?.("data-node")) {
+      const nodeId = marked.getAttribute("data-node");
+      const screenId = marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null;
+      app.editors.selectedNodeId = nodeId;
+      app.editors.focus = { ...(app.editors.focus ?? {}), screenId, resourceId: editor.resourceId };
+      app.editors.commentTarget = { ...located, kind: "node", nodeId, screenId };
+    } else if (screenMarked?.getAttribute?.("data-screen")) {
+      const screenId = screenMarked.getAttribute("data-screen");
+      app.editors.selectedNodeId = null;
+      app.editors.focus = { ...(app.editors.focus ?? {}), screenId, resourceId: editor.resourceId };
+      app.editors.commentTarget = { ...located, kind: "screen", screenId };
+    } else {
+      const hit = hitBoardNode(editor.authoritative.document, point);
+      if (hit?.nodeId) {
+        app.editors.selectedNodeId = hit.nodeId;
+        app.editors.focus = { ...(app.editors.focus ?? {}), screenId: hit.screenId, resourceId: editor.resourceId };
+        app.editors.commentTarget = { ...located, kind: "node", nodeId: hit.nodeId, screenId: hit.screenId };
+      } else {
+        app.editors.commentTarget = { ...located, kind: "canvas" };
+      }
+    }
     renderShell(app);
   });
   const nodes = editor.authoritative.document.screens?.[0];
@@ -1133,17 +1153,30 @@ function renderEditor(app, t) {
       },
     }));
   }
-  const compose = element(document, "textarea", {
-    "data-comment": "true",
-    oninput: (event) => { current.commentText = event.target.value; },
-  });
+  const compose = element(document, "textarea", { "data-comment": "true" });
   compose.value = current.commentText ?? "";
-  panel.append(comments, compose, element(document, "button", {
+  const commentButton = element(document, "button", {
     type: "button",
     class: "btn primary",
     "data-action": "comment",
+    disabled: commentCanSubmit(app, compose.value) ? null : "",
     onclick: () => addEditorComment(app, compose),
-  }, t("addComment")));
+  }, t("addComment"));
+  commentButton.disabled = !commentCanSubmit(app, compose.value);
+  compose.addEventListener("input", () => {
+    current.commentText = compose.value;
+    setCommentEnabled(commentButton, commentCanSubmit(app, compose.value));
+  });
+  const owner = document;
+  if (app.onCommentSelection) owner.removeEventListener?.("selectionchange", app.onCommentSelection);
+  app.onCommentSelection = () => {
+    const field = app.root.querySelector?.("[data-comment]");
+    const button = app.root.querySelector?.("[data-action='comment']");
+    if (!field || !button) return;
+    setCommentEnabled(button, commentCanSubmit(app, field.value));
+  };
+  owner.addEventListener?.("selectionchange", app.onCommentSelection);
+  panel.append(comments, compose, commentButton);
   const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
   for (const notice of current.notices ?? []) {
     const key = noticeCopy[notice.state];
@@ -1175,12 +1208,46 @@ function followEditor(app) {
   startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
 
+function commentCanSubmit(app, value) {
+  return Boolean(currentCommentAnchor(app)) && typeof value === "string" && value.trim().length > 0;
+}
+
+function setCommentEnabled(button, enabled) {
+  button.disabled = !enabled;
+  if (enabled) button.removeAttribute("disabled");
+  else button.setAttribute("disabled", "");
+}
+
+function currentCommentAnchor(app) {
+  const editor = app.editors?.current;
+  const board = editor?.authoritative?.document ?? editor?.document;
+  if (!editor || !board) return null;
+  if (editor.kind === "void") {
+    const host = app.root.querySelector?.("[data-void]");
+    const document = app.root.ownerDocument;
+    const selection = document?.getSelection?.() ?? document?.defaultView?.getSelection?.();
+    if (!host || !selection?.anchorNode || !host.contains(selection.anchorNode)) return null;
+    const range = selectedPlainRange(selection);
+    const k = editor.page ?? app.voidState?.page;
+    const lang = app.language === "es" ? "es" : "en";
+    const page = board.pages?.find((item) => item.k === k);
+    if (!range || !page || typeof page[lang] !== "string") return null;
+    return textAnchor(editor, k, lang, range.start, range.end);
+  }
+  const target = app.editors.commentTarget;
+  if (!target || target.resourceId !== editor.resourceId) return null;
+  return boardCommentAnchor(board, target);
+}
+
 function addEditorComment(app, compose) {
   const editors = editorsOf(app);
   const current = editors.current;
   if (!current) return;
-  current.commentText = compose.value;
-  createComment(app.api, editors, { quote: compose.value }, compose.value).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  const value = compose.value;
+  current.commentText = value;
+  const anchor = currentCommentAnchor(app);
+  if (!anchor || !value.trim()) return;
+  createComment(app.api, editors, anchor, value).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
 
 function replyToThread(app, threadId) {

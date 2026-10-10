@@ -57,16 +57,16 @@ test("editor comments, attachments and Watch stay on their own revisions", async
   assert.notEqual(opened.revision, opened.commentsRevision);
   assert.notEqual(opened.revision, opened.attachmentRevision);
   const staleDocument = { ...editors, current: { ...opened, revision: "a".repeat(64) } };
-  await assert.rejects(createComment(api, staleDocument, { quote: "aside" }, "Stale document"), (error) => error.code === "revision_conflict");
+  await assert.rejects(createComment(api, staleDocument, canvasAnchor(), "Stale document"), (error) => error.code === "revision_conflict");
   const staleComments = { ...editors, current: { ...opened, commentsRevision: "b".repeat(64) } };
-  await assert.rejects(createComment(api, staleComments, { quote: "aside" }, "Stale comments"), (error) => error.code === "revision_conflict");
+  await assert.rejects(createComment(api, staleComments, canvasAnchor(), "Stale comments"), (error) => error.code === "revision_conflict");
   await assert.rejects(setAttachments(api, { ...editors, current: { ...opened, attachmentRevision: "c".repeat(64) } }, opened.attached), (error) => error.code === "revision_conflict");
   await assert.rejects(setAttachments(api, editors, ["missing-unit"]), (error) => error.code === "unknown_unit");
   await assert.rejects(setAttachments(api, editors, Array.from({ length: 257 }, (_, index) => `project:shop:unit-${index}`)), (error) => error.code === "invalid_body");
   const attached = await setAttachments(api, editors, ["project:shop:executor-shop", "project:shop:executor-shop", "env:web:overlord-web"]);
   assert.deepEqual(attached.data.attached, ["project:shop:executor-shop", "env:web:overlord-web"]);
   fixture.control.setNoticeFailure("project:shop:executor-shop");
-  const created = await createComment(api, editors, { quote: "aside" }, "Unplaced note");
+  const created = await createComment(api, editors, canvasAnchor(), "Unplaced note");
   assert.equal(created.data.thread.place, null);
   assert.equal(created.data.notifications[0].state, "failed");
   fixture.control.setNoticeFailure(null);
@@ -570,6 +570,44 @@ test("reopening a board reloads referenced images and draws clipped styled nodes
   assert.equal(hitBoardNode(board, { x: 32, y: 32 }).nodeId, "trail");
 });
 
+test("comment creation accepts only a complete anchor for that editor", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const editors = createEditors();
+  const boards = await loadCatalog(api, editors, "blueprint");
+  const board = boards.find((item) => item.title === "Cart");
+  await openEditor(api, editors, board);
+  await assert.rejects(createComment(api, editors, { quote: "aside" }, "Quote only"), (error) => error.code === "invalid_body");
+  await assert.rejects(createComment(api, editors, { ...canvasAnchor(), point: { x: 1.5, y: 0 } }, "Fractional point"), (error) => error.code === "invalid_body");
+  await assert.rejects(createComment(api, editors, {
+    screen: "empty", screenTitle: "Empty cart", element: "label", label: "Label", path: ["Empty cart", "Label"],
+  }, "Missing point"), (error) => error.code === "invalid_body");
+  await assert.rejects(createComment(api, editors, welcomeAnchor(), "Wrong editor"), (error) => error.code === "invalid_body");
+  await assert.rejects(createComment(api, editors, {
+    screen: "empty", screenTitle: "Empty cart", element: "missing", label: "Missing", path: ["Empty cart"], point: { x: 1, y: 2 },
+  }, "Missing node"), (error) => error.code === "anchor_changed");
+  const placed = await createComment(api, editors, {
+    screen: "empty", screenTitle: "Empty cart", element: "label", label: "Label", path: ["Empty cart", "Root", "Label"], point: { x: 16, y: 20 },
+  }, "On the label");
+  assert.equal(placed.data.thread.place.screenId, "empty");
+  assert.equal(placed.data.thread.place.nodeId, "label");
+  const texts = await loadCatalog(api, editors, "void");
+  const notes = texts.find((item) => item.title === "Release notes");
+  await openEditor(api, editors, notes);
+  await assert.rejects(createComment(api, editors, canvasAnchor(), "Wrong editor"), (error) => error.code === "invalid_body");
+  const mismatched = { ...welcomeAnchor(), quote: "WelcomX" };
+  await assert.rejects(createComment(api, editors, mismatched, "Wrong quote"), (error) => error.code === "anchor_changed");
+  const partial = { ...welcomeAnchor() };
+  delete partial.suffix;
+  await assert.rejects(createComment(api, editors, partial, "Partial void"), (error) => error.code === "invalid_body");
+  const created = await createComment(api, editors, welcomeAnchor(), "On the welcome");
+  assert.equal(created.data.thread.anchor.k, "Intro.Welcome");
+  assert.equal(created.data.thread.anchor.quote, "Welcome");
+  assert.equal(created.data.thread.anchor.prefix, "");
+  assert.equal(created.data.thread.anchor.suffix, "\nA first paragraph.");
+});
+
 function svgDocument() {
   const create = (tag) => ({
     tag,
@@ -664,6 +702,22 @@ function sentinels(value, found = []) {
 }
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+function canvasAnchor(x = 0, y = 0) {
+  return { screen: null, screenTitle: null, element: null, label: "Board", path: ["Board"], point: { x, y } };
+}
+
+function welcomeAnchor() {
+  return {
+    k: "Intro.Welcome",
+    lang: "en",
+    start: 0,
+    end: 7,
+    quote: "Welcome",
+    prefix: "",
+    suffix: "\nA first paragraph.",
+  };
+}
 
 function apiFrom(url) {
   const parsed = new URL(url);

@@ -1166,6 +1166,7 @@ test("void drafts stay with their page and comments use the rendered selection",
   assert.equal(ranged.lang, "en");
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.k === "Intro.Welcome")?.en === broken
     && desktop.root.querySelector("[data-source]")?.value === broken, "The saved text was not shown.");
+  await delay(150);
 
   const kept = `${broken} kept`;
   desktop.app.editors.current.revision = "a".repeat(64);
@@ -1196,7 +1197,7 @@ test("void drafts stay with their page and comments use the rendered selection",
   typeInput(desktop.root.querySelector("[data-field='create-id']"), "fresh-note", 0, 10);
   typeInput(desktop.root.querySelector("[data-field='create-title']"), "Fresh", 0, 5);
   click(desktop.root.querySelector("[data-action='create-resource']"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "fresh-note", "The new text did not open.");
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "fresh-note" && desktop.app.voidState?.page === "Intro.Welcome", "The new text did not open on its first page.");
   assert.equal(desktop.app.voidState.page, "Intro.Welcome");
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "LOCAL DRAFT");
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "Next page.");
@@ -1205,6 +1206,112 @@ test("void drafts stay with their page and comments use the rendered selection",
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
   await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-source]")?.value === "LOCAL DRAFT", "The page draft was lost while switching texts.");
 });
+
+test("comments use a complete anchor and stay disabled until one exists", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (!init?.body || init.method !== "POST") return;
+    writes.push({ url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='comment']") && desktop.root.querySelector("[data-node='label']"), "The board comment control did not appear.");
+  const commentPosts = () => writes.filter((item) => item.url.includes("/comments") && item.body.anchor);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
+  typeInput(desktop.root.querySelector("[data-comment]"), "Place the label", 0, 3);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
+  click(desktop.root.querySelector("[data-action='comment']"));
+  await delay(40);
+  assert.equal(commentPosts().length, 0);
+  const host = desktop.root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
+  click(desktop.root.querySelector("[data-action='comment']"));
+  await waitFor(() => commentPosts().some((item) => item.body.text === "Place the label"), "The node comment was not sent.");
+  const nodeAnchor = commentPosts().find((item) => item.body.text === "Place the label").body.anchor;
+  assert.equal(nodeAnchor.screen, "empty");
+  assert.equal(nodeAnchor.screenTitle, "Empty cart");
+  assert.equal(nodeAnchor.element, "label");
+  assert.equal(nodeAnchor.label, "Label");
+  assert.deepEqual(nodeAnchor.path, ["Empty cart", "Root", "Label"]);
+  assert.deepEqual(nodeAnchor.point, { x: 20, y: 24 });
+  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent node comment remained.");
+
+  clickEvent(desktop.root.querySelector(".board-host"), { target: desktop.root.querySelector("[data-screen='empty']"), offsetX: 8, offsetY: 9 });
+  typeInput(desktop.root.querySelector("[data-comment]"), "Whole screen", 0, 5);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
+  click(desktop.root.querySelector("[data-action='comment']"));
+  await waitFor(() => commentPosts().some((item) => item.body.text === "Whole screen"), "The screen comment was not sent.");
+  const screenAnchor = commentPosts().find((item) => item.body.text === "Whole screen").body.anchor;
+  assert.equal(screenAnchor.screen, "empty");
+  assert.equal(screenAnchor.screenTitle, "Empty cart");
+  assert.equal(screenAnchor.element, null);
+  assert.equal(screenAnchor.label, "Empty cart");
+  assert.deepEqual(screenAnchor.path, ["Empty cart"]);
+  assert.deepEqual(screenAnchor.point, { x: 8, y: 9 });
+  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent screen comment remained.");
+
+  clickEvent(desktop.root.querySelector(".board-host"), { target: desktop.root.querySelector(".board-host"), offsetX: -40, offsetY: -15 });
+  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
+  typeInput(desktop.root.querySelector("[data-comment]"), "On the canvas", 0, 3);
+  click(desktop.root.querySelector("[data-action='comment']"));
+  await waitFor(() => commentPosts().some((item) => item.body.text === "On the canvas"), "The canvas comment was not sent.");
+  const canvas = commentPosts().find((item) => item.body.text === "On the canvas").body.anchor;
+  assert.equal(canvas.screen, null);
+  assert.equal(canvas.screenTitle, null);
+  assert.equal(canvas.element, null);
+  assert.equal(canvas.label, "Board");
+  assert.deepEqual(canvas.path, ["Board"]);
+  assert.deepEqual(canvas.point, { x: -40, y: -15 });
+  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent canvas comment remained.");
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
+  typeInput(desktop.root.querySelector("[data-comment]"), "Use the rendered words", 0, 3);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
+  const quote = textNodes(desktop.root.querySelector("[data-void]")).find((node) => node.textContent.includes("first"));
+  const offset = quote.textContent.indexOf("first");
+  desktop.document.getSelection = () => ({
+    anchorNode: quote,
+    anchorOffset: offset,
+    focusNode: quote,
+    focusOffset: offset + "first".length,
+    isCollapsed: false,
+  });
+  desktop.app.onCommentSelection();
+  assert.equal(desktop.root.querySelector("[data-comment]").value, "Use the rendered words");
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
+  click(desktop.root.querySelector("[data-action='comment']"));
+  await waitFor(() => commentPosts().some((item) => item.body.text === "Use the rendered words"), "The text comment was not sent.");
+  const textAnchorBody = commentPosts().find((item) => item.body.text === "Use the rendered words").body.anchor;
+  assert.equal(textAnchorBody.k, "Intro.Welcome");
+  assert.equal(textAnchorBody.lang, "en");
+  assert.equal(textAnchorBody.start, 10);
+  assert.equal(textAnchorBody.end, 15);
+  assert.equal(textAnchorBody.quote, "first");
+  assert.equal(textAnchorBody.prefix, "Welcome\nA ");
+  assert.equal(textAnchorBody.suffix, " paragraph.");
+});
+
+function clickEvent(node, event) {
+  const payload = { preventDefault() {}, target: event.target ?? node, offsetX: event.offsetX ?? 0, offsetY: event.offsetY ?? 0 };
+  for (const handler of node?.listeners?.get("click") ?? []) handler(payload);
+}
 
 function textNodes(node, found = []) {
   if (node?.tag === "#text") found.push(node);
@@ -1444,6 +1551,21 @@ function createTestDocument(width = 390) {
         return false;
       },
       remove() {},
+      removeAttribute(name) {
+        this.attributes.delete(name);
+        if (name.startsWith("data-")) {
+          const key = name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+          delete this.dataset[key];
+        }
+      },
+      closest(selector) {
+        let current = this;
+        while (current) {
+          if (selectorMatches(current, selector)) return current;
+          current = current.parent;
+        }
+        return null;
+      },
       getBoundingClientRect() { return { left: 0, top: 0, width, height: 700 }; },
     };
     return node;

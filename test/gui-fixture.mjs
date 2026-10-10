@@ -2630,12 +2630,101 @@ function validateTaskStatus(body) {
   revisionField(body.expectedRevision);
 }
 
+const VOID_ANCHOR_KEYS = ["k", "lang", "start", "end", "quote", "prefix", "suffix"];
+const BOARD_ANCHOR_KEYS = ["screen", "screenTitle", "element", "label", "path", "point"];
+
 function validateComment(body) {
   requireObject(body, ["anchor", "text", "expectedRevision", "expectedCommentsRevision"]);
   requireKeys(body, ["anchor", "text", "expectedRevision"]);
   if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 10000) throw new HttpError(422, "invalid_body", "The comment is not valid.");
   revisionField(body.expectedRevision);
   if (body.expectedCommentsRevision !== undefined && body.expectedCommentsRevision !== null) revisionField(body.expectedCommentsRevision);
+  validateCommentAnchor(body.anchor);
+}
+
+function anchorVariant(anchor) {
+  if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) return null;
+  const keys = Object.keys(anchor);
+  if (keys.length === VOID_ANCHOR_KEYS.length && VOID_ANCHOR_KEYS.every((key) => keys.includes(key))) return "void";
+  if (keys.length === BOARD_ANCHOR_KEYS.length && BOARD_ANCHOR_KEYS.every((key) => keys.includes(key))) return "blueprint";
+  return null;
+}
+
+function validateCommentAnchor(anchor) {
+  const variant = anchorVariant(anchor);
+  if (variant === "void") validateVoidAnchor(anchor);
+  else if (variant === "blueprint") validateBoardAnchor(anchor);
+  else throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+}
+
+function validateVoidAnchor(anchor) {
+  if (typeof anchor.k !== "string" || anchor.k.length < 1 || anchor.k.length > 200) throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  if (anchor.lang !== "en" && anchor.lang !== "es") throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  if (!Number.isInteger(anchor.start) || !Number.isInteger(anchor.end) || anchor.start < 0 || anchor.end <= anchor.start) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  if (typeof anchor.quote !== "string" || typeof anchor.prefix !== "string" || typeof anchor.suffix !== "string") {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  if (anchor.quote.length !== anchor.end - anchor.start || anchor.prefix.length > 48 || anchor.suffix.length > 48) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+}
+
+function validateBoardAnchor(anchor) {
+  const id = (value) => value === null || (typeof value === "string" && value.length > 0 && value.length <= 160);
+  if (!id(anchor.screen) || !id(anchor.element) || (anchor.element !== null && anchor.screen === null)) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  if (anchor.screen === null) {
+    if (anchor.screenTitle !== null) throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  } else if (anchor.screenTitle !== null && (typeof anchor.screenTitle !== "string" || anchor.screenTitle.length > 160)) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  if (typeof anchor.label !== "string" || anchor.label.length > 160) throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  if (!Array.isArray(anchor.path) || anchor.path.length > 10 || anchor.path.some((item) => typeof item !== "string" || item.length > 160)) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  const point = anchor.point;
+  if (!point || typeof point !== "object" || Array.isArray(point) || Object.keys(point).length !== 2) {
+    throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  }
+  for (const axis of ["x", "y"]) {
+    if (!Number.isInteger(point[axis]) || point[axis] < -100000 || point[axis] > 100000) {
+      throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+    }
+  }
+}
+
+function fixturePlain(source) {
+  return String(source ?? "").replaceAll("<b>", "").replaceAll("</b>", "").replaceAll("<i>", "").replaceAll("</i>");
+}
+
+function assertVoidAnchorMatches(editor, anchor) {
+  const page = (editor.document?.pages ?? []).find((item) => item.k === anchor.k);
+  const source = page?.[anchor.lang];
+  if (typeof source !== "string") throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
+  const plain = fixturePlain(source);
+  const prefix = plain.slice(Math.max(0, anchor.start - 48), anchor.start);
+  const quote = plain.slice(anchor.start, anchor.end);
+  const suffix = plain.slice(anchor.end, anchor.end + 48);
+  if (anchor.end > plain.length || anchor.quote !== quote || anchor.prefix !== prefix || anchor.suffix !== suffix) {
+    throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
+  }
+}
+
+function assertBoardAnchorMatches(editor, anchor) {
+  if (anchor.screen === null && anchor.element === null) return;
+  const screen = (editor.document?.screens ?? []).find((item) => item.id === anchor.screen);
+  if (!screen) throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
+  if (anchor.screenTitle !== null && anchor.screenTitle !== screen.title) throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
+  if (anchor.element !== null && !nodeExists(screen.root, anchor.element)) throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
+}
+
+function nodeExists(node, id) {
+  if (!node) return false;
+  if (node.id === id) return true;
+  return (node.kids ?? []).some((child) => nodeExists(child, id));
 }
 
 function validateReply(body) {
@@ -2672,6 +2761,9 @@ async function prepareComment(fx, resourceId, body) {
   if (editor.revision !== body.expectedRevision || (body.expectedCommentsRevision ?? null) !== editor.commentsRevision) {
     throw new HttpError(409, "revision_conflict", "The editor was changed elsewhere.");
   }
+  if (anchorVariant(body.anchor) !== editor.kind) throw new HttpError(422, "invalid_body", "The anchor is not valid.");
+  if (editor.kind === "void") assertVoidAnchorMatches(editor, body.anchor);
+  else assertBoardAnchorMatches(editor, body.anchor);
   const thread = {
     id: uuid(),
     anchor: body.anchor,
@@ -4051,6 +4143,7 @@ export async function createGuiFixture(options = {}) {
       fx.closed = true;
       disconnectStreams(fx);
       await closeServers(fx);
+      await fx.tail;
       await tree.cleanup();
     },
   };
