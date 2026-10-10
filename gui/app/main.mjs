@@ -20,6 +20,24 @@ import {
 } from "./chats.mjs";
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
+import {
+  applyWatch,
+  createComment,
+  createEditors,
+  groupCatalog,
+  handleActivity,
+  loadCatalog,
+  loadComments,
+  markDirty,
+  noteComment,
+  noteRemote,
+  openEditor,
+  replyComment,
+  resolveComment,
+  setAttachments,
+  startWatch,
+  stopWatch,
+} from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
@@ -135,6 +153,23 @@ async function onStream(app, event) {
   if (event?.name === "message.created" && app.thread?.chat?.id === event.envelope?.data?.chatId) {
     incomingMessage(app.thread, event.envelope.data.message);
   }
+  const editors = app.editors;
+  const data = event?.envelope?.data ?? {};
+  if (editors && event?.name === "comment.changed") noteComment(editors, data);
+  if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) noteRemote(editors, data);
+  if (editors && event?.name === "editor.activity") handleActivity(editors, data);
+  if (editors && event?.name === "watch.changed") {
+    const nextId = applyWatch(editors, data);
+    const summary = nextId ? editors.catalog.find((item) => item.id === nextId) : null;
+    if (summary) await openEditor(app.api, editors, summary);
+  }
+  if (editors?.current?.commentsStale) {
+    try {
+      await loadComments(app.api, editors);
+    } catch (error) {
+      editors.error = error;
+    }
+  }
   if (app.layout !== "unknown") renderShell(app);
 }
 
@@ -237,6 +272,8 @@ function renderWorkspace(app, t, view, counts) {
   if (app.mode === "map") {
     ensureMap(app);
     stage.append(element(document, "div", { class: "map" }));
+  } else if (app.mode === "blueprint" || app.mode === "document") {
+    stage.append(renderEditor(app, t));
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
   }
@@ -328,6 +365,156 @@ function renderCollection(app, t) {
   app.activeHandlers = handlers;
   block.append(search, total, host);
   return block;
+}
+
+function editorsOf(app) {
+  if (!app.editors) app.editors = createEditors();
+  return app.editors;
+}
+
+function queueCatalog(app, kind) {
+  const editors = editorsOf(app);
+  if (editors.loadedKind === kind || editors.catalogLoading) return;
+  editors.catalogLoading = true;
+  loadCatalog(app.api, editors, kind, editors.query ?? "").then(() => {
+    editors.catalogLoading = false;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => {
+    editors.catalogLoading = false;
+    editors.loadedKind = kind;
+    editors.error = error;
+    if (!app.disposed) renderShell(app);
+  });
+}
+
+function renderEditor(app, t) {
+  const document = app.root.ownerDocument;
+  const editors = editorsOf(app);
+  const kind = app.mode === "document" ? "void" : "blueprint";
+  queueCatalog(app, kind);
+  const current = editors.current?.kind === kind ? editors.current : null;
+  const title = current?.authoritative?.title ?? current?.authoritative?.legacy?.id ?? t(app.mode);
+  const watch = editors.watch;
+  const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
+  const panel = element(document, "div", { class: "editor-panel" });
+  panel.append(element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }));
+  panel.append(element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }));
+  if (current?.authoritative?.legacy?.reason === "conversion_required") {
+    panel.append(element(document, "p", { "data-legacy": current.authoritative.legacy.path ?? "", text: t("conversionRequired") }));
+  }
+  if (editors.error?.code === "corrupt_resource") panel.append(element(document, "p", { text: t("corruptResource") }));
+  const list = element(document, "div", { class: "editor-list" });
+  for (const group of groupCatalog(editors.catalog)) {
+    for (const item of group.items) {
+      list.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-resource": item.id,
+        "aria-pressed": String(current?.resourceId === item.id),
+        onclick: () => selectEditor(app, item),
+      }, `${group.project} ${item.title}`));
+    }
+  }
+  panel.append(list);
+  if (!current) return panel;
+  const draft = element(document, "textarea", {
+    class: "editor-compose",
+    "data-draft": current.resourceId,
+    oninput: (event) => {
+      current.draftText = event.target.value;
+      markDirty(app.api, editors, app.store.capabilities, true);
+    },
+  });
+  draft.value = current.draftText ?? "";
+  panel.append(draft);
+  const attached = new Set(current.attached ?? []);
+  const picker = element(document, "div", { class: "attach-list", "data-attached": [...attached].join(" ") });
+  for (const unit of app.unitList?.catalog ?? []) {
+    const box = element(document, "label", {},
+      element(document, "input", { type: "checkbox", "data-unit": unit.id, ...(attached.has(unit.id) ? { checked: "true" } : {}) }),
+      ` ${unit.unit}`,
+    );
+    picker.append(box);
+  }
+  const actions = element(document, "div", { class: "editor-actions" });
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app, picker) }, t("attach")));
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app, picker) }, t("watch")));
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => stopWatch(app.api, editors).then(() => renderShell(app)).catch((error) => noteEditor(app, error)) }, t("stopWatch")));
+  panel.append(picker, actions);
+  const comments = element(document, "div", { class: "editor-comments" });
+  for (const thread of current.threads ?? []) {
+    const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
+    box.append(element(document, "p", { text: (thread.messages ?? []).map((message) => message.text).join(" ") }));
+    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
+    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
+    comments.append(box);
+  }
+  const compose = element(document, "textarea", {
+    "data-comment": "true",
+    oninput: (event) => { current.commentText = event.target.value; },
+  });
+  compose.value = current.commentText ?? "";
+  panel.append(comments, compose, element(document, "button", {
+    type: "button",
+    class: "btn primary",
+    "data-action": "comment",
+    onclick: () => addEditorComment(app, compose),
+  }, t("addComment")));
+  const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
+  for (const notice of current.notices ?? []) {
+    const key = noticeCopy[notice.state];
+    if (!key) continue;
+    panel.append(element(document, "p", { "data-notice": notice.state, text: t(key) }));
+  }
+  return panel;
+}
+
+function selectEditor(app, summary) {
+  const editors = editorsOf(app);
+  app.store.selected.resourceId = summary.id;
+  app.store.open.editors.set(summary.id, summary.kind);
+  app.store.open.comments.add(summary.id);
+  openEditor(app.api, editors, summary).then(() => {
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
+}
+
+function checkedUnits(picker) {
+  return [...picker.querySelectorAll("input[data-unit]")].filter((input) => input.checked).map((input) => input.getAttribute("data-unit"));
+}
+
+function saveAttachments(app, picker) {
+  setAttachments(app.api, editorsOf(app), checkedUnits(picker)).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function followEditor(app, picker) {
+  const editors = editorsOf(app);
+  const unitId = checkedUnits(picker)[0] ?? editors.current?.attached?.[0];
+  if (!unitId || !editors.current) return;
+  startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function addEditorComment(app, compose) {
+  const editors = editorsOf(app);
+  const current = editors.current;
+  if (!current) return;
+  current.commentText = compose.value;
+  createComment(app.api, editors, { quote: compose.value }, compose.value).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function replyToThread(app, threadId) {
+  const editors = editorsOf(app);
+  const text = editors.current?.commentText || "Noted.";
+  replyComment(app.api, editors, threadId, text).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function resolveThread(app, threadId) {
+  resolveComment(app.api, editorsOf(app), threadId).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function noteEditor(app, error) {
+  if (app.editors) app.editors.error = error;
+  noteAction(app, error);
 }
 
 function ensureMap(app) {

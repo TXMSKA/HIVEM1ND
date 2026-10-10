@@ -347,6 +347,11 @@ button, input { font: inherit; color: inherit; }
   background: var(--ring);
 }
 .map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; gap: 8px; }
+.editor-panel { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; overflow: auto; }
+.editor-list, .attach-list, .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.editor-comments { display: flex; flex-direction: column; gap: 8px; }
+.comment-box, .editor-compose { background: var(--card); color: var(--text); border-radius: var(--radius-control); padding: 8px; }
+.editor-compose textarea, .editor-compose input, .attach-list { width: 100%; }
 .map-action { background: var(--panel); color: var(--text); border: var(--panel-border); border-radius: var(--radius-pill); padding: 8px 12px; }
 
 @media (prefers-reduced-motion: reduce) {
