@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -107,7 +107,7 @@ test('a send arrives from the unit user, registers once, and keeps the subject t
   await unit(mind, 'shop', 'executor-shop');
   const person = await open(mind);
 
-  const first = await person.send({ project: 'shop', subject: `A comment\non a ${'long '.repeat(80)}line\u0007`, body: 'Line one.\nLine two.', attachments: ['C:\\repo\\docs\\flows\\comments\\checkout.json'] });
+  const first = await person.send({ project: 'shop', subject: `A comment\non a ${'long '.repeat(80)}line\u0007`, body: 'Line one.\nLine two.', attachments: ['docs/flows/comments/checkout.json'] });
   assert.equal(first.sent, true);
   assert.equal(first.to, 'executor-shop');
   assert.match(first.id, /^[0-9a-f-]{36}$/);
@@ -119,22 +119,80 @@ test('a send arrives from the unit user, registers once, and keeps the subject t
   assert.equal(messages.length, 2);
   const byId = new Map(messages.map((message) => [message.id, message]));
   const one = byId.get(first.id);
-  assert.equal(one.from, 'user');
+  assert.equal(one.from, 'master');
   assert.equal(one.to, 'executor-shop');
   assert.equal(one.priority, 'normal');
   assert.equal(one.body, 'Line one.\nLine two.');
-  assert.deepEqual(one.attachments, ['C:\\repo\\docs\\flows\\comments\\checkout.json']);
+  assert.deepEqual(one.attachments, ['docs/flows/comments/checkout.json']);
   assert.ok(one.subject.startsWith('A comment on a long long'), one.subject);
   assert.ok(one.subject.length <= 240 && !/[\u0000-\u001f]/.test(one.subject));
   assert.equal(byId.get(second.id).subject, 'Message from the person', 'an empty subject gets a plain one');
 
   const sessions = await readdir(path.join(mind, 'user', 'relay', 'sessions'));
   assert.equal(sessions.length, 1, 'two sends are one registration');
-  const status = await reader.status({ unit: 'user' });
+  const status = await reader.status({ unit: 'master' });
   const [registration] = status.units.flatMap((item) => item.registeredSessions);
-  assert.equal(registration.unit, 'user');
-  assert.equal(registration.client, 'user');
+  assert.equal(registration.unit, 'master');
+  assert.equal(registration.unitId, 'root:master');
+  assert.equal(registration.scopeId, 'root');
+  assert.equal(registration.client, 'master');
   assert.equal(registration.nativeSessionId, `blueprint-${HOST}`);
+  const saved = JSON.parse(await readFile(path.join(mind, 'user', 'relay', 'sessions', sessions[0]), 'utf8'));
+  assert.equal(saved.client, 'master');
+  assert.notEqual(saved.client, 'user');
+});
+
+test('an injected operation client selects a project without registering or starting a service', async (context) => {
+  const mind = await fixture(context);
+  const calls = [];
+  const operations = {
+    async status() {
+      return { units: [
+        { unit: 'reviewer-shop', scope: 'project:shop', state: 'in', date: '2026-10-08 09:00' },
+        { unit: 'executor-shop', scope: 'project:shop', state: 'in', date: '2026-10-01 09:00' },
+        { unit: 'executor-blog', scope: 'project:blog', state: 'in', date: '2026-10-08 09:00' },
+      ] };
+    },
+    async register(args) { calls.push(args); return args; },
+    async send(args) { calls.push(args); return { id: '11111111-1111-4111-8111-111111111111' }; },
+  };
+  const person = await createPersonRelay({ mindPath: mind, tool: 'blueprint', hostname: HOST, operations });
+  assert.equal((await person.agentFor('shop')).unit, 'executor-shop');
+  assert.equal(calls.length, 0);
+  assert.equal(await exists(path.join(mind, 'user', 'relay', 'sessions')), false);
+  const sent = await person.send({ project: 'shop', subject: 'Hello', body: 'x', attachments: ['docs/flows/comments/checkout.json'] });
+  assert.equal(sent.sent, true);
+  assert.equal(calls[0].unit, 'master');
+  assert.equal(calls[0].client, 'master');
+  assert.deepEqual(calls[1].attachments, ['docs/flows/comments/checkout.json']);
+});
+
+test('a historical user registration and string attachment stay readable without new bytes', async (context) => {
+  const mind = await fixture(context);
+  await unit(mind, 'shop', 'executor-shop');
+  const inbox = path.join(mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop');
+  await mkdir(inbox, { recursive: true });
+  const id = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+  const raw = Buffer.from(`id: ${id}\nfrom: user\nto: executor-shop\nmachine: ${HOST}\ntimestamp: 2026-10-01T00:00:00.000Z\nsubject: Old\nattachments: ["C:\\\\repo\\\\docs\\\\flows\\\\comments\\\\checkout.json"]\n\nHistorical body\n`, 'utf8');
+  const messagePath = path.join(inbox, `20261001-000000-${HOST}-${id}.md`);
+  await writeFile(messagePath, raw);
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  await mkdir(sessions, { recursive: true });
+  const registrationPath = path.join(sessions, '317fe33f-ec4e-49f2-9ab1-7f2a71b1d9b1.json');
+  const registration = `${JSON.stringify({ kind: 'registration', registrationId: '317fe33f-ec4e-49f2-9ab1-7f2a71b1d9b1', unit: 'user', scopeId: 'user', client: 'user', machine: HOST, nativeSessionId: 'historical', registeredAt: '2026-10-01T00:00:00.000Z' })}\n`;
+  await writeFile(registrationPath, registration);
+  const reader = await createRelay({ mindPath: mind, hostname: HOST, sessionId: 'reader', client: 'test' });
+  const listed = await reader.inbox({ unit: 'executor-shop' });
+  assert.equal(listed.messages[0].id, id);
+  assert.equal(listed.messages[0].from, 'user');
+  assert.deepEqual(listed.messages[0].attachments, ['C:\\repo\\docs\\flows\\comments\\checkout.json']);
+  const status = await reader.status({ unit: 'user' });
+  const saved = status.units.flatMap((item) => item.registeredSessions)[0];
+  assert.equal(saved.client, 'user');
+  assert.equal(saved.unit, 'user');
+  assert.equal(saved.unitId, 'root:master');
+  assert.equal(await readFile(messagePath, 'utf8'), raw.toString('utf8'));
+  assert.equal(await readFile(registrationPath, 'utf8'), registration);
 });
 
 test('a send to a project is not a send to the whole mind', async (context) => {

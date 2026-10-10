@@ -25,13 +25,13 @@ async function enabledWakeUnits(mindPath, now) {
 }
 
 /**
- * The person's channel to agents from the kit's local tools, sent as the literal unit `user`.
- * The tool registers once, on its first message, so opening a tool writes nothing.
+ * The person's channel to agents. Sends as canonical master and registers on the first message,
+ * so opening the tool writes nothing. A saved registration is not an agent capability.
  */
-export async function createPersonRelay({ mindPath, tool, hostname = os.hostname(), clock = () => Date.now() } = {}) {
+export async function createPersonRelay({ mindPath, tool, hostname = os.hostname(), clock = () => Date.now(), operations = null } = {}) {
   if (typeof tool !== 'string' || !/^[a-z][a-z0-9-]{0,40}$/.test(tool)) throw new TypeError('tool must be a short lowercase name.');
   const sessionId = `${tool}-${hostname}`;
-  const relay = await createRelay({ mindPath, hostname, sessionId, client: 'user' });
+  const relay = operations ?? await createRelay({ mindPath, hostname, sessionId, client: 'master' });
   let registered = false;
 
   async function agentFor(project) {
@@ -48,7 +48,7 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
     const agent = await agentFor(project);
     if (!agent) return { sent: false, reason: 'no-agent' };
     if (!registered) {
-      await relay.register({ unit: 'user', nativeSessionId: sessionId, client: 'user' });
+      await relay.register({ unit: 'master', nativeSessionId: sessionId, client: 'master' });
       registered = true;
     }
     const result = await relay.send({ to: agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });

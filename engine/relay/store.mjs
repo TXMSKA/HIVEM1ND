@@ -4,9 +4,11 @@ import { mkdir, open, lstat, readdir, readFile, rename, realpath, unlink, link a
 import os from 'node:os';
 import path from 'node:path';
 import { assertWithin } from '../records.mjs';
+import { uuidV8 } from '../service/identity.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+const MAX_V3_RECORD_BYTES = 1000000;
 const MAX_SUBJECT_LENGTH = 240;
 const MAX_ATTACHMENTS = 64;
 const MAX_LIST_LIMIT = 500;
@@ -38,6 +40,13 @@ function validUnit(value, label = 'unit') {
     throw relayError('INVALID_UNIT', `${label} must be a path-safe unit name.`);
   }
   return value;
+}
+
+function canonicalUnitId(unit, scopeId) {
+  if (typeof unit === 'string' && (unit.toLowerCase() === 'user' || unit.toLowerCase() === 'master')) return 'root:master';
+  if (!scopeId || scopeId === 'user' || scopeId === 'root') return `root:${unit}`;
+  if (scopeId.startsWith('project:') || scopeId.startsWith('env:')) return `${scopeId}:${unit}`;
+  return `root:${unit}`;
 }
 
 function safeMachine(value) {
@@ -79,9 +88,6 @@ function parseHeaders(raw) {
   const headerText = text.slice(0, separator);
   const delimiter = text.slice(separator).match(/^\r?\n\r?\n/)[0];
   const body = text.slice(separator + delimiter.length);
-  if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
-    throw relayError('MESSAGE_TOO_LARGE', 'A Relay message body exceeds the maximum size.');
-  }
   const headers = Object.create(null);
   for (const line of headerText.split(/\r?\n/)) {
     const index = line.indexOf(':');
@@ -93,7 +99,21 @@ function parseHeaders(raw) {
       headers[key] = Array.isArray(headers[key]) ? [...headers[key], value] : [headers[key], value];
     } else headers[key] = value;
   }
+  const version3 = headers['from-id'] || headers['to-id'] || headers.kind || headers['unit-id'];
+  if (version3) {
+    const complete = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(text, 'utf8');
+    if (complete > MAX_V3_RECORD_BYTES) throw relayError('MESSAGE_TOO_LARGE', 'A Relay record exceeds the maximum size.');
+  } else if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
+    throw relayError('MESSAGE_TOO_LARGE', 'A Relay message body exceeds the maximum size.');
+  }
   return { headers, body };
+}
+
+function attachmentPath(entry) {
+  if (typeof entry !== 'string' || entry.length > 2048 || /[\u0000-\u001f\u007f]/.test(entry) || entry.split(/[\\/]+/).includes('..')) {
+    throw relayError('MALFORMED_MESSAGE', 'The attachment metadata contains an unsafe path reference.');
+  }
+  return entry;
 }
 
 function header(headers, name, fallback = '') {
@@ -128,22 +148,32 @@ function parseMessage(raw, sourcePath, archived = false) {
   if (packed) {
     try { attachments = JSON.parse(packed); } catch { throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.'); }
   }
-  if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS || attachments.some((entry) => typeof entry !== 'string')) {
-    throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.');
-  }
-  if (attachments.some((entry) => entry.length > 2048 || /[\u0000-\u001f\u007f]/.test(entry) || entry.split(/[\\/]+/).includes('..'))) {
-    throw relayError('MALFORMED_MESSAGE', 'The attachment metadata contains an unsafe path reference.');
-  }
+  if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS) throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.');
+  attachments = attachments.map((entry) => {
+    if (typeof entry === 'string') return attachmentPath(entry);
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.path !== 'string') {
+      throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.');
+    }
+    const kind = entry.kind === undefined ? null : entry.kind;
+    if (kind !== null && typeof kind !== 'string') throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.');
+    return { path: attachmentPath(entry.path), kind };
+  });
   const explicitId = header(headers, 'id');
   if (explicitId && !/^[a-zA-Z0-9_-]{1,180}$/.test(explicitId)) throw relayError('MALFORMED_MESSAGE', 'The message id is invalid.');
   const threadId = header(headers, 'thread-id') || header(headers, 'thread') || id;
   if (!/^[a-zA-Z0-9_-]{1,180}$/.test(threadId)) throw relayError('MALFORMED_MESSAGE', 'The thread id is invalid.');
   const replyTo = header(headers, 'reply-to') || null;
   if (replyTo && !/^[a-zA-Z0-9_-]{1,180}$/.test(replyTo)) throw relayError('MALFORMED_MESSAGE', 'The reply id is invalid.');
+  const fromId = header(headers, 'from-id');
+  const toId = header(headers, 'to-id');
+  const kind = header(headers, 'kind');
   return {
     id,
     from,
     to,
+    ...(fromId ? { fromId } : {}),
+    ...(toId ? { toId } : {}),
+    ...(kind ? { kind } : {}),
     machine: header(headers, 'machine') || legacySender?.[2] || null,
     timestamp: header(headers, 'timestamp') || header(headers, 'date') || null,
     date: header(headers, 'date') || null,
@@ -505,9 +535,13 @@ function safeActivity(value) {
 }
 
 function toPublicRegistration(record) {
+  const unitId = record.unitId || canonicalUnitId(record.unit, record.scopeId);
   return {
     registrationId: record.registrationId,
     unit: record.unit,
+    unitId,
+    scopeId: record.scopeId ?? null,
+    sessionId: typeof record.sessionId === 'string' ? record.sessionId : uuidV8(['session', record.machine, record.client ?? '', record.nativeSessionId ?? '', unitId]),
     nativeSessionId: record.nativeSessionId ?? null,
     client: record.client ?? null,
     machine: record.machine,
@@ -659,7 +693,11 @@ export async function createRelay(options = {}) {
 
   // The scope a registration names, when the unit still has its state record there. Looking through every scope, as resolveUnit does, walks each project of the mind.
   async function registeredScope(unit, scopeId) {
-    if (unit.toLowerCase() === 'user') return scopeId === 'user' ? { id: 'user', path: userPath, environment: null, project: null } : null;
+    const person = unit.toLowerCase();
+    if (person === 'user' || person === 'master') {
+      if (scopeId !== 'user' && scopeId !== 'root') return null;
+      return { id: scopeId, path: userPath, environment: null, project: null };
+    }
     if (!UNIT_PATTERN.test(unit)) return null;
     const scope = (await routesAndScopes()).scopes.find((item) => item.id === scopeId);
     if (!scope) return null;
@@ -891,7 +929,14 @@ export async function createRelay(options = {}) {
 
   async function resolveUnit(unit, { allowUser = true } = {}) {
     validUnit(unit);
-    if (allowUser && unit.toLowerCase() === 'user') return { unit: 'user', scope: { id: 'user', path: userPath, environment: null, project: null } };
+    const person = allowUser ? unit.toLowerCase() : '';
+    if (person === 'user' || person === 'master') {
+      return {
+        unit: person === 'master' ? 'master' : 'user',
+        unitId: 'root:master',
+        scope: { id: person === 'master' ? 'root' : 'user', path: userPath, environment: null, project: null },
+      };
+    }
     const { scopes } = await routesAndScopes();
     const matches = [];
     for (const scope of scopes) {
@@ -918,21 +963,34 @@ export async function createRelay(options = {}) {
     return [...latestByMachine.values()];
   }
 
+  function archiveDirectories(unit) {
+    const dirs = [path.join(archivePath, unit)];
+    if (unit.toLowerCase() === 'user' || unit.toLowerCase() === 'master') {
+      dirs.push(path.join(archivePath, 'user'), path.join(archivePath, 'master'));
+      dirs.push(path.join(archivePath, 'by-unit', Buffer.from('root:master', 'utf8').toString('base64url')));
+    }
+    return [...new Set(dirs.map((dir) => path.resolve(dir)))];
+  }
+
   // A copy that OneDrive delivers after the message was read leaves an active file beside its archived twin; the archive is the record that it was read.
   async function isReadCopy(unit, file, raw) {
-    const twinPath = path.join(archivePath, unit, path.basename(file));
-    if (!await lstatOrNull(twinPath)) return false;
-    try { return (await readRegularFileSafe(mindPath, twinPath))?.equals(raw) === true; }
-    catch (error) { if (isTransientFsError(error)) return false; throw error; }
+    for (const directory of archiveDirectories(unit)) {
+      const twinPath = path.join(directory, path.basename(file));
+      if (!await lstatOrNull(twinPath)) continue;
+      try {
+        if ((await readRegularFileSafe(mindPath, twinPath))?.equals(raw) === true) return true;
+      } catch (error) { if (isTransientFsError(error)) continue; throw error; }
+    }
+    return false;
   }
 
   async function locateMessage(id, unit) {
     if (typeof id !== 'string' || id.length > 180 || !/^[a-zA-Z0-9_-]+$/.test(id)) throw relayError('INVALID_ID', 'Message ids must be safe identifiers.');
     const { scope } = await resolveUnit(unit);
     const activeDirectory = path.join(scope.path, 'inbox', unit);
-    const archiveDirectory = path.join(archivePath, unit);
     const candidates = [];
-    for (const [directory, archived] of [[activeDirectory, false], [archiveDirectory, true]]) {
+    const locations = [[activeDirectory, false], ...archiveDirectories(unit).map((directory) => [directory, true])];
+    for (const [directory, archived] of locations) {
       const files = await listRegularFiles(mindPath, directory, candidateMessageFilename);
       for (const file of files) {
         let raw = null;
@@ -997,6 +1055,24 @@ export async function createRelay(options = {}) {
           } catch (error) { skipMalformed(error); }
         }
       }
+      const scopedRoot = path.join(archivePath, 'by-unit');
+      let scopedNames = [];
+      if (unit) {
+        const resolved = await resolveUnit(unit);
+        const scopeId = resolved.scope.project ? `project:${resolved.scope.project}` : resolved.scope.environment ? `env:${resolved.scope.environment}` : resolved.scope.id;
+        scopedNames = [Buffer.from(resolved.unitId ?? canonicalUnitId(unit, scopeId), 'utf8').toString('base64url')];
+      } else scopedNames = await directoryNames(mindPath, scopedRoot);
+      for (const name of scopedNames) {
+        const files = await listRegularFiles(mindPath, path.join(scopedRoot, name), candidateMessageFilename);
+        for (const file of files) {
+          try {
+            const raw = await readRegularFileSafe(mindPath, file);
+            if (!raw) continue;
+            const message = parseMessage(raw, file, true);
+            if (validMessageFilename(path.basename(file), message)) output.push({ parsed: message, raw });
+          } catch (error) { skipMalformed(error); }
+        }
+      }
     }
     return uniqueMessageEntries(output).map((entry) => entry.parsed)
       .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
@@ -1045,8 +1121,10 @@ export async function createRelay(options = {}) {
         }
       }
       const observedAt = isoNow();
+      const unitId = identity.unitId ?? canonicalUnitId(unit, identity.scope.id);
       const record = {
-        kind: 'registration', registrationId: randomUUID(), instanceId, unit,
+        kind: 'registration', registrationId: randomUUID(), instanceId, unit, unitId,
+        sessionId: uuidV8(['session', hostname, client ?? '', nativeSessionId, unitId]),
         scopeId: identity.scope.id, nativeSessionId, client, machine: hostname,
         registeredAt: observedAt, activity, activityObservedAt: activity === null ? null : observedAt,
         quota, quotaObservedAt: quota === null ? null : observedAt,
