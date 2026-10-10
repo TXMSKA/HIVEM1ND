@@ -11,14 +11,24 @@ import {
   undoTask,
 } from "./actions.mjs";
 import {
+  applyMessageRead,
+  canMarkMailbox,
   createThread,
   incomingMessage,
+  loadMailboxMessage,
+  loadMailboxes,
   loadMessages,
   manageChat,
+  markMailboxRead,
+  measureVisible,
+  messageWindow,
   openDirectChat,
   openGroupChat,
   openMailbox,
+  postMailbox,
   postMessage,
+  postVisibleReads,
+  updateNearBottom,
 } from "./chats.mjs";
 import { addNode, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
@@ -223,6 +233,7 @@ export function renderShell(app) {
   restoreInputFocus(app);
   finishList(app);
   finishMap(app);
+  syncChatReads(app);
 }
 
 function inputDrafts(app) {
@@ -310,8 +321,14 @@ async function onStream(app, event) {
   if (event?.name === "session.changed") noteSession(app, dataOf(event));
   if (event?.name === "approval.requested" || event?.name === "approval.answered") await noteApproval(app, dataOf(event));
   if (event?.name === "approval.grant.changed") await noteGrant(app, dataOf(event));
-  if (event?.name === "message.created" && app.thread?.chat?.id === event.envelope?.data?.chatId) {
-    incomingMessage(app.thread, event.envelope.data.message);
+  if (event?.name === "message.read") {
+    applyMessageRead(app.thread, dataOf(event));
+    noteMailboxRead(app, dataOf(event));
+  }
+  if (event?.name === "message.created" && app.thread?.chat?.id === dataOf(event).chatId) {
+    const host = app.root.querySelector?.(".transcript");
+    if (host) updateNearBottom(app.thread, host);
+    incomingMessage(app.thread, dataOf(event).message);
   }
   const editors = app.editors;
   const data = event?.envelope?.data ?? {};
@@ -1464,11 +1481,38 @@ function chatPanel(app, t) {
     "data-pinned": String(Boolean(thread.chat.pinned)),
     "data-listed": String(thread.chat.listed !== false),
   });
-  if (!thread.messages.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
-  for (const message of thread.messages) {
-    transcript.append(element(document, "p", { "data-message": message.id, text: message.body || message.subject || "" }));
+  const windowed = messageWindow(thread.messages, {
+    nearBottom: thread.nearBottom !== false,
+    anchorId: thread.nearBottom === false ? thread.anchorId : null,
+    start: thread.windowStart ?? 0,
+  });
+  thread.windowStart = windowed.start;
+  if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
+  for (const message of windowed.items) {
+    transcript.append(element(document, "p", {
+      "data-message": message.id,
+      "data-read": message.read ? "true" : "false",
+      text: message.body || message.subject || "",
+    }));
   }
   if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
+  transcript.addEventListener("scroll", () => {
+    const before = thread.nearBottom;
+    thread.readPause = false;
+    updateNearBottom(thread, transcript);
+    if (thread.nearBottom) thread.unseen = 0;
+    measureVisible(thread, transcript);
+    if (thread.nearBottom !== before) {
+      renderShell(app);
+      return;
+    }
+    postVisibleReads(app.api, thread).then((result) => {
+      if (result && !app.disposed) renderShell(app);
+    }).catch((error) => {
+      thread.readPause = true;
+      noteAction(app, error);
+    });
+  });
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
   if (caps.includes("chat.manage")) {
@@ -1493,8 +1537,103 @@ function chatPanel(app, t) {
     const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
     panel.append(composer, send);
   }
-  if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
+  if (app.mailbox) panel.append(renderMailbox(app, t));
+  else if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
   return panel;
+}
+
+function noteMailboxRead(app, data) {
+  const box = app.mailbox;
+  if (!box?.unitId || data?.mailboxId !== box.unitId) return;
+  if (data.readerId && data.readerId !== "root:master") return;
+  const ids = new Set(data.messageIds ?? []);
+  for (const item of box.items ?? []) if (ids.has(item.id)) item.read = true;
+  if (box.detail && ids.has(box.detail.id)) box.detail = { ...box.detail, read: true };
+}
+
+function syncChatReads(app) {
+  const transcript = app.root.querySelector?.(".transcript");
+  const thread = app.thread;
+  if (!transcript || !thread?.chat || thread.readPause) return;
+  measureVisible(thread, transcript);
+  postVisibleReads(app.api, thread).then((result) => {
+    if (result && !app.disposed) renderShell(app);
+  }).catch((error) => {
+    if (app.disposed) return;
+    thread.readPause = true;
+    noteAction(app, error);
+  });
+}
+
+function renderMailbox(app, t) {
+  const document = app.root.ownerDocument;
+  const box = app.mailbox;
+  const section = element(document, "section", { class: "mailbox", "data-mailbox-view": "true" });
+  const list = element(document, "div", { class: "mailbox-list", "data-mailbox-list": "true" });
+  for (const item of box.list ?? []) {
+    list.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-mailbox-unit": item.unitId,
+      text: `${item.unitId} ${item.unread ?? 0}`,
+      onclick: () => openMailboxUnit(app, item.unitId),
+    }));
+  }
+  section.append(list);
+  if (box.unitId) {
+    const history = element(document, "div", { class: "mailbox-history", "data-mailbox-history": box.unitId });
+    history.append(element(document, "p", { text: t("mailboxHistory") }));
+    if (!box.items?.length) history.append(element(document, "p", { "data-empty": "true", text: t("mailboxEmpty") }));
+    for (const message of box.items ?? []) {
+      history.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-mailbox-message": message.id,
+        "data-read": message.read ? "true" : "false",
+        text: message.body || message.subject || message.id,
+        onclick: () => openMailboxDetail(app, message.id),
+      }));
+    }
+    if (box.nextCursor) {
+      history.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-action": "mailbox-older",
+        text: t("loadOlder"),
+        onclick: () => openMailboxUnit(app, box.unitId, box.nextCursor),
+      }));
+    }
+    section.append(history);
+  }
+  if (box.detail) {
+    section.append(element(document, "article", {
+      "data-mailbox-detail": box.detail.id,
+      text: box.detail.body || box.detail.subject || "",
+    }));
+    if (canMarkMailbox(app.store.audience, app.store.capabilities, box.unitId)) {
+      section.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-action": "mark-read",
+        text: t("markRead"),
+        onclick: () => markOpenMailbox(app),
+      }));
+    }
+  }
+  if (box.unitId && (app.store.capabilities ?? []).includes("chat.post")) {
+    const compose = element(document, "input", { class: "composer", "data-mailbox-compose": "true", "aria-label": t("mailboxCompose") });
+    compose.value = box.composer ?? "";
+    compose.addEventListener("input", () => { box.composer = compose.value; });
+    section.append(compose, element(document, "button", {
+      type: "button",
+      class: "btn primary",
+      "data-action": "send-mailbox",
+      text: t("send"),
+      onclick: () => sendMailbox(app, compose),
+    }));
+  }
+  if (box.note) section.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: box.note }));
+  return section;
 }
 
 function takePendingChat(app) {
@@ -1550,23 +1689,81 @@ function changeChat(app, change) {
 function loadOlder(app) {
   const host = app.root.querySelector?.(".transcript");
   const anchor = host?.querySelector?.("[data-message]");
-  if (app.thread) app.thread.anchorOffset = anchor?.offsetTop ?? 0;
+  const measuredId = anchor?.getAttribute?.("data-message") ?? null;
+  const measuredOffset = anchor?.offsetTop ?? 0;
+  if (app.thread) {
+    app.thread.nearBottom = false;
+    if (measuredId) app.thread.anchorId = measuredId;
+    app.thread.anchorOffset = measuredOffset;
+  }
   const older = Boolean(app.thread.nextCursor);
   loadMessages(app.api, app.thread, older).then(() => {
     if (app.disposed) return;
+    if (measuredId) app.thread.anchorId = measuredId;
+    app.thread.anchorOffset = measuredOffset;
+    app.thread.nearBottom = false;
     renderShell(app);
     const next = app.root.querySelector?.(".transcript");
     const node = next?.querySelector?.(`[data-message="${app.thread.anchorId}"]`);
-    if (next && node) next.scrollTop += node.offsetTop - (app.thread.anchorOffset ?? 0);
+    if (next && node) next.scrollTop += (node.offsetTop ?? 0) - (app.thread.anchorOffset ?? 0);
   }).catch((error) => noteAction(app, error));
 }
 
 function inspectMailbox(app) {
-  const unitId = app.store.selected.unitId;
+  loadMailboxes(app.api).then((result) => {
+    app.mailbox = {
+      list: result.data.items ?? [],
+      unitId: null,
+      items: [],
+      nextCursor: null,
+      detail: null,
+      composer: "",
+      note: "",
+    };
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function openMailboxUnit(app, unitId, cursor = null) {
+  openMailbox(app.api, unitId, "all", cursor).then((result) => {
+    const incoming = result.data.items ?? [];
+    app.mailbox.unitId = unitId;
+    app.mailbox.items = cursor ? [...(app.mailbox.items ?? []), ...incoming] : incoming;
+    app.mailbox.nextCursor = result.data.nextCursor ?? null;
+    if (!cursor) app.mailbox.detail = null;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function openMailboxDetail(app, messageId) {
+  const unitId = app.mailbox?.unitId;
   if (!unitId) return;
-  openMailbox(app.api, unitId, "all").then((result) => {
-    const first = result.data.items?.[0];
-    app.mailboxNote = first ? `${result.data.total} read:${first.read}` : `${result.data.total ?? 0} mailbox`;
+  loadMailboxMessage(app.api, unitId, messageId).then((result) => {
+    app.mailbox.detail = result.data;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function markOpenMailbox(app) {
+  const box = app.mailbox;
+  if (!box?.detail || !canMarkMailbox(app.store.audience, app.store.capabilities, box.unitId)) return;
+  markMailboxRead(app.api, box.unitId, [box.detail.id]).then((result) => {
+    const read = new Set(result.data.readIds ?? []);
+    for (const item of box.items ?? []) if (read.has(item.id)) item.read = true;
+    if (read.has(box.detail.id)) box.detail = { ...box.detail, read: true };
+    box.note = text(app.language, "markedRead");
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function sendMailbox(app, compose) {
+  const box = app.mailbox;
+  if (!box?.unitId) return;
+  box.composer = compose.value;
+  postMailbox(app.api, box.unitId, { body: compose.value }).then((result) => {
+    box.composer = "";
+    box.items = [result.data, ...(box.items ?? [])];
+    box.detail = result.data;
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }

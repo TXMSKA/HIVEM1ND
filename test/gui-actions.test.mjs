@@ -5,9 +5,12 @@ import { createGuiFixture } from "./gui-fixture.mjs";
 import { createApi, request } from "../gui/app/api.mjs";
 import {
   acknowledgeVisible,
+  applyMessageRead,
   createThread,
   incomingMessage,
   loadMessages,
+  messageWindow,
+  updateNearBottom,
   manageChat,
   openDirectChat,
   openGroupChat,
@@ -439,6 +442,21 @@ test("older pages prepend once and a late message stays unread until it is visib
   assert.equal(acknowledgeVisible(thread).includes(late.id), false);
   thread.visibleIds.add(late.id);
   assert.equal(acknowledgeVisible(thread).includes(late.id), true);
+  const host = { scrollHeight: 1000, scrollTop: 1000 - 640 - 24, clientHeight: 640 };
+  assert.equal(updateNearBottom(thread, host), true);
+  host.scrollTop -= 1;
+  assert.equal(updateNearBottom(thread, host), false);
+  const many = Array.from({ length: 1200 }, (_, index) => ({ id: `m${index}`, body: "x" }));
+  const windowed = messageWindow(many, { nearBottom: true });
+  assert.equal(windowed.items.length, 40);
+  assert.equal(windowed.items[0].id, "m1160");
+  const anchored = messageWindow(many, { nearBottom: false, anchorId: "m10" });
+  assert.equal(anchored.items[0].id, "m10");
+  assert.equal(anchored.items.length, 40);
+  assert.equal(applyMessageRead(thread, { chatId: thread.chat.id, readerId: "project:shop:executor-shop", messageIds: [late.id] }), false);
+  assert.equal(late.read, false);
+  assert.equal(applyMessageRead(thread, { chatId: thread.chat.id, readerId: "root:master", messageIds: [late.id], unread: 0 }), true);
+  assert.equal(late.read, true);
 });
 
 test("a lost chat post retries the same operation and a rate limit keeps the composer", async (context) => {

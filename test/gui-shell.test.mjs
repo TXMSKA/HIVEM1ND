@@ -851,6 +851,86 @@ test("an incoming render keeps unsent chat text and return notes", async (t) => 
   await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']")?.value === "", "The sent return note remained.");
 });
 
+test("visible chat lines are marked read and mailbox inspection stays closed", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, urls);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, "The chat list did not load.");
+  navigate(desktop.app, "chats");
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === chat.id && desktop.root.querySelector("[data-composer]"), "The chat did not open.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "Visible line", 0, 12);
+  click(desktop.root.querySelector("[data-action='send']"));
+  await waitFor(() => [...desktop.root.querySelectorAll("[data-message]")].some((node) => node.textContent === "Visible line" && node.getAttribute("data-read") === "true"), "The visible line was not acknowledged.");
+  assert.equal(urls.some((url) => url.includes(`/chats/${encodeURIComponent(chat.id)}/read`) || url.includes(`/chats/${chat.id}/read`)), true);
+
+  const transcript = desktop.root.querySelector(".transcript");
+  transcript._scrollHeight = transcript.clientHeight + 80;
+  transcript.scrollTop = 0;
+  desktop.app.thread.nearBottom = false;
+  for (const handler of transcript.listeners.get("scroll") ?? []) handler();
+  assert.equal(desktop.app.thread.nearBottom, false);
+  await fixture.control.emit("message.created", {
+    chatId: chat.id,
+    mailboxId: null,
+    message: { id: "away-from-bottom", body: "Away from the bottom", timestamp: "2099-01-01T00:00:00.000Z", read: false },
+  });
+  await waitFor(() => desktop.root.querySelector("[data-new-messages]")?.textContent === "New messages", "A message away from the bottom was treated as visible.");
+
+  const mailboxReads = () => urls.filter((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)).length;
+  const beforeReads = mailboxReads();
+  click(desktop.root.querySelector("[data-action='mailbox']"));
+  await waitFor(() => desktop.root.querySelector("[data-mailbox-unit]"), "The mailbox list did not open.");
+  const mailboxIds = [...desktop.root.querySelectorAll("[data-mailbox-unit]")].map((node) => node.getAttribute("data-mailbox-unit"));
+  let opened = false;
+  for (const unitId of mailboxIds) {
+    click(desktop.root.querySelector(`[data-mailbox-unit="${unitId}"]`));
+    await waitFor(() => desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`), "The mailbox history did not open.");
+    const message = desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`).querySelector("[data-mailbox-message]");
+    if (!message) continue;
+    click(message);
+    await waitFor(() => desktop.root.querySelector("[data-mailbox-detail]"), "The mailbox message did not open.");
+    opened = true;
+    break;
+  }
+  assert.equal(opened, true);
+  assert.equal(mailboxReads(), beforeReads);
+  const compose = desktop.root.querySelector("[data-mailbox-compose]");
+  assert.ok(compose);
+  typeInput(compose, "Mailbox note", 0, 12);
+  click(desktop.root.querySelector("[data-action='send-mailbox']"));
+  await waitFor(() => [...desktop.root.querySelectorAll("[data-mailbox-message]")].some((node) => node.textContent === "Mailbox note"), "The mailbox message was not posted.");
+  assert.equal(mailboxReads(), beforeReads);
+  click(desktop.root.querySelector("[data-action='mark-read']"));
+  await waitFor(() => mailboxReads() > beforeReads, "Mark read did not call the mailbox route.");
+
+  const phoneUrls = [];
+  const phone = await bootApp(fixture.phoneUrl, 390, phoneUrls);
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.app.chatList?.catalog?.length, "The phone chat list did not load.");
+  click(phone.root.querySelector("[data-phone-mode='chats']"));
+  const phoneChat = phone.app.chatList.catalog[0];
+  phone.app.activeHandlers.onActivate({ id: phoneChat.id, kind: "chat" }, "double");
+  await waitFor(() => phone.root.querySelector("[data-action='mailbox']"), "The phone mailbox control did not appear.");
+  click(phone.root.querySelector("[data-action='mailbox']"));
+  await waitFor(() => phone.root.querySelector("[data-mailbox-unit]"), "The phone mailbox list did not open.");
+  const agent = [...phone.root.querySelectorAll("[data-mailbox-unit]")].find((node) => node.getAttribute("data-mailbox-unit") !== "root:master");
+  assert.ok(agent);
+  click(agent);
+  const agentId = agent.getAttribute("data-mailbox-unit");
+  await waitFor(() => phone.root.querySelector(`[data-mailbox-history="${agentId}"]`), "The phone mailbox history did not open.");
+  const agentMessage = phone.root.querySelector(`[data-mailbox-history="${agentId}"]`).querySelector("[data-mailbox-message]");
+  if (agentMessage) {
+    click(agentMessage);
+    await waitFor(() => phone.root.querySelector("[data-mailbox-detail]"), "The phone mailbox detail did not open.");
+  }
+  assert.equal(phone.root.querySelector("[data-action='mark-read']"), null);
+  assert.equal(phoneUrls.some((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)), false);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -1017,6 +1097,26 @@ function createTestDocument(width = 390) {
       scrollTop: 0,
       clientWidth: width,
       clientHeight: 640,
+      get offsetHeight() {
+        if (Number.isFinite(this._offsetHeight)) return this._offsetHeight;
+        if (this.getAttribute?.("data-message")) return 48;
+        return 0;
+      },
+      get offsetTop() {
+        if (Number.isFinite(this._offsetTop)) return this._offsetTop;
+        const parent = this.parent;
+        if (!parent?.children) return 0;
+        let top = 0;
+        for (const child of parent.children) {
+          if (child === this) return top;
+          top += child.offsetHeight || 0;
+        }
+        return 0;
+      },
+      get scrollHeight() {
+        if (Number.isFinite(this._scrollHeight)) return this._scrollHeight;
+        return (this.children ?? []).reduce((sum, child) => sum + (child.offsetHeight || 0), 0);
+      },
       isConnected: true,
       style: {},
       dataset: {},
