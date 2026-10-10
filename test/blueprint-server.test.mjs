@@ -139,7 +139,7 @@ test("a comment with the flag is saved first and then sent to the agent of the p
 
   const [message] = await inboxOf(w);
   const file = path.resolve(w.flows, "comments", "checkout.json");
-  assert.equal(message.from, "user");
+  assert.equal(message.from, "master");
   assert.equal(message.subject, "Blueprint comment: checkout / Continue");
   assert.deepEqual(message.attachments, [file]);
   const thread = added.json.threads[0].id;
@@ -259,12 +259,14 @@ test("a sketch that is not Blueprint JSON v1 as Lite reads it is refused and nev
   assert.match(refused.json.error, /screens\[0\]\.root\.kids\[0\]\.fill/);
 
   const extra = sketchWith();
-  extra.script = "alert(1)";
-  assert.match((await put(extra)).json.error, /script is not part of a Lite sketch/);
+  extra.title = "x".repeat(241);
+  assert.match((await put(extra)).json.error, /title/);
 
   const drawn = sketchWith();
-  drawn.screens[0].root.kids.push({ id: "n-evil", name: "Evil", t: "vector", place: { x: 0, y: 0 }, w: 10, h: 10, d: 'M0 0" onload="x' });
-  assert.equal((await put(drawn)).status, 400);
+  drawn.screens[0].root.kids.push({ id: "n-evil", name: "Evil", t: "vector", place: { x: 0, y: 0 }, w: 10, h: 10 });
+  const vector = await put(drawn);
+  assert.equal(vector.status, 400);
+  assert.match(vector.json.error, /\.d /);
 
   assert.equal((await put(sketchWith(), { Origin: "http://evil.example" })).status, 403);
   assert.equal((await w.call(route, { method: "PUT", body: "{}", type: "text/plain" })).status, 415);

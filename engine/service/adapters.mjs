@@ -1,4 +1,4 @@
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, readFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -122,7 +122,7 @@ export async function enqueueStart(context, input) {
   const state = await readBytes(context.store, path.join(context.paths.mind, 'user', 'state', `${unit.unit}.md`));
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (hashBytes(state) !== input.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
-  if (!answersFor(context.beat, context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
+  if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const prompt = input.prompt ?? null;
   if (prompt != null && (typeof prompt !== 'string' || Buffer.byteLength(prompt) > PROMPT_MAX)) {
     throw new CoreError(413, 'message_too_large', 'The start prompt is too large.');
@@ -239,7 +239,7 @@ async function launch(context, request) {
     if (current && current.phase !== 'failed') await writeJournal(context, { ...current, phase: 'failed' });
     return finish(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
   }
-  if (!answersFor(context.beat, context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
+  if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const state = await readBytes(context.store, statePath(context, request.unitId));
   if (!state || hashBytes(state) !== request.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && item.phase !== 'failed')) {
@@ -361,6 +361,25 @@ async function findRequest(context, requestId) {
     if (await readBytes(context.store, absolute(context, relative))) return relative;
   }
   return '';
+}
+
+async function currentBeat(context) {
+  if (context.beat) return context.beat;
+  const machine = context.paths?.machine;
+  if (!context.paths?.origin || !machine) return null;
+  try {
+    return JSON.parse(await readFile(path.join(context.paths.origin, 'machines', machine, 'service.json'), 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function readStartRequest(context, requestId) {
+  const relative = await findRequest(context, requestId);
+  const request = relative ? await readJson(context, relative) : null;
+  if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
+  return { request, result: await latestResult(context, requestId) };
 }
 
 function adapterFor(context, client) {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader } from './identity.mjs';
 import { createChat } from './chats.mjs';
+import { paginate } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocks } from './store.mjs';
 import { openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -132,6 +133,53 @@ export async function answerApproval(context, approvalId, input) {
     const decision = answer.decision === 'deny' ? 'denied' : 'approved';
     return settle(context, withAnswer(loaded, answer), answer, decision, answer);
   });
+}
+
+export async function listApprovals(context, query = {}) {
+  const wanted = query.state ?? 'pending';
+  const items = [];
+  for (const id of await approvalIds(context)) {
+    const loaded = await loadApproval(context, id);
+    const state = loaded.result?.state ?? 'pending';
+    if (query.unitId && loaded.request.unitId !== query.unitId) continue;
+    if (wanted !== state) continue;
+    items.push(projectApproval(loaded.request, state, loaded.result));
+  }
+  items.sort((left, right) => left.id.localeCompare(right.id));
+  return paginate(items, query);
+}
+
+export async function readApproval(context, approvalId) {
+  const loaded = await loadApproval(context, approvalId);
+  return projectApproval(loaded.request, loaded.result?.state ?? 'pending', loaded.result);
+}
+
+export async function readAnswerResult(context, approvalId, answerId) {
+  const parsed = await readJson(context, `user/relay/approvals/${approvalId}/answer-results/${answerId}.json`);
+  if (!parsed) throw new CoreError(404, 'answer_not_found', 'The answer does not exist.');
+  return {
+    answerId: parsed.answerId,
+    approvalId: parsed.approvalId,
+    state: parsed.state,
+    resultAnswerId: parsed.resultAnswerId ?? null,
+    at: parsed.at ?? null,
+  };
+}
+
+export async function listGrants(context, unitId, query = {}) {
+  const parsed = parseUnitId(unitId);
+  const state = await readState(context, parsed);
+  if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  const items = grantsOf(state.bytes).map((grant) => ({ ...grant, unitId: parsed.id }));
+  return paginate(items, query);
+}
+
+export async function readRevocation(context, requestId) {
+  const result = await readJson(context, `user/relay/grant-revocation-results/${requestId}.json`);
+  if (result) return result;
+  const pending = await readJson(context, `user/relay/grant-revocations/${context.paths.machine}/${requestId}.json`);
+  if (!pending) throw new CoreError(404, 'revocation_not_found', 'The revocation does not exist.');
+  return { requestId: pending.id, unitId: pending.unitId, grantId: pending.grantId, state: 'pending', revision: null };
 }
 
 export async function consumeAnswers(context, approvalId = null) {

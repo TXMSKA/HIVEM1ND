@@ -8,9 +8,9 @@ import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } 
 import { readCollection, readDetail, readProjection } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
-import { answerApproval, requestApproval, revokeGrant } from './approvals.mjs';
+import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { enqueueStart, stopSession } from './adapters.mjs';
+import { enqueueStart, readStartRequest, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
@@ -198,6 +198,7 @@ export async function createHttpServer(options) {
   const viewers = new Map();
   const watch = createWatch({ bus, now: options.now ?? (() => Date.now()) });
   options.watch = watch;
+  options.ownedPids ??= new Set();
   const homeMemory = new Map();
   const homeState = {
     grant: null,
@@ -525,11 +526,14 @@ function domainContext(options, credential, bus) {
     watch: options.watch ?? null,
     ownedPids: options.ownedPids ?? new Set(),
     aliases: options.aliases ?? [],
+    adapters: options.adapters ?? null,
+    models: options.models ?? [],
     principal: {
       unitId: audience === 'agent' ? credential.unitId : 'root:master',
       audience,
       stableId: credential?.token ?? null,
       viewerId: credential?.viewerId ?? null,
+      sessionId: credential?.sessionId ?? null,
     },
   };
 }
@@ -619,9 +623,18 @@ async function invoke(route, scope) {
     if (!injected) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
     return injected({ domain, params, query, body, credential });
   }
+  if (route.template === '/approvals' && route.method === 'GET') return { status: 200, body: await listApprovals(domain, query) };
+  if (route.template === '/approvals/:approvalId' && route.method === 'GET') return { status: 200, body: await readApproval(domain, params.approvalId) };
+  if (route.template === '/approvals/:approvalId/answers/:answerId') return { status: 200, body: await readAnswerResult(domain, params.approvalId, params.answerId) };
+  if (route.template === '/units/:unitId/approval-grants') return { status: 200, body: await listGrants(domain, params.unitId, query) };
+  if (route.template === '/grant-revocations/:requestId') return { status: 200, body: await readRevocation(domain, params.requestId) };
+  if (route.template === '/session-requests/:requestId') return { status: 200, body: await readStartRequest(domain, params.requestId) };
   if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
   if (route.handler === 'collection') return { status: 200, body: await readCollection(domain, route.collection, numbers(query)) };
-  if (route.handler === 'detail') return { status: 200, body: await readDetail(domain, route.collection, params.unitId ?? params.chatId ?? params.taskId ?? params.approvalId ?? params.requestId ?? params.messageId) };
+  if (route.handler === 'detail') {
+    const detailId = route.template.endsWith('/:messageId') ? params.messageId : (params.taskId ?? params.approvalId ?? params.requestId ?? params.chatId ?? params.unitId ?? params.messageId);
+    return { status: 200, body: await readDetail(domain, route.collection, detailId) };
+  }
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
   if (route.handler === 'settings') {
     const detail = safeSettings(await readDetail(domain, 'settings'), credential);
@@ -635,7 +648,7 @@ async function invoke(route, scope) {
     await connectLead(domain, params.unitId, body);
     return { status: 200, body: { unitId: params.unitId, leadId: body.leadId ?? null } };
   }
-  if (route.handler === 'enqueueStart') return { status: 202, body: await enqueueStart(domain, { ...body, unitId: params.unitId }) };
+  if (route.handler === 'enqueueStart') return { status: 202, body: await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision }) };
   if (route.handler === 'stopSession') return { status: 200, body: await stopSession(domain, params.sessionId) };
   if (route.handler === 'patchLayout') {
     await patchLayout(domain, body);
@@ -647,7 +660,10 @@ async function invoke(route, scope) {
   if (route.handler === 'patchChat') return { status: 200, body: await patchChat(domain, params.chatId, body) };
   if (route.handler === 'postMailbox') return { status: 201, body: await postMailbox(domain, params.unitId, body) };
   if (route.handler === 'readMailbox') return { status: 200, body: await readMailbox(domain, params.unitId, body ?? {}) };
-  if (route.handler === 'requestApproval') return { status: 201, body: await requestApproval(domain, body) };
+  if (route.handler === 'requestApproval') {
+    const result = await requestApproval(domain, body);
+    return { status: result.status ?? 202, body: result };
+  }
   if (route.handler === 'answerApproval') return { status: 200, body: await answerApproval(domain, params.approvalId, body) };
   if (route.handler === 'revokeGrant') return { status: 200, body: await revokeGrant(domain, params.unitId, params.grantId, body ?? {}) };
   if (route.handler === 'changeStatus') {
@@ -680,6 +696,7 @@ function validateQuery(route, query) {
   const allowed = route.method === 'GET' && route.handler !== 'detail' && route.handler !== 'layout' && route.handler !== 'settings' && route.handler !== 'readViewer' && route.handler !== 'events'
     ? new Set(page)
     : new Set();
+  if (route.template === '/approvals') allowed.add('state');
   for (const key of Object.keys(query)) {
     if (!allowed.has(key)) throw new CoreError(422, 'invalid_query', 'The query contains an unknown field.');
   }

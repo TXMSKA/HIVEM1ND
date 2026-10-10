@@ -13,3 +13,27 @@ A second mind does not take the lock held by the first.
 Native login is reported only after a verified session. A version probe is not a login. Home access expires twelve hours after it is opened. Offline publication pauses at the hard byte and message limits, and a conflict keeps both copies.
 
 Integrated QA runs the core tests, lint, and build from this kit after the core branch is merged with the interface branch. Do not treat a missing native login or a missing pinned Node archive as a passed smoke.
+
+## Build verification
+
+Recorded on feat/3.0-core after the standalone checks on 2026-10-10.
+
+`npm.cmd run test:core` reported 623 tests, 622 passed, 0 failed, and 1 skipped. The skip is an existing host permission case. It is not a native login or an installer smoke.
+
+`npm.cmd run lint` reported 0 issues in 227 Markdown files. A wake fixture can leave `.work/` behind if another process holds those files. That directory is temporary and was removed before this lint. It is not part of the package.
+
+`npm.cmd run build` wrote `dist/hivem1nd-3.0.0.tgz` with 324 files, 6 roles, 10 commands, and 15 features. SHA-256 `a4c2a710f7d9f6c169e9db4b12300ca508fbe59677dbb82751990bceded67816`. The log line was `browser assets unavailable for standalone packaging` because `gui/app` is not in this worktree. Release packaging fails closed without those assets.
+
+These checks did not register a login task, write the OneDrive mind, or signal a process they did not start.
+
+Limits that are not passes:
+
+- Native login was not verified. With an empty PATH, Claude, Codex, and Cursor all report `nativeSupport` false. Creating a session without a verified login throws `client_unavailable`. A fixture transcript only proves the protocol parser.
+- Windows protection of the local bootstrap file uses the .NET file access-control API. The PowerShell Security module would not load, so the Security-module cmdlets were not used.
+- The media step did convert a real PNG to WebP with the local ffmpeg.
+- `node-v22.23.3-win-x64.zip` was not on disk. Its pinned SHA-256 is `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`, and `node.exe` inside it is `9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`. ZIP, CRC, and dry-run checks passed without that archive. `node --version` was not run from it.
+- `service install` prints a dry plan. It does not call schtasks, launchctl, or systemctl.
+- HTTP MCP serves the eight editor tools. The stdio relay still talks to the relay directly, and the 120-second approval wait is not wrapped around every legacy tool on that path.
+- The static wizard still submits the mind path. Origin fields default when the caller omits them.
+
+After this branch is merged with the interface branch, integrated QA uses this service and the real browser. Cover both looks and both languages, the approved desktop, phone, and editor screens, the static allowlist, a QR scan of the live private URL, phone approve, accept, and send-back, and two temporary machines sharing one temporary origin, including an offline backlog. Exercise a verified native client only when one is actually logged in. Stage the installer only when the pinned Node archive is supplied, and keep operating-system registration injected. A real system registration, a public history rewrite, and a release stay on the owner's separate workflow.
