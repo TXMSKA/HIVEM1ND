@@ -46,6 +46,28 @@ export function invalidateCollection(store, name) {
   store.pages.delete(name);
 }
 
+export function startCollection(store, name) {
+  const previous = store.pages.get(name);
+  const generation = (previous?.generation ?? 0) + 1;
+  store.pages.set(name, {
+    generation,
+    items: [],
+    total: null,
+    issues: [],
+    nextCursor: null,
+    status: "loading",
+    query: previous?.query ?? "",
+  });
+  return generation;
+}
+
+export function writeCollection(store, name, generation, patch) {
+  const current = store.pages.get(name);
+  if (!current || current.generation !== generation) return false;
+  Object.assign(current, patch, { generation });
+  return true;
+}
+
 export async function loadSnapshot(store, api) {
   const ticket = ++store.ticket;
   store.pending.set("view", ticket);

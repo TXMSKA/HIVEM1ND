@@ -1,6 +1,8 @@
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showError } from "./components.mjs";
+import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { text } from "./i18n.mjs";
+import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { synchronize } from "./stream.mjs";
 
@@ -42,6 +44,8 @@ export async function mount(root, env = globalThis) {
     readAt: null,
     sync: "local",
     disposed: false,
+    hierarchy: { shown: new Map(), collapsed: new Set() },
+    restoreSearch: false,
   };
   renderStatus(app, "loading");
   if (!api.token) {
@@ -55,6 +59,7 @@ export async function mount(root, env = globalThis) {
   try {
     await loadSnapshot(store, api);
     await loadPresentation(app);
+    await loadLists(app);
   } catch (error) {
     renderFailure(app, error);
   }
@@ -78,6 +83,7 @@ export function renderShell(app) {
   shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
+  finishList(app);
 }
 
 export function dispose(app) {
@@ -93,6 +99,12 @@ async function onStream(app, event) {
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
     return;
+  }
+  if (event?.name === "unit.changed" || event?.name === "view.changed") {
+    if (app.unitList) await reloadList(app.unitList);
+  }
+  if (event?.name === "chat.changed") {
+    if (app.chatList) await reloadList(app.chatList);
   }
   if (app.layout !== "unknown") renderShell(app);
 }
@@ -179,26 +191,142 @@ function renderWorkspace(app, t, view, counts) {
   const summary = element(document, "section", { class: "summary" },
     element(document, "h2", { text: t("summaryTitle") }),
     element(document, "div", { class: "counts" },
-      element(document, "span", { text: t("unitCount", { count: counts.units ?? 0 }) }),
+      element(document, "span", { text: t("unitCount", { count: counts.units ?? app.unitList?.catalog?.length ?? 0 }) }),
       element(document, "span", { text: t("unreadCount", { count: counts.unread ?? 0 }) }),
       element(document, "span", { text: t("issueCount", { count: counts.issues ?? 0 }) }),
     ),
-    element(document, "p", { text: t("later") }),
   );
+  const issueItems = view?.issues ?? app.unitList?.issues ?? [];
   const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
-  for (const issue of view?.issues ?? []) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-  if (!view?.issues?.length) issues.append(element(document, "p", { text: t("emptyList") }));
-  const side = element(document, "aside", { class: "panel side" }, tabs, summary, issues);
+  for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
+  if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
+  const collection = renderCollection(app, t);
+  const side = element(document, "aside", { class: "panel side" }, tabs, summary, issues, collection);
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { text: t(app.mode) }),
     element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }),
   );
+  const selected = app.store.indexes.units.get(app.store.selected.unitId)
+    ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
+    ?? null;
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, element(document, "div", { class: "inspector-body" },
-    element(document, "h2", { text: t("emptyInspector") }),
+    element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
   ));
   return element(document, "div", { class: "workspace" }, side, stage, inspector);
+}
+
+async function loadLists(app) {
+  app.unitList = createPagedList({ api: app.api, store: app.store, name: "units", route: "/units" });
+  app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" } });
+  const refresh = () => {
+    if (!app.disposed && app.layout !== "unknown") renderShell(app);
+  };
+  app.unitList.onUpdate = refresh;
+  app.chatList.onUpdate = refresh;
+  await Promise.all([loadAll(app.unitList), loadAll(app.chatList)]);
+}
+
+function renderCollection(app, t) {
+  const document = app.root.ownerDocument;
+  const list = app.tab === "chats" ? app.chatList : app.unitList;
+  const block = element(document, "div", { class: "list-block" });
+  if (!list) {
+    block.append(element(document, "p", { text: t("loadingList") }));
+    return block;
+  }
+  if (app.layout === "phone") list.rowHeight = 44;
+  const search = element(document, "input", {
+    class: "search",
+    type: "search",
+    value: list.query,
+    placeholder: t("search"),
+    "aria-label": t("search"),
+    oninput: (event) => {
+      app.restoreSearch = true;
+      setQuery(list, event.target.value);
+    },
+  });
+  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : t("listTotal", { count: list.total ?? 0 });
+  const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), text: status });
+  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab) });
+  const rows = collectionRows(app, t, list);
+  const handlers = {
+    selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.unitId,
+    onActivate: (row, kind) => {
+      if (row.kind === "chat") {
+        app.store.selected.chatId = row.id;
+        app.activated = { id: row.id, kind };
+      } else if (row.unit) activateUnit(app, row.unit, kind);
+      renderShell(app);
+    },
+    onToggle: (groupId) => {
+      toggleGroup(app.hierarchy, groupId);
+      renderShell(app);
+    },
+    onReveal: (groupId, count) => {
+      revealGroup(app.hierarchy, groupId, count);
+      renderShell(app);
+    },
+  };
+  app.activeList = list;
+  app.activeRows = rows;
+  app.activeHandlers = handlers;
+  block.append(search, total, host);
+  return block;
+}
+
+function finishList(app) {
+  const host = app.root.querySelector?.(".list");
+  if (!host || !app.activeList) return;
+  renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
+  const view = app.root.ownerDocument.defaultView;
+  if (!host.clientHeight && view?.requestAnimationFrame) {
+    view.requestAnimationFrame(() => {
+      if (app.disposed || !host.isConnected) return;
+      renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
+    });
+  }
+  if (app.restoreSearch) app.root.querySelector?.(".search")?.focus?.();
+}
+
+function collectionRows(app, t, list) {
+  if (app.tab === "chats") {
+    return list.items.map((chat, index) => ({
+      id: chat.id,
+      kind: "chat",
+      chat,
+      depth: 0,
+      text: chat.title || chat.id,
+      pos: index + 1,
+      setsize: list.items.length,
+    }));
+  }
+  const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
+  const tree = buildHierarchy(source, list.issues);
+  const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
+  const labels = new Map();
+  for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
+  for (const row of rows) {
+    if (row.kind === "unit") {
+      const scope = row.unit.scope?.name;
+      const name = labels.get(row.label) > 1 && scope ? `${row.label} · ${scope}` : row.label;
+      row.text = `${name} ${t(statusKey(row.unit.status))}`;
+    } else if (row.labelKey === "showMore") row.text = t("showMore", { count: row.count });
+    else if (row.labelKey) row.text = t(row.labelKey);
+    else row.text = row.label ?? "";
+  }
+  return rows;
+}
+
+function statusKey(status) {
+  if (status === "out") return "statusOut";
+  if (status === "quota") return "statusQuota";
+  if (status === "waiting") return "statusWaiting";
+  if (status === "working") return "statusWorking";
+  if (status === "idle") return "statusIdle";
+  return "statusUnknown";
 }
 
 function renderFooter(app, t) {
