@@ -29,24 +29,41 @@ export function compareVersions(left, right) {
 export function validateOwner({ packMachine, target, record = null, headers = null, bindings = {} } = {}) {
   const format = record?.format ?? null;
   if (format === 'hivem1nd-session-result-v1') {
-    const owner = bindings.requests?.[record.requestId]?.targetMachine;
-    if ((owner && owner !== packMachine) || (record.machine && record.machine !== packMachine)) ownerError();
+    const owner = bindings.requests?.[record.requestId]?.targetMachine ?? null;
+    if (!owner) return pendingOwner(`request:${record.requestId ?? ''}`);
+    if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
   if (format === 'hivem1nd-approval-result-v1' || format === 'hivem1nd-approval-answer-result-v1') {
-    const owner = bindings.approvals?.[record.approvalId]?.machine;
-    if ((owner && owner !== packMachine) || (record.machine && record.machine !== packMachine)) ownerError();
+    const owner = bindings.approvals?.[record.approvalId]?.machine ?? null;
+    if (!owner) return pendingOwner(`approval:${record.approvalId ?? ''}`);
+    if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
   if (format === 'hivem1nd-grant-revocation-result-v1') {
-    const owner = bindings.revocations?.[record.requestId]?.machine ?? record.machine;
-    if (owner && owner !== packMachine) ownerError();
+    const owner = bindings.revocations?.[record.requestId]?.machine ?? null;
+    if (!owner) return pendingOwner(`revocation:${record.requestId ?? ''}`);
+    if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
+  }
+  if (format === 'hivem1nd-session-status-v1') {
+    const owner = bindings.sessions?.[record.sessionId]?.machine ?? null;
+    if (!owner) return pendingOwner(`session:${record.sessionId ?? ''}`);
+    if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
   if (format === 'hivem1nd-service-v1' && record.machine !== packMachine) ownerError();
-  if (typeof target?.path === 'string' && target.path.includes('/relay/read/')) {
-    const reader = target.path.split('/relay/read/')[1]?.split('/')[0];
-    if (reader && reader !== packMachine) ownerError();
+  if (isReadReceipt(target?.path)) {
+    const reader = receiptMachine(target.path);
+    if (!reader || reader !== packMachine || (record?.machine && record.machine !== packMachine)) ownerError();
   }
-  if (headers?.machine && headers.kind !== 'notice' && !isDeterministicNotice(headers) && headers.machine !== packMachine) ownerError();
-  return { packMachine, format };
+  if (headers && messageHeaders(headers)) {
+    if (isDeterministicNotice(headers)) return { state: 'accept', packMachine, format };
+    if (headers.machine && headers.machine !== packMachine) ownerError();
+    const fromId = headers['from-id'];
+    if (fromId) {
+      const actors = actorMachines(bindings, fromId);
+      if (actors.length === 0) return pendingOwner(`actor:${fromId}`);
+      if (!actors.includes(packMachine)) ownerError();
+    } else if (headers.machine !== packMachine) ownerError();
+  }
+  return { state: 'accept', packMachine, format };
 }
 
 export async function preserveConflict(sync, target, bytes, change, roots) {
@@ -71,9 +88,17 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
     const raw = change.operation === 'delete' ? null : incoming.objects.get(change.hash);
     return { change, raw, record: parseRecord(raw), headers: parseHeaders(raw) };
   });
+  const ownerBindings = await mergeOwnerBindings(sync, bindings);
+  for (const item of prepared) absorbOwnerRecord(ownerBindings, item.record);
+  const missingOwners = [];
   for (const item of prepared) {
     if (Date.parse(item.change.at) > sync.now() + FUTURE_MS) throw new CoreError(422, 'invalid_pack', 'The change time is too far in the future.');
-    validateOwner({ packMachine: decoded.header.machine, target: item.change.target, record: item.record, headers: item.headers, bindings });
+    const verdict = validateOwner({ packMachine: decoded.header.machine, target: item.change.target, record: item.record, headers: item.headers, bindings: ownerBindings });
+    if (verdict.state === 'pending') missingOwners.push(verdict.missing);
+  }
+  if (missingOwners.length > 0) {
+    await writePending(sync, decoded, incoming.packHash, 'owner_unavailable');
+    return { status: 'pending', code: 'owner_unavailable', missing: missingOwners, packHash: incoming.packHash };
   }
   let missingProject = false;
   for (const item of prepared) {
@@ -470,6 +495,105 @@ function versionPath(sync) {
 
 function grantPath(sync) {
   return path.join(sync.paths.localDirectory, 'grant-tombstones.json');
+}
+
+function pendingOwner(missing) {
+  return { state: 'pending', missing };
+}
+
+function claimedMachine(record) {
+  return typeof record?.machine === 'string' ? record.machine : null;
+}
+
+function messageHeaders(headers) {
+  return Boolean(headers.kind || headers['from-id'] || headers.machine);
+}
+
+function actorMachines(bindings, id) {
+  const value = bindings.actors?.[id];
+  if (!value) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value;
+  if (typeof value.machine === 'string') return [value.machine];
+  return [];
+}
+
+function isReadReceipt(filePath) {
+  return typeof filePath === 'string' && filePath.split('/').includes('read');
+}
+
+function receiptMachine(filePath) {
+  const parts = filePath.split('/');
+  const index = parts.lastIndexOf('read');
+  const after = parts.slice(index + 1);
+  if (parts[index - 1] === 'relay') return after[0] ?? null;
+  return after.length >= 2 ? after[1] : null;
+}
+
+async function mergeOwnerBindings(sync, supplied = {}) {
+  const bindings = {
+    requests: { ...(supplied.requests ?? {}) },
+    approvals: { ...(supplied.approvals ?? {}) },
+    revocations: { ...(supplied.revocations ?? {}) },
+    sessions: { ...(supplied.sessions ?? {}) },
+    actors: { ...(supplied.actors ?? {}) },
+  };
+  if (!sync?.paths?.mind) return bindings;
+  const roots = [
+    path.join(sync.paths.mind, 'user', 'relay', 'requests'),
+    path.join(sync.paths.mind, 'user', 'relay', 'approvals'),
+    path.join(sync.paths.mind, 'user', 'relay', 'sessions'),
+    path.join(sync.paths.mind, 'user', 'relay', 'registrations'),
+  ];
+  for (const root of roots) await readOwnerTree(root, (record) => absorbOwnerRecord(bindings, record));
+  return bindings;
+}
+
+function absorbOwnerRecord(bindings, record) {
+  if (!record || typeof record !== 'object') return;
+  if (record.format === 'hivem1nd-session-request-v1' && record.id && record.targetMachine) {
+    bindings.requests[record.id] = { targetMachine: record.targetMachine };
+    bindings.revocations[record.id] = { machine: record.targetMachine };
+  }
+  if ((record.format === 'hivem1nd-approval-v1' || record.format === 'hivem1nd-approval-binding-v1') && record.machine) {
+    const id = record.approvalId ?? record.id;
+    if (id) bindings.approvals[id] = { machine: record.machine };
+  }
+  if (record.kind === 'registration' && record.sessionId && record.machine) {
+    bindings.sessions[record.sessionId] = { machine: record.machine };
+    if (record.unitId) addActor(bindings, record.unitId, record.machine);
+  }
+}
+
+function addActor(bindings, unitId, machine) {
+  const current = actorMachines(bindings, unitId);
+  if (!current.includes(machine)) current.push(machine);
+  bindings.actors[unitId] = current;
+}
+
+async function readOwnerTree(directory, visit) {
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await readOwnerTree(full, visit);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      visit(JSON.parse(await readFile(full, 'utf8')));
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
 }
 
 function ownerError() {
