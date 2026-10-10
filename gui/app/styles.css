@@ -281,6 +281,34 @@ button, input { font: inherit; color: inherit; }
 .shell[data-layout="phone"] .phone-nav button,
 .shell[data-layout="phone"] .btn { min-height: var(--target); }
 
+.search {
+  margin: 0 var(--gap) 8px;
+  min-height: 36px;
+  border: var(--panel-border);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.list-block { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.list-total { margin: 0 var(--gap) 8px; color: var(--mute); }
+.list { min-height: 0; flex: 1; overflow: auto; }
+.row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border: 0;
+  background: transparent;
+  color: var(--body);
+  text-align: left;
+}
+.row[aria-selected="true"], .row:focus-visible { background: var(--card); color: var(--text); }
+.row-heading, .row-issue { color: var(--mute); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;

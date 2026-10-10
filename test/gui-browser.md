@@ -15,3 +15,11 @@ Observations from Chrome against the isolated fixture. Each scenario used the de
 | 1440x900 | modern | es | Spanish chrome on the modern palette. | Language es. Copy included Mapa, Documento, Concentración, 4 pendientes, Jerarquía, Instantánea, 11 unidades, 5 sin leer, and 3 incidencias. Service issue text stayed in the service language. Geometry matched the modern 1440 row. | none | this file |
 | 1024x768 | modern | es | Spanish chrome at the narrow desktop width. | Spanish chrome and modern palette. Geometry matched the modern 1024 row. | none | this file |
 | 720x450 at device scale 2 | modern | es | Spanish chrome at 200% zoom. | Spanish chrome. Bar height 91. Footer at top 420. Side scroll height 490 inside a 317px panel. Inspector display none. | none | this file |
+
+## Step 4 lists
+
+The large fixture was opened at 1440x900. End moved focus to the last hierarchy row and kept that row inside the list pane. Searching `unit-1200` left the snapshot count at 1211 and the filtered total at 1. The bulk group showed that row. Enter selected it. A later unit change kept the same filtered row and total. Compact rows stayed under 100. There were no console errors.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Search reaches unit 1200. The group can be expanded. Keyboard activation selects it. Fewer than 100 compact rows are mounted. The total stays correct after a list change. | Before the search, 17 compact rows were mounted. The list scroll height was 612 and its client height was 293. End focused root:incubator inside the pane. The snapshot read 1211 units and the list total was 1211. After searching unit-1200 and activating that row with Enter, 3 compact rows were mounted, the filtered total was 1, the row read unit-1200 Out, and aria-selected was true. The snapshot still read 1211 units. After a unit change event, the filtered total stayed 1 and the same row stayed selected. | none | this file |

@@ -60,6 +60,15 @@ const COPY = {
   closeInspector: ["Close details", "Cerrar detalles"],
   summaryTitle: ["Snapshot", "Instantánea"],
   issuesTitle: ["Issues", "Incidencias"],
+  search: ["Search", "Buscar"],
+  command: ["Chain of command", "Cadena de mando"],
+  withoutOverlord: ["Without an Overlord", "Sin un Overlord"],
+  services: ["Services", "Servicios"],
+  scopeRoot: ["Root", "Raíz"],
+  listError: ["The list could not be loaded.", "No se pudo cargar la lista."],
+  cycleIssue: ["A reporting cycle was found.", "Se encontró un ciclo de reporte."],
+  loadingList: ["Loading the list.", "Cargando la lista."],
+  listTotal: ["{count} listed", "{count} en la lista"],
 };
 
 const DICTIONARIES = {
