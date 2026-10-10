@@ -3553,6 +3553,9 @@ function revokeViewer(fx, viewerId) {
   for (const stream of [...fx.streams]) {
     if (stream.principal.viewerId === viewerId) endStream(stream);
   }
+  for (const [watchId, watch] of [...fx.watches]) {
+    if (watch.viewerId === viewerId) fx.watches.delete(watchId);
+  }
 }
 
 function revokeAudience(fx, audience) {
@@ -3860,6 +3863,7 @@ export async function createGuiFixture(options = {}) {
         await boot(fx);
       },
       revokeViewer(id) { revokeViewer(fx, id); },
+      watchCount() { return fx.watches.size; },
     },
     async close() {
       if (fx.closed) return;

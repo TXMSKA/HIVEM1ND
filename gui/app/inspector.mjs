@@ -28,13 +28,13 @@ export function renderSession(document, session, t) {
 export function renderGrants(document, grants, t, onRevoke) {
   const block = element(document, "section", { class: "grants" });
   for (const grant of grants ?? []) {
-    block.append(element(document, "button", {
+    if (onRevoke) block.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "revoke-grant",
       "data-grant": grant.id,
       text: t("revoke"),
-      onclick: () => onRevoke?.(grant),
+      onclick: () => onRevoke(grant),
     }));
   }
   return block;
@@ -74,7 +74,7 @@ export function renderTask(document, task, t, onStatus, onUndo) {
   });
   if (!canSendBack(task)) back.disabled = true;
   block.append(accept, note, back);
-  if (task.undoAvailable) {
+  if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "undo", text: t("undo"), onclick: () => onUndo?.(task) }));
   }
   return block;
