@@ -36,6 +36,7 @@ Usage:
   hivem1nd view [--project <name>] [options]
   hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
+  hivem1nd service <install|uninstall|status|run> [--dry-run] [options]
 
 Commands:
   init       Configure this machine in eight guided steps
@@ -46,6 +47,7 @@ Commands:
   view       Show chats, squads, what waits on the person, tasks, inbox and products
   relay     Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
+  service    Plan the user login service, or print its status
 
 Relay options:
   --mind-path <path>       Path to the private mind
@@ -85,6 +87,12 @@ Uninstall options:
   --dry-run             Report the plan without removing anything
   --remove-mind         Also delete the mind folder when it is safe to
 
+Service options:
+  service install --dry-run    Print the login plan. This does not register a task.
+  --origin-kind <folder|onedrive>
+  --origin-path <path>         Explicit origin folder
+  --cosmic-path <path>         Cosmic parent. The mind folder hivem1nd is appended when no mind path is set.
+
 Pylon options:
   --state <branch|main> Store team state on its own branch or on main
   --ai-files            Allow shared AI files (default)
@@ -117,6 +125,9 @@ const VALUE_FLAGS = new Map([
   ["--environment", "environment"],
   ["--state", "state"],
   ["--project", "project"],
+  ["--origin-kind", "originKind"],
+  ["--origin-path", "originPath"],
+  ["--cosmic-path", "cosmicPath"],
 ]);
 
 const BOOLEAN_FLAGS = new Map([
@@ -133,8 +144,8 @@ const BOOLEAN_FLAGS = new Map([
 ]);
 
 const ALLOWED_FLAGS = {
-  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname"]),
-  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
+  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -145,6 +156,7 @@ const ALLOWED_FLAGS = {
 export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
+  if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
   if (argv.length === 1 && ["-h", "--help"].includes(argv[0])) return { help: true };
   if (argv.length === 1 && ["-v", "--version"].includes(argv[0])) return { version: true };
@@ -212,6 +224,42 @@ export function parseArgs(argv) {
   }
 
   return { command, options };
+}
+
+const SERVICE_FLAGS = new Set(["dryRun", "originKind", "originPath", "cosmicPath", "mindPath", "homeDir", "hostname", "json"]);
+
+function parseServiceArgs(tokens) {
+  const action = tokens[0];
+  if (!action || action === "--help" || action === "-h") return { command: "service", help: true };
+  if (!["install", "uninstall", "status", "run"].includes(action)) {
+    throw new CliUsageError("service requires install, uninstall, status or run.");
+  }
+  const options = { action };
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["-h", "--help"].includes(token)) return { command: "service", help: true };
+    if (VALUE_FLAGS.has(token)) {
+      const key = VALUE_FLAGS.get(token);
+      if (!SERVICE_FLAGS.has(key)) throw new CliUsageError(`${token} is not valid for service.`);
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError(`${token} requires a value.`);
+      options[key] = value;
+      index += 1;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(token)) {
+      const [key, value] = BOOLEAN_FLAGS.get(token);
+      if (!SERVICE_FLAGS.has(key)) throw new CliUsageError(`${token} is not valid for service.`);
+      options[key] = value;
+      continue;
+    }
+    if (token.startsWith("-")) throw new CliUsageError(`Unknown option: ${token}`);
+    throw new CliUsageError("service does not accept positional arguments.");
+  }
+  if (options.originKind && !["folder", "onedrive"].includes(options.originKind)) {
+    throw new CliUsageError("--origin-kind must be folder or onedrive.");
+  }
+  return { command: "service", options };
 }
 
 const RELAY_VALUE_FLAGS = new Map([
@@ -462,6 +510,11 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     env,
     resume: options.resume === true,
     relaySetup: true,
+    serviceSetup: true,
+    serviceDryRun: true,
+    ...(options.originKind ? { originKind: options.originKind } : {}),
+    ...(options.originPath ? { originPath: options.originPath } : {}),
+    ...(options.cosmicPath ? { cosmicPath: options.cosmicPath } : {}),
   };
 }
 
@@ -841,7 +894,10 @@ async function waitForServer(server, output) {
 async function runInit(options, dependencies, output) {
   if (options.gui) {
     const { createWizardServer } = dependencies.wizard ?? await import("../gui/server.mjs");
-    const server = await createWizardServer({ sessionOptions: setupOptions(options, { env: dependencies.env }) });
+    const server = await createWizardServer({
+      sessionOptions: setupOptions(options, { env: dependencies.env }),
+      openCompletedViewer: dependencies.openCompletedViewer,
+    });
     await (dependencies.openUrl ?? openLocalUrl)(server.url);
     await (dependencies.waitForServer ?? waitForServer)(server, output);
     return 0;
@@ -933,6 +989,48 @@ async function runLifecycle(command, options, dependencies, output) {
   const text = options.json ? formatResult(result) : formatHumanResult(result);
   if (text) output.write(`${text}\n`);
   return result.completed === false ? 1 : 0;
+}
+
+async function runService(options, dependencies, output) {
+  const { installService, planRegistration, uninstallService } = dependencies.serviceInstall ?? await import("../engine/service/install.mjs");
+  if (!options.mindPath && !options.cosmicPath) {
+    output.write("Service commands need --mind-path or --cosmic-path. Nothing was discovered or written.\n");
+    return 1;
+  }
+  const mindPath = options.mindPath
+    ? path.resolve(options.mindPath)
+    : path.join(path.resolve(options.cosmicPath), "hivem1nd");
+  const registration = {
+    platform: process.platform,
+    nodePath: process.execPath,
+    cliPath: path.join(KIT_PATH, "cli", "index.mjs"),
+    mindPath,
+    workingDirectory: KIT_PATH,
+    localDirectory: options.cosmicPath ? path.resolve(options.cosmicPath) : path.dirname(mindPath),
+    home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
+    sid: "S-1-5-21-current",
+  };
+  if (options.action === "status") {
+    output.write("Service status is plan-only here. No login registration was queried on the operating system.\n");
+    return 0;
+  }
+  if (options.action === "run") {
+    output.write("Service run did not start. Pass a configured mind to an injected runtime; this command does not discover one.\n");
+    return 1;
+  }
+  const plan = planRegistration(registration);
+  if (options.action === "uninstall") {
+    if (options.dryRun === false && !dependencies.registrationRunner) {
+      output.write("Refusing to delete a login registration without an injected runner.\n");
+      return 1;
+    }
+    const removal = uninstallService(plan);
+    output.write(`${JSON.stringify({ dryRun: true, os: false, commands: removal.commands }, null, 2)}\n`);
+    return 0;
+  }
+  const installed = await installService(registration, { dryRun: true, run: dependencies.registrationRunner });
+  output.write(`${JSON.stringify({ dryRun: true, os: false, action: installed.action, commands: installed.commands, digest: installed.digest }, null, 2)}\n`);
+  return 0;
 }
 
 async function runUninstall(options, dependencies, output) {
@@ -1204,6 +1302,8 @@ export async function runCli(argv, dependencies = {}) {
     }
     if (parsed.command === "init") {
       return await runInit(parsed.options, dependencies, output);
+    } else if (parsed.command === "service") {
+      return await runService(parsed.options, dependencies, output);
     } else if (parsed.command === "uninstall") {
       return await runUninstall(parsed.options, dependencies, output);
     } else if (parsed.command === "relay") {
