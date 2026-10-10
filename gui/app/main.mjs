@@ -1,4 +1,14 @@
 import { connectUnits, createUnit, startSession, stopSession } from "./actions.mjs";
+import {
+  createThread,
+  incomingMessage,
+  loadMessages,
+  manageChat,
+  openDirectChat,
+  openGroupChat,
+  openMailbox,
+  postMessage,
+} from "./chats.mjs";
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
@@ -111,6 +121,9 @@ async function onStream(app, event) {
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
   if (event?.name === "session.changed") noteSession(app, event.envelope?.data ?? {});
+  if (event?.name === "message.created" && app.thread?.chat?.id === event.envelope?.data?.chatId) {
+    incomingMessage(app.thread, event.envelope.data.message);
+  }
   if (app.layout !== "unknown") renderShell(app);
 }
 
@@ -231,6 +244,7 @@ function renderWorkspace(app, t, view, counts) {
     }));
   }
   inspectorBody.append(actionControls(app, t, selected));
+  inspectorBody.append(chatPanel(app, t));
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
@@ -316,6 +330,9 @@ function ensureMap(app) {
   };
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
   app.mapState.onGroupConnect = (pending) => confirmConnection(app, pending.source, pending.targets ?? []);
+  app.mapState.onGroupMessage = (ids) => {
+    openGroupChat(app.api, ids).then((result) => showChat(app, result.data)).catch((error) => noteAction(app, error));
+  };
   return app.mapState;
 }
 
@@ -332,6 +349,7 @@ function finishMap(app) {
     connect: text(app.language, "connect"),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
+  takePendingChat(app);
   const view = app.root.ownerDocument.defaultView;
   if (!host.clientWidth && view?.requestAnimationFrame && !app.mapFramed) {
     app.mapFramed = true;
@@ -630,6 +648,98 @@ function noteSession(app, data) {
   if (!state || !SESSION_COPY[state]) return;
   if (data.request?.requestId) app.sessionRequestId = data.request.requestId;
   app.actionNote = text(app.language, SESSION_COPY[state]);
+}
+
+function chatPanel(app, t) {
+  const document = app.root.ownerDocument;
+  const thread = app.thread;
+  const panel = element(document, "section", { class: "chat-panel" });
+  if (!thread?.chat) return panel;
+  const transcript = element(document, "div", {
+    class: "transcript",
+    "data-chat": thread.chat.id,
+    "data-members": String(thread.chat.members?.length ?? 0),
+    "data-total": String(thread.total ?? thread.messages.length),
+    "data-pinned": String(Boolean(thread.chat.pinned)),
+    "data-listed": String(thread.chat.listed !== false),
+  });
+  if (!thread.messages.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
+  for (const message of thread.messages) {
+    transcript.append(element(document, "p", { "data-message": message.id, text: message.body || message.subject || "" }));
+  }
+  if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
+  const row = element(document, "div", { class: "action-row" });
+  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "pin", text: t("pin"), onclick: () => changeChat(app, { pinned: true }) }));
+  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "unlist", text: t("removeFromList"), onclick: () => changeChat(app, { listed: false }) }));
+  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "reopen", text: t("reopenChat"), onclick: () => changeChat(app, { listed: true }) }));
+  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
+  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "mailbox", text: t("mailbox"), onclick: () => inspectMailbox(app) }));
+  const composer = element(document, "input", { class: "composer", "data-composer": "true", value: thread.composer, "aria-label": t("send") });
+  const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
+  panel.append(transcript, row, composer, send);
+  if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
+  return panel;
+}
+
+function takePendingChat(app) {
+  const pending = app.pendingChat;
+  if (!pending || app.chatOpening) return;
+  app.pendingChat = null;
+  if (!pending.create) return;
+  app.chatOpening = true;
+  openDirectChat(app.api, [pending.unitId]).then((result) => showChat(app, result.data)).catch((error) => noteAction(app, error)).finally(() => { app.chatOpening = false; });
+}
+
+function showChat(app, chat) {
+  app.thread = createThread(chat);
+  return loadMessages(app.api, app.thread).then(() => {
+    if (!app.disposed) renderShell(app);
+  });
+}
+
+function changeChat(app, change) {
+  const chat = app.thread?.chat;
+  if (!chat) return;
+  manageChat(app.api, chat, change).then((result) => {
+    app.thread.chat = result.data;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function loadOlder(app) {
+  const host = app.root.querySelector?.(".transcript");
+  const anchor = host?.querySelector?.("[data-message]");
+  if (app.thread) app.thread.anchorOffset = anchor?.offsetTop ?? 0;
+  const older = Boolean(app.thread.nextCursor);
+  loadMessages(app.api, app.thread, older).then(() => {
+    if (app.disposed) return;
+    renderShell(app);
+    const next = app.root.querySelector?.(".transcript");
+    const node = next?.querySelector?.(`[data-message="${app.thread.anchorId}"]`);
+    if (next && node) next.scrollTop += node.offsetTop - (app.thread.anchorOffset ?? 0);
+  }).catch((error) => noteAction(app, error));
+}
+
+function inspectMailbox(app) {
+  const unitId = app.store.selected.unitId;
+  if (!unitId) return;
+  openMailbox(app.api, unitId, "all").then((result) => {
+    const first = result.data.items?.[0];
+    app.mailboxNote = first ? `${result.data.total} read:${first.read}` : `${result.data.total ?? 0} mailbox`;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function submitComposer(app, composer) {
+  app.thread.composer = composer.value;
+  postMessage(app.api, app.thread, { body: composer.value }).then(() => {
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function noteAction(app, error) {
+  app.actionNote = error?.code ?? "request_failed";
+  if (!app.disposed) renderShell(app);
 }
 
 function unitById(app, id) {

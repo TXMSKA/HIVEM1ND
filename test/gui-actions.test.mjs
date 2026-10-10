@@ -2,7 +2,19 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createGuiFixture } from "./gui-fixture.mjs";
-import { createApi } from "../gui/app/api.mjs";
+import { createApi, request } from "../gui/app/api.mjs";
+import {
+  acknowledgeVisible,
+  createThread,
+  incomingMessage,
+  loadMessages,
+  manageChat,
+  openDirectChat,
+  openGroupChat,
+  openMailbox,
+  postMessage,
+  retryMessage,
+} from "../gui/app/chats.mjs";
 import { connectUnits, createUnit, startSession, stopSession, trackSessionRequest } from "../gui/app/actions.mjs";
 import {
   applyRemoteLayout,
@@ -252,6 +264,121 @@ test("the fixture keeps connection direction, refuses an unavailable machine, an
   assert.equal(remote.status, 409);
   assert.equal(remote.body.error.code, "remote_session");
 });
+
+test("direct chats are reused, groups stay distinct, and unlisting keeps history", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const first = await openDirectChat(api, ["project:shop:executor-shop"]);
+  const second = await openDirectChat(api, ["project:shop:executor-shop"]);
+  assert.equal(first.data.id, second.data.id);
+  assert.equal(second.status, 200);
+  const left = await openGroupChat(api, ["project:shop:executor-shop", "env:web:overlord-web"]);
+  const right = await openGroupChat(api, ["project:shop:executor-shop", "env:web:overlord-web"]);
+  assert.equal(left.data.kind, "group");
+  assert.equal(left.data.members.includes("root:master"), true);
+  assert.notEqual(left.data.id, right.data.id);
+  const hidden = await manageChat(api, left.data, { listed: false });
+  assert.equal(hidden.data.listed, false);
+  const thread = createThread(hidden.data);
+  await loadMessages(api, thread);
+  const before = thread.messages.map((message) => message.id);
+  const listed = await request(api, "GET", "/chats");
+  assert.equal(listed.data.items.some((chat) => chat.id === left.data.id), false);
+  const retained = await request(api, "GET", "/chats", { query: { listed: "false" } });
+  assert.equal(retained.data.items.some((chat) => chat.id === left.data.id), true);
+  const reopened = await manageChat(api, hidden.data, { listed: true });
+  const again = createThread(reopened.data);
+  await loadMessages(api, again);
+  assert.deepEqual(again.messages.map((message) => message.id), before);
+});
+
+test("a group post reaches every other member and a failed notice stays visible", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const opened = await openGroupChat(api, ["project:shop:executor-shop", "root:adjutant"]);
+  fixture.control.setNoticeFailure("root:adjutant");
+  const thread = createThread(opened.data);
+  const posted = await postMessage(api, thread, { body: "All members can read this.", subject: "Release", priority: "normal" });
+  assert.equal(posted.data.notifications.length, opened.data.members.length - 1);
+  assert.equal(posted.data.notifications.find((item) => item.unitId === "root:adjutant").state, "failed");
+  assert.equal(posted.data.notifications.find((item) => item.unitId === "project:shop:executor-shop").state, "pending");
+  assert.equal(thread.composer, "");
+  await loadMessages(api, thread);
+  assert.equal(thread.messages.some((message) => message.body === "All members can read this."), true);
+});
+
+test("older pages prepend once and a late message stays unread until it is visible", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const opened = await openGroupChat(api, ["root:executive"]);
+  await fixture.control.seedMessages(opened.data.id, 400);
+  const thread = createThread(opened.data);
+  await loadMessages(api, thread);
+  assert.equal(thread.messages.length, 50);
+  const anchor = thread.messages[0].id;
+  await loadMessages(api, thread, true);
+  assert.equal(thread.anchorId, anchor);
+  assert.equal(thread.messages[50].id, anchor);
+  assert.equal(new Set(thread.messages.map((message) => message.id)).size, thread.messages.length);
+  const late = { id: "late-message", timestamp: "2026-10-10T11:00:00.000Z", body: "older", read: false };
+  incomingMessage(thread, late);
+  thread.visibleIds = new Set([thread.messages.at(-1).id]);
+  assert.equal(acknowledgeVisible(thread).includes(late.id), false);
+  thread.visibleIds.add(late.id);
+  assert.equal(acknowledgeVisible(thread).includes(late.id), true);
+});
+
+test("a lost chat post retries the same operation and a rate limit keeps the composer", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const opened = await openDirectChat(api, ["root:adjutant"]);
+  const thread = createThread(opened.data);
+  fixture.control.setFault({ method: "POST", path: `/api/v1/chats/${opened.data.id}/messages`, dropAfterCommit: true });
+  await assert.rejects(postMessage(api, thread, { body: "Keep this draft" }));
+  assert.equal(thread.composer, "Keep this draft");
+  const operation = thread.operation;
+  await retryMessage(api, thread);
+  assert.equal(thread.composer, "");
+  assert.equal(thread.messages[0].body, "Keep this draft");
+  assert.equal(operation.id, thread.messages[0] && operation.id);
+  const limited = createThread(opened.data);
+  const slowing = apiWith(async () => ({ status: 429, error: { code: "rate_limited", message: "Slow down." } }));
+  await assert.rejects(postMessage(slowing, limited, { body: "Still typing" }));
+  assert.equal(limited.composer, "Still typing");
+  assert.equal(limited.operation.body.body, "Still typing");
+  const mailbox = await openMailbox(api, "project:blog:executor-shop", "all");
+  assert.equal(mailbox.status, 200);
+});
+
+test("a second submit joins the in-flight post", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const api = apiWith(async () => {
+    await gate;
+    return { data: { message: { id: "m1", body: "one", timestamp: "2026-10-10T12:00:00.000Z" }, notifications: [] } };
+  });
+  const thread = createThread({ id: "chat-1" });
+  const first = postMessage(api, thread, { body: "one" });
+  const second = postMessage(api, thread, { body: "two" });
+  assert.equal(first, second);
+  release();
+  await first;
+  assert.equal(thread.messages.length, 1);
+  assert.equal(thread.messages[0].body, "one");
+});
+
+function fixtureApi(fixture) {
+  const desktop = new URL(fixture.desktopUrl);
+  return createApi({
+    location: { origin: desktop.origin, pathname: desktop.pathname, search: desktop.search, hash: desktop.hash },
+    history: { replaceState() {} },
+    fetch: globalThis.fetch.bind(globalThis),
+  });
+}
 
 async function call(fixture, method, route, body) {
   const response = await fetch(`${fixture.origin}${route}`, {

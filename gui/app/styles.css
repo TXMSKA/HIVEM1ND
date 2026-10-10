@@ -250,6 +250,8 @@ button, input { font: inherit; color: inherit; }
 .dialog input { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--ring); border-radius: 999px; padding: 8px 12px; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .action-note { color: var(--body); }
+.transcript { max-height: 240px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
+.transcript p { margin: 0; }
 
 .phone-nav {
   display: none;

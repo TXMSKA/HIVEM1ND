@@ -9,6 +9,7 @@ import {
   LOCAL_MACHINE,
   canonical,
   createFixtureTree,
+  deterministicUuid,
   seedRecords,
   sha256,
   stableJson,
@@ -1462,7 +1463,13 @@ async function prepareChatPost(fx, body, principal, chatId) {
   };
   return {
     status: 201,
-    data: { message, notifications: chat.members.filter((unitId) => unitId !== principal.unitId).map((unitId) => ({ unitId, state: "pending" })) },
+    data: {
+      message,
+      notifications: chat.members.filter((unitId) => unitId !== principal.unitId).map((unitId) => ({
+        unitId,
+        state: fx.noticeFailure === unitId ? "failed" : "pending",
+      })),
+    },
     writes,
     events: [{ name: "message.created", chatId, data: { chatId, mailboxId: null, message } }],
   };
@@ -1592,7 +1599,8 @@ function routeTable() {
     { pattern: "/sessions", GET: { query: ["q", "limit", "cursor", "unitId", "machine", "state"] } },
     { pattern: "/sync", GET: { query: [] } },
     { pattern: "/layout", GET: { query: [] }, PATCH: { capability: "layout.write", validate: validateLayout } },
-    { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned"] } },
+    { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned"] }, POST: { capability: "chat.manage", validate: validateChat } },
+    { pattern: "/chats/:chatId", PATCH: { capability: "chat.manage", validate: validateChatPatch } },
     { pattern: "/chats/:chatId", GET: { query: [] } },
     { pattern: "/chats/:chatId/messages", GET: { query: ["q", "limit", "cursor", "before"] }, POST: { capability: "chat.post", validate: validateMessage } },
     { pattern: "/chats/:chatId/read", POST: { capability: "master.read", allow: ["read", "master.read"], validate: validateRead } },
@@ -2333,6 +2341,92 @@ function prepareStop(fx, sessionId) {
   };
 }
 
+function validateChat(body) {
+  requireObject(body, ["members", "title"]);
+  requireKeys(body, ["members"]);
+  if (!Array.isArray(body.members) || body.members.length < 1 || body.members.length > 256 || body.members.some((id) => typeof id !== "string" || !id)) {
+    throw new HttpError(422, "invalid_members", "The chat members are not valid.");
+  }
+  if (body.title !== undefined && typeof body.title !== "string") throw new HttpError(422, "invalid_body", "The title is not valid.");
+}
+
+function validateChatPatch(body) {
+  requireObject(body, ["pinned", "listed", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  if (!("pinned" in body) && !("listed" in body)) throw new HttpError(422, "invalid_body", "The chat change is not valid.");
+  if ("pinned" in body && typeof body.pinned !== "boolean") throw new HttpError(422, "invalid_body", "The chat change is not valid.");
+  if ("listed" in body && typeof body.listed !== "boolean") throw new HttpError(422, "invalid_body", "The chat change is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+async function prepareChat(fx, body, principal) {
+  const snap = await projection(fx);
+  const selected = [...new Set(body.members.filter((id) => id !== principal.unitId))];
+  if (!selected.length || selected.some((id) => !snap.units.some((unit) => unit.id === id && unit.revision))) {
+    throw new HttpError(422, "invalid_members", "The chat members are not valid.");
+  }
+  const members = [principal.unitId, ...selected];
+  const kind = selected.length === 1 ? "direct" : "group";
+  const names = selected.map((id) => snap.units.find((unit) => unit.id === id).unit);
+  const title = body.title || (kind === "direct" ? names[0] : names.join(", ").slice(0, 240));
+  if (kind === "direct") {
+    const id = deterministicUuid(["direct-chat", [...members].sort()]);
+    const existing = snap.chats.find((chat) => chat.id === id);
+    if (existing?.listed) return { status: 200, data: publicChat(existing), writes: [], events: [] };
+    if (existing) return rewriteChat(fx, existing, { listed: true });
+    return writeNewChat(fx, { id, title, members, kind, pinned: false, listed: true });
+  }
+  return writeNewChat(fx, { id: uuid(), title, members, kind, pinned: false, listed: true });
+}
+
+async function prepareChatPatch(fx, chatId, body) {
+  const snap = await projection(fx);
+  const chat = snap.chats.find((item) => item.id === chatId);
+  if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+  if (chat.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The chat was changed elsewhere.", { currentRevision: chat.revision });
+  return rewriteChat(fx, chat, {
+    pinned: body.pinned ?? chat.pinned,
+    listed: body.listed ?? chat.listed,
+  });
+}
+
+function writeNewChat(fx, chat) {
+  const createdAt = clock(fx).toISOString();
+  const text = `id: ${chat.id}\ntitle: ${chat.title}\nmembers: ${JSON.stringify(chat.members)}\npinned: ${chat.pinned}\nlisted: ${chat.listed}\ncreated: ${createdAt}\ncreated-by: root:master\nkind: ${chat.kind}\n\n`;
+  const bytes = Buffer.from(text);
+  const revision = sha256(bytes);
+  const data = { ...chat, createdAt, revision, lastMessage: null, unread: 0 };
+  return {
+    status: 201,
+    data,
+    writes: [{ path: join(fx.tree.user, "relay", "chats", chat.id, "chat.md"), beforeRevision: null, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "chat.changed", chatId: chat.id, data: { chat: data } }],
+  };
+}
+
+async function rewriteChat(fx, chat, changes) {
+  const text = replaceChatFields(await readFile(chat.file, "utf8"), changes);
+  const bytes = Buffer.from(text);
+  const revision = sha256(bytes);
+  const data = publicChat({ ...chat, ...changes, revision });
+  return {
+    status: 200,
+    data,
+    writes: [{ path: chat.file, beforeRevision: chat.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "chat.changed", chatId: chat.id, data: { chat: data } }],
+  };
+}
+
+function replaceChatFields(text, changes) {
+  const rows = text.replace(/\s*$/, "").split("\n");
+  for (const [key, value] of Object.entries(changes)) {
+    const line = `${key}: ${value}`;
+    const index = rows.findIndex((row) => row.startsWith(`${key}:`));
+    if (index >= 0) rows[index] = line;
+  }
+  return `${rows.join("\n")}\n`;
+}
+
 async function checkMutation(fx, pattern, params, body) {
   if (pattern === "/units" || pattern === "/units/:unitId/lead" || pattern === "/units/:unitId/session") {
     const snap = await projection(fx);
@@ -2360,6 +2454,8 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
   if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);
   if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
+  if (pattern === "/chats") return prepareChat(fx, body, principal);
+  if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);
   if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId);
   if (pattern === "/chats/:chatId/read") return prepareChatRead(fx, body, principal, params.chatId);
@@ -2630,6 +2726,7 @@ export async function createGuiFixture(options = {}) {
     homeFailures: new Map(),
     home: null,
     fault: null,
+    noticeFailure: null,
     sessionRequests: new Map(),
     sessionStops: new Map(),
     cache: null,
@@ -2678,6 +2775,19 @@ export async function createGuiFixture(options = {}) {
         });
       },
       setFault(fault) { fx.fault = fault; },
+      setNoticeFailure(unitId) { fx.noticeFailure = unitId; },
+      seedMessages(chatId, count) {
+        return enqueue(fx, async () => {
+          const base = Date.parse("2026-10-10T12:00:00.000Z");
+          for (let index = 0; index < count; index += 1) {
+            const id = deterministicUuid(["fixture-message", chatId, index]);
+            const stamp = new Date(base + index * 1000).toISOString();
+            const text = `id: ${id}\nfrom: master\nfrom-id: root:master\nto: chat:${chatId}\nto-id: chat:${chatId}\nmachine: ${LOCAL_MACHINE}\ntimestamp: ${stamp}\npriority: normal\nsubject: note ${index}\nthread-id: ${chatId}\nkind: message\n\nMessage ${index}\n`;
+            await writeAtomic(join(fx.tree.user, "relay", "chats", chatId, `${id}.md`), Buffer.from(text));
+          }
+          invalidate(fx);
+        });
+      },
       setSession(requestId, state, error = null) {
         return enqueue(fx, async () => {
           const current = fx.sessionRequests.get(requestId);
