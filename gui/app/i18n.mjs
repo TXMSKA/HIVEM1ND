@@ -112,6 +112,17 @@ const COPY = {
   answerQueued: ["Answer queued.", "La respuesta está en cola."],
   approved: ["Approved", "Aprobado"],
   note: ["Note", "Nota"],
+  watching: ["Watching {unit}.", "Siguiendo a {unit}."],
+  watchWaiting: ["Waiting for {unit}.", "En espera de {unit}."],
+  watchOff: ["Following is off.", "El seguimiento está apagado."],
+  attach: ["Attach", "Adjuntar"],
+  addComment: ["Add comment", "Agregar comentario"],
+  reply: ["Reply", "Responder"],
+  resolve: ["Resolve", "Resolver"],
+  comment: ["Comment", "Comentario"],
+  corruptResource: ["The comments could not be read.", "No se pudieron leer los comentarios."],
+  conversionRequired: ["This module needs a JSON copy.", "Este módulo necesita una copia JSON."],
+  stopWatch: ["Stop following", "Dejar de seguir"],
 };
 
 const DICTIONARIES = {

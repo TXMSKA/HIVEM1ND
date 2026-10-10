@@ -56,3 +56,11 @@ Chrome at 1440x900 on the modern English shell, with executor-shop selected. The
 | Viewport | Look | Language | Expected | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1440x900 | modern | en | Pending approval becomes approved only after the owner result. Expired approval stays visible. Revoke stays pending. Lead-gated delivery is blocked. Accept, send back, and a conflicting undo are distinct. Waiting changes only after an outcome. | Accept on task 030 was disabled. Send back with a note set the note to open. Accept on task 029 set the note to done. After an external edit, undo showed undo_conflict. Approve showed Answer queued, then Approved. The expired approval remained. Revoke showed pending. Waiting went from 5 to 4. | none | this file |
+
+## Step 9 editors
+
+Chrome at 1440x900 on the modern English shell. Blueprint opened Cart. Two units were attached. A comment failed its notice, then a fixture reply reopened it and resolve closed it. Watch waited, followed the attached unit, and then stopped. A delayed board read lost to the newer selection, and the draft stayed.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Attach two units. Add, reply, and resolve a comment. A failed notice is followed by a fixture reply. Watch shows the resource and the following label, then stops. A delayed fetch does not replace the newer selection or its draft. | Attachments were project:shop:executor-shop and env:web:overlord-web. The comment Unplaced note showed failed. The reply was open and then resolved. The header was blueprint Cart. Watch waited for project:shop:executor-shop, then read Watching project:shop:executor-shop, then Following is off. After the delayed read the title stayed Cart and the draft stayed kept locally. The hash was empty and the console was empty. | none | this file |

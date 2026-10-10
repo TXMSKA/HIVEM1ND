@@ -937,6 +937,7 @@ async function loadEditors(fx, issues) {
       : join(repo, "docs", "flows", "comments", `${resource.legacyId ?? document?.id}.json`);
     let commentsRevision = null;
     let threads = [];
+    let corrupt = false;
     try {
       const loaded = await readJsonFile(commentsFile);
       commentsRevision = loaded.hash;
@@ -947,7 +948,12 @@ async function loadEditors(fx, issues) {
         notifications: [],
       }));
     } catch (error) {
-      if (error.code !== "ENOENT") issues.push({ path: `${resource.project}/${resource.path}`, code: "corrupt_resource", message: "The comment sidecar is unreadable." });
+      if (error.code !== "ENOENT") {
+        issues.push({ path: `${resource.project}/${resource.path}`, code: "corrupt_resource", message: "The comment sidecar is unreadable." });
+        commentsRevision = null;
+        threads = [];
+        corrupt = true;
+      }
     }
     let attachmentRevision = null;
     let attached = [];
@@ -976,6 +982,7 @@ async function loadEditors(fx, issues) {
       attachmentRevision,
       commentsRevision,
       threads,
+      corrupt,
       proposals: threads.flatMap((thread) => (thread.messages ?? []).flatMap((message) => (message.proposal ? [{ ...message.proposal, resourceId: resource.id, threadId: thread.id, commentsRevision }] : []))),
     });
   }
@@ -1621,14 +1628,20 @@ function routeTable() {
     { pattern: "/grant-revocations/:requestId", GET: { query: [] } },
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
     { pattern: "/settings", GET: { query: [] } },
-    { pattern: "/viewer", GET: { capability: "viewer.write", query: [] } },
-    { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] } },
+    { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
+    { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
+    { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateBoard } },
     { pattern: "/blueprint/boards/:resourceId", GET: { query: [] } },
-    { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] } },
+    { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateText } },
     { pattern: "/void/texts/:resourceId", GET: { query: [] } },
     { pattern: "/void/texts/:resourceId/proposals", GET: { query: ["q", "limit", "cursor", "state"] } },
     { pattern: "/editors/:resourceId/attachments", GET: { query: [] } },
-    { pattern: "/editors/:resourceId/comments", GET: { query: ["q", "limit", "cursor", "status"] } },
+    { pattern: "/editors/:resourceId/comments", GET: { query: ["q", "limit", "cursor", "status"] }, POST: { capability: "comment.write", validate: validateComment } },
+    { pattern: "/editors/:resourceId/comments/:threadId/replies", POST: { capability: "comment.write", validate: validateReply } },
+    { pattern: "/editors/:resourceId/comments/:threadId", PATCH: { capability: "comment.write", validate: validateThread } },
+    { pattern: "/editors/:resourceId/attachments", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateAttachments } },
+    { pattern: "/watch", POST: { capability: "watch", validate: validateWatch, runtime: true } },
+    { pattern: "/watch/:watchId", DELETE: { capability: "watch", validate: validateEmpty, runtime: true } },
     { pattern: "/editors/:resourceId/assets/:assetId", GET: { query: [] } },
     { pattern: "/events", GET: { query: ["unitId", "chatId", "resourceId"] } },
     { pattern: "/auth/logout", POST: { capability: "read", validate: validateEmpty, runtime: true } },
@@ -1810,7 +1823,9 @@ async function readData(fx, snap, spec, params, query) {
   }
   if (pattern === "/blueprint/boards/:resourceId" || pattern === "/void/texts/:resourceId") {
     noneQuery(query);
-    return requireEditor(snap, params.resourceId);
+    const editor = requireEditor(snap, params.resourceId);
+    if (editor.corrupt) throw new HttpError(409, "corrupt_resource", "The comment sidecar is unreadable.");
+    return editor;
   }
   if (pattern === "/void/texts/:resourceId/proposals") {
     const editor = requireEditor(snap, params.resourceId);
@@ -1825,6 +1840,7 @@ async function readData(fx, snap, spec, params, query) {
   }
   if (pattern === "/editors/:resourceId/comments") {
     const editor = requireEditor(snap, params.resourceId);
+    if (editor.corrupt) throw new HttpError(409, "corrupt_resource", "The comment sidecar is unreadable.");
     const status = query.get("status") ?? "all";
     const items = editor.threads.filter((thread) => status === "all" || thread.status === status);
     const result = page(items, query, spec.GET.query, (thread, q) => JSON.stringify(thread).toLowerCase().includes(q), []);
@@ -2461,6 +2477,285 @@ function validateTaskStatus(body) {
   revisionField(body.expectedRevision);
 }
 
+function validateComment(body) {
+  requireObject(body, ["anchor", "text", "expectedRevision", "expectedCommentsRevision"]);
+  requireKeys(body, ["anchor", "text", "expectedRevision"]);
+  if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 10000) throw new HttpError(422, "invalid_body", "The comment is not valid.");
+  revisionField(body.expectedRevision);
+  if (body.expectedCommentsRevision !== undefined && body.expectedCommentsRevision !== null) revisionField(body.expectedCommentsRevision);
+}
+
+function validateReply(body) {
+  requireObject(body, ["text", "expectedCommentsRevision"]);
+  requireKeys(body, ["text", "expectedCommentsRevision"]);
+  if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(422, "invalid_body", "The comment is not valid.");
+  revisionField(body.expectedCommentsRevision);
+}
+
+function validateThread(body) {
+  requireObject(body, ["status", "expectedCommentsRevision"]);
+  requireKeys(body, ["status", "expectedCommentsRevision"]);
+  if (!["open", "resolved"].includes(body.status)) throw new HttpError(422, "invalid_body", "The comment status is not valid.");
+  revisionField(body.expectedCommentsRevision);
+}
+
+function validateAttachments(body) {
+  requireObject(body, ["attached", "expectedRevision"]);
+  requireKeys(body, ["attached", "expectedRevision"]);
+  if (!Array.isArray(body.attached) || body.attached.length > 256 || new Set(body.attached).size !== body.attached.length) {
+    throw new HttpError(422, "invalid_body", "The attached units are not valid.");
+  }
+  if (body.expectedRevision !== null) revisionField(body.expectedRevision);
+}
+
+function validateWatch(body) {
+  requireObject(body, ["unitId", "resourceId", "chatId"]);
+  requireKeys(body, ["unitId"]);
+  if (typeof body.unitId !== "string") throw new HttpError(422, "invalid_body", "The unit is not valid.");
+}
+
+async function prepareComment(fx, resourceId, body) {
+  const editor = await editorFor(fx, resourceId);
+  if (editor.revision !== body.expectedRevision || (body.expectedCommentsRevision ?? null) !== editor.commentsRevision) {
+    throw new HttpError(409, "revision_conflict", "The editor was changed elsewhere.");
+  }
+  const thread = {
+    id: uuid(),
+    anchor: body.anchor,
+    status: "open",
+    place: body.anchor?.screen ? { screenId: body.anchor.screen, nodeId: body.anchor.element ?? null, x: body.anchor.point?.x ?? 0, y: body.anchor.point?.y ?? 0 } : null,
+    messages: [{ id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
+  };
+  return writeComments(fx, editor, [...editor.threads, thread], thread);
+}
+
+async function prepareReply(fx, params, body) {
+  const editor = await editorFor(fx, params.resourceId);
+  if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
+  const thread = editor.threads.find((item) => item.id === params.threadId);
+  if (!thread) throw new HttpError(404, "thread_not_found", "The thread was not found.");
+  const next = {
+    ...thread,
+    status: "open",
+    messages: [...(thread.messages ?? []), { id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
+  };
+  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200);
+}
+
+async function prepareThreadStatus(fx, params, body) {
+  const editor = await editorFor(fx, params.resourceId);
+  if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
+  const thread = editor.threads.find((item) => item.id === params.threadId);
+  if (!thread) throw new HttpError(404, "thread_not_found", "The thread was not found.");
+  const next = { ...thread, status: body.status };
+  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200);
+}
+
+async function prepareAttachments(fx, resourceId, body) {
+  const snap = await projection(fx);
+  const editor = requireEditor(snap, resourceId);
+  if ((body.expectedRevision ?? null) !== editor.attachmentRevision) throw new HttpError(409, "revision_conflict", "The attachments were changed elsewhere.");
+  if (body.attached.some((id) => !snap.units.some((unit) => unit.id === id && unit.revision))) throw new HttpError(422, "unknown_unit", "The unit is unknown.");
+  const record = { format: "hivem1nd-editor-binding-v1", resourceId, kind: editor.kind, attached: body.attached, updatedAt: clock(fx).toISOString() };
+  const bytes = Buffer.from(stableJson(record));
+  const revision = sha256(bytes);
+  const failed = fx.noticeFailure && body.attached.includes(fx.noticeFailure) ? fx.noticeFailure : null;
+  return {
+    status: 200,
+    data: {
+      attached: body.attached,
+      revision,
+      notifications: body.attached.map((unitId) => ({ unitId, state: unitId === failed ? "failed" : "pending" })),
+    },
+    writes: [{ path: join(fx.tree.user, "relay", "editors", `${resourceId}.json`), beforeRevision: editor.attachmentRevision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "editor.changed", resourceId, data: { resourceId, attached: body.attached, revision } }],
+  };
+}
+
+async function prepareWatch(fx, body, principal) {
+  const snap = await projection(fx);
+  if (body.resourceId) {
+    const editor = requireEditor(snap, body.resourceId);
+    if (!editor.attached.includes(body.unitId)) throw new HttpError(403, "not_attached", "The unit is not attached to that resource.");
+  }
+  if (body.chatId) {
+    const chat = snap.chats.find((item) => item.id === body.chatId);
+    if (!chat || !(chat.members ?? []).includes(body.unitId)) throw new HttpError(422, "invalid_chat_member", "The unit is not in that chat.");
+  }
+  const cutoff = fx.nowMs - 15 * 60_000;
+  const recent = [...fx.activity].reverse().find((item) => item.unitId === body.unitId && item.ms >= cutoff && (!body.resourceId || item.resourceId === body.resourceId));
+  const watchId = uuid();
+  const record = { watchId, state: recent ? "watching" : "waiting", unitId: body.unitId, resourceId: body.resourceId ?? recent?.resourceId ?? null, viewerId: principal.viewerId };
+  fx.watches.set(watchId, record);
+  return {
+    status: 200,
+    data: { watchId, state: record.state, unitId: record.unitId, resourceId: record.resourceId },
+    writes: [],
+    events: [{ name: "watch.changed", global: false, viewerId: principal.viewerId, data: record }],
+    apply() {},
+  };
+}
+
+function prepareStopWatch(fx, watchId, principal) {
+  const current = fx.watches.get(watchId);
+  if (!current || current.viewerId !== principal.viewerId) throw new HttpError(404, "not_found", "The watch was not found.");
+  fx.watches.delete(watchId);
+  return { status: 204, data: null, writes: [], events: [{ name: "watch.changed", viewerId: principal.viewerId, data: { watchId, state: "off" } }], apply() {} };
+}
+
+async function editorFor(fx, resourceId) {
+  const editor = requireEditor(await projection(fx), resourceId);
+  if (editor.corrupt) throw new HttpError(409, "corrupt_resource", "The comment sidecar is unreadable.");
+  return editor;
+}
+
+function commentsPath(fx, editor) {
+  const repo = join(fx.tree.root, "repositories", editor.project);
+  if (editor.kind === "void") return join(repo, ...editor.path.split("/")).replace(/\.json$/, ".comments.json");
+  return join(repo, "docs", "flows", "comments", `${editor.legacy?.id ?? editor.document?.id}.json`);
+}
+
+function writeComments(fx, editor, threads, thread, status = 201) {
+  const document = { threads: threads.map((item) => ({ ...item, revision: undefined })) };
+  const bytes = Buffer.from(stableJson(document));
+  const commentsRevision = sha256(bytes);
+  const failed = fx.noticeFailure;
+  return {
+    status,
+    data: {
+      thread: { ...thread, place: thread.place ?? null },
+      commentsRevision,
+      notifications: [{ unitId: editor.attached[0] ?? null, state: failed && editor.attached.includes(failed) ? "failed" : "pending" }],
+    },
+    writes: [{ path: commentsPath(fx, editor), beforeRevision: editor.commentsRevision, afterRevision: commentsRevision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "comment.changed", resourceId: editor.id, data: { resourceId: editor.id, thread, commentsRevision } }],
+  };
+}
+
+function validateViewer(body) {
+  requireObject(body, ["look", "language", "dirty"]);
+  const present = ["look", "language", "dirty"].filter((key) => body[key] !== undefined);
+  if (!present.length) throw new HttpError(422, "invalid_body", "The viewer change is empty.");
+  if (body.look !== undefined && body.look !== null && !["modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
+  if (body.language !== undefined && body.language !== null && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The language is not valid.");
+  if (body.dirty !== undefined && typeof body.dirty !== "boolean") throw new HttpError(422, "invalid_body", "The dirty flag is not valid.");
+}
+
+function prepareViewer(fx, body, principal) {
+  const viewer = fx.viewers.get(principal.viewerId) ?? principal;
+  if (body.look !== undefined) viewer.look = body.look;
+  if (body.language !== undefined) viewer.language = body.language;
+  if (body.dirty !== undefined) viewer.dirty = body.dirty;
+  const data = viewerData(viewer);
+  return { status: 200, data, writes: [], events: [{ name: "viewer.changed", viewerId: viewer.viewerId, data }], apply() {} };
+}
+
+function validateRegister(body) {
+  requireObject(body, ["kind", "project", "path"]);
+  requireKeys(body, ["kind", "project", "path"]);
+  if (!["blueprint", "void"].includes(body.kind)) throw new HttpError(422, "invalid_body", "The editor kind is not valid.");
+  assertEditorPath(body.project, body.path);
+}
+
+function validateBoard(body) {
+  requireObject(body, ["project", "path", "document", "attached"]);
+  requireKeys(body, ["project", "document"]);
+  assertDocument(body.document);
+  if (body.path !== undefined) assertEditorPath(body.project, body.path);
+  else assertEditorPath(body.project, "docs/flows/boards/placeholder.json");
+}
+
+function validateText(body) {
+  requireObject(body, ["project", "path", "document", "attached"]);
+  requireKeys(body, ["project", "path", "document"]);
+  assertDocument(body.document);
+  assertEditorPath(body.project, body.path);
+}
+
+function assertEditorPath(project, path) {
+  if (typeof project !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(project)) throw new HttpError(422, "invalid_body", "The project is not valid.");
+  if (typeof path !== "string" || path.startsWith("/") || path.includes("\\") || path.includes("\0") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new HttpError(422, "invalid_path", "The path is not valid.");
+  }
+}
+
+function assertDocument(document) {
+  if (!document || typeof document !== "object" || Array.isArray(document) || document.formatVersion !== 1 || typeof document.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,40}$/.test(document.id)) {
+    throw new HttpError(422, "invalid_document", "The document is not valid.");
+  }
+}
+
+async function prepareRegister(fx, body) {
+  const file = editorFile(fx, body.project, body.path);
+  try {
+    await readFile(file);
+  } catch {
+    throw new HttpError(404, "resource_not_found", "The resource was not found.");
+  }
+  const id = deterministicUuid(["editor", body.kind, body.project, body.path]);
+  const catalog = await readJsonFile(join(fx.tree.user, "gui", "resources.json"));
+  if (catalog.value.resources.some((item) => item.id === id)) {
+    return { status: 200, data: requireEditor(await projection(fx), id), writes: [], events: [] };
+  }
+  const next = structuredClone(catalog.value);
+  next.resources.push({ id, kind: body.kind, project: body.project, path: body.path, legacyId: body.path.endsWith(".mjs") ? body.path.split("/").at(-1).replace(/\.mjs$/, "") : null });
+  const bytes = Buffer.from(stableJson(next));
+  const readOnly = body.path.endsWith(".mjs");
+  return {
+    status: 201,
+    data: { id, kind: body.kind, project: body.project, path: body.path, title: body.path, readOnly, revision: null, document: null, legacy: readOnly ? { id: body.path, path: body.path, reason: "conversion_required" } : null, attached: [], threads: [], commentsRevision: null, attachmentRevision: null },
+    writes: [{ path: join(fx.tree.user, "gui", "resources.json"), beforeRevision: catalog.hash, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "editor.changed", resourceId: id, data: { resourceId: id } }],
+  };
+}
+
+async function prepareCreateEditor(fx, kind, body) {
+  const path = body.path ?? (kind === "blueprint" ? `docs/flows/boards/${body.document.id}.json` : null);
+  if (!path?.endsWith(".json")) throw new HttpError(422, "invalid_path", "The path is not valid.");
+  assertEditorPath(body.project, path);
+  const id = deterministicUuid(["editor", kind, body.project, path]);
+  const catalog = await readJsonFile(join(fx.tree.user, "gui", "resources.json"));
+  if (catalog.value.resources.some((item) => item.id === id || (item.project === body.project && item.path === path))) {
+    throw new HttpError(409, "resource_exists", "The resource already exists.");
+  }
+  const file = editorFile(fx, body.project, path);
+  if (await hashExisting(file) !== null) throw new HttpError(409, "resource_exists", "The resource already exists.");
+  const snap = await projection(fx);
+  const attached = body.attached ?? [];
+  if (attached.some((unitId) => !snap.units.some((unit) => unit.id === unitId && unit.revision))) throw new HttpError(422, "unknown_unit", "The unit is unknown.");
+  const document = kind === "void" ? { ...body.document, rev: 1, history: [] } : body.document;
+  const docBytes = Buffer.from(stableJson(document));
+  const revision = sha256(docBytes);
+  const next = structuredClone(catalog.value);
+  next.resources.push({ id, kind, project: body.project, path, legacyId: null });
+  const catalogBytes = Buffer.from(stableJson(next));
+  const writes = [
+    { path: file, beforeRevision: null, afterRevision: revision, afterBytesBase64: docBytes.toString("base64") },
+    { path: join(fx.tree.user, "gui", "resources.json"), beforeRevision: catalog.hash, afterRevision: sha256(catalogBytes), afterBytesBase64: catalogBytes.toString("base64") },
+  ];
+  let attachmentRevision = null;
+  if (attached.length) {
+    const binding = { format: "hivem1nd-editor-binding-v1", resourceId: id, kind, attached, updatedAt: clock(fx).toISOString() };
+    const bindingBytes = Buffer.from(stableJson(binding));
+    attachmentRevision = sha256(bindingBytes);
+    writes.push({ path: join(fx.tree.user, "relay", "editors", `${id}.json`), beforeRevision: null, afterRevision: attachmentRevision, afterBytesBase64: bindingBytes.toString("base64") });
+  }
+  return {
+    status: 201,
+    data: { id, kind, project: body.project, title: document.title ?? document.id, path, readOnly: false, revision, document, legacy: null, attached, threads: [], commentsRevision: null, attachmentRevision, proposals: [] },
+    writes,
+    events: [{ name: kind === "void" ? "void.changed" : "blueprint.changed", resourceId: id, data: { resourceId: id, revision } }],
+  };
+}
+
+function editorFile(fx, project, path) {
+  const repo = join(fx.tree.root, "repositories", project);
+  const file = join(repo, ...path.split("/"));
+  const rel = relative(repo, file);
+  if (!rel || rel.startsWith("..")) throw new HttpError(422, "invalid_path", "The path is not valid.");
+  return file;
+}
+
 function validateUndo(body) {
   requireObject(body, ["expectedRevision"]);
   requireKeys(body, ["expectedRevision"]);
@@ -2580,6 +2875,16 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/units/:unitId/approval-grants/:grantId") return prepareRevoke(fx, params, body);
   if (pattern === "/tasks/:taskId/status") return prepareTaskStatus(fx, params.taskId, body, principal);
   if (pattern === "/tasks/:taskId/undo") return prepareUndo(fx, params.taskId, body);
+  if (pattern === "/editors/:resourceId/comments") return prepareComment(fx, params.resourceId, body);
+  if (pattern === "/editors/:resourceId/comments/:threadId/replies") return prepareReply(fx, params, body);
+  if (pattern === "/editors/:resourceId/comments/:threadId") return prepareThreadStatus(fx, params, body);
+  if (pattern === "/editors/:resourceId/attachments") return prepareAttachments(fx, params.resourceId, body);
+  if (pattern === "/watch") return prepareWatch(fx, body, principal);
+  if (pattern === "/watch/:watchId") return prepareStopWatch(fx, params.watchId, principal);
+  if (pattern === "/viewer") return prepareViewer(fx, body, principal);
+  if (pattern === "/editors/register") return prepareRegister(fx, body);
+  if (pattern === "/blueprint/boards") return prepareCreateEditor(fx, "blueprint", body);
+  if (pattern === "/void/texts") return prepareCreateEditor(fx, "void", body);
   if (pattern === "/chats") return prepareChat(fx, body, principal);
   if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);
@@ -2856,6 +3161,8 @@ export async function createGuiFixture(options = {}) {
     answers: new Map(),
     revocations: new Map(),
     taskUndo: new Map(),
+    watches: new Map(),
+    activity: [],
     sessionRequests: new Map(),
     sessionStops: new Map(),
     cache: null,
@@ -2905,6 +3212,27 @@ export async function createGuiFixture(options = {}) {
       },
       setFault(fault) { fx.fault = fault; },
       setNoticeFailure(unitId) { fx.noticeFailure = unitId; },
+      openDesktop() {
+        return enqueue(fx, async () => createViewer(fx, { embedded: false, hostOrigin: null, look: null, language: null, audience: "desktop" }).url);
+      },
+      refresh() {
+        return enqueue(fx, async () => { invalidate(fx); });
+      },
+      noteActivity(activity) {
+        return enqueue(fx, async () => {
+          const record = { ...activity, at: clock(fx).toISOString() };
+          fx.activity.push({ ...record, ms: fx.nowMs });
+          const events = [{ name: "editor.activity", global: true, resourceId: record.resourceId ?? null, unitId: record.unitId, data: record }];
+          for (const watch of fx.watches.values()) {
+            const sameResource = !watch.resourceId || watch.resourceId === record.resourceId;
+            if (watch.unitId !== record.unitId || !sameResource) continue;
+            watch.state = "watching";
+            if (!watch.resourceId) watch.resourceId = record.resourceId ?? null;
+            events.push({ name: "watch.changed", viewerId: watch.viewerId, data: { watchId: watch.watchId, state: watch.state, unitId: watch.unitId, resourceId: watch.resourceId } });
+          }
+          publish(fx, events, fx.primary);
+        });
+      },
       settleAnswer(answerId, state) {
         return enqueue(fx, async () => {
           const current = fx.answers.get(answerId);
