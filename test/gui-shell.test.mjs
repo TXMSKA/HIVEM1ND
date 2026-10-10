@@ -1405,6 +1405,101 @@ test("unit and session forms use machines and clients, and the inspector shows t
   assert.equal(silentForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
 });
 
+test("unsaved forms share one dirty flag and only a saved draft clears it", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method !== "PATCH" || !init.body) return;
+    writes.push({ url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  const embedMessages = [];
+  await waitFor(() => desktop.app.chatList?.catalog?.length > 0 && desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The desktop lists did not load.");
+  desktop.app.embed = {
+    disposed: false,
+    viewer: { embedded: true, hostOrigin: "http://127.0.0.1:9", viewerId: "viewer-dirty", capabilities: DESKTOP },
+    transport: { parent: { postMessage(data) { embedMessages.push(data); } } },
+  };
+  const dirtyPatches = () => writes.filter((item) => item.url.includes("/viewer") && Object.prototype.hasOwnProperty.call(item.body ?? {}, "dirty"));
+  const dirtyMessages = () => embedMessages.filter((item) => item.type === "dirty");
+  navigate(desktop.app, "chats");
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-composer]"), "The chat composer did not open.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "Hold", 0, 4);
+  await waitFor(() => dirtyPatches().some((item) => item.body.dirty === true), "Chat text did not mark the viewer dirty.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "Hold!", 0, 5);
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "single");
+  await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']"), "The return note did not appear.");
+  typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "Fix", 0, 3);
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-node-name]"), "The node name field did not open.");
+  typeInput(desktop.root.querySelector("[data-node-name]"), "Label 2", 0, 7);
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
+  const source = desktop.root.querySelector("[data-source]");
+  typeInput(source, `${source.value}!`, 0, 1);
+  typeInput(desktop.root.querySelector("[data-draft]"), "Auxiliary", 0, 9);
+  assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
+  assert.equal(dirtyMessages().filter((item) => item.value === true).length, 1);
+  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
+  assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "Hold!");
+  assert.equal(desktop.app.inputDrafts.notes.get("project:shop:030").value, "Fix");
+
+  navigate(desktop.app, "chats");
+  await waitFor(() => desktop.root.querySelector("[data-composer]")?.value === "Hold!", "The chat draft was not restored.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "", 0, 0);
+  typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "", 0, 0);
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === cart.id), "The board catalog did not return.");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-node-name]")?.value === "Label 2", `The node draft was not restored. value=${desktop.root.querySelector("[data-node-name]")?.value ?? "missing"} stored=${desktop.app.inputDrafts.nodes?.get(cart.id) ?? "missing"}`);
+  typeInput(desktop.root.querySelector("[data-node-name]"), "", 0, 0);
+  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === notes.id), "The text catalog did not return.");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.endsWith("!"), "The source draft was discarded with the other forms.");
+  click(desktop.root.querySelector("[data-action='save-range']"));
+  await waitFor(() => !(desktop.app.editors.current?.textDrafts?.size), "The source draft was not saved.");
+  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
+  typeInput(desktop.root.querySelector("[data-draft]"), "", 0, 0);
+  await waitFor(() => dirtyPatches().some((item) => item.body.dirty === false) && dirtyMessages().some((item) => item.value === false), "Saving the last draft did not clear the dirty flag.");
+  assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
+  assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "");
+  assert.equal(desktop.app.inputDrafts.notes.get("project:shop:030").value, "");
+  assert.equal(desktop.app.viewerDirty, false);
+
+  const phoneUrls = [];
+  const phone = await bootApp(fixture.phoneUrl, 390, phoneUrls);
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.app.chatList?.catalog?.length, "The phone chat list did not load.");
+  click(phone.root.querySelector("[data-phone-mode='chats']"));
+  const phoneChat = phone.app.chatList.catalog[0];
+  phone.app.activeHandlers.onActivate({ id: phoneChat.id, kind: "chat" }, "double");
+  await waitFor(() => phone.root.querySelector("[data-composer]"), "The phone composer did not open.");
+  typeInput(phone.root.querySelector("[data-composer]"), "Local only", 0, 10);
+  await delay(40);
+  assert.equal(phoneUrls.some((url) => url.includes("/viewer")), false);
+  assert.equal(phone.app.inputDrafts.chats.get(phoneChat.id).value, "Local only");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

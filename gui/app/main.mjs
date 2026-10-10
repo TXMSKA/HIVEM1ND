@@ -43,7 +43,6 @@ import {
   handleActivity,
   loadCatalog,
   loadComments,
-  markDirty,
   discardEditorDraft,
   noteComment,
   noteRemote,
@@ -243,8 +242,89 @@ export function renderShell(app) {
 }
 
 function inputDrafts(app) {
-  if (!app.inputDrafts) app.inputDrafts = { chats: new Map(), notes: new Map(), focus: null, cleared: new Set() };
+  if (!app.inputDrafts) {
+    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), focus: null, cleared: new Set() };
+  }
   return app.inputDrafts;
+}
+
+function draftMap(app, name) {
+  const drafts = inputDrafts(app);
+  if (!drafts[name]) drafts[name] = new Map();
+  return drafts[name];
+}
+
+function textDraftsDiffer(editor) {
+  if (!editor?.textDrafts?.size) return false;
+  const pages = editor.authoritative?.document?.pages ?? editor.document?.pages ?? [];
+  for (const [key, value] of editor.textDrafts) {
+    const parts = String(key).split("\0");
+    const page = pages.find((item) => item.k === parts[1]);
+    if (!page || page[parts[2]] !== value) return true;
+  }
+  return false;
+}
+
+function editorFormsDirty(editor) {
+  if (!editor) return false;
+  if (editor.commentText) return true;
+  if (editor.nodeDraft) return true;
+  if (textDraftsDiffer(editor)) return true;
+  const mirrored = editor.draftKey ? textDraft(editor, editor.resourceId, editor.draftKey.k, editor.draftKey.lang) : undefined;
+  return Boolean(editor.draftText) && editor.draftText !== mirrored;
+}
+
+function aggregateDirty(app) {
+  const drafts = inputDrafts(app);
+  for (const name of ["chats", "notes", "nodes", "resources", "mail", "auxiliary"]) {
+    for (const value of drafts[name]?.values() ?? []) {
+      const text = typeof value === "string" ? value : value?.value;
+      if (text) return true;
+    }
+  }
+  const seen = new Set();
+  const editors = [];
+  if (app.editors?.current) editors.push(app.editors.current);
+  for (const editor of app.editors?.drafts?.values() ?? []) editors.push(editor);
+  for (const editor of editors) {
+    if (!editor || seen.has(editor)) continue;
+    seen.add(editor);
+    if (editorFormsDirty(editor)) return true;
+  }
+  return false;
+}
+
+function syncViewerDirty(app) {
+  const editor = app.editors?.current;
+  if (editor) editor.dirty = editorFormsDirty(editor);
+  if (!(app.store.capabilities ?? []).includes("viewer.write")) return null;
+  const dirty = aggregateDirty(app);
+  if (app.embed && app.embedDirty !== dirty) {
+    app.embedDirty = dirty;
+    publishDirty(app.embed, dirty);
+  }
+  if (app.viewerDirty === dirty) return app.viewerPatch ?? null;
+  app.viewerDirty = dirty;
+  if (app.editors) app.editors.viewerDirty = dirty;
+  const operation = createOperation({ method: "PATCH", path: "/viewer", body: { dirty } });
+  app.viewerPatch = request(app.api, "PATCH", "/viewer", { operation }).catch((error) => {
+    if (!app.disposed) noteAction(app, error);
+  });
+  if (app.editors) app.editors.viewerPatch = app.viewerPatch;
+  return app.viewerPatch;
+}
+
+function rememberFormDraft(app, name, id, value) {
+  const map = draftMap(app, name);
+  if (value) map.set(id, value);
+  else map.delete(id);
+  syncViewerDirty(app);
+}
+
+function releaseFormDraft(app, name, id, saved) {
+  const map = draftMap(app, name);
+  if (saved === undefined || map.get(id) === saved || map.get(id)?.value === saved) map.delete(id);
+  syncViewerDirty(app);
 }
 
 function fieldDraft(node) {
@@ -278,10 +358,11 @@ function captureInputs(app) {
 
 function clearInputDraft(app, kind, id) {
   const drafts = inputDrafts(app);
-  const bucket = kind === "chat" ? drafts.chats : drafts.notes;
+  const bucket = kind === "chat" ? drafts.chats : kind === "note" ? drafts.notes : draftMap(app, kind);
   bucket.delete(id);
   drafts.cleared.add(`${kind}:${id}`);
   if (drafts.focus?.kind === kind && drafts.focus.id === id) drafts.focus = null;
+  syncViewerDirty(app);
 }
 
 function restoreInputFocus(app) {
@@ -656,6 +737,7 @@ function renderWaitingRecord(app, t) {
     const noteDraft = inputDrafts(app).notes.get(record.task.id);
     block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
+      syncViewerDirty(app);
     }, phone ? canAccept(record.task) : canSendBack(record.task)));
     return block;
   }
@@ -804,10 +886,22 @@ function boardSurface(app, document, editor, t) {
   const nodes = editor.authoritative.document.screens?.[0];
   const tools = element(document, "div", { class: "editor-actions" });
   const name = element(document, "input", { "data-node-name": "true", "aria-label": t("nodeName") });
+  name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
+  name.addEventListener("input", () => {
+    editor.nodeDraft = name.value;
+    rememberFormDraft(app, "nodes", editor.resourceId, name.value);
+  });
   tools.append(name);
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "patch-node",
-    onclick: () => patchNode(app.api, editor, app.editors.selectedNodeId, { name: name.value, value: name.value }).then(() => renderShell(app)).catch((error) => noteEditor(app, error)),
+    onclick: () => {
+      const saved = name.value;
+      patchNode(app.api, editor, app.editors.selectedNodeId, { name: saved, value: saved }).then(() => {
+        if (draftMap(app, "nodes").get(editor.resourceId) === saved) editor.nodeDraft = "";
+        releaseFormDraft(app, "nodes", editor.resourceId, saved);
+        if (!app.disposed) renderShell(app);
+      }).catch((error) => noteEditor(app, error));
+    },
   }, t("nodeName")));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "add-node",
@@ -875,7 +969,10 @@ function commentOnNode(app, editor) {
     label: node.name ?? node.id,
     path: [node.name ?? node.id],
     point: { x: Math.round(node.place?.x ?? 0), y: Math.round(node.place?.y ?? 0) },
-  }, text).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  }, text).then(() => {
+    syncViewerDirty(app);
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
 }
 
 function findBoardNode(node, id) {
@@ -925,6 +1022,7 @@ function voidSurface(app, document, editor, t) {
   source.value = stored === undefined ? (page?.[lang] ?? "") : stored;
   source.addEventListener("input", () => {
     rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
+    syncViewerDirty(app);
   });
   tools.append(source);
   tools.append(element(document, "button", {
@@ -973,8 +1071,8 @@ function saveVoid(app, editor, value) {
   const bounds = sourceReplacement(current, value);
   saveRange(app.api, editor, page.k, lang, bounds.start, bounds.end, bounds.replacement).then(() => {
     editor.textDrafts?.delete(textDraftKey(editor.resourceId, page.k, lang));
-    editor.dirty = (editor.textDrafts?.size ?? 0) > 0;
-    if (!editor.dirty) editor.draftText = "";
+    if (editor.draftKey?.k === page.k && editor.draftKey?.lang === lang) editor.draftText = "";
+    syncViewerDirty(app);
     if (!app.disposed) renderShell(app);
   }).catch((error) => {
     editor.conflict = { ...(editor.conflict ?? {}), code: error.code, draftKey: { k: page.k, lang } };
@@ -992,7 +1090,10 @@ function commentOnQuote(app, editor) {
   const range = selectedPlainRange(selection);
   if (!page || !range) return;
   const anchor = textAnchor(editor, page.k, lang, range.start, range.end);
-  createComment(app.api, app.editors, anchor, editor.commentText || anchor.quote).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  createComment(app.api, app.editors, anchor, editor.commentText || anchor.quote).then(() => {
+    syncViewerDirty(app);
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
 }
 
 function answerVoid(app, editor, proposal, decision) {
@@ -1039,7 +1140,13 @@ function renderEditor(app, t) {
       "data-action": "discard-draft",
       text: t("discardDraft"),
       onclick: () => {
+        const resourceId = editors.current?.resourceId;
         discardEditorDraft(editors);
+        if (resourceId) {
+          draftMap(app, "nodes").delete(resourceId);
+          if (editors.current) editors.current.nodeDraft = "";
+        }
+        syncViewerDirty(app);
         renderShell(app);
       },
     }));
@@ -1095,13 +1202,11 @@ function renderEditor(app, t) {
   const draft = element(document, "textarea", {
     class: "editor-compose",
     "data-draft": current.resourceId,
-    oninput: (event) => {
-      current.draftText = event.target.value;
-      markDirty(app.api, editors, app.store.capabilities, true);
-      if (app.embed) publishDirty(app.embed, true);
+    oninput: () => {
+      rememberFormDraft(app, "auxiliary", current.resourceId, draft.value);
     },
   });
-  draft.value = current.draftText ?? "";
+  draft.value = draftMap(app, "auxiliary").get(current.resourceId) ?? "";
   panel.append(draft);
   if (current.attachmentResource !== current.resourceId) {
     current.attachmentChoice = new Set(current.attached ?? []);
@@ -1166,6 +1271,7 @@ function renderEditor(app, t) {
   compose.addEventListener("input", () => {
     current.commentText = compose.value;
     setCommentEnabled(commentButton, commentCanSubmit(app, compose.value));
+    syncViewerDirty(app);
   });
   const owner = document;
   if (app.onCommentSelection) owner.removeEventListener?.("selectionchange", app.onCommentSelection);
@@ -1247,7 +1353,10 @@ function addEditorComment(app, compose) {
   current.commentText = value;
   const anchor = currentCommentAnchor(app);
   if (!anchor || !value.trim()) return;
-  createComment(app.api, editors, anchor, value).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  createComment(app.api, editors, anchor, value).then(() => {
+    syncViewerDirty(app);
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
 }
 
 function replyToThread(app, threadId) {
@@ -1277,7 +1386,10 @@ function editorDraft(app) {
 function editorField(document, app, t, key, labelKey, field) {
   const input = element(document, "input", { "data-field": field, "aria-label": t(labelKey) });
   input.value = editorDraft(app)[key] ?? "";
-  input.addEventListener("input", () => { editorDraft(app)[key] = input.value; });
+  input.addEventListener("input", () => {
+    editorDraft(app)[key] = input.value;
+    rememberFormDraft(app, "resources", key, input.value);
+  });
   return input;
 }
 
@@ -1315,8 +1427,12 @@ function resourceForms(app, document, t) {
 
 function submitRegister(app, kind) {
   const draft = editorDraft(app);
+  const savedPath = draft.path;
   registerResource(app.api, { kind, project: draft.project.trim(), path: draft.path.trim() })
-    .then((result) => openCreated(app, result.data, kind))
+    .then((result) => {
+      releaseFormDraft(app, "resources", "path", savedPath);
+      return openCreated(app, result.data, kind);
+    })
     .catch((error) => noteEditor(app, error));
 }
 
@@ -1330,8 +1446,16 @@ function submitCreate(app, kind) {
   const title = draft.title.trim() || id;
   const path = draft.createPath.trim() || (kind === "blueprint" ? `docs/flows/boards/${id}.json` : `docs/${id}.json`);
   const document = kind === "blueprint" ? starterBoard(id, title) : starterText(id, title);
+  const savedId = draft.id;
+  const savedTitle = draft.title;
+  const savedCreatePath = draft.createPath;
   createResource(app.api, kind, { project: draft.project.trim(), path, document })
-    .then((result) => openCreated(app, result.data, kind))
+    .then((result) => {
+      releaseFormDraft(app, "resources", "id", savedId);
+      releaseFormDraft(app, "resources", "title", savedTitle);
+      releaseFormDraft(app, "resources", "createPath", savedCreatePath);
+      return openCreated(app, result.data, kind);
+    })
     .catch((error) => noteEditor(app, error));
 }
 
@@ -1427,6 +1551,8 @@ function resizeBoard(app, editor) {
   const height = Number(draft.height);
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 16000 || height > 16000) return;
   const selected = app.editors?.focus?.screenId;
+  const savedWidth = draft.width;
+  const savedHeight = draft.height;
   saveBoardStructure(app, editor, (document) => {
     const screen = document.screens?.find((item) => item.id === selected) ?? document.screens?.[0];
     if (!screen) return;
@@ -1436,6 +1562,9 @@ function resizeBoard(app, editor) {
       screen.root.w = width;
       screen.root.h = height;
     }
+  }, () => {
+    releaseFormDraft(app, "resources", "width", savedWidth);
+    releaseFormDraft(app, "resources", "height", savedHeight);
   });
 }
 
@@ -1468,10 +1597,11 @@ function addBoardLink(app, editor) {
   });
 }
 
-function saveBoardStructure(app, editor, edit) {
+function saveBoardStructure(app, editor, edit, onSaved) {
   if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
   const next = editedBoard(editor.authoritative, edit);
   replaceBoard(app.api, editor, next.document).then(() => {
+    onSaved?.();
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteEditor(app, error));
 }
@@ -1480,9 +1610,11 @@ function replaceVoidDocument(app, editor) {
   if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
   const title = editorDraft(app).documentTitle.trim();
   if (!title) return;
+  const savedTitle = editorDraft(app).documentTitle;
   const next = structuredClone(editor.authoritative.document);
   next.title = title;
   replaceDocument(app.api, editor, next).then(() => {
+    releaseFormDraft(app, "resources", "documentTitle", savedTitle);
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteEditor(app, error));
 }
@@ -2164,6 +2296,7 @@ function chatPanel(app, t) {
       const draft = fieldDraft(composer);
       inputDrafts(app).chats.set(thread.chat.id, draft);
       thread.composer = draft.value;
+      syncViewerDirty(app);
     });
     const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
     panel.append(composer, send);
@@ -2254,7 +2387,10 @@ function renderMailbox(app, t) {
   if (box.unitId && (app.store.capabilities ?? []).includes("chat.post")) {
     const compose = element(document, "input", { class: "composer", "data-mailbox-compose": "true", "aria-label": t("mailboxCompose") });
     compose.value = box.composer ?? "";
-    compose.addEventListener("input", () => { box.composer = compose.value; });
+    compose.addEventListener("input", () => {
+      box.composer = compose.value;
+      rememberFormDraft(app, "mail", box.unitId, compose.value);
+    });
     section.append(compose, element(document, "button", {
       type: "button",
       class: "btn primary",
@@ -2386,8 +2522,10 @@ function sendMailbox(app, compose) {
   const box = app.mailbox;
   if (!box?.unitId) return;
   box.composer = compose.value;
-  postMailbox(app.api, box.unitId, { body: compose.value }).then((result) => {
-    box.composer = "";
+  const saved = compose.value;
+  postMailbox(app.api, box.unitId, { body: saved }).then((result) => {
+    box.composer = box.composer === saved ? "" : box.composer;
+    releaseFormDraft(app, "mail", box.unitId, saved);
     box.items = [result.data, ...(box.items ?? [])];
     box.detail = result.data;
     if (!app.disposed) renderShell(app);
@@ -2445,6 +2583,7 @@ function renderInspector(app, t, selected) {
     const phone = app.layout === "phone" || app.store.audience === "phone";
     panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
+      syncViewerDirty(app);
     }, phone ? canAccept(task) : canSendBack(task)));
     panel.append(openTaskDetail(document, task, t));
   }
