@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { CoreError } from './identity.mjs';
 import { checkLimits } from './security.mjs';
@@ -64,8 +64,10 @@ export async function closeHome(context, options = {}) {
   grant.tokens.clear();
   await closeAll(grant.listeners ?? []);
   grant.listeners = [];
-  if (grant.expiry) grant.expiry.cleared = true;
-  if (grant.poll) grant.poll.cleared = true;
+  if (grant.expiry) clearTimeout(grant.expiry);
+  if (grant.poll) clearTimeout(grant.poll);
+  grant.expiry = null;
+  grant.poll = null;
   context.grant = null;
   if (options.quiet !== true) emit(context, options.reason ?? 'closed');
   return status(context);
@@ -79,6 +81,11 @@ export async function exchange(context, input, peer) {
     if (grant?.enabled) await closeHome(context, { reason: 'expired' });
     throw new CoreError(410, 'home_expired', 'Home access is not active.');
   }
+  if (!interfacesMatch(context, grant)) {
+    await closeHome(context, { reason: 'closed' });
+    throw new CoreError(410, 'home_expired', 'Home access is not active.');
+  }
+  assertHomeWindow(bucket, peer ?? 'unknown', context.now());
   const presented = presentedSecret(input);
   const expected = input && Object.hasOwn(input, 'code') ? grant.code : grant.key;
   if (!safeEqual(expected, presented)) {
@@ -95,6 +102,11 @@ export async function exchange(context, input, peer) {
 
 export function status(context) {
   const grant = context.grant;
+  if (grant?.enabled && (context.now() >= Date.parse(grant.expiresAt) || !interfacesMatch(context, grant))) {
+    const reason = context.now() >= Date.parse(grant.expiresAt) ? 'expired' : 'closed';
+    void closeHome(context, { reason });
+    return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
+  }
   if (!grant?.enabled) return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
   const remaining = Math.max(0, Math.ceil((Date.parse(grant.expiresAt) - context.now()) / 1000));
   return {
@@ -109,19 +121,13 @@ export function status(context) {
 export async function pollHome(context) {
   const grant = context.grant;
   if (!grant?.enabled) return status(context);
-  const current = new Map(eligibleAddresses(context.interfaces?.() ?? networkInterfaces()).map((item) => [item.address, item.netmask]));
-  const survivors = [];
-  for (const listener of grant.listeners) {
-    if (current.get(listener.address) !== listener.netmask) {
-      await listener.close();
-      continue;
-    }
-    survivors.push(listener);
-  }
-  grant.listeners = survivors;
-  if (survivors.length === 0) return closeHome(context, { reason: 'closed' });
-  grant.addresses = survivors.map((listener) => ({ origin: `http://${listener.address}:${listener.port}` }));
+  if (!interfacesMatch(context, grant)) return closeHome(context, { reason: 'closed' });
   return status(context);
+}
+
+function interfacesMatch(context, grant) {
+  const current = new Map(eligibleAddresses(context.interfaces?.() ?? networkInterfaces()).map((item) => [item.address, item.netmask]));
+  return (grant.listeners ?? []).every((listener) => current.get(listener.address) === listener.netmask);
 }
 
 function selectAddresses(available, requested) {
@@ -140,11 +146,19 @@ function selectAddresses(available, requested) {
 
 async function bindAddress(context, address) {
   if (context.listen) return context.listen(address);
-  const server = createServer((socket) => socket.destroy());
+  const server = createHttpServer((req, res) => {
+    if (context.serve) {
+      context.serve(req, res);
+      return;
+    }
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('The home listener is not attached.');
+  });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, address.address, () => resolve());
   });
+  server.unref();
   const bound = server.address();
   return {
     address: address.address,
@@ -155,22 +169,31 @@ async function bindAddress(context, address) {
 }
 
 function arm(context, grant) {
-  const schedule = context.schedule ?? ((fn) => ({ fn, cleared: false }));
-  const expiry = schedule(() => {
-    if (!expiry.cleared && context.grant === grant) return closeHome(context, { reason: 'expired' });
-    return null;
-  }, LIFETIME_MS);
+  const expiry = setTimeout(() => {
+    if (context.grant === grant) void closeHome(context, { reason: 'expired' });
+  }, Math.max(0, Date.parse(grant.expiresAt) - context.now()));
+  expiry.unref?.();
   grant.expiry = expiry;
-  schedulePoll(context, grant, schedule);
+  schedulePoll(context, grant);
 }
 
-function schedulePoll(context, grant, schedule) {
-  const poll = schedule(() => {
-    if (poll.cleared || context.grant !== grant) return;
+function schedulePoll(context, grant) {
+  const poll = setTimeout(() => {
+    if (context.grant !== grant) return;
     pollHome(context).catch(() => {});
-    schedulePoll(context, grant, schedule);
+    schedulePoll(context, grant);
   }, POLL_MS);
+  poll.unref?.();
   grant.poll = poll;
+}
+
+function assertHomeWindow(bucket, peer, now) {
+  const windowMs = 60000;
+  const recentPeer = (bucket.peers?.get(peer) ?? []).filter((at) => now - at < windowMs);
+  const recentGrant = (bucket.grantFailures ?? []).filter((at) => now - at < windowMs);
+  if (recentPeer.length < 5 && recentGrant.length < 30) return;
+  const earliest = Math.min(...(recentPeer.length >= 5 ? recentPeer : recentGrant));
+  throw new CoreError(429, 'auth_rate_limited', 'Too many home attempts.', {}, new Date(earliest + windowMs).toISOString());
 }
 
 function grantView(context, includeSecret) {

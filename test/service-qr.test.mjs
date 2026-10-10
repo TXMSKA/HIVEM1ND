@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { get as httpGet } from 'node:http';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,8 +67,10 @@ test('home grants expire exactly, revoke tokens and hide secrets', async (t) => 
   await openHome(context, {});
   await assert.rejects(async () => credentials.verify(phone.token), (error) => error.status === 401);
   const second = await exchange(context, { key: context.grant.key }, '192.168.1.23');
+  await assert.rejects(() => exchange(context, { code: context.grant.shortCode }, '192.168.1.40'), { code: 'auth_rate_limited' });
+  const liveKey = context.grant.key;
   advanceClock(fixture, 43200000);
-  await context.grant.expiry.fn();
+  await assert.rejects(() => exchange(context, { key: liveKey }, '192.168.1.23'), { code: 'home_expired' });
   await assert.rejects(async () => credentials.verify(second.token), { status: 401, code: 'unauthorized' });
   assert.equal(events.at(-1).data.reason, 'expired');
   assert.equal(events.at(-1).data.home.enabled, false);
@@ -107,6 +110,50 @@ test('a failed second bind leaves no listener and a lost interface closes the gr
   await pollHome(context);
   assert.equal(context.grant, null);
   await assert.rejects(async () => context.credentials.verify(token), (error) => error.status === 401);
+  context.interfaces = () => [
+    { name: 'a', address: '192.168.1.10', netmask: '255.255.255.0', internal: false },
+    { name: 'b', address: '192.168.1.11', netmask: '255.255.255.0', internal: false },
+  ];
+  await openHome(context, { addresses: ['192.168.1.10', '192.168.1.11'] });
+  context.interfaces = () => [{ name: 'a', address: '192.168.1.10', netmask: '255.255.255.0', internal: false }];
+  await pollHome(context);
+  assert.equal(context.grant, null);
+  await closeHome(context);
+});
+
+test('the home listener is the shared dispatcher and a correct key stays blocked', async (t) => {
+  const addresses = eligibleAddresses();
+  assert.ok(addresses.length > 0);
+  let hits = 0;
+  const now = Date.parse('2026-10-10T12:00:00.000Z');
+  const context = {
+    now: () => now,
+    credentials: createCredentialStore({ now: () => now }),
+    bus: { emit() {} },
+    bucket: { peers: new Map(), grantFailures: [] },
+    interfaces: () => addresses.map((item) => ({ ...item, internal: false })),
+    serve(req, res) {
+      hits += 1;
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('dispatcher');
+    },
+  };
+  t.after(() => closeHome(context));
+  const grant = await openHome(context, { addresses: [addresses[0].address] });
+  const body = await new Promise((resolve, reject) => {
+    const request = httpGet(`${grant.addresses[0].origin}/`, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    });
+    request.on('error', reject);
+  });
+  assert.equal(body, 'dispatcher');
+  assert.equal(hits, 1);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await assert.rejects(() => exchange(context, { key: 'wrong-key' }, '192.168.1.40'), { code: 'invalid_home_key' });
+  }
+  await assert.rejects(() => exchange(context, { key: grant.key }, '192.168.1.40'), { code: 'auth_rate_limited' });
   await closeHome(context);
 });
 
