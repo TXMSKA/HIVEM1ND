@@ -1,3 +1,4 @@
+import { createOperation, request as apiRequest, retryOperation } from "./api.mjs";
 import {
   edgeEndpoints,
   groupKeyForUnit,
@@ -9,11 +10,13 @@ import {
   toScreen,
   toWorld,
 } from "./map-geometry.mjs";
+import { isAfterCursor } from "./state.mjs";
 
 export const NODE_RADIUS = 28;
 
 export function createMap({ units = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
-  const layout = saved.layout ?? saved;
+  const wrapped = saved.layout ? saved : { layout: saved, revision: null };
+  const layout = wrapped.layout ?? { nodes: {}, groups: {} };
   const placed = placeUnits(units, layout);
   return {
     api,
@@ -33,6 +36,21 @@ export function createMap({ units = [], saved = { nodes: {}, groups: {} }, api =
     host: null,
     document: null,
     calls: [],
+    revision: wrapped.revision ?? null,
+    authoritative: { layout: structuredClone(layout), revision: wrapped.revision ?? null },
+    pending: new Map(),
+    pendingGroups: new Map(),
+    editGeneration: 0,
+    inFlight: null,
+    layoutObservationGeneration: 0,
+    layoutConflict: null,
+    retryOperation: null,
+    layoutCursor: null,
+    serviceId: null,
+    refreshTicket: 0,
+    refreshing: false,
+    layoutBuffer: [],
+    persist: false,
   };
 }
 
@@ -194,11 +212,15 @@ export function pointerUp(map, event) {
     const target = hitNode(world, paintNodes(map), map.view.zoom)?.id ?? null;
     map.pendingConnect = { source: gesture.source, target: target === gesture.source ? null : target };
     map.gesture = null;
+    if (map.pendingConnect.target) map.onConnect?.(map.pendingConnect);
     refresh(map);
     return;
   }
   if (!gesture.dragging) {
-    if (gesture.kind === "move") selectOne(map, gesture.id, gesture.shift);
+    if (gesture.kind === "move") {
+      selectOne(map, gesture.id, gesture.shift);
+      map.onSelect?.(gesture.id);
+    }
     map.gesture = null;
     refresh(map);
     return;
@@ -208,6 +230,11 @@ export function pointerUp(map, event) {
     const ids = marqueeIds(gesture.start, gesture.current, paintNodes(map));
     map.selection = gesture.shift ? new Set([...gesture.previous, ...ids]) : new Set(ids);
   }
+  if (gesture.kind === "move" && gesture.dragging && map.persist) {
+    for (const id of gesture.ids) queueLayoutPatch(map, id, map.positions[id]);
+    flushLayout(map);
+  }
+  if (gesture.kind === "connect" && map.pendingConnect?.target) map.onConnect?.(map.pendingConnect);
   map.gesture = null;
   refresh(map);
 }
@@ -283,6 +310,7 @@ export function wheelZoom(map, event, rect) {
 export function requestConnect(map) {
   const ids = [...map.selection];
   map.pendingConnect = { source: ids[0] ?? null, targets: ids.slice(1) };
+  map.onGroupConnect?.(map.pendingConnect);
 }
 
 export function requestGroupMessage(map) {
@@ -386,4 +414,173 @@ function hostRect(host) {
 
 function byId(a, b) {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+export function queueLayoutPatch(map, id, position) {
+  const previous = map.pending.get(id);
+  map.editGeneration += 1;
+  const saved = map.authoritative?.layout?.nodes?.[id] ?? map.positions[id] ?? position;
+  map.pending.set(id, {
+    position: { x: position.x, y: position.y },
+    generation: map.editGeneration,
+    base: previous?.base ?? { x: saved.x, y: saved.y },
+  });
+}
+
+export function queueGroupPatch(map, id, group) {
+  const previous = map.pendingGroups.get(id);
+  map.editGeneration += 1;
+  map.pendingGroups.set(id, { group: { ...group }, generation: map.editGeneration, base: previous?.base ?? null });
+}
+
+export async function flushLayout(map) {
+  if (map.inFlight || map.refreshing || map.pending.size + map.pendingGroups.size === 0) return;
+  const batch = new Map(map.pending);
+  const groups = new Map(map.pendingGroups);
+  const body = { expectedRevision: map.authoritative.revision };
+  if (batch.size) body.nodes = Object.fromEntries([...batch].map(([id, edit]) => [id, edit.position]));
+  if (groups.size) body.groups = Object.fromEntries([...groups].map(([id, edit]) => [id, edit.group]));
+  const operation = makeOperation(map, "PATCH", "/layout", body);
+  const observedAtDispatch = map.layoutObservationGeneration;
+  map.inFlight = operation;
+  try {
+    const result = await callApi(map, operation);
+    if (map.layoutObservationGeneration === observedAtDispatch) {
+      map.authoritative = result.data;
+      map.layoutObservationGeneration += 1;
+    } else {
+      const refreshed = await refreshCurrentLayout(map);
+      if (!refreshed) return;
+    }
+    for (const [id, edit] of batch) {
+      if (map.pending.get(id)?.generation === edit.generation) map.pending.delete(id);
+    }
+    for (const [id, edit] of groups) {
+      if (map.pendingGroups.get(id)?.generation === edit.generation) map.pendingGroups.delete(id);
+    }
+    renderPositions(map, overlay(map.authoritative.layout.nodes, map.pending));
+  } catch (error) {
+    if (error?.code === "revision_conflict") await reconcileLayoutConflict(map, batch);
+    else map.retryOperation = operation;
+  } finally {
+    map.inFlight = null;
+  }
+  const dirty = [...map.pending.values()].some((edit) => !edit.retried) || [...map.pendingGroups.values()].some((edit) => !edit.retried);
+  if (!map.layoutConflict && !map.retryOperation && dirty) queueMicrotask(() => flushLayout(map));
+}
+
+export function applyRemoteLayout(map, event) {
+  const cursor = String(event?.id ?? "");
+  const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]+)$/.exec(cursor);
+  if (!match || !event?.envelope?.data?.layout) return false;
+  if (map.serviceId && map.serviceId !== match[1]) return false;
+  if (map.layoutCursor && !isAfterCursor(cursor, map.layoutCursor)) return false;
+  map.serviceId = match[1];
+  map.layoutCursor = cursor;
+  map.layoutObservationGeneration += 1;
+  if (map.refreshing || map.inFlight) {
+    map.layoutBuffer.push(event);
+    return true;
+  }
+  map.authoritative = event.envelope.data;
+  renderPositions(map, overlay(map.authoritative.layout.nodes, map.pending));
+  return true;
+}
+
+export async function refreshCurrentLayout(map) {
+  const ticket = ++map.refreshTicket;
+  const observed = map.layoutObservationGeneration;
+  map.refreshing = true;
+  try {
+    const result = await callApi(map, makeOperation(map, "GET", "/layout"));
+    if (map.refreshTicket !== ticket || map.layoutObservationGeneration !== observed) {
+      const newer = map.layoutBuffer.shift();
+      if (newer) map.authoritative = newer.envelope.data;
+      if (map.layoutBuffer.length && map.refreshTicket === ticket) queueMicrotask(() => refreshCurrentLayout(map));
+      return false;
+    }
+    map.authoritative = result.data;
+    return true;
+  } finally {
+    if (map.refreshTicket === ticket) map.refreshing = false;
+  }
+}
+
+export async function retrySavedLayout(map) {
+  const operation = map.retryOperation;
+  if (!operation) return null;
+  map.retryOperation = null;
+  map.inFlight = operation;
+  try {
+    const result = map.transport ? await map.transport(operation) : await retryOperation(map.api, operation);
+    map.authoritative = result.data;
+    return result;
+  } finally {
+    map.inFlight = null;
+  }
+}
+
+export function keepLocalPosition(map, id) {
+  const edit = map.pending.get(id);
+  if (!edit) return;
+  map.editGeneration += 1;
+  map.pending.set(id, { ...edit, generation: map.editGeneration });
+  if (map.layoutConflict?.ids) map.layoutConflict.ids = map.layoutConflict.ids.filter((item) => item !== id);
+  if (!map.layoutConflict?.ids?.length) map.layoutConflict = null;
+  return flushLayout(map);
+}
+
+export function useIncomingPosition(map, id) {
+  const incoming = map.authoritative?.layout?.nodes?.[id];
+  if (incoming) map.positions[id] = { x: incoming.x, y: incoming.y };
+  map.pending.delete(id);
+  if (map.layoutConflict?.ids) map.layoutConflict.ids = map.layoutConflict.ids.filter((item) => item !== id);
+  if (!map.layoutConflict?.ids?.length) map.layoutConflict = null;
+  refresh(map);
+}
+
+async function reconcileLayoutConflict(map, batch) {
+  const observed = map.layoutObservationGeneration;
+  const result = await callApi(map, makeOperation(map, "GET", "/layout"));
+  if (map.layoutObservationGeneration !== observed) {
+    await refreshCurrentLayout(map);
+    return;
+  }
+  const remote = result.data;
+  map.authoritative = remote;
+  const conflicts = [];
+  for (const [id, edit] of batch) {
+    const incoming = remote.layout?.nodes?.[id];
+    const same = incoming && incoming.x === edit.base.x && incoming.y === edit.base.y;
+    if ((!incoming || same) && !edit.retried) {
+      map.editGeneration += 1;
+      map.pending.set(id, { ...edit, generation: map.editGeneration, retried: true });
+    } else if (!same) conflicts.push(id);
+  }
+  renderPositions(map, overlay(remote.layout.nodes, map.pending));
+  map.layoutConflict = conflicts.length ? { ids: conflicts, remote } : null;
+}
+
+function overlay(nodes, pending) {
+  const next = { ...(nodes ?? {}) };
+  for (const [id, edit] of pending) next[id] = { ...edit.position };
+  return next;
+}
+
+function renderPositions(map, nodes) {
+  for (const [id, point] of Object.entries(nodes ?? {})) {
+    if (map.pending.has(id)) map.positions[id] = { ...map.pending.get(id).position };
+    else map.positions[id] = { x: point.x, y: point.y };
+  }
+  refresh(map);
+}
+
+function makeOperation(map, method, path, body) {
+  if (map.api?.createOperation) return map.api.createOperation(method, path, body);
+  return createOperation({ method, path, body });
+}
+
+function callApi(map, operation) {
+  if (map.transport) return map.transport(operation);
+  return apiRequest(map.api, operation.method, operation.path, { operation });
 }

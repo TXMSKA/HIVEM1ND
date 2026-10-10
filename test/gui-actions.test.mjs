@@ -1,0 +1,267 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import { createGuiFixture } from "./gui-fixture.mjs";
+import { createApi } from "../gui/app/api.mjs";
+import { connectUnits, createUnit, startSession, stopSession, trackSessionRequest } from "../gui/app/actions.mjs";
+import {
+  applyRemoteLayout,
+  createMap,
+  flushLayout,
+  keepLocalPosition,
+  queueLayoutPatch,
+  refreshCurrentLayout,
+  retrySavedLayout,
+  useIncomingPosition,
+} from "../gui/app/map.mjs";
+
+const SERVICE = "11111111-1111-4111-8111-111111111111";
+
+function layout(nodes, revision = "a".repeat(64)) {
+  return { layout: { nodes, groups: {} }, revision };
+}
+
+function envelope(nodes, revision, id) {
+  return { id, envelope: { data: layout(nodes, revision) } };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("two rapid drags persist the latest coordinate and a remote move survives", async () => {
+  const calls = [];
+  const map = createMap({
+    units: [{ id: "a" }, { id: "b" }],
+    saved: layout({ a: { x: 1, y: 1 }, b: { x: 2, y: 2 } }),
+  });
+  map.persist = true;
+  const gate = deferred();
+  map.transport = async (operation) => {
+    calls.push(operation);
+    await gate.promise;
+    return { data: layout({ a: operation.body.nodes.a, b: { x: 9, y: 9 } }, "b".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 5, y: 5 });
+  queueLayoutPatch(map, "a", { x: 8, y: 8 });
+  const saving = flushLayout(map);
+  gate.resolve();
+  await saving;
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].body.nodes.a, { x: 8, y: 8 });
+  assert.equal(calls[0].body.nodes.b, undefined);
+  assert.deepEqual(map.positions.b, { x: 9, y: 9 });
+  assert.deepEqual(map.positions.a, { x: 8, y: 8 });
+});
+
+test("a remote layout event after commit does not restore the older response", async () => {
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const gate = deferred();
+  map.transport = () => gate.promise.then(() => ({ data: layout({ a: { x: 4, y: 4 } }, "b".repeat(64)) }));
+  queueLayoutPatch(map, "a", { x: 4, y: 4 });
+  const saving = flushLayout(map);
+  applyRemoteLayout(map, envelope({ a: { x: 7, y: 7 } }, "d".repeat(64), `${SERVICE}:3`));
+  map.transport = async () => ({ data: layout({ a: { x: 7, y: 7 } }, "d".repeat(64)) });
+  gate.resolve();
+  await saving;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(map.authoritative.layout.nodes.a, { x: 7, y: 7 });
+});
+
+test("an event during the reconciliation GET invalidates that response", async () => {
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const gate = deferred();
+  let reads = 0;
+  map.transport = (operation) => {
+    if (operation.method === "GET") {
+      reads += 1;
+      return gate.promise.then(() => ({ data: layout({ a: { x: 1, y: 1 } }, "e".repeat(64)) }));
+    }
+    const error = new Error("conflict");
+    error.code = "revision_conflict";
+    throw error;
+  };
+  map.positions.a = { x: 3, y: 3 };
+  queueLayoutPatch(map, "a", map.positions.a);
+  const saving = flushLayout(map);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  applyRemoteLayout(map, envelope({ a: { x: 6, y: 6 } }, "f".repeat(64), `${SERVICE}:4`));
+  gate.resolve();
+  await saving;
+  await refreshCurrentLayout(map);
+  assert.equal(reads >= 1, true);
+  assert.equal(map.positions.a.x, 3);
+});
+
+test("a same-id conflict keeps the local draft or takes the incoming point", async () => {
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  map.transport = (operation) => {
+    if (operation.method === "PATCH") {
+      const error = new Error("conflict");
+      error.code = "revision_conflict";
+      throw error;
+    }
+    return { data: layout({ a: { x: 5, y: 5 } }, "f".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 3, y: 3 });
+  await flushLayout(map);
+  assert.deepEqual(map.layoutConflict.ids, ["a"]);
+  map.transport = async (operation) => ({ data: layout({ a: operation.body.nodes.a }, "f".repeat(64)) });
+  await keepLocalPosition(map, "a");
+  assert.equal(map.layoutConflict, null);
+  assert.deepEqual(map.positions.a, { x: 3, y: 3 });
+  queueLayoutPatch(map, "a", { x: 4, y: 4 });
+  map.transport = (operation) => {
+    if (operation.method === "PATCH") {
+      const error = new Error("conflict");
+      error.code = "revision_conflict";
+      throw error;
+    }
+    return { data: layout({ a: { x: 9, y: 9 } }, "1".repeat(64)) };
+  };
+  await flushLayout(map);
+  useIncomingPosition(map, "a");
+  assert.deepEqual(map.positions.a, { x: 9, y: 9 });
+  assert.equal(map.pending.has("a"), false);
+});
+
+test("a lost layout response retries the same operation", async () => {
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const seen = [];
+  map.transport = async (operation) => {
+    seen.push(operation.id);
+    if (seen.length === 1) throw new Error("socket dropped");
+    return { data: layout({ a: operation.body.nodes.a }, "b".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 2, y: 2 });
+  await flushLayout(map);
+  assert.equal(map.retryOperation.method, "PATCH");
+  await retrySavedLayout(map);
+  assert.equal(seen[0], seen[1]);
+  assert.deepEqual(map.authoritative.layout.nodes.a, { x: 2, y: 2 });
+});
+
+function apiWith(handler) {
+  const location = { origin: "http://127.0.0.1:9", pathname: "/", search: "", hash: "#session=desktop-token" };
+  return createApi({
+    location,
+    history: { replaceState() {} },
+    fetch: async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      const outcome = await handler({ method: options.method, path: decodeURIComponent(new URL(url).pathname), body, headers: options.headers });
+      const status = outcome.status ?? 200;
+      const payload = status >= 400
+        ? { contract: "hivem1nd-gui-v3", error: outcome.error }
+        : {
+          contract: "hivem1nd-gui-v3",
+          data: outcome.data ?? null,
+          meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: { mode: "snapshot" } },
+        };
+      return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+    },
+  });
+}
+
+test("a connection makes the target report to the source and keeps each result", async () => {
+  const calls = [];
+  const api = apiWith(async (call) => {
+    calls.push(call);
+    if (call.path.endsWith("/root:master/lead")) return { status: 422, data: null };
+    if (call.path.endsWith("/project:shop:executor-shop/lead")) {
+      return { data: { id: "project:shop:executor-shop", leadId: "env:web:overlord-web" } };
+    }
+    return { data: { id: "root:adjutant", leadId: "root:overseer" } };
+  });
+  const source = { id: "root:overseer", unit: "overseer", revision: "a".repeat(64) };
+  const results = await connectUnits(api, source, [
+    { id: "root:adjutant", unit: "adjutant", revision: "b".repeat(64) },
+    { id: "root:master", unit: "master", role: "master", revision: "c".repeat(64) },
+  ]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.leadId, "root:overseer");
+  assert.equal(calls[0].body.confirmed, true);
+  assert.equal(results[0].data.leadId, "root:overseer");
+  assert.equal(results[1].error.code, "invalid_lead");
+});
+
+test("creating a unit names an unavailable machine before any success", async () => {
+  const api = apiWith(async () => ({
+    status: 409,
+    error: { code: "machine_unavailable", message: "The machine is unavailable.", details: { machine: "OFFLINE" } },
+  }));
+  await assert.rejects(createUnit(api, {
+    unit: "executor-shop", role: "executor", scope: { kind: "project", name: "shop" }, machine: "OFFLINE",
+  }), (error) => error.code === "machine_unavailable" && error.details.machine === "OFFLINE");
+});
+
+test("a session stays queued until the request says otherwise and stop stays stopping", async () => {
+  const api = apiWith(async (call) => {
+    if (call.path.endsWith("/session")) return { status: 202, data: { requestId: "req-1", state: "queued" } };
+    if (call.path.includes("/session-requests/")) return { data: { requestId: "req-1", state: "failed", error: { code: "launch_ambiguous" } } };
+    return { status: 202, data: { sessionId: "ses-1", state: "stopping" } };
+  });
+  const started = await startSession(api, { id: "root:overseer", revision: "a".repeat(64) }, "cursor", "Look at the map");
+  assert.equal(started.data.state, "queued");
+  const tracked = await trackSessionRequest(api, "req-1");
+  assert.equal(tracked.data.state, "failed");
+  const stopped = await stopSession(api, "ses-1");
+  assert.equal(stopped.data.state, "stopping");
+});
+
+test("the fixture keeps connection direction, refuses an unavailable machine, and queues a stop", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const before = await call(fixture, "GET", "/api/v1/units?limit=200");
+  const unavailable = await call(fixture, "POST", "/api/v1/units", {
+    unit: "executor-offline", role: "executor", scope: { kind: "project", name: "shop" }, machine: "OFFLINE", leadId: null, job: null, model: null,
+  });
+  assert.equal(unavailable.status, 409);
+  assert.equal(unavailable.body.error.code, "machine_unavailable");
+  assert.equal(unavailable.body.error.details.machine, "OFFLINE");
+  const after = await call(fixture, "GET", "/api/v1/units?limit=200");
+  assert.equal(after.body.data.items.length, before.body.data.items.length);
+  const created = await call(fixture, "POST", "/api/v1/units", {
+    unit: "executor-new", role: "executor", scope: { kind: "project", name: "shop" }, machine: "DESKTOP", leadId: null, job: null, model: null,
+  });
+  assert.equal(created.status, 201);
+  const overseer = before.body.data.items.find((unit) => unit.id === "root:overseer");
+  const adjutant = before.body.data.items.find((unit) => unit.id === "root:adjutant");
+  const connected = await call(fixture, "PUT", "/api/v1/units/root%3Aadjutant/lead", {
+    leadId: "root:overseer", confirmed: true, expectedRevision: adjutant.revision,
+  });
+  assert.equal(connected.status, 200);
+  assert.equal(connected.body.data.leadId, "root:overseer");
+  assert.notEqual(connected.body.data.id, overseer.id);
+  const started = await call(fixture, "POST", "/api/v1/units/root%3Aoverseer/session", {
+    client: "cursor", prompt: null, expectedRevision: overseer.revision,
+  });
+  assert.equal(started.status, 202);
+  assert.equal(started.body.data.state, "queued");
+  const tracked = await call(fixture, "GET", `/api/v1/session-requests/${started.body.data.requestId}`);
+  assert.equal(tracked.body.data.state, "queued");
+  await fixture.control.setSession(started.body.data.requestId, "failed", "launch_ambiguous");
+  const failed = await call(fixture, "GET", `/api/v1/session-requests/${started.body.data.requestId}`);
+  assert.equal(failed.body.data.state, "failed");
+  assert.equal(failed.body.data.error.code, "launch_ambiguous");
+  const stopping = await call(fixture, "POST", "/api/v1/sessions/20c58b80-4d93-88cd-83b3-39d78f1d9d5d/stop", { confirmed: true });
+  assert.equal(stopping.status, 202);
+  assert.equal(stopping.body.data.state, "stopping");
+  const remote = await call(fixture, "POST", "/api/v1/sessions/30c58b80-4d93-48cd-83b3-39d78f1d9d5d/stop", { confirmed: true });
+  assert.equal(remote.status, 409);
+  assert.equal(remote.body.error.code, "remote_session");
+});
+
+async function call(fixture, method, route, body) {
+  const response = await fetch(`${fixture.origin}${route}`, {
+    method,
+    headers: {
+      ...fixture.headers,
+      ...(body === undefined ? {} : { "Content-Type": "application/json", "Idempotency-Key": randomUUID() }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : null };
+}

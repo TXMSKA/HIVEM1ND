@@ -1,9 +1,10 @@
+import { connectUnits, createUnit, startSession, stopSession } from "./actions.mjs";
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
-import { announce, element, icon, showError } from "./components.mjs";
+import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
-import { centerUnit, createMap, renderMap } from "./map.mjs";
+import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { synchronize } from "./stream.mjs";
 
@@ -108,6 +109,8 @@ async function onStream(app, event) {
   if (event?.name === "chat.changed") {
     if (app.chatList) await reloadList(app.chatList);
   }
+  if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
+  if (event?.name === "session.changed") noteSession(app, event.envelope?.data ?? {});
   if (app.layout !== "unknown") renderShell(app);
 }
 
@@ -216,11 +219,21 @@ function renderWorkspace(app, t, view, counts) {
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
     ?? null;
+  const inspectorBody = element(document, "div", { class: "inspector-body" },
+    element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
+  );
+  if (app.actionNote) {
+    inspectorBody.append(element(document, "p", {
+      class: "action-note",
+      "data-action-note": "true",
+      "data-request": app.sessionRequestId ?? "",
+      text: app.actionNote,
+    }));
+  }
+  inspectorBody.append(actionControls(app, t, selected));
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
-  }, element(document, "div", { class: "inspector-body" },
-    element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
-  ));
+  }, inspectorBody);
   return element(document, "div", { class: "workspace" }, side, stage, inspector);
 }
 
@@ -295,6 +308,14 @@ function ensureMap(app) {
   const saved = app.store.layout?.layout ?? { nodes: {}, groups: {} };
   if (!app.mapState) app.mapState = createMap({ units, saved, api: app.api });
   else app.mapState.units = units;
+  app.mapState.api = app.api;
+  app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
+  app.mapState.onSelect = (id) => {
+    app.store.selected.unitId = id;
+    if (!app.disposed) renderShell(app);
+  };
+  app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
+  app.mapState.onGroupConnect = (pending) => confirmConnection(app, pending.source, pending.targets ?? []);
   return app.mapState;
 }
 
@@ -461,6 +482,158 @@ function syncCopy(sync) {
 function clockText(value) {
   const match = String(value ?? "").match(/T(\d{2}:\d{2})/);
   return match ? `${match[1]} UTC` : "";
+}
+
+const SESSION_COPY = {
+  queued: "sessionQueued",
+  starting: "sessionStarting",
+  started: "sessionStarted",
+  failed: "sessionFailed",
+  expired: "sessionExpired",
+  stopping: "sessionStopping",
+  stopped: "sessionStopped",
+};
+
+function actionControls(app, t, selected) {
+  const document = app.root.ownerDocument;
+  const row = element(document, "div", { class: "action-row" });
+  const caps = app.store.capabilities ?? [];
+  if (caps.includes("unit.create")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "new-unit", text: t("newUnit"), onclick: () => openUnitForm(app) }));
+  }
+  if (selected && caps.includes("session.start")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), onclick: () => openSessionForm(app, selected) }));
+  }
+  const sessionId = selected?.sessionIds?.[0];
+  if (sessionId && caps.includes("session.stop")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId) }));
+  }
+  for (const id of app.mapState?.layoutConflict?.ids ?? []) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "keep-local", text: t("keepLocal"), onclick: () => keepLocalPosition(app.mapState, id) }));
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "use-incoming", text: t("useIncoming"), onclick: () => useIncomingPosition(app.mapState, id) }));
+  }
+  return row;
+}
+
+function confirmConnection(app, sourceId, targetIds) {
+  const source = unitById(app, sourceId);
+  const targets = targetIds.map((id) => unitById(app, id)).filter(Boolean);
+  if (!source || !targets.length) return;
+  const body = targets.map((target) => text(app.language, "confirmConnect", { member: target.unit, lead: source.unit })).join(" ");
+  showDialog(app.root.ownerDocument, {
+    title: text(app.language, "connect"),
+    body,
+    confirm: text(app.language, "connect"),
+    cancel: text(app.language, "cancel"),
+    onConfirm: async () => {
+      const results = await connectUnits(app.api, source, targets);
+      app.actionNote = results.map((result) => result.error ? `${result.id ?? "unit"} ${result.error.code}` : `${result.id} ${result.data?.leadId ?? ""}`).join(" ");
+      if (app.unitList) await reloadList(app.unitList);
+      if (!app.disposed) renderShell(app);
+    },
+  });
+}
+
+function openUnitForm(app) {
+  openFields(app, text(app.language, "newUnit"), [
+    ["unit", "unitName", "executor-made"],
+    ["role", "role", "executor"],
+    ["scopeKind", "scopeKind", "project"],
+    ["scopeName", "scopeName", "shop"],
+    ["machine", "machine", "DESKTOP"],
+  ], async (values) => {
+    try {
+      await createUnit(app.api, {
+        unit: values.unit,
+        role: values.role,
+        scope: { kind: values.scopeKind, name: values.scopeName || null },
+        machine: values.machine,
+        leadId: null,
+        job: null,
+        model: null,
+      });
+      app.actionNote = values.unit;
+      if (app.unitList) await reloadList(app.unitList);
+    } catch (error) {
+      app.actionNote = error?.code === "machine_unavailable"
+        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? values.machine })
+        : `${error?.code ?? "request_failed"}`;
+    }
+    if (!app.disposed) renderShell(app);
+  });
+}
+
+function openSessionForm(app, unit) {
+  openFields(app, text(app.language, "startSession"), [
+    ["client", "client", "cursor"],
+    ["prompt", "prompt", ""],
+  ], async (values) => {
+    try {
+      const started = await startSession(app.api, unit, values.client, values.prompt || null);
+      app.sessionRequestId = started.data.requestId;
+      app.actionNote = text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed");
+    } catch (error) {
+      app.actionNote = error?.code ?? "request_failed";
+    }
+    if (!app.disposed) renderShell(app);
+  });
+}
+
+function confirmStop(app, sessionId) {
+  showDialog(app.root.ownerDocument, {
+    title: text(app.language, "stopSession"),
+    body: text(app.language, "sessionStopping"),
+    confirm: text(app.language, "stopSession"),
+    cancel: text(app.language, "cancel"),
+    onConfirm: async () => {
+      try {
+        const stopped = await stopSession(app.api, sessionId);
+        app.actionNote = text(app.language, SESSION_COPY[stopped.data.state] ?? "sessionStopping");
+      } catch (error) {
+        app.actionNote = error?.code ?? "request_failed";
+      }
+      if (!app.disposed) renderShell(app);
+    },
+  });
+}
+
+function openFields(app, title, fields, onConfirm) {
+  const document = app.root.ownerDocument;
+  const dialog = document.createElement("dialog");
+  dialog.className = "dialog";
+  const form = element(document, "form", { method: "dialog" });
+  form.append(element(document, "h2", { text: title }));
+  for (const [name, label, value] of fields) {
+    const input = element(document, "input", { name, value, "aria-label": text(app.language, label) });
+    form.append(element(document, "label", { text: text(app.language, label) }, input));
+  }
+  const actions = element(document, "div", { class: "dialog-actions" });
+  const cancel = element(document, "button", { type: "button", class: "btn", text: text(app.language, "cancel") });
+  const confirm = element(document, "button", { type: "submit", class: "btn primary", text: title });
+  cancel.addEventListener("click", () => dialog.close());
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(fields.map(([name]) => [name, form.elements[name].value]));
+    dialog.close();
+    await onConfirm(values);
+  });
+  actions.append(cancel, confirm);
+  form.append(actions);
+  dialog.append(form);
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+function noteSession(app, data) {
+  const state = data.request?.state ?? data.session?.state;
+  if (!state || !SESSION_COPY[state]) return;
+  if (data.request?.requestId) app.sessionRequestId = data.request.requestId;
+  app.actionNote = text(app.language, SESSION_COPY[state]);
+}
+
+function unitById(app, id) {
+  return app.unitList?.catalog?.find((unit) => unit.id === id) ?? app.store.indexes.units.get(id) ?? null;
 }
 
 if (typeof document !== "undefined") {
