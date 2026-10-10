@@ -3,7 +3,7 @@ import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, validateMachineName } from '../service/identity.mjs';
 import { assertNoLinks } from '../service/paths.mjs';
-import { packFileName, validateHead } from './pack.mjs';
+import { decodePack, packFileName, validateHead } from './pack.mjs';
 
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -46,6 +46,13 @@ export async function publishPack(origin, packBytes) {
     sequence = journal.sequence;
   } else if (journal?.phase === 'committed' && journal.packHash === digest) {
     return { sequence: journal.sequence, hash: digest, bytes: bytes.length, replayed: true };
+  }
+  const decoded = decodePack(bytes);
+  if (decoded.header.machine !== origin.machine) {
+    throw new CoreError(422, 'invalid_record_owner', 'The pack machine does not match the origin.');
+  }
+  if (decoded.header.sequence !== sequence) {
+    throw new CoreError(409, 'revision_conflict', 'The pack sequence is not the next origin sequence.');
   }
   if (head?.packs?.some((item) => item.sequence === sequence && item.hash !== digest)) {
     throw new CoreError(409, 'revision_conflict', 'A committed pack sequence cannot be reused for different bytes.');

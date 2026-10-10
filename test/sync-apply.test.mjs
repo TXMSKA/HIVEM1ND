@@ -169,14 +169,14 @@ test('immutable bytes and the wrong owner are rejected before writes', async (t)
   }));
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: `user/relay/approvals/${approvalId}/result.json` }, result),
-  ], [{ hash: hashBytes(result), raw: result }], { sequence: 2 }), {
+  ], [{ hash: hashBytes(result), raw: result }], { sequence: 1 }), {
     bindings: { approvals: { [approvalId]: { machine: 'DESKTOP' } } },
   }), (error) => error.code === 'invalid_record_owner');
   await assert.rejects(() => readFile(path.join(fixture.paths.mind, 'user', 'relay', 'approvals', approvalId, 'result.json')));
   const ahead = Buffer.from('future');
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: 'user/future.txt' }, ahead, { at: '2026-10-10T12:00:31.000Z' }),
-  ], [{ hash: hashBytes(ahead), raw: ahead }], { sequence: 3 })), (error) => error.code === 'invalid_pack');
+  ], [{ hash: hashBytes(ahead), raw: ahead }], { sequence: 1 })), (error) => error.code === 'invalid_pack');
 });
 
 test('a missing dependency stays pending and a later copy does not charge twice', async (t) => {
@@ -196,6 +196,7 @@ test('a missing dependency stays pending and a later copy does not charge twice'
     updatedAt: AT,
     packs: [{ sequence: 1, file: '000000000001.pack', hash: hashBytes(base), bytes: base.length }],
   };
+  await applyPack(desktop, base, { ledger: null });
   const pending = await applyPack(desktop, later, {
     ledger,
     provider: { async readHead() { return head; }, async readPack() { return null; } },
@@ -231,10 +232,13 @@ test('a crashed group resumes once and a crashed head is not reused for other by
   assert.equal(desktop.store.events.filter((event) => event.type === 'sync.applied').length, 1);
   const beat = { format: 'hivem1nd-service-v1', machine: 'LAPTOP', state: 'running', version: '3.0.0', heartbeatAt: AT, startedAt: AT };
   laptopOrigin.fault = 'before-head';
-  const bytes = Buffer.from('pack-bytes-are-not-a-pack');
+  const crashBody = Buffer.from('crash');
+  const bytes = pack([put({ kind: 'mind', path: 'user/crash.txt' }, crashBody)], [{ hash: hashBytes(crashBody), raw: crashBody }]);
+  const otherBody = Buffer.from('other');
+  const other = pack([put({ kind: 'mind', path: 'user/other-crash.txt' }, otherBody, { id: uuidV8(['other-crash']) })], [{ hash: hashBytes(otherBody), raw: otherBody }]);
   await assert.rejects(() => publishPack(laptopOrigin, bytes), (error) => error.code === 'injected_crash');
   assert.equal(await readHead(laptopOrigin, 'LAPTOP'), null);
-  await assert.rejects(() => publishPack(laptopOrigin, Buffer.from('other bytes')), (error) => error.code === 'revision_conflict');
+  await assert.rejects(() => publishPack(laptopOrigin, other), (error) => error.code === 'revision_conflict');
   const parked = await readFile(path.join(fixture.root, 'origin', 'machines', 'LAPTOP', 'packs', '000000000001.pack'));
   assert.equal(hashBytes(parked), hashBytes(bytes));
   await publishPack(laptopOrigin, bytes);
@@ -264,22 +268,22 @@ test('a registered project imports only cataloged documents, sidecars, and asset
   const icon = Buffer.from('png');
   await applyPack(desktop, pack([
     put({ kind: 'project', project: 'shop', path: 'docs/flows/assets/icon.png' }, icon),
-  ], [{ hash: hashBytes(icon), raw: icon }], { sequence: 2 }), { projects: desktop.projects });
+  ], [{ hash: hashBytes(icon), raw: icon }], { sequence: 1 }), { projects: desktop.projects });
   assert.equal(await readFile(path.join(shop, 'docs', 'flows', 'assets', 'icon.png'), 'utf8'), 'png');
   const notes = Buffer.from('{"title":"Imported"}\n');
   await applyPack(desktop, pack([
     put({ kind: 'project', project: 'shop', path: 'docs/release.json' }, notes, { at: LATER }),
-  ], [{ hash: hashBytes(notes), raw: notes }], { sequence: 3 }), { projects: desktop.projects });
+  ], [{ hash: hashBytes(notes), raw: notes }], { sequence: 2 }), { projects: desktop.projects });
   assert.equal(await readFile(path.join(shop, 'docs', 'release.json'), 'utf8'), '{"title":"Imported"}\n');
   const comments = Buffer.from('{"threads":[]}\n');
   await applyPack(desktop, pack([
     put({ kind: 'project', project: 'shop', path: 'docs/release.comments.json' }, comments),
-  ], [{ hash: hashBytes(comments), raw: comments }], { sequence: 4 }), { projects: desktop.projects });
+  ], [{ hash: hashBytes(comments), raw: comments }], { sequence: 3 }), { projects: desktop.projects });
   assert.equal(await readFile(path.join(shop, 'docs', 'release.comments.json'), 'utf8'), '{"threads":[]}\n');
   const evil = Buffer.from('evil');
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'project', project: 'shop', path: 'docs/flows/assets/evil.png' }, evil),
-  ], [{ hash: hashBytes(evil), raw: evil }], { sequence: 5 }), { projects: desktop.projects }), (error) => error.code === 'invalid_pack');
+  ], [{ hash: hashBytes(evil), raw: evil }], { sequence: 4 }), { projects: desktop.projects }), (error) => error.code === 'invalid_pack');
   await assert.rejects(() => readFile(path.join(shop, 'docs', 'flows', 'assets', 'evil.png')));
 });
 
@@ -312,7 +316,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   ], [
     { hash: hashBytes(request), raw: request },
     { hash: hashBytes(bound), raw: bound },
-  ], { sequence: 2 })), (error) => error.code === 'invalid_record_owner');
+  ], { sequence: 1 })), (error) => error.code === 'invalid_record_owner');
   const registration = Buffer.from(JSON.stringify({
     kind: 'registration', sessionId, unitId: 'project:shop:executor-shop', machine: 'LAPTOP',
   }));
@@ -325,7 +329,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   ], [
     { hash: hashBytes(registration), raw: registration },
     { hash: hashBytes(status), raw: status },
-  ], { sequence: 3 }));
+  ], { sequence: 1 }));
   const saved = JSON.parse(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', sessionId, 'one.json'), 'utf8'));
   assert.equal(saved.sessionId, sessionId);
   const notice = [
@@ -339,7 +343,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   const noticeBytes = Buffer.from(notice);
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: 'user/relay/chats/room/note.md' }, noticeBytes),
-  ], [{ hash: hashBytes(noticeBytes), raw: noticeBytes }], { sequence: 4 }), {
+  ], [{ hash: hashBytes(noticeBytes), raw: noticeBytes }], { sequence: 2 }), {
     bindings: { actors: { 'project:shop:executor-shop': 'LAPTOP' } },
   }), (error) => error.code === 'invalid_record_owner');
   const receipt = Buffer.from(JSON.stringify({
@@ -347,7 +351,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   }));
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: `user/relay/chats/${uuidV8(['chat'])}/read/${Buffer.from('root:master').toString('base64url')}/DESKTOP/${uuidV8(['receipt'])}.json` }, receipt),
-  ], [{ hash: hashBytes(receipt), raw: receipt }], { sequence: 5 })), (error) => error.code === 'invalid_record_owner');
+  ], [{ hash: hashBytes(receipt), raw: receipt }], { sequence: 2 })), (error) => error.code === 'invalid_record_owner');
 });
 
 test('links are not followed and an unregistered project stays pending', async (t) => {
@@ -363,7 +367,7 @@ test('links are not followed and an unregistered project stays pending', async (
   assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'secret');
   const pending = await applyPack(desktop, pack([
     put({ kind: 'project', project: 'shop', path: 'docs/readme.md' }, raw, { at: LATER }),
-  ], [{ hash: hashBytes(raw), raw }], { sequence: 4 }));
+  ], [{ hash: hashBytes(raw), raw }], { sequence: 1 }));
   assert.equal(pending.status, 'pending');
   assert.equal(pending.code, 'project_unavailable');
   await assert.rejects(() => readFile(path.join(fixture.root, 'shop', 'docs', 'readme.md')));
@@ -435,6 +439,28 @@ test('a state approval header drops tombstoned grants and keeps the rest of the 
   const versions = JSON.parse(await readFile(path.join(desktop.paths.localDirectory, 'sync-versions.json'), 'utf8'));
   const fileBytes = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'));
   assert.ok(Object.values(versions.targets).some((item) => item.hash === hashBytes(fileBytes)));
+});
+
+test('an out-of-order pack stays pending and a foreign sequence is not published', async (t) => {
+  const { fixture, desktop, laptopOrigin } = await world(t);
+  const raw = Buffer.from('later');
+  const skipped = pack([put({ kind: 'mind', path: 'user/skipped.txt' }, raw)], [{ hash: hashBytes(raw), raw }], { sequence: 2 });
+  const pending = await applyPack(desktop, skipped);
+  assert.equal(pending.status, 'pending');
+  assert.equal(pending.code, 'sequence_incomplete');
+  await assert.rejects(() => readFile(path.join(fixture.paths.mind, 'user', 'skipped.txt')));
+  const first = pack([put({ kind: 'mind', path: 'user/first.txt' }, raw)], [{ hash: hashBytes(raw), raw }]);
+  await applyPack(desktop, first);
+  const marker = path.join(desktop.paths.localDirectory, 'received', 'LAPTOP', '1.applied.json');
+  const stored = JSON.parse(await readFile(marker, 'utf8'));
+  stored.packHash = 'f'.repeat(64);
+  await writeFile(marker, `${JSON.stringify(stored)}\n`);
+  await assert.rejects(() => applyPack(desktop, first), { code: 'revision_conflict' });
+  const foreign = pack([put({ kind: 'mind', path: 'user/foreign.txt' }, raw, { machine: 'BRAVO' })], [{ hash: hashBytes(raw), raw }], { machine: 'BRAVO' });
+  await assert.rejects(() => publishPack(laptopOrigin, foreign), { code: 'invalid_record_owner' });
+  await assert.rejects(() => readFile(path.join(fixture.root, 'origin', 'machines', 'LAPTOP', 'packs', '000000000001.pack')), { code: 'ENOENT' });
+  const ahead = pack([put({ kind: 'mind', path: 'user/ahead.txt' }, raw, { id: uuidV8(['ahead']) })], [{ hash: hashBytes(raw), raw }], { sequence: 99 });
+  await assert.rejects(() => publishPack(laptopOrigin, ahead), { code: 'revision_conflict' });
 });
 
 test('an origin watcher reports a real head change and does not poll while idle', async (t) => {
