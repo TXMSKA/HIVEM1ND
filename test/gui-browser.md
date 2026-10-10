@@ -23,3 +23,12 @@ The large fixture was opened at 1440x900. End moved focus to the last hierarchy 
 | Viewport | Look | Language | Expected | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1440x900 | modern | en | Search reaches unit 1200. The group can be expanded. Keyboard activation selects it. Fewer than 100 compact rows are mounted. The total stays correct after a list change. | Before the search, 17 compact rows were mounted. The list scroll height was 612 and its client height was 293. End focused root:incubator inside the pane. The snapshot read 1211 units and the list total was 1211. After searching unit-1200 and activating that row with Enter, 3 compact rows were mounted, the filtered total was 1, the row read unit-1200 Out, and aria-selected was true. The snapshot still read 1211 units. After a unit change event, the filtered total stayed 1 and the same row stayed selected. | none | this file |
+
+## Step 5 map
+
+A local drag moved one circle. Escape restored that drag. A reverse marquee selected the visible circles, including adjutant, executive, and overseer. Zoom moved a circle, and a second drag used the new scale. Double-clicking executor-shop in Hierarchy centered it and selected it. No layout write was part of this gate.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Free placement, local move, reverse marquee, zoom, cancelled drag, and Hierarchy double-click centers the unit. | Background rgb(15, 11, 19), accent #bdcd79. master moved from left 698 to 758. The following drag was cancelled and the circle returned to 758. The reverse marquee selected 9 circles, including root:adjutant, root:executive, and root:overseer. Wheel zoom moved overseer from 698 to 700.59375. Double-clicking project:shop:executor-shop set aria-pressed and its center delta to 0. The inspector read executor-shop Waiting. | none | this file |
+| 1440x900 | high-contrast | en | The same gestures on set A. | Background rgb(5, 5, 5), accent #d4b06a. master moved from 699 to 759 and the cancelled drag returned it there. The reverse marquee selected the same 9 circles. Zoom moved overseer from 699 to 701.6875. Hierarchy double-click centered executor-shop with center delta 0. | none | this file |
