@@ -6,6 +6,9 @@ import { CoreError, canonicalJson } from './identity.mjs';
 import { atomicWrite, readBytes, recoverTransactions } from './store.mjs';
 import { writeDurable } from '../sync/origin.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
+import { createCredentialStore } from './security.mjs';
+import { createEventBus } from './events.mjs';
+import { createHttpServer } from './http.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -43,6 +46,7 @@ export async function startService(options) {
     await writeBootstrap(handle);
     handle.adopted = await adoptWake(options, { nonce });
     handle.beat = await writeBeat(options, 'running');
+    if (options.serveHttp === true) handle.http = await createHttpServer({ ...options, bus: options.bus, credentials: options.credentials });
     return handle;
   } catch (error) {
     await rollback(handle);
@@ -120,8 +124,16 @@ export async function writeBeat(options, state) {
   return record;
 }
 
+export async function composeCore(options) {
+  const bus = options.bus ?? createEventBus({ now: options.now, machine: options.paths.machine });
+  const credentials = options.credentials ?? createCredentialStore({ now: options.now });
+  const http = await createHttpServer({ ...options, bus, credentials, handlers: options.handlers ?? {} });
+  return { bus, credentials, http };
+}
+
 export async function stopService(handle) {
   if (!handle || handle.attached) return { stopped: false };
+  if (handle.http) await handle.http.close();
   await writeBeat(handle.options, 'stopped');
   if (handle.listener?.close) await handle.listener.close();
   await closeBridge(handle.bridge);
