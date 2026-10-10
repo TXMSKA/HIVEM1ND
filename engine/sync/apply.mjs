@@ -115,7 +115,7 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
   }
   const roots = writeRoots(sync, resolvedProjects);
   if (incoming.status === 'pending') {
-    await chargeReceipt(ledger, decoded, packBytes);
+    await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
     return { status: 'pending', missing: incoming.missing, packHash: incoming.packHash };
   }
   const prepared = decoded.changes.map((change) => {
@@ -169,7 +169,7 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
     if (plans[plans.length - 1].version) versions.targets[key] = plans[plans.length - 1].version;
   }
   if (plans.some((plan) => plan.corrupt)) throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
-  await chargeReceipt(ledger, decoded, packBytes);
+  await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
   const groups = groupPlans(prepared, plans);
   let completed = 0;
   for (const group of groups) {
@@ -382,14 +382,16 @@ async function checkpoint(sync, decoded, packBytes, ledger) {
   await writeDurable(sync.store, ledger.file, Buffer.from(`${canonicalJson(data)}\n`, 'utf8'), writeRoots(sync, sync.projects));
 }
 
-async function chargeReceipt(ledger, decoded, packBytes) {
+async function chargeReceipt(ledger, decoded, packBytes, objects = null) {
   if (!ledger) return;
   const opened = ledger.file ? ledger : openLedger(ledger);
   const bytes = Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.from(packBytes).length;
+  const known = new Set(opened.knownMessageIds ?? []);
+  const messages = countLogicalMessages({ ...decoded, objects: objects ?? decoded.objects }, known);
   await reserveReceipt(opened, {
     machine: decoded.header.machine,
     id: `${decoded.header.machine}:${decoded.header.sequence}:${decoded.packHash}`,
-    messages: countLogicalMessages(decoded),
+    messages,
     bytes,
   });
 }

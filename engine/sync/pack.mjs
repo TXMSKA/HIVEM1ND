@@ -325,8 +325,10 @@ export async function resolveDependencies(packBytes, provider, state = { stack: 
   return { status: 'ready', decoded, objects, missing: [], packHash: decoded.packHash };
 }
 
-export function countLogicalMessages(decoded) {
-  const seen = new Set();
+const NOTICE_KINDS = new Set(['chat-notice', 'approval-notice', 'task-notice', 'comment-notice', 'sync-notice', 'conflict-notice']);
+
+export function countLogicalMessages(decoded, knownIds = null) {
+  const seen = new Set(knownIds ?? []);
   let count = 0;
   const accept = (id) => {
     if (!id || seen.has(id)) return;
@@ -337,8 +339,11 @@ export function countLogicalMessages(decoded) {
     if (change.operation !== 'put') continue;
     const raw = decoded.objects?.get(change.hash);
     if (!raw) continue;
+    if (raw.length > 1000000 && isMessageTarget(change.target)) {
+      throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');
+    }
     if (isMessageTarget(change.target)) {
-      const message = readMessage(raw);
+      const message = readMessage(raw, change.target);
       if (!message?.id || isDeterministicNotice(message)) continue;
       accept(message.id);
       continue;
@@ -350,9 +355,10 @@ export function countLogicalMessages(decoded) {
 }
 
 export function isDeterministicNotice(message) {
-  if (!message || message.kind !== 'notice' || typeof message.id !== 'string') return false;
+  if (!message || typeof message.id !== 'string' || !NOTICE_KINDS.has(message.kind)) return false;
   const expected = uuidV8(['notice', message.phase ?? '', message.window ?? '', message.subject ?? '']);
-  return message.id === expected;
+  if (message.id === expected) return true;
+  return typeof message.resourceId === 'string' && message.resourceId !== '' && typeof message.noticeKey === 'string' && message.noticeKey === `${message.resourceId}:${message.recipient ?? message.toId ?? ''}`;
 }
 
 function framed(header, payload) {
@@ -500,15 +506,17 @@ export function isSecretName(name) {
 }
 
 function isMessageTarget(target) {
-  if (!target) return false;
-  return /(^|\/)inbox\/[^/]+\/[^/]+\.md$/.test(target.path) || /(^|\/)archive\/[^/]+\/[^/]+\.md$/.test(target.path);
+  if (!target?.path || target.path.includes('/read/')) return false;
+  return /(^|\/)inbox\/[^/]+\/[^/]+\.md$/.test(target.path)
+    || /(^|\/)archive\/[^/]+\/[^/]+\.md$/.test(target.path)
+    || /(^|\/)chats\/[^/]+\/[^/]+\.md$/.test(target.path);
 }
 
 function isCommentTarget(target) {
   return Boolean(target && (target.path.endsWith('.comments.json') || target.path.includes('/comments/')));
 }
 
-function readMessage(raw) {
+function readMessage(raw, target) {
   const text = raw.toString('utf8');
   const split = text.split(/\r?\n\r?\n/, 2);
   const headers = {};
@@ -517,13 +525,19 @@ function readMessage(raw) {
     if (colon <= 0) continue;
     headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
   }
-  if (!headers.id) return null;
+  const fileId = target?.path?.split('/').pop()?.replace(/\.md$/, '') ?? '';
+  const id = headers.id || (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fileId) ? fileId : '');
+  if (!id) return null;
   return {
-    id: headers.id,
+    id,
     kind: headers.kind ?? null,
     phase: headers.phase ?? '',
     window: headers.window ?? '',
     subject: headers.subject ?? '',
+    resourceId: headers['resource-id'] ?? null,
+    noticeKey: headers['notice-key'] ?? null,
+    recipient: headers['to-id'] ?? null,
+    toId: headers['to-id'] ?? null,
   };
 }
 

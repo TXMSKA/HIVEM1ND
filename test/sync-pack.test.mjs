@@ -328,8 +328,9 @@ test('invalid packs are rejected before any file is written', async (t) => {
 
 test('logical message counts use canonical records and ignore forged notice claims', () => {
   const noticeId = uuidV8(['notice', 'publication', '2026-10-10T12', 'paused']);
-  const notice = Buffer.from(`id: ${noticeId}\nkind: notice\nphase: publication\nwindow: 2026-10-10T12\nsubject: paused\n\nPaused\n`);
-  assert.equal(isDeterministicNotice({ id: noticeId, kind: 'notice', phase: 'publication', window: '2026-10-10T12', subject: 'paused' }), true);
+  const notice = Buffer.from(`id: ${noticeId}\nkind: chat-notice\nphase: publication\nwindow: 2026-10-10T12\nsubject: paused\nresource-id: ${noticeId}\nnotice-key: ${noticeId}:\n\nPaused\n`);
+  assert.equal(isDeterministicNotice({ id: noticeId, kind: 'chat-notice', phase: 'publication', window: '2026-10-10T12', subject: 'paused' }), true);
+  assert.equal(isDeterministicNotice({ id: noticeId, kind: 'notice', phase: 'publication', window: '2026-10-10T12', subject: 'paused' }), false);
   const forgedId = uuidV8(['forged-notice']);
   const forged = Buffer.from(`id: ${forgedId}\nkind: notice\nphase: publication\nwindow: 2026-10-10T12\nsubject: paused\n\nForged\n`);
   const commentId = uuidV8(['comment', 1]);
@@ -354,6 +355,21 @@ test('logical message counts use canonical records and ignore forged notice clai
     objects,
   });
   assert.equal(countLogicalMessages(decodePack(packed)), 3);
+  const chatId = '11111111-1111-4111-8111-111111111111';
+  const chat = Buffer.from(`\n\nlegacy\n`);
+  const chatPack = encodePack({
+    machine: 'DESKTOP',
+    sequence: 1,
+    changes: [change({ kind: 'mind', path: `user/relay/chats/room/${chatId}.md` }, chat, { messageId: null, at: '2026-10-10T12:00:04.000Z' })],
+    objects: [{ hash: hashBytes(chat), raw: chat }],
+  });
+  assert.equal(countLogicalMessages(decodePack(chatPack)), 1);
+  assert.equal(countLogicalMessages(decodePack(chatPack), new Set([chatId])), 0);
+  const huge = Buffer.alloc(1000001, 0x61);
+  assert.throws(() => countLogicalMessages({
+    changes: [{ operation: 'put', hash: 'aa', target: { kind: 'mind', path: 'user/inbox/master/big.md' } }],
+    objects: new Map([['aa', huge]]),
+  }), { code: 'message_too_large' });
 });
 
 test('a head rejects regression and a changed committed hash', () => {
