@@ -19,7 +19,7 @@ import {
   postMessage,
 } from "./chats.mjs";
 import { addNode, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, uploadAsset } from "./blueprint.mjs";
-import { createApi, dispose as disposeApi, request } from "./api.mjs";
+import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -44,13 +44,15 @@ import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, r
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
+import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
+import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, beginTextEdit, enterFocus, leaveFocus, moveFocus, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
-const PHONE_MODES = ["hierarchy", "chats", "waiting", "map"];
+const PHONE_MODES = PHONE_NAV;
 
 export function presentation(viewer, settings) {
   return {
@@ -59,7 +61,8 @@ export function presentation(viewer, settings) {
   };
 }
 
-export function shellLayout(capabilities) {
+export function shellLayout(capabilities, audience) {
+  if (audience === "phone") return "phone";
   if (!capabilities?.length) return "unknown";
   const names = new Set(capabilities);
   return names.has("viewer.write") || names.has("layout.write") ? "desktop" : "phone";
@@ -98,26 +101,101 @@ export async function mount(root, env = globalThis) {
     renderShell(app);
   });
   renderStatus(app, "loading");
+  if (!api.token && api.homeKey) {
+    try {
+      const credential = await exchangeHomeFragment(api);
+      return bootSession(app, credential);
+    } catch (error) {
+      renderPhoneError(app, error);
+      return app;
+    }
+  }
   if (!api.token) {
     renderSignedOut(app);
     return app;
   }
-  synchronize(api, store, {
-    cursor: () => store.cursor,
+  return bootSession(app, null);
+}
+
+async function bootSession(app, credential) {
+  if (credential) {
+    app.api.token = credential.token;
+    app.store.capabilities = credential.capabilities ?? [];
+    app.store.audience = credential.audience ?? null;
+    app.store.expiresAt = credential.expiresAt ?? null;
+  }
+  if (app.store.audience === "phone") {
+    app.mode = "hierarchy";
+    app.tab = "hierarchy";
+  }
+  synchronize(app.api, app.store, {
+    cursor: () => app.store.cursor,
     onEvent: (event) => onStream(app, event),
   });
   try {
-    await loadSnapshot(store, api);
+    await loadSnapshot(app.store, app.api);
     await loadPresentation(app);
     await loadLists(app);
+    startOwnEmbed(app);
   } catch (error) {
     renderFailure(app, error);
   }
   return app;
 }
 
+function startOwnEmbed(app) {
+  if (app.embed || app.disposed) return;
+  const viewer = app.store.viewer;
+  if (app.store.audience === "phone" || !viewer?.embedded || !viewer.hostOrigin) return;
+  if (!app.store.capabilities.includes("viewer.write")) return;
+  const transport = app.root.ownerDocument.defaultView;
+  app.embed = startEmbedChannel({
+    ...viewer,
+    capabilities: app.store.capabilities,
+  }, {
+    patchViewer: (body) => patchOwnViewer(app, body),
+    logout: () => logoutOwnViewer(app),
+  }, transport);
+  publishReady(app.embed);
+}
+
+async function patchOwnViewer(app, body) {
+  const operation = createOperation({ method: "PATCH", path: "/viewer", body });
+  const result = await request(app.api, "PATCH", "/viewer", { operation });
+  app.store.viewer = { ...app.store.viewer, ...result.data };
+  const choice = presentation(app.store.viewer, app.store.settings?.settings);
+  app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+  app.language = choice.language === "es" ? "es" : "en";
+  if (!app.disposed) renderShell(app);
+  return result;
+}
+
+async function logoutOwnViewer(app) {
+  disposeEmbed(app.embed);
+  app.embed = null;
+  if (app.editors) {
+    app.editors.drafts?.clear?.();
+    app.editors.watch = null;
+    app.editors.current = null;
+  }
+  if (app.homeState) clearGrant(app.homeState);
+  await logout(app.api);
+  app.disposed = true;
+  renderSignedOut(app);
+}
+
 export function navigate(app, mode) {
-  const allowed = app.layout === "phone" ? PHONE_MODES : [...DESKTOP_MODES, "settings", "hierarchy", "chats"];
+  if (app.layout === "phone") {
+    if (!PHONE_MODES.includes(mode)) return;
+    if (mode === "waiting") app.mode = "waiting";
+    else {
+      app.tab = mode;
+      app.mode = "hierarchy";
+    }
+    renderShell(app);
+    return;
+  }
+  const allowed = [...DESKTOP_MODES, "settings", "hierarchy", "chats"];
   if (!allowed.includes(mode)) return;
   if (mode === "hierarchy" || mode === "chats") app.tab = mode;
   else app.mode = mode;
@@ -132,7 +210,7 @@ export function renderShell(app) {
   const t = (key, variables) => text(app.language, key, variables);
   const view = app.store.view;
   const counts = view?.counts ?? {};
-  const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode });
+  const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode, "data-tab": app.tab });
   shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
@@ -145,6 +223,7 @@ export function dispose(app) {
   app.disposed = true;
   app.api.live && (app.api.live.stopped = true);
   if (app.homeState) clearGrant(app.homeState);
+  disposeEmbed(app.embed);
   releaseAssets(app.editors?.current);
   disposeApi(app.api);
 }
@@ -208,10 +287,11 @@ async function loadPresentation(app) {
   const choice = presentation(app.store.viewer, app.store.settings?.settings);
   app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
   app.language = choice.language === "es" ? "es" : "en";
-  app.layout = shellLayout(app.store.capabilities);
+  app.layout = shellLayout(app.store.capabilities, app.store.audience);
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
   app.store.settings.home = home.home;
+  startOwnEmbed(app);
   publish(app);
 }
 
@@ -231,13 +311,15 @@ function publish(app) {
 function renderBar(app, t, counts) {
   const document = app.root.ownerDocument;
   const modes = element(document, "div", { class: "modes", role: "toolbar" });
-  for (const mode of DESKTOP_MODES) {
-    modes.append(element(document, "button", {
-      type: "button",
-      class: "mode",
-      "aria-pressed": String(app.mode === mode),
-      onclick: () => navigate(app, mode),
-    }, icon(document, mode), t(mode)));
+  if (app.layout !== "phone") {
+    for (const mode of DESKTOP_MODES) {
+      modes.append(element(document, "button", {
+        type: "button",
+        class: "mode",
+        "aria-pressed": String(app.mode === mode),
+        onclick: () => navigate(app, mode),
+      }, icon(document, mode), t(mode)));
+    }
   }
   const waiting = element(document, "span", { class: "pill" }, icon(document, "waiting"), t("waitingCount", { count: counts.waiting ?? 0 }));
   const settings = element(document, "button", {
@@ -257,7 +339,9 @@ function renderBar(app, t, counts) {
       renderShell(app);
     },
   }, icon(document, "waiting"));
-  return element(document, "header", { class: "bar" }, brand(document), modes, waiting, inspector, settings);
+  const bar = element(document, "header", { class: "bar" }, brand(document), modes, waiting);
+  if (app.layout !== "phone") bar.append(inspector, settings);
+  return bar;
 }
 
 function renderWorkspace(app, t, view, counts) {
@@ -286,6 +370,9 @@ function renderWorkspace(app, t, view, counts) {
   if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
   const collection = renderCollection(app, t);
   const side = element(document, "aside", { class: "panel side" }, tabs, summary, issues, collection);
+  const selected = app.store.indexes.units.get(app.store.selected.unitId)
+    ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
+    ?? null;
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { text: t(app.mode) }),
   );
@@ -296,12 +383,14 @@ function renderWorkspace(app, t, view, counts) {
     stage.append(renderEditor(app, t));
   } else if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
+  } else if (app.layout === "phone" && app.mode === "waiting") {
+    stage.append(renderInspector(app, t, selected));
+  } else if (app.layout === "phone" && app.tab === "chats") {
+    stage.append(chatPanel(app, t));
+    if (app.phoneChatNote) stage.append(element(document, "p", { "data-phone-chat": "required", text: t("desktopChatRequired") }));
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
   }
-  const selected = app.store.indexes.units.get(app.store.selected.unitId)
-    ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
-    ?? null;
   const inspectorBody = element(document, "div", { class: "inspector-body" },
     element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
   );
@@ -315,8 +404,10 @@ function renderWorkspace(app, t, view, counts) {
     }));
   }
   inspectorBody.append(actionControls(app, t, selected));
-  inspectorBody.append(chatPanel(app, t));
-  inspectorBody.append(renderInspector(app, t, selected));
+  if (app.layout !== "phone") {
+    inspectorBody.append(chatPanel(app, t));
+    inspectorBody.append(renderInspector(app, t, selected));
+  }
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
@@ -370,7 +461,15 @@ function renderCollection(app, t) {
       if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
         app.activated = { id: row.id, kind };
-      } else if (row.unit) activateUnit(app, row.unit, kind);
+      } else if (row.unit) {
+        activateUnit(app, row.unit, kind);
+        if (app.layout === "phone") takePendingChat(app);
+        loadInspector(app, row.unit.id);
+      }
+      if (row.kind === "chat") {
+        const chat = app.chatList?.catalog?.find((item) => item.id === row.id) ?? app.chatList?.items?.find((item) => item.id === row.id);
+        if (chat) showChat(app, chat);
+      }
       renderShell(app);
     },
     onToggle: (groupId) => {
@@ -651,6 +750,7 @@ function renderEditor(app, t) {
     oninput: (event) => {
       current.draftText = event.target.value;
       markDirty(app.api, editors, app.store.capabilities, true);
+      if (app.embed) publishDirty(app.embed, true);
     },
   });
   draft.value = current.draftText ?? "";
@@ -977,25 +1077,40 @@ function renderFooter(app, t) {
 }
 
 function renderPhoneNav(app, t) {
-  const document = app.root.ownerDocument;
-  const nav = element(document, "nav", { class: "phone-nav" });
-  for (const mode of PHONE_MODES) {
-    nav.append(element(document, "button", {
-      type: "button",
-      "aria-pressed": String(app.mode === mode || app.tab === mode),
-      onclick: () => navigate(app, mode),
-    }, icon(document, mode === "waiting" ? "waiting" : mode), t(mode)));
-  }
-  return nav;
+  const current = app.mode === "waiting" ? "waiting" : app.tab;
+  return renderPhone(app.root.ownerDocument, t, PHONE_MODES, current, (mode) => navigate(app, mode), icon);
 }
 
 function renderSignedOut(app) {
   const document = app.root.ownerDocument;
   const t = (key) => text(app.language, key);
-  app.root.replaceChildren(element(document, "section", { class: "gate" },
+  const gate = element(document, "section", { class: "gate" },
     element(document, "h2", { text: t("reopenTitle") }),
-    element(document, "p", { text: app.api.homeKey ? t("homePrompt") : t("reopenBody") }),
-  ));
+    element(document, "p", { text: app.phoneError ? t(app.phoneError) : t("reopenBody") }),
+  );
+  if (app.phoneRetryAfter) gate.setAttribute("data-retry-after", String(app.phoneRetryAfter));
+  gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code)));
+  app.root.replaceChildren(gate);
+}
+
+function renderPhoneError(app, error) {
+  app.api.homeKey = null;
+  app.api.token = null;
+  if (error?.code === "home_expired") app.phoneError = "homeExpired";
+  else if (error?.code === "auth_rate_limited") app.phoneError = "rateLimited";
+  else app.phoneError = "homeKeyInvalid";
+  app.phoneRetryAfter = error?.retryAfter ?? null;
+  renderSignedOut(app);
+}
+
+async function submitCode(app, code) {
+  try {
+    const credential = await exchangeCode(app.api, code);
+    app.phoneError = null;
+    await bootSession(app, credential);
+  } catch (error) {
+    renderPhoneError(app, error);
+  }
 }
 
 function renderFailure(app, error) {
@@ -1221,14 +1336,23 @@ function chatPanel(app, t) {
   }
   if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
   const row = element(document, "div", { class: "action-row" });
-  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "pin", text: t("pin"), onclick: () => changeChat(app, { pinned: true }) }));
-  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "unlist", text: t("removeFromList"), onclick: () => changeChat(app, { listed: false }) }));
-  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "reopen", text: t("reopenChat"), onclick: () => changeChat(app, { listed: true }) }));
+  const caps = app.store.capabilities ?? [];
+  if (caps.includes("chat.manage")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "pin", text: t("pin"), onclick: () => changeChat(app, { pinned: true }) }));
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "unlist", text: t("removeFromList"), onclick: () => changeChat(app, { listed: false }) }));
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "reopen", text: t("reopenChat"), onclick: () => changeChat(app, { listed: true }) }));
+  }
   row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
-  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "mailbox", text: t("mailbox"), onclick: () => inspectMailbox(app) }));
-  const composer = element(document, "input", { class: "composer", "data-composer": "true", value: thread.composer, "aria-label": t("send") });
-  const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
-  panel.append(transcript, row, composer, send);
+  if (caps.includes("mailbox.read") || caps.includes("master.read")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "mailbox", text: t("mailbox"), onclick: () => inspectMailbox(app) }));
+  }
+  panel.append(transcript, row);
+  if (caps.includes("chat.post")) {
+    const composer = element(document, "input", { class: "composer", "data-composer": "true", "aria-label": t("send") });
+    composer.value = thread.composer ?? "";
+    const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
+    panel.append(composer, send);
+  }
   if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
   return panel;
 }
@@ -1237,9 +1361,31 @@ function takePendingChat(app) {
   const pending = app.pendingChat;
   if (!pending || app.chatOpening) return;
   app.pendingChat = null;
-  if (!pending.create) return;
+  if (!pending.create) {
+    openExistingDirect(app, pending.unitId);
+    return;
+  }
+  app.phoneChatNote = false;
   app.chatOpening = true;
   openDirectChat(app.api, [pending.unitId]).then((result) => showChat(app, result.data)).catch((error) => noteAction(app, error)).finally(() => { app.chatOpening = false; });
+}
+
+function openExistingDirect(app, unitId) {
+  Promise.all([
+    request(app.api, "GET", "/chats", { query: { unitId, listed: "true", limit: "50" } }),
+    request(app.api, "GET", "/chats", { query: { unitId, listed: "false", limit: "50" } }),
+  ]).then(([listed, hidden]) => {
+    const chats = [...(listed.data.items ?? []), ...(hidden.data.items ?? [])];
+    const chat = chats.find((item) => item.members?.length === 2 && item.members.includes(unitId) && item.members.includes("root:master"));
+    app.tab = "chats";
+    if (chat) {
+      app.phoneChatNote = false;
+      showChat(app, chat);
+      return;
+    }
+    app.phoneChatNote = true;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
 }
 
 function showChat(app, chat) {
@@ -1300,10 +1446,13 @@ function renderInspector(app, t, selected) {
   if (selected) panel.append(renderUnit(document, selected, t));
   const data = app.inspectorData;
   if (!data || data.unitId !== selected?.id) return panel;
-  panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant)));
-  for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
+  const caps = app.store.capabilities ?? [];
+  if (caps.includes("grant.revoke")) panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant)));
+  if (caps.includes("approval.answer")) {
+    for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
+  }
   for (const task of data.tasks ?? []) {
-    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), (item) => undoSelected(app, item)));
+    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null));
     panel.append(openTaskDetail(document, task, t));
   }
   panel.append(renderWaiting(document, data.waiting, t));

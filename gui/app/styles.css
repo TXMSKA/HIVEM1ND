@@ -287,7 +287,7 @@ button, input { font: inherit; color: inherit; }
 .shell[data-layout="phone"] .modes,
 .shell[data-layout="phone"] .inspector,
 .shell[data-layout="phone"] .tabs { display: none; }
-.shell[data-layout="phone"] .phone-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.shell[data-layout="phone"] .phone-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .shell[data-layout="phone"] .phone-nav button,
 .shell[data-layout="phone"] .btn { min-height: var(--target); }
 

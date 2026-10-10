@@ -146,6 +146,11 @@ const COPY = {
   homeRemaining: ["{count} seconds remaining", "{count} segundos restantes"],
   noGrantSecret: ["Open home access on this screen to show a new code.", "Abrir el acceso de casa en esta pantalla para mostrar un código nuevo."],
   qrTitle: ["Home access code", "Código de acceso de casa"],
+  desktopChatRequired: ["A desktop conversation is required.", "Se requiere una conversación creada en el escritorio."],
+  homeCode: ["Home code", "Código de casa"],
+  submitCode: ["Continue", "Continuar"],
+  homeKeyInvalid: ["The home key is not valid.", "La clave de casa no es válida."],
+  rateLimited: ["Too many attempts. Wait and try again.", "Demasiados intentos. Esperar y volver a intentar."],
 };
 
 const DICTIONARIES = {

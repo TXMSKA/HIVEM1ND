@@ -4,15 +4,19 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
+import { answerApproval, changeTaskStatus } from "../gui/app/actions.mjs";
+import { markMailboxRead } from "../gui/app/chats.mjs";
+import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
+import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
-import { presentation, shellLayout } from "../gui/app/main.mjs";
+import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
-import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
+import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
@@ -62,11 +66,19 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
   assert.equal(shellLayout(DESKTOP), "desktop");
   assert.equal(shellLayout(["viewer.write"]), "desktop");
   assert.equal(shellLayout([]), "unknown");
-  assert.equal(shellLayout(DESKTOP), "desktop");
+  assert.equal(shellLayout(DESKTOP, "phone"), "phone");
+  assert.equal(shellLayout(PHONE, "desktop"), "phone");
+  for (const action of ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"]) {
+    assert.equal(canPerform(PHONE, action), true, action);
+  }
+  for (const action of ["chat.manage", "mailbox.read", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "grant.revoke", "task.undo", "task.status", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"]) {
+    assert.equal(canPerform(PHONE, action), false, action);
+    assert.equal(canPerform(DESKTOP, action), true, action);
+  }
 });
 
 test("the shell has no remote assets, token storage, or inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs"];
+  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     assert.equal(source.includes("localStorage"), false, file);
@@ -85,7 +97,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("session="), false);
   const main = sources[1][1];
   const imports = [...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).sort();
-  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
+  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[3][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);
@@ -404,6 +416,273 @@ test("a failed home binding leaves no active grant", async (t) => {
   assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 410);
 });
 
+test("a home code is cleared before it is sent and a bad code keeps no secret", async (t) => {
+  const document = createTestDocument().document;
+  let submitted = null;
+  const form = renderCodeEntry(document, (key) => text("en", key), (code) => { submitted = code; });
+  const input = form.querySelector("[data-home-code]");
+  input.value = "ab23cd";
+  form.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(submitted, "ab23cd");
+  assert.equal(input.value, "");
+  const nav = renderPhone(document, (key) => text("en", key), ["hierarchy", "chats", "waiting"], "hierarchy", () => undefined, () => null);
+  assert.deepEqual([...nav.querySelectorAll("[data-phone-mode]")].map((node) => node.getAttribute("data-phone-mode")), ["hierarchy", "chats", "waiting"]);
+
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const home = new URL(fixture.phoneUrl);
+  let sent = null;
+  const api = createApi({
+    location: { origin: home.origin, pathname: "/", search: "", hash: "" },
+    history: { replaceState() {} },
+    fetch: async (url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonEnvelope(200, { token: "phone-token", audience: "phone", capabilities: PHONE, expiresAt: "2026-10-11T00:00:00.000Z" });
+    },
+  });
+  const credential = await exchangeCode(api, "ab23cd");
+  assert.deepEqual(sent, { code: "AB23CD" });
+  assert.equal(credential.audience, "phone");
+  assert.equal(api.homeKey, null);
+  assert.equal(api.token, "phone-token");
+
+  const invalid = apiFrom(`${home.origin}/`);
+  await assert.rejects(exchangeCode(invalid, "abcdef"), (error) => error.code === "invalid_home_key" && error.status === 401);
+  assert.equal(invalid.token, null);
+  assert.equal(invalid.homeKey, null);
+  const parsedHome = new URL(fixture.phoneUrl);
+  let cleared = "";
+  const fragment = createApi({
+    location: { origin: parsedHome.origin, pathname: parsedHome.pathname, search: parsedHome.search, hash: parsedHome.hash },
+    history: { replaceState(_state, _title, next) { cleared = String(next); } },
+    fetch: globalThis.fetch.bind(globalThis),
+  });
+  assert.equal(fragment.homeKey, FIXTURE_HOME_KEY);
+  assert.equal(cleared.includes("home="), false);
+  assert.equal(cleared.includes(FIXTURE_HOME_KEY), false);
+  const exchanged = await exchangeHomeFragment(fragment);
+  assert.equal(exchanged.audience, "phone");
+  assert.equal(fragment.homeKey, null);
+  assert.equal(fragment.token, exchanged.token);
+  const again = await exchangeCode(apiFrom(`${home.origin}/`), FIXTURE_HOME_CODE);
+  assert.equal(again.expiresAt, exchanged.expiresAt);
+});
+
+test("replaced and expired home codes are rejected and attempts are rate limited", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = apiFrom(fixture.desktopUrl);
+  const opened = await openHome(desktop, ["192.168.1.23"]);
+  const home = new URL(fixture.phoneUrl).origin;
+  await assert.rejects(exchangeCode(apiFrom(`${home}/`), FIXTURE_HOME_CODE), (error) => error.code === "invalid_home_key");
+  const lowered = await exchangeCode(apiFrom(`${home}/`), opened.data.shortCode.toLowerCase());
+  assert.equal(lowered.expiresAt, opened.data.expiresAt);
+  assert.equal((await exchangeCode(apiFrom(`${home}/`), opened.data.shortCode)).expiresAt, lowered.expiresAt);
+  await fixture.control.advance(12 * 60 * 60 * 1000);
+  await assert.rejects(exchangeCode(apiFrom(`${home}/`), opened.data.shortCode), (error) => error.code === "home_expired" && error.status === 410);
+
+  const limited = await createGuiFixture();
+  t.after(() => limited.close());
+  const limitedHome = new URL(limited.phoneUrl).origin;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "invalid_home_key");
+  }
+  await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "auth_rate_limited" && error.retryAfter === 60_000);
+});
+
+test("phone boot never calls viewer routes and a narrow desktop token stays desktop", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const phone = await bootApp(fixture.phoneUrl, 390, urls);
+  t.after(() => dispose(phone.app));
+  await until(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone");
+  assert.equal(phone.app.embed ?? null, null);
+  assert.equal(phone.view.innerWidth, 390);
+  navigate(phone.app, "map");
+  navigate(phone.app, "blueprint");
+  navigate(phone.app, "settings");
+  assert.equal(phone.app.mode, "hierarchy");
+  assert.equal(phone.root.querySelector(".mode"), null);
+  assert.equal(phone.root.querySelector("[data-action='new-unit']"), null);
+  assert.equal(phone.root.querySelector("[aria-label='Settings']"), null);
+  const overseer = phone.app.unitList.catalog.find((unit) => unit.id === "root:overseer");
+  phone.app.activeHandlers.onActivate({ id: overseer.id, kind: "unit", unit: overseer }, "double");
+  await until(() => phone.app.phoneChatNote === true);
+  assert.equal(phone.root.querySelector("[data-phone-chat='required']")?.textContent, "A desktop conversation is required.");
+  const executor = phone.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  phone.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await until(() => phone.root.querySelector("[data-composer]") && phone.app.thread?.chat?.members?.includes(executor.id));
+  assert.equal(phone.root.querySelector("[data-action='pin']"), null);
+  await until(() => phone.app.inspectorData?.unitId === executor.id);
+  navigate(phone.app, "waiting");
+  const review = phone.root.querySelector("[data-task='project:shop:029']");
+  assert.equal(review?.querySelector("[data-action='accept']")?.disabled, false);
+  assert.equal(review?.querySelector("[data-action='send-back']")?.disabled, false);
+  assert.equal(phone.root.querySelector("[data-action='undo']"), null);
+  assert.equal(phone.root.querySelector("[data-action='revoke-grant']"), null);
+  phone.view.innerWidth = 1440;
+  renderShell(phone.app);
+  assert.equal(phone.root.querySelector(".shell").getAttribute("data-layout"), "phone");
+
+  const directId = deterministicUuid(["direct-chat", ["project:shop:executor-shop", "root:master"].sort()]);
+  const message = createOperation({
+    method: "POST",
+    path: "/chats/:chatId/messages",
+    params: { chatId: directId },
+    body: { body: "On my way", subject: "", replyTo: null, attachments: [], priority: "normal" },
+  });
+  await request(phone.app.api, "POST", message.path, { operation: message });
+  await retryOperation(phone.app.api, message);
+  const returning = (await request(phone.app.api, "GET", "/tasks/:taskId", { params: { taskId: "project:shop:030" } })).data;
+  const note = createOperation({
+    method: "POST",
+    path: "/tasks/:taskId/status",
+    params: { taskId: "project:shop:030" },
+    body: { status: "open", note: "Needs another pass", expectedRevision: returning.revision },
+  });
+  await request(phone.app.api, "POST", note.path, { operation: note });
+  await retryOperation(phone.app.api, note);
+  await changeTaskStatus(phone.app.api, (await request(phone.app.api, "GET", "/tasks/:taskId", { params: { taskId: "project:shop:029" } })).data, "done");
+  const mailboxOperation = createOperation({
+    method: "POST",
+    path: "/mailboxes/:unitId/messages",
+    params: { unitId: "root:master" },
+    body: { body: "Seen from the phone", subject: "", replyTo: null, attachments: [], priority: "normal" },
+  });
+  const mailbox = await request(phone.app.api, "POST", mailboxOperation.path, { operation: mailboxOperation });
+  await markMailboxRead(phone.app.api, "root:master", [mailbox.data.id]);
+  const approval = (await request(phone.app.api, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ecf")).data;
+  await answerApproval(phone.app.api, approval, "approve");
+  await delay(200);
+  assert.equal(urls.some((url) => url.includes("/viewer")), false);
+
+  const denied = [
+    ["POST", "/units", {}],
+    ["PUT", "/units/:unitId/lead", { unitId: "root:overseer" }],
+    ["POST", "/units/:unitId/session", { unitId: "root:overseer" }],
+    ["POST", "/sessions/:sessionId/stop", { sessionId: "00000000-0000-4000-8000-000000000000" }],
+    ["PATCH", "/layout", {}],
+    ["POST", "/chats", {}],
+    ["PATCH", "/chats/:chatId", { chatId: directId }],
+    ["PATCH", "/settings", {}],
+    ["POST", "/settings/home-network", {}],
+    ["DELETE", "/units/:unitId/approval-grants/:grantId", { unitId: "project:shop:executor-shop", grantId: "f605f169-8686-4a88-a213-7ca19703fd41" }],
+    ["POST", "/tasks/:taskId/undo", { taskId: "project:shop:027" }],
+    ["POST", "/editors/register", {}],
+    ["POST", "/editors/:resourceId/comments", { resourceId: "missing" }],
+    ["POST", "/void/texts/:resourceId/proposals/:proposalId/answer", { resourceId: "missing", proposalId: "missing" }],
+    ["POST", "/watch", {}],
+    ["PATCH", "/viewer", {}],
+    ["POST", "/blueprint/boards", {}],
+    ["POST", "/editors/:resourceId/assets", { resourceId: "missing" }],
+  ];
+  for (const [method, path, params] of denied) {
+    const operation = createOperation({ method, path, params, body: {} });
+    await assert.rejects(request(phone.app.api, method, operation.path, { operation }), (error) => error.status === 403 && error.code === "phone_read_only", `${method} ${path}`);
+  }
+  await assert.rejects(request(phone.app.api, "GET", "/viewer"), (error) => error.status === 403 && error.code === "phone_read_only");
+  const closed = (await request(phone.app.api, "GET", "/tasks/:taskId", { params: { taskId: "project:shop:026" } })).data;
+  await assert.rejects(changeTaskStatus(phone.app.api, closed, "closed"), (error) => error.code === "phone_read_only");
+
+  const desktopUrls = [];
+  const desktop = await bootApp(fixture.desktopUrl, 390, desktopUrls);
+  t.after(() => dispose(desktop.app));
+  await until(() => desktop.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop");
+  assert.equal(desktop.view.innerWidth, 390);
+  assert.equal(shellLayout(desktop.app.store.capabilities), "desktop");
+});
+
+test("embedded viewers accept only their parent and logout is idempotent", async (t) => {
+  const parent = fakeParent();
+  const other = fakeParent();
+  const calls = [];
+  const channel = startEmbedChannel({
+    embedded: true,
+    hostOrigin: "http://127.0.0.1:9",
+    viewerId: "viewer-a",
+    capabilities: DESKTOP,
+  }, {
+    patchViewer: async (body) => { calls.push(body); },
+    logout: async () => { calls.push("logout"); },
+  }, parent.transport);
+  const sibling = startEmbedChannel({
+    embedded: true,
+    hostOrigin: "http://127.0.0.1:9",
+    viewerId: "viewer-b",
+    capabilities: DESKTOP,
+  }, {
+    patchViewer: async (body) => { calls.push(["b", body]); },
+    logout: async () => { calls.push("logout-b"); },
+  }, other.transport);
+  publishReady(channel);
+  publishDirty(channel, 1);
+  assert.deepEqual(parent.parent.sent.data, {
+    contract: "hivem1nd-embed-v1",
+    viewerId: "viewer-a",
+    type: "dirty",
+    value: true,
+  });
+  assert.equal(parent.parent.sent.origin, "http://127.0.0.1:9");
+  publishReady(sibling);
+  assert.equal(other.parent.sent.data.viewerId, "viewer-b");
+  assert.equal(parent.parent.sent.data.viewerId, "viewer-a");
+  const forged = [
+    { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } },
+    { source: parent.parent, origin: "https://evil.example", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } },
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "modern" } },
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "other", viewerId: "viewer-a", type: "set-look", value: "modern" } },
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "neon" } },
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: false } },
+  ];
+  for (const event of forged) await handleParentMessage(channel, event);
+  assert.deepEqual(calls, []);
+  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-language", value: "es" } });
+  await handleParentMessage(sibling, { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "high-contrast" } });
+  assert.deepEqual(calls[0], { language: "es" });
+  assert.deepEqual(calls[1], ["b", { look: "high-contrast" }]);
+  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: null } });
+  assert.equal(calls.at(-1), "logout");
+  disposeEmbed(channel);
+  publishDirty(channel, false);
+  assert.equal(parent.parent.sent.data.type, "dirty");
+  assert.equal(parent.parent.sent.data.value, true);
+
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const secret = await bootstrapSecret(fixture.root);
+  const first = await localViewer(fixture, secret, { look: null, language: null });
+  const second = await localViewer(fixture, secret, { look: "modern", language: "en" });
+  const left = apiFrom(first.url);
+  const right = apiFrom(second.url);
+  await request(left, "POST", "/watch", { operation: createOperation({ method: "POST", path: "/watch", body: { unitId: "root:master" } }) });
+  assert.equal(fixture.control.watchCount(), 1);
+  const patched = await request(left, "PATCH", "/viewer", {
+    operation: createOperation({ method: "PATCH", path: "/viewer", body: { look: "high-contrast", language: "es", dirty: true } }),
+  });
+  assert.equal(patched.data.look, "high-contrast");
+  assert.equal(patched.data.dirty, true);
+  const untouched = await request(right, "GET", "/viewer");
+  assert.equal(untouched.data.viewerId, second.viewerId);
+  assert.equal(untouched.data.look, "modern");
+  assert.equal(untouched.data.dirty, false);
+  const settings = await request(apiFrom(fixture.desktopUrl), "GET", "/settings");
+  assert.equal(settings.data.settings.look, "modern");
+  assert.equal(settings.data.settings.language, "en");
+  const gone = await logout(left);
+  assert.equal(gone.status, 204);
+  assert.equal(left.token, null);
+  assert.equal(fixture.control.watchCount(), 0);
+  let fetched = false;
+  left.fetch = async () => { fetched = true; throw new Error("logout fetched twice"); };
+  assert.equal((await logout(left)).status, 204);
+  assert.equal(fetched, false);
+  assert.equal((await request(right, "GET", "/viewer")).data.viewerId, second.viewerId);
+  await assert.rejects(request(apiFrom(first.url), "POST", "/sessions/none/stop", {
+    operation: createOperation({ method: "POST", path: "/sessions/none/stop", body: {} }),
+  }), (error) => error.status === 401);
+});
+
 function qrDigest(matrix) {
   const text = matrix.map((row) => row.map((cell) => (cell ? "1" : "0")).join("")).join("\n");
   return createHash("sha256").update(text).digest("hex");
@@ -432,6 +711,174 @@ async function exchangeRaw(fixture, key) {
     body: JSON.stringify({ key }),
   });
   return { status: response.status, json: await response.json() };
+}
+
+function jsonEnvelope(status, data) {
+  const body = JSON.stringify({
+    contract: "hivem1nd-gui-v3",
+    data,
+    meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
+  });
+  return { status, ok: status >= 200 && status < 300, headers: { get() { return null; } }, text: async () => body };
+}
+
+async function until(check) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (check()) return;
+    await delay(20);
+  }
+  throw new Error("The phone shell did not reach the expected state.");
+}
+
+async function bootApp(url, width, urls) {
+  const { document, root, view } = createTestDocument(width);
+  const parsed = new URL(url);
+  const app = await mount(root, {
+    location: { origin: parsed.origin, pathname: parsed.pathname, search: parsed.search, hash: parsed.hash },
+    history: { replaceState() {} },
+    fetch: async (input, init) => {
+      urls.push(String(input));
+      return fetch(input, init);
+    },
+  });
+  return { app, root, view, document };
+}
+
+function fakeParent() {
+  const parent = { sent: null, postMessage(data, origin) { this.sent = { data, origin }; } };
+  return { parent, transport: { parent, addEventListener() {}, removeEventListener() {} } };
+}
+
+async function bootstrapSecret(root) {
+  const entries = await readdir(root, { recursive: true });
+  const hit = entries.find((entry) => String(entry).endsWith("bootstrap.json"));
+  return JSON.parse(await readFile(join(root, hit), "utf8")).secret;
+}
+
+async function localViewer(fixture, secret, viewer) {
+  const response = await fetch(`${fixture.origin}/api/v1/auth/local`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: fixture.origin, Authorization: `Bearer ${secret}` },
+    body: JSON.stringify({ embedded: true, hostOrigin: "http://127.0.0.1:9", look: viewer.look, language: viewer.language }),
+  });
+  const json = await response.json();
+  assert.equal(response.status, 201);
+  return json.data;
+}
+
+function createTestDocument(width = 390) {
+  const document = {
+    documentElement: null,
+    body: null,
+    activeElement: null,
+    defaultView: null,
+    createElement(tag) { return make(tag, null); },
+    createElementNS(namespace, tag) { return make(tag, namespace); },
+    createTextNode(value) { return make("#text", null, String(value)); },
+  };
+  const view = { parent: null, innerWidth: width, innerHeight: 844, addEventListener() {}, removeEventListener() {}, requestAnimationFrame() { return 0; }, postMessage() {} };
+  document.defaultView = view;
+  function make(tag, namespace, text = "") {
+    const node = {
+      tag,
+      namespace,
+      children: [],
+      attributes: new Map(),
+      listeners: new Map(),
+      className: "",
+      textContent: text,
+      value: "",
+      disabled: false,
+      tabIndex: 0,
+      scrollTop: 0,
+      clientWidth: width,
+      clientHeight: 640,
+      isConnected: true,
+      style: {},
+      dataset: {},
+      ownerDocument: document,
+      setAttribute(name, value) {
+        this.attributes.set(name, String(value));
+        if (name.startsWith("data-")) {
+          const key = name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+          this.dataset[key] = String(value);
+        }
+      },
+      getAttribute(name) { return this.attributes.get(name) ?? null; },
+      append(...kids) { for (const kid of kids) this.appendChild(kid); },
+      appendChild(kid) {
+        if (kid == null) return;
+        kid.parent = this;
+        this.children.push(kid);
+      },
+      replaceChildren(...kids) {
+        this.children = [];
+        this.append(...kids);
+      },
+      addEventListener(type, handler) {
+        const list = this.listeners.get(type) ?? [];
+        list.push(handler);
+        this.listeners.set(type, list);
+      },
+      removeEventListener() {},
+      querySelector(selector) { return find(this, selector, false); },
+      querySelectorAll(selector) { return find(this, selector, true); },
+      focus() {},
+      remove() {},
+      getBoundingClientRect() { return { left: 0, top: 0, width, height: 700 }; },
+    };
+    return node;
+  }
+  function find(node, selector, all) {
+    const found = [];
+    const visit = (current) => {
+      for (const child of current.children ?? []) {
+        if (selectorMatches(child, selector)) found.push(child);
+        visit(child);
+      }
+    };
+    visit(node);
+    return all ? found : (found[0] ?? null);
+  }
+  document.documentElement = make("html");
+  document.body = make("body");
+  document.documentElement.append(document.body);
+  const root = make("div");
+  document.body.append(root);
+  document.querySelector = (selector) => find(document.documentElement, selector, false);
+  document.querySelectorAll = (selector) => find(document.documentElement, selector, true);
+  return { document, root, view };
+}
+
+function selectorMatches(node, selector) {
+  return selector.split(",").some((part) => selectorPart(node, part.trim()));
+}
+
+function selectorPart(node, selector) {
+  if (!node || node.tag === "#text") return false;
+  let rest = selector;
+  if (/^[A-Za-z]/.test(rest)) {
+    const tag = /^[A-Za-z][\w-]*/.exec(rest)[0];
+    if (node.tag !== tag) return false;
+    rest = rest.slice(tag.length);
+  }
+  while (rest.startsWith(".")) {
+    const name = /^[\w-]+/.exec(rest.slice(1))?.[0];
+    if (!name || !String(node.className ?? "").split(/\s+/).includes(name)) return false;
+    rest = rest.slice(1 + name.length);
+  }
+  while (rest.startsWith("[")) {
+    const end = rest.indexOf("]");
+    if (end < 0) return false;
+    const body = rest.slice(1, end);
+    const eq = body.indexOf("=");
+    const name = eq === -1 ? body : body.slice(0, eq);
+    const expected = eq === -1 ? null : body.slice(eq + 1).replace(/^["']|["']$/g, "");
+    const actual = node.getAttribute?.(name);
+    if (actual == null || (expected != null && actual !== expected)) return false;
+    rest = rest.slice(end + 1);
+  }
+  return rest.length === 0;
 }
 
 async function assertAbsent(root, secret) {
