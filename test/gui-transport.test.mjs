@@ -227,6 +227,35 @@ test("a frame larger than 16 MB fails visibly", () => {
   assert.throws(() => parser.pushText(`data: ${"x".repeat(FRAME_LIMIT + 1)}\n`), (error) => error.code === "frame_too_large");
 });
 
+test("an expired approval keeps the desktop credential and home expiry clears it", async () => {
+  const approval = harness({
+    fetch: async () => jsonResponse(410, { error: { code: "approval_expired", message: "The approval has expired.", requestId: "x", details: {}, retryAt: null } }),
+  }).api;
+  const token = approval.token;
+  await assert.rejects(request(approval, "POST", "/approvals/expired/answer", {
+    body: { decision: "deny", expectedRevision: "a".repeat(64) },
+  }), (error) => error.code === "approval_expired" && error.status === 410);
+  assert.equal(approval.token, token);
+
+  const capability = harness({
+    fetch: async () => jsonResponse(410, { error: { code: "capability_expired", message: "The capability has expired.", requestId: "x", details: {}, retryAt: null } }),
+  }).api;
+  await assert.rejects(request(capability, "GET", "/view"), (error) => error.code === "capability_expired");
+  assert.equal(capability.token !== null, true);
+
+  const home = harness({
+    fetch: async () => jsonResponse(410, { error: { code: "home_expired", message: "Home access has expired.", requestId: "x", details: {}, retryAt: null } }),
+  }).api;
+  await assert.rejects(request(home, "GET", "/view"), (error) => error.code === "home_expired");
+  assert.equal(home.token, null);
+
+  const revoked = harness({
+    fetch: async () => jsonResponse(401, { error: { code: "invalid_session", message: "The session is invalid.", requestId: "x", details: {}, retryAt: null } }),
+  }).api;
+  await assert.rejects(request(revoked, "GET", "/view"), (error) => error.status === 401);
+  assert.equal(revoked.token, null);
+});
+
 test("reconnect waits on the capped schedule and stops when the credential ends", async () => {
   assert.equal(reconnectDelay(0, () => 0), 800);
   assert.equal(reconnectDelay(0, () => 1), 1200);

@@ -553,6 +553,7 @@ test("review, undo, and queued approval outcomes stay distinct", async (context)
   const expiredApi = fixtureApi(fixture);
   const expired = await request(expiredApi, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ec4");
   await assert.rejects(answerApproval(expiredApi, expired.data, "deny"), (error) => error.code === "approval_expired");
+  assert.equal(expiredApi.token !== null, true);
 });
 
 function fixtureApi(fixture) {
