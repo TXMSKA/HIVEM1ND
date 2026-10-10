@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, uuidV8 } from './identity.mjs';
+import { publishDomainEvents } from './events.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { openSync, stageTransaction } from '../sync/store.mjs';
@@ -271,7 +272,7 @@ async function commitMany(context, entries, events) {
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   const changes = await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
   if (context.pulse) await context.pulse.changed(changes.map((change) => change.id));
-  for (const event of events) context.store.events.push(event);
+  publishDomainEvents(context, events);
 }
 
 async function loadChat(context, chatId) {

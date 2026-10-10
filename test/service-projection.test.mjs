@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEventBus, revisionRelation } from '../engine/service/events.mjs';
+import { createEventBus, publishDomainEvents, revisionRelation } from '../engine/service/events.mjs';
 import { randomUUID } from 'node:crypto';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
@@ -200,6 +200,8 @@ test('events replay after a cursor, isolate viewers, and drop expired or duplica
   assert.equal(replayed.reset, false);
   assert.equal(replayed.events.some((event) => event.name === 'unit.changed'), true);
   assert.equal(replayed.frames.at(-1).name, 'stream.ready');
+  assert.equal(replayed.frames.at(-1).data.source.kind, 'service');
+  assert.equal(replayed.frames.at(-1).data.data.capabilities.length, 22);
   bus.emit({ name: 'watch.changed', viewerId: 'viewer-a', data: { watchId: 'w', viewerId: 'viewer-a', unitId: 'root:master', resourceId: null, state: 'watching' } });
   bus.emit({ name: 'session.changed', data: { session: { id: 's', nativeSessionId: 'secret-native', endpoint: 'pipe://secret' } } });
   assert.equal(live.some((frame) => frame.name === 'watch.changed'), true);
@@ -245,6 +247,17 @@ async function answeringMachine(fixture) {
     heartbeatAt: new Date(fixture.clock.now).toISOString(), startedAt: new Date(fixture.clock.now).toISOString(),
   }));
 }
+
+test('a domain event is emitted once with a unit source', () => {
+  const bus = createEventBus({ now: () => NOW, machine: 'DESKTOP' });
+  const seen = [];
+  bus.subscribe({ stableId: 'desktop', audience: 'desktop', viewerId: 'viewer-a' }, {}, (frame) => seen.push(frame));
+  const context = { store: { events: [] }, bus, paths: { machine: 'DESKTOP' }, principal: { unitId: 'root:master' } };
+  publishDomainEvents(context, [{ name: 'chat.changed', data: { chat: { id: 'room' } } }]);
+  assert.equal(context.store.events.length, 1);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].data.source, { kind: 'unit', id: 'root:master', unitId: 'root:master' });
+});
 
 test('unit, lead, layout, and settings writes are validated before any file changes', async (t) => {
   const fixture = await mind(t);
