@@ -1,0 +1,632 @@
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { CoreError, canonicalJson, hashBytes, hashText, parseTaskId, parseUnitId, validateRole } from './identity.mjs';
+
+const VIEW_LIMIT = 16000000;
+const OBSERVATION_MS = 15 * 60 * 1000;
+const BEAT_MS = 180000;
+const FUTURE_MS = 30000;
+const STATUS_ORDER = ['unknown', 'out', 'quota', 'waiting', 'working', 'idle'];
+const TASK_ORDER = ['review', 'open', 'done', 'closed'];
+
+export function statusFor({ malformed = false, state = 'in', quota = null, waiting = false, activity = null } = {}) {
+  if (malformed || !STATUS_ORDER.includes(state) && state !== 'in' && state !== 'out') return 'unknown';
+  if (malformed) return 'unknown';
+  if (state === 'out') return 'out';
+  if (quota && (quota.exhausted === true || (typeof quota.remaining === 'number' && quota.remaining <= 0))) return 'quota';
+  if (waiting) return 'waiting';
+  if (activity === 'busy' || activity === 'active') return 'working';
+  return 'idle';
+}
+
+export function answersFor(beat, now) {
+  if (!beat || beat.state !== 'running') return false;
+  const at = Date.parse(beat.heartbeatAt ?? '');
+  if (!Number.isFinite(at)) return false;
+  if (at > now + FUTURE_MS) return false;
+  if (now - at > BEAT_MS) return false;
+  return true;
+}
+
+export function observationFresh(at, now) {
+  const parsed = Date.parse(at ?? '');
+  return Number.isFinite(parsed) && parsed <= now + FUTURE_MS && now - parsed <= OBSERVATION_MS;
+}
+
+export function waitingFor(items) {
+  const seen = new Set();
+  const unique = [];
+  for (const item of items) {
+    if (!item?.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    unique.push(item);
+  }
+  unique.sort((left, right) => Number(right.blocking) - Number(left.blocking) || String(right.since).localeCompare(String(left.since)) || left.id.localeCompare(right.id));
+  return unique;
+}
+
+export function paginate(items, { limit = 50, cursor = null, filters = {}, snapshot = '' } = {}) {
+  const bounded = boundLimit(limit);
+  const filterHash = hashText(canonicalJson(filters));
+  const snapshotHash = typeof snapshot === 'string' ? snapshot : hashText(canonicalJson(snapshot));
+  let position = 0;
+  if (cursor) {
+    const decoded = decodeCursor(cursor);
+    if (decoded.filters !== filterHash) throw new CoreError(400, 'invalid_cursor', 'The page cursor does not match these filters.');
+    if (decoded.snapshot !== snapshotHash) throw new CoreError(409, 'cursor_expired', 'The page cursor expired.');
+    if (!Number.isSafeInteger(decoded.position) || decoded.position < 0 || decoded.position > items.length) {
+      throw new CoreError(400, 'invalid_cursor', 'The page cursor position is not valid.');
+    }
+    position = decoded.position;
+  }
+  const slice = items.slice(position, position + bounded);
+  const next = position + bounded < items.length ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: position + bounded }) : null;
+  return { items: slice, total: items.length, nextCursor: next, issues: [] };
+}
+
+export function paginateMessages(messages, { limit = 50, cursor = null, before = null, filters = {}, snapshot = '' } = {}) {
+  if (cursor && before) throw new CoreError(400, 'invalid_cursor', 'A message page cannot use before and a cursor together.');
+  const ordered = [...messages].sort(messageOrder);
+  const filterHash = hashText(canonicalJson({ ...filters, before: before ?? null }));
+  const snapshotHash = typeof snapshot === 'string' ? snapshot : hashText(canonicalJson(snapshot));
+  let end = ordered.length;
+  if (before) {
+    const index = ordered.findIndex((message) => message.id === before);
+    if (index < 0) throw new CoreError(404, 'message_not_found', 'The message is not in this chat.');
+    end = index;
+  }
+  if (cursor) {
+    const decoded = decodeCursor(cursor);
+    if (decoded.filters !== filterHash) throw new CoreError(400, 'invalid_cursor', 'The page cursor does not match these filters.');
+    if (decoded.snapshot !== snapshotHash) throw new CoreError(409, 'cursor_expired', 'The page cursor expired.');
+    end = decoded.position;
+  }
+  const bounded = boundLimit(limit);
+  const start = Math.max(0, end - bounded);
+  const next = start > 0 ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: start }) : null;
+  return { items: ordered.slice(start, end), total: ordered.length, nextCursor: next, issues: [] };
+}
+
+export async function readProjection(context, query = {}) {
+  const loaded = await loadMind(context);
+  const view = assemble(loaded, query);
+  const bytes = Buffer.byteLength(canonicalJson(view));
+  if (bytes > VIEW_LIMIT) {
+    throw new CoreError(413, 'view_too_large', 'The view exceeds 16 MB. Request the individual lists.');
+  }
+  return view;
+}
+
+export async function readCollection(context, name, query = {}) {
+  const view = await readProjection(context, query);
+  const items = collectionItems(view, name, query);
+  const filtered = items.filter((item) => matchesQuery(item, name, query));
+  const snapshot = hashText(canonicalJson(filtered.map(identityOf)));
+  return { ...paginate(filtered, { ...query, snapshot, filters: normalizeFilters(query) }), issues: view.issues };
+}
+
+export async function readDetail(context, name, id) {
+  const view = await readProjection(context);
+  if (name === 'layout') return { layout: view.layout, revision: view.layoutRevision };
+  if (name === 'settings') return { settings: view.settings, revision: view.settingsRevision };
+  const found = collectionItems(view, name, {}).find((item) => item.id === id);
+  if (!found) throw new CoreError(404, `${name.replace(/s$/, '')}_not_found`, 'The record does not exist.');
+  return found;
+}
+
+export function collectIssues(issues) {
+  const seen = new Set();
+  const unique = [];
+  for (const item of issues ?? []) {
+    const key = `${item.path ?? ''}\0${item.code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ path: item.path ?? null, code: item.code, message: item.message });
+  }
+  return unique;
+}
+
+async function loadMind(context) {
+  const mind = context.paths?.mind;
+  if (!mind) throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+  try {
+    const stats = await lstat(mind);
+    if (!stats.isDirectory()) throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+  } catch (error) {
+    if (error instanceof CoreError) throw error;
+    throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+  }
+  const now = context.now();
+  const issues = [];
+  const units = [];
+  for (const relative of await filesUnder(mind, 'user/state')) {
+    if (!relative.endsWith('.md') || relative.includes('.conflict-')) continue;
+    units.push(readUnit(await readSafe(mind, relative), relative, issues));
+  }
+  const sessions = [];
+  for (const relative of await filesUnder(mind, 'user/relay/sessions')) {
+    if (!relative.endsWith('.json')) continue;
+    sessions.push(...readSession(await readSafe(mind, relative), relative, now, issues));
+  }
+  const messages = [];
+  for (const relative of await filesUnder(mind, 'user/inbox')) {
+    if (!relative.endsWith('.md')) continue;
+    const message = readMessageFile(await readSafe(mind, relative), relative, issues);
+    if (message) messages.push(message);
+  }
+  for (const relative of await filesUnder(mind, 'user/relay/chats')) {
+    if (!relative.endsWith('.md') || relative.endsWith('/chat.md')) continue;
+    const message = readMessageFile(await readSafe(mind, relative), relative, issues);
+    if (message) messages.push(message);
+  }
+  const tasks = [];
+  for (const relative of await filesUnder(mind, 'user/tasks')) {
+    if (!relative.endsWith('.md')) continue;
+    const task = readTask(await readSafe(mind, relative), relative, units, issues);
+    if (task) tasks.push(task);
+  }
+  const chats = await readChats(mind, messages, issues);
+  const machines = await readMachines(context, now, issues);
+  const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues);
+  const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
+  return { units, sessions, messages, tasks, chats, machines, layout, settings, issues: collectIssues(issues) };
+}
+
+function assemble(loaded, query) {
+  const waiting = waitingFor([
+    ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
+      id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
+    })),
+    ...loaded.messages.filter((message) => message.replyRequested).map((message) => ({
+      id: `message:${message.id}`, kind: 'message', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
+    })),
+  ]);
+  const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
+  const units = loaded.units.map((unit) => ({
+    ...unit,
+    status: statusFor({
+      malformed: unit.malformed,
+      state: unit.state,
+      quota: quotaFor(loaded.sessions, unit.id),
+      waiting: waitingUnits.has(unit.id),
+      activity: activityFor(loaded.sessions, unit.id),
+    }),
+  }));
+  const overseers = units.filter((unit) => unit.role === 'overseer' && !unit.malformed);
+  const canonical = overseers.find((unit) => unit.id === 'root:overseer') ?? overseers[0] ?? null;
+  const issues = [...loaded.issues];
+  for (const extra of overseers) {
+    if (canonical && extra.id !== canonical.id) issues.push({ path: extra.path, code: 'duplicate_overseer', message: 'Only one Overseer is canonical.' });
+  }
+  const leads = [...new Set([canonical?.id, ...units.map((unit) => unit.leadId)].filter(Boolean))];
+  const squads = buildSquads(units);
+  const listedChats = loaded.chats.filter((chat) => query.listed === false ? true : chat.listed !== false);
+  const project = query.project ?? null;
+  const visibleUnits = project ? units.filter((unit) => inProjectChain(unit, project, units)) : units;
+  visibleUnits.sort(unitOrder);
+  const view = {
+    mind: { version: '3.0.0', machine: query.machine ?? null, project },
+    units: visibleUnits,
+    leads,
+    squads,
+    projects: [],
+    machines: loaded.machines,
+    sessions: loaded.sessions,
+    chats: listedChats,
+    tasks: loaded.tasks,
+    waiting,
+    counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
+    issues: collectIssues(issues),
+    layout: loaded.layout?.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} },
+    layoutRevision: loaded.layout?.revision ?? null,
+    settings: loaded.settings?.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' },
+    settingsRevision: loaded.settings?.revision ?? null,
+    messages: loaded.messages,
+  };
+  return view;
+}
+
+function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
+  const tasks = loaded.tasks;
+  return {
+    units: units.length,
+    leads: leads.length,
+    squads: squads.length,
+    projects: 0,
+    machines: loaded.machines.length,
+    sessions: loaded.sessions.length,
+    chats: chats.length,
+    waiting: waiting.length,
+    open: tasks.filter((task) => task.status === 'open').length,
+    review: tasks.filter((task) => task.status === 'review').length,
+    done: tasks.filter((task) => task.status === 'done').length,
+    closed: tasks.filter((task) => task.status === 'closed').length,
+    unread: loaded.messages.filter((message) => message.read === false).length,
+    issues: issues.length,
+  };
+}
+
+function readUnit(bytes, relative, issues) {
+  const blank = {
+    id: null, unit: path.basename(relative, '.md'), role: null, scope: null, leadId: null, job: null, model: null,
+    machine: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
+    sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
+  };
+  if (!bytes) {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The state could not be read.' });
+    return blank;
+  }
+  try {
+    const headers = headerMap(bytes);
+    const id = parseUnitId(headers.get('unit-id'));
+    const role = validateRole(headers.get('role'));
+    const state = headers.get('state');
+    if (state !== 'in' && state !== 'out') throw new CoreError(422, 'corrupt_resource', 'The state is not valid.');
+    return {
+      ...blank,
+      id: id.id,
+      unit: headers.get('unit') || id.unit,
+      role,
+      scope: id.scope,
+      leadId: headers.get('lead-id') || null,
+      job: headers.get('job') || null,
+      model: headers.get('model') || null,
+      machine: headers.get('machine') || null,
+      state,
+      context: bodyText(bytes),
+      date: headers.get('date') || null,
+      branch: headers.get('branch') || null,
+      revision: hashBytes(bytes),
+      approvalGrants: parseGrants(headers.get('approvals')),
+      malformed: false,
+    };
+  } catch {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The state could not be projected.' });
+    return blank;
+  }
+}
+
+function readSession(bytes, relative, now, issues) {
+  if (!bytes) return [];
+  try {
+    const record = JSON.parse(bytes.toString('utf8'));
+    const activity = observationFresh(record.activityObservedAt, now) ? record.activity ?? null : null;
+    const quota = observationFresh(record.quotaObservedAt, now) ? record.quota ?? null : null;
+    return [{
+      id: record.sessionId,
+      unitId: record.unitId ?? null,
+      client: record.client ?? null,
+      machine: record.machine ?? null,
+      nativeSessionId: record.nativeSessionId ?? null,
+      registeredAt: record.registeredAt ?? null,
+      activity,
+      quota,
+      wake: { enabled: false, deadlineAt: null, pausedReason: null },
+      state: 'registered',
+    }];
+  } catch {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The session could not be projected.' });
+    return [];
+  }
+}
+
+function readMessageFile(bytes, relative, issues) {
+  if (!bytes) return null;
+  try {
+    const headers = headerMap(bytes);
+    const id = headers.get('id');
+    if (!id) throw new Error('missing id');
+    return {
+      id,
+      fromId: headers.get('from-id') || null,
+      toId: headers.get('to-id') || headers.get('to') || null,
+      machine: headers.get('machine') || null,
+      timestamp: headers.get('timestamp') || null,
+      date: headers.get('date') || null,
+      priority: headers.get('priority') === 'urgent' ? 'urgent' : 'normal',
+      subject: headers.get('subject') || '',
+      body: bodyText(bytes),
+      threadId: headers.get('thread') || id,
+      replyTo: headers.get('reply-to') || null,
+      replyRequested: headers.get('reply-requested') === 'true',
+      attachments: [],
+      kind: headers.get('kind') || 'message',
+      read: headers.get('read') === 'true',
+      notice: null,
+      path: relative,
+    };
+  } catch {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The message could not be projected.' });
+    return null;
+  }
+}
+
+function readTask(bytes, relative, units, issues) {
+  if (!bytes) return null;
+  try {
+    const headers = headerMap(bytes);
+    const id = parseTaskId(headers.get('id') || headers.get('task-id'));
+    const status = headers.get('status');
+    if (!['open', 'review', 'done', 'closed'].includes(status)) throw new Error('status');
+    const body = bodyText(bytes);
+    const toId = headers.get('to-id') || null;
+    const fromId = headers.get('from-id') || null;
+    const assignee = units.find((unit) => unit.id === toId);
+    const lead = units.find((unit) => unit.id === assignee?.leadId);
+    const leadLabel = lead?.unit ?? assignee?.leadId;
+    const reviewable = status === 'review' && isMaster(fromId) && (!assignee?.leadId || Boolean(leadLabel && body.includes(`Approved for review by ${leadLabel}`)));
+    return {
+      id: id.id,
+      number: id.number,
+      scope: id.scope,
+      title: headers.get('title') || '',
+      status,
+      fromId,
+      toId,
+      date: headers.get('date') || null,
+      requirements: [],
+      approvedBy: null,
+      reviewable,
+      revision: hashBytes(bytes),
+      request: body,
+      report: body,
+      undoAvailable: false,
+    };
+  } catch {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The task could not be projected.' });
+    return null;
+  }
+}
+
+async function readChats(mind, messages, issues) {
+  const chats = [];
+  let entries = [];
+  try {
+    entries = await readdir(path.join(mind, 'user', 'relay', 'chats'), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return chats;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const relative = `user/relay/chats/${entry.name}/chat.md`;
+    const bytes = await readSafe(mind, relative);
+    if (!bytes) continue;
+    try {
+      const headers = headerMap(bytes);
+      const id = headers.get('id') || entry.name;
+      const members = (headers.get('members') || '').split(',').map((item) => item.trim()).filter(Boolean);
+      const own = messages.filter((message) => message.path?.includes(`/chats/${entry.name}/`) && !message.path.endsWith('/chat.md'));
+      chats.push({
+        id,
+        title: headers.get('title') || '',
+        kind: headers.get('kind') === 'group' ? 'group' : 'direct',
+        members,
+        pinned: headers.get('pinned') === 'true',
+        listed: headers.get('listed') !== 'false',
+        createdAt: headers.get('created-at') || null,
+        revision: hashBytes(bytes),
+        lastMessage: own[own.length - 1] ?? null,
+        unread: own.filter((message) => !message.read).length,
+      });
+    } catch {
+      issues.push({ path: relative, code: 'corrupt_resource', message: 'The chat could not be projected.' });
+    }
+  }
+  return chats;
+}
+
+async function readMachines(context, now, issues) {
+  const machines = [];
+  const origin = context.paths?.origin;
+  if (!origin) return machines;
+  let entries = [];
+  try {
+    entries = await readdir(path.join(origin, 'machines'), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return machines;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const relative = path.join(origin, 'machines', entry.name, 'service.json');
+    try {
+      const beat = JSON.parse(await readFile(relative, 'utf8'));
+      machines.push({
+        id: beat.machine ?? entry.name,
+        state: beat.state === 'running' || beat.state === 'stopped' ? beat.state : 'unknown',
+        version: beat.version ?? null,
+        heartbeatAt: beat.heartbeatAt ?? null,
+        answers: answersFor(beat, now),
+        clients: [],
+        issues: [],
+      });
+    } catch {
+      issues.push({ path: `machines/${entry.name}/service.json`, code: 'corrupt_resource', message: 'The service beat could not be projected.' });
+    }
+  }
+  machines.sort((left, right) => left.id.localeCompare(right.id));
+  return machines;
+}
+
+async function readJsonRecord(mind, relative, format, issues) {
+  const bytes = await readSafe(mind, relative);
+  if (!bytes) return null;
+  try {
+    const value = JSON.parse(bytes.toString('utf8'));
+    if (value.format !== format) throw new Error('format');
+    return { value, revision: hashBytes(bytes) };
+  } catch {
+    issues.push({ path: relative, code: 'corrupt_resource', message: 'The record could not be projected.' });
+    return { value: null, revision: null };
+  }
+}
+
+function buildSquads(units) {
+  const groups = new Map();
+  for (const unit of units) {
+    if (!unit.id || unit.malformed) continue;
+    const key = unit.leadId ? `lead:${unit.leadId}` : `loose:${unit.scope?.kind ?? 'root'}:${unit.scope?.name ?? 'root'}`;
+    const group = groups.get(key) ?? { id: key, leadId: unit.leadId ?? null, scope: unit.scope, members: [], rollup: { working: 0, idle: 0, waiting: 0, out: 0, attention: 0 } };
+    group.members.push(unit.id);
+    if (unit.status === 'quota' || unit.status === 'unknown') group.rollup.attention += 1;
+    else if (group.rollup[unit.status] !== undefined) group.rollup[unit.status] += 1;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function collectionItems(view, name) {
+  if (name === 'units' || name === 'leads') return name === 'leads' ? view.units.filter((unit) => view.leads.includes(unit.id)) : view.units;
+  if (name === 'squads') return view.squads;
+  if (name === 'machines') return view.machines;
+  if (name === 'sessions') return view.sessions;
+  if (name === 'chats') return view.chats;
+  if (name === 'tasks') return view.tasks;
+  if (name === 'waiting') return view.waiting;
+  if (name === 'messages') return view.messages;
+  return [];
+}
+
+function matchesQuery(item, name, query) {
+  if (query.q && !searchText(item, name).toLowerCase().includes(String(query.q).toLowerCase())) return false;
+  if (query.status && item.status !== query.status) return false;
+  if (query.unitId && item.unitId !== query.unitId && item.id !== query.unitId && item.toId !== query.unitId) return false;
+  return true;
+}
+
+function searchText(item, name) {
+  if (name === 'units' || name === 'leads') return `${item.unit ?? ''} ${item.job ?? ''} ${item.context ?? ''}`;
+  if (name === 'messages') return `${item.subject ?? ''} ${item.body ?? ''}`;
+  if (name === 'tasks') return `${item.number ?? ''} ${item.title ?? ''} ${item.report ?? ''}`;
+  return `${item.title ?? ''} ${item.id ?? ''} ${item.unit ?? ''}`;
+}
+
+function normalizeFilters(query) {
+  const filters = {};
+  for (const key of ['q', 'project', 'machine', 'leadId', 'status', 'unitId', 'listed', 'pinned', 'state', 'kind']) {
+    if (query[key] !== undefined) filters[key] = query[key];
+  }
+  return filters;
+}
+
+function identityOf(item) {
+  return item.id ?? item.path ?? '';
+}
+
+function inProjectChain(unit, project, units) {
+  if (unit.scope?.id === `project:${project}`) return true;
+  if (unit.scope?.kind === 'root' || unit.role === 'overseer' || unit.role === 'master') return true;
+  if (unit.scope?.kind === 'environment') return units.some((item) => item.scope?.id === `project:${project}` && item.leadId === unit.id);
+  return false;
+}
+
+function unitOrder(left, right) {
+  const rank = (unit) => (unit.status === 'idle' || unit.status === 'out' ? 1 : 0);
+  return rank(left) - rank(right) || String(left.unit).localeCompare(String(right.unit)) || String(left.id).localeCompare(String(right.id));
+}
+
+function messageOrder(left, right) {
+  const a = left.timestamp || left.date || '';
+  const b = right.timestamp || right.date || '';
+  return a.localeCompare(b) || String(left.id).localeCompare(String(right.id));
+}
+
+function activityFor(sessions, unitId) {
+  const session = sessions.find((item) => item.unitId === unitId);
+  if (!session) return null;
+  return session.activity ?? null;
+}
+
+function quotaFor(sessions, unitId) {
+  return sessions.find((item) => item.unitId === unitId)?.quota ?? null;
+}
+
+function isMaster(id) {
+  return id === 'root:master' || id === 'user' || id === 'master';
+}
+
+function parseGrants(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function headerMap(bytes) {
+  const text = bytes.toString('utf8');
+  const end = text.indexOf('\n\n') >= 0 ? text.indexOf('\n\n') : text.length;
+  const headers = new Map();
+  for (const line of text.slice(0, end).split(/\r?\n/)) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    headers.set(line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim());
+  }
+  return headers;
+}
+
+function bodyText(bytes) {
+  const text = bytes.toString('utf8');
+  const split = text.split(/\r?\n\r?\n/);
+  return split.length > 1 ? split.slice(1).join('\n\n') : '';
+}
+
+async function filesUnder(root, relative) {
+  const found = [];
+  await walk(path.join(root, ...relative.split('/')), relative, found);
+  return found;
+}
+
+async function walk(directory, relative, found) {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const next = `${relative}/${entry.name}`;
+    if (entry.isDirectory()) await walk(path.join(directory, entry.name), next, found);
+    else if (entry.isFile()) found.push(next);
+  }
+}
+
+async function readSafe(root, relative) {
+  try {
+    return await readFile(path.join(root, ...relative.split('/')));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function boundLimit(limit) {
+  const value = limit === undefined ? 50 : Number(limit);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 200) throw new CoreError(422, 'invalid_query', 'The page limit must be from 1 to 200.');
+  return value;
+}
+
+function encodeCursor(payload) {
+  const encoded = Buffer.from(canonicalJson(payload)).toString('base64url');
+  if (encoded.length > 1024) throw new CoreError(400, 'invalid_cursor', 'The page cursor is too large.');
+  return encoded;
+}
+
+function decodeCursor(cursor) {
+  if (typeof cursor !== 'string' || cursor.length > 1024) throw new CoreError(400, 'invalid_cursor', 'The page cursor is not valid.');
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (parsed.contract !== 'hivem1nd-gui-v3' || typeof parsed.filters !== 'string' || typeof parsed.snapshot !== 'string') {
+      throw new Error('shape');
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof CoreError) throw error;
+    throw new CoreError(400, 'invalid_cursor', 'The page cursor is not valid.');
+  }
+}
