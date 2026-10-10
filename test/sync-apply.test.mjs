@@ -244,6 +244,45 @@ test('a crashed group resumes once and a crashed head is not reused for other by
   assert.equal(service.machine, 'LAPTOP');
 });
 
+test('a registered project imports only cataloged documents, sidecars, and assets', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const shop = path.join(fixture.root, 'shop');
+  await mkdir(path.join(shop, 'gui'), { recursive: true });
+  await mkdir(path.join(shop, 'docs'), { recursive: true });
+  await writeFile(path.join(shop, 'README.md'), 'local');
+  await writeFile(path.join(shop, 'docs', 'release.json'), '{"title":"Release","cover":"docs/flows/assets/icon.png"}\n');
+  await writeFile(path.join(shop, 'gui', 'resources.json'), `${JSON.stringify({
+    format: 'hivem1nd-resources-v1',
+    resources: [{ id: '10943b49-2c8a-4b30-b3aa-2d431e34a551', kind: 'void', project: 'shop', path: 'docs/release.json', legacyId: null }],
+  })}\n`);
+  desktop.projects = [{ name: 'shop', localPath: shop }];
+  const readme = Buffer.from('replaced');
+  await assert.rejects(() => applyPack(desktop, pack([
+    put({ kind: 'project', project: 'shop', path: 'README.md' }, readme),
+  ], [{ hash: hashBytes(readme), raw: readme }]), { projects: desktop.projects }), (error) => error.code === 'invalid_pack');
+  assert.equal(await readFile(path.join(shop, 'README.md'), 'utf8'), 'local');
+  const icon = Buffer.from('png');
+  await applyPack(desktop, pack([
+    put({ kind: 'project', project: 'shop', path: 'docs/flows/assets/icon.png' }, icon),
+  ], [{ hash: hashBytes(icon), raw: icon }], { sequence: 2 }), { projects: desktop.projects });
+  assert.equal(await readFile(path.join(shop, 'docs', 'flows', 'assets', 'icon.png'), 'utf8'), 'png');
+  const notes = Buffer.from('{"title":"Imported"}\n');
+  await applyPack(desktop, pack([
+    put({ kind: 'project', project: 'shop', path: 'docs/release.json' }, notes, { at: LATER }),
+  ], [{ hash: hashBytes(notes), raw: notes }], { sequence: 3 }), { projects: desktop.projects });
+  assert.equal(await readFile(path.join(shop, 'docs', 'release.json'), 'utf8'), '{"title":"Imported"}\n');
+  const comments = Buffer.from('{"threads":[]}\n');
+  await applyPack(desktop, pack([
+    put({ kind: 'project', project: 'shop', path: 'docs/release.comments.json' }, comments),
+  ], [{ hash: hashBytes(comments), raw: comments }], { sequence: 4 }), { projects: desktop.projects });
+  assert.equal(await readFile(path.join(shop, 'docs', 'release.comments.json'), 'utf8'), '{"threads":[]}\n');
+  const evil = Buffer.from('evil');
+  await assert.rejects(() => applyPack(desktop, pack([
+    put({ kind: 'project', project: 'shop', path: 'docs/flows/assets/evil.png' }, evil),
+  ], [{ hash: hashBytes(evil), raw: evil }], { sequence: 5 }), { projects: desktop.projects }), (error) => error.code === 'invalid_pack');
+  await assert.rejects(() => readFile(path.join(shop, 'docs', 'flows', 'assets', 'evil.png')));
+});
+
 test('links are not followed and an unregistered project stays pending', async (t) => {
   const { fixture, desktop } = await world(t);
   const outside = path.join(fixture.root, 'outside');

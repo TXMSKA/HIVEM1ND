@@ -5,7 +5,7 @@ import { resolveTarget } from '../service/paths.mjs';
 import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
-import { resolveIncoming, targetKey } from './store.mjs';
+import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
 import { writeDurable } from './origin.mjs';
 
 const FUTURE_MS = 30000;
@@ -75,13 +75,20 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
     if (Date.parse(item.change.at) > sync.now() + FUTURE_MS) throw new CoreError(422, 'invalid_pack', 'The change time is too far in the future.');
     validateOwner({ packMachine: decoded.header.machine, target: item.change.target, record: item.record, headers: item.headers, bindings });
   }
+  let missingProject = false;
   for (const item of prepared) {
     if (item.change.target.kind !== 'project') continue;
     const project = resolvedProjects.find((entry) => entry.name === item.change.target.project && entry.localPath && entry.eligible !== false);
     if (!project) {
-      await writePending(sync, decoded, incoming.packHash, 'project_unavailable');
-      return { status: 'pending', code: 'project_unavailable', packHash: incoming.packHash };
+      missingProject = true;
+      continue;
     }
+    const allowed = await projectPathSet(project);
+    if (!allowed.has(item.change.target.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
+  }
+  if (missingProject) {
+    await writePending(sync, decoded, incoming.packHash, 'project_unavailable');
+    return { status: 'pending', code: 'project_unavailable', packHash: incoming.packHash };
   }
   for (const item of prepared) await resolveTarget(sync.paths, item.change.target, { projects: resolvedProjects });
   const versions = await readVersions(sync);
