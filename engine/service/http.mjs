@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, isUuid } from './identity.mjs';
+import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection } from './projection.mjs';
@@ -12,6 +12,7 @@ import { answerApproval, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
 import { enqueueStart, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
+import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 
 const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
 const STATIC_FILES = new Set([
@@ -192,6 +193,17 @@ export async function createHttpServer(options) {
   const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP' });
   const credentials = options.credentials;
   const viewers = new Map();
+  const homeMemory = new Map();
+  const homeState = {
+    grant: null,
+    credentials,
+    bus,
+    now: options.now ?? (() => Date.now()),
+    interfaces: options.interfaces,
+    listen: options.listen,
+    schedule: options.schedule,
+    bucket: { peers: new Map(), grantFailures: [] },
+  };
   const bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
   const compiled = routeTable().map(compile);
   const sockets = new Set();
@@ -256,11 +268,16 @@ export async function createHttpServer(options) {
       return;
     }
     if (route.handler === 'authLocal' || route.handler === 'authHome' || route.handler === 'logout') {
-      const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options });
+      const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress });
       respond(res, outcome.status, outcome.body ?? undefined, outcome.headers);
       return;
     }
-    const run = () => invoke(route, { domain, params, query, body, credential, viewers, bus, options });
+    const run = () => invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState });
+    if (route.handler === 'home') {
+      const outcome = await rememberHome(homeMemory, credential, req, relative, body, requestId, run);
+      respond(res, outcome.status ?? 200, { data: outcome.body, meta: { requestId, replayed: outcome.replayed === true }, sync: null });
+      return;
+    }
     const outcome = route.method === 'GET'
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
@@ -430,7 +447,8 @@ function allowedBody(handler) {
     patchViewer: ['presentation', 'dirty'],
     createChat: ['members', 'title'],
     authLocal: [],
-    authHome: ['grant', 'code'],
+    authHome: ['key', 'code'],
+    home: ['enabled', 'addresses'],
   };
   return table[handler] ? new Set(table[handler]) : null;
 }
@@ -455,7 +473,7 @@ function domainContext(options, credential, bus) {
 }
 
 async function invoke(route, scope) {
-  const { domain, params, query, body, credential, viewers, options } = scope;
+  const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
   if (route.handler === 'unavailable') {
     const injected = options.handlers?.[route.template];
@@ -466,7 +484,10 @@ async function invoke(route, scope) {
   if (route.handler === 'collection') return { status: 200, body: await readCollection(domain, route.collection, numbers(query)) };
   if (route.handler === 'detail') return { status: 200, body: await readDetail(domain, route.collection, params.unitId ?? params.chatId ?? params.taskId ?? params.approvalId ?? params.requestId ?? params.messageId) };
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
-  if (route.handler === 'settings') return { status: 200, body: safeSettings(await readDetail(domain, 'settings'), credential) };
+  if (route.handler === 'settings') {
+    const detail = safeSettings(await readDetail(domain, 'settings'), credential);
+    return { status: 200, body: { ...detail, home: homeStatus(homeState) } };
+  }
   if (route.handler === 'createUnit') {
     await createUnit(domain, body);
     return { status: 201, body: { unit: body.unit, role: body.role } };
@@ -496,6 +517,11 @@ async function invoke(route, scope) {
     return { status: 200, body: await changeStatus(domain, params.taskId, body) };
   }
   if (route.handler === 'undoStatus') return { status: 200, body: await undoStatus(domain, params.taskId, body) };
+  if (route.handler === 'home') {
+    if (body.enabled === true) return { status: 201, body: await openHome(homeState, body) };
+    if (body.enabled === false) return { status: 200, body: await closeHome(homeState) };
+    throw new CoreError(422, 'invalid_body', 'Home control needs enabled.');
+  }
   if (route.handler === 'patchSettings') {
     await patchSettings(domain, body);
     return { status: 200, body: await readDetail(domain, 'settings') };
@@ -529,6 +555,19 @@ function safeSettings(detail, credential) {
   if (credential?.audience !== 'phone') return detail;
   const settings = detail.settings ?? {};
   return { settings: { look: settings.look ?? null, language: settings.language ?? null }, revision: detail.revision };
+}
+
+async function rememberHome(memory, credential, req, relative, body, requestId, run) {
+  const key = headerOne(req, 'idempotency-key');
+  if (!isUuid(key)) throw new CoreError(400, 'idempotency_required', 'Idempotency-Key must be a UUID.');
+  const bodyHash = hashText(canonicalJson(body));
+  const prior = memory.get(`${credential.token}:${key}`);
+  if (prior && (prior.path !== relative || prior.bodyHash !== bodyHash)) throw new CoreError(409, 'idempotency_conflict', 'This idempotency key was already used with a different request.');
+  if (prior) return { ...prior.outcome, replayed: true };
+  const outcome = await run();
+  memory.set(`${credential.token}:${key}`, { path: relative, bodyHash, outcome });
+  void requestId;
+  return outcome;
 }
 
 async function mutate(options, credential, req, relative, body, requestId, eventCursor, run) {
@@ -565,7 +604,10 @@ async function runAuth(route, scope) {
     scope.viewers.set(viewerId, { presentation: null, dirty: false });
     return { status: 200, body: { token: issued.token, capabilities: issued.capabilities, viewerId } };
   }
-  if (route.handler === 'authHome') throw new CoreError(503, 'service_unavailable', 'Home access is not available yet.');
+  if (route.handler === 'authHome') {
+    if (scope.listener.kind !== 'lan') throw new CoreError(403, 'forbidden', 'Home exchange is only available on the home network.');
+    return { status: 200, body: await exchange(scope.homeState, scope.body, scope.peer) };
+  }
   scope.credentials.revoke(scope.credential.token);
   scope.bus.closePrincipal(scope.credential.token);
   scope.viewers.delete(scope.credential.viewerId);

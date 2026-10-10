@@ -99,6 +99,11 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
     revoke(token) {
       records.delete(token);
     },
+    revokeAudience(audience) {
+      for (const [token, record] of records) {
+        if (record.audience === audience) records.delete(token);
+      }
+    },
   };
 }
 
