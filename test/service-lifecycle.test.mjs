@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -194,22 +194,49 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
     await closeGuiHost();
     await dispose(fixture);
   });
-  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner() };
+  const originPath = path.join(fixture.root, 'gui-origin');
+  const assetDir = path.join(fixture.root, 'gui-assets');
+  await mkdir(originPath, { recursive: true });
+  await mkdir(assetDir, { recursive: true });
+  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>HIVEM1ND</title>\n');
+  await writeFile(fixture.paths.configFile, `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath: fixture.paths.mind,
+    machine: fixture.machine,
+    origin: { kind: 'folder', path: originPath },
+    stagingPath: fixture.paths.staging,
+    port: 0,
+  })}\n`);
+  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner(), assetDir };
   await assert.rejects(startGui({ ...input, mindPath: path.join(fixture.root, 'missing') }), { code: 'mind_not_configured' });
   await assert.rejects(startGui({ ...input, embedded: true, hostOrigin: 'file://local' }), { code: 'invalid_body' });
   const first = await startGui({ ...input, look: 'modern' });
   const second = await startGui({ ...input, embedded: true, hostOrigin: 'http://embed.example' });
   assert.equal(first.origin, second.origin);
   assert.notEqual(first.token, second.token);
-  assert.equal(first.url.includes('token='), false);
+  assert.equal(first.url, `${first.origin}/gui/${first.viewerId}/#session=${first.token}`);
+  assert.equal(new URL(first.url).search, '');
   assert.equal(first.isDirty(), false);
   assert.equal(second.isDirty(), false);
+  await assert.rejects(() => first.setTheme('paper'), { code: 'invalid_body' });
   await first.setTheme('high-contrast');
   const seen = await call(first.origin, first.token);
   const other = await call(second.origin, second.token);
   assert.equal(seen.json.data.look, 'high-contrast');
   assert.equal(other.json.data.look ?? null, null);
   assert.equal(other.json.data.language ?? null, null);
+  const ownShell = await shellHeaders(`${first.origin}/gui/${first.viewerId}/`);
+  const embeddedShell = await shellHeaders(`${second.origin}/gui/${second.viewerId}/`);
+  const rootShell = await shellHeaders(`${first.origin}/`);
+  assert.match(ownShell.csp, /frame-ancestors 'none'/);
+  assert.equal(ownShell.frame, 'DENY');
+  assert.match(embeddedShell.csp, /frame-ancestors http:\/\/embed\.example/);
+  assert.equal(embeddedShell.frame, undefined);
+  assert.match(rootShell.csp, /frame-ancestors 'none'/);
+  assert.equal(rootShell.frame, 'DENY');
+  await patchDirty(first);
+  await waitFor(() => (first.isDirty() ? 'dirty' : Promise.reject(new Error('clean'))), 'viewer dirty');
+  assert.equal(second.isDirty(), false);
   await second.stop();
   await second.stop();
   const still = await call(first.origin, first.token);
@@ -388,6 +415,44 @@ async function waitFor(read, label, runtime) {
   }
   const detail = runtime?.lastError ? `${runtime.lastError.code ?? ''} ${runtime.lastError.message}` : '';
   throw new Error(`${label} timed out${detail ? `: ${detail}` : ''}${last ? ` (${last.code ?? last.message})` : ''}`);
+}
+
+function shellHeaders(target) {
+  const url = new URL(target);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'GET', headers: { host: url.host } }, (res) => {
+      res.resume();
+      resolve({ status: res.statusCode, csp: res.headers['content-security-policy'], frame: res.headers['x-frame-options'] });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function patchDirty(handle) {
+  const url = new URL('/api/v1/viewer', handle.origin);
+  const payload = Buffer.from(JSON.stringify({ dirty: true }));
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'PATCH',
+      headers: {
+        host: url.host,
+        origin: url.origin,
+        authorization: `Bearer ${handle.token}`,
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        'idempotency-key': randomUUID(),
+      },
+    }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
 }
 
 function call(origin, token) {

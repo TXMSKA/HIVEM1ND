@@ -1,16 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
-import { lstat, mkdir } from 'node:fs/promises';
-import os from 'node:os';
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
+import { closeAttachedServices, connectService, subscribe } from '../engine/service/client.mjs';
 import { CoreError } from '../engine/service/identity.mjs';
-import { servicePaths } from '../engine/service/paths.mjs';
-import { createStore } from '../engine/service/store.mjs';
-import { composeCore } from '../engine/service/service.mjs';
-
-const CAPABILITIES = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailbox.read', 'approval.answer', 'grant.revoke', 'task.status', 'task.undo', 'unit.create', 'unit.connect', 'session.start', 'session.stop', 'layout.write', 'settings.write', 'home.manage', 'editor.read', 'editor.write', 'comment.write', 'proposal.answer', 'asset.write', 'watch', 'viewer.write']);
-
-let active = null;
 
 function fail(status, code, message) {
   throw new CoreError(status, code, message);
@@ -41,76 +34,93 @@ export async function startGui(input = {}) {
   if (hostOrigin != null && !originOf(hostOrigin)) fail(422, 'invalid_body', 'The host origin must be one http or https origin.');
   if (input.look != null && !['modern', 'high-contrast'].includes(input.look)) fail(422, 'invalid_body', 'The look is not supported.');
   if (input.language != null && !['en', 'es'].includes(input.language)) fail(422, 'invalid_body', 'The language is not supported.');
-  if (active && path.resolve(active.mindPath) !== mindPath) fail(409, 'service_mind_conflict', 'Another mind owns the service lock.');
-  if (!active) active = await boot(mindPath, input);
-  const auth = await call(active.port, 'POST', '/api/v1/auth/local', {
-    embedded,
-    hostOrigin,
-    look: input.look ?? null,
-    language: input.language ?? null,
-  }, active.secret);
-  if (auth.status !== 200) fail(auth.status, auth.json?.error?.code ?? 'service_unavailable', 'The viewer could not sign in.');
-  const token = auth.json.token;
-  const viewerId = auth.json.viewerId;
-  if (input.look != null || input.language != null) {
-    await call(active.port, 'PATCH', '/api/v1/viewer', { look: input.look ?? null, language: input.language ?? null }, token);
+  const confineRoot = input.confineRoot ?? (input.env?.LOCALAPPDATA ? path.dirname(input.env.LOCALAPPDATA) : input.env?.XDG_DATA_HOME ? path.dirname(input.env.XDG_DATA_HOME) : null);
+  const service = await connectService({ ...input, mindPath, confineRoot });
+  let token = null;
+  let stream = null;
+  let untrack = null;
+  try {
+    const auth = await call(service.origin.port, 'POST', '/api/v1/auth/local', {
+      embedded,
+      hostOrigin: embedded ? hostOrigin : input.hostOrigin ?? null,
+      look: input.look ?? null,
+      language: input.language ?? null,
+    }, service.secret);
+    if (auth.status !== 200 || !auth.json?.token || !auth.json?.viewerId || !auth.json?.url) {
+      fail(auth.status ?? 503, auth.json?.error?.code ?? 'service_unavailable', 'The viewer could not sign in.');
+    }
+    token = auth.json.token;
+    const viewerId = auth.json.viewerId;
+    const handle = {
+      origin: service.origin.origin,
+      url: auth.json.url,
+      token,
+      viewerId,
+      embedded,
+      capabilities: auth.json.capabilities,
+      dirty: false,
+      look: input.look ?? null,
+      language: input.language ?? null,
+      stopped: false,
+      async setTheme(look) {
+        if (!['modern', 'high-contrast'].includes(look)) fail(422, 'invalid_body', 'The look is not supported.');
+        await patchViewer(service.origin.port, token, { look });
+        handle.look = look;
+      },
+      async setLanguage(language) {
+        if (!['en', 'es'].includes(language)) fail(422, 'invalid_body', 'The language is not supported.');
+        await patchViewer(service.origin.port, token, { language });
+        handle.language = language;
+      },
+      isDirty() {
+        return handle.dirty === true;
+      },
+      async stop() {
+        if (handle.stopped) return;
+        handle.stopped = true;
+        stream?.close();
+        untrack?.();
+        await call(service.origin.port, 'POST', '/api/v1/auth/logout', null, token).catch(() => {});
+        await service.release();
+      },
+    };
+    let ready;
+    const readyPromise = new Promise((resolve, reject) => { ready = { resolve, reject }; });
+    const viewerClient = { origin: service.origin, token, closed: false };
+    stream = subscribe(viewerClient, (frame) => {
+      if (frame.event === 'stream.ready') ready.resolve();
+      if (frame.event === 'error') ready.reject(new CoreError(frame.status ?? 503, 'service_unavailable', 'The viewer stream did not start.'));
+      if (frame.event !== 'viewer.changed') return;
+      const body = frame.data?.data ?? {};
+      if (body.viewerId !== viewerId) return;
+      if (typeof body.dirty === 'boolean') handle.dirty = body.dirty;
+      if (body.look !== undefined) handle.look = body.look;
+      if (body.language !== undefined) handle.language = body.language;
+    });
+    untrack = service.track(stream.close);
+    const timeout = setTimeout(() => ready.reject(new CoreError(503, 'service_unavailable', 'The viewer stream did not start.')), 3000);
+    try {
+      await readyPromise;
+    } finally {
+      clearTimeout(timeout);
+    }
+    return handle;
+  } catch (error) {
+    stream?.close();
+    untrack?.();
+    if (token) await call(service.origin.port, 'POST', '/api/v1/auth/logout', null, token).catch(() => {});
+    await service.release({ stop: true });
+    throw error;
   }
-  const handle = {
-    origin: `http://127.0.0.1:${active.port}`,
-    url: `http://127.0.0.1:${active.port}/gui/${viewerId}#/`,
-    token,
-    viewerId,
-    embedded,
-    capabilities: CAPABILITIES,
-    dirty: false,
-    stopped: false,
-    async setTheme(look) {
-      if (handle.stopped) return;
-      await call(active.port, 'PATCH', '/api/v1/viewer', { look }, token);
-    },
-    async setLanguage(language) {
-      if (handle.stopped) return;
-      await call(active.port, 'PATCH', '/api/v1/viewer', { language }, token);
-    },
-    isDirty() {
-      return handle.dirty === true;
-    },
-    async stop() {
-      if (handle.stopped) return;
-      handle.stopped = true;
-      await call(active.port, 'POST', '/api/v1/auth/logout', null, token);
-    },
-  };
-  return handle;
 }
 
-async function boot(mindPath, input) {
-  const env = input.env ?? process.env;
-  const paths = servicePaths({
-    platform: input.platform ?? process.platform,
-    env,
-    home: input.home ?? os.homedir(),
-    mindPath,
-    machine: input.machine ?? os.hostname(),
-  });
-  await mkdir(paths.localDirectory, { recursive: true });
-  const confineRoot = input.env ? path.dirname(input.env.LOCALAPPDATA ?? input.env.XDG_DATA_HOME ?? paths.cosmic) : null;
-  const store = createStore({
-    root: confineRoot ?? paths.cosmic,
-    mindPath: paths.mind,
-    localDirectory: paths.localDirectory,
-    confineRoot,
-    now: input.now,
-  });
-  if (input.aclRunner) store.aclRunner = input.aclRunner;
-  const core = await composeCore({ store, paths, now: input.now, projects: [], aclRunner: input.aclRunner });
-  return { mindPath, port: core.http.port, core, secret: core.bootstrap.secret };
+async function patchViewer(port, token, body) {
+  const result = await call(port, 'PATCH', '/api/v1/viewer', body, token);
+  if (result.status !== 200) fail(result.status ?? 503, result.json?.error?.code ?? 'service_unavailable', 'The viewer could not be updated.');
 }
 
 export async function closeGuiHost() {
-  if (!active) return;
-  await active.core.http.close();
-  active = null;
+  await closeAttachedServices();
 }
 
 function call(port, method, target, body, token) {
