@@ -1,10 +1,12 @@
-import { writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
-import { composeCore } from '../engine/service/service.mjs';
+import { composeCore, startService, stopService } from '../engine/service/service.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createCredentialStore, protectLocalFile, safeError } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -119,6 +121,100 @@ test('a phone token is rejected for a desktop write on the real listener', async
   await assert.rejects(() => exchange(home, { key: `${grant.key}no` }, '10.0.0.8'), (error) => error.code === 'invalid_home_key');
   await closeQuiet(home);
 });
+
+test('local login requires the protected bootstrap secret and binds only the viewer fields', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const port = await new Promise((resolve) => {
+    const server = createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const assigned = server.address().port;
+      server.close(() => resolve(assigned));
+    });
+  });
+  const started = await startService({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    userKey: 'auth-user',
+    guardPort: port,
+  });
+  t.after(() => stopService(started));
+  const httpPort = started.http.port;
+  const secret = started.bootstrap.secret;
+  const bootFile = path.join(fixture.paths.localDirectory, 'bootstrap.json');
+  const boot = JSON.parse(await readFile(bootFile, 'utf8'));
+  const active = JSON.parse(await readFile(fixture.paths.activeFile, 'utf8'));
+  const local = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'service.json'), 'utf8'));
+  assert.deepEqual(Object.keys(boot).sort(), ['format', 'origin', 'secret', 'startedAt']);
+  assert.equal(boot.format, 'hivem1nd-bootstrap-v1');
+  assert.equal(Buffer.from(boot.secret, 'base64url').length, 32);
+  assert.equal(JSON.stringify(active).includes(secret), false);
+  assert.equal(JSON.stringify(local).includes(secret), false);
+  assert.equal(local.format, 'hivem1nd-service-local-v1');
+  assert.equal(active.mindPath, fixture.paths.mind);
+  const missing = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { body: {} });
+  assert.equal(missing.status, 401);
+  assert.equal(missing.json.error.code, 'invalid_bootstrap');
+  const wrong = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: randomBytes(32).toString('base64url'), body: {} });
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.json.error.code, 'invalid_bootstrap');
+  const opened = await requestJson(httpPort, 'POST', '/api/v1/auth/local', {
+    token: secret,
+    body: { embedded: false, hostOrigin: null, look: 'high-contrast', language: 'es' },
+  });
+  assert.equal(opened.status, 200);
+  assert.equal(opened.json.capabilities.length, 22);
+  assert.equal(opened.json.expiresAt, null);
+  const reused = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: opened.json.token, body: {} });
+  assert.equal(reused.status, 401);
+  assert.equal(reused.json.error.code, 'invalid_bootstrap');
+  const session = await requestJson(httpPort, 'GET', '/api/v1/units', { token: secret });
+  assert.equal(session.status, 401);
+  const viewer = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: opened.json.token });
+  assert.equal(viewer.json.data.look, 'high-contrast');
+  assert.equal(viewer.json.data.language, 'es');
+  assert.equal(viewer.json.data.embedded, false);
+  const extra = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { unit: 'nope' } });
+  assert.equal(extra.status, 422);
+  const host = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { embedded: true, hostOrigin: 'file://local' } });
+  assert.equal(host.status, 422);
+  assert.equal(host.json.error.code, 'invalid_host_origin');
+  await writeFile(bootFile, '{}\n');
+  const closed = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
+  assert.equal(closed.status, 503);
+  assert.equal(closed.json.error.code, 'bootstrap_unavailable');
+  assert.equal(closed.json.token, undefined);
+});
+
+function requestJson(port, method, target, { token = null, body = undefined } = {}) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port,
+      method,
+      path: target,
+      headers: {
+        host: `127.0.0.1:${port}`,
+        origin: `http://127.0.0.1:${port}`,
+        ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const json = raw && String(res.headers['content-type'] ?? '').includes('json') ? JSON.parse(raw) : null;
+        resolve({ status: res.statusCode, json });
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.end(payload);
+    else req.end();
+  });
+}
 
 async function closeQuiet(home) {
   const { closeHome } = await import('../engine/service/home.mjs');

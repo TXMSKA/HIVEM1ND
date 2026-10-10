@@ -341,6 +341,7 @@ test('a loopback projection read returns the same list shape', async (t) => {
         origin: `http://127.0.0.1:${core.http.port}`,
         'content-type': 'application/json',
         'content-length': String(payload.length),
+        authorization: `Bearer ${core.bootstrap.secret}`,
       },
     }, (res) => {
       const chunks = [];
