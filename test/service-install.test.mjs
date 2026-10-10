@@ -7,7 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '../cli/index.mjs';
 import { createWizardServer } from '../gui/server.mjs';
-import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
+import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
 import { assertReleaseAssets, assertZipBounds, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installPayload, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
@@ -56,7 +57,7 @@ test('registration plans stay dry and quote the current user', async () => {
   }), { code: 'unsupported_origin' });
 });
 
-test('registration quoting, reinstall, and failed phase recovery stay off the operating system', async () => {
+test('registration quoting, reinstall, and failed phase recovery stay off the operating system', async (context) => {
   const quoted = planRegistration({
     platform: 'win32',
     nodePath: 'C:\\Program Files\\node.exe',
@@ -92,6 +93,8 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   }), { code: 'service_unavailable' });
 
   const calls = [];
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
   const input = {
     config: {
       mindPath: 'C:\\mind',
@@ -99,7 +102,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
       stagingPath: 'C:\\local\\staging',
       origin: { kind: 'folder', path: 'D:\\origin' },
     },
-    registration: { ...base, platform: 'win32' },
+    registration: { ...base, platform: 'win32', localDirectory: path.join(root, 'local') },
   };
   let persisted = 0;
   const first = await runServicePhases(input, {
@@ -110,6 +113,14 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   });
   assert.equal(first.status, 'failed');
   assert.equal(first.phase, 'start');
+  assert.equal(first.viewerUrl, null);
+  const xml = await readFile(path.join(root, 'local', 'service-task.xml'));
+  assert.equal(xml[0], 0xff);
+  assert.equal(xml[1], 0xfe);
+  assert.match(xml.toString('utf16le'), /--mind-path/);
+  assert.equal(Array.isArray(calls[0]), true);
+  assert.equal(calls[0][0], 'schtasks.exe');
+  assert.equal(calls[0].includes('--mind'), false);
   assert.equal(persisted, 1);
   assert.equal(calls.length, 1);
   const second = await runServicePhases(input, {
@@ -149,6 +160,69 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   });
   assert.equal(same.action, 'unchanged');
   assert.equal(calls.includes('same'), false);
+  assert.equal(planRegistration({ ...base, platform: 'win32' }).name, 'HIVEM1ND-1');
+  assert.equal(planRegistration({ ...base, platform: 'win32' }).arguments.includes('--mind'), false);
+});
+
+test('a mismatched operating system registration is left in place', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const localDirectory = path.join(root, 'local');
+  const acl = stubAclRunner();
+  const calls = [];
+  const created = await installService({ ...base, platform: 'win32', localDirectory }, {
+    dryRun: false,
+    aclRunner: acl,
+    query: async () => ({ present: false }),
+    run: async (argv) => { calls.push(argv); },
+  });
+  assert.equal(created.action, 'create');
+  assert.equal(created.os, true);
+  assert.equal(acl.calls.some((call) => call.op === 'protect'), true);
+  assert.equal(calls[0][0], 'schtasks.exe');
+  const blocked = await installService({ ...base, platform: 'win32', localDirectory }, {
+    dryRun: false,
+    current: { installationId: 'ours', digest: created.digest },
+    query: async () => ({ present: true, installationId: 'foreign', executable: 'C:\\other.exe', arguments: [], digest: 'no' }),
+    run: async () => { calls.push('again'); },
+  });
+  assert.equal(blocked.conflict, true);
+  assert.equal(calls.includes('again'), false);
+  const mind = path.join(root, 'mind');
+  const directory = path.join(root, 'Cosmic', 'hivem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX');
+  await mkdir(directory, { recursive: true });
+  const record = {
+    format: 'hivem1nd-registration-v1',
+    installationId: 'ours',
+    executable: created.executable,
+    arguments: created.arguments,
+    name: created.name,
+    path: created.file,
+    body: created.body,
+    digest: created.digest,
+  };
+  const file = path.join(directory, 'registration.json');
+  await writeFile(file, `${JSON.stringify(record)}\n`);
+  const kept = await removeOwnedRegistration({
+    platform: 'win32',
+    mindPath: mind,
+    hostname: 'TESTBOX',
+    cosmicPath: path.join(root, 'Cosmic'),
+    dryRun: false,
+    query: async () => ({ present: true, installationId: 'foreign', executable: 'C:\\other.exe', arguments: [], digest: 'no' }),
+    run: async () => { throw new Error('deleted'); },
+  });
+  assert.match(kept.kept.reason, /left in place/);
+  assert.match(await readFile(file, 'utf8'), /ours/);
+  await assert.rejects(() => startConfiguredViewer({}, {
+    start: async () => ({ http: { port: 1 } }),
+    login: async () => 'http://127.0.0.1/gui/viewer#/',
+  }), { code: 'service_unavailable' });
+  const ready = await startConfiguredViewer({}, {
+    start: async () => ({ http: { port: 9 }, bootstrap: { secret: 's' } }),
+    login: async ({ port, secret }) => (port === 9 && secret === 's' ? 'http://127.0.0.1:9/gui/v#/' : null),
+  });
+  assert.equal(ready.viewerUrl, 'http://127.0.0.1:9/gui/v#/');
 });
 
 test('uninstall describes an owned registration and keeps a modified one', async (context) => {

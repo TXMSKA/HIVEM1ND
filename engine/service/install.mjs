@@ -50,10 +50,15 @@ export function planRegistration(input) {
   fail(422, 'invalid_path', 'This platform has no user service plan.');
 }
 
+function serviceNameFor(sid) {
+  const tail = String(sid ?? '').split('-').filter(Boolean).pop() || 'user';
+  return `HIVEM1ND-${tail}`;
+}
+
 function planWindows(input) {
-  const name = input.name ?? 'HIVEM1ND-service';
   const sid = input.sid ?? 'S-1-5-21-0';
-  const args = [input.cliPath, 'service', 'run', '--mind', input.mindPath].map(quoteWindows).join(' ');
+  const name = input.name ?? serviceNameFor(sid);
+  const args = [input.cliPath, 'service', 'run', '--mind-path', input.mindPath].map(quoteWindows).join(' ');
   const body = `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${xml(sid)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
@@ -69,7 +74,8 @@ function planWindows(input) {
     body,
     encoding: 'utf-16le',
     executable: input.nodePath,
-    arguments: [input.cliPath, 'service', 'run', '--mind', input.mindPath],
+    arguments: [input.cliPath, 'service', 'run', '--mind-path', input.mindPath],
+    argv: ['schtasks.exe', '/Create', '/XML', file, '/TN', name],
     commands: [`schtasks.exe /Create /XML ${quoteWindows(file)} /TN ${quoteWindows(name)}`],
     digest: createHash('sha256').update(body).digest('hex'),
   };
@@ -77,7 +83,7 @@ function planWindows(input) {
 
 function planMac(input) {
   const label = input.label ?? 'com.hivem1nd.service';
-  const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind', input.mindPath];
+  const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind-path', input.mindPath];
   const body = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>Label</key><string>${xml(label)}</string><key>ProgramArguments</key><array>${args.map((item) => `<string>${xml(item)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(input.workingDirectory)}</string><key>RunAtLoad</key><true/><key>ThrottleInterval</key><integer>5</integer></dict></plist>`;
   const file = path.join(input.home ?? input.workingDirectory, 'Library', 'LaunchAgents', `${label}.plist`);
@@ -97,7 +103,7 @@ function planMac(input) {
 function planLinux(input) {
   if (input.userManager === false) fail(503, 'service_unavailable', 'The user service manager is not available.');
   const unit = input.unitName ?? 'hivem1nd.service';
-  const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind', input.mindPath];
+  const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind-path', input.mindPath];
   const exec = args.map(escapeSystemd).join(' ');
   const body = `[Service]\nType=simple\nExecStart=${exec}\nWorkingDirectory=${escapeSystemd(input.workingDirectory)}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
   const file = path.join(input.configHome ?? path.join(input.home ?? input.workingDirectory, '.config'), 'systemd', 'user', unit);
@@ -124,21 +130,59 @@ export function registrationRunner(run) {
   };
 }
 
+export async function startConfiguredViewer(config, options = {}) {
+  const handle = options.start
+    ? await options.start(config)
+    : await (await import('./service.mjs')).runConfiguredService({ mindPath: config.mindPath, ...options });
+  const port = handle?.http?.port;
+  const secret = handle?.bootstrap?.secret ?? handle?.bootstrapState?.secret;
+  if (!port || !secret) throw new CoreError(503, 'service_unavailable', 'The service is not ready.');
+  const url = options.login
+    ? await options.login({ port, secret, handle })
+    : await loginViewer(port, secret);
+  if (!url) throw new CoreError(503, 'service_unavailable', 'Local login did not complete.');
+  return { viewerUrl: url, handle };
+}
+
+async function loginViewer(port, secret) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/v1/auth/local`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ embedded: false, look: 'light', language: 'en' }),
+  });
+  if (!response.ok) return null;
+  const body = await response.json();
+  return body?.url ?? null;
+}
+
 export async function installService(input, options = {}) {
   const plan = planRegistration(input);
   const dryRun = options.dryRun !== false;
   if (dryRun) return { ...plan, executed: [], dryRun: true, os: false, action: 'plan' };
-  if (options.current) {
+  const actual = options.query ? await options.query(plan) : null;
+  if (actual?.present) {
+    const ownedId = options.current?.installationId && actual.installationId === options.current.installationId;
+    if (sameActual(actual, plan) && (!options.current?.installationId || ownedId)) {
+      return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged' };
+    }
+    if (!ownedId) {
+      return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: 'The login registration is not owned by this install.' };
+    }
+  } else if (!options.query && options.current) {
     const verdict = verifyOwnedRegistration(options.current, plan);
     if (verdict.owned) return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged' };
     return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: verdict.reason };
   }
-  const executed = [];
-  for (const command of plan.commands) {
-    executed.push(command);
-    if (options.run) await options.run(command);
-  }
-  return { ...plan, executed, dryRun: false, os: false, action: 'create', installationId: randomUUID() };
+  await mkdir(path.dirname(plan.file), { recursive: true });
+  await writeFile(plan.file, Buffer.from(`\uFEFF${plan.body}`, 'utf16le'));
+  if (options.aclRunner) await options.aclRunner.protect(plan.file);
+  const action = actual?.present ? 'update' : 'create';
+  const argv = plan.platform === 'win32'
+    ? ['schtasks.exe', '/Create', '/XML', plan.file, '/TN', plan.name, ...(action === 'update' ? ['/F'] : [])]
+    : plan.argv ?? plan.arguments;
+  if (options.run) await options.run(argv);
+  else throw new CoreError(503, 'service_unavailable', 'No registration runner was provided.');
+  return { ...plan, executed: [argv], dryRun: false, os: true, action, installationId: options.current?.installationId ?? randomUUID() };
 }
 
 export function uninstallService(plan, current) {
@@ -156,7 +200,17 @@ export function uninstallService(plan, current) {
 export function verifyOwnedRegistration(current, expected) {
   if (!current) return { owned: false, reason: 'absent' };
   if (current.digest !== expected.digest) return { owned: false, reason: 'modified' };
+  if (current.executable && current.executable !== expected.executable) return { owned: false, reason: 'modified' };
+  if (current.arguments && JSON.stringify(current.arguments) !== JSON.stringify(expected.arguments)) return { owned: false, reason: 'modified' };
+  if (current.installationId && expected.installationId && current.installationId !== expected.installationId) return { owned: false, reason: 'modified' };
   return { owned: true, reason: 'match' };
+}
+
+function sameActual(actual, plan) {
+  if (!actual?.present) return false;
+  return actual.executable === plan.executable
+    && JSON.stringify(actual.arguments ?? []) === JSON.stringify(plan.arguments)
+    && actual.digest === plan.digest;
 }
 
 export function bootstrapConfig(config) {
@@ -342,19 +396,32 @@ export async function removeOwnedRegistration(options = {}) {
     if (error?.code === 'ENOENT') return { commands: [], removed: false };
     throw error;
   }
-  const actual = createHash('sha256').update(current.body ?? '').digest('hex');
-  if (!current.body || actual !== current.digest) {
+  const actualDigest = createHash('sha256').update(current.body ?? '').digest('hex');
+  if (!current.body || actualDigest !== current.digest) {
     return { commands: [], removed: false, kept: { path: ownershipFile, reason: 'The login registration was modified and was left in place.' } };
+  }
+  if (options.query) {
+    const actual = await options.query(current);
+    const same = actual?.executable === current.executable
+      && JSON.stringify(actual?.arguments ?? []) === JSON.stringify(current.arguments ?? [])
+      && actual?.digest === current.digest
+      && (!current.installationId || actual?.installationId === current.installationId);
+    if (!same) {
+      return { commands: [], removed: false, kept: { path: ownershipFile, reason: 'The operating system registration does not match and was left in place.' } };
+    }
   }
   const command = platform === 'win32'
     ? `schtasks.exe /Delete /TN ${quoteWindows(current.name)} /F`
     : platform === 'darwin'
       ? `launchctl bootout gui/${options.uid ?? 501} ${current.path}`
       : `systemctl --user disable --now ${current.name}`;
+  const argv = platform === 'win32'
+    ? ['schtasks.exe', '/Delete', '/TN', current.name, '/F']
+    : [command];
   if (!options.dryRun && options.run) {
-    await options.run(command);
+    await options.run(argv);
     await unlink(ownershipFile);
-    return { commands: [command], removed: true, removedPath: ownershipFile };
+    return { commands: [command], argv, removed: true, removedPath: ownershipFile };
   }
   return { commands: [command], removed: false, described: true };
 }

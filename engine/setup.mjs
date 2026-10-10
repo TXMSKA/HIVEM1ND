@@ -623,7 +623,8 @@ class SetupSession {
     });
     if (service) {
       this.result.service = service;
-      this.result.viewerUrl = service.viewerUrl ?? null;
+      this.result.viewerUrl = service.status === 'started' ? (service.viewerUrl ?? null) : null;
+      if (service.status === 'failed') this.result.completed = false;
     }
     return this.result;
   }
@@ -656,7 +657,7 @@ class SetupSession {
     if (service.state?.installed?.digest) {
       this.serviceCurrent = { digest: service.state.installed.digest, executable: service.state.installed.executable };
     }
-    if (service.viewerUrl && this.openViewer && !this.viewerOpened) {
+    if (service.status === 'started' && service.viewerUrl && this.openViewer && !this.viewerOpened) {
       this.viewerOpened = true;
       await this.openViewer(service.viewerUrl);
     }
