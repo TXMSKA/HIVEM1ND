@@ -37,7 +37,7 @@ function safeScalar(value, label, max = 180) {
 
 function normalizeBinding(value, machine, { remote = false } = {}) {
   if (!plainObject(value)) throw wakeError('WAKE_INVALID_BINDING', 'Wake operations require an explicit binding object.');
-  const unknown = Object.keys(value).find((key) => !['unit', 'nativeSessionId', 'client', 'machine'].includes(key));
+  const unknown = Object.keys(value).find((key) => !['unit', 'unitId', 'nativeSessionId', 'client', 'machine'].includes(key));
   if (unknown) throw wakeError('WAKE_INVALID_BINDING', `Wake binding does not accept ${unknown}.`);
   const unit = safeScalar(value.unit, 'unit', 80);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(unit) || unit === '.' || unit === '..' || unit.endsWith('.')
@@ -52,11 +52,20 @@ function normalizeBinding(value, machine, { remote = false } = {}) {
     throw wakeError('WAKE_INVALID_BINDING', 'machine must be a path-safe host name.');
   }
   if (selectedMachine !== machine && !remote) throw wakeError('WAKE_WRONG_MACHINE', 'A wake controller cannot target a different machine.');
-  return { unit, nativeSessionId, client, machine: selectedMachine };
+  const binding = { unit, nativeSessionId, client, machine: selectedMachine };
+  if (value.unitId !== undefined) {
+    const unitId = safeScalar(value.unitId, 'unitId', 200);
+    if (!/^(root|env|project):[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(unitId) || !unitId.endsWith(`:${unit}`) && unitId !== `root:${unit}`) {
+      throw wakeError('WAKE_INVALID_BINDING', 'unitId must be the canonical id for that unit.');
+    }
+    binding.unitId = unitId;
+  }
+  return binding;
 }
 
 function bindingHash(binding) {
-  return createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  const identity = binding.unitId ?? binding.unit;
+  return createHash('sha256').update(JSON.stringify([identity, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
 }
 
 function iso(ms) { return new Date(ms).toISOString(); }
@@ -157,7 +166,8 @@ function freshPolicy(policy, now) {
 
 function expectedPolicy(policy, binding, key) {
   return Boolean(policy?.kind === 'relay-wake-policy' && policy.version === 1 && policy.key === key
-    && plainObject(policy.binding) && ['unit', 'nativeSessionId', 'client', 'machine'].every((field) => policy.binding[field] === binding[field]));
+    && plainObject(policy.binding) && ['unit', 'nativeSessionId', 'client', 'machine'].every((field) => policy.binding[field] === binding[field])
+    && (binding.unitId == null || policy.binding.unitId === binding.unitId));
 }
 
 function validStoredPolicy(policy, binding, key) {
