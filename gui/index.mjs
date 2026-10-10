@@ -102,7 +102,8 @@ async function boot(mindPath, input) {
     confineRoot,
     now: input.now,
   });
-  const core = await composeCore({ store, paths, now: input.now, projects: [] });
+  if (input.aclRunner) store.aclRunner = input.aclRunner;
+  const core = await composeCore({ store, paths, now: input.now, projects: [], aclRunner: input.aclRunner });
   return { mindPath, port: core.http.port, core, secret: core.bootstrap.secret };
 }
 

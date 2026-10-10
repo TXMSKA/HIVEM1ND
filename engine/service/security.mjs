@@ -1,151 +1,110 @@
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { statSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, mkdir, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { CoreError } from './identity.mjs';
 
 const DESKTOP = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailbox.read', 'approval.answer', 'grant.revoke', 'task.status', 'task.undo', 'unit.create', 'unit.connect', 'session.start', 'session.stop', 'layout.write', 'settings.write', 'home.manage', 'editor.read', 'editor.write', 'comment.write', 'proposal.answer', 'asset.write', 'watch', 'viewer.write']);
 const PHONE = new Set(['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back']);
-const PROTECT_SCRIPT = Buffer.from(`
-$ErrorActionPreference = 'Stop'
-$path = $env:HIVEM1ND_PROTECT_PATH
-$sid = $env:HIVEM1ND_PROTECT_SID
-$item = Get-Item -LiteralPath $path -Force
-$identifier = New-Object System.Security.Principal.SecurityIdentifier($sid)
-$system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-if ($item.PSIsContainer) {
-  $acl = [System.IO.Directory]::GetAccessControl($path)
-  $acl.SetAccessRuleProtection($true, $false)
-  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
-  $flags = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-  $propagation = [System.Security.AccessControl.PropagationFlags]::None
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', $flags, $propagation, 'Allow')))
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', $flags, $propagation, 'Allow')))
-  [System.IO.Directory]::SetAccessControl($path, $acl)
-  $checked = [System.IO.Directory]::GetAccessControl($path).Access
-} else {
-  $acl = [System.IO.File]::GetAccessControl($path)
-  $acl.SetAccessRuleProtection($true, $false)
-  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', 'Allow')))
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
-  [System.IO.File]::SetAccessControl($path, $acl)
-  $checked = [System.IO.File]::GetAccessControl($path).Access
-}
-foreach ($rule in $checked) {
-  if ($rule.IsInherited) { exit 2 }
-  $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-  if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
-}
-`, 'utf16le').toString('base64');
+const SYSTEM_SID = 'S-1-5-18';
+const ADMINISTRATORS_SID = 'S-1-5-32-544';
+const ACL_TIMEOUT_MS = 8000;
 
-const SID_SCRIPT = Buffer.from('$ErrorActionPreference = \'Stop\'; [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value', 'utf16le').toString('base64');
+export function createAclRunner({ spawnSync: run = spawnSync } = {}) {
+  let userSid = null;
+  return {
+    userSid() {
+      if (userSid) return userSid;
+      const result = runTool(run, 'whoami.exe', ['/user', '/fo', 'csv', '/nh']);
+      const sid = String(result.stdout ?? '').match(/S-\d+-\d+(?:-\d+)+/)?.[0] ?? '';
+      if (!/^S-\d+-\d+(?:-\d+)+$/.test(sid)) throw new CoreError(503, 'bootstrap_unavailable', 'The current user could not be identified.');
+      userSid = sid;
+      return sid;
+    },
+    protect(target) {
+      const sid = this.userSid();
+      const rights = statSync(target).isDirectory() ? '(OI)(CI)F' : 'F';
+      const grant = (value) => `*${value}:${rights}`;
+      runTool(run, 'icacls.exe', [
+        target,
+        '/inheritance:r',
+        '/grant:r', grant(SYSTEM_SID),
+        '/grant:r', grant(ADMINISTRATORS_SID),
+        '/grant:r', grant(sid),
+      ]);
+      return { protected: true, sid };
+    },
+    check(target) {
+      const sid = this.userSid();
+      const saved = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(6).toString('hex')}.txt`);
+      try {
+        runTool(run, 'icacls.exe', [target, '/save', saved, '/Q']);
+        assertLimitedAcl(readAclText(saved), sid);
+      } finally {
+        try { unlinkSync(saved); } catch { /* The save file is already gone. */ }
+      }
+      return { ok: true };
+    },
+  };
+}
+
+export function stubAclRunner() {
+  const calls = [];
+  const sid = 'S-1-5-21-1-2-3-1001';
+  return {
+    calls,
+    userSid() {
+      calls.push({ op: 'sid' });
+      return sid;
+    },
+    protect(target) {
+      calls.push({ op: 'protect', target: String(target) });
+      return { protected: true, sid };
+    },
+    check(target) {
+      calls.push({ op: 'check', target: String(target) });
+      return { ok: true };
+    },
+  };
+}
+
+let sharedRunner = null;
+
+export function aclRunnerFrom(options = {}) {
+  return options.aclRunner ?? options.store?.aclRunner ?? sharedAclRunner();
+}
+
+function sharedAclRunner() {
+  if (!sharedRunner) sharedRunner = createAclRunner();
+  return sharedRunner;
+}
 
 export async function protectLocalFile(file, options = {}) {
   if (options.fail === true) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
   await mkdir(path.dirname(file), { recursive: true });
   const info = await stat(file);
-  if (process.platform === 'win32') {
-    const sid = options.sid ?? await currentSid();
-    await runPowerShell(PROTECT_SCRIPT, { HIVEM1ND_PROTECT_PATH: file, HIVEM1ND_PROTECT_SID: sid }, options);
-    await verifyLocalPermissions(file, { sid });
-    return { protected: true, sid };
+  if (process.platform !== 'win32') {
+    await chmod(path.dirname(file), 0o700);
+    await chmod(file, info.isDirectory() ? 0o700 : 0o600);
+    await verifyLocalPermissions(file);
+    return { protected: true };
   }
-  await chmod(path.dirname(file), 0o700);
-  await chmod(file, info.isDirectory() ? 0o700 : 0o600);
-  await verifyLocalPermissions(file);
-  return { protected: true };
+  const runner = aclRunnerFrom(options);
+  const protectedFile = runner.protect(file);
+  return { protected: true, sid: protectedFile.sid };
 }
 
 export async function verifyLocalPermissions(file, options = {}) {
   if (process.platform === 'win32') {
-    const sid = options.sid ?? await currentSid();
-    const output = await runPowerShell(Buffer.from(`
-$ErrorActionPreference = 'Stop'
-$sid = $env:HIVEM1ND_PROTECT_SID
-$path = $env:HIVEM1ND_PROTECT_PATH
-$item = Get-Item -LiteralPath $path -Force
-if ($item.PSIsContainer) { $rules = [System.IO.Directory]::GetAccessControl($path).Access }
-else { $rules = [System.IO.File]::GetAccessControl($path).Access }
-if ($rules.Count -lt 1) { exit 4 }
-foreach ($rule in $rules) {
-  if ($rule.IsInherited) { exit 2 }
-  $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-  if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
-}
-Write-Output 'ok'
-`, 'utf16le').toString('base64'), { HIVEM1ND_PROTECT_PATH: file, HIVEM1ND_PROTECT_SID: sid }, options);
-    if (!output.includes('ok')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+    aclRunnerFrom(options).check(file);
     return { ok: true };
   }
   const info = await stat(file);
   if ((info.mode & 0o077) !== 0) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
   return { ok: true };
 }
-
-const PAIR_PROTECT_SCRIPT = Buffer.from(`
-$ErrorActionPreference = 'Stop'
-$dir = $env:HIVEM1ND_PROTECT_DIR
-$file = $env:HIVEM1ND_PROTECT_FILE
-$sid = $env:HIVEM1ND_PROTECT_SID
-function Protect-Path([string]$path) {
-  $item = Get-Item -LiteralPath $path -Force
-  $identifier = New-Object System.Security.Principal.SecurityIdentifier($sid)
-  $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-  if ($item.PSIsContainer) {
-    $acl = [System.IO.Directory]::GetAccessControl($path)
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
-    $flags = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-    $propagation = [System.Security.AccessControl.PropagationFlags]::None
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', $flags, $propagation, 'Allow')))
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', $flags, $propagation, 'Allow')))
-    [System.IO.Directory]::SetAccessControl($path, $acl)
-    return [System.IO.Directory]::GetAccessControl($path).Access
-  }
-  $acl = [System.IO.File]::GetAccessControl($path)
-  $acl.SetAccessRuleProtection($true, $false)
-  foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identifier, 'FullControl', 'Allow')))
-  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
-  [System.IO.File]::SetAccessControl($path, $acl)
-  return [System.IO.File]::GetAccessControl($path).Access
-}
-function Assert-Owned($rules) {
-  if ($rules.Count -lt 1) { exit 4 }
-  foreach ($rule in $rules) {
-    if ($rule.IsInherited) { exit 2 }
-    $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-    if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
-  }
-}
-Assert-Owned (Protect-Path $dir)
-Assert-Owned (Protect-Path $file)
-Write-Output 'ok'
-`, 'utf16le').toString('base64');
-
-const PAIR_VERIFY_SCRIPT = Buffer.from(`
-$ErrorActionPreference = 'Stop'
-$dir = $env:HIVEM1ND_PROTECT_DIR
-$file = $env:HIVEM1ND_PROTECT_FILE
-$sid = $env:HIVEM1ND_PROTECT_SID
-function Get-Rules([string]$path) {
-  $item = Get-Item -LiteralPath $path -Force
-  if ($item.PSIsContainer) { return [System.IO.Directory]::GetAccessControl($path).Access }
-  return [System.IO.File]::GetAccessControl($path).Access
-}
-function Assert-Owned($rules) {
-  if ($rules.Count -lt 1) { exit 4 }
-  foreach ($rule in $rules) {
-    if ($rule.IsInherited) { exit 2 }
-    $value = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-    if ($value -ne $sid -and $value -ne 'S-1-5-18') { exit 3 }
-  }
-}
-Assert-Owned (Get-Rules $dir)
-Assert-Owned (Get-Rules $file)
-Write-Output 'ok'
-`, 'utf16le').toString('base64');
 
 export async function protectBootstrapFiles(directory, file, options = {}) {
   if (options.fail === true) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
@@ -157,14 +116,11 @@ export async function protectBootstrapFiles(directory, file, options = {}) {
     await verifyLocalPermissions(file);
     return { protected: true };
   }
-  const sid = options.sid ?? await currentSid();
-  const output = await runPowerShell(PAIR_PROTECT_SCRIPT, {
-    HIVEM1ND_PROTECT_DIR: directory,
-    HIVEM1ND_PROTECT_FILE: file,
-    HIVEM1ND_PROTECT_SID: sid,
-  }, options);
-  if (!output.includes('ok')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
-  return { protected: true, sid };
+  const runner = aclRunnerFrom(options);
+  runner.protect(directory);
+  runner.protect(file);
+  runner.check(file);
+  return { protected: true, sid: runner.userSid() };
 }
 
 export async function verifyBootstrapFiles(directory, file, options = {}) {
@@ -173,13 +129,7 @@ export async function verifyBootstrapFiles(directory, file, options = {}) {
     await verifyLocalPermissions(file);
     return { ok: true };
   }
-  const sid = options.sid ?? await currentSid();
-  const output = await runPowerShell(PAIR_VERIFY_SCRIPT, {
-    HIVEM1ND_PROTECT_DIR: directory,
-    HIVEM1ND_PROTECT_FILE: file,
-    HIVEM1ND_PROTECT_SID: sid,
-  }, options);
-  if (!output.includes('ok')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  aclRunnerFrom(options).check(file);
   return { ok: true };
 }
 
@@ -317,41 +267,53 @@ export function safeError(error, requestId) {
   };
 }
 
-async function currentSid() {
-  const output = await runPowerShell(SID_SCRIPT, {});
-  const sid = output.trim().split(/\s+/).at(-1);
-  if (!/^S-\d+-\d+(?:-\d+)+$/.test(sid ?? '')) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
-  return sid;
-}
-
-function runPowerShell(encoded, env, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+function runTool(run, command, args) {
+  let result;
+  try {
+    result = run(command, args, {
       shell: false,
       windowsHide: true,
+      timeout: ACL_TIMEOUT_MS,
+      encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...env },
     });
-    options.handles?.push(child);
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.'));
-    }, 8000);
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
-    child.once('error', () => {
-      clearTimeout(timer);
-      reject(new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.'));
-    });
-    child.once('exit', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.'));
-      else resolve(stdout);
-      void stderr;
-    });
-  });
+  } catch {
+    throw new CoreError(503, 'bootstrap_unavailable', 'The private folder could not be protected.');
+  }
+  if (result?.error || result?.status !== 0) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder could not be protected.');
+  return result;
+}
+
+function readAclText(file) {
+  const bytes = readFileSync(file);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  if (bytes.includes(0)) return bytes.toString('utf16le').replace(/^\uFEFF/, '');
+  return bytes.toString('utf8');
+}
+
+function assertLimitedAcl(text, userSid) {
+  const marker = text.indexOf('D:');
+  if (marker < 0) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
+  const dacl = text.slice(marker).split(/\r?\n/, 1)[0].trim();
+  const flags = dacl.slice(2).split('(', 1)[0];
+  if (!flags.includes('P')) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder still inherits permissions.');
+  const allowed = new Set([SYSTEM_SID, ADMINISTRATORS_SID, 'SY', 'BA', userSid.toUpperCase()]);
+  const aces = [...dacl.matchAll(/\(([^()]*)\)/g)].map((match) => match[1]);
+  if (aces.length < 1) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
+  let sawUser = false;
+  let sawSystem = false;
+  let sawAdmin = false;
+  for (const ace of aces) {
+    const fields = ace.split(';');
+    if (fields.length < 6) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
+    if ((fields[1] ?? '').includes('ID')) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder still inherits permissions.');
+    const trustee = fields[5].toUpperCase();
+    if (!allowed.has(trustee)) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
+    if (trustee === userSid.toUpperCase()) sawUser = true;
+    if (trustee === 'SY' || trustee === SYSTEM_SID) sawSystem = true;
+    if (trustee === 'BA' || trustee === ADMINISTRATORS_SID) sawAdmin = true;
+  }
+  if (!sawUser || !sawSystem || !sawAdmin) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
 }
 
 function normalizeAddress(address) {

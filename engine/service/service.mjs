@@ -7,7 +7,7 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, readBytes, recoverTransactions } from './store.mjs';
 import { writeDurable } from '../sync/origin.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
-import { createCredentialStore, protectBootstrapFiles, verifyBootstrapFiles } from './security.mjs';
+import { createCredentialStore, protectBootstrapFiles } from './security.mjs';
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 
@@ -66,26 +66,16 @@ export async function attachOrStart(options, port = options.guardPort) {
   const deadline = Date.now() + (options.attachTimeoutMs ?? 10000);
   let bootstrap = null;
   let active = null;
-  let protectedRecord = false;
   while (Date.now() <= deadline) {
     bootstrap = await readOptionalJson(bootstrapPath(options));
     active = await readOptionalJson(activePath(options));
     if (bootstrap && active && (!validBootstrap(bootstrap) || !validActive(active))) {
       throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
     }
-    if (bootstrap && active) {
-      try {
-        await verifyBootstrapFiles(path.dirname(bootstrapPath(options)), bootstrapPath(options));
-        protectedRecord = true;
-        break;
-      } catch {
-        protectedRecord = false;
-      }
-    }
+    if (bootstrap && active) break;
     await new Promise((resolve) => setTimeout(resolve, 15));
   }
   if (!bootstrap || !active) throw new CoreError(503, options.attachTimeoutMs == null ? 'service_start_timeout' : 'service_unavailable', 'The guard is occupied by something else.');
-  if (!protectedRecord) throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
   if (active.mindPath !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
   if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
     throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
@@ -233,7 +223,11 @@ async function publishBootstrap(options, httpPort, state) {
     state.secret = secret;
     state.record = record;
     state.valid = false;
-    await protectBootstrapFiles(path.dirname(file), file, { handles: options.handles, sid: options.sid, fail: options.bootstrapFail === true });
+    await protectBootstrapFiles(path.dirname(file), file, {
+      aclRunner: options.aclRunner,
+      store: options.store,
+      fail: options.bootstrapFail === true,
+    });
     state.valid = true;
     return record;
   } catch (error) {
