@@ -4,7 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
-import { answerApproval, changeTaskStatus } from "../gui/app/actions.mjs";
+import { answerApproval, changeTaskStatus, startSession } from "../gui/app/actions.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
@@ -732,6 +732,52 @@ test("embedded viewers accept only their parent and logout is idempotent", async
   }), (error) => error.status === 401);
 });
 
+test("session, approval and grant outcomes use the contract events", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, urls);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === executor.id, "The inspector did not open.");
+  const overseer = (await request(desktop.app.api, "GET", "/units/:unitId", { params: { unitId: "root:overseer" } })).data;
+  const started = await startSession(desktop.app.api, overseer, "cursor", null);
+  await waitFor(() => desktop.app.sessionRequestId === started.data.requestId && noteText(desktop) === "The session is queued.", "The session request event did not arrive.");
+  await fixture.control.patchSession(started.data.requestId, "failed", "launch_ambiguous");
+  const beforeReset = urls.length;
+  const firstMark = desktop.app.trackedAt ?? 0;
+  await fixture.control.emit("stream.reset", { reason: "service_restarted", cursor: "0" });
+  await waitFor(() => (desktop.app.trackedAt ?? 0) > firstMark && noteText(desktop) === "The session failed. Nothing was launched." && urls.slice(beforeReset).some((url) => url.includes(`/session-requests/${started.data.requestId}`)), "The session request was not reread.");
+
+  const pendingId = "e80a0bf9-8fb4-4d64-9527-04524c9a2ecf";
+  const pending = desktop.root.querySelector(`[data-approval="${pendingId}"]`);
+  click(pending?.querySelector("[data-action='deny']"));
+  await waitFor(() => desktop.app.answerId && noteText(desktop) === "Answer queued.", "The queued denial was not shown.");
+  assert.notEqual(noteText(desktop), "Approved");
+  assert.equal(desktop.root.querySelector(`[data-approval="${pendingId}"]`)?.getAttribute("data-approval-state"), "answering");
+  const beforeAnswer = urls.length;
+  const answerMark = desktop.app.trackedAt ?? 0;
+  await fixture.control.emit("stream.reset", { reason: "cursor_expired", cursor: "0" });
+  await waitFor(() => (desktop.app.trackedAt ?? 0) > answerMark && urls.slice(beforeAnswer).some((url) => url.includes(`/approvals/${pendingId}/answers/${desktop.app.answerId}`)), "The answer was not reread.");
+  await fixture.control.settleAnswer(desktop.app.answerId, "applied");
+  await waitFor(() => noteText(desktop) === "Denied" && desktop.root.querySelector(`[data-approval="${pendingId}"]`)?.getAttribute("data-approval-state") === "denied", "The denial was labeled as an approval.");
+  assert.equal(urls.some((url) => url.includes("/waiting")), true);
+  assert.equal(urls.some((url) => url.includes("/approval-grants")), true);
+
+  const grantId = "f605f169-8686-4a88-a213-7ca19703fd41";
+  click(desktop.root.querySelector(`[data-grant="${grantId}"]`));
+  await waitFor(() => desktop.app.revocationRequestId, "The revocation was not tracked.");
+  await fixture.control.settleRevocation(desktop.app.revocationRequestId);
+  await waitFor(() => desktop.root.querySelector(`[data-grant="${grantId}"]`) == null && noteText(desktop) === "The grant was revoked.", "The revoked grant stayed in the inspector.");
+
+  const extraId = "11111111-1111-4111-8111-111111111111";
+  const sample = desktop.app.inspectorData.approvals[0];
+  await fixture.control.emit("approval.requested", { approval: { ...sample, id: extraId, display: "Extra request", state: "pending" } });
+  await waitFor(() => desktop.root.querySelector(`[data-approval="${extraId}"]`), "The requested approval did not appear.");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -800,6 +846,22 @@ function jsonEnvelope(status, data) {
     meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
   });
   return { status, ok: status >= 200 && status < 300, headers: { get() { return null; } }, text: async () => body };
+}
+
+function noteText(booted) {
+  return booted.root.querySelector("[data-action-note]")?.textContent ?? "";
+}
+
+function click(node) {
+  for (const handler of node?.listeners?.get("click") ?? []) handler({ preventDefault() {}, target: node });
+}
+
+async function waitFor(check, label) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (check()) return;
+    await delay(25);
+  }
+  throw new Error(label);
 }
 
 async function until(check) {
