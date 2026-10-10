@@ -38,7 +38,7 @@ export async function requestApproval(context, input) {
   if (typeof input?.display !== 'string' || input.display.length < 1 || input.display.length > 240) {
     throw new CoreError(422, 'invalid_body', 'The approval display is not valid.');
   }
-  if (typeof input?.alwaysAllowed !== 'boolean') throw new CoreError(422, 'invalid_body', 'alwaysAllowed must be boolean.');
+  if (input?.alwaysAllowed !== undefined && typeof input.alwaysAllowed !== 'boolean') throw new CoreError(422, 'invalid_body', 'alwaysAllowed must be boolean.');
   const state = await readState(context, parsed);
   if (!state) throw new CoreError(404, 'unit_not_found', 'The requesting unit does not exist.');
   const chat = await chatFor(context, input?.chatId, parsed.id);
@@ -55,7 +55,8 @@ export async function requestApproval(context, input) {
     action: normalized.action,
     pattern: normalized.pattern,
     display: input.display,
-    alwaysAllowed: Boolean(normalized.exact && input.alwaysAllowed && !existing),
+    alwaysAllowed: Boolean(normalized.alwaysAllowed && !existing),
+    operationId: typeof input?.operationId === 'string' ? input.operationId : null,
     requestedAt,
     expiresAt: new Date(context.now() + LIFETIME_MS).toISOString(),
   };
@@ -93,7 +94,7 @@ export async function requestApproval(context, input) {
       throw new CoreError(502, 'delivery_failed', 'The approval notice was not delivered.');
     }
   }
-  const live = existing ? await sessionLive(context, sessionId, request) : false;
+  const live = existing ? await resumeNative(context, request) : false;
   return {
     status: existing ? 200 : 202,
     approval: projectApproval(request, existing ? 'approved' : 'pending', result),
@@ -290,7 +291,7 @@ async function settle(context, loaded, answer, state, pending = null) {
     events.push({ name: 'unit.changed', data: { unit: { id: request.unitId } } });
   }
   await commitFiles(context, entries, events);
-  const resumed = state === 'approved' && await sessionLive(context, request.sessionId, request);
+  const resumed = state === 'approved' && await resumeNative(context, request);
   return { status: 200, approvalId: request.id, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, replayed: false };
 }
 
@@ -373,10 +374,16 @@ async function reconcileGrants(context) {
 
 function arm(context, request) {
   const delay = Date.parse(request.expiresAt) - context.now();
-  if (delay <= 0 || typeof context.schedule !== 'function') return;
-  context.schedule(() => {
+  if (delay <= 0) return;
+  const run = () => {
     recoverApprovals(context).catch(() => {});
-  }, delay);
+  };
+  if (typeof context.schedule === 'function') {
+    context.schedule(run, delay);
+    return;
+  }
+  const timer = setTimeout(run, delay);
+  timer.unref?.();
 }
 
 async function chatFor(context, chatId, unitId) {
@@ -424,24 +431,19 @@ async function readAnswers(context, approvalId) {
 }
 
 async function sessionLive(context, sessionId, request) {
-  const directory = path.join(context.paths.mind, 'user', 'relay', 'sessions');
-  let names = [];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw error;
+  if (typeof context.native?.connected !== 'function') return false;
+  if (await context.native.connected(sessionId) !== true) return false;
+  if (request?.action === 'file.write' && Array.isArray(context.attached) && !context.attached.includes(request.pattern?.path)) return false;
+  return true;
+}
+
+async function resumeNative(context, request) {
+  const live = await sessionLive(context, request.sessionId, request);
+  if (!live) return false;
+  if (typeof context.native?.resolve === 'function') {
+    await context.native.resolve({ sessionId: request.sessionId, operationId: request.operationId ?? null, decision: 'approve' });
   }
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const bytes = await readBytes(context.store, path.join(directory, name));
-    if (!bytes) continue;
-    const parsed = JSON.parse(bytes.toString('utf8'));
-    if (parsed.sessionId !== sessionId || parsed.state === 'stopped') continue;
-    if (request?.action === 'file.write' && Array.isArray(context.attached) && !context.attached.includes(request.pattern?.path)) return false;
-    return true;
-  }
-  return false;
+  return true;
 }
 
 async function approvalIds(context) {
@@ -536,7 +538,20 @@ function withAnswer(loaded, answer) {
 function normalizeProcess(pattern, projects) {
   const command = typeof pattern.command === 'string' ? pattern.command : '';
   const cwd = typeof pattern.cwd === 'string' ? pattern.cwd.replaceAll('\\', '/').replace(/\/+$/, '') : '';
-  const exact = command.length > 0 && !/[?*[\]]/.test(command) && !command.includes('..') && projects.includes(cwd);
+  const known = new Set();
+  for (const project of projects) {
+    if (typeof project === 'string') {
+      const trimmed = project.replaceAll('\\', '/').replace(/\/+$/, '');
+      known.add(trimmed);
+      continue;
+    }
+    if (typeof project?.name === 'string') {
+      known.add(project.name);
+      known.add(`project:${project.name}`);
+    }
+    if (typeof project?.localPath === 'string') known.add(project.localPath.replaceAll('\\', '/').replace(/\/+$/, ''));
+  }
+  const exact = command.length > 0 && !/[?*[\]]/.test(command) && !command.includes('..') && known.has(cwd);
   return { action: 'process.run', pattern: { command, cwd }, exact, alwaysAllowed: exact };
 }
 

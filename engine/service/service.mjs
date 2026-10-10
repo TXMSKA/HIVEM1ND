@@ -18,6 +18,7 @@ import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './security.mjs';
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
+import { recoverApprovals } from './approvals.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -55,6 +56,12 @@ export async function startService(options) {
     await acquireServiceLock(handle);
     await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
+    await recoverApprovals({
+      store: options.store,
+      paths,
+      now: options.now ?? (() => Date.now()),
+      projects: options.projects ?? [],
+    });
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;
     handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now });

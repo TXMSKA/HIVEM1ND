@@ -43,6 +43,18 @@ function pattern() {
   return { command: 'npm run build', cwd: 'project:shop' };
 }
 
+function liveNative(sessionId) {
+  const calls = [];
+  return {
+    calls,
+    connected: async (id) => id === sessionId,
+    resolve: async (input) => {
+      calls.push(input);
+      return { acknowledged: true };
+    },
+  };
+}
+
 async function requestBytes(fixture, id) {
   return readFile(path.join(fixture.paths.mind, 'user', 'relay', 'approvals', id, 'request.json'));
 }
@@ -67,10 +79,17 @@ test('normalization is exact and unsupported actions stay unsupported', () => {
   const network = normalizeAction('network.request', { method: 'get', origin: 'https://example.com', path: '/hook' });
   assert.deepEqual(network.pattern, { method: 'GET', origin: 'https://example.com', path: '/hook' });
   assert.throws(() => normalizeAction('shell.glob', { command: '*' }), (error) => error.code === 'unsupported_action');
+  const registered = normalizeAction('process.run', { command: 'npm run build', cwd: 'project:shop' }, { projects: [{ name: 'shop', localPath: 'C:/shop' }] });
+  assert.equal(registered.exact, true);
+  const elsewhere = normalizeAction('process.run', { command: 'npm run build', cwd: 'C:/other' }, { projects: [{ name: 'shop', localPath: 'C:/shop' }] });
+  assert.equal(elsewhere.exact, false);
 });
 
 test('the owner applies one local decision and a stale dialog cannot replace it', async (t) => {
-  const { fixture, context, master } = await service(t);
+  const { fixture, context, master, sessionId } = await service(t);
+  const native = liveNative(sessionId);
+  context.native = native;
+  master.native = native;
   await assert.rejects(() => requestApproval(context, {
     action: 'shell.glob', pattern: { command: '*' }, display: 'Nope', alwaysAllowed: false, unitId: 'env:web:overlord-web',
   }), (error) => error.code === 'unsupported_action');
@@ -82,6 +101,7 @@ test('the owner applies one local decision and a stale dialog cannot replace it'
   const resolved = await answerApproval(master, created.approval.id, { decision: 'approve-always', expectedRevision: revision });
   assert.equal(resolved.allow, true);
   assert.equal(resolved.resumed, true);
+  assert.equal(native.calls.length, 1);
   assert.equal(resolved.state, 'approved');
   const saved = await grants(fixture);
   assert.equal(saved.length, 1);
@@ -145,6 +165,9 @@ test('expiry, delivery failure, and inexact always never become an allow', async
   assert.equal(inexact.approval.alwaysAllowed, false);
   const revision = approvalRevision({ request: await requestBytes(fixture, inexact.approval.id), answers: [] });
   await assert.rejects(() => answerApproval(master, inexact.approval.id, { decision: 'approve-always', expectedRevision: revision }), (error) => error.code === 'always_unavailable');
+  const native = liveNative(context.principal.sessionId);
+  context.native = native;
+  master.native = native;
   const once = await answerApproval(master, inexact.approval.id, { decision: 'approve', expectedRevision: revision });
   assert.equal(once.grantId, null);
   assert.equal(once.allow, true);
@@ -226,13 +249,21 @@ test('a remote owner applies revocation and the requester does not invent the re
 });
 
 test('an existing exact grant resolves without a prompt and a dead session does not resume', async (t) => {
-  const { fixture, context, master } = await service(t);
+  const { fixture, context, master, sessionId } = await service(t);
   const grant = { id: randomUUID(), action: 'process.run', pattern: { command: 'npm run build', cwd: 'project:shop' }, grantedAt: '2026-10-10T11:00:00.000Z', grantedBy: 'root:master' };
   await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'), stateText('DESKTOP', [grant]));
   const matched = await requestApproval(context, { action: 'process.run', pattern: { command: 'npm run build', cwd: 'project:shop/' }, display: 'Build', alwaysAllowed: true });
   assert.equal(matched.prompted, false);
-  assert.equal(matched.allow, true);
+  assert.equal(matched.allow, false);
+  assert.equal(matched.resumed, false);
   assert.equal(matched.approval.grantId, grant.id);
+  const native = liveNative(sessionId);
+  context.native = native;
+  const resumed = await requestApproval(context, { action: 'process.run', pattern: { command: 'npm run build', cwd: 'project:shop/' }, display: 'Build', alwaysAllowed: true, operationId: 'op-1' });
+  assert.equal(resumed.allow, true);
+  assert.equal(resumed.resumed, true);
+  assert.equal(native.calls.length, 1);
+  assert.equal(native.calls[0].operationId, 'op-1');
   assert.equal((await grants(fixture)).length, 1);
   const quiet = { ...context, principal: { ...context.principal, sessionId: randomUUID() } };
   const created = await requestApproval(quiet, { action: 'network.request', pattern: { method: 'post', origin: 'https://example.com', path: '/hook' }, display: 'Call', alwaysAllowed: false });
