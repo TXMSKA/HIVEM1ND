@@ -554,6 +554,8 @@ test("review, undo, and queued approval outcomes stay distinct", async (context)
   const expired = await request(expiredApi, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ec4");
   await assert.rejects(answerApproval(expiredApi, expired.data, "deny"), (error) => error.code === "approval_expired");
   assert.equal(expiredApi.token !== null, true);
+  const desktopReturn = await changeTaskStatus(api, gated, "open", "Desktop send back");
+  assert.equal(desktopReturn.data.task.status, "open");
 });
 
 function fixtureApi(fixture) {

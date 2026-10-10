@@ -1,5 +1,7 @@
 import {
   answerApproval,
+  canAccept,
+  canSendBack,
   changeTaskStatus,
   connectUnits,
   createUnit,
@@ -1597,9 +1599,10 @@ function renderInspector(app, t, selected) {
   }
   for (const task of data.tasks ?? []) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
+    const phone = app.layout === "phone" || app.store.audience === "phone";
     panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
-    }));
+    }, phone ? canAccept(task) : canSendBack(task)));
     panel.append(openTaskDetail(document, task, t));
   }
   panel.append(renderWaiting(document, data.waiting, t));

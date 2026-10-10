@@ -567,8 +567,11 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   await until(() => phone.app.inspectorData?.unitId === executor.id);
   navigate(phone.app, "waiting");
   const review = phone.root.querySelector("[data-task='project:shop:029']");
+  const gatedReview = phone.root.querySelector("[data-task='project:shop:030']");
   assert.equal(review?.querySelector("[data-action='accept']")?.disabled, false);
   assert.equal(review?.querySelector("[data-action='send-back']")?.disabled, false);
+  assert.equal(gatedReview?.querySelector("[data-action='accept']")?.disabled, true);
+  assert.equal(gatedReview?.querySelector("[data-action='send-back']")?.disabled, true);
   assert.equal(phone.root.querySelector("[data-action='undo']"), null);
   assert.equal(phone.root.querySelector("[data-action='revoke-grant']"), null);
   phone.view.innerWidth = 1440;
@@ -585,14 +588,7 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   await request(phone.app.api, "POST", message.path, { operation: message });
   await retryOperation(phone.app.api, message);
   const returning = (await request(phone.app.api, "GET", "/tasks/:taskId", { params: { taskId: "project:shop:030" } })).data;
-  const note = createOperation({
-    method: "POST",
-    path: "/tasks/:taskId/status",
-    params: { taskId: "project:shop:030" },
-    body: { status: "open", note: "Needs another pass", expectedRevision: returning.revision },
-  });
-  await request(phone.app.api, "POST", note.path, { operation: note });
-  await retryOperation(phone.app.api, note);
+  await assert.rejects(changeTaskStatus(phone.app.api, returning, "open", "Needs another pass"), (error) => error.code === "phone_read_only");
   await changeTaskStatus(phone.app.api, (await request(phone.app.api, "GET", "/tasks/:taskId", { params: { taskId: "project:shop:029" } })).data, "done");
   const mailboxOperation = createOperation({
     method: "POST",
@@ -602,6 +598,15 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   });
   const mailbox = await request(phone.app.api, "POST", mailboxOperation.path, { operation: mailboxOperation });
   await markMailboxRead(phone.app.api, "root:master", [mailbox.data.id]);
+  const agentMail = createOperation({
+    method: "POST",
+    path: "/mailboxes/:unitId/messages",
+    params: { unitId: "project:shop:executor-shop" },
+    body: { body: "From the phone", subject: "", replyTo: null, attachments: [], priority: "normal" },
+  });
+  const agentMessage = await request(phone.app.api, "POST", agentMail.path, { operation: agentMail });
+  assert.equal(agentMessage.data.body, "From the phone");
+  await assert.rejects(markMailboxRead(phone.app.api, "project:shop:executor-shop", [agentMessage.data.id]), (error) => error.code === "phone_read_only");
   const approval = (await request(phone.app.api, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ecf")).data;
   await answerApproval(phone.app.api, approval, "approve");
   await delay(200);
