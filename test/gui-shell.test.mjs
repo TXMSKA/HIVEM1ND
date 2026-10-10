@@ -808,6 +808,44 @@ test("Watch opens the focused board and clears a stopped watch", async (t) => {
   await waitFor(() => desktop.app.editors.watch == null, "The stopped watch remained.");
 });
 
+test("an incoming render keeps unsent chat text and return notes", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length > 1, "The chat list did not load.");
+  navigate(desktop.app, "chats");
+  const [first, second] = desktop.app.chatList.catalog;
+  desktop.app.activeHandlers.onActivate({ id: first.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === first.id && desktop.root.querySelector("[data-composer]"), "The first chat did not open.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "Unsent hello", 6, 11);
+  await fixture.control.emit("service.changed", { machine: "DESKTOP" });
+  await waitFor(() => desktop.root.querySelector("[data-composer]")?.value === "Unsent hello", "The unsent chat text was erased.");
+  const restored = desktop.root.querySelector("[data-composer]");
+  assert.equal(desktop.document.activeElement, restored);
+  assert.equal(restored.selectionStart, 6);
+  assert.equal(restored.selectionEnd, 11);
+  desktop.app.activeHandlers.onActivate({ id: second.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === second.id && desktop.root.querySelector("[data-composer]")?.value === "", "The second chat reused the first draft.");
+  typeInput(desktop.root.querySelector("[data-composer]"), "Second draft", 0, 6);
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-composer]").value, "Second draft");
+  desktop.app.activeHandlers.onActivate({ id: first.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === first.id && desktop.root.querySelector("[data-composer]")?.value === "Unsent hello", "The first draft was lost while switching chats.");
+  click(desktop.root.querySelector("[data-action='send']"));
+  await waitFor(() => desktop.app.thread?.chat?.id === first.id && desktop.root.querySelector("[data-composer]")?.value === "", "The sent chat draft remained.");
+
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']"), "The return note did not appear.");
+  typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "Needs another pass", 6, 13);
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").value, "Needs another pass");
+  assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").selectionStart, 6);
+  click(desktop.root.querySelector("[data-task='project:shop:030']")?.querySelector("[data-action='send-back']"));
+  await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']")?.value === "", "The sent return note remained.");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -880,6 +918,14 @@ function jsonEnvelope(status, data) {
 
 function noteText(booted) {
   return booted.root.querySelector("[data-action-note]")?.textContent ?? "";
+}
+
+function typeInput(node, value, start, end) {
+  node.value = value;
+  node.selectionStart = start;
+  node.selectionEnd = end;
+  node.focus();
+  for (const handler of node.listeners?.get("input") ?? []) handler();
 }
 
 function click(node) {
@@ -996,7 +1042,19 @@ function createTestDocument(width = 390) {
       removeEventListener() {},
       querySelector(selector) { return find(this, selector, false); },
       querySelectorAll(selector) { return find(this, selector, true); },
-      focus() {},
+      focus() { this.ownerDocument.activeElement = this; },
+      setSelectionRange(start, end) {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+      },
+      contains(node) {
+        let current = node;
+        while (current) {
+          if (current === this) return true;
+          current = current.parent;
+        }
+        return false;
+      },
       remove() {},
       getBoundingClientRect() { return { left: 0, top: 0, width, height: 700 }; },
     };
