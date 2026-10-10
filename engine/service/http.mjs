@@ -446,11 +446,15 @@ async function serveEdge(req, res, pathname, { assetDir, viewers }) {
     name = decodeStatic(pathname.slice('/app/'.length));
   }
   const bytes = await serveStatic(assetDir, name);
-  respond(res, 200, bytes, {
+  const viewerId = pathname.startsWith('/gui/') ? decodeId(decodeURIComponent(pathname.split('/')[2] ?? '')) : null;
+  const viewer = viewerId ? viewers.get(viewerId) : null;
+  const embedded = viewer?.embedded === true && validHostOrigin(viewer.hostOrigin);
+  const headers = {
     'content-type': contentType(name),
-    'content-security-policy': csp(),
-    'x-frame-options': 'DENY',
-  });
+    'content-security-policy': csp(embedded ? viewer.hostOrigin : "'none'"),
+  };
+  if (!embedded) headers['x-frame-options'] = 'DENY';
+  respond(res, 200, bytes, headers);
 }
 
 function compile(route) {
@@ -802,7 +806,18 @@ async function invoke(route, scope) {
   if (route.handler === 'patchViewer') {
     const current = { ...(viewers.get(credential.viewerId) ?? {}), ...body };
     viewers.set(credential.viewerId, current);
-    scope.bus.emit({ name: 'viewer.changed', viewerId: credential.viewerId, data: { viewerId: credential.viewerId } });
+    scope.bus.emit({
+      name: 'viewer.changed',
+      viewerId: credential.viewerId,
+      data: {
+        viewerId: credential.viewerId,
+        embedded: current.embedded === true,
+        hostOrigin: current.hostOrigin ?? null,
+        look: current.look ?? null,
+        language: current.language ?? null,
+        dirty: current.dirty === true,
+      },
+    });
     return { status: 200, body: current };
   }
   throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
@@ -1007,8 +1022,8 @@ function contentType(name) {
   return 'text/html; charset=utf-8';
 }
 
-function csp() {
-  return "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+function csp(ancestors) {
+  return `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
 }
 
 function decodeStatic(name) {
