@@ -530,6 +530,9 @@ function domainContext(options, credential, bus) {
     aliases: options.aliases ?? [],
     adapters: options.adapters ?? null,
     models: options.models ?? [],
+    ledger: options.ledger ?? null,
+    sync: options.sync ?? null,
+    pulse: options.pulse ?? null,
     principal: {
       unitId: audience === 'agent' ? credential.unitId : 'root:master',
       audience,
