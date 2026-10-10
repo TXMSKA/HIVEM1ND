@@ -76,8 +76,8 @@ function parseJson(bytes, code = 'corrupt_resource') {
   }
 }
 
-function catalogFile(project) {
-  return path.join(project.localPath, 'docs', 'flows', 'resources.json');
+function catalogFile(context) {
+  return path.join(context.paths.mind, 'user', 'gui', 'resources.json');
 }
 
 function indexFile(project) {
@@ -88,8 +88,8 @@ function commentsFile(project, legacyId) {
   return path.join(project.localPath, 'docs', 'flows', 'comments', `${legacyId}.json`);
 }
 
-async function readCatalog(project) {
-  const loaded = await loadBytes(catalogFile(project));
+async function readCatalog(context) {
+  const loaded = await loadBytes(catalogFile(context));
   const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-resources-v1', resources: [] };
   if (!value || typeof value !== 'object' || !Array.isArray(value.resources)) fail(409, 'corrupt_resource', 'The resource could not be read.');
   return { ...loaded, value };
@@ -184,9 +184,9 @@ export async function registerResource(context, input) {
   const readOnly = relative.endsWith('.mjs');
   const document = readOnly ? null : validateBoard(parseJson(loaded.bytes));
   const legacyId = document?.id ?? path.basename(relative).replace(/\.(json|mjs)$/, '');
-  const catalog = await readCatalog(project);
+  const catalog = await readCatalog(context);
   if (catalog.value.resources.some((item) => item.project === project.name && item.legacyId === legacyId)) fail(409, 'board_id_exists', 'That board id is already registered.');
-  if (catalog.value.resources.some((item) => item.path === relative)) fail(409, 'resource_exists', 'That path is already registered.');
+  if (catalog.value.resources.some((item) => item.project === project.name && item.path === relative)) fail(409, 'resource_exists', 'That path is already registered.');
   const entry = {
     id: randomUUID(),
     kind: input.kind ?? 'blueprint',
@@ -197,7 +197,7 @@ export async function registerResource(context, input) {
     attached: [],
   };
   const next = { ...catalog.value, resources: [...catalog.value.resources, entry] };
-  await commit(context, [record(catalogFile(project), catalog.revision, jsonBytes(next))]);
+  await commit(context, [record(catalogFile(context), catalog.revision, jsonBytes(next))]);
   return view(entry, document, loaded.revision);
 }
 
@@ -206,8 +206,9 @@ export async function list(context, query = {}) {
   const items = [];
   for (const name of names) {
     const project = projectOf(context, name);
-    const catalog = await readCatalog(project);
+    const catalog = await readCatalog(context);
     for (const entry of catalog.value.resources) {
+      if (entry.project !== project.name) continue;
       if (query.kind && entry.kind !== query.kind) continue;
       const file = inside(project.localPath, entry.path);
       const loaded = await loadBytes(file);
@@ -219,12 +220,12 @@ export async function list(context, query = {}) {
 
 async function resourceOf(context, id) {
   if (!isUuid(id)) fail(404, 'not_found', 'The resource does not exist.');
-  for (const project of context.projects ?? []) {
-    const catalog = await readCatalog(project);
-    const entry = entryOf(catalog, id);
-    if (entry) return { project, catalog, entry };
-  }
-  fail(404, 'not_found', 'The resource does not exist.');
+  const catalog = await readCatalog(context);
+  const entry = entryOf(catalog, id);
+  if (!entry) fail(404, 'not_found', 'The resource does not exist.');
+  const project = (context.projects ?? []).find((item) => item.name === entry.project && item.localPath);
+  if (!project) fail(503, 'project_unavailable', 'The project is not available on this machine.');
+  return { project, catalog, entry };
 }
 
 export async function readEditor(context, id) {
@@ -258,7 +259,7 @@ export async function createBoard(context, input) {
   const full = inside(project.localPath, relative);
   const existing = await loadBytes(full);
   if (existing.bytes) fail(409, 'resource_exists', 'That path is already registered.');
-  const catalog = await readCatalog(project);
+  const catalog = await readCatalog(context);
   if (catalog.value.resources.some((item) => item.project === project.name && item.legacyId === document.id)) fail(409, 'board_id_exists', 'That board id is already registered.');
   const index = await loadBytes(indexFile(project));
   const comments = await loadBytes(commentsFile(project, document.id));
@@ -278,7 +279,7 @@ export async function createBoard(context, input) {
   const bytes = jsonBytes(document);
   await commit(context, [
     record(full, null, bytes),
-    record(catalogFile(project), catalog.revision, jsonBytes(nextCatalog)),
+    record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
     record(indexFile(project), index.revision, jsonBytes(nextIndex)),
     record(commentsFile(project, document.id), null, jsonBytes(sidecar)),
   ]);
@@ -394,7 +395,7 @@ export async function writeAttachments(context, id, input) {
   const resources = found.catalog.value.resources.map((item) => (item.id === id ? { ...item, attached: [...input.attached] } : item));
   const next = { ...found.catalog.value, resources };
   const bytes = jsonBytes(next);
-  await commit(context, [record(catalogFile(found.project), found.catalog.revision, bytes)]);
+  await commit(context, [record(catalogFile(context), found.catalog.revision, bytes)]);
   return { attached: [...input.attached], revision: hashBytes(bytes) };
 }
 
@@ -568,9 +569,9 @@ export async function createText(context, input) {
     fail(422, 'invalid_path', 'The path id is not canonical.');
   }
   if ((await loadBytes(full)).bytes) fail(409, 'resource_exists', 'That path is already registered.');
-  const catalog = await readCatalog(project);
+  const catalog = await readCatalog(context);
   const id = uuidV8(['editor', 'void', project.name, relative]);
-  if (catalog.value.resources.some((item) => item.id === id || item.path === relative)) fail(409, 'resource_exists', 'That path is already registered.');
+  if (catalog.value.resources.some((item) => item.id === id || (item.project === project.name && item.path === relative))) fail(409, 'resource_exists', 'That path is already registered.');
   const entry = {
     id, kind: 'void', project: project.name, path: relative, legacyId: path.basename(relative, '.json'), readOnly: false,
     attached: Array.isArray(input.attached) ? [...input.attached] : [],
@@ -582,7 +583,7 @@ export async function createText(context, input) {
     record(full, null, bytes),
     record(`${stemOf(full)}.orig.json`, null, bytes),
     record(`${stemOf(full)}.comments.json`, null, jsonBytes(comments)),
-    record(catalogFile(project), catalog.revision, jsonBytes(nextCatalog)),
+    record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
   ], [{ name: 'void.changed', resourceId: id, revision: hashBytes(bytes), data: { resourceId: id, revision: hashBytes(bytes), operation: 'create' } }]);
   rememberExternal(context, id, hashBytes(bytes), document);
   return view(entry, document, hashBytes(bytes));

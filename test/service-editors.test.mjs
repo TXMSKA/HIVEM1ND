@@ -182,7 +182,7 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(denied.status, 403);
-  const editor = await readEditor({ store: fixture.store, projects: [{ name: 'shop', localPath }] }, created.json.data.id);
+  const editor = await readEditor({ store: fixture.store, paths: fixture.paths, projects: [{ name: 'shop', localPath }] }, created.json.data.id);
   assert.equal(editor.document.script, 'from http');
 });
 

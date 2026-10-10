@@ -23,7 +23,8 @@ const DEPENDENCY_KEYS = ['hash', 'machine', 'packHash', 'sequence'];
 const TRANSACTION_KEYS = ['changeIds', 'id'];
 const CHANGE_KEYS = ['at', 'baseHash', 'format', 'hash', 'id', 'machine', 'messageId', 'operation', 'size', 'target', 'transactionId'];
 
-const LOCAL_PREFIXES = ['user/relay/sessions/', 'user/relay/leases/', 'user/relay/credentials/'];
+const LOCAL_PREFIXES = ['user/relay/leases/', 'user/relay/credentials/', 'user/relay/endpoints/'];
+const LOCAL_FIELDS = new Set(['endpoint', 'endpoints', 'credential', 'credentials', 'token', 'secret', 'secrets', 'pid', 'lease', 'bootstrap', 'password', 'authorization', 'socket', 'pipe']);
 
 export function compressObject(raw) {
   const bytes = asBuffer(raw);
@@ -470,6 +471,40 @@ function validateTransactions(transactions, changes) {
     ids.add(change.id);
   }
   return normalized;
+}
+
+export function sessionVerdict(bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes));
+  } catch {
+    return 'excluded';
+  }
+  if (!parsed || parsed.kind !== 'registration') return 'excluded';
+  return containsLocal(parsed, 0) ? 'secret' : 'ok';
+}
+
+export function sanitizeSessionRecord(bytes) {
+  if (sessionVerdict(bytes) === 'excluded') return null;
+  const parsed = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes));
+  return Buffer.from(canonicalJson(stripLocal(parsed, 0)));
+}
+
+function containsLocal(value, depth) {
+  if (depth > 8 || !value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => containsLocal(item, depth + 1));
+  return Object.entries(value).some(([key, item]) => LOCAL_FIELDS.has(key) || containsLocal(item, depth + 1));
+}
+
+function stripLocal(value, depth) {
+  if (depth > 8 || !value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((item) => stripLocal(item, depth + 1));
+  const next = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (LOCAL_FIELDS.has(key)) continue;
+    next[key] = stripLocal(item, depth + 1);
+  }
+  return next;
 }
 
 function safeMindPath(input) {

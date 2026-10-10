@@ -253,9 +253,11 @@ test('a registered project imports only cataloged documents, sidecars, and asset
   const shop = path.join(fixture.root, 'shop');
   await mkdir(path.join(shop, 'gui'), { recursive: true });
   await mkdir(path.join(shop, 'docs'), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'gui'), { recursive: true });
   await writeFile(path.join(shop, 'README.md'), 'local');
   await writeFile(path.join(shop, 'docs', 'release.json'), '{"title":"Release","cover":"docs/flows/assets/icon.png"}\n');
-  await writeFile(path.join(shop, 'gui', 'resources.json'), `${JSON.stringify({
+  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"README.md"}]}\n');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
     format: 'hivem1nd-resources-v1',
     resources: [{ id: '10943b49-2c8a-4b30-b3aa-2d431e34a551', kind: 'void', project: 'shop', path: 'docs/release.json', legacyId: null }],
   })}\n`);

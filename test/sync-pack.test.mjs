@@ -398,6 +398,8 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   const shop = path.join(fixture.root, 'shop');
   await mkdir(path.join(mind, 'user', 'gui'), { recursive: true });
   await mkdir(path.join(mind, 'user', 'relay', 'sessions'), { recursive: true });
+  await mkdir(path.join(mind, 'user', 'relay', 'leases'), { recursive: true });
+  await mkdir(path.join(mind, 'user', 'relay', 'credentials'), { recursive: true });
   await mkdir(path.join(mind, 'engine'), { recursive: true });
   await mkdir(path.join(shop, 'docs', 'flows', 'boards'), { recursive: true });
   await mkdir(path.join(shop, 'docs', 'flows', 'comments'), { recursive: true });
@@ -410,13 +412,23 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   await writeFile(path.join(mind, 'user', 'page.tmp'), 'temp');
   await writeFile(path.join(mind, 'user', 'notes.conflict-DESKTOP-20261010T120000000Z'), 'lost');
   await writeFile(path.join(mind, 'user', 'relay', 'sessions', 'session.json'), '{}');
+  const registrationId = uuidV8(['registration', 'shop']);
+  const registrationPath = `user/relay/sessions/${registrationId}.json`;
+  const registration = {
+    kind: 'registration', registrationId, sessionId: uuidV8(['session', 'shop']), unitId: 'project:shop:executor-shop',
+    client: 'codex', machine: 'DESKTOP', endpoint: '\\\\.\\pipe\\secret', credential: 'hidden',
+  };
+  await writeFile(path.join(mind, 'user', 'relay', 'sessions', `${registrationId}.json`), `${JSON.stringify(registration)}\n`);
+  await writeFile(path.join(mind, 'user', 'relay', 'leases', 'lease.json'), '{"pid":4}\n');
+  await writeFile(path.join(mind, 'user', 'relay', 'credentials', 'token.json'), '{"token":"no"}\n');
   await writeFile(path.join(mind, 'engine', 'kit.mjs'), 'kit');
   await writeFile(path.join(shop, '.git', 'config'), 'git');
   await writeFile(path.join(shop, 'readme.md'), 'no');
-  await writeFile(path.join(shop, 'gui', 'resources.json'), `${JSON.stringify({
+  await writeFile(path.join(mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
     format: 'hivem1nd-resources-v1',
     resources: [{ id: uuidV8(['editor', 'blueprint', 'shop', 'docs/flows/boards/cart.json']), kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/cart.json', legacyId: 'cart' }],
   })}\n`);
+  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"readme.md"}]}\n');
   await writeFile(path.join(shop, 'docs', 'flows', 'boards', 'cart.json'), '{"src":"docs/flows/assets/logo.png"}\n');
   await writeFile(path.join(shop, 'docs', 'flows', 'comments', 'cart.json'), '{}\n');
   await writeFile(path.join(shop, 'docs', 'flows', 'assets', 'logo.png'), Buffer.from([137, 80, 78, 71]));
@@ -430,11 +442,18 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
     'project:shop:docs/flows/assets/logo.png',
     'project:shop:docs/flows/boards/cart.json',
     'project:shop:docs/flows/comments/cart.json',
-    'project:shop:gui/resources.json',
   ].sort());
   assert.ok(eligible.includes('mind::user/gui/layout.json'));
+  assert.ok(eligible.includes('mind::user/gui/resources.json'));
   assert.ok(eligible.includes('mind::user/draft.txt'));
-  assert.equal(eligible.some((item) => item.includes('credentials') || item.includes('.tmp') || item.includes('conflict') || item.includes('sessions') || item.includes('kit') || item.includes('readme') || item.includes('linked') || item.includes('.git')), false);
+  assert.ok(eligible.includes(`mind::${registrationPath}`));
+  assert.equal(eligible.some((item) => item.includes('credentials') || item.includes('.tmp') || item.includes('conflict') || item.endsWith('session.json') || item.includes('leases') || item.includes('kit') || item.includes('readme') || item.includes('linked') || item.includes('.git')), false);
+  const observed = await observeLocalChange(sync, { kind: 'mind', path: registrationPath }, { bytes: await readFile(path.join(mind, registrationPath)) });
+  assert.equal(observed.staged, true);
+  const stored = JSON.parse((await readObject(sync, observed.change.hash)).toString('utf8'));
+  assert.equal(stored.kind, 'registration');
+  assert.equal(stored.endpoint, undefined);
+  assert.equal(stored.credential, undefined);
   const raw = Buffer.from('same');
   const transactionId = uuidV8(['transaction', 'pair']);
   const staged = await stageTransaction(sync, [
@@ -447,11 +466,11 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   assert.equal(staged[0].transactionId, transactionId);
   assert.deepEqual(await readObject(sync, staged[0].hash), raw);
   const objects = await readdir(path.join(fixture.paths.localDirectory, 'staging', 'objects'));
-  assert.equal(objects.length, 1);
+  assert.equal(objects.length, 2);
   const [tomb] = await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/left.txt' }, deleted: true }]);
   assert.equal(tomb.operation, 'delete');
   assert.equal(tomb.hash, null);
-  assert.equal((await readdir(path.join(fixture.paths.localDirectory, 'staging', 'objects'))).length, 1);
+  assert.equal((await readdir(path.join(fixture.paths.localDirectory, 'staging', 'objects'))).length, 2);
   const baselines = await stageBaselines(sync);
   assert.ok(baselines.length >= 4);
   const again = await stageBaselines(sync);

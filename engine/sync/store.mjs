@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { atomicWrite, exclusiveRecord, readBytes, withLocks } from '../service/store.mjs';
-import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, validateChange } from './pack.mjs';
+import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -116,8 +116,14 @@ async function observeUnlocked(sync, target, options) {
   const key = targetKey(normalized);
   const at = options.at ? requireTime(options.at) : timestamp(sync.now());
   const deleted = options.deleted === true;
-  if (!deleted && options.bytes == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
-  const nextHash = deleted ? null : hashBytes(Buffer.isBuffer(options.bytes) ? options.bytes : Buffer.from(options.bytes));
+  let source = options.bytes;
+  if (!deleted && normalized.kind === 'mind' && normalized.path.startsWith('user/relay/sessions/')) {
+    const clean = sanitizeSessionRecord(source);
+    if (!clean) return { staged: false, excluded: true };
+    source = clean;
+  }
+  if (!deleted && source == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
+  const nextHash = deleted ? null : hashBytes(Buffer.isBuffer(source) ? source : Buffer.from(source));
   if (options.applied === true) {
     const id = typeof options.id === 'string' ? options.id : uuidV8(['applied', sync.machine, key, nextHash ?? 'deleted', at]);
     const machine = typeof options.machine === 'string' ? options.machine : sync.machine;
@@ -130,7 +136,7 @@ async function observeUnlocked(sync, target, options) {
     if (!matches) {
       const pendingLocal = deleted
         ? { hash: null, deleted: true, at }
-        : { hash: nextHash, deleted: false, at, bytes: Buffer.from(options.bytes).toString('base64') };
+        : { hash: nextHash, deleted: false, at, bytes: Buffer.from(source).toString('base64') };
       await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: marker.hash, at: marker.at, machine: marker.machine, id: marker.id, deleted: marker.deleted === true, pendingLocal })}\n`, 'utf8'));
       return { staged: false, held: true };
     }
@@ -169,7 +175,7 @@ async function observeUnlocked(sync, target, options) {
   if (current && current.deleted === deleted && current.hash === nextHash) return { staged: false, unchanged: true };
   const [change] = await stageUnlocked(sync, [{
     target: normalized,
-    bytes: options.bytes,
+    bytes: source,
     deleted,
     at,
     id: options.id,
@@ -262,7 +268,7 @@ async function prepareTarget(sync, target) {
   if (normalized.kind === 'project') {
     const project = sync.projects.find((item) => item.name === normalized.project && item.localPath && item.eligible !== false);
     if (!project) throw new CoreError(409, 'project_unavailable', 'The project is not registered on this machine.');
-    const allowed = await projectPathSet(project);
+    const allowed = await projectPathSet(project, { mind: sync.paths.mind });
     if (!allowed.has(normalized.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
   }
   await resolveTarget(sync.paths, normalized, { projects: sync.projects });
@@ -274,6 +280,10 @@ async function walkMind(sync, targets) {
     if (!relative.startsWith('user/')) return;
     if (isInside(sync.paths.origin, absolute) || isInside(sync.paths.localDirectory, absolute) || isInside(sync.paths.staging, absolute)) return;
     try {
+      if (relative.startsWith('user/relay/sessions/')) {
+        const bytes = await readFile(absolute);
+        if (sessionVerdict(bytes) === 'excluded') return;
+      }
       targets.push(normalizeTarget({ kind: 'mind', path: relative }));
     } catch {
       return;
@@ -297,7 +307,7 @@ async function walkDirectory(root, relative, visit) {
       const stats = await lstat(full);
       if (stats.isSymbolicLink()) continue;
       if (entry.name === '.git' || entry.name === 'node_modules') continue;
-      if (next === 'user/relay/sessions' || next === 'user/relay/leases' || next === 'user/relay/credentials') continue;
+      if (next === 'user/relay/leases' || next === 'user/relay/credentials' || next === 'user/relay/endpoints') continue;
       await walkDirectory(root, next, visit);
       continue;
     }
@@ -307,7 +317,7 @@ async function walkDirectory(root, relative, visit) {
 }
 
 async function projectTargets(sync, project) {
-  const allowed = await projectPathSet(project);
+  const allowed = await projectPathSet(project, { mind: sync.paths.mind });
   const targets = [];
   for (const relative of allowed) {
     const absolute = path.resolve(project.localPath, ...relative.split('/'));
@@ -318,7 +328,7 @@ async function projectTargets(sync, project) {
   return targets;
 }
 
-export async function projectPathSet(project) {
+export async function projectPathSet(project, options = {}) {
   const allowed = new Set();
   const add = (relative) => {
     try {
@@ -327,8 +337,7 @@ export async function projectPathSet(project) {
       return;
     }
   };
-  if (await isRegular(path.join(project.localPath, 'gui', 'resources.json'))) add('gui/resources.json');
-  for (const resource of await readCatalog(project)) {
+  for (const resource of await readCatalog(options.mind, project.name)) {
     if (resource?.project !== project.name || typeof resource.path !== 'string') continue;
     add(resource.path);
     for (const sidecar of sidecars(resource)) add(sidecar);
@@ -371,12 +380,14 @@ function referencedAssets(bytes) {
   return found;
 }
 
-async function readCatalog(project) {
-  const file = path.join(project.localPath, 'gui', 'resources.json');
+async function readCatalog(mind, projectName) {
+  if (!mind) return [];
+  const file = path.join(mind, 'user', 'gui', 'resources.json');
   if (!(await isRegular(file))) return [];
   try {
     const parsed = JSON.parse((await readFile(file)).toString('utf8'));
-    return parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources) ? parsed.resources : [];
+    const resources = parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources) ? parsed.resources : [];
+    return resources.filter((item) => item?.project === projectName);
   } catch {
     return [];
   }

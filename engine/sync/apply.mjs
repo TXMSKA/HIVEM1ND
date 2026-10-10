@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
-import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, validateChange, validateHead } from './pack.mjs';
+import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
@@ -126,6 +126,9 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
   for (const item of prepared) absorbOwnerRecord(ownerBindings, item.record);
   const missingOwners = [];
   for (const item of prepared) {
+    if (item.change.target.kind === 'mind' && item.change.target.path.startsWith('user/relay/sessions/') && item.raw && sessionVerdict(item.raw) !== 'ok') {
+      throw new CoreError(422, 'invalid_pack', 'A session registration still carries a local secret.');
+    }
     if (Date.parse(item.change.at) > sync.now() + FUTURE_MS) throw new CoreError(422, 'invalid_pack', 'The change time is too far in the future.');
     const verdict = validateOwner({ packMachine: decoded.header.machine, target: item.change.target, record: item.record, headers: item.headers, bindings: ownerBindings });
     if (verdict.state === 'pending') missingOwners.push(verdict.missing);
@@ -142,7 +145,7 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
       missingProject = true;
       continue;
     }
-    const allowed = await projectPathSet(project);
+    const allowed = await projectPathSet(project, { mind: sync.paths.mind });
     if (!allowed.has(item.change.target.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
   }
   if (missingProject) {
