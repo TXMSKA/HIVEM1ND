@@ -441,6 +441,25 @@ test('a state approval header drops tombstoned grants and keeps the rest of the 
   assert.ok(Object.values(versions.targets).some((item) => item.hash === hashBytes(fileBytes)));
 });
 
+test('a resumed group keeps an unexpected edit instead of replaying over it', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const left = Buffer.from('left');
+  const right = Buffer.from('right');
+  const transactionId = uuidV8(['group', 'resume']);
+  const first = put({ kind: 'mind', path: 'user/group-left.txt' }, left, { transactionId, id: uuidV8(['group-left']) });
+  const second = put({ kind: 'mind', path: 'user/group-right.txt' }, right, { transactionId, at: LATER, id: uuidV8(['group-right']) });
+  const grouped = pack([first, second], [{ hash: hashBytes(left), raw: left }, { hash: hashBytes(right), raw: right }], {
+    transactions: [{ id: transactionId, changeIds: [first.id, second.id] }],
+  });
+  desktop.applyFault = { afterWrites: 1 };
+  await assert.rejects(() => applyPack(desktop, grouped), { code: 'injected_crash' });
+  const rightPath = path.join(fixture.paths.mind, 'user', 'group-right.txt');
+  await writeFile(rightPath, 'unexpected');
+  await applyPack(desktop, grouped);
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'group-left.txt'), 'utf8'), 'left');
+  assert.equal(await readFile(rightPath, 'utf8'), 'unexpected');
+});
+
 test('an out-of-order pack stays pending and a foreign sequence is not published', async (t) => {
   const { fixture, desktop, laptopOrigin } = await world(t);
   const raw = Buffer.from('later');
