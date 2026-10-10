@@ -1567,11 +1567,6 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.equal(textResource.querySelector("[data-action='save-range']") != null, true);
   assert.equal(textComments.querySelector("[data-comment]") != null, true);
   assert.equal(textComments.querySelector("[data-source]"), null);
-  click(textResource.querySelector("[data-action='enter-focus']"));
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
-  assert.equal(desktop.root.querySelector("[data-editor-layout]"), null);
-  assert.equal(desktop.root.querySelector(".side") != null, true);
-  assert.equal(desktop.root.querySelector(".inspector") != null, true);
 
   const css = await readFile("gui/app/styles.css", "utf8");
   const modern = css.split('[data-look="high-contrast"]')[0];
@@ -1581,6 +1576,61 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.match(contrast, /--editor-side:\s*240px/);
   assert.match(contrast, /--editor-comments:\s*380px/);
   assert.match(css, /\.workspace-editor\s*\{[^}]*grid-template-columns:\s*var\(--editor-side\)\s+minmax\(0,\s*1fr\)\s+var\(--editor-comments\)/);
+});
+
+test("Focus keeps only the readable document until the pointer reveals its tools", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
+  click(desktop.root.querySelector("[data-action='enter-focus']"));
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
+  const reading = desktop.root.querySelector("[data-focus-layout]");
+  assert.equal(reading?.getAttribute("data-focus-layout"), "document");
+  assert.equal(desktop.root.querySelector(".workspace-focus")?.children.length, 1);
+  assert.equal(textNodes(reading.querySelector(".void-page")).some((node) => node.textContent.includes("Welcome")), true);
+  assert.equal(reading.querySelector("[data-tools]")?.getAttribute("data-tools"), "hidden");
+  assert.equal(desktop.root.querySelector("[data-editor-column]"), null);
+  assert.equal(desktop.root.querySelector("[data-editor-tools]"), null);
+  assert.equal(desktop.root.querySelector("[data-comment]"), null);
+  assert.equal(desktop.root.querySelector(".side"), null);
+  assert.equal(desktop.root.querySelector(".inspector"), null);
+  assert.equal(desktop.root.querySelector(".foot") != null, true);
+  for (const look of ["high-contrast", "modern"]) {
+    desktop.app.look = look;
+    renderShell(desktop.app);
+    assert.equal(desktop.app.look, look);
+    assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
+    assert.equal(desktop.root.querySelector("[data-editor-column]"), null);
+    assert.equal(desktop.root.querySelector(".void-page") != null, true);
+  }
+  const stale = desktop.root.querySelector("[data-action='enter-focus']");
+  for (const handler of desktop.root.listeners?.get("pointermove") ?? []) handler();
+  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "visible");
+  assert.equal(desktop.root.querySelector(".void-tools")?.className.includes("is-visible"), true);
+  for (const handler of desktop.view.listeners?.get("keydown") ?? []) {
+    handler({ key: "Escape", target: { tagName: "BODY" }, preventDefault() {} });
+  }
+  const fresh = desktop.root.querySelector("[data-action='enter-focus']");
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
+  assert.equal(fresh != null && fresh !== stale, true);
+  assert.equal(desktop.document.activeElement, fresh);
+  assert.equal(fresh.closest("[data-editor-layout]")?.getAttribute("data-editor-layout"), "document");
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const focusCss = css.slice(css.indexOf('[data-mode="focus"]'));
+  assert.match(focusCss, /background:\s*#000000/);
+  assert.match(focusCss, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(focusCss, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+  assert.match(focusCss, /\[data-mode="focus"\] \.foot[\s\S]*display:\s*none/);
+  assert.match(focusCss, /box-shadow:\s*none/);
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {
@@ -1739,7 +1789,20 @@ function createTestDocument(width = 390) {
     createTextNode(value) { return make("#text", null, String(value)); },
     createDocumentFragment() { return make("#fragment", null); },
   };
-  const view = { parent: null, innerWidth: width, innerHeight: 844, addEventListener() {}, removeEventListener() {}, requestAnimationFrame() { return 0; }, postMessage() {} };
+  const view = {
+    parent: null,
+    innerWidth: width,
+    innerHeight: 844,
+    listeners: new Map(),
+    addEventListener(type, handler) {
+      const list = this.listeners.get(type) ?? [];
+      list.push(handler);
+      this.listeners.set(type, list);
+    },
+    removeEventListener() {},
+    requestAnimationFrame() { return 0; },
+    postMessage() {},
+  };
   document.defaultView = view;
   function make(tag, namespace, text = "") {
     const node = {

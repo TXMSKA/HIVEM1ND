@@ -551,6 +551,7 @@ function renderBar(app, t, counts) {
 }
 
 function renderWorkspace(app, t, view, counts) {
+  if (app.mode === "focus") return renderFocusWorkspace(app, t);
   if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
   const tabs = element(document, "div", { class: "tabs", role: "tablist" });
@@ -1032,8 +1033,7 @@ function voidSurface(app, document, editor, t) {
   }, t("send")));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "enter-focus",
-    onclick: (event) => {
-      app.focusReturn = event.currentTarget;
+    onclick: () => {
       enterFocus(app.voidState);
       app.mode = "focus";
       renderShell(app);
@@ -1061,6 +1061,7 @@ function voidSurface(app, document, editor, t) {
     }
     list.append(block);
   }
+  if (app.mode === "focus") return element(document, "div", { class: "focus-document" }, host, tools);
   return element(document, "div", {}, host, tools, list);
 }
 
@@ -1112,13 +1113,21 @@ function onFocusKey(app, event) {
     leaveFocus(app.voidState);
     app.mode = "document";
     renderShell(app);
-    app.focusReturn?.focus?.();
+    app.root.querySelector?.("[data-action='enter-focus']")?.focus?.();
     return;
   }
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
   moveFocus(app.voidState, event.key);
   event.preventDefault();
   renderShell(app);
+}
+
+function renderFocusWorkspace(app, t) {
+  const document = app.root.ownerDocument;
+  const current = editorsOf(app).current;
+  const reading = element(document, "div", { class: "focus-reading", "data-focus-layout": "document" });
+  if (current?.kind === "void" && current.authoritative?.document) reading.append(voidSurface(app, document, current, t));
+  return element(document, "div", { class: "workspace workspace-focus" }, reading);
 }
 
 function renderEditorWorkspace(app, t) {
