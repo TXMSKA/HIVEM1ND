@@ -75,6 +75,10 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   const view = await call(core.http.port, 'GET', '/api/v1/view', { token });
   assert.equal(view.status, 200);
   assert.equal(view.json.meta.requestId.length > 0, true);
+  assert.equal(view.json.contract, 'hivem1nd-gui-v3');
+  assert.equal(typeof view.json.meta.readAt, 'string');
+  assert.equal(typeof view.json.meta.eventCursor, 'string');
+  assert.equal(view.json.meta.sync, null);
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
   const created = await call(core.http.port, 'POST', '/api/v1/units', {
     token,

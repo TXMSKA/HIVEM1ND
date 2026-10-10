@@ -141,6 +141,20 @@ export async function readJsonBody(req, { expect = 'any', limit = 1000000 } = {}
   }
 }
 
+function successEnvelope(outcome, meta) {
+  return {
+    contract: 'hivem1nd-gui-v3',
+    data: outcome.body,
+    meta: {
+      requestId: meta.requestId,
+      readAt: meta.readAt,
+      eventCursor: meta.eventCursor,
+      sync: outcome.sync ?? null,
+      replayed: outcome.replayed === true,
+    },
+  };
+}
+
 export function respond(res, status, body, headers = {}) {
   const extra = {
     'cache-control': 'no-store',
@@ -343,9 +357,11 @@ export async function createHttpServer(options) {
       return;
     }
     const run = () => invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState });
+    const readCursor = typeof bus.captureCursor === 'function' ? bus.captureCursor() : null;
+    const readAt = new Date(options.now?.() ?? Date.now()).toISOString();
     if (route.handler === 'home') {
       const outcome = await rememberHome(homeMemory, credential, req, relative, body, requestId, run);
-      respond(res, outcome.status ?? 200, { data: outcome.body, meta: { requestId, replayed: outcome.replayed === true }, sync: null });
+      respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
     }
     const outcome = route.method === 'GET'
@@ -365,12 +381,7 @@ export async function createHttpServer(options) {
       res.end(outcome.raw);
       return;
     }
-    const envelope = {
-      data: outcome.body,
-      meta: { requestId, replayed: outcome.replayed === true },
-      sync: outcome.sync ?? null,
-    };
-    respond(res, outcome.status ?? 200, envelope);
+    respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
   }
 
   server.on('connection', (socket) => {
