@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { createApi, request } from "../gui/app/api.mjs";
+import { createApi, createOperation, request } from "../gui/app/api.mjs";
 import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundary, validUtf16Boundary } from "../gui/app/markup.mjs";
 import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
@@ -315,13 +315,106 @@ test("void edits keep source boundaries, history and proposals", async (t) => {
   assert.equal(editors.current.revision, revision);
   assert.equal(editors.current.authoritative.proposals.find((item) => item.id === second.id).state, "discarded");
   const next = document.pages.find((page) => page.k === "Notes.Next");
-  await saveRange(api, editors.current, "Notes.Next", "en", 0, next.en.length, "<b>Next 😀</b> <script>no</script>");
+  const applied = await saveRange(api, editors.current, "Notes.Next", "en", 0, next.en.length, "<b>Next 😀</b> <script>no</script>");
+  assert.deepEqual(Object.keys(applied.data).sort(), ["editor", "proposal"]);
+  assert.equal(applied.data.proposal, null);
+  assert.equal(applied.data.editor.document.pages.find((page) => page.k === "Notes.Next").en, "<b>Next 😀</b> <script>no</script>");
+  assert.equal(editors.current.revision, applied.data.editor.revision);
+  assert.equal(editors.current.dirty, false);
+  assert.equal(editors.current.document.pages.find((page) => page.k === "Notes.Next").en, applied.data.editor.document.pages.find((page) => page.k === "Notes.Next").en);
   const saved = editors.current.authoritative.document.pages.find((page) => page.k === "Notes.Next").en;
   assert.equal(saved, "<b>Next 😀</b> <script>no</script>");
   assert.equal(editors.current.authoritative.document.pages.find((page) => page.k === "Notes.Next").sentinel, "void-next-sentinel");
   assert.equal((await readFile(historyPath, "utf8")).trim().split(/\n/).length, historyBefore + 2);
   assert.deepEqual(await readFile(origPath), original);
+  const documentPath = join(fixture.root, "repositories", "shop", "docs", "release.json");
+  const commentsPath = join(fixture.root, "repositories", "shop", "docs", "release.comments.json");
+  const documentBefore = await readFile(documentPath);
+  const commentsBefore = await readFile(commentsPath);
+  const introduction = editors.current.authoritative.document.pages.find((page) => page.k === "Intro.Welcome").en;
+  const start = introduction.indexOf("Hello");
+  const operation = createOperation({
+    method: "POST",
+    path: "/void/texts/:resourceId/ranges",
+    params: { resourceId: editors.current.resourceId },
+    body: {
+      k: "Intro.Welcome",
+      lang: "en",
+      start,
+      end: start + "Hello".length,
+      expectedText: "Hello",
+      replacement: "Later",
+      expectedRevision: editors.current.revision,
+      mode: "propose",
+      threadId: "b37ea5c9-31a6-43ea-aed4-63e842c41f37",
+      expectedCommentsRevision: editors.current.commentsRevision,
+    },
+  });
+  const proposed = await request(api, "POST", operation.path, { operation });
+  assert.equal(proposed.data.proposal.state, "pending");
+  assert.equal(proposed.data.proposal.replacement, "Later");
+  assert.equal(proposed.data.proposal.resourceId, editors.current.resourceId);
+  assert.equal(proposed.data.proposal.threadId, "b37ea5c9-31a6-43ea-aed4-63e842c41f37");
+  assert.equal(proposed.data.editor.revision, editors.current.revision);
+  assert.notEqual(proposed.data.editor.commentsRevision, editors.current.commentsRevision);
+  assert.equal(proposed.data.proposal.commentsRevision, proposed.data.editor.commentsRevision);
+  assert.deepEqual(await readFile(documentPath), documentBefore);
+  assert.notDeepEqual(await readFile(commentsPath), commentsBefore);
+  const withoutThread = { ...operation.body, mode: "propose" };
+  delete withoutThread.threadId;
+  delete withoutThread.expectedCommentsRevision;
+  const missingThread = createOperation({
+    method: "POST",
+    path: "/void/texts/:resourceId/ranges",
+    params: { resourceId: editors.current.resourceId },
+    body: withoutThread,
+  });
+  await assert.rejects(request(api, "POST", missingThread.path, { operation: missingThread }), (error) => error.status === 422);
+  const stale = createOperation({
+    method: "POST",
+    path: "/void/texts/:resourceId/ranges",
+    params: { resourceId: editors.current.resourceId },
+    body: { ...operation.body, expectedCommentsRevision: "a".repeat(64), threadId: "b37ea5c9-31a6-43ea-aed4-63e842c41f37" },
+  });
+  await assert.rejects(request(api, "POST", stale.path, { operation: stale }), (error) => error.code === "revision_conflict");
 });
+
+test("a compliant range envelope replaces the draft with the saved editor", async () => {
+  const editor = {
+    resourceId: "text-1",
+    revision: "a".repeat(64),
+    commentsRevision: "c".repeat(64),
+    document: { pages: [{ k: "Page", en: "Before" }] },
+    authoritative: { document: { pages: [{ k: "Page", en: "Before" }] }, revision: "a".repeat(64) },
+    dirty: true,
+  };
+  const savedEditor = {
+    resourceId: "text-1",
+    revision: "b".repeat(64),
+    commentsRevision: "c".repeat(64),
+    document: { pages: [{ k: "Page", en: "After" }] },
+  };
+  const api = createApi({
+    location: { origin: "http://127.0.0.1:9", pathname: "/", search: "", hash: "#session=desktop-token" },
+    history: { replaceState() {} },
+    fetch: async () => jsonResponse({ editor: savedEditor, proposal: null }),
+  });
+  const result = await saveRange(api, editor, "Page", "en", 0, 6, "After");
+  assert.equal(result.data.proposal, null);
+  assert.equal(editor.dirty, false);
+  assert.equal(editor.revision, savedEditor.revision);
+  assert.equal(editor.document.pages[0].en, "After");
+  assert.equal(editor.authoritative.document.pages[0].en, "After");
+  assert.notEqual(editor.authoritative.document.pages[0].en, "Before");
+});
+
+function jsonResponse(data) {
+  return new Response(JSON.stringify({
+    contract: "hivem1nd-gui-v3",
+    data,
+    meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: { mode: "snapshot" } },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
 
 function fakeDocument() {
   const create = (tagName) => ({

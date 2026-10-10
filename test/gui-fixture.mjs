@@ -2984,6 +2984,14 @@ function validateRange(body) {
   requireKeys(body, ["k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision"]);
   revisionField(body.expectedRevision);
   if (!Number.isInteger(body.start) || !Number.isInteger(body.end)) throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+  if (typeof body.expectedText !== "string" || typeof body.replacement !== "string") throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+  if (body.mode !== undefined && body.mode !== "apply" && body.mode !== "propose") throw new HttpError(422, "invalid_body", "The range mode is not valid.");
+  if (body.mode === "propose") {
+    if (typeof body.threadId !== "string" || !body.threadId || body.expectedCommentsRevision == null) {
+      throw new HttpError(422, "invalid_body", "A suggestion requires a thread and a comments revision.");
+    }
+    revisionField(body.expectedCommentsRevision);
+  }
 }
 
 function validateProposalAnswer(body) {
@@ -3010,11 +3018,70 @@ async function prepareRange(fx, resourceId, body) {
     throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
   }
   if (source.slice(body.start, body.end) !== body.expectedText) throw new HttpError(409, "range_changed", "The source range changed.");
+  if ((body.mode ?? "apply") === "propose") return proposeRange(fx, editor, body);
   const document = structuredClone(editor.document);
   const page = document.pages.find((item) => item.k === body.k);
   page[body.lang] = `${source.slice(0, body.start)}${body.replacement}${source.slice(body.end)}`;
   document.rev = (document.rev ?? 0) + 1;
-  return writeText(fx, editor, document, { k: body.k, lang: body.lang, before: body.expectedText, after: body.replacement });
+  const saved = await writeText(fx, editor, document, { k: body.k, lang: body.lang, before: body.expectedText, after: body.replacement });
+  return { status: saved.status, data: { editor: saved.data, proposal: null }, writes: saved.writes, events: saved.events };
+}
+
+async function proposeRange(fx, editor, body) {
+  if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
+  const threads = structuredClone(editor.threads ?? []);
+  const thread = threads.find((item) => item.id === body.threadId);
+  if (!thread) throw new HttpError(404, "thread_not_found", "The thread was not found.");
+  const text = body.replacement.trim() ? body.replacement : body.expectedText;
+  if (!text.trim()) throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+  const at = clock(fx).toISOString();
+  const proposal = {
+    id: uuid(),
+    state: "pending",
+    k: body.k,
+    lang: body.lang,
+    start: body.start,
+    end: body.end,
+    expectedText: body.expectedText,
+    replacement: body.replacement,
+    baseRevision: editor.revision,
+    createdBy: "root:master",
+    createdAt: at,
+    decidedBy: null,
+    decidedAt: null,
+  };
+  const next = {
+    ...thread,
+    status: "open",
+    messages: [...(thread.messages ?? []), {
+      id: uuid(),
+      author: "master",
+      authorId: "root:master",
+      at,
+      text,
+      proposal,
+    }],
+  };
+  const updated = threads.map((item) => item.id === thread.id ? next : item);
+  const comments = writeComments(fx, editor, updated, next, 200);
+  const published = { ...proposal, resourceId: editor.id, threadId: thread.id, commentsRevision: comments.data.commentsRevision };
+  return {
+    status: 200,
+    data: {
+      editor: {
+        ...editor,
+        commentsRevision: comments.data.commentsRevision,
+        threads: updated,
+        proposals: updated.flatMap(proposalList),
+      },
+      proposal: published,
+    },
+    writes: comments.writes,
+    events: [
+      ...comments.events,
+      { name: "void.proposal.changed", resourceId: editor.id, data: { resourceId: editor.id, proposal: published, commentsRevision: comments.data.commentsRevision } },
+    ],
+  };
 }
 
 async function prepareProposal(fx, params, body) {
