@@ -53,7 +53,7 @@ export function renderApproval(document, approval, t, onAnswer) {
   return block;
 }
 
-export function renderTask(document, task, t, onStatus, onUndo) {
+export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft) {
   const block = element(document, "section", { "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
   block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
   const accept = element(document, "button", {
@@ -64,7 +64,9 @@ export function renderTask(document, task, t, onStatus, onUndo) {
     onclick: () => onStatus?.(task, "done"),
   });
   if (!canAccept(task)) accept.disabled = true;
-  const note = element(document, "input", { "data-note": task.id, "aria-label": t("sendBack"), value: "" });
+  const note = element(document, "input", { "data-note": task.id, "aria-label": t("sendBack") });
+  note.value = draft;
+  note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
   const back = element(document, "button", {
     type: "button",
     class: "btn",

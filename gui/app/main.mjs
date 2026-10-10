@@ -206,6 +206,7 @@ export function navigate(app, mode) {
 }
 
 export function renderShell(app) {
+  captureInputs(app);
   const document = app.root.ownerDocument;
   document.documentElement.lang = app.language;
   document.documentElement.dataset.look = app.look;
@@ -217,8 +218,63 @@ export function renderShell(app) {
   shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
+  restoreInputFocus(app);
   finishList(app);
   finishMap(app);
+}
+
+function inputDrafts(app) {
+  if (!app.inputDrafts) app.inputDrafts = { chats: new Map(), notes: new Map(), focus: null, cleared: new Set() };
+  return app.inputDrafts;
+}
+
+function fieldDraft(node) {
+  const value = node?.value ?? "";
+  const start = Number.isInteger(node?.selectionStart) ? node.selectionStart : value.length;
+  const end = Number.isInteger(node?.selectionEnd) ? node.selectionEnd : value.length;
+  return { value, start, end };
+}
+
+function captureInputs(app) {
+  const drafts = inputDrafts(app);
+  const composer = app.root.querySelector?.("[data-composer]");
+  const chatId = composer?.getAttribute?.("data-chat") ?? app.thread?.chat?.id;
+  if (composer && chatId && !drafts.cleared.has(`chat:${chatId}`)) {
+    const draft = fieldDraft(composer);
+    drafts.chats.set(chatId, draft);
+    if (app.thread?.chat?.id === chatId) app.thread.composer = draft.value;
+  }
+  if (chatId) drafts.cleared.delete(`chat:${chatId}`);
+  for (const note of app.root.querySelectorAll?.("[data-note]") ?? []) {
+    const taskId = note.getAttribute?.("data-note");
+    if (!taskId || drafts.cleared.has(`note:${taskId}`)) continue;
+    drafts.notes.set(taskId, fieldDraft(note));
+  }
+  for (const taskId of [...drafts.notes.keys()]) drafts.cleared.delete(`note:${taskId}`);
+  const active = app.root.ownerDocument?.activeElement;
+  if (active?.getAttribute?.("data-composer") && chatId) drafts.focus = { kind: "chat", id: chatId };
+  else if (active?.getAttribute?.("data-note")) drafts.focus = { kind: "note", id: active.getAttribute("data-note") };
+  else if (active && app.root.contains?.(active)) drafts.focus = null;
+}
+
+function clearInputDraft(app, kind, id) {
+  const drafts = inputDrafts(app);
+  const bucket = kind === "chat" ? drafts.chats : drafts.notes;
+  bucket.delete(id);
+  drafts.cleared.add(`${kind}:${id}`);
+  if (drafts.focus?.kind === kind && drafts.focus.id === id) drafts.focus = null;
+}
+
+function restoreInputFocus(app) {
+  const focus = inputDrafts(app).focus;
+  if (!focus) return;
+  const node = focus.kind === "chat"
+    ? app.root.querySelector?.("[data-composer]")
+    : app.root.querySelector?.(`[data-note="${focus.id}"]`);
+  if (!node) return;
+  const draft = focus.kind === "chat" ? inputDrafts(app).chats.get(focus.id) : inputDrafts(app).notes.get(focus.id);
+  node.focus?.();
+  if (typeof node.setSelectionRange === "function" && draft) node.setSelectionRange(draft.start, draft.end);
 }
 
 export function dispose(app) {
@@ -1424,8 +1480,14 @@ function chatPanel(app, t) {
   }
   panel.append(transcript, row);
   if (caps.includes("chat.post")) {
-    const composer = element(document, "input", { class: "composer", "data-composer": "true", "aria-label": t("send") });
-    composer.value = thread.composer ?? "";
+    const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-chat": thread.chat.id, "aria-label": t("send") });
+    const savedChat = inputDrafts(app).chats.get(thread.chat.id);
+    composer.value = savedChat?.value ?? thread.composer ?? "";
+    composer.addEventListener("input", () => {
+      const draft = fieldDraft(composer);
+      inputDrafts(app).chats.set(thread.chat.id, draft);
+      thread.composer = draft.value;
+    });
     const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
     panel.append(composer, send);
   }
@@ -1465,7 +1527,10 @@ function openExistingDirect(app, unitId) {
 }
 
 function showChat(app, chat) {
+  captureInputs(app);
   app.thread = createThread(chat);
+  const saved = inputDrafts(app).chats.get(chat.id);
+  if (saved) app.thread.composer = saved.value;
   return loadMessages(app.api, app.thread).then(() => {
     if (!app.disposed) renderShell(app);
   });
@@ -1505,8 +1570,11 @@ function inspectMailbox(app) {
 }
 
 function submitComposer(app, composer) {
+  const chatId = app.thread?.chat?.id;
   app.thread.composer = composer.value;
+  if (chatId) inputDrafts(app).chats.set(chatId, fieldDraft(composer));
   postMessage(app.api, app.thread, { body: composer.value }).then(() => {
+    if (chatId) clearInputDraft(app, "chat", chatId);
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }
@@ -1528,7 +1596,10 @@ function renderInspector(app, t, selected) {
     for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
   }
   for (const task of data.tasks ?? []) {
-    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null));
+    const noteDraft = inputDrafts(app).notes.get(task.id);
+    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+      inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
+    }));
     panel.append(openTaskDetail(document, task, t));
   }
   panel.append(renderWaiting(document, data.waiting, t));
@@ -1586,6 +1657,7 @@ function revokeSelectedGrant(app, unit, grant) {
 
 function setTaskStatus(app, task, status, note) {
   changeTaskStatus(app.api, task, status, note).then((result) => {
+    if (status === "open") clearInputDraft(app, "note", task.id);
     app.actionNote = result.data.task.status;
     app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
     refreshWaiting(app);
