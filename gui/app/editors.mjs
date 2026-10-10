@@ -78,6 +78,8 @@ export async function openEditor(api, editors, summary) {
     attached: result.data.attached ?? [],
     threads: result.data.threads ?? [],
     draftText: saved?.draftText ?? "",
+    draftKey: saved?.draftKey ?? null,
+    textDrafts: saved?.textDrafts ?? new Map(),
     commentText: saved?.commentText ?? "",
     baseRevision: saved?.dirty ? saved.baseRevision : result.data.revision,
     dirty: Boolean(saved?.dirty),
@@ -360,6 +362,8 @@ export function discardEditorDraft(editors) {
   if (!current || !remote) return false;
   current.dirty = false;
   current.draftText = "";
+  current.draftKey = null;
+  current.textDrafts = new Map();
   current.authoritative = remote;
   current.revision = remote.revision ?? current.revision;
   current.baseRevision = remote.revision ?? current.baseRevision;

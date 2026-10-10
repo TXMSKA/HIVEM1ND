@@ -5,6 +5,7 @@ import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, startSession } from "../gui/app/actions.mjs";
+import { textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
@@ -1110,6 +1111,106 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   renderShell(phone.app);
   assert.equal(phone.root.querySelector("[data-action='replace-document']"), null);
 });
+
+test("void drafts stay with their page and comments use the rendered selection", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (!init?.body || (init.method !== "POST" && init.method !== "PUT")) return;
+    writes.push({ method: init.method, url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
+  const commentsBefore = () => writes.filter((item) => item.method === "POST" && item.url.includes("/comments"));
+  click(desktop.root.querySelector("[data-action='comment-quote']"));
+  await delay(40);
+  assert.equal(commentsBefore().length, 0);
+  const quote = textNodes(desktop.root.querySelector("[data-void]")).find((node) => node.textContent.includes("first"));
+  const offset = quote.textContent.indexOf("first");
+  desktop.document.getSelection = () => ({
+    anchorNode: quote,
+    anchorOffset: offset,
+    focusNode: quote,
+    focusOffset: offset + "first".length,
+    isCollapsed: false,
+  });
+  click(desktop.root.querySelector("[data-action='comment-quote']"));
+  await waitFor(() => commentsBefore().some((item) => item.body.anchor?.quote === "first"), "The comment did not use the rendered selection.");
+  const anchor = commentsBefore().find((item) => item.body.anchor?.quote === "first").body.anchor;
+  assert.equal(anchor.k, "Intro.Welcome");
+  assert.equal(anchor.lang, "en");
+  assert.equal(anchor.start, 10);
+  assert.equal(anchor.end, 15);
+  assert.equal(anchor.prefix, "Welcome\nA ");
+  assert.equal(anchor.suffix, " paragraph.");
+
+  const source = desktop.root.querySelector("[data-source]");
+  const original = source.value;
+  const broken = original.replace("<b>", "<");
+  typeInput(source, broken, 0, 1);
+  click(desktop.root.querySelector("[data-action='save-range']"));
+  await waitFor(() => writes.some((item) => item.method === "POST" && item.url.includes("/ranges") && item.body.replacement === broken), "The unsafe range was not saved.");
+  const ranged = writes.filter((item) => item.method === "POST" && item.url.includes("/ranges")).at(-1).body;
+  assert.equal(ranged.start, 0);
+  assert.equal(ranged.end, original.length);
+  assert.equal(ranged.expectedText, original);
+  assert.equal(ranged.k, "Intro.Welcome");
+  assert.equal(ranged.lang, "en");
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.k === "Intro.Welcome")?.en === broken
+    && desktop.root.querySelector("[data-source]")?.value === broken, "The saved text was not shown.");
+
+  const kept = `${broken} kept`;
+  desktop.app.editors.current.revision = "a".repeat(64);
+  typeInput(desktop.root.querySelector("[data-source]"), kept, 0, 4);
+  click(desktop.root.querySelector("[data-action='save-range']"));
+  await waitFor(() => desktop.app.editors.current?.conflict?.code === "revision_conflict", "The conflict draft was discarded.");
+  assert.equal(desktop.root.querySelector("[data-source]").value, kept);
+  assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), kept);
+
+  typeInput(desktop.root.querySelector("[data-source]"), "", 0, 0);
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-source]").value, "");
+  desktop.app.voidState.page = "Notes.Next";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-source]").value, "Next page.");
+  desktop.app.voidState.page = "Intro.Welcome";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-source]").value, "");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-source]").value.includes("Bienvenida"), true);
+  desktop.app.language = "en";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-source]").value, "");
+  typeInput(desktop.root.querySelector("[data-source]"), "LOCAL DRAFT", 0, 5);
+  desktop.app.voidState.page = "Notes.Next";
+  renderShell(desktop.app);
+  typeInput(desktop.root.querySelector("[data-field='create-id']"), "fresh-note", 0, 10);
+  typeInput(desktop.root.querySelector("[data-field='create-title']"), "Fresh", 0, 5);
+  click(desktop.root.querySelector("[data-action='create-resource']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "fresh-note", "The new text did not open.");
+  assert.equal(desktop.app.voidState.page, "Intro.Welcome");
+  assert.notEqual(desktop.root.querySelector("[data-source]").value, "LOCAL DRAFT");
+  assert.notEqual(desktop.root.querySelector("[data-source]").value, "Next page.");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-source]")?.value === "LOCAL DRAFT", "The page draft was lost while switching texts.");
+});
+
+function textNodes(node, found = []) {
+  if (node?.tag === "#text") found.push(node);
+  for (const child of node?.children ?? []) textNodes(child, found);
+  return found;
+}
 
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");

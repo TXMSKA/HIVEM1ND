@@ -1,5 +1,5 @@
 import { createOperation, request } from "./api.mjs";
-import { createTextAnchor, plainText, rangeRequest, renderMarkup } from "./markup.mjs";
+import { boundaryInsideTag, createTextAnchor, plainOffsets, plainText, rangeRequest, renderMarkup, validUtf16Boundary } from "./markup.mjs";
 
 export function renderDocument(document, host, editor) {
   host.replaceChildren();
@@ -21,12 +21,58 @@ export function renderDocument(document, host, editor) {
   host.append(block);
 }
 
+export function textDraftKey(resourceId, k, lang) {
+  return `${resourceId}\0${k}\0${lang}`;
+}
+
+export function textDraft(editor, resourceId, k, lang) {
+  const drafts = editor?.textDrafts;
+  const key = textDraftKey(resourceId, k, lang);
+  if (!drafts?.has(key)) return undefined;
+  return drafts.get(key);
+}
+
+export function rememberTextDraft(editor, resourceId, k, lang, value) {
+  if (!editor.textDrafts) editor.textDrafts = new Map();
+  editor.textDrafts.set(textDraftKey(resourceId, k, lang), value);
+  editor.draftKey = { k, lang };
+  editor.draftText = value;
+  editor.dirty = true;
+  return value;
+}
+
 export function beginTextEdit(editor, k, lang) {
   const source = editor.document?.pages?.find((page) => page.k === k)?.[lang] ?? editor.authoritative?.document?.pages?.find((page) => page.k === k)?.[lang] ?? "";
-  editor.draftText = source;
-  editor.draftKey = { k, lang };
-  editor.dirty = true;
-  return editor.draftText;
+  const existing = textDraft(editor, editor.resourceId, k, lang);
+  return rememberTextDraft(editor, editor.resourceId, k, lang, existing === undefined ? source : existing);
+}
+
+export function sourceReplacement(current, value) {
+  const currentText = String(current ?? "");
+  const nextText = String(value ?? "");
+  let start = 0;
+  while (start < currentText.length && start < nextText.length && currentText[start] === nextText[start]) start += 1;
+  let end = currentText.length;
+  let valueEnd = nextText.length;
+  while (end > start && valueEnd > start && currentText[end - 1] === nextText[valueEnd - 1]) {
+    end -= 1;
+    valueEnd -= 1;
+  }
+  if (!safeSourceBoundary(currentText, start) || !safeSourceBoundary(currentText, end) || !safeSourceBoundary(nextText, start) || !safeSourceBoundary(nextText, valueEnd)) {
+    return { start: 0, end: currentText.length, replacement: nextText };
+  }
+  return { start, end, replacement: nextText.slice(start, valueEnd) };
+}
+
+function safeSourceBoundary(source, offset) {
+  return validUtf16Boundary(source, offset) && !boundaryInsideTag(source, offset);
+}
+
+export function selectedPlainRange(selection) {
+  if (!selection?.anchorNode || !selection.focusNode || selection.isCollapsed) return null;
+  const range = plainOffsets(selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset);
+  if (!range || range.start === range.end) return null;
+  return range;
 }
 
 export async function saveRange(api, editor, k, lang, start, end, replacement) {

@@ -53,6 +53,20 @@ export function runMetadata(node) {
   return runs.get(node) ?? null;
 }
 
+export function plainOffsets(anchorNode, anchorOffset, focusNode, focusOffset) {
+  const start = plainPoint(anchorNode, anchorOffset);
+  const end = plainPoint(focusNode, focusOffset);
+  if (start == null || end == null) return null;
+  return { start: Math.min(start, end), end: Math.max(start, end) };
+}
+
+function plainPoint(node, offset) {
+  const run = runMetadata(node);
+  if (!run || run.type !== "text" || !Number.isInteger(offset)) return null;
+  const index = Math.max(0, Math.min(offset, run.text.length));
+  return run.plainStart + index;
+}
+
 export function sourceBoundary(source, plainOffset, affinity = "end") {
   const tokens = tokenizeMarkup(source);
   const tags = tokens.filter((token) => token.type === "tag" && token.plainStart === plainOffset);

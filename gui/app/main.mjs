@@ -66,7 +66,7 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, beginTextEdit, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, renderDocument, renderProposal, replaceDocument, saveRange, showTools, textAnchor } from "./void.mjs";
+import { answerProposal, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceDocument, saveRange, selectedPlainRange, showTools, sourceReplacement, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -879,18 +879,32 @@ function boardPoint(svg, event) {
 
 function voidSurface(app, document, editor, t) {
   editor.focus = app.editors.focus;
-  if (!app.voidState) app.voidState = { mode: app.mode, tools: app.mode !== "focus", page: editor.page ?? editor.authoritative.document.pages?.[0]?.k, pages: editor.authoritative.document.pages };
-  app.voidState.pages = editor.authoritative.document.pages;
+  const pages = editor.authoritative.document.pages ?? [];
+  const lang = app.language === "es" ? "es" : "en";
+  if (!app.voidState || app.voidState.resourceId !== editor.resourceId) {
+    const requested = editor.page ?? editor.focus?.k;
+    app.voidState = {
+      mode: app.mode,
+      tools: app.mode !== "focus",
+      page: pages.some((page) => page.k === requested) ? requested : pages[0]?.k,
+      pages,
+      resourceId: editor.resourceId,
+    };
+  } else {
+    app.voidState.pages = pages;
+    if (!pages.some((page) => page.k === app.voidState.page)) app.voidState.page = pages[0]?.k;
+  }
   editor.page = app.voidState.page;
-  editor.language = app.language;
+  editor.language = lang;
   const host = element(document, "div", { class: "void-page", "data-void": "true" });
   renderDocument(document, host, editor);
   const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
-  const source = element(document, "textarea", { "data-source": "true" });
-  source.value = editor.draftText || (editor.authoritative.document.pages.find((page) => page.k === editor.page)?.[app.language] ?? "");
+  const page = pages.find((item) => item.k === editor.page);
+  const stored = textDraft(editor, editor.resourceId, editor.page, lang);
+  const source = element(document, "textarea", { "data-source": "true", "data-draft-key": `${editor.resourceId}:${editor.page}:${lang}` });
+  source.value = stored === undefined ? (page?.[lang] ?? "") : stored;
   source.addEventListener("input", () => {
-    editor.draftText = source.value;
-    editor.dirty = true;
+    rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
   });
   tools.append(source);
   tools.append(element(document, "button", {
@@ -934,20 +948,16 @@ function voidSurface(app, document, editor, t) {
 function saveVoid(app, editor, value) {
   const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
   const lang = app.language === "es" ? "es" : "en";
-  const current = page[lang];
-  beginTextEdit(editor, page.k, lang);
-  editor.draftText = value;
-  editor.dirty = true;
-  let start = 0;
-  while (start < current.length && start < value.length && current[start] === value[start]) start += 1;
-  let end = current.length;
-  let valueEnd = value.length;
-  while (end > start && valueEnd > start && current[end - 1] === value[valueEnd - 1]) {
-    end -= 1;
-    valueEnd -= 1;
-  }
-  saveRange(app.api, editor, page.k, lang, start, end, value.slice(start, valueEnd)).then(() => renderShell(app)).catch((error) => {
-    editor.conflict = { code: error.code };
+  const current = page?.[lang] ?? "";
+  rememberTextDraft(editor, editor.resourceId, page.k, lang, value);
+  const bounds = sourceReplacement(current, value);
+  saveRange(app.api, editor, page.k, lang, bounds.start, bounds.end, bounds.replacement).then(() => {
+    editor.textDrafts?.delete(textDraftKey(editor.resourceId, page.k, lang));
+    editor.dirty = (editor.textDrafts?.size ?? 0) > 0;
+    if (!editor.dirty) editor.draftText = "";
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => {
+    editor.conflict = { ...(editor.conflict ?? {}), code: error.code, draftKey: { k: page.k, lang } };
     noteEditor(app, error);
   });
 }
@@ -955,7 +965,13 @@ function saveVoid(app, editor, value) {
 function commentOnQuote(app, editor) {
   const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
   const lang = app.language === "es" ? "es" : "en";
-  const anchor = textAnchor(editor, page.k, lang, 0, 7);
+  const host = app.root.querySelector?.("[data-void]");
+  const document = app.root.ownerDocument;
+  const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
+  if (host && selection?.anchorNode && !host.contains(selection.anchorNode)) return;
+  const range = selectedPlainRange(selection);
+  if (!page || !range) return;
+  const anchor = textAnchor(editor, page.k, lang, range.start, range.end);
   createComment(app.api, app.editors, anchor, editor.commentText || anchor.quote).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
 
