@@ -481,6 +481,42 @@ test("a second submit joins the in-flight post", async () => {
   assert.equal(thread.messages[0].body, "one");
 });
 
+test("accept omits a null note and send back keeps its note", async (context) => {
+  const calls = [];
+  const mock = apiWith(async (call) => {
+    calls.push(call.body);
+    return { data: { task: { id: "task-1", status: call.body.status, revision: "b".repeat(64) }, changeId: "change-1" } };
+  });
+  await changeTaskStatus(mock, { id: "task-1", revision: "a".repeat(64) }, "done", null);
+  await changeTaskStatus(mock, { id: "task-1", revision: "a".repeat(64) }, "done", undefined);
+  await changeTaskStatus(mock, { id: "task-1", revision: "a".repeat(64) }, "open", "Needs another pass");
+  assert.equal(Object.hasOwn(calls[0], "note"), false);
+  assert.equal(Object.hasOwn(calls[1], "note"), false);
+  assert.equal(calls[2].note, "Needs another pass");
+
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const tasks = await request(api, "GET", "/tasks", { query: { status: "open,review,done,closed", limit: "50" } });
+  const ready = tasks.data.items.find((task) => task.id === "project:shop:029");
+  const gated = tasks.data.items.find((task) => task.id === "project:shop:030");
+  const rejected = await call(fixture, "POST", "/api/v1/tasks/project%3Ashop%3A029/status", {
+    status: "done", note: null, expectedRevision: ready.revision,
+  });
+  assert.equal(rejected.status, 422);
+  const rejectedNumber = await call(fixture, "POST", "/api/v1/tasks/project%3Ashop%3A029/status", {
+    status: "done", note: 1, expectedRevision: ready.revision,
+  });
+  assert.equal(rejectedNumber.status, 422);
+  const accepted = await changeTaskStatus(api, ready, "done");
+  const undone = await undoTask(api, accepted.data.task);
+  const returned = await changeTaskStatus(api, undone.data.task, "open", "Needs another pass");
+  assert.equal(returned.data.task.status, "open");
+  const noted = await request(api, "GET", "/tasks/project%3Ashop%3A029");
+  assert.equal(noted.data.report.includes("Needs another pass"), true);
+  assert.equal(gated.status, "review");
+});
+
 test("review, undo, and queued approval outcomes stay distinct", async (context) => {
   const fixture = await createGuiFixture();
   context.after(() => fixture.close());

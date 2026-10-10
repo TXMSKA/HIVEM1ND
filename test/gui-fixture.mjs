@@ -2584,7 +2584,7 @@ function validateTaskStatus(body) {
   requireObject(body, ["status", "note", "expectedRevision"]);
   requireKeys(body, ["status", "expectedRevision"]);
   if (!["open", "review", "done", "closed"].includes(body.status)) throw new HttpError(422, "invalid_body", "The status is not valid.");
-  if (body.note !== undefined && body.note !== null && typeof body.note !== "string") throw new HttpError(422, "invalid_body", "The note is not valid.");
+  if (body.note !== undefined && typeof body.note !== "string") throw new HttpError(422, "invalid_body", "The note is not valid.");
   revisionField(body.expectedRevision);
 }
 

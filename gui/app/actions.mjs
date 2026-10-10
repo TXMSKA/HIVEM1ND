@@ -112,11 +112,13 @@ export async function changeTaskStatus(api, task, status, note = null) {
     error.code = "note_required";
     throw error;
   }
+  const body = { status, expectedRevision: task.revision };
+  if (typeof note === "string") body.note = note;
   const operation = createOperation({
     method: "POST",
     path: "/tasks/:taskId/status",
     params: { taskId: task.id },
-    body: { status, note, expectedRevision: task.revision },
+    body,
   });
   return request(api, "POST", operation.path, { operation });
 }
