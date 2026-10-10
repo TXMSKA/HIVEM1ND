@@ -511,7 +511,8 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     resume: options.resume === true,
     relaySetup: true,
     serviceSetup: true,
-    serviceDryRun: true,
+    serviceDryRun: options.dryRun === true,
+    ...(options.dryRun === true ? {} : { serviceRunner: runRegistrationCommand, serviceStart: startUserService }),
     ...(options.originKind ? { originKind: options.originKind } : {}),
     ...(options.originPath ? { originPath: options.originPath } : {}),
     ...(options.cosmicPath ? { cosmicPath: options.cosmicPath } : {}),
@@ -1008,8 +1009,9 @@ async function runService(options, dependencies, output) {
     workingDirectory: KIT_PATH,
     localDirectory: options.cosmicPath ? path.resolve(options.cosmicPath) : path.dirname(mindPath),
     home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
-    sid: "S-1-5-21-current",
+    sid: dependencies.sid ?? "S-1-5-21-current",
   };
+  const dry = options.dryRun === true;
   if (options.action === "status") {
     output.write("Service status is plan-only here. No login registration was queried on the operating system.\n");
     return 0;
@@ -1043,6 +1045,10 @@ async function runService(options, dependencies, output) {
     output.write("Service stopped.\n");
     return 0;
   }
+  if (!dry && !dependencies.sid) {
+    const { aclRunnerFrom } = await import("../engine/service/security.mjs");
+    registration.sid = (dependencies.aclRunner ?? aclRunnerFrom(dependencies)).userSid();
+  }
   const plan = planRegistration(registration);
   if (options.action === "uninstall") {
     if (options.dryRun === false && !dependencies.registrationRunner) {
@@ -1053,9 +1059,30 @@ async function runService(options, dependencies, output) {
     output.write(`${JSON.stringify({ dryRun: true, os: false, commands: removal.commands }, null, 2)}\n`);
     return 0;
   }
-  const installed = await installService(registration, { dryRun: true, run: dependencies.registrationRunner });
-  output.write(`${JSON.stringify({ dryRun: true, os: false, action: installed.action, commands: installed.commands, digest: installed.digest }, null, 2)}\n`);
+  const installed = await installService(registration, {
+    dryRun: dry,
+    run: dependencies.registrationRunner ?? (dry ? null : runRegistrationCommand),
+    query: dependencies.queryRegistration,
+    aclRunner: dependencies.aclRunner,
+  });
+  output.write(`${JSON.stringify({ dryRun: dry, os: installed.os === true, action: installed.action, commands: installed.commands, digest: installed.digest }, null, 2)}\n`);
   return 0;
+}
+
+async function startUserService(config) {
+  const { startConfiguredViewer } = await import("../engine/service/install.mjs");
+  return startConfiguredViewer(config);
+}
+
+function runRegistrationCommand(argv) {
+  return new Promise((resolve, reject) => {
+    import("node:child_process").then(({ spawn }) => {
+      const [file, ...args] = argv;
+      const child = spawn(file, args, { shell: false, windowsHide: true });
+      child.once("error", reject);
+      child.once("exit", (code) => (code === 0 ? resolve() : reject(new Error("The registration command failed."))));
+    }).catch(reject);
+  });
 }
 
 function waitForServiceStop() {
