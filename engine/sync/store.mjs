@@ -286,7 +286,7 @@ async function projectTargets(sync, project) {
   return targets;
 }
 
-async function projectPathSet(project) {
+export async function projectPathSet(project) {
   const allowed = new Set();
   const add = (relative) => {
     try {
