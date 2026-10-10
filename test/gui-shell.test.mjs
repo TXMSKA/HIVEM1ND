@@ -565,13 +565,15 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   await until(() => phone.root.querySelector("[data-composer]") && phone.app.thread?.chat?.members?.includes(executor.id));
   assert.equal(phone.root.querySelector("[data-action='pin']"), null);
   await until(() => phone.app.inspectorData?.unitId === executor.id);
+  phone.app.waitingList.height = 20000;
   navigate(phone.app, "waiting");
-  const review = phone.root.querySelector("[data-task='project:shop:029']");
-  const gatedReview = phone.root.querySelector("[data-task='project:shop:030']");
+  await until(() => phone.root.querySelector("[data-waiting-surface]")?.querySelector("[data-task='project:shop:029']"));
+  click(phone.root.querySelector("[data-waiting-surface]").querySelector("[data-task='project:shop:029']"));
+  await until(() => phone.root.querySelector("[data-waiting-record='review']")?.querySelector("[data-action='accept']"));
+  const review = phone.root.querySelector("[data-waiting-record='review']");
   assert.equal(review?.querySelector("[data-action='accept']")?.disabled, false);
   assert.equal(review?.querySelector("[data-action='send-back']")?.disabled, false);
-  assert.equal(gatedReview?.querySelector("[data-action='accept']")?.disabled, true);
-  assert.equal(gatedReview?.querySelector("[data-action='send-back']")?.disabled, true);
+  assert.equal(phone.root.querySelector("[data-task='project:shop:030']"), null);
   assert.equal(phone.root.querySelector("[data-action='undo']"), null);
   assert.equal(phone.root.querySelector("[data-action='revoke-grant']"), null);
   phone.view.innerWidth = 1440;
@@ -929,6 +931,44 @@ test("visible chat lines are marked read and mailbox inspection stays closed", a
   }
   assert.equal(phone.root.querySelector("[data-action='mark-read']"), null);
   assert.equal(phoneUrls.some((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)), false);
+});
+
+test("waiting opens from either navigation surface and refreshes without a selected unit", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.status === "ready" || desktop.app.waitingList?.status === "empty", "Waiting did not load.");
+  assert.equal(desktop.app.store.selected.unitId, null);
+  const pending = desktop.app.waitingList.items.find((item) => item.approvalId === "e80a0bf9-8fb4-4d64-9527-04524c9a2ecf");
+  assert.ok(pending);
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]")?.querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"), "The waiting list did not open.");
+  const search = desktop.root.querySelector("[data-waiting-search]");
+  typeInput(search, "zzzz-no-such-waiting", 0, 20);
+  await waitFor(() => desktop.root.querySelector("[data-waiting-total]")?.getAttribute("data-waiting-total") === "0", "Waiting search did not filter.");
+  typeInput(search, "", 0, 0);
+  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]")?.querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"), "Waiting search did not restore the list.");
+  click(desktop.root.querySelector("[data-waiting-surface]").querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-record='approval']")?.querySelector("[data-action='approve']"), "The approval action was not offered.");
+  assert.equal(desktop.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='revoke-grant']"), null);
+
+  const phone = await bootApp(fixture.phoneUrl, 390, []);
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.app.waitingList?.items?.some((item) => item.approvalId === pending.approvalId), "The phone waiting list did not load.");
+  assert.equal(phone.app.store.selected.unitId, null);
+  const before = phone.app.store.view?.counts?.waiting ?? 0;
+  const approval = (await request(phone.app.api, "GET", "/approvals/:approvalId", { params: { approvalId: pending.approvalId } })).data;
+  const answered = await answerApproval(phone.app.api, approval, "approve");
+  await fixture.control.settleAnswer(answered.data.answerId, "applied");
+  await waitFor(() => phone.app.store.selected.unitId === null && (phone.app.store.view?.counts?.waiting ?? before) < before, "The waiting total did not refresh without a selected unit.");
+  phone.app.waitingList.height = 20000;
+  click(phone.root.querySelector("[data-phone-mode='waiting']"));
+  await waitFor(() => phone.root.querySelector("[data-waiting-surface]")?.querySelector("[data-kind='review']"), "Phone Waiting did not open its own list.");
+  assert.equal(phone.app.store.selected.unitId, null);
+  click(phone.root.querySelector("[data-waiting-surface]").querySelector("[data-kind='review']"));
+  await waitFor(() => phone.root.querySelector("[data-waiting-record='review']")?.querySelector("[data-action='accept']"), "The phone review action was hidden.");
+  assert.equal(phone.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='undo']"), null);
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {

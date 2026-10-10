@@ -57,7 +57,7 @@ import {
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
-import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
+import { createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
@@ -202,7 +202,10 @@ async function logoutOwnViewer(app) {
 export function navigate(app, mode) {
   if (app.layout === "phone") {
     if (!PHONE_MODES.includes(mode)) return;
-    if (mode === "waiting") app.mode = "waiting";
+    if (mode === "waiting") {
+      app.mode = "waiting";
+      if (app.waitingList) reloadList(app.waitingList);
+    }
     else {
       app.tab = mode;
       app.mode = "hierarchy";
@@ -294,6 +297,12 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   app.api.live && (app.api.live.stopped = true);
+  for (const list of [app.unitList, app.chatList, app.waitingList]) {
+    if (!list) continue;
+    list.controller?.abort();
+    if (list.timer) clearTimeout(list.timer);
+    list.timer = null;
+  }
   if (app.homeState) clearGrant(app.homeState);
   disposeEmbed(app.embed);
   releaseAssets(app.editors?.current);
@@ -303,6 +312,7 @@ export function dispose(app) {
 async function onStream(app, event) {
   if (app.disposed) return;
   await acceptStreamEvent(app.store, app.api, event);
+  if (app.disposed) return;
   if (event?.name === "home.changed") noteHome(app, dataOf(event));
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
@@ -312,6 +322,7 @@ async function onStream(app, event) {
   if (event?.name === "stream.reset") await recheckTracked(app);
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
     if (app.unitList) await reloadList(app.unitList);
+    if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
   }
   if (event?.name === "chat.changed") {
     if (app.chatList) await reloadList(app.chatList);
@@ -425,7 +436,13 @@ function renderBar(app, t, counts) {
       }, icon(document, mode), t(mode)));
     }
   }
-  const waiting = element(document, "span", { class: "pill" }, icon(document, "waiting"), t("waitingCount", { count: counts.waiting ?? 0 }));
+  const waiting = element(document, "button", {
+    type: "button",
+    class: "pill",
+    "data-action": "waiting",
+    "aria-pressed": String(app.waitingOpen === true || app.mode === "waiting"),
+    onclick: () => openWaiting(app),
+  }, icon(document, "waiting"), t("waitingCount", { count: counts.waiting ?? 0 }));
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
@@ -480,7 +497,9 @@ function renderWorkspace(app, t, view, counts) {
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { text: t(app.mode) }),
   );
-  if (app.mode === "map") {
+  if (app.layout !== "phone" && app.waitingOpen) {
+    stage.append(renderWaitingSurface(app, t));
+  } else if (app.mode === "map") {
     ensureMap(app);
     stage.append(element(document, "div", { class: "map" }));
   } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
@@ -488,7 +507,7 @@ function renderWorkspace(app, t, view, counts) {
   } else if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
   } else if (app.layout === "phone" && app.mode === "waiting") {
-    stage.append(renderInspector(app, t, selected));
+    stage.append(renderWaitingSurface(app, t));
   } else if (app.layout === "phone" && app.tab === "chats") {
     stage.append(chatPanel(app, t));
     if (app.phoneChatNote) stage.append(element(document, "p", { "data-phone-chat": "required", text: t("desktopChatRequired") }));
@@ -521,18 +540,136 @@ function renderWorkspace(app, t, view, counts) {
 async function loadLists(app) {
   app.unitList = createPagedList({ api: app.api, store: app.store, name: "units", route: "/units" });
   app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" } });
+  app.waitingList = createPagedList({ api: app.api, store: app.store, name: "waiting", route: "/waiting" });
   const refresh = () => {
     if (!app.disposed && app.layout !== "unknown") renderShell(app);
   };
   app.unitList.onUpdate = refresh;
   app.chatList.onUpdate = refresh;
+  app.waitingList.onUpdate = refresh;
   try {
     const layout = await request(app.api, "GET", "/layout");
     if (!app.disposed) app.store.layout = layout.data;
   } catch {
     // Placement still runs when the layout route is unavailable.
   }
-  await Promise.all([loadAll(app.unitList), loadAll(app.chatList)]);
+  await Promise.all([loadAll(app.unitList), loadAll(app.chatList), loadAll(app.waitingList)]);
+}
+
+function openWaiting(app) {
+  if (app.layout === "phone") {
+    navigate(app, "waiting");
+    return;
+  }
+  app.waitingOpen = app.waitingOpen !== true;
+  if (app.waitingOpen && app.waitingList) reloadList(app.waitingList);
+  if (!app.disposed) renderShell(app);
+}
+
+function renderWaitingSurface(app, t) {
+  const document = app.root.ownerDocument;
+  const list = app.waitingList;
+  const surface = element(document, "section", { class: "waiting-surface", "data-waiting-surface": "true" });
+  const search = element(document, "input", {
+    class: "search",
+    type: "search",
+    "data-waiting-search": "true",
+    "aria-label": t("search"),
+  });
+  search.value = list?.query ?? "";
+  search.addEventListener("input", () => {
+    if (list) setQuery(list, search.value);
+  });
+  const total = list?.total ?? 0;
+  surface.append(search, element(document, "p", {
+    "data-waiting-total": String(total),
+    text: t("waitingCount", { count: total }),
+  }));
+  if (!list || list.status === "loading") {
+    surface.append(element(document, "p", { text: t("loadingList") }));
+    return surface;
+  }
+  const items = list.items ?? [];
+  const range = windowRange(list.scrollTop, list.height || 640, list.rowHeight || 36, items.length);
+  surface.append(renderWaiting(document, items.slice(range.start, range.end), t, (item) => openWaitingItem(app, item)));
+  surface.append(renderWaitingRecord(app, t));
+  return surface;
+}
+
+function openWaitingItem(app, item) {
+  if (!item) return;
+  app.waitingItemId = item.id;
+  const caps = app.store.capabilities ?? [];
+  if (item.unitId) app.store.selected.unitId = item.unitId;
+  if (item.approvalId) {
+    request(app.api, "GET", "/approvals/:approvalId", { params: { approvalId: item.approvalId } }).then((result) => {
+      app.waitingRecord = { kind: "approval", approval: result.data, item };
+      if (!app.disposed) renderShell(app);
+    }).catch((error) => noteAction(app, error));
+    return;
+  }
+  if (item.taskId) {
+    request(app.api, "GET", "/tasks/:taskId", { params: { taskId: item.taskId } }).then((result) => {
+      app.waitingRecord = { kind: "review", task: result.data, item };
+      if (!app.disposed) renderShell(app);
+    }).catch((error) => noteAction(app, error));
+    return;
+  }
+  if (item.chatId) {
+    request(app.api, "GET", "/chats/:chatId", { params: { chatId: item.chatId } }).then((result) => {
+      app.waitingRecord = { kind: "chat", chat: result.data, item };
+      if (app.layout === "phone") app.mode = "hierarchy";
+      app.tab = "chats";
+      showChat(app, result.data);
+    }).catch((error) => noteAction(app, error));
+    return;
+  }
+  if (item.messageId) {
+    loadMailboxMessage(app.api, "root:master", item.messageId).then((result) => {
+      app.waitingRecord = { kind: "message", message: result.data, item };
+      if (!app.disposed) renderShell(app);
+    }).catch((error) => noteAction(app, error));
+    return;
+  }
+  app.waitingRecord = { kind: "question", item };
+  if (app.layout === "phone") app.mode = "hierarchy";
+  if (item.unitId) openExistingDirect(app, item.unitId);
+  else if (!app.disposed) renderShell(app);
+}
+
+function renderWaitingRecord(app, t) {
+  const document = app.root.ownerDocument;
+  const record = app.waitingRecord;
+  const block = element(document, "div", { "data-waiting-record": record?.kind ?? "" });
+  if (!record) return block;
+  const caps = app.store.capabilities ?? [];
+  if (record.kind === "approval" && record.approval && caps.includes("approval.answer")) {
+    block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision)));
+    return block;
+  }
+  if (record.kind === "review" && record.task && (caps.includes("task.status") || caps.includes("task.accept") || caps.includes("task.send-back"))) {
+    const phone = app.layout === "phone" || app.store.audience === "phone";
+    const noteDraft = inputDrafts(app).notes.get(record.task.id);
+    block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+      inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
+    }, phone ? canAccept(record.task) : canSendBack(record.task)));
+    return block;
+  }
+  if (record.kind === "message" && record.message) {
+    block.append(element(document, "article", { "data-mailbox-detail": record.message.id, text: record.message.body || record.message.subject || "" }));
+    if (canMarkMailbox(app.store.audience, caps, "root:master")) {
+      block.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-action": "mark-read",
+        text: t("markRead"),
+        onclick: () => markMailboxRead(app.api, "root:master", [record.message.id]).then(() => refreshWaiting(app)).catch((error) => noteAction(app, error)),
+      }));
+    }
+    return block;
+  }
+  block.append(element(document, "p", { text: record.item?.title || record.approval?.display || record.task?.title || "" }));
+  return block;
 }
 
 function renderCollection(app, t) {
@@ -1802,7 +1939,7 @@ function renderInspector(app, t, selected) {
     }, phone ? canAccept(task) : canSendBack(task)));
     panel.append(openTaskDetail(document, task, t));
   }
-  panel.append(renderWaiting(document, data.waiting, t));
+  panel.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
   return panel;
 }
 
@@ -1873,8 +2010,13 @@ function undoSelected(app, task) {
 }
 
 function refreshWaiting(app) {
-  request(app.api, "GET", "/waiting", { query: { limit: "50" } }).then((waiting) => {
-    if (app.inspectorData) app.inspectorData.waiting = waiting.data.items ?? [];
+  const jobs = [];
+  if (app.waitingList) jobs.push(reloadList(app.waitingList));
+  jobs.push(request(app.api, "GET", "/view").then((result) => {
+    app.store.view = result.data;
+  }).catch(() => {}));
+  return Promise.all(jobs).then(() => {
+    if (app.inspectorData && app.waitingList) app.inspectorData.waiting = app.waitingList.items ?? [];
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }
@@ -1916,18 +2058,21 @@ async function noteGrant(app, data) {
 }
 
 async function refreshOwnerSurface(app, unitId) {
-  const reads = [request(app.api, "GET", "/waiting", { query: { limit: "50" } })];
+  const jobs = [];
+  if (app.waitingList) jobs.push(reloadList(app.waitingList));
+  jobs.push(request(app.api, "GET", "/view").then((result) => {
+    app.store.view = result.data;
+  }).catch(() => {}));
   if (unitId) {
-    reads.push(request(app.api, "GET", "/units/:unitId/approval-grants", {
+    jobs.push(request(app.api, "GET", "/units/:unitId/approval-grants", {
       params: { unitId },
       query: { limit: "50" },
+    }).then((grants) => {
+      if (app.inspectorData && (!unitId || app.inspectorData.unitId === unitId)) app.inspectorData.grants = grants.data.items ?? [];
     }));
   }
-  const [waiting, grants] = await Promise.all(reads);
-  if (app.inspectorData) {
-    app.inspectorData.waiting = waiting.data.items ?? [];
-    if (grants && (!unitId || app.inspectorData.unitId === unitId)) app.inspectorData.grants = grants.data.items ?? [];
-  }
+  await Promise.all(jobs);
+  if (app.inspectorData && app.waitingList) app.inspectorData.waiting = app.waitingList.items ?? [];
   if (!app.disposed) renderShell(app);
 }
 

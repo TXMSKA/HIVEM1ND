@@ -82,10 +82,23 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   return block;
 }
 
-export function renderWaiting(document, items, t) {
+export function renderWaiting(document, items, t, onOpen) {
   const block = element(document, "section", { class: "waiting-list", "data-waiting": String(items?.length ?? 0) });
   if (!items?.length) block.append(element(document, "p", { text: t("emptyList") }));
-  for (const item of items ?? []) block.append(element(document, "p", { text: item.title ?? item.kind ?? "" }));
+  for (const item of items ?? []) {
+    const attrs = {
+      "data-waiting-item": item.id,
+      "data-kind": item.kind ?? "",
+      "data-approval": item.approvalId ?? "",
+      "data-task": item.taskId ?? "",
+      "data-chat": item.chatId ?? "",
+      "data-message": item.messageId ?? "",
+      "data-unit": item.unitId ?? "",
+      text: item.title || item.kind || "",
+    };
+    if (onOpen) block.append(element(document, "button", { type: "button", class: "btn", ...attrs, onclick: () => onOpen(item) }));
+    else block.append(element(document, "p", attrs));
+  }
   return block;
 }
 
