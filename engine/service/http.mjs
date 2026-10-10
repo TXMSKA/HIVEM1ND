@@ -1,0 +1,618 @@
+import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import { readFile, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { CoreError, canonicalJson, isUuid } from './identity.mjs';
+import { atomicWrite, withReceipt } from './store.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
+import { readCollection, readDetail, readProjection } from './projection.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
+import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
+import { answerApproval, requestApproval, revokeGrant } from './approvals.mjs';
+import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
+import { enqueueStart, stopSession } from './adapters.mjs';
+import { createEventBus } from './events.mjs';
+
+const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
+const STATIC_FILES = new Set([
+  'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
+  'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
+  'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs',
+]);
+
+const ROUTES = [
+  ['GET', '/view', 'read', 'DPA', 'view'],
+  ['GET', '/units', 'read', 'DPA', 'collection', 'units'],
+  ['GET', '/leads', 'read', 'DPA', 'collection', 'leads'],
+  ['GET', '/squads', 'read', 'DPA', 'collection', 'squads'],
+  ['GET', '/projects', 'read', 'DPA', 'collection', 'projects'],
+  ['GET', '/machines', 'read', 'DPA', 'collection', 'machines'],
+  ['GET', '/sync', 'read', 'DPA', 'collection', 'sync'],
+  ['GET', '/sessions', 'read', 'DPA', 'collection', 'sessions'],
+  ['GET', '/units/:unitId', 'read', 'DPA', 'detail', 'units'],
+  ['POST', '/units', 'unit.create', 'D', 'createUnit'],
+  ['PUT', '/units/:unitId/lead', 'unit.connect', 'D', 'connectLead'],
+  ['POST', '/units/:unitId/session', 'session.start', 'D', 'enqueueStart'],
+  ['GET', '/session-requests/:requestId', 'read', 'DPA', 'detail', 'sessions'],
+  ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
+  ['GET', '/layout', 'read', 'DP', 'layout'],
+  ['PATCH', '/layout', 'layout.write', 'D', 'patchLayout'],
+  ['GET', '/chats', 'read', 'DPA', 'collection', 'chats'],
+  ['GET', '/chats/:chatId', 'read', 'DPA', 'detail', 'chats'],
+  ['GET', '/chats/:chatId/messages', 'read', 'DPA', 'collection', 'messages'],
+  ['POST', '/chats', 'chat.manage', 'D', 'createChat'],
+  ['POST', '/chats/:chatId/messages', 'chat.post', 'DPA', 'postChat'],
+  ['POST', '/chats/:chatId/read', 'read', 'DPA', 'readChat'],
+  ['PATCH', '/chats/:chatId', 'chat.manage', 'D', 'patchChat'],
+  ['GET', '/mailboxes', 'read', 'DPA', 'collection', 'mailboxes'],
+  ['GET', '/mailboxes/:unitId/messages', 'read', 'DPA', 'collection', 'messages'],
+  ['GET', '/mailboxes/:unitId/messages/:messageId', 'read', 'DPA', 'detail', 'messages'],
+  ['POST', '/mailboxes/:unitId/messages', 'chat.post', 'DPA', 'postMailbox'],
+  ['POST', '/mailboxes/:unitId/read', 'read', 'DPA', 'readMailbox'],
+  ['GET', '/approvals', 'read', 'DPA', 'collection', 'approvals'],
+  ['GET', '/approvals/:approvalId', 'read', 'DPA', 'detail', 'approvals'],
+  ['GET', '/approvals/:approvalId/answers/:answerId', 'read', 'DPA', 'detail', 'approvals'],
+  ['POST', '/approvals/request', 'approval.request', 'A', 'requestApproval'],
+  ['POST', '/approvals/:approvalId/answer', 'approval.answer', 'DP', 'answerApproval'],
+  ['GET', '/units/:unitId/approval-grants', 'read', 'DP', 'collection', 'approvals'],
+  ['DELETE', '/units/:unitId/approval-grants/:grantId', 'grant.revoke', 'D', 'revokeGrant'],
+  ['GET', '/grant-revocations/:requestId', 'read', 'DP', 'detail', 'approvals'],
+  ['GET', '/tasks', 'read', 'DPA', 'collection', 'tasks'],
+  ['GET', '/tasks/:taskId', 'read', 'DPA', 'detail', 'tasks'],
+  ['GET', '/waiting', 'read', 'DPA', 'collection', 'waiting'],
+  ['POST', '/tasks/:taskId/status', 'task.status', 'DPA', 'changeStatus'],
+  ['POST', '/tasks/:taskId/undo', 'task.undo', 'DA', 'undoStatus'],
+  ['GET', '/settings', 'read', 'DP', 'settings'],
+  ['PATCH', '/settings', 'settings.write', 'D', 'patchSettings'],
+  ['POST', '/settings/home-network', 'home.manage', 'D', 'home'],
+  ['POST', '/auth/local', null, '', 'authLocal'],
+  ['POST', '/auth/home', null, '', 'authHome'],
+  ['POST', '/auth/logout', null, 'DP', 'logout'],
+  ['GET', '/blueprint/boards', 'editor.read', 'DPA', 'unavailable'],
+  ['GET', '/blueprint/boards/:resourceId', 'editor.read', 'DPA', 'unavailable'],
+  ['POST', '/editors/register', 'editor.write', 'D', 'unavailable'],
+  ['POST', '/blueprint/boards', 'editor.write', 'D', 'unavailable'],
+  ['PUT', '/blueprint/boards/:resourceId', 'editor.write', 'DA', 'unavailable'],
+  ['POST', '/blueprint/boards/:resourceId/nodes', 'editor.write', 'DA', 'unavailable'],
+  ['PATCH', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'unavailable'],
+  ['DELETE', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'unavailable'],
+  ['GET', '/void/texts', 'editor.read', 'DPA', 'unavailable'],
+  ['GET', '/void/texts/:resourceId', 'editor.read', 'DPA', 'unavailable'],
+  ['POST', '/void/texts', 'editor.write', 'D', 'unavailable'],
+  ['PUT', '/void/texts/:resourceId', 'editor.write', 'DA', 'unavailable'],
+  ['POST', '/void/texts/:resourceId/ranges', 'editor.write', 'DA', 'unavailable'],
+  ['GET', '/void/texts/:resourceId/proposals', 'editor.read', 'DPA', 'unavailable'],
+  ['POST', '/void/texts/:resourceId/proposals/:proposalId/answer', 'proposal.answer', 'D', 'unavailable'],
+  ['GET', '/editors/:resourceId/attachments', 'editor.read', 'DPA', 'unavailable'],
+  ['PUT', '/editors/:resourceId/attachments', 'editor.write', 'D', 'unavailable'],
+  ['GET', '/editors/:resourceId/comments', 'editor.read', 'DPA', 'unavailable'],
+  ['POST', '/editors/:resourceId/comments', 'comment.write', 'DA', 'unavailable'],
+  ['POST', '/editors/:resourceId/comments/:threadId/replies', 'comment.write', 'DA', 'unavailable'],
+  ['PATCH', '/editors/:resourceId/comments/:threadId', 'comment.write', 'DA', 'unavailable'],
+  ['GET', '/editors/:resourceId/assets/:assetId', 'editor.read', 'DPA', 'unavailable'],
+  ['POST', '/editors/:resourceId/assets', 'asset.write', 'D', 'unavailable'],
+  ['POST', '/watch', 'watch', 'D', 'unavailable'],
+  ['DELETE', '/watch/:watchId', 'watch', 'D', 'unavailable'],
+  ['GET', '/viewer', 'read', 'D', 'readViewer'],
+  ['PATCH', '/viewer', 'viewer.write', 'D', 'patchViewer'],
+  ['GET', '/events', 'read', 'DPA', 'events'],
+];
+
+export function routeTable() {
+  return ROUTES.map(([method, template, operation, audience, handler, collection]) => ({
+    method, template, operation, audience, handler, collection: collection ?? null,
+  }));
+}
+
+export function decodeId(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.includes('%') || raw.includes('/') || raw.includes('\\') || raw.includes('..')) {
+    throw new CoreError(422, 'invalid_path', 'The path id is not canonical.');
+  }
+  return raw;
+}
+
+export async function readJsonBody(req, { expect = 'any' } = {}) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1000000) throw new CoreError(413, 'request_too_large', 'The body is too large.');
+    chunks.push(chunk);
+  }
+  if (size === 0) {
+    if (expect === 'json') throw new CoreError(422, 'invalid_body', 'A JSON body is required.');
+    return null;
+  }
+  if (expect === 'none') throw new CoreError(422, 'invalid_body', 'This route does not accept a body.');
+  const type = String(req.headers['content-type'] ?? '');
+  if (!type.startsWith('application/json')) throw new CoreError(415, 'invalid_body', 'Content-Type must be application/json.');
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CoreError(422, 'invalid_body', 'The body must be a JSON object.');
+    return parsed;
+  } catch (error) {
+    if (error instanceof CoreError) throw error;
+    throw new CoreError(422, 'invalid_body', 'The body is not JSON.');
+  }
+}
+
+export function respond(res, status, body, headers = {}) {
+  const extra = {
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    ...headers,
+  };
+  if (status === 204) {
+    res.writeHead(204, extra);
+    res.end();
+    return;
+  }
+  if (Buffer.isBuffer(body)) {
+    res.writeHead(status, { ...extra, 'content-type': extra['content-type'] ?? 'application/octet-stream' });
+    res.end(body);
+    return;
+  }
+  const payload = Buffer.from(JSON.stringify(body));
+  res.writeHead(status, { ...extra, 'content-type': 'application/json; charset=utf-8' });
+  res.end(payload);
+}
+
+export async function serveStatic(assetDir, name) {
+  if (!assetDir) throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
+  if (!STATIC_FILES.has(name)) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  const root = await realpath(assetDir).catch(() => { throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.'); });
+  const target = path.resolve(root, name);
+  const relative = path.relative(root, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  const bytes = await readFile(target).catch((error) => {
+    if (error?.code === 'ENOENT') throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
+    throw error;
+  });
+  return bytes;
+}
+
+export function serveEvents(res, bus, principal, cursor) {
+  const headers = {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    connection: 'keep-alive',
+  };
+  res.writeHead(200, headers);
+  res.flushHeaders();
+  const subscriber = bus.subscribe(principal, {}, (frame) => {
+    res.write(`event: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
+  });
+  bus.replay(subscriber, cursor ?? null);
+  return subscriber;
+}
+
+export async function createHttpServer(options) {
+  const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP' });
+  const credentials = options.credentials;
+  const viewers = new Map();
+  const bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
+  const compiled = routeTable().map(compile);
+  const sockets = new Set();
+  const server = createServer((req, res) => {
+    dispatch(req, res).catch(async (error) => {
+      if (res.headersSent || res.writableEnded) {
+        res.destroy();
+        return;
+      }
+      for await (const chunk of req) void chunk;
+      const status = error instanceof CoreError ? error.status : 500;
+      const headers = {};
+      if (error?.retryAt) headers['retry-after'] = retryAfter(error.retryAt, options.now?.() ?? Date.now());
+      if (error?.allow) headers.allow = error.allow;
+      respond(res, status, safeError(error, randomUUID()), headers);
+    });
+  });
+
+  async function dispatch(req, res) {
+    const requestId = headerOne(req, 'x-request-id') ?? randomUUID();
+    if (headerOne(req, 'x-request-id') && !isUuid(requestId)) throw new CoreError(422, 'invalid_body', 'The request id must be a UUID.');
+    const eventCursor = headerOne(req, 'last-event-id') ?? null;
+    const requested = splitTarget(req.url ?? '/');
+    const listener = listenerOf(options, server);
+    checkPeer(req.socket.remoteAddress, listener);
+    checkHost(headerOne(req, 'host'), listener);
+    const write = req.method !== 'GET' && req.method !== 'HEAD';
+    checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
+    const headerBytes = Object.entries(req.headers).reduce((sum, [key, value]) => sum + key.length + String(value).length, 0);
+    checkLimits(bucket, { url: req.url ?? '', headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
+    if (requested.path === '/mcp' || requested.path.startsWith('/app/') || requested.path === '/' || requested.path.startsWith('/gui/')) {
+      await serveEdge(req, res, requested.path, { assetDir: options.assetDir, viewers });
+      return;
+    }
+    if (!requested.path.startsWith('/api/v1/') && requested.path !== '/api/v1') throw new CoreError(404, 'not_found', 'The route does not exist.');
+    const relative = requested.path.slice('/api/v1'.length) || '/';
+    const query = parseQuery(requested.search);
+    const matches = compiled.filter((route) => route.regex.test(relative));
+    if (matches.length === 0) throw new CoreError(404, 'not_found', 'The route does not exist.');
+    const route = matches.find((item) => item.method === req.method);
+    if (!route) {
+      const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
+      error.allow = [...new Set(matches.map((item) => item.method))].join(', ');
+      throw error;
+    }
+    const params = paramsOf(route, relative);
+    const body = await readJsonBody(req, { expect: bodyExpect(route, req.method) });
+    rejectUnknown(route, body);
+    const credential = credentialFor(req, route, credentials, listener);
+    const domain = domainContext(options, credential, bus);
+    const object = await objectFor(route, domain, credential, params, body);
+    const operation = operationFor(route, credential, body);
+    if (operation) authorize(credential, operation, object);
+    if (route.handler === 'events') {
+      const principal = { ...domain.principal, stableId: credential.token, audience: credential.audience, viewerId: credential.viewerId ?? null };
+      const subscriber = serveEvents(res, bus, principal, eventCursor);
+      bucket.streams.add(subscriber);
+      req.on('close', () => {
+        bus.release(subscriber);
+        bucket.streams.delete(subscriber);
+      });
+      return;
+    }
+    if (route.handler === 'authLocal' || route.handler === 'authHome' || route.handler === 'logout') {
+      const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options });
+      respond(res, outcome.status, outcome.body ?? undefined, outcome.headers);
+      return;
+    }
+    const run = () => invoke(route, { domain, params, query, body, credential, viewers, bus, options });
+    const outcome = route.method === 'GET'
+      ? await run()
+      : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
+    const envelope = {
+      data: outcome.body,
+      meta: { requestId, replayed: outcome.replayed === true },
+      sync: outcome.sync ?? null,
+    };
+    respond(res, outcome.status ?? 200, envelope);
+  }
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await listen(server, options.host ?? '127.0.0.1', options.port ?? 0);
+  return {
+    server,
+    bus,
+    credentials,
+    port: server.address().port,
+    viewers,
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+function splitTarget(value) {
+  const queryAt = value.indexOf('?');
+  const path = queryAt === -1 ? value : value.slice(0, queryAt);
+  const search = queryAt === -1 ? '' : value.slice(queryAt);
+  if (path.includes('\\') || path.includes('//')) throw new CoreError(422, 'invalid_path', 'The path id is not canonical.');
+  return { path, search };
+}
+
+async function serveEdge(req, res, pathname, { assetDir, viewers }) {
+  if (pathname === '/mcp') {
+    if (req.method !== 'POST') {
+      const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
+      error.allow = 'POST';
+      throw error;
+    }
+    throw new CoreError(503, 'service_unavailable', 'The MCP bridge is not available yet.');
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
+    error.allow = 'GET';
+    throw error;
+  }
+  let name = 'index.html';
+  if (pathname.startsWith('/gui/')) {
+    const viewerId = decodeId(decodeURIComponent(pathname.split('/')[2] ?? ''));
+    if (!viewers.has(viewerId)) throw new CoreError(404, 'not_found', 'The viewer does not exist.');
+  } else if (pathname.startsWith('/app/')) {
+    name = decodeStatic(pathname.slice('/app/'.length));
+  }
+  const bytes = await serveStatic(assetDir, name);
+  respond(res, 200, bytes, {
+    'content-type': contentType(name),
+    'content-security-policy': csp(),
+    'x-frame-options': 'DENY',
+  });
+}
+
+function compile(route) {
+  const names = [];
+  const pattern = route.template.replace(/:([A-Za-z]+)/g, (_, name) => {
+    names.push(name);
+    return '([^/]+)';
+  });
+  return { ...route, names, regex: new RegExp(`^${pattern}$`) };
+}
+
+function paramsOf(route, relative) {
+  const match = route.regex.exec(relative);
+  const params = {};
+  route.names.forEach((name, index) => {
+    let decoded = match[index + 1];
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      throw new CoreError(422, 'invalid_path', 'The path id is not canonical.');
+    }
+    params[name] = decodeId(decoded);
+  });
+  return params;
+}
+
+function parseQuery(search) {
+  const raw = search.startsWith('?') ? search.slice(1) : search;
+  if (raw.length === 0) return {};
+  const query = {};
+  for (const part of raw.split('&')) {
+    const [key, value = ''] = part.split('=');
+    if (query[key] !== undefined) throw new CoreError(422, 'invalid_query', 'A query field is repeated.');
+    query[decodeURIComponent(key)] = decodeURIComponent(value);
+  }
+  return query;
+}
+
+function credentialFor(req, route, credentials, listener) {
+  if (route.handler === 'authLocal') {
+    if (listener.kind !== 'loopback') throw new CoreError(403, 'forbidden', 'Local login is only available on loopback.');
+    return null;
+  }
+  if (route.handler === 'authHome') return null;
+  const header = headerOne(req, 'authorization') ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  const record = credentials.verify(token);
+  const audiences = expandAudience(route.audience);
+  if (audiences.length > 0 && !audiences.includes(record.audience)) throw new CoreError(403, 'forbidden', 'The credential cannot call this route.');
+  return record;
+}
+
+function expandAudience(value) {
+  return value.split('').map((letter) => ({ D: 'desktop', P: 'phone', A: 'agent' }[letter])).filter(Boolean);
+}
+
+function operationFor(route, credential, body) {
+  if (route.handler === 'changeStatus' && credential?.audience === 'phone') {
+    if (body?.status === 'done') return 'task.accept';
+    if (body?.status === 'open') return 'task.send-back';
+    throw new CoreError(403, 'phone_read_only', 'Phone cannot change that.');
+  }
+  return route.operation;
+}
+
+async function objectFor(route, domain, credential, params, body) {
+  if (credential?.audience === 'agent' && route.operation === 'read') return { scope: 'own', unitId: credential.unitId };
+  if (route.handler === 'changeStatus' && credential?.audience === 'phone') {
+    const task = await loadTask(domain, params.taskId);
+    const reviewable = reviewAuthority(task).reviewable;
+    if (body?.status === 'done') return { reviewable };
+    if (body?.status === 'open') return { reviewable };
+    throw new CoreError(403, 'phone_read_only', 'Phone cannot change that.');
+  }
+  if (route.operation === 'task.status' && credential?.audience === 'agent') return { unitId: credential.unitId };
+  if (route.operation === 'mailbox.read') return { unitId: params.unitId ?? credential?.unitId };
+  if (route.operation === 'approval.request') return { unitId: credential?.unitId };
+  if (route.operation === 'editor.write' || route.operation === 'comment.write') return { attached: credential?.attached === true };
+  return {};
+}
+
+function bodyExpect(route) {
+  if (route.method === 'GET' || route.handler === 'events') return 'none';
+  if (route.handler === 'logout' || route.handler === 'stopSession') return 'any';
+  return 'json';
+}
+
+function rejectUnknown(route, body) {
+  if (!body) return;
+  const allowed = allowedBody(route.handler);
+  if (!allowed) return;
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) throw new CoreError(422, 'invalid_body', 'The body contains an unknown field.');
+  }
+}
+
+function allowedBody(handler) {
+  const table = {
+    createUnit: ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
+    patchSettings: ['look', 'language', 'expectedRevision'],
+    patchLayout: ['nodes', 'groups', 'expectedRevision'],
+    patchViewer: ['presentation', 'dirty'],
+    createChat: ['members', 'title'],
+    authLocal: [],
+    authHome: ['grant', 'code'],
+  };
+  return table[handler] ? new Set(table[handler]) : null;
+}
+
+function domainContext(options, credential, bus) {
+  const audience = credential?.audience ?? 'desktop';
+  return {
+    store: options.store,
+    paths: options.paths,
+    now: options.now ?? (() => Date.now()),
+    bus,
+    projects: options.projects ?? [],
+    ownedPids: options.ownedPids ?? new Set(),
+    aliases: options.aliases ?? [],
+    principal: {
+      unitId: audience === 'agent' ? credential.unitId : 'root:master',
+      audience,
+      stableId: credential?.token ?? null,
+      viewerId: credential?.viewerId ?? null,
+    },
+  };
+}
+
+async function invoke(route, scope) {
+  const { domain, params, query, body, credential, viewers, options } = scope;
+  validateQuery(route, query);
+  if (route.handler === 'unavailable') {
+    const injected = options.handlers?.[route.template];
+    if (!injected) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
+    return injected({ domain, params, query, body, credential });
+  }
+  if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
+  if (route.handler === 'collection') return { status: 200, body: await readCollection(domain, route.collection, numbers(query)) };
+  if (route.handler === 'detail') return { status: 200, body: await readDetail(domain, route.collection, params.unitId ?? params.chatId ?? params.taskId ?? params.approvalId ?? params.requestId ?? params.messageId) };
+  if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
+  if (route.handler === 'settings') return { status: 200, body: safeSettings(await readDetail(domain, 'settings'), credential) };
+  if (route.handler === 'createUnit') {
+    await createUnit(domain, body);
+    return { status: 201, body: { unit: body.unit, role: body.role } };
+  }
+  if (route.handler === 'connectLead') {
+    await connectLead(domain, params.unitId, body);
+    return { status: 200, body: { unitId: params.unitId, leadId: body.leadId ?? null } };
+  }
+  if (route.handler === 'enqueueStart') return { status: 202, body: await enqueueStart(domain, { ...body, unitId: params.unitId }) };
+  if (route.handler === 'stopSession') return { status: 200, body: await stopSession(domain, params.sessionId) };
+  if (route.handler === 'patchLayout') {
+    await patchLayout(domain, body);
+    return { status: 200, body: await readDetail(domain, 'layout') };
+  }
+  if (route.handler === 'createChat') return { status: 201, body: await createChat(domain, body) };
+  if (route.handler === 'postChat') return { status: 201, body: await postChat(domain, params.chatId, body) };
+  if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
+  if (route.handler === 'patchChat') return { status: 200, body: await patchChat(domain, params.chatId, body) };
+  if (route.handler === 'postMailbox') return { status: 201, body: await postMailbox(domain, params.unitId, body) };
+  if (route.handler === 'readMailbox') return { status: 200, body: await readMailbox(domain, params.unitId, body ?? {}) };
+  if (route.handler === 'requestApproval') return { status: 201, body: await requestApproval(domain, body) };
+  if (route.handler === 'answerApproval') return { status: 200, body: await answerApproval(domain, params.approvalId, body) };
+  if (route.handler === 'revokeGrant') return { status: 200, body: await revokeGrant(domain, params.unitId, params.grantId, body ?? {}) };
+  if (route.handler === 'changeStatus') {
+    const operation = credential.audience === 'phone' ? (body.status === 'done' ? 'task.accept' : 'task.send-back') : 'task.status';
+    void operation;
+    return { status: 200, body: await changeStatus(domain, params.taskId, body) };
+  }
+  if (route.handler === 'undoStatus') return { status: 200, body: await undoStatus(domain, params.taskId, body) };
+  if (route.handler === 'patchSettings') {
+    await patchSettings(domain, body);
+    return { status: 200, body: await readDetail(domain, 'settings') };
+  }
+  if (route.handler === 'readViewer') return { status: 200, body: viewers.get(credential.viewerId) ?? { presentation: null, dirty: false } };
+  if (route.handler === 'patchViewer') {
+    const current = { ...(viewers.get(credential.viewerId) ?? {}), ...body };
+    viewers.set(credential.viewerId, current);
+    scope.bus.emit({ name: 'viewer.changed', viewerId: credential.viewerId, data: { viewerId: credential.viewerId } });
+    return { status: 200, body: current };
+  }
+  throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
+}
+
+function validateQuery(route, query) {
+  const allowed = route.method === 'GET' && route.handler !== 'detail' && route.handler !== 'layout' && route.handler !== 'settings' && route.handler !== 'readViewer' && route.handler !== 'events'
+    ? new Set(PAGE_QUERY)
+    : new Set();
+  for (const key of Object.keys(query)) {
+    if (!allowed.has(key)) throw new CoreError(422, 'invalid_query', 'The query contains an unknown field.');
+  }
+}
+
+function numbers(query) {
+  const next = { ...query };
+  if (next.limit !== undefined) next.limit = Number(next.limit);
+  return next;
+}
+
+function safeSettings(detail, credential) {
+  if (credential?.audience !== 'phone') return detail;
+  const settings = detail.settings ?? {};
+  return { settings: { look: settings.look ?? null, language: settings.language ?? null }, revision: detail.revision };
+}
+
+async function mutate(options, credential, req, relative, body, requestId, eventCursor, run) {
+  const key = headerOne(req, 'idempotency-key');
+  if (!isUuid(key)) throw new CoreError(400, 'idempotency_required', 'Idempotency-Key must be a UUID.');
+  return withReceipt(options.store, {
+    principal: credential.token,
+    key,
+    method: req.method,
+    path: relative,
+    body,
+    requestId,
+    eventCursor,
+  }, async (receipt) => {
+    const outcome = await run();
+    await atomicWrite(options.store, path.join(options.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
+      ...receipt,
+      status: outcome.status ?? 200,
+      response: outcome.body ?? null,
+    })}\n`));
+    return outcome;
+  });
+}
+
+async function runAuth(route, scope) {
+  if (route.handler === 'authLocal') {
+    const viewerId = randomUUID();
+    const issued = scope.credentials.issue({
+      audience: 'desktop',
+      unitId: 'root:master',
+      viewerId,
+      expiresAt: new Date((scope.options.now?.() ?? Date.now()) + 12 * 60 * 60 * 1000).toISOString(),
+    });
+    scope.viewers.set(viewerId, { presentation: null, dirty: false });
+    return { status: 200, body: { token: issued.token, capabilities: issued.capabilities, viewerId } };
+  }
+  if (route.handler === 'authHome') throw new CoreError(503, 'service_unavailable', 'Home access is not available yet.');
+  scope.credentials.revoke(scope.credential.token);
+  scope.bus.closePrincipal(scope.credential.token);
+  scope.viewers.delete(scope.credential.viewerId);
+  return { status: 204, body: null };
+}
+
+function listenerOf(options, server) {
+  const address = server.address();
+  return {
+    kind: options.listenerKind ?? 'loopback',
+    address: options.bindAddress ?? '127.0.0.1',
+    port: address?.port,
+    netmask: options.netmask ?? '255.255.255.255',
+  };
+}
+
+function headerOne(req, name) {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0];
+  return value ?? null;
+}
+
+function retryAfter(retryAt, now) {
+  const seconds = Math.ceil((Date.parse(retryAt) - now) / 1000);
+  return String(Math.max(1, seconds));
+}
+
+function contentType(name) {
+  if (name.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (name.endsWith('.mjs') || name.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  return 'text/html; charset=utf-8';
+}
+
+function csp() {
+  return "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+}
+
+function decodeStatic(name) {
+  if (name.includes('%') || name.includes('..') || name.includes('/') || name.includes('\\')) {
+    throw new CoreError(404, 'not_found', 'The asset is not available.');
+  }
+  return name;
+}
+
+function listen(server, host, port) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => resolve());
+  });
+}

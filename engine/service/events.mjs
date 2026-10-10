@@ -116,6 +116,12 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     return { reset: false, events, ready: true, frames };
   }
 
+  function release(subscriber) {
+    if (!subscriber) return;
+    subscriber.closed = true;
+    subscribers.delete(subscriber);
+  }
+
   function closePrincipal(stableId) {
     revoked.add(stableId);
     for (const subscriber of [...subscribers]) {
@@ -158,7 +164,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     return true;
   }
 
-  return { captureCursor, emit, subscribe, replay, closePrincipal, startupId };
+  return { captureCursor, emit, subscribe, replay, release, closePrincipal, startupId };
 }
 
 export function matches(filters, record) {

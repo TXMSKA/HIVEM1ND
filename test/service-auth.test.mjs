@@ -1,7 +1,9 @@
 import { writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { composeCore } from '../engine/service/service.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createCredentialStore, protectLocalFile, safeError } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -74,4 +76,35 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   assert.equal(protectedFile.protected, true);
   store.revoke(desktop.token);
   await assert.rejects(async () => store.verify(desktop.token), (error) => error.status === 401);
+});
+
+test('a phone token is rejected for a desktop write on the real listener', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
+  t.after(() => core.http.close());
+  const phone = core.credentials.issue({ audience: 'phone', expiresAt: new Date(fixture.clock.now + 60_000).toISOString() });
+  const status = await new Promise((resolve, reject) => {
+    const payload = Buffer.from('{"language":"es"}');
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'PATCH',
+      path: '/api/v1/settings',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${phone.token}`,
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        'idempotency-key': '6f1d7c2e-1b4a-4e3a-9c55-0a0b0c0d0e0f',
+      },
+    }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+  assert.equal(status, 403);
 });

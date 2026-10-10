@@ -4,7 +4,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { attachNative, dispatchLocal } from '../engine/service/bridge.mjs';
-import { adoptWake, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
+import { request as httpRequest } from 'node:http';
+import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function freePort() {
@@ -110,4 +111,56 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   assert.equal(accepted.accepted, true);
   await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, nativeSessionId: 'native-1', handshake: false }), (error) => error.code === 'stop_unavailable');
   await stopService(started);
+});
+
+test('the HTTP event stream stays up beside the service guard', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
+  t.after(() => core.http.close());
+  const local = await new Promise((resolve, reject) => {
+    const payload = Buffer.from('{}');
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'POST',
+      path: '/api/v1/auth/local',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+  const opened = await new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: core.http.port,
+      path: '/api/v1/events',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${local.token}`,
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => {
+        raw += chunk.toString('utf8');
+        if (raw.includes('event: stream.ready')) {
+          req.destroy();
+          resolve(res.statusCode);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(opened, 200);
 });

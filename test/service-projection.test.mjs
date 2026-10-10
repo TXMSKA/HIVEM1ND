@@ -6,6 +6,8 @@ import { createEventBus, revisionRelation } from '../engine/service/events.mjs';
 import { randomUUID } from 'node:crypto';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
+import { request as httpRequest } from 'node:http';
+import { composeCore } from '../engine/service/service.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from '../engine/service/units.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -320,4 +322,52 @@ test('unit, lead, layout, and settings writes are validated before any file chan
   assert.equal(names.includes('layout.changed'), true);
   assert.equal(names.includes('view.changed'), true);
   assert.equal(names.includes('settings.changed'), true);
+});
+
+test('a loopback projection read returns the same list shape', async (t) => {
+  const fixture = await makeCoreFixture({ now: NOW });
+  t.after(() => dispose(fixture));
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
+  t.after(() => core.http.close());
+  const token = await new Promise((resolve, reject) => {
+    const payload = Buffer.from('{}');
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'POST',
+      path: '/api/v1/auth/local',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')).token));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+  const listed = await new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: core.http.port,
+      path: '/api/v1/units',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  const direct = await readCollection({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, principal: { unitId: 'root:master' } }, 'units');
+  assert.deepEqual(listed.data.items, direct.items);
 });
