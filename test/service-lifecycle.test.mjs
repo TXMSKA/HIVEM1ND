@@ -164,3 +164,54 @@ test('the HTTP event stream stays up beside the service guard', async (t) => {
   });
   assert.equal(opened, 200);
 });
+
+test('two GUI hosts share one service and keep separate viewers', async (t) => {
+  const fixture = await makeCoreFixture();
+  const { startGui, closeGuiHost } = await import('../gui/index.mjs');
+  t.after(async () => {
+    await closeGuiHost();
+    await dispose(fixture);
+  });
+  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now };
+  await assert.rejects(startGui({ ...input, mindPath: path.join(fixture.root, 'missing') }), { code: 'mind_not_configured' });
+  await assert.rejects(startGui({ ...input, embedded: true, hostOrigin: 'file://local' }), { code: 'invalid_body' });
+  const first = await startGui({ ...input, look: 'modern' });
+  const second = await startGui({ ...input, embedded: true, hostOrigin: 'http://embed.example' });
+  assert.equal(first.origin, second.origin);
+  assert.notEqual(first.token, second.token);
+  assert.equal(first.url.includes('token='), false);
+  assert.equal(first.isDirty(), false);
+  assert.equal(second.isDirty(), false);
+  await first.setTheme('high-contrast');
+  const seen = await call(first.origin, first.token);
+  const other = await call(second.origin, second.token);
+  assert.equal(seen.json.data.look, 'high-contrast');
+  assert.equal(other.json.data.look ?? null, null);
+  assert.equal(other.json.data.language ?? null, null);
+  await second.stop();
+  await second.stop();
+  const still = await call(first.origin, first.token);
+  assert.equal(still.status, 200);
+  const otherMind = path.join(fixture.root, 'localappdata', 'Cosmic', 'other-mind');
+  await mkdir(path.join(otherMind, 'user'), { recursive: true });
+  await assert.rejects(startGui({ ...input, mindPath: otherMind }), { code: 'service_mind_conflict' });
+});
+
+function call(origin, token) {
+  const url = new URL('/api/v1/viewer', origin);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'GET',
+      headers: { host: url.host, origin: url.origin, authorization: `Bearer ${token}` },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
