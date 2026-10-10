@@ -180,7 +180,7 @@ function scopeOf(id) {
 }
 
 function section(body, heading) {
-  const pattern = new RegExp(`^## ${heading}\\n([\\s\\S]*?)(?=^## |$)`, "m");
+  const pattern = new RegExp(`(?:^|\\n)## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
   return pattern.exec(body)?.[1]?.replace(/\n$/, "") ?? "";
 }
 
@@ -1614,6 +1614,11 @@ function routeTable() {
     { pattern: "/units/:unitId/approval-grants", GET: { query: ["q", "limit", "cursor"] } },
     { pattern: "/tasks", GET: { query: ["q", "limit", "cursor", "project", "unitId", "status"] } },
     { pattern: "/tasks/:taskId", GET: { query: [] } },
+    { pattern: "/tasks/:taskId/status", POST: { capability: "task.status", allow: ["task.accept", "task.send-back"], validate: validateTaskStatus } },
+    { pattern: "/tasks/:taskId/undo", POST: { capability: "task.undo", validate: validateUndo } },
+    { pattern: "/approvals/:approvalId/answer", POST: { capability: "approval.answer", validate: validateAnswer } },
+    { pattern: "/units/:unitId/approval-grants/:grantId", DELETE: { capability: "grant.revoke", validate: validateRevoke } },
+    { pattern: "/grant-revocations/:requestId", GET: { query: [] } },
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
     { pattern: "/settings", GET: { query: [] } },
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] } },
@@ -1746,8 +1751,16 @@ async function readData(fx, snap, spec, params, query) {
     if (!approval) throw new HttpError(404, "not_found", "The approval was not found.");
     return approval;
   }
+  if (pattern === "/grant-revocations/:requestId") {
+    noneQuery(query);
+    const record = fx.revocations.get(params.requestId);
+    if (!record) throw new HttpError(404, "not_found", "The revocation was not found.");
+    return record;
+  }
   if (pattern === "/approvals/:approvalId/answers/:answerId") {
     noneQuery(query);
+    const memory = fx.answers.get(params.answerId);
+    if (memory?.approvalId === params.approvalId) return memory;
     const approval = snap.approvals.find((item) => item.id === params.approvalId);
     const outcome = approval?.answerOutcomes.find((item) => item.answerId === params.answerId);
     if (!outcome) throw new HttpError(404, "not_found", "The answer was not found.");
@@ -2427,6 +2440,115 @@ function replaceChatFields(text, changes) {
   return `${rows.join("\n")}\n`;
 }
 
+function validateAnswer(body) {
+  requireObject(body, ["decision", "expectedRevision"]);
+  requireKeys(body, ["decision", "expectedRevision"]);
+  if (!["approve", "approve-always", "deny"].includes(body.decision)) throw new HttpError(422, "invalid_body", "The decision is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+function validateRevoke(body) {
+  requireObject(body, ["expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+}
+
+function validateTaskStatus(body) {
+  requireObject(body, ["status", "note", "expectedRevision"]);
+  requireKeys(body, ["status", "expectedRevision"]);
+  if (!["open", "review", "done", "closed"].includes(body.status)) throw new HttpError(422, "invalid_body", "The status is not valid.");
+  if (body.note !== undefined && body.note !== null && typeof body.note !== "string") throw new HttpError(422, "invalid_body", "The note is not valid.");
+  revisionField(body.expectedRevision);
+}
+
+function validateUndo(body) {
+  requireObject(body, ["expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+}
+
+async function prepareAnswer(fx, approvalId, body) {
+  const snap = await projection(fx);
+  const approval = snap.approvals.find((item) => item.id === approvalId);
+  if (!approval) throw new HttpError(404, "not_found", "The approval was not found.");
+  if (approval.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The approval was changed elsewhere.");
+  if (approval.state === "expired" || Date.parse(approval.expiresAt) <= fx.nowMs) throw new HttpError(410, "approval_expired", "The approval has expired.");
+  if (body.decision === "approve-always" && approval.alwaysAllowed === false) throw new HttpError(422, "always_unavailable", "Approve always is not available.");
+  if (approval.state !== "pending") throw new HttpError(409, "approval_resolved", "The approval was already answered.");
+  const answerId = uuid();
+  const answer = { decision: body.decision, at: clock(fx).toISOString(), answerId };
+  const bytes = Buffer.from(stableJson(answer));
+  const record = { answerId, approvalId, state: "queued", resultAnswerId: null, at: null };
+  fx.answers.set(answerId, record);
+  return {
+    status: 202,
+    data: { approval: { ...approval, state: "answering" }, answerId },
+    writes: [{ path: join(fx.tree.user, "relay", "approvals", approvalId, "answers", `${answerId}.json`), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "approval.changed", data: { approval: { ...approval, state: "answering" }, answerId } }],
+  };
+}
+
+async function prepareRevoke(fx, params, body) {
+  const snap = await projection(fx);
+  const unit = snap.units.find((item) => item.id === params.unitId);
+  const grant = unit?.approvalGrants?.find((item) => item.id === params.grantId);
+  if (!unit || !grant) throw new HttpError(404, "grant_not_found", "The grant was not found.");
+  if (unit.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit was changed elsewhere.");
+  const requestId = uuid();
+  const record = { requestId, unitId: unit.id, grantId: grant.id, state: "pending", revision: unit.revision };
+  fx.revocations.set(requestId, record);
+  return { status: 202, data: record, writes: [], events: [{ name: "grant.changed", data: record }] };
+}
+
+async function prepareTaskStatus(fx, taskId, body, principal) {
+  const snap = await projection(fx);
+  const task = snap.tasks.find((item) => item.id === taskId);
+  if (!task) throw new HttpError(404, "task_not_found", "The task was not found.");
+  if (principal.audience === "phone" && !(task.status === "review" && (body.status === "done" || body.status === "open"))) {
+    throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
+  }
+  if (task.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The task was changed elsewhere.");
+  if (body.status === task.status) throw new HttpError(409, "status_unchanged", "The status is already set.");
+  if (body.status === "done" && task.status === "review" && !task.reviewable) throw new HttpError(409, "review_not_ready", "The lead has not approved this delivery.");
+  if (task.status === "review" && body.status === "open" && !String(body.note ?? "").trim()) throw new HttpError(422, "note_required", "A note is required.");
+  const previous = await readFile(task.file);
+  const next = Buffer.from(replaceStatus(previous.toString("utf8"), body.status, body.note));
+  fx.taskUndo.set(taskId, previous);
+  const updated = { ...publicTask(task), status: body.status, reviewable: false, undoAvailable: true, revision: sha256(next) };
+  return {
+    status: 200,
+    data: { task: updated, changeId: uuid() },
+    writes: [{ path: task.file, beforeRevision: task.revision, afterRevision: updated.revision, afterBytesBase64: next.toString("base64") }],
+    events: [{ name: "task.changed", data: { task: updated } }],
+  };
+}
+
+async function prepareUndo(fx, taskId, body) {
+  const snap = await projection(fx);
+  const task = snap.tasks.find((item) => item.id === taskId);
+  if (!task) throw new HttpError(404, "task_not_found", "The task was not found.");
+  if (task.revision !== body.expectedRevision) throw new HttpError(409, "undo_conflict", "The task was changed elsewhere.");
+  const previous = fx.taskUndo.get(taskId);
+  if (!previous) throw new HttpError(409, "nothing_to_undo", "There is nothing to undo.");
+  const restored = /^status: (.+)$/m.exec(previous.toString("utf8"))?.[1] ?? task.status;
+  const updated = { ...publicTask(task), status: restored, revision: sha256(previous), undoAvailable: false };
+  fx.taskUndo.delete(taskId);
+  return {
+    status: 200,
+    data: { task: updated, changeId: uuid(), undoOf: taskId },
+    writes: [{ path: task.file, beforeRevision: task.revision, afterRevision: updated.revision, afterBytesBase64: previous.toString("base64") }],
+    events: [{ name: "task.changed", data: { task: updated } }],
+  };
+}
+
+function replaceStatus(text, status, note) {
+  const rows = text.replace(/\s*$/, "").split("\n");
+  const index = rows.findIndex((row) => row.startsWith("status:"));
+  if (index >= 0) rows[index] = `status: ${status}`;
+  const extra = String(note ?? "").trim() ? `\n\n${String(note).trim()}\n` : "\n";
+  return `${rows.join("\n")}${extra}`;
+}
+
 async function checkMutation(fx, pattern, params, body) {
   if (pattern === "/units" || pattern === "/units/:unitId/lead" || pattern === "/units/:unitId/session") {
     const snap = await projection(fx);
@@ -2454,6 +2576,10 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
   if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);
   if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
+  if (pattern === "/approvals/:approvalId/answer") return prepareAnswer(fx, params.approvalId, body);
+  if (pattern === "/units/:unitId/approval-grants/:grantId") return prepareRevoke(fx, params, body);
+  if (pattern === "/tasks/:taskId/status") return prepareTaskStatus(fx, params.taskId, body, principal);
+  if (pattern === "/tasks/:taskId/undo") return prepareUndo(fx, params.taskId, body);
   if (pattern === "/chats") return prepareChat(fx, body, principal);
   if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);
@@ -2727,6 +2853,9 @@ export async function createGuiFixture(options = {}) {
     home: null,
     fault: null,
     noticeFailure: null,
+    answers: new Map(),
+    revocations: new Map(),
+    taskUndo: new Map(),
     sessionRequests: new Map(),
     sessionStops: new Map(),
     cache: null,
@@ -2776,6 +2905,30 @@ export async function createGuiFixture(options = {}) {
       },
       setFault(fault) { fx.fault = fault; },
       setNoticeFailure(unitId) { fx.noticeFailure = unitId; },
+      settleAnswer(answerId, state) {
+        return enqueue(fx, async () => {
+          const current = fx.answers.get(answerId);
+          if (!current) throw new Error("Unknown answer.");
+          current.state = state;
+          current.at = clock(fx).toISOString();
+          if (state === "applied") {
+            const result = { state: "approved", grantId: null, answerId };
+            const bytes = Buffer.from(stableJson(result));
+            await writeAtomic(join(fx.tree.user, "relay", "approvals", current.approvalId, "result.json"), bytes);
+            invalidate(fx);
+          }
+          publish(fx, [{ name: "approval.changed", global: true, data: { answer: { ...current } } }], fx.primary);
+        });
+      },
+      editTask(taskId, extra) {
+        return enqueue(fx, async () => {
+          const task = (await projection(fx)).tasks.find((item) => item.id === taskId);
+          if (!task) throw new Error("Unknown task.");
+          const text = await readFile(task.file, "utf8");
+          await writeAtomic(task.file, Buffer.from(`${text.replace(/\s*$/, "")}\n\n${extra}\n`));
+          invalidate(fx);
+        });
+      },
       seedMessages(chatId, count) {
         return enqueue(fx, async () => {
           const base = Date.parse("2026-10-10T12:00:00.000Z");

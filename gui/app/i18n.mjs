@@ -85,7 +85,13 @@ const COPY = {
   actionFailed: ["The action failed.", "La acción falló."],
   unitName: ["Name", "Nombre"],
   role: ["Role", "Rol"],
+  scope: ["Scope", "Ámbito"],
+  lead: ["Lead", "Líder"],
+  job: ["Job", "Trabajo"],
+  model: ["Model", "Modelo"],
   machine: ["Machine", "Máquina"],
+  branch: ["Branch", "Rama"],
+  date: ["Date", "Fecha"],
   scopeKind: ["Scope", "Ámbito"],
   scopeName: ["Scope name", "Nombre del ámbito"],
   client: ["Client", "Cliente"],
@@ -100,6 +106,12 @@ const COPY = {
   mailbox: ["Mailbox", "Buzón"],
   send: ["Send", "Enviar"],
   emptyChat: ["No messages yet.", "Todavía no hay mensajes."],
+  unknown: ["Unknown", "Desconocido"],
+  revoke: ["Revoke", "Revocar"],
+  undo: ["Undo", "Deshacer"],
+  answerQueued: ["Answer queued.", "La respuesta está en cola."],
+  approved: ["Approved", "Aprobado"],
+  note: ["Note", "Nota"],
 };
 
 const DICTIONARIES = {

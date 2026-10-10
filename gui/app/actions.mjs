@@ -67,6 +67,70 @@ export async function stopSession(api, sessionId) {
   return { ...result, operation };
 }
 
+export function canAccept(task) {
+  return task?.status === "review" && task.reviewable === true;
+}
+
+export function canSendBack(task) {
+  return task?.status === "review";
+}
+
+export async function answerApproval(api, approval, decision) {
+  if (decision === "approve-always" && approval.alwaysAllowed === false) {
+    const error = new Error("Approve always is not available.");
+    error.code = "always_unavailable";
+    throw error;
+  }
+  const operation = createOperation({
+    method: "POST",
+    path: "/approvals/:approvalId/answer",
+    params: { approvalId: approval.id },
+    body: { decision, expectedRevision: approval.revision },
+  });
+  const result = await request(api, "POST", operation.path, { operation });
+  return { ...result, operation };
+}
+
+export async function trackAnswer(api, approvalId, answerId) {
+  return request(api, "GET", `/approvals/${encodeURIComponent(approvalId)}/answers/${encodeURIComponent(answerId)}`);
+}
+
+export async function revokeGrant(api, unit, grantId) {
+  const operation = createOperation({
+    method: "DELETE",
+    path: "/units/:unitId/approval-grants/:grantId",
+    params: { unitId: unit.id, grantId },
+    body: { expectedRevision: unit.revision },
+  });
+  const result = await request(api, "DELETE", operation.path, { operation });
+  return { ...result, operation };
+}
+
+export async function changeTaskStatus(api, task, status, note = null) {
+  if (status === "open" && !String(note ?? "").trim()) {
+    const error = new Error("A note is required.");
+    error.code = "note_required";
+    throw error;
+  }
+  const operation = createOperation({
+    method: "POST",
+    path: "/tasks/:taskId/status",
+    params: { taskId: task.id },
+    body: { status, note, expectedRevision: task.revision },
+  });
+  return request(api, "POST", operation.path, { operation });
+}
+
+export async function undoTask(api, task) {
+  const operation = createOperation({
+    method: "POST",
+    path: "/tasks/:taskId/undo",
+    params: { taskId: task.id },
+    body: { expectedRevision: task.revision },
+  });
+  return request(api, "POST", operation.path, { operation });
+}
+
 function looksLikeCycle(source, target) {
   const seen = new Set([target.id]);
   let leadId = source?.leadId ?? null;

@@ -48,3 +48,11 @@ Chrome at 1440x900 on the modern English shell. A hierarchy double-click selecte
 | Viewport | Look | Language | Expected | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1440x900 | modern | en | Direct chat from a double-click, a three-member group, two replies, pin, unlist, reopen, older history, and a mailbox inspection that does not mark mail read. | executor-shop was aria-pressed and its direct chat opened. The new group read "No messages yet." and had 3 members. The transcript then showed First reply and Second reply. The chat pinned, left the list, and was listed again. After 400 messages, the total read 400 and the anchor delta was 0. The offline mailbox stayed "0 mailbox" on a second look. The shop mailbox stayed "1 read:false" on a second look. | none | this file |
+
+## Step 8 review
+
+Chrome at 1440x900 on the modern English shell, with executor-shop selected. The lead-gated delivery could not be accepted. Send back required a note and moved that task to open. The reviewable delivery was accepted, then an external edit made undo report undo_conflict. A pending approval went from Answer queued to Approved only after the owner result. An expired approval stayed visible. Grant revoke stayed pending. Waiting fell from 5 to 4 and did not empty while other items remained.
+
+| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1440x900 | modern | en | Pending approval becomes approved only after the owner result. Expired approval stays visible. Revoke stays pending. Lead-gated delivery is blocked. Accept, send back, and a conflicting undo are distinct. Waiting changes only after an outcome. | Accept on task 030 was disabled. Send back with a note set the note to open. Accept on task 029 set the note to done. After an external edit, undo showed undo_conflict. Approve showed Answer queued, then Approved. The expired approval remained. Revoke showed pending. Waiting went from 5 to 4. | none | this file |
