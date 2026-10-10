@@ -144,10 +144,10 @@ test('Claude SessionStart reuses only the exact enabled binding and handles read
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(result, null);
-  assert.equal(spawnCalls, 1);
+  assert.equal(spawnCalls, 0);
   assert.deepEqual(observations, [[binding, { activity: 'idle' }]]);
   assert.equal(Buffer.concat(stdoutChunks).toString('utf8'), '');
-  assert.match(Buffer.concat(stderrChunks).toString('utf8'), /worker could not start/);
+  assert.doesNotMatch(Buffer.concat(stderrChunks).toString('utf8'), /worker could not start/);
   assert.doesNotMatch(Buffer.concat(stderrChunks).toString('utf8'), /ephemeral|hook-start/);
 });
 

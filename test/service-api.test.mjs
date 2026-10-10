@@ -82,11 +82,12 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   assert.equal(listed.json.data.items.some((item) => item.unit === 'builder'), true);
   const future = await call(core.http.port, 'POST', '/mcp', {
     token,
-    body: {},
-    headers: { 'idempotency-key': randomUUID() },
+    body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
+    headers: { accept: 'application/json, text/event-stream' },
   });
-  assert.equal(future.status, 503);
-  assert.equal(future.json.error.code, 'service_unavailable');
+  assert.equal(future.status, 200);
+  assert.equal(future.json.result.protocolVersion, '2025-03-26');
+  assert.equal(future.json.result.serverInfo.version, '3.0.0');
   const asset = await call(core.http.port, 'GET', '/api/v1/editors/board/assets/missing', { token });
   assert.equal(asset.status, 404);
   assert.equal(asset.json.error.code, 'not_found');
