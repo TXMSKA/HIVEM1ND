@@ -15,7 +15,20 @@ import {
   postMessage,
   retryMessage,
 } from "../gui/app/chats.mjs";
-import { connectUnits, createUnit, startSession, stopSession, trackSessionRequest } from "../gui/app/actions.mjs";
+import {
+  answerApproval,
+  canAccept,
+  changeTaskStatus,
+  connectUnits,
+  createUnit,
+  revokeGrant,
+  startSession,
+  stopSession,
+  trackAnswer,
+  trackSessionRequest,
+  undoTask,
+} from "../gui/app/actions.mjs";
+import { retryOperation } from "../gui/app/api.mjs";
 import {
   applyRemoteLayout,
   createMap,
@@ -369,6 +382,44 @@ test("a second submit joins the in-flight post", async () => {
   await first;
   assert.equal(thread.messages.length, 1);
   assert.equal(thread.messages[0].body, "one");
+});
+
+test("review, undo, and queued approval outcomes stay distinct", async (context) => {
+  const fixture = await createGuiFixture();
+  context.after(() => fixture.close());
+  const api = fixtureApi(fixture);
+  const tasks = await request(api, "GET", "/tasks", { query: { status: "open,review,done,closed", limit: "50" } });
+  const ready = tasks.data.items.find((task) => task.id === "project:shop:029");
+  const gated = tasks.data.items.find((task) => task.id === "project:shop:030");
+  assert.equal(canAccept(gated), false);
+  assert.equal(canAccept(ready), true);
+  await assert.rejects(changeTaskStatus(api, gated, "done"), (error) => error.code === "review_not_ready");
+  await assert.rejects(changeTaskStatus(api, ready, "open", " "), (error) => error.code === "note_required");
+  const accepted = await changeTaskStatus(api, ready, "done");
+  assert.equal(accepted.data.task.status, "done");
+  const undone = await undoTask(api, accepted.data.task);
+  assert.equal(undone.data.task.status, "review");
+  await fixture.control.editTask("project:shop:029", "External edit");
+  const current = await request(api, "GET", "/tasks/project%3Ashop%3A029");
+  await assert.rejects(undoTask(api, undone.data.task), (error) => error.code === "undo_conflict");
+  assert.equal(current.data.status, "review");
+  const pending = await request(api, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ecf");
+  const queued = await answerApproval(api, pending.data, "approve");
+  assert.equal(queued.status, 202);
+  assert.equal((await trackAnswer(api, pending.data.id, queued.data.answerId)).data.state, "queued");
+  await fixture.control.settleAnswer(queued.data.answerId, "rejected");
+  assert.equal((await trackAnswer(api, pending.data.id, queued.data.answerId)).data.state, "rejected");
+  const denied = await request(api, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ec3");
+  await assert.rejects(answerApproval(api, denied.data, "approve-always"), (error) => error.code === "always_unavailable");
+  const unit = await request(api, "GET", "/units/project%3Ashop%3Aexecutor-shop");
+  const grantId = unit.data.approvalGrants[0].id;
+  const revocation = await revokeGrant(api, unit.data, grantId);
+  assert.equal(revocation.data.state, "pending");
+  const again = await retryOperation(api, revocation.operation);
+  assert.equal(again.data.requestId, revocation.data.requestId);
+  const expiredApi = fixtureApi(fixture);
+  const expired = await request(expiredApi, "GET", "/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ec4");
+  await assert.rejects(answerApproval(expiredApi, expired.data, "deny"), (error) => error.code === "approval_expired");
 });
 
 function fixtureApi(fixture) {

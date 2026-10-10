@@ -1,4 +1,13 @@
-import { connectUnits, createUnit, startSession, stopSession } from "./actions.mjs";
+import {
+  answerApproval,
+  changeTaskStatus,
+  connectUnits,
+  createUnit,
+  revokeGrant,
+  startSession,
+  stopSession,
+  undoTask,
+} from "./actions.mjs";
 import {
   createThread,
   incomingMessage,
@@ -12,6 +21,7 @@ import {
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
+import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
@@ -121,6 +131,7 @@ async function onStream(app, event) {
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
   if (event?.name === "session.changed") noteSession(app, event.envelope?.data ?? {});
+  if (event?.name === "approval.changed") noteApproval(app, event.envelope?.data ?? {});
   if (event?.name === "message.created" && app.thread?.chat?.id === event.envelope?.data?.chatId) {
     incomingMessage(app.thread, event.envelope.data.message);
   }
@@ -240,11 +251,13 @@ function renderWorkspace(app, t, view, counts) {
       class: "action-note",
       "data-action-note": "true",
       "data-request": app.sessionRequestId ?? "",
+      "data-answer": app.answerId ?? "",
       text: app.actionNote,
     }));
   }
   inspectorBody.append(actionControls(app, t, selected));
   inspectorBody.append(chatPanel(app, t));
+  inspectorBody.append(renderInspector(app, t, selected));
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
@@ -326,6 +339,7 @@ function ensureMap(app) {
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
   app.mapState.onSelect = (id) => {
     app.store.selected.unitId = id;
+    loadInspector(app, id);
     if (!app.disposed) renderShell(app);
   };
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
@@ -740,6 +754,89 @@ function submitComposer(app, composer) {
 function noteAction(app, error) {
   app.actionNote = error?.code ?? "request_failed";
   if (!app.disposed) renderShell(app);
+}
+
+function renderInspector(app, t, selected) {
+  const document = app.root.ownerDocument;
+  const panel = element(document, "div", { class: "review-panel" });
+  if (selected) panel.append(renderUnit(document, selected, t));
+  const data = app.inspectorData;
+  if (!data || data.unitId !== selected?.id) return panel;
+  panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant)));
+  for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
+  for (const task of data.tasks ?? []) {
+    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), (item) => undoSelected(app, item)));
+    panel.append(openTaskDetail(document, task, t));
+  }
+  panel.append(renderWaiting(document, data.waiting, t));
+  return panel;
+}
+
+function loadInspector(app, unitId) {
+  const ticket = (app.inspectorTicket ?? 0) + 1;
+  app.inspectorTicket = ticket;
+  Promise.all([
+    request(app.api, "GET", "/tasks", { query: { unitId, status: "open,review,done,closed", limit: "50" } }),
+    request(app.api, "GET", "/approvals", { query: { unitId, state: "pending", limit: "50" } }),
+    request(app.api, "GET", "/approvals", { query: { unitId, state: "expired", limit: "20" } }),
+    request(app.api, "GET", `/units/${encodeURIComponent(unitId)}`),
+    request(app.api, "GET", "/waiting", { query: { limit: "50" } }),
+  ]).then(([tasks, approvals, expired, unit, waiting]) => {
+    if (app.disposed || ticket !== app.inspectorTicket) return;
+    app.inspectorData = {
+      unitId,
+      tasks: tasks.data.items ?? [],
+      approvals: [...(approvals.data.items ?? []), ...(expired.data.items ?? [])],
+      grants: unit.data.approvalGrants ?? [],
+      waiting: waiting.data.items ?? [],
+    };
+    renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function answerSelected(app, approval, decision) {
+  answerApproval(app.api, approval, decision).then((result) => {
+    app.actionNote = text(app.language, "answerQueued");
+    app.answerId = result.data.answerId;
+    app.answerApprovalId = approval.id;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function revokeSelectedGrant(app, unit, grant) {
+  revokeGrant(app.api, unit, grant.id).then((result) => {
+    app.actionNote = result.data.state;
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function setTaskStatus(app, task, status, note) {
+  changeTaskStatus(app.api, task, status, note).then((result) => {
+    app.actionNote = result.data.task.status;
+    app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
+    refreshWaiting(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function undoSelected(app, task) {
+  undoTask(app.api, task).then((result) => {
+    app.actionNote = result.data.task.status;
+    app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
+    refreshWaiting(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function refreshWaiting(app) {
+  request(app.api, "GET", "/waiting", { query: { limit: "50" } }).then((waiting) => {
+    if (app.inspectorData) app.inspectorData.waiting = waiting.data.items ?? [];
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteAction(app, error));
+}
+
+function noteApproval(app, data) {
+  const state = data.answer?.state;
+  if (state === "applied") app.actionNote = text(app.language, "approved");
+  else if (state) app.actionNote = state;
 }
 
 function unitById(app, id) {
