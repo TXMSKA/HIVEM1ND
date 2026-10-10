@@ -22,6 +22,13 @@ export function openOrigin({ store, paths, now = () => Date.now(), machine } = {
   };
 }
 
+export async function nextSequence(origin) {
+  const head = await readHead(origin, origin.machine);
+  const journal = await readJournal(origin);
+  if (journal?.phase === 'prepared') return journal.sequence;
+  return (head?.sequence ?? 0) + 1;
+}
+
 export async function publishPack(origin, packBytes) {
   const bytes = Buffer.isBuffer(packBytes) ? packBytes : Buffer.from(packBytes);
   const digest = hashBytes(bytes);
@@ -75,6 +82,10 @@ export async function publishPack(origin, packBytes) {
     bytes: bytes.length,
     file: filename,
   });
+  if (origin.fault === 'after-head') {
+    origin.fault = null;
+    throw new CoreError(500, 'injected_crash', 'Injected crash after the head was committed.');
+  }
   return { sequence, hash: digest, bytes: bytes.length, replayed: false };
 }
 
