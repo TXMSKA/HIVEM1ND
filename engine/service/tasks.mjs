@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, hashBytes, isPersonAlias, parseTaskId, parseUnitId, replaceHeader } from './identity.mjs';
+import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
 import { commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
@@ -169,7 +170,7 @@ async function commitChange(context, task, change) {
   const result = await commitTransaction(context.store, transaction);
   const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   await stageTransaction(sync, stage);
-  for (const event of events) context.store.events.push(event);
+  publishDomainEvents(context, events);
   return { ...result, replayed: false, body: transaction.response.body };
 }
 

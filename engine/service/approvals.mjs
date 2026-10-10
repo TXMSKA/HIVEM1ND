@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader } from './identity.mjs';
+import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocks } from './store.mjs';
@@ -506,7 +507,7 @@ async function commitFiles(context, records, events) {
     bytes: Buffer.isBuffer(record.afterBytes) ? record.afterBytes : Buffer.from(record.afterBytesBase64, 'base64'),
   }));
   if (stage.length) await stageTransaction(sync, stage);
-  for (const event of events) context.store.events.push(event);
+  publishDomainEvents(context, events);
 }
 
 function entry(context, relative, before, bytes) {

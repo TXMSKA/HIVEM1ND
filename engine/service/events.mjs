@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './identity.mjs';
+import { DESKTOP } from './security.mjs';
 
 export const EVENT_NAMES = [
   'stream.ready', 'stream.reset', 'service.changed', 'unit.changed', 'view.changed',
@@ -51,7 +52,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
       at: new Date(now()).toISOString(),
       atMs: now(),
       machine,
-      source: event.source ?? { kind: 'local' },
+      source: event.source ?? sourceFor(event, machine),
       data: event.data ?? {},
       resourceId,
       unitId: event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? null,
@@ -89,7 +90,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
           name,
           at: new Date(now()).toISOString(),
           machine,
-          source: { kind: 'local' },
+          source: { kind: 'service', id: machine, unitId: null },
           data,
           resourceId: null,
           unitId: null,
@@ -218,7 +219,28 @@ function stripSecrets(value) {
 function capabilitiesFor(principal) {
   if (principal.audience === 'phone') return ['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back'];
   if (principal.audience === 'agent') return ['own'];
-  return ['desktop'];
+  return [...DESKTOP];
+}
+
+export function publishDomainEvents(context, events) {
+  for (const event of events) {
+    context.store.events.push(event);
+    if (!context.bus) continue;
+    const unitId = event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? context.principal?.unitId ?? null;
+    context.bus.emit({
+      ...event,
+      unitId,
+      source: event.source ?? (unitId
+        ? { kind: 'unit', id: unitId, unitId }
+        : { kind: 'service', id: context.paths?.machine ?? 'service', unitId: null }),
+    });
+  }
+}
+
+function sourceFor(event, machine) {
+  const unitId = event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? null;
+  if (unitId) return { kind: 'unit', id: unitId, unitId };
+  return { kind: 'service', id: machine, unitId: null };
 }
 
 function parseCursor(cursor) {

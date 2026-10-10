@@ -192,6 +192,7 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     connection: 'keep-alive',
+    'x-accel-buffering': 'no',
   };
   res.writeHead(200, headers);
   res.flushHeaders();
@@ -221,6 +222,13 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
     res.write(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
   });
   bus.replay(subscriber, cursor ?? null);
+  const keepalive = setInterval(() => {
+    if (!res.writableEnded) res.write(': keepalive\n\n');
+  }, 15000);
+  keepalive.unref?.();
+  const stop = () => clearInterval(keepalive);
+  res.on?.('close', stop);
+  extras.req?.on?.('close', stop);
   return subscriber;
 }
 
