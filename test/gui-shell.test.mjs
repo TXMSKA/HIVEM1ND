@@ -1319,6 +1319,92 @@ function textNodes(node, found = []) {
   return found;
 }
 
+test("unit and session forms use machines and clients, and the inspector shows the contract facts", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, urls, async (input, init) => {
+    if (!init?.body || (init.method !== "POST" && init.method !== "PUT")) return;
+    writes.push({ method: init.method, url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-session-activity]")?.getAttribute("data-session-activity") === "busy", "The session facts did not load.");
+  const session = desktop.root.querySelectorAll("[data-session='20c58b80-4d93-88cd-83b3-39d78f1d9d5d']").find((node) => node.querySelector("[data-session-activity]"));
+  assert.equal(session.querySelector("[data-session-quota]").getAttribute("data-session-quota"), "unknown");
+  assert.equal(session.querySelector("[data-session-wake]").getAttribute("data-session-wake"), "enabled");
+  assert.equal(desktop.root.querySelector("[data-machine='DESKTOP']").getAttribute("data-answers"), "true");
+  const grant = desktop.root.querySelector("[data-grant-action='process.run']").parent;
+  assert.equal(grant.querySelector("[data-grant-action]").getAttribute("data-grant-action"), "process.run");
+  assert.equal(grant.querySelector("[data-grant-pattern]").textContent, "command: npm run build, cwd: project:shop");
+  assert.equal(grant.querySelector("[data-action='revoke-grant']") == null, false);
+  const reviewable = desktop.root.querySelector("[data-task='project:shop:029']");
+  assert.equal(reviewable.getAttribute("data-reviewable"), "true");
+  assert.equal(reviewable.querySelector("[data-action='accept']").disabled, false);
+  assert.equal(desktop.root.querySelector("[data-task-detail='project:shop:029']").querySelector("[data-requirements]").getAttribute("data-requirements"), "SHOP-1");
+  assert.equal(desktop.root.querySelector("[data-task-detail='project:shop:029']").querySelector("[data-approved-by]").getAttribute("data-approved-by"), "env:web:overlord-web");
+  const gated = desktop.root.querySelector("[data-task='project:shop:030']");
+  assert.equal(gated.getAttribute("data-reviewable"), "false");
+  assert.equal(gated.querySelector("[data-action='accept']").disabled, true);
+  assert.equal(desktop.root.querySelector("[data-task-detail='project:shop:030']").querySelector("[data-approved-by]").getAttribute("data-approved-by"), "");
+
+  click(desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit form did not open.");
+  const unitForm = desktop.document.querySelector("[data-form='unit']");
+  const machine = unitForm.querySelector("[name='machine']");
+  const machineOptions = machine.querySelectorAll("option");
+  assert.equal(machineOptions.find((option) => option.getAttribute("value") === "OFFLINE").getAttribute("disabled"), "");
+  assert.equal(machineOptions.find((option) => option.getAttribute("value") === "DESKTOP").getAttribute("disabled"), null);
+  assert.equal(unitForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
+  typeInput(unitForm.querySelector("[name='unit']"), "executor-made", 0, 13);
+  unitForm.querySelector("[name='leadId']").value = "env:web:overlord-web";
+  typeInput(unitForm.querySelector("[name='job']"), "builder", 0, 7);
+  typeInput(unitForm.querySelector("[name='model']"), "strong", 0, 6);
+  typeInput(unitForm.querySelector("[name='positionX']"), "12", 0, 2);
+  typeInput(unitForm.querySelector("[name='positionY']"), "24", 0, 2);
+  click(unitForm.querySelector("[data-action='confirm-form']"));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-made"), "The new unit did not appear.");
+  const created = writes.find((item) => item.body?.unit === "executor-made");
+  assert.equal(created.body.role, "executor");
+  assert.deepEqual(created.body.scope, { kind: "project", name: "shop" });
+  assert.equal(created.body.machine, "DESKTOP");
+  assert.equal(created.body.leadId, "env:web:overlord-web");
+  assert.equal(created.body.job, "builder");
+  assert.equal(created.body.model, "strong");
+  assert.deepEqual(created.body.position, { x: 12, y: 24 });
+
+  const adjutant = desktop.app.unitList.catalog.find((unit) => unit.id === "root:adjutant");
+  desktop.app.activeHandlers.onActivate({ id: adjutant.id, kind: "unit", unit: adjutant }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === "root:adjutant", "The adjutant inspector did not open.");
+  const beforeSession = urls.length;
+  click(desktop.root.querySelector("[data-action='start-session']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
+  const sessionForm = desktop.document.querySelector("[data-form='session']");
+  const clients = sessionForm.querySelector("[name='client']").querySelectorAll("option").map((option) => option.getAttribute("value"));
+  assert.deepEqual(clients, ["claude", "codex", "cursor"]);
+  sessionForm.querySelector("[name='client']").value = "codex";
+  typeInput(sessionForm.querySelector("[name='prompt']"), "Check the build", 0, 15);
+  click(sessionForm.querySelector("[data-action='confirm-form']"));
+  await waitFor(() => urls.slice(beforeSession).some((url) => url.includes("/session-requests/")), "The queued session was not read back.");
+  const started = writes.find((item) => item.body?.client === "codex");
+  assert.deepEqual(Object.keys(started.body).sort(), ["client", "expectedRevision", "prompt"]);
+  assert.equal(started.body.prompt, "Check the build");
+  assert.equal(noteText(desktop), "The session is queued.");
+
+  const blog = desktop.app.unitList.catalog.find((unit) => unit.id === "project:blog:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: blog.id, kind: "unit", unit: blog }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-machine='OFFLINE']")?.getAttribute("data-answers") === "false", "The silent machine was not shown.");
+  click(desktop.root.querySelector("[data-action='start-session']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='session']")?.querySelector("[data-client-unavailable]"), "The unavailable client was still offered.");
+  const silentForm = desktop.document.querySelector("[data-form='session']");
+  assert.equal(silentForm.querySelector("[name='client']"), null);
+  assert.equal(silentForm.querySelector("[data-action='confirm-form']").disabled, true);
+  assert.equal(silentForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -1550,7 +1636,17 @@ function createTestDocument(width = 390) {
         }
         return false;
       },
-      remove() {},
+      showModal() { this.setAttribute("open", ""); },
+      close() {
+        this.removeAttribute("open");
+        for (const handler of this.listeners.get("close") ?? []) handler();
+      },
+      remove() {
+        const parent = this.parent;
+        if (!parent?.children) return;
+        parent.children = parent.children.filter((child) => child !== this);
+        this.parent = null;
+      },
       removeAttribute(name) {
         this.attributes.delete(name);
         if (name.startsWith("data-")) {

@@ -58,7 +58,7 @@ import {
   stopWatch,
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
-import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
+import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
@@ -1865,46 +1865,125 @@ function confirmConnection(app, sourceId, targetIds) {
   });
 }
 
-function openUnitForm(app) {
-  openFields(app, text(app.language, "newUnit"), [
-    ["unit", "unitName", "executor-made"],
-    ["role", "role", "executor"],
-    ["scopeKind", "scopeKind", "project"],
-    ["scopeName", "scopeName", "shop"],
-    ["machine", "machine", "DESKTOP"],
-  ], async (values) => {
+const UNIT_ROLES = ["adjutant", "executive", "executor", "genesis", "incubator", "master", "overlord", "overseer"];
+const SCOPE_KINDS = [
+  ["root", "scopeRoot"],
+  ["environment", "scopeEnvironment"],
+  ["project", "scopeProject"],
+];
+
+async function openUnitForm(app) {
+  let machines = [];
+  try {
+    machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
+  } catch (error) {
+    noteAction(app, error);
+    return;
+  }
+  const leads = leadChoices(app);
+  openChoiceForm(app, "unit", text(app.language, "newUnit"), (form, confirm) => {
+    const document = form.ownerDocument;
+    appendInput(document, form, "unit", text(app.language, "unitName"), "");
+    appendSelect(document, form, "role", text(app.language, "role"), UNIT_ROLES.map((role) => ({ value: role, label: role })), "executor");
+    appendSelect(document, form, "scopeKind", text(app.language, "scopeKind"), SCOPE_KINDS.map(([value, label]) => ({
+      value,
+      label: text(app.language, label),
+    })), "project");
+    appendInput(document, form, "scopeName", text(app.language, "scopeName"), "shop");
+    appendSelect(document, form, "machine", text(app.language, "machine"), machines.map((machine) => ({
+      value: machine.id,
+      label: `${machine.id}: ${machine.answers ? text(app.language, "machineAnswers") : text(app.language, "machineSilent")}`,
+      disabled: !machine.answers,
+    })), machines.find((machine) => machine.answers)?.id ?? "");
+    for (const machine of machines) {
+      for (const issue of machine.issues ?? []) {
+        form.append(element(document, "p", {
+          "data-machine-issue": machine.id,
+          text: issue.message || text(app.language, "machineUnavailable", { machine: machine.id }),
+        }));
+      }
+    }
+    appendSelect(document, form, "leadId", text(app.language, "lead"), [
+      { value: "", label: text(app.language, "unknown") },
+      ...leads.map((unit) => ({ value: unit.id, label: unit.unit })),
+    ], "");
+    appendInput(document, form, "job", text(app.language, "job"), "");
+    appendInput(document, form, "model", text(app.language, "model"), "");
+    appendInput(document, form, "positionX", text(app.language, "positionX"), "");
+    appendInput(document, form, "positionY", text(app.language, "positionY"), "");
+    if (!machines.some((machine) => machine.answers)) confirm.disabled = true;
+  }, async (form) => {
+    const machineId = fieldValue(form, "machine");
+    const machine = machines.find((item) => item.id === machineId);
+    if (!machine?.answers) {
+      app.actionNote = text(app.language, "machineUnavailable", { machine: machineId });
+      if (!app.disposed) renderShell(app);
+      return;
+    }
+    const kind = fieldValue(form, "scopeKind");
+    const name = fieldValue(form, "scopeName").trim();
+    const leadId = fieldValue(form, "leadId");
     try {
-      await createUnit(app.api, {
-        unit: values.unit,
-        role: values.role,
-        scope: { kind: values.scopeKind, name: values.scopeName || null },
-        machine: values.machine,
-        leadId: null,
-        job: null,
-        model: null,
+      const created = await createUnit(app.api, {
+        unit: fieldValue(form, "unit").trim(),
+        role: fieldValue(form, "role"),
+        scope: { kind, name: kind === "root" ? null : name },
+        machine: machineId,
+        leadId: leadId || null,
+        job: fieldValue(form, "job").trim() || null,
+        model: fieldValue(form, "model").trim() || null,
+        position: readPosition(form),
       });
-      app.actionNote = values.unit;
+      app.actionNote = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
       if (app.unitList) await reloadList(app.unitList);
     } catch (error) {
       app.actionNote = error?.code === "machine_unavailable"
-        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? values.machine })
+        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? machineId })
         : `${error?.code ?? "request_failed"}`;
     }
     if (!app.disposed) renderShell(app);
   });
 }
 
-function openSessionForm(app, unit) {
-  openFields(app, text(app.language, "startSession"), [
-    ["client", "client", "cursor"],
-    ["prompt", "prompt", ""],
-  ], async (values) => {
+async function openSessionForm(app, unit) {
+  let machines = [];
+  try {
+    machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
+  } catch (error) {
+    noteAction(app, error);
+    return;
+  }
+  const machine = machines.find((item) => item.id === unit.machine) ?? null;
+  const clients = (machine?.clients ?? []).filter((item) => item.enabled === true && item.installed === true);
+  openChoiceForm(app, "session", text(app.language, "startSession"), (form, confirm) => {
+    const document = form.ownerDocument;
+    if (machine) form.append(renderMachine(document, machine, (key, values) => text(app.language, key, values)));
+    if (!clients.length) {
+      form.append(element(document, "p", { "data-client-unavailable": "true", text: text(app.language, "clientUnavailable") }));
+      confirm.disabled = true;
+      return;
+    }
+    appendSelect(document, form, "client", text(app.language, "client"), clients.map((item) => ({
+      value: item.id,
+      label: item.id,
+    })), clients[0].id);
+    appendInput(document, form, "prompt", text(app.language, "prompt"), "");
+  }, async (form) => {
+    const client = fieldValue(form, "client");
+    if (!clients.some((item) => item.id === client)) {
+      app.actionNote = text(app.language, "clientUnavailable");
+      if (!app.disposed) renderShell(app);
+      return;
+    }
     try {
-      const started = await startSession(app.api, unit, values.client, values.prompt || null);
+      const started = await startSession(app.api, unit, client, fieldValue(form, "prompt").trim() || null);
       app.sessionRequestId = started.data.requestId;
       app.actionNote = text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed");
+      if (started.data.state === "queued" || started.data.state === "starting") await recheckTracked(app);
     } catch (error) {
-      app.actionNote = error?.code ?? "request_failed";
+      app.actionNote = error?.code === "machine_unavailable"
+        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? unit.machine })
+        : `${error?.code ?? "request_failed"}`;
     }
     if (!app.disposed) renderShell(app);
   });
@@ -1928,32 +2007,83 @@ function confirmStop(app, sessionId) {
   });
 }
 
-function openFields(app, title, fields, onConfirm) {
+function openChoiceForm(app, kind, title, build, onConfirm) {
   const document = app.root.ownerDocument;
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
+  dialog.setAttribute("data-form", kind);
   const form = element(document, "form", { method: "dialog" });
   form.append(element(document, "h2", { text: title }));
-  for (const [name, label, value] of fields) {
-    const input = element(document, "input", { name, value, "aria-label": text(app.language, label) });
-    form.append(element(document, "label", { text: text(app.language, label) }, input));
-  }
+  const confirm = element(document, "button", { type: "button", class: "btn primary", "data-action": "confirm-form", text: title });
+  build(form, confirm);
   const actions = element(document, "div", { class: "dialog-actions" });
   const cancel = element(document, "button", { type: "button", class: "btn", text: text(app.language, "cancel") });
-  const confirm = element(document, "button", { type: "submit", class: "btn primary", text: title });
+  let sending = false;
   cancel.addEventListener("click", () => dialog.close());
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const values = Object.fromEntries(fields.map(([name]) => [name, form.elements[name].value]));
+  confirm.addEventListener("click", async () => {
+    if (sending || confirm.disabled) return;
+    sending = true;
     dialog.close();
-    await onConfirm(values);
+    try {
+      await onConfirm(form);
+    } finally {
+      sending = false;
+    }
   });
   actions.append(cancel, confirm);
   form.append(actions);
   dialog.append(form);
   dialog.addEventListener("close", () => dialog.remove());
   document.body.append(dialog);
-  dialog.showModal();
+  if (typeof dialog.showModal === "function") dialog.showModal();
+}
+
+function appendInput(document, form, name, label, value) {
+  const input = document.createElement("input");
+  input.setAttribute("name", name);
+  input.setAttribute("aria-label", label);
+  input.value = value;
+  form.append(element(document, "label", { text: label }, input));
+  return input;
+}
+
+function appendSelect(document, form, name, label, choices, value) {
+  const select = document.createElement("select");
+  select.setAttribute("name", name);
+  select.setAttribute("aria-label", label);
+  for (const choice of choices) {
+    const option = element(document, "option", {
+      value: choice.value,
+      text: choice.label,
+      disabled: choice.disabled ? "" : null,
+    });
+    option.value = choice.value;
+    if (choice.disabled) option.disabled = true;
+    select.append(option);
+  }
+  select.value = value ?? "";
+  form.append(element(document, "label", { text: label }, select));
+  return select;
+}
+
+function fieldValue(form, name) {
+  return form.querySelector(`[name="${name}"]`)?.value ?? "";
+}
+
+function readPosition(form) {
+  const x = fieldValue(form, "positionX").trim();
+  const y = fieldValue(form, "positionY").trim();
+  if (x === "" && y === "") return undefined;
+  if (!/^-?\d+$/.test(x) || !/^-?\d+$/.test(y)) return undefined;
+  return { x: Number(x), y: Number(y) };
+}
+
+function leadChoices(app) {
+  const byId = new Map();
+  for (const unit of [...(app.unitList?.catalog ?? []), ...(app.store.indexes?.units?.values() ?? [])]) {
+    if (unit?.id && unit.revision) byId.set(unit.id, unit);
+  }
+  return [...byId.values()].sort((left, right) => String(left.unit).localeCompare(String(right.unit), "en"));
 }
 
 function noteSession(app, data) {
@@ -2282,9 +2412,13 @@ function noteAction(app, error) {
 function renderInspector(app, t, selected) {
   const document = app.root.ownerDocument;
   const panel = element(document, "div", { class: "review-panel" });
-  if (selected) panel.append(renderUnit(document, selected, t));
   const data = app.inspectorData;
+  if (selected) panel.append(renderUnit(document, selected, t));
+  const machines = data?.unitId && data.unitId === selected?.id ? data.machines ?? [] : [];
+  const machine = machines.find((item) => item.id === selected?.machine);
+  if (machine) panel.append(renderMachine(document, machine, t));
   if (!data || data.unitId !== selected?.id) return panel;
+  for (const session of data.sessions ?? []) panel.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
   if (caps.includes("grant.revoke")) panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant)));
   if (caps.includes("approval.answer")) {
@@ -2327,7 +2461,9 @@ function loadInspector(app, unitId) {
     collectPages(app.api, "/approvals", { query: { unitId, state: "expired" }, limit: 20 }),
     request(app.api, "GET", `/units/${encodeURIComponent(unitId)}`),
     collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }),
-  ]).then(([tasks, approvals, expired, unit, waiting]) => {
+    collectPages(app.api, "/machines", { limit: 50 }),
+    collectPages(app.api, "/sessions", { query: { unitId }, limit: 50 }),
+  ]).then(([tasks, approvals, expired, unit, waiting, machines, sessions]) => {
     if (app.disposed || ticket !== app.inspectorTicket) return;
     app.inspectorData = {
       unitId,
@@ -2343,8 +2479,11 @@ function loadInspector(app, unitId) {
       waitingTotal: waiting.total,
       waitingIssues: waiting.issues,
       waitingNext: waiting.nextCursor,
+      machines: machines.items,
+      sessions: sessions.items,
     };
-    renderShell(app);
+    if (!app.disposed) renderShell(app);
+    if (app.sessionRequestId || (app.answerId && app.answerApprovalId) || app.revocationRequestId) recheckTracked(app);
   }).catch((error) => noteAction(app, error));
 }
 
