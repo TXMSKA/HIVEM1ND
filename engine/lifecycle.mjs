@@ -462,7 +462,8 @@ export async function evolve(options = {}) {
   const warnings = [...lifecycleWarnings, ...collisionWarnings, ...(installation?.warnings ?? [])];
   const conflicts = installation?.conflicts ?? [];
   const lastCheck = isoDate(resolved.now);
-  const completed = conflicts.length === 0;
+  let completed = conflicts.length === 0;
+  let service = null;
   // Relay points the clients at the mind's own copy of the CLI, so it runs after the update wrote it.
   const relay = completed && resolved.relaySetup === true
     ? await (await import("./relay/config.mjs")).ensureRelayClients({
@@ -476,6 +477,13 @@ export async function evolve(options = {}) {
   if (completed) {
     await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
     await updateLastCheck(resolved.mindPath, resolved.hostname, lastCheck);
+  }
+
+  if (completed && resolved.serviceSetup === true) {
+    const configure = resolved.configureService
+      ?? (await import("./service/install.mjs")).configureOwnedService;
+    service = await configure({ ...resolved, kitPath: resolved.kitPath, dryRun: resolved.serviceDryRun !== false });
+    if (service?.status === "failed") completed = false;
   }
 
   return {
@@ -499,6 +507,7 @@ export async function evolve(options = {}) {
     kept,
     relay,
     reportPath: installation?.reportPath ?? null,
+    ...(service ? { service } : {}),
     lastCheck: completed ? lastCheck : headerValue(
       await readText(await machineFilePath(resolved.mindPath, resolved.hostname)),
       "last-check",

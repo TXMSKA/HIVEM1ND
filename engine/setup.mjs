@@ -13,6 +13,8 @@ import {
   loadAdapters,
   resolveAdapterPaths,
 } from './discovery.mjs';
+import { configureOwnedService } from './service/install.mjs';
+import { localCosmic } from './service/paths.mjs';
 import {
   applyInstallPlan,
   combinePlans,
@@ -38,6 +40,25 @@ import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs'
 
 const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
 
+const SERVICE_COPY = {
+  en: {
+    originKind: 'Origin',
+    originKindHelp: 'A folder origin stays outside the mind. OneDrive is allowed for the origin. Staging stays on the local disk.',
+    originPath: 'Origin folder',
+    originPathHelp: 'Leave this empty to use the local Cosmic origin for this mind.',
+    folder: 'Folder',
+    onedrive: 'OneDrive',
+  },
+  es: {
+    originKind: 'Origen',
+    originKindHelp: 'Un origen de carpeta queda fuera de la mente. OneDrive se permite como origen. El staging queda en el disco local.',
+    originPath: 'Carpeta de origen',
+    originPathHelp: 'Dejar vacío para usar el origen local de Cosmic de esta mente.',
+    folder: 'Carpeta',
+    onedrive: 'OneDrive',
+  },
+};
+
 const CATEGORY_ORDER = [
   { id: 'planning', labelKey: 'categoryPlanning' },
   { id: 'quality', labelKey: 'categoryQuality' },
@@ -60,7 +81,9 @@ export async function createSetupSession(options = {}) {
   const presets = await computeMindPresets({ kitPath, homeDir, env });
   const defaultMindPath = options.mindPath
     ? path.resolve(options.mindPath)
-    : path.join(homeDir, 'HIVEM1ND');
+    : options.cosmicPath
+      ? path.join(path.resolve(options.cosmicPath), 'hivem1nd')
+      : cosmicMind(env, homeDir);
   validateMindSelection(defaultMindPath, kitPath);
 
   const session = new SetupSession({
@@ -74,6 +97,13 @@ export async function createSetupSession(options = {}) {
     presets,
     resume: options.resume !== false,
     relaySetup: options.relaySetup === true,
+    serviceSetup: options.serviceSetup === true,
+    serviceDryRun: options.serviceDryRun !== false,
+    serviceRunner: options.serviceRunner ?? null,
+    serviceStart: options.serviceStart ?? null,
+    serviceProtect: options.serviceProtect !== false,
+    openViewer: options.openViewer ?? null,
+    cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : null,
   });
   await session.initialize();
   return session;
@@ -103,6 +133,8 @@ class SetupSession {
       attach: null,
       conflicts: {},
       confirm: false,
+      originKind: 'folder',
+      originPath: '',
     };
     this.machineRecord = null;
     this.result = null;
@@ -167,7 +199,7 @@ class SetupSession {
       base.values = { mindPath: this.mindPath };
       base.presets = this.presets.map((preset) => ({
         id: preset.id,
-        label: text(language, preset.labelKey),
+        label: preset.label ?? text(language, preset.labelKey),
         path: preset.path,
       }));
       if (this.canAttach()) {
@@ -187,6 +219,15 @@ class SetupSession {
         base.values.attach = this.answers.attach ?? true;
         this.alertedMind = normalizePath(this.mindPath);
       }
+      base.fields.push(
+        field('originKind', 'select', serviceText(language, 'originKind'), false, [
+          { value: 'folder', label: serviceText(language, 'folder') },
+          { value: 'onedrive', label: serviceText(language, 'onedrive') },
+        ], serviceText(language, 'originKindHelp')),
+        field('originPath', 'text', serviceText(language, 'originPath'), false, undefined, serviceText(language, 'originPathHelp')),
+      );
+      base.values.originKind = this.answers.originKind || 'folder';
+      base.values.originPath = this.answers.originPath || '';
     }
     if (this.currentStep === 3) {
       base.scanned = this.answers.agentsScanned === true;
@@ -371,6 +412,15 @@ class SetupSession {
         this.currentStep = 2;
       }
     } else if (this.currentStep === 2) {
+      if (values.originKind !== undefined && values.originKind !== '' && values.originKind !== 'folder' && values.originKind !== 'onedrive') {
+        throw new SetupValidationError('originKind must be folder or onedrive');
+      }
+      if (values.originKind === 'folder' || values.originKind === 'onedrive') this.answers.originKind = values.originKind;
+      if (typeof values.originPath === 'string' && values.originPath.trim() !== '') {
+        const origin = path.resolve(values.originPath);
+        validateMindSelection(origin, this.kitPath);
+        this.answers.originPath = origin;
+      }
       const selected = path.resolve(requireValue(values.mindPath ?? this.mindPath, 'mindPath'));
       validateMindSelection(selected, this.kitPath);
       await validateDestinationType(selected);
@@ -561,6 +611,8 @@ class SetupSession {
       ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.mindPath, mindPath: this.mindPath })
       : [];
     this.currentStep = 8;
+    let service = null;
+    if (this.serviceSetup && unwritten.length === 0) service = await this.configureService();
     this.result = this.completionResult(applied.files, plan.warnings, {
       relay,
       omitted: applied.omitted,
@@ -569,7 +621,46 @@ class SetupSession {
       unwritten,
       reportPath,
     });
+    if (service) {
+      this.result.service = service;
+      this.result.viewerUrl = service.viewerUrl ?? null;
+    }
     return this.result;
+  }
+
+  async retryService() {
+    if (!this.serviceSetup || !this.result) return this.result;
+    const service = await this.configureService();
+    this.result = { ...this.result, service, viewerUrl: service.viewerUrl ?? null };
+    return this.result;
+  }
+
+  async configureService() {
+    const service = await configureOwnedService({
+      env: this.env,
+      homeDir: this.homeDir,
+      cosmicPath: this.cosmicPath,
+      mindPath: this.mindPath,
+      hostname: this.hostname,
+      kitPath: this.kitPath,
+      originKind: this.answers.originKind || 'folder',
+      originPath: this.answers.originPath || null,
+      dryRun: this.serviceDryRun !== false,
+      run: this.serviceRunner,
+      start: this.serviceStart,
+      protect: this.serviceProtect !== false,
+      state: this.serviceState,
+      current: this.serviceCurrent,
+    });
+    this.serviceState = service.state;
+    if (service.state?.installed?.digest) {
+      this.serviceCurrent = { digest: service.state.installed.digest, executable: service.state.installed.executable };
+    }
+    if (service.viewerUrl && this.openViewer && !this.viewerOpened) {
+      this.viewerOpened = true;
+      await this.openViewer(service.viewerUrl);
+    }
+    return service;
   }
 
   unwrittenAssets(plan, applied) {
@@ -899,6 +990,10 @@ export function conflictChoiceKey(conflict, choice) {
   return choice === 'replace' ? 'replaceLink' : 'omitLink';
 }
 
+function serviceText(language, key) {
+  return (SERVICE_COPY[language] ?? SERVICE_COPY.en)[key];
+}
+
 function field(id, type, label, required, options, help) {
   const descriptor = { id, type, label, required };
   if (options) descriptor.options = options;
@@ -1100,6 +1195,7 @@ async function removeOwnedDraft(mindPath, hostname) {
 
 async function computeMindPresets({ kitPath, homeDir, env }) {
   const presets = [
+    { id: 'cosmic', label: 'Cosmic', path: cosmicMind(env, homeDir) },
     { id: 'installer', labelKey: 'installer', path: kitPath },
     { id: 'drive', labelKey: 'drive', path: path.join(driveRoot(env, homeDir), 'HIVEM1ND') },
     { id: 'user', labelKey: 'user', path: path.join(homeDir, 'HIVEM1ND') },
@@ -1107,6 +1203,16 @@ async function computeMindPresets({ kitPath, homeDir, env }) {
   const oneDrive = await detectOneDrive(env);
   if (oneDrive) presets.push({ id: 'oneDrive', labelKey: 'oneDrive', path: path.join(oneDrive, 'HIVEM1ND') });
   return presets;
+}
+
+function cosmicMind(env, homeDir) {
+  try {
+    return path.join(localCosmic({ platform: process.platform, env, home: homeDir }), 'hivem1nd');
+  } catch {
+    if (process.platform === 'darwin') return path.join(homeDir, 'Library', 'Application Support', 'Cosmic', 'hivem1nd');
+    if (process.platform === 'win32') return path.join(homeDir, 'AppData', 'Local', 'Cosmic', 'hivem1nd');
+    return path.join(homeDir, '.local', 'share', 'Cosmic', 'hivem1nd');
+  }
 }
 
 function driveRoot(env, homeDir) {

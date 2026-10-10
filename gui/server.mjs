@@ -159,12 +159,14 @@ export async function createWizardServer({
   createSession = defaultSessionFactory,
   sessionOptions = {},
   token = crypto.randomBytes(32).toString("base64url"),
+  openCompletedViewer,
 } = {}) {
   if (host !== HOST) throw new Error("The wizard server can only bind to 127.0.0.1.");
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid wizard server port.");
   if (typeof token !== "string" || token.length < 32) throw new Error("The wizard session token is too short.");
 
   const activeSession = session ?? await createSession(sessionOptions);
+  let viewerOpened = false;
   const assetRoot = fileURLToPath(new URL("./", import.meta.url));
   const assets = new Map();
   for (const [route, [name, contentType]] of STATIC_FILES) {
@@ -273,7 +275,12 @@ export async function createWizardServer({
             if (!choices.has(selection)) throw new HttpError(400, "conflict_unresolved", `Choose how to handle ${conflictPath}.`);
           }
           await activeSession.answer({ confirm: true, conflicts: body.conflicts ?? {} });
-          return activeSession.install();
+          const result = await activeSession.install();
+          if (!viewerOpened && result?.viewerUrl && typeof openCompletedViewer === "function") {
+            viewerOpened = true;
+            await openCompletedViewer(result.viewerUrl);
+          }
+          return result;
         });
         sendJson(response, 200, { data: result });
         return;

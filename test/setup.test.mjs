@@ -416,7 +416,7 @@ test('the default mind path is the user home, never the kit tree or a QA fixture
   });
   await session.answer({ installMode: 'custom' });
   const step = await session.getStep();
-  assert.equal(step.values.mindPath, path.join(homeDir, 'HIVEM1ND'));
+  assert.equal(step.values.mindPath, path.join(homeDir, 'AppData', 'Local', 'Cosmic', 'hivem1nd'));
   assert.ok(!step.values.mindPath.toLowerCase().includes('.qa'));
   assert.ok(!step.values.mindPath.startsWith(path.join(KIT_PATH, 'user')));
 });
@@ -436,7 +436,7 @@ test('mind location presets always offer the installer, drive and user folders, 
   });
   await withoutOneDrive.answer({ installMode: 'custom' });
   const stepWithout = await withoutOneDrive.getStep();
-  assert.deepEqual(stepWithout.presets.map((preset) => preset.id), ['installer', 'drive', 'user']);
+  assert.deepEqual(stepWithout.presets.map((preset) => preset.id), ['cosmic', 'installer', 'drive', 'user']);
   assert.equal(stepWithout.presets.find((preset) => preset.id === 'installer').path, KIT_PATH);
   assert.equal(stepWithout.presets.find((preset) => preset.id === 'user').path, path.join(homeDir, 'HIVEM1ND'));
 
@@ -926,6 +926,61 @@ test('simple mode attaches to a mind already installed on this machine instead o
   assert.equal(await pathExists(path.join(fixture.root, 'unused')), false);
   assert.equal(await readFile(path.join(installed, 'user', 'VERSION'), 'utf8'), '1.1.1\n');
   assert.ok(await pathExists(path.join(installed, 'user', 'machines', 'SECOND.md')));
+});
+
+test('service setup writes config before startup and retries the failed phase once', async (context) => {
+  const fixture = await makeFixture(context);
+  const env = process.platform === 'win32'
+    ? { PATH: '', LOCALAPPDATA: path.join(fixture.root, 'local') }
+    : process.platform === 'darwin'
+      ? { PATH: '' }
+      : { PATH: '', XDG_DATA_HOME: path.join(fixture.root, 'share') };
+  const commands = [];
+  const opened = [];
+  let starts = 0;
+  const session = await createSetupSession({
+    kitPath: KIT_PATH,
+    mindPath: fixture.mindPath,
+    homeDir: fixture.homeDir,
+    hostname: 'TESTBOX',
+    language: 'en',
+    env,
+    serviceSetup: true,
+    serviceDryRun: false,
+    serviceProtect: false,
+    serviceRunner: async (command) => { commands.push(command); },
+    serviceStart: async () => {
+      starts += 1;
+      if (starts === 1) throw new Error('starter down');
+      return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' };
+    },
+    openViewer: async (url) => { opened.push(url); },
+  });
+  const located = await session.answer({ installMode: 'custom' });
+  assert.equal(located.number, 2);
+  assert.equal(located.fields.some((item) => item.id === 'originKind'), true);
+  await session.answer({ mindPath: fixture.mindPath, originKind: 'folder' });
+  await session.answer({ scan: true });
+  await session.answer({ agents: [], attachModes: {} });
+  const includeStep = await session.getStep();
+  await session.answer({ included: includeStep.values.included });
+  await session.answer({ projectsConfirmed: true });
+  await session.answer({ skipPreferences: true, autoUpdates: false });
+  await session.answer({ confirm: true });
+  const failed = await session.install();
+  assert.equal(failed.service.status, 'failed');
+  assert.equal(failed.service.phase, 'start');
+  assert.match(await readFile(failed.service.configFile, 'utf8'), /hivem1nd-service-config-v1/);
+  assert.equal(opened.length, 0);
+  const recorded = commands.length;
+  assert.equal(recorded > 0, true);
+  const retried = await session.retryService();
+  assert.equal(retried.service.status, 'started');
+  assert.equal(commands.length, recorded);
+  assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
+  await session.retryService();
+  assert.equal(opened.length, 1);
+  assert.equal(commands.length, recorded);
 });
 
 async function makeInstalledMind(fixture, version) {
