@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, validateName, validateRole, canonicalScope } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, validateName, validateRole, canonicalScope } from './identity.mjs';
 import { answersFor } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
 import { openSync, stageTransaction } from '../sync/store.mjs';
@@ -136,7 +136,7 @@ async function prepareCreate(context, input) {
     throw new CoreError(409, 'machine_unavailable', 'The selected machine is not answering.', { machine, heartbeatAt: beat?.heartbeatAt ?? null });
   }
   const existing = await leadMap(context);
-  if ([...existing.values()].some((item) => item.id === id.id) || existing.has(unit)) {
+  if (existing.has(id.id)) {
     throw new CoreError(409, 'unit_exists', 'The unit already exists.');
   }
   if (role === 'overseer' && [...existing.values()].some((item) => item.role === 'overseer')) {
@@ -145,7 +145,7 @@ async function prepareCreate(context, input) {
   const leadId = input.leadId ?? null;
   if (leadId !== null) {
     const lead = parseUnitId(leadId);
-    if (!existing.has(lead.unit) && ![...existing.values()].some((item) => item.id === lead.id)) {
+    if (!existing.has(lead.id)) {
       throw new CoreError(422, 'invalid_lead', 'The lead does not exist.');
     }
   }
@@ -160,7 +160,7 @@ async function prepareCreate(context, input) {
     { name: 'layout.changed', data: { layout: JSON.parse(layoutBytes.toString('utf8')), revision: hashBytes(layoutBytes) } },
     { name: 'view.changed', data: { revision: hashBytes(state), collections: ['units', 'leads', 'squads'] } },
   ];
-  const relative = `user/state/${unit}.md`;
+  const relative = unitStatePath(id);
   return {
     id: id.id,
     events,
@@ -227,23 +227,45 @@ async function readBeat(context, machine) {
 
 async function leadMap(context) {
   const map = new Map();
-  const directory = path.join(context.paths.mind, 'user', 'state');
-  let names = [];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return map;
-    throw error;
-  }
-  for (const name of names) {
-    if (!name.endsWith('.md') || name.includes('.conflict-')) continue;
-    const relative = `user/state/${name}`;
+  for (const relative of await stateFiles(context)) {
     const bytes = await readBytes(context.store, absolute(context, relative));
     if (!bytes) continue;
     const id = header(bytes, 'unit-id');
-    map.set(name.slice(0, -3), { id, role: header(bytes, 'role'), leadId: header(bytes, 'lead-id') });
+    if (!id || map.has(id)) continue;
+    map.set(id, { id, role: header(bytes, 'role'), leadId: header(bytes, 'lead-id') });
   }
   return map;
+}
+
+async function stateFiles(context) {
+  const relatives = [];
+  const addDir = async (relativeDir) => {
+    const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
+    let names = [];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return;
+      throw error;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.md') || name.includes('.conflict-')) continue;
+      relatives.push(`${relativeDir}/${name}`);
+    }
+  };
+  await addDir('user/state');
+  for (const kind of ['environments', 'projects']) {
+    const parent = path.join(context.paths.mind, 'user', kind);
+    let children = [];
+    try {
+      children = await readdir(parent);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const child of children) await addDir(`user/${kind}/${child}/state`);
+  }
+  return relatives;
 }
 
 function assertNoCycle(unitId, leadId, map) {
@@ -252,15 +274,19 @@ function assertNoCycle(unitId, leadId, map) {
   while (current) {
     if (seen.has(current)) throw new CoreError(409, 'lead_cycle', 'The lead chain would loop.');
     seen.add(current);
-    current = [...map.values()].find((item) => item.id === current)?.leadId ?? null;
+    current = map.get(current)?.leadId ?? null;
   }
 }
 
 async function readState(context, parsed) {
-  const relative = `user/state/${parsed.unit}.md`;
+  const relative = unitStatePath(parsed);
   const bytes = await readBytes(context.store, absolute(context, relative));
-  if (!bytes) return null;
-  return { bytes, relative, absolute: absolute(context, relative) };
+  if (bytes && header(bytes, 'unit-id') === parsed.id) return { bytes, relative, absolute: absolute(context, relative) };
+  const legacy = `user/state/${parsed.unit}.md`;
+  if (legacy === relative) return null;
+  const old = await readBytes(context.store, absolute(context, legacy));
+  if (!old || header(old, 'unit-id') !== parsed.id) return null;
+  return { bytes: old, relative: legacy, absolute: absolute(context, legacy) };
 }
 
 async function readJson(context, relative) {

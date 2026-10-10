@@ -286,9 +286,13 @@ test('unit, lead, layout, and settings writes are validated before any file chan
   await createUnit(context, {
     unit: 'executor-shop', role: 'executor', scope: { kind: 'project', name: 'shop' }, machine: 'DESKTOP', leadId: 'env:web:overlord-web', job: 'builder',
   });
-  const executorPath = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await createUnit(context, { unit: 'worker', role: 'executor', scope: 'root', machine: 'DESKTOP', leadId: 'root:overseer' });
+  await createUnit(context, { unit: 'worker', role: 'executor', scope: { kind: 'project', name: 'shop' }, machine: 'DESKTOP', leadId: 'root:overseer' });
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'worker.md')).then(() => true, () => false), true);
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state', 'worker.md')).then(() => true, () => false), true);
+  const executorPath = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state', 'executor-shop.md');
   const beforeCycle = await readFile(executorPath);
-  const overlordRevision = revisionOf(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'overlord-web.md')));
+  const overlordRevision = revisionOf(await readFile(path.join(fixture.paths.mind, 'user', 'environments', 'web', 'state', 'overlord-web.md')));
   await assert.rejects(
     () => connectLead(context, 'env:web:overlord-web', { leadId: 'project:shop:executor-shop', confirmed: true, expectedRevision: overlordRevision }),
     (error) => error.code === 'lead_cycle',

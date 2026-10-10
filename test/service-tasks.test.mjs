@@ -69,6 +69,16 @@ async function records(fixture) {
   return readdir(directory).catch(() => []);
 }
 
+test('a project task is read from its scope directory', async (t) => {
+  const { fixture, context } = await world(t);
+  const dir = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'tasks');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, '002.md'), taskText().replaceAll(`id: ${TASK}`, 'id: project:shop:002'));
+  const task = await loadTask(context, 'project:shop:002');
+  assert.equal(task.id, 'project:shop:002');
+  await assert.rejects(() => loadTask(context, 'project:shop:003'), (error) => error.code === 'task_not_found');
+});
+
 test('only authorized edges commit and lead gating stays intact', async (t) => {
   const { fixture, context, file } = await world(t);
   const agent = as(context, AGENT);
