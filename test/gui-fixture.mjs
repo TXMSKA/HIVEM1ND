@@ -1357,7 +1357,7 @@ function authorize(principal, route) {
     if (principal.audience === "phone") throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
     throw new HttpError(403, "forbidden", "This credential cannot do that.");
   }
-  if (principal.audience === "phone" && route.mailboxUnit && route.mailboxUnit !== "root:master" && route.method !== "GET") {
+  if (principal.audience === "phone" && route.mailboxUnit && route.mailboxUnit !== "root:master" && route.pattern === "/mailboxes/:unitId/read") {
     throw new HttpError(403, "phone_read_only", "The phone can acknowledge only the person's mailbox.");
   }
 }
@@ -3442,7 +3442,7 @@ async function prepareTaskStatus(fx, taskId, body, principal) {
   const snap = await projection(fx);
   const task = snap.tasks.find((item) => item.id === taskId);
   if (!task) throw new HttpError(404, "task_not_found", "The task was not found.");
-  if (principal.audience === "phone" && !(task.status === "review" && (body.status === "done" || body.status === "open"))) {
+  if (principal.audience === "phone" && !(task.status === "review" && task.reviewable === true && (body.status === "done" || body.status === "open"))) {
     throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
   }
   if (task.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The task was changed elsewhere.");

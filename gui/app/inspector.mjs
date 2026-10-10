@@ -53,7 +53,7 @@ export function renderApproval(document, approval, t, onAnswer) {
   return block;
 }
 
-export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft) {
+export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task)) {
   const block = element(document, "section", { "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
   block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
   const accept = element(document, "button", {
@@ -74,7 +74,7 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     text: t("sendBack"),
     onclick: () => onStatus?.(task, "open", note.value),
   });
-  if (!canSendBack(task)) back.disabled = true;
+  if (!allowSendBack) back.disabled = true;
   block.append(accept, note, back);
   if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "undo", text: t("undo"), onclick: () => onUndo?.(task) }));
