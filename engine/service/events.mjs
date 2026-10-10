@@ -80,11 +80,12 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     }
     const parsed = parseCursor(cursor);
     const frames = [];
-    const push = (name, data) => {
+    const push = (name, data, id = captureCursor()) => {
       const frame = {
+        id,
         name,
         data: present(subscriber.principal, {
-          id: name === 'stream.ready' || name === 'stream.reset' ? captureCursor() : null,
+          id,
           name,
           at: new Date(now()).toISOString(),
           machine,
@@ -103,16 +104,16 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     if (!parsed || parsed.startupId !== startupId || parsed.sequence > sequence || gap(parsed.sequence)) {
       const reason = parsed && parsed.startupId !== startupId ? 'service_restarted' : 'cursor_expired';
       push('stream.reset', { reason, cursor: captureCursor() });
-      push('stream.ready', { cursor: captureCursor(), readAt: new Date(now()).toISOString(), capabilities: capabilitiesFor(subscriber.principal) });
+      push('stream.ready', { cursor: captureCursor(), readAt: new Date(now()).toISOString(), capabilities: issuedCapabilities(subscriber.principal) });
       return { reset: true, events: [], ready: true, frames };
     }
     const events = ring.filter((record) => sequenceOf(record.id) > parsed.sequence && allowed(subscriber, record));
     for (const record of events) {
-      const frame = { name: record.name, data: present(subscriber.principal, record) };
+      const frame = { id: record.id, name: record.name, data: present(subscriber.principal, record) };
       frames.push(frame);
       subscriber.listener(frame);
     }
-    push('stream.ready', { cursor: captureCursor(), readAt: new Date(now()).toISOString(), capabilities: capabilitiesFor(subscriber.principal) });
+    push('stream.ready', { cursor: captureCursor(), readAt: new Date(now()).toISOString(), capabilities: issuedCapabilities(subscriber.principal) });
     return { reset: false, events, ready: true, frames };
   }
 
@@ -152,13 +153,14 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
 
   function deliver(subscriber, record) {
     if (!allowed(subscriber, record)) return;
-    const frame = { name: record.name, data: present(subscriber.principal, record) };
+    const frame = { id: record.id, name: record.name, data: present(subscriber.principal, record) };
     subscriber.buffer.push(frame);
     subscriber.listener(frame);
   }
 
   function allowed(subscriber, record) {
     if (subscriber.closed) return false;
+    if (!visible(subscriber.principal, record)) return false;
     if (VIEWER_EVENTS.has(record.name)) return Boolean(subscriber.principal.viewerId) && subscriber.principal.viewerId === record.viewerId;
     if (!matches(subscriber.filters ?? {}, record)) return false;
     return true;
@@ -179,11 +181,27 @@ function present(principal, record) {
   const data = principal.audience === 'phone' ? stripSecrets(record.data) : record.data;
   return {
     contract: 'hivem1nd-events-v3',
+    id: record.id ?? null,
+    cursor: record.id ?? null,
     at: record.at,
     machine: record.machine,
     source: record.source,
     data,
   };
+}
+
+function visible(principal, record) {
+  if (principal.audience !== 'agent') return true;
+  if (record.name === 'settings.changed' || record.name === 'sync.changed' || record.name === 'sync.conflict' || record.name === 'service.changed') return false;
+  if (record.name.startsWith('session') || record.name.startsWith('approval')) return record.unitId === principal.unitId;
+  if (record.unitId && record.unitId !== principal.unitId) return false;
+  if (record.chatId && !(principal.chatIds ?? []).includes(record.chatId)) return false;
+  if (record.resourceId && !(principal.resourceIds ?? []).includes(record.resourceId)) return false;
+  return true;
+}
+
+function issuedCapabilities(principal) {
+  return Array.isArray(principal.capabilities) ? principal.capabilities : capabilitiesFor(principal);
 }
 
 function stripSecrets(value) {

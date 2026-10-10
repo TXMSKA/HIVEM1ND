@@ -176,7 +176,7 @@ export async function serveStatic(assetDir, name) {
   return bytes;
 }
 
-export function serveEvents(res, bus, principal, cursor) {
+export function serveEvents(res, bus, principal, cursor, extras = {}) {
   const headers = {
     'content-type': 'text/event-stream',
     'cache-control': 'no-store',
@@ -185,8 +185,30 @@ export function serveEvents(res, bus, principal, cursor) {
   };
   res.writeHead(200, headers);
   res.flushHeaders();
-  const subscriber = bus.subscribe(principal, {}, (frame) => {
-    res.write(`event: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
+  const filters = extras.filters ?? {};
+  let subscriber;
+  const end = () => {
+    bus.release(subscriber);
+    if (extras.watch && principal.viewerId) disposeViewer(extras.watch, principal.stableId);
+    if (!res.writableEnded) res.end();
+    extras.req?.destroy();
+  };
+  subscriber = bus.subscribe(principal, filters, (frame) => {
+    if (frame.name === 'closed') {
+      end();
+      return;
+    }
+    if (principal.expiresAt && Date.parse(principal.expiresAt) <= (extras.now?.() ?? Date.now())) {
+      end();
+      return;
+    }
+    try {
+      extras.credentials?.verify(principal.stableId);
+    } catch {
+      end();
+      return;
+    }
+    res.write(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
   });
   bus.replay(subscriber, cursor ?? null);
   return subscriber;
@@ -271,8 +293,20 @@ export async function createHttpServer(options) {
     const operation = operationFor(route, credential, body);
     if (operation) authorize(credential, operation, { ...object, listener: listener.kind });
     if (route.handler === 'events') {
-      const principal = { ...domain.principal, stableId: credential.token, audience: credential.audience, viewerId: credential.viewerId ?? null };
-      const subscriber = serveEvents(res, bus, principal, eventCursor);
+      const principal = {
+        ...domain.principal,
+        stableId: credential.token,
+        audience: credential.audience,
+        viewerId: credential.viewerId ?? null,
+        capabilities: credential.capabilities ?? [],
+        expiresAt: credential.expiresAt ?? null,
+        unitId: credential.audience === 'agent' ? credential.unitId : domain.principal.unitId,
+        chatIds: credential.chatIds ?? [],
+        resourceIds: credential.resourceIds ?? [],
+      };
+      const filters = {};
+      for (const key of ['unitId', 'chatId', 'resourceId']) if (typeof query[key] === 'string') filters[key] = query[key];
+      const subscriber = serveEvents(res, bus, principal, eventCursor, { filters, credentials, watch, req, now: options.now });
       bucket.streams.add(subscriber);
       req.on('close', () => {
         bus.release(subscriber);
@@ -770,6 +804,11 @@ function validateQuery(route, query) {
     ? new Set(page)
     : new Set();
   if (route.template === '/approvals') allowed.add('state');
+  if (route.handler === 'events') {
+    allowed.add('unitId');
+    allowed.add('chatId');
+    allowed.add('resourceId');
+  }
   for (const key of Object.keys(query)) {
     if (!allowed.has(key)) throw new CoreError(422, 'invalid_query', 'The query contains an unknown field.');
   }

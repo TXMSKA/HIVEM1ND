@@ -10,6 +10,7 @@ import { approvalRevision } from '../engine/service/approvals.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { writeBeat } from '../engine/service/service.mjs';
+import { createEventBus } from '../engine/service/events.mjs';
 import { routeTable } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -946,6 +947,45 @@ test('lan rejects desktop tokens and an agent cannot read the general mind', asy
   assert.equal(general.json.error.code, 'forbidden');
   const foreign = await call(loop.http.port, 'GET', '/api/v1/mailboxes/root:master/messages', { token: agent.token });
   assert.equal(foreign.status, 403);
+});
+
+test('agent streams hide other units and event frames carry ids', async (t) => {
+  const { core, token } = await boot(t);
+  const bus = createEventBus({ now: () => Date.now(), machine: 'DESKTOP' });
+  const seen = [];
+  const agent = { stableId: 'agent-1', audience: 'agent', unitId: 'root:executor', capabilities: ['read'], chatIds: [], resourceIds: [] };
+  const subscriber = bus.subscribe(agent, {}, (frame) => seen.push(frame.name));
+  bus.emit({ name: 'settings.changed', data: {} });
+  bus.emit({ name: 'unit.changed', unitId: 'root:other', data: { unitId: 'root:other' } });
+  bus.emit({ name: 'unit.changed', unitId: 'root:executor', data: { unitId: 'root:executor' } });
+  bus.release(subscriber);
+  assert.deepEqual(seen, ['unit.changed']);
+  const opened = await new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port: core.http.port,
+      path: '/api/v1/events',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => {
+        raw += chunk.toString('utf8');
+        if (raw.includes('event: stream.ready')) {
+          req.destroy();
+          resolve(raw);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.match(opened, /^id: [0-9a-f-]+:\d+$/im);
+  assert.match(opened, /"cursor":/);
+  assert.match(opened, /"capabilities":\[/);
 });
 
 test('the package exports the GUI host from the root and from ./gui', async () => {
