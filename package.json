@@ -1,11 +1,15 @@
 {
   "name": "hivem1nd",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "One mind for every coding agent.",
   "license": "MIT",
   "author": "TXMSKA",
   "type": "module",
-  "main": "gui/electron.mjs",
+  "main": "gui/index.mjs",
+  "exports": {
+    ".": "./gui/index.mjs",
+    "./gui": "./gui/index.mjs"
+  },
   "bin": {
     "hivem1nd": "cli/index.mjs"
   },
@@ -39,7 +43,7 @@
     "lint": "markdownlint-cli2",
     "test": "node --test test/*.test.mjs",
     "build": "node scripts/build.mjs",
-    "start": "electron .",
+    "start": "node cli/index.mjs service run",
     "dev": "node cli/index.mjs init --gui",
     "pack:win": "electron-builder --win --x64 --dir --publish never",
     "dist:win": "npm run pack:win && node scripts/zip-win.mjs"

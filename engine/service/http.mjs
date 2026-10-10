@@ -505,7 +505,7 @@ function allowedBody(handler) {
     createUnit: ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
     patchSettings: ['look', 'language', 'expectedRevision'],
     patchLayout: ['nodes', 'groups', 'expectedRevision'],
-    patchViewer: ['presentation', 'dirty'],
+    patchViewer: ['presentation', 'dirty', 'look', 'language'],
     createChat: ['members', 'title'],
     authLocal: [],
     authHome: ['key', 'code'],

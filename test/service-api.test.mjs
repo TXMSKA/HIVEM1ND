@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -341,4 +341,15 @@ test('home enable is memory-only and loopback cannot exchange it', async (t) => 
   const exchanged = await call(core.http.port, 'POST', '/api/v1/auth/home', { body: { key: opened.json.data.key } });
   assert.equal(exchanged.status, 403);
   assert.equal(JSON.stringify(opened.json.error ?? {}).includes(opened.json.data.key), false);
+});
+
+test('the package exports the GUI host from the root and from ./gui', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.version, '3.0.0');
+  assert.equal(pkg.main, 'gui/index.mjs');
+  assert.equal(pkg.exports['.'], './gui/index.mjs');
+  assert.equal(pkg.exports['./gui'], './gui/index.mjs');
+  const root = await import('../gui/index.mjs');
+  assert.equal(typeof root.startGui, 'function');
+  assert.equal(typeof root.closeGuiHost, 'function');
 });
