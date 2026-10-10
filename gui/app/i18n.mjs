@@ -73,6 +73,7 @@ const COPY = {
   listTotal: ["{count} listed", "{count} en la lista"],
   connect: ["Connect", "Conectar"],
   messageGroup: ["Message as group", "Enviar como grupo"],
+  pan: ["Pan", "Desplazar"],
   newUnit: ["New unit", "Nueva unidad"],
   startSession: ["Start", "Iniciar"],
   stopSession: ["Stop", "Detener"],

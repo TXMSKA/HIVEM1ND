@@ -1521,6 +1521,7 @@ function finishMap(app) {
   app.mapState.labels = {
     messageGroup: text(app.language, "messageGroup"),
     connect: text(app.language, "connect"),
+    pan: text(app.language, "pan"),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
   takePendingChat(app);

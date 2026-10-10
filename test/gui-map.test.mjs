@@ -157,6 +157,60 @@ test("map gestures move a group once, cancel, marquee, zoom, and ignore the API"
   assert.equal(map.api.request, map.api.request);
 });
 
+test("keyboard movement is saved and panning changes only the viewport", async () => {
+  const calls = [];
+  const map = createMap({
+    units: [unit("a", "a", "executor", "project", "shop")],
+    saved: { layout: { nodes: { a: { x: 0, y: 0 } }, groups: {} }, revision: "a".repeat(64) },
+  });
+  map.persist = true;
+  map.transport = async (operation) => {
+    calls.push(operation);
+    return { data: { layout: { nodes: operation.body.nodes, groups: {} }, revision: "b".repeat(64) } };
+  };
+  const host = createHost();
+  renderMap(host.ownerDocument, host, map, { pan: "Pan" });
+  assert.equal(map.focusId, null);
+  const node = host.querySelector("[data-unit-id='a']");
+  host.listeners.get("focusin")[0]({ target: node });
+  assert.equal(map.focusId, "a");
+  const selected = [];
+  map.onSelect = (id) => selected.push(id);
+  keyDown(map, { key: "Enter", preventDefault() {} });
+  assert.deepEqual(selected, ["a"]);
+  assert.equal(map.inspectorId, "a");
+  await keyDown(map, { key: "ArrowRight", preventDefault() {} });
+  assert.deepEqual(map.positions.a, { x: 10, y: 0 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(calls[0].path, "/layout");
+  assert.deepEqual(calls[0].body.nodes.a, { x: 10, y: 0 });
+  assert.equal(calls[0].body.expectedRevision, "a".repeat(64));
+
+  const rect = { left: 0, top: 0, width: 800, height: 600 };
+  map.view = { x: 40, y: 40, zoom: 1 };
+  pointerDown(map, { ...point(10, 10, { rect }), altKey: true });
+  pointerMove(map, point(40, 25, { rect }));
+  pointerUp(map, point(40, 25, { rect }));
+  assert.deepEqual(map.view, { x: 70, y: 55, zoom: 1 });
+  assert.deepEqual(map.positions.a, { x: 10, y: 0 });
+  assert.equal(calls.length, 1);
+
+  map.view = { x: 0, y: 0, zoom: 1 };
+  host.querySelector("[data-action='pan']").listeners.get("click")[0]();
+  assert.equal(map.panning, true);
+  pointerDown(map, point(200, 200, { rect }));
+  pointerMove(map, point(230, 210, { rect }));
+  cancelGesture(map);
+  assert.deepEqual(map.view, { x: 0, y: 0, zoom: 1 });
+  pointerDown(map, point(200, 200, { rect }));
+  pointerMove(map, point(230, 210, { rect }));
+  pointerUp(map, point(230, 210, { rect }));
+  assert.deepEqual(map.view, { x: 30, y: 10, zoom: 1 });
+  assert.deepEqual(map.positions.a, { x: 10, y: 0 });
+  assert.equal(calls.length, 1);
+});
+
 test("collapsed scope groups hide their members and rendered nodes keep paint order", () => {
   const map = createMap({
     units: [

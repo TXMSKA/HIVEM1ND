@@ -127,6 +127,18 @@ export function renderMap(document, host, map, labels = {}) {
   }
   const actions = document.createElement("div");
   actions.className = "map-actions";
+  const pan = document.createElement("button");
+  pan.type = "button";
+  pan.className = "map-action";
+  pan.dataset.action = "pan";
+  pan.setAttribute("data-action", "pan");
+  pan.setAttribute("aria-pressed", String(Boolean(map.panning)));
+  pan.textContent = labels.pan ?? "Pan";
+  pan.addEventListener("click", () => {
+    map.panning = !map.panning;
+    refresh(map);
+  });
+  actions.append(pan);
   if (map.selection.size > 1) {
     const message = document.createElement("button");
     message.type = "button";
@@ -149,11 +161,31 @@ export function renderMap(document, host, map, labels = {}) {
   return nodes.map((node) => node.id);
 }
 
+function panGesture(map, event, rect) {
+  return {
+    kind: "pan",
+    pointerId: event.pointerId,
+    rect,
+    originClient: { x: event.clientX, y: event.clientY },
+    originView: { x: map.view.x, y: map.view.y, zoom: map.view.zoom },
+    dragging: false,
+  };
+}
+
+function focusedUnitId(event) {
+  const node = event.target?.closest?.("[data-unit-id]") ?? event.target;
+  return node?.getAttribute?.("data-unit-id") ?? node?.dataset?.unitId ?? null;
+}
+
 export function pointerDown(map, event) {
   const rect = event.rect ?? hostRect(map.host);
   const target = readTarget(event);
   const world = toWorld({ x: event.clientX, y: event.clientY }, rect, map.view);
   event.currentTarget?.setPointerCapture?.(event.pointerId);
+  if (event.button === 1 || event.altKey) {
+    map.gesture = panGesture(map, event, rect);
+    return;
+  }
   if (target.handle === "connect" && target.unitId) {
     map.gesture = {
       kind: "connect",
@@ -167,6 +199,10 @@ export function pointerDown(map, event) {
   }
   const node = target.unitId ? nodeById(map, target.unitId) : hitNode(world, paintNodes(map), map.view.zoom);
   if (!node) {
+    if (map.panning) {
+      map.gesture = panGesture(map, event, rect);
+      return;
+    }
     map.gesture = {
       kind: "marquee",
       start: world,
@@ -205,6 +241,11 @@ export function pointerMove(map, event) {
     if (!gesture.dragging && distance < 4) return;
     gesture.dragging = true;
   }
+  if (gesture.kind === "pan") {
+    map.view.x = gesture.originView.x + (event.clientX - gesture.originClient.x);
+    map.view.y = gesture.originView.y + (event.clientY - gesture.originClient.y);
+    return;
+  }
   const world = toWorld({ x: event.clientX, y: event.clientY }, gesture.rect, map.view);
   if (gesture.kind === "marquee") {
     gesture.current = world;
@@ -226,6 +267,11 @@ export function pointerMove(map, event) {
 export function pointerUp(map, event) {
   const gesture = map.gesture;
   if (!gesture) return;
+  if (gesture.kind === "pan") {
+    map.gesture = null;
+    refresh(map);
+    return;
+  }
   const world = toWorld({ x: event.clientX, y: event.clientY }, gesture.rect, map.view);
   if (gesture.kind === "connect") {
     const target = hitNode(world, paintNodes(map), map.view.zoom)?.id ?? null;
@@ -266,6 +312,10 @@ export function cancelGesture(map) {
   }
   if (gesture.kind === "marquee") map.selection = gesture.previous;
   if (gesture.kind === "connect") map.pendingConnect = null;
+  if (gesture.kind === "pan") {
+    map.view.x = gesture.originView.x;
+    map.view.y = gesture.originView.y;
+  }
   map.gesture = null;
   refresh(map);
 }
@@ -290,6 +340,9 @@ export function keyDown(map, event) {
   if (event.key === "Enter" && id) {
     map.inspectorId = id;
     map.selection = new Set([id]);
+    map.focusId = id;
+    map.onSelect?.(id);
+    event.preventDefault?.();
     return;
   }
   if (event.key === " " && id) {
@@ -297,6 +350,7 @@ export function keyDown(map, event) {
     return;
   }
   if (!id || !map.positions[id]) return;
+  map.focusId = id;
   const step = event.shiftKey ? 1 : 10;
   const next = { ...map.positions[id] };
   if (event.key === "ArrowRight") next.x += step;
@@ -314,6 +368,10 @@ export function keyDown(map, event) {
     }
   } else map.positions[id] = next;
   event.preventDefault?.();
+  if (!map.persist) return;
+  const moved = map.selection.has(id) ? [...map.selection] : [id];
+  for (const movedId of moved) queueLayoutPatch(map, movedId, map.positions[movedId]);
+  return flushLayout(map);
 }
 
 export function wheelZoom(map, event, rect) {
@@ -388,6 +446,10 @@ function bindMap(host, map) {
   if (host.boundMap) return;
   host.boundMap = true;
   host.tabIndex = 0;
+  host.addEventListener("focusin", (event) => {
+    const id = focusedUnitId(event);
+    if (id) map.focusId = id;
+  });
   host.addEventListener("pointerdown", (event) => pointerDown(map, event));
   host.addEventListener("pointermove", (event) => pointerMove(map, event));
   host.addEventListener("pointerup", (event) => pointerUp(map, event));
