@@ -352,6 +352,9 @@ button, input { font: inherit; color: inherit; }
 .editor-comments { display: flex; flex-direction: column; gap: 8px; }
 .comment-box, .editor-compose { background: var(--card); color: var(--text); border-radius: var(--radius-control); padding: 8px; }
 .editor-compose textarea, .editor-compose input, .attach-list { width: 100%; }
+.board-host { overflow: auto; background: var(--card); border-radius: var(--radius-control); }
+.board-svg { width: 100%; height: 360px; background: var(--card2); }
+.board-svg text { fill: var(--text); font: 14px var(--font); }
 .map-action { background: var(--panel); color: var(--text); border: var(--panel-border); border-radius: var(--radius-pill); padding: 8px 12px; }
 
 @media (prefers-reduced-motion: reduce) {

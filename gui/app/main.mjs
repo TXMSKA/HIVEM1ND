@@ -18,6 +18,7 @@ import {
   openMailbox,
   postMessage,
 } from "./chats.mjs";
+import { addNode, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import {
@@ -131,6 +132,7 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   app.api.live && (app.api.live.stopped = true);
+  releaseAssets(app.editors?.current);
   disposeApi(app.api);
 }
 
@@ -387,6 +389,112 @@ function queueCatalog(app, kind) {
   });
 }
 
+function boardSurface(app, document, editor, t) {
+  const host = element(document, "div", { class: "board-host" });
+  editor.focus = app.editors.focus;
+  renderBoard(document, host, editor);
+  host.addEventListener("click", (event) => {
+    const marked = event.target?.closest?.("[data-node]");
+    const svg = host.querySelector("svg");
+    const point = boardPoint(svg, event);
+    const hit = marked ? { nodeId: marked.getAttribute("data-node"), screenId: marked.closest("[data-screen]")?.getAttribute("data-screen") } : hitBoardNode(editor.authoritative.document, point);
+    if (!hit?.nodeId) return;
+    app.editors.selectedNodeId = hit.nodeId;
+    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: hit.screenId, resourceId: editor.resourceId };
+    renderShell(app);
+  });
+  const nodes = editor.authoritative.document.screens?.[0];
+  const tools = element(document, "div", { class: "editor-actions" });
+  const name = element(document, "input", { "data-node-name": "true", "aria-label": t("nodeName") });
+  tools.append(name);
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "patch-node",
+    onclick: () => patchNode(app.api, editor, app.editors.selectedNodeId, { name: name.value, value: name.value }).then(() => renderShell(app)).catch((error) => noteEditor(app, error)),
+  }, t("nodeName")));
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "add-node",
+    onclick: () => addBoardShape(app, editor, nodes),
+  }, t("addShape")));
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "remove-node",
+    onclick: () => removeNode(app.api, editor, app.editors.selectedNodeId).then(() => renderShell(app)).catch((error) => noteEditor(app, error)),
+  }, t("removeShape")));
+  const file = element(document, "input", { type: "file", accept: "image/png,image/jpeg,image/webp", "data-asset": "true" });
+  file.addEventListener("change", () => {
+    const selected = file.files?.[0];
+    if (!selected) return;
+    uploadAsset(app.api, editor, selected).then((asset) => addImageNode(app, editor, nodes, asset)).catch((error) => noteEditor(app, error));
+  });
+  tools.append(file);
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "comment-node",
+    onclick: () => commentOnNode(app, editor),
+  }, t("comment")));
+  return element(document, "div", {}, host, tools);
+}
+
+function addBoardShape(app, editor, screen) {
+  const count = (app.editors.shapeCount ?? 0) + 1;
+  app.editors.shapeCount = count;
+  addNode(app.api, editor, {
+    screenId: screen.id,
+    parentId: screen.root.id,
+    node: { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] },
+  }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function addImageNode(app, editor, screen, asset) {
+  const count = (app.editors.shapeCount ?? 0) + 1;
+  app.editors.shapeCount = count;
+  addNode(app.api, editor, {
+    screenId: screen.id,
+    parentId: screen.root.id,
+    node: { id: `image-${count}`, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
+  }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function commentOnNode(app, editor) {
+  const board = editor.authoritative.document;
+  const selected = app.editors.selectedNodeId;
+  let screen = board.screens?.[0];
+  let node = screen?.root;
+  for (const item of board.screens ?? []) {
+    const found = findBoardNode(item.root, selected);
+    if (found) {
+      screen = item;
+      node = found;
+    }
+  }
+  const text = editor.commentText || "On the node.";
+  createComment(app.api, app.editors, {
+    screen: screen.id,
+    screenTitle: screen.title,
+    element: node.id,
+    label: node.name ?? node.id,
+    path: [node.name ?? node.id],
+    point: { x: Math.round(node.place?.x ?? 0), y: Math.round(node.place?.y ?? 0) },
+  }, text).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function findBoardNode(node, id) {
+  if (!node) return null;
+  if (node.id === id) return node;
+  for (const child of node.kids ?? []) {
+    const found = findBoardNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function boardPoint(svg, event) {
+  if (!svg?.createSVGPoint || !svg.getScreenCTM) return { x: event.offsetX ?? 0, y: event.offsetY ?? 0 };
+  const point = svg.createSVGPoint();
+  point.x = event.clientX;
+  point.y = event.clientY;
+  const local = point.matrixTransform(svg.getScreenCTM().inverse());
+  return { x: local.x, y: local.y };
+}
+
 function renderEditor(app, t) {
   const document = app.root.ownerDocument;
   const editors = editorsOf(app);
@@ -399,6 +507,8 @@ function renderEditor(app, t) {
   const panel = element(document, "div", { class: "editor-panel" });
   panel.append(element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }));
   panel.append(element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }));
+  if (current?.conflict) panel.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
+  if (current?.kind === "blueprint" && current.authoritative?.document) panel.append(boardSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
     panel.append(element(document, "p", { "data-legacy": current.authoritative.legacy.path ?? "", text: t("conversionRequired") }));
   }

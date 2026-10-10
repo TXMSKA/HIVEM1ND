@@ -123,6 +123,11 @@ const COPY = {
   corruptResource: ["The comments could not be read.", "No se pudieron leer los comentarios."],
   conversionRequired: ["This module needs a JSON copy.", "Este módulo necesita una copia JSON."],
   stopWatch: ["Stop following", "Dejar de seguir"],
+  addShape: ["Add shape", "Agregar forma"],
+  removeShape: ["Remove shape", "Quitar forma"],
+  nodeName: ["Node name", "Nombre del nodo"],
+  upload: ["Upload", "Subir"],
+  unresolved: ["Unresolved link", "Enlace sin destino"],
 };
 
 const DICTIONARIES = {

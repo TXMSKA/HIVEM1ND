@@ -941,9 +941,11 @@ async function loadEditors(fx, issues) {
     try {
       const loaded = await readJsonFile(commentsFile);
       commentsRevision = loaded.hash;
+      const nodeIds = new Set();
+      if (document) collectNodeIds(document, nodeIds);
       threads = (loaded.value.threads ?? []).map((thread) => ({
         ...thread,
-        place: resource.kind === "void" ? { start: thread.anchor?.start ?? 0, end: thread.anchor?.end ?? 0, exact: true } : (thread.anchor?.screen ? { screenId: thread.anchor.screen, nodeId: thread.anchor.element ?? null, x: thread.anchor.point?.x ?? 0, y: thread.anchor.point?.y ?? 0 } : null),
+        place: resource.kind === "void" ? { start: thread.anchor?.start ?? 0, end: thread.anchor?.end ?? 0, exact: true } : (thread.anchor?.screen && (thread.anchor.element == null || nodeIds.has(thread.anchor.element)) ? { screenId: thread.anchor.screen, nodeId: thread.anchor.element ?? null, x: thread.anchor.point?.x ?? 0, y: thread.anchor.point?.y ?? 0 } : null),
         revision: loaded.hash,
         notifications: [],
       }));
@@ -1631,7 +1633,10 @@ function routeTable() {
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
     { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
     { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateBoard } },
-    { pattern: "/blueprint/boards/:resourceId", GET: { query: [] } },
+    { pattern: "/blueprint/boards/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateBoardPut } },
+    { pattern: "/blueprint/boards/:resourceId/nodes", POST: { capability: "editor.write", validate: validateAddNode } },
+    { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", PATCH: { capability: "editor.write", validate: validatePatchNode } },
+    { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", DELETE: { capability: "editor.write", validate: validateDeleteNode } },
     { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateText } },
     { pattern: "/void/texts/:resourceId", GET: { query: [] } },
     { pattern: "/void/texts/:resourceId/proposals", GET: { query: ["q", "limit", "cursor", "state"] } },
@@ -1642,6 +1647,7 @@ function routeTable() {
     { pattern: "/editors/:resourceId/attachments", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateAttachments } },
     { pattern: "/watch", POST: { capability: "watch", validate: validateWatch, runtime: true } },
     { pattern: "/watch/:watchId", DELETE: { capability: "watch", validate: validateEmpty, runtime: true } },
+    { pattern: "/editors/:resourceId/assets", POST: { capability: "asset.write", validate: validateAsset } },
     { pattern: "/editors/:resourceId/assets/:assetId", GET: { query: [] } },
     { pattern: "/events", GET: { query: ["unitId", "chatId", "resourceId"] } },
     { pattern: "/auth/logout", POST: { capability: "read", validate: validateEmpty, runtime: true } },
@@ -2061,6 +2067,12 @@ async function handleApi(fx, request, response, audience) {
   }
   const query = queryMap(url);
   if (request.method === "GET" || request.method === "HEAD") {
+    if (spec.pattern === "/editors/:resourceId/assets/:assetId") {
+      const asset = await readAsset(fx, matched.params.resourceId, matched.params.assetId);
+      response.writeHead(200, { "Content-Type": asset.contentType, ETag: `"${sha256(asset.bytes)}"`, "Cache-Control": "no-store", "Content-Length": asset.bytes.length });
+      response.end(request.method === "HEAD" ? undefined : asset.bytes);
+      return;
+    }
     const body = await handleRead(fx, principal, spec, matched.params, query, requestId);
     sendJson(response, 200, body);
     return;
@@ -2748,12 +2760,267 @@ async function prepareCreateEditor(fx, kind, body) {
   };
 }
 
+function collectNodeIds(document, ids) {
+  for (const screen of document.screens ?? []) collectNode(screen.root, ids);
+}
+
+function collectNode(node, ids) {
+  if (!node?.id) return;
+  ids.add(node.id);
+  for (const child of node.kids ?? []) collectNode(child, ids);
+}
+
 function editorFile(fx, project, path) {
   const repo = join(fx.tree.root, "repositories", project);
   const file = join(repo, ...path.split("/"));
   const rel = relative(repo, file);
   if (!rel || rel.startsWith("..")) throw new HttpError(422, "invalid_path", "The path is not valid.");
   return file;
+}
+
+function validateBoardPut(body) {
+  requireObject(body, ["document", "expectedRevision"]);
+  requireKeys(body, ["document", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  assertDocument(body.document);
+}
+
+function validateAddNode(body) {
+  requireObject(body, ["screenId", "parentId", "index", "node", "expectedRevision"]);
+  requireKeys(body, ["screenId", "parentId", "node", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!body.node || typeof body.node !== "object" || Array.isArray(body.node)) throw new HttpError(422, "invalid_node", "The node is not valid.");
+}
+
+function validatePatchNode(body) {
+  requireObject(body, ["changes", "expectedRevision"]);
+  requireKeys(body, ["changes", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!body.changes || typeof body.changes !== "object" || Array.isArray(body.changes)) throw new HttpError(422, "invalid_node", "The node is not valid.");
+  for (const key of ["id", "t", "kids"]) if (key in body.changes) throw new HttpError(422, "invalid_node", "Structural fields require a structural operation.");
+}
+
+function validateDeleteNode(body) {
+  requireObject(body, ["expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+}
+
+function validateAsset(body) {
+  requireObject(body, ["contentType", "bytesBase64"]);
+  requireKeys(body, ["contentType", "bytesBase64"]);
+  if (!["image/png", "image/jpeg", "image/webp"].includes(body.contentType)) throw new HttpError(422, "invalid_asset", "The asset is not an image.");
+  if (typeof body.bytesBase64 !== "string") throw new HttpError(422, "invalid_asset", "The asset is not an image.");
+}
+
+async function prepareBoardPut(fx, resourceId, body) {
+  const editor = await editorFor(fx, resourceId);
+  if (editor.readOnly || !editor.document) throw new HttpError(409, "read_only_resource", "The resource is read only.");
+  if (editor.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The board was changed elsewhere.", { currentRevision: editor.revision });
+  assertCompatible(editor.document, body.document);
+  assertNewLinks(editor.document, body.document);
+  return writeBoard(fx, editor, body.document, { document: body.document });
+}
+
+async function prepareAddNode(fx, resourceId, body) {
+  const editor = await mutableBoard(fx, resourceId, body.expectedRevision);
+  const screen = editor.document.screens.find((item) => item.id === body.screenId);
+  const parent = screen ? findNode(screen.root, body.parentId) : null;
+  if (!parent || parent.node.t !== "box") throw new HttpError(422, "invalid_parent", "The parent is not a box.");
+  if (findInDocument(editor.document, body.node.id)) throw new HttpError(409, "node_exists", "The node already exists.");
+  const kids = parent.node.kids ?? [];
+  const index = body.index ?? kids.length;
+  if (!Number.isInteger(index) || index < 0 || index > kids.length) throw new HttpError(422, "invalid_node", "The index is not valid.");
+  const document = structuredClone(editor.document);
+  const nextParent = findNode(document.screens.find((item) => item.id === body.screenId).root, body.parentId);
+  nextParent.node.kids = [...(nextParent.node.kids ?? [])];
+  nextParent.node.kids.splice(index, 0, body.node);
+  return writeBoard(fx, editor, document, { editor: null, nodeId: body.node.id });
+}
+
+async function preparePatchNode(fx, params, body) {
+  const editor = await mutableBoard(fx, params.resourceId, body.expectedRevision);
+  if (!findInDocument(editor.document, params.nodeId)) throw new HttpError(404, "node_not_found", "The node was not found.");
+  const document = structuredClone(editor.document);
+  const found = findInDocument(document, params.nodeId);
+  mergeNode(found.node, body.changes);
+  return writeBoard(fx, editor, document, {});
+}
+
+async function prepareDeleteNode(fx, params, body) {
+  const editor = await mutableBoard(fx, params.resourceId, body.expectedRevision);
+  const document = structuredClone(editor.document);
+  const removed = removeSubtree(document, params.nodeId);
+  if (removed.root) throw new HttpError(422, "root_node", "The root node cannot be removed.");
+  if (!removed.ids) throw new HttpError(404, "node_not_found", "The node was not found.");
+  document.links = (document.links ?? []).filter((link) => !removed.ids.has(link.element));
+  return writeBoard(fx, editor, document, {});
+}
+
+async function prepareAsset(fx, resourceId, body) {
+  const editor = await editorFor(fx, resourceId);
+  if (editor.readOnly) throw new HttpError(409, "read_only_resource", "The resource is read only.");
+  const bytes = Buffer.from(body.bytesBase64, "base64");
+  if (bytes.length > 10 * 1024 * 1024) throw new HttpError(413, "asset_too_large", "The asset is too large.");
+  const extension = imageExtension(bytes, body.contentType);
+  const assetId = uuid();
+  const src = `docs/flows/assets/${assetId}.${extension}`;
+  return {
+    status: 201,
+    data: { id: assetId, src, contentType: body.contentType, url: `/api/v1/editors/${resourceId}/assets/${assetId}` },
+    writes: [{ path: editorFile(fx, editor.project, src), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
+    events: [],
+  };
+}
+
+async function readAsset(fx, resourceId, assetId) {
+  const editor = requireEditor(await projection(fx), resourceId);
+  const folder = editorFile(fx, editor.project, "docs/flows/assets");
+  for (const extension of ["png", "jpg", "webp"]) {
+    const file = join(folder, `${assetId}.${extension}`);
+    try {
+      const bytes = await readFile(file);
+      const contentType = extension === "png" ? "image/png" : extension === "jpg" ? "image/jpeg" : "image/webp";
+      imageExtension(bytes, contentType);
+      return { bytes, contentType };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+    }
+  }
+  throw new HttpError(404, "asset_not_found", "The asset was not found.");
+}
+
+function imageExtension(bytes, contentType) {
+  const png = bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const jpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const webp = bytes.length > 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  if (contentType === "image/png" && png) return "png";
+  if (contentType === "image/jpeg" && jpeg) return "jpg";
+  if (contentType === "image/webp" && webp) return "webp";
+  throw new HttpError(422, "invalid_asset", "The asset is not an image.");
+}
+
+async function mutableBoard(fx, resourceId, expectedRevision) {
+  const editor = await editorFor(fx, resourceId);
+  if (editor.readOnly || !editor.document) throw new HttpError(409, "read_only_resource", "The resource is read only.");
+  if (editor.revision !== expectedRevision) throw new HttpError(409, "revision_conflict", "The board was changed elsewhere.", { currentRevision: editor.revision });
+  return editor;
+}
+
+function writeBoard(fx, editor, document, data) {
+  const bytes = Buffer.from(stableJson(document));
+  const revision = sha256(bytes);
+  const editorData = { ...editor, document, revision, file: undefined, corrupt: undefined };
+  return {
+    status: 200,
+    data: data.nodeId ? { editor: editorData, nodeId: data.nodeId } : editorData,
+    writes: [{ path: editorFile(fx, editor.project, editor.path), beforeRevision: editor.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
+    events: [{ name: "blueprint.changed", resourceId: editor.id, data: { resourceId: editor.id, revision } }],
+  };
+}
+
+function assertCompatible(before, after) {
+  const next = identify(after);
+  for (const [id, value] of identify(before)) {
+    if (!next.has(id)) continue;
+    if (unknownChanged(value, next.get(id))) throw new HttpError(409, "unsupported_fields_lost", "The edit dropped editor fields.");
+  }
+}
+
+function assertNewLinks(before, after) {
+  const screens = new Set((after.screens ?? []).map((screen) => screen.id));
+  const old = new Set((before.links ?? []).map((link) => link.id));
+  for (const link of after.links ?? []) {
+    if (old.has(link.id)) continue;
+    if (!screens.has(link.from) || !screens.has(link.to)) throw new HttpError(422, "invalid_document", "The link is not internal.");
+  }
+}
+
+function identify(document) {
+  const map = new Map();
+  if (document?.id) map.set(`doc:${document.id}`, document);
+  for (const page of document?.pages ?? []) if (page?.id) map.set(`page:${page.id}`, page);
+  for (const screen of document?.screens ?? []) {
+    if (screen?.id) map.set(`screen:${screen.id}`, screen);
+    identifyNode(screen.root, map);
+  }
+  for (const link of document?.links ?? []) if (link?.id) map.set(`link:${link.id}`, link);
+  for (const [name, list] of [["component", document?.components], ["font", document?.fonts], ["thread", document?.threads]]) {
+    for (const item of list ?? []) if (item?.id) map.set(`${name}:${item.id}`, item);
+  }
+  return map;
+}
+
+function identifyNode(node, map) {
+  if (!node?.id) return;
+  map.set(`node:${node.id}`, node);
+  for (const child of node.kids ?? []) identifyNode(child, map);
+}
+
+function unknownChanged(before, after) {
+  const known = new Set(["formatVersion", "id", "title", "note", "pages", "screens", "links", "components", "fonts", "threads", "objects", "order", "start", "pageId", "x", "y", "w", "h", "root", "from", "to", "element", "transition", "direction", "duration", "name", "t", "place", "dir", "kids", "value", "color", "align", "d", "src", "icon", "fill", "stroke", "strokeWidth", "radius", "corners", "clip", "opacity", "kind", "sides", "size", "weight", "font"]);
+  for (const key of Object.keys(before)) {
+    if (key === "place" && before.place && typeof before.place === "object") {
+      for (const placeKey of Object.keys(before.place)) {
+        if (["x", "y"].includes(placeKey)) continue;
+        if (stableJson(before.place[placeKey]) !== stableJson(after.place?.[placeKey])) return true;
+      }
+    }
+    if (known.has(key)) continue;
+    if (stableJson(before[key]) !== stableJson(after?.[key])) return true;
+  }
+  return false;
+}
+
+function findInDocument(document, nodeId) {
+  for (const screen of document.screens ?? []) {
+    const found = findNode(screen.root, nodeId);
+    if (found) return { ...found, screen };
+  }
+  return null;
+}
+
+function findNode(node, nodeId, parent = null) {
+  if (!node) return null;
+  if (node.id === nodeId) return { node, parent };
+  for (const child of node.kids ?? []) {
+    const found = findNode(child, nodeId, node);
+    if (found) return found;
+  }
+  return null;
+}
+
+function mergeNode(node, changes) {
+  for (const [key, value] of Object.entries(changes)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && node[key] && typeof node[key] === "object" && !Array.isArray(node[key])) mergeNode(node[key], value);
+    else node[key] = value;
+  }
+}
+
+function removeSubtree(document, nodeId) {
+  for (const screen of document.screens ?? []) {
+    if (screen.root?.id === nodeId) return { root: true, ids: null };
+    const ids = detach(screen.root, nodeId);
+    if (ids) return { root: false, ids };
+  }
+  return { root: false, ids: null };
+}
+
+function detach(node, nodeId) {
+  const kids = node.kids ?? [];
+  const index = kids.findIndex((child) => child.id === nodeId);
+  if (index >= 0) {
+    const [removed] = kids.splice(index, 1);
+    node.kids = kids;
+    const ids = new Set();
+    collectNodeIds({ screens: [{ root: removed }] }, ids);
+    return ids;
+  }
+  for (const child of kids) {
+    const ids = detach(child, nodeId);
+    if (ids) return ids;
+  }
+  return null;
 }
 
 function validateUndo(body) {
@@ -2885,6 +3152,11 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/editors/register") return prepareRegister(fx, body);
   if (pattern === "/blueprint/boards") return prepareCreateEditor(fx, "blueprint", body);
   if (pattern === "/void/texts") return prepareCreateEditor(fx, "void", body);
+  if (pattern === "/blueprint/boards/:resourceId") return prepareBoardPut(fx, params.resourceId, body);
+  if (pattern === "/blueprint/boards/:resourceId/nodes" && body.node) return prepareAddNode(fx, params.resourceId, body);
+  if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId" && body.changes) return preparePatchNode(fx, params, body);
+  if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId") return prepareDeleteNode(fx, params, body);
+  if (pattern === "/editors/:resourceId/assets") return prepareAsset(fx, params.resourceId, body);
   if (pattern === "/chats") return prepareChat(fx, body, principal);
   if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);
@@ -3222,7 +3494,7 @@ export async function createGuiFixture(options = {}) {
         return enqueue(fx, async () => {
           const record = { ...activity, at: clock(fx).toISOString() };
           fx.activity.push({ ...record, ms: fx.nowMs });
-          const events = [{ name: "editor.activity", global: true, resourceId: record.resourceId ?? null, unitId: record.unitId, data: record }];
+          const events = [];
           for (const watch of fx.watches.values()) {
             const sameResource = !watch.resourceId || watch.resourceId === record.resourceId;
             if (watch.unitId !== record.unitId || !sameResource) continue;
@@ -3230,7 +3502,25 @@ export async function createGuiFixture(options = {}) {
             if (!watch.resourceId) watch.resourceId = record.resourceId ?? null;
             events.push({ name: "watch.changed", viewerId: watch.viewerId, data: { watchId: watch.watchId, state: watch.state, unitId: watch.unitId, resourceId: watch.resourceId } });
           }
+          events.push({ name: "editor.activity", global: true, resourceId: record.resourceId ?? null, unitId: record.unitId, data: record });
           publish(fx, events, fx.primary);
+        });
+      },
+      editBoard(resourceId) {
+        return enqueue(fx, async () => {
+          const editor = requireEditor(await projection(fx), resourceId);
+          const document = structuredClone(editor.document);
+          document.note = `${document.note ?? ""} outside`;
+          const bytes = Buffer.from(stableJson(document));
+          await writeAtomic(editorFile(fx, editor.project, editor.path), bytes);
+          invalidate(fx);
+          publish(fx, [{ name: "blueprint.changed", resourceId, global: true, data: { resourceId, revision: sha256(bytes) } }], fx.primary);
+        });
+      },
+      setLook(look) {
+        return enqueue(fx, async () => {
+          for (const viewer of fx.viewers.values()) if (viewer.audience === "desktop") viewer.look = look;
+          publish(fx, [{ name: "viewer.changed", global: true, data: { look } }], fx.primary);
         });
       },
       settleAnswer(answerId, state) {
