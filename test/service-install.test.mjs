@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { parseArgs } from '../cli/index.mjs';
 import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
-import { assertReleaseAssets, assertZipBounds, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installPayload, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -414,4 +414,61 @@ test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offl
   assert.equal(planned.activated, false);
   assert.equal(planned.importSmoke, 'passed');
   assert.equal(await readFile(path.join(planned.staged, 'notes.txt'), 'utf8'), 'staged');
+});
+
+test('activation keeps the previous payload and refuses a junction stage', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const outside = path.join(root, 'outside');
+  const kit = path.join(root, 'kit');
+  await mkdir(outside, { recursive: true });
+  await mkdir(kit, { recursive: true });
+  await writeFile(path.join(outside, 'secret.txt'), 'safe');
+  await writeFile(path.join(kit, 'previous.txt'), 'keep');
+  await symlink(outside, path.join(root, 'kit.stage'), 'junction');
+  await symlink(outside, path.join(root, 'linked'), 'junction');
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: path.join(root, 'linked', 'kit'),
+    files: [{ name: 'notes.txt', data: Buffer.from('new') }],
+  }), /link/);
+  assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'safe');
+  const notes = Buffer.from('new');
+  const manifest = {
+    files: [{ name: 'notes.txt', bytes: notes.length, sha256: createHash('sha256').update(notes).digest('hex') }],
+  };
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'notes.txt', data: notes }],
+    manifest,
+    identity: { mind: 'mind-a', service: 'service-a' },
+    active: { mind: 'mind-b', service: 'service-a' },
+  }), { code: 'identity_mismatch' });
+  assert.equal(await readFile(path.join(kit, 'previous.txt'), 'utf8'), 'keep');
+  const activated = await installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: notes }],
+    manifest,
+    identity: { mind: 'mind-a', service: 'service-a' },
+    active: { mind: 'mind-a', service: 'service-a' },
+    smoke: true,
+    spawn(file, args, options) {
+      assert.equal(options.env.PATH, '');
+      assert.equal(options.shell, false);
+      assert.match(String(args.at(-1)), /@clack\/prompts/);
+      return '';
+    },
+  });
+  assert.equal(activated.activated, true);
+  assert.equal(await readFile(path.join(kit, 'notes.txt'), 'utf8'), 'new');
+  assert.equal(await readFile(path.join(activated.backup, 'previous.txt'), 'utf8'), 'keep');
+  await assert.rejects(() => access(path.join(kit, 'previous.txt')), { code: 'ENOENT' });
+  assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'safe');
+  const names = await readdir(root);
+  assert.deepEqual(names.filter((name) => name.endsWith('.stage')), ['kit.stage']);
 });
