@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
-import { CoreError, hashBytes, isUuid } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8 } from './identity.mjs';
+import { admitMessage, openLedger } from '../sync/limits.mjs';
+import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
+import { plain } from '../../features/void/text.mjs';
 import { commitTransaction } from './store.mjs';
 
 const ASSET_LIMIT = 10000000;
@@ -118,8 +121,12 @@ export function validateBoard(document) {
   }
 }
 
-async function commit(context, entries) {
-  return commitTransaction(context.store, { id: randomUUID(), entries });
+async function commit(context, entries, events = []) {
+  const result = await commitTransaction(context.store, { id: randomUUID(), entries, events });
+  if (context.bus) {
+    for (const event of events) context.bus.emit(event);
+  }
+  return result;
 }
 
 function record(file, before, bytes) {
@@ -198,6 +205,7 @@ export async function readEditor(context, id) {
   const file = inside(project.localPath, entry.path);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
+  if (entry.kind === 'void') return view(entry, validateText(parseJson(loaded.bytes)), loaded.revision);
   if (entry.readOnly) return view(entry, null, loaded.revision);
   return view(entry, validateBoard(parseJson(loaded.bytes)), loaded.revision);
 }
@@ -341,10 +349,9 @@ export async function removeNode(context, id, nodeId, input) {
 }
 
 export async function readComments(context, id) {
-  const { project, entry } = await resourceOf(context, id);
-  const loaded = await loadBytes(commentsFile(project, entry.legacyId));
-  if (!loaded.bytes) return { board: entry.legacyId, threads: [] };
-  return parseJson(loaded.bytes);
+  const found = await resourceOf(context, id);
+  const loaded = await loadComments(found);
+  return { ...projectComments(loaded.value, found.entry.id), commentsRevision: loaded.revision };
 }
 
 export async function readAttachments(context, id) {
@@ -400,3 +407,518 @@ export async function readAsset(context, id, assetId) {
   if (!kind) fail(422, 'invalid_asset', 'The asset is not a verified image.');
   return { bytes: loaded.bytes, type: kind.type };
 }
+
+function clock(context) {
+  return new Date(context.now?.() ?? Date.now()).toISOString();
+}
+
+function actor(context) {
+  const principal = context.principal ?? { audience: 'desktop', unitId: 'root:master' };
+  if (principal.audience === 'agent') return { author: principal.unitId, authorId: principal.unitId };
+  return { author: 'master', authorId: principal.unitId ?? 'root:master' };
+}
+
+function assertCanEdit(context, entry) {
+  const principal = context.principal;
+  if (principal?.audience === 'agent' && !(entry.attached ?? []).includes(principal.unitId)) {
+    fail(403, 'forbidden', 'The agent is not attached to that resource.');
+  }
+}
+
+function stemOf(file) {
+  return file.replace(/\.json$/i, '');
+}
+
+function commentsPath(found) {
+  if (found.entry.kind === 'void') return `${stemOf(inside(found.project.localPath, found.entry.path))}.comments.json`;
+  return commentsFile(found.project, found.entry.legacyId);
+}
+
+async function loadComments(found) {
+  const file = commentsPath(found);
+  const loaded = await loadBytes(file);
+  if (!loaded.bytes) {
+    const value = found.entry.kind === 'void'
+      ? { path: path.basename(found.entry.path), threads: [] }
+      : { board: found.entry.legacyId, threads: [] };
+    return { file, bytes: null, revision: null, value };
+  }
+  let value;
+  try {
+    value = JSON.parse(loaded.bytes.toString('utf8'));
+  } catch {
+    fail(409, 'corrupt_resource', 'The resource could not be read.');
+  }
+  if (!value || typeof value !== 'object' || !Array.isArray(value.threads)) fail(409, 'corrupt_resource', 'The resource could not be read.');
+  return { file, ...loaded, value };
+}
+
+function projectComments(value, resourceId) {
+  const copy = structuredClone(value);
+  for (const thread of copy.threads ?? []) {
+    thread.messages = (thread.messages ?? []).map((message, index) => ({
+      ...message,
+      id: message.id ?? uuidV8(['comment-message', resourceId, thread.id, index, message.author, message.at, message.text]),
+      author: ['person', 'user', 'User'].includes(message.author) ? 'master' : message.author,
+    }));
+  }
+  return copy;
+}
+
+function assignIds(value, resourceId) {
+  for (const thread of value.threads ?? []) {
+    thread.messages = (thread.messages ?? []).map((message, index) => (
+      message.id ? message : { ...message, id: uuidV8(['comment-message', resourceId, thread.id, index, message.author, message.at, message.text]) }
+    ));
+  }
+  return value;
+}
+
+export function validateText(document) {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) fail(422, 'invalid_document', 'The text is not a document.');
+  if (typeof document.title !== 'string' || document.title.length < 1 || document.title.length > 240) fail(422, 'invalid_document', 'The title must be 1 to 240 characters.');
+  if (!Array.isArray(document.pages)) fail(422, 'invalid_document', 'The text needs pages.');
+  const keys = new Set();
+  for (const page of document.pages) {
+    if (!page || typeof page !== 'object' || typeof page.k !== 'string' || page.k.length < 1 || page.k.length > 240) fail(422, 'invalid_document', 'Each page needs a stable key.');
+    if (keys.has(page.k)) fail(422, 'invalid_document', 'A page key is used twice.');
+    keys.add(page.k);
+    for (const [key, item] of Object.entries(page)) {
+      if (key === 'k') continue;
+      if (typeof item === 'string' && item.length > 1000000) fail(422, 'invalid_document', 'A language string is too long.');
+    }
+  }
+  if (document.rev !== undefined && (!Number.isInteger(document.rev) || document.rev < 0)) fail(422, 'invalid_document', 'The revision must be a whole number.');
+  return structuredClone(document);
+}
+
+function textChanges(before, after) {
+  const changes = [];
+  const leftPages = new Map((before?.pages ?? []).map((page) => [page.k, page]));
+  const rightPages = new Map((after?.pages ?? []).map((page) => [page.k, page]));
+  for (const key of new Set([...leftPages.keys(), ...rightPages.keys()])) {
+    const left = leftPages.get(key) ?? {};
+    const right = rightPages.get(key) ?? {};
+    for (const lang of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      if (lang === 'k' || (typeof left[lang] !== 'string' && typeof right[lang] !== 'string')) continue;
+      const previous = typeof left[lang] === 'string' ? left[lang] : '';
+      const next = typeof right[lang] === 'string' ? right[lang] : '';
+      if (previous !== next) changes.push({ k: key, lang, before: previous, after: next });
+    }
+  }
+  return changes;
+}
+
+function rememberExternal(context, id, revision, document) {
+  if (!context.externalHashes) context.externalHashes = new Map();
+  if (!context.snapshots) context.snapshots = new Map();
+  context.externalHashes.set(id, revision);
+  if (document) context.snapshots.set(id, document);
+}
+
+async function textBundle(context, id) {
+  const found = await resourceOf(context, id);
+  if (found.entry.kind !== 'void') fail(404, 'not_found', 'The resource does not exist.');
+  const file = inside(found.project.localPath, found.entry.path);
+  const loaded = await loadBytes(file);
+  if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
+  return { ...found, file, loaded, document: parseJson(loaded.bytes) };
+}
+
+export async function createText(context, input) {
+  const document = validateText(input.document);
+  document.rev = Number.isInteger(document.rev) ? document.rev : 0;
+  const project = projectOf(context, input.project);
+  const relative = input.path;
+  const full = inside(project.localPath, relative);
+  if (relative.endsWith('.orig.json') || relative.endsWith('.comments.json') || relative.endsWith('.versions.jsonl')) {
+    fail(422, 'invalid_path', 'The path id is not canonical.');
+  }
+  if ((await loadBytes(full)).bytes) fail(409, 'resource_exists', 'That path is already registered.');
+  const catalog = await readCatalog(project);
+  const id = uuidV8(['editor', 'void', project.name, relative]);
+  if (catalog.value.resources.some((item) => item.id === id || item.path === relative)) fail(409, 'resource_exists', 'That path is already registered.');
+  const entry = {
+    id, kind: 'void', project: project.name, path: relative, legacyId: path.basename(relative, '.json'), readOnly: false,
+    attached: Array.isArray(input.attached) ? [...input.attached] : [],
+  };
+  const bytes = jsonBytes(document);
+  const comments = { path: path.basename(relative), threads: [] };
+  const nextCatalog = { ...catalog.value, resources: [...catalog.value.resources, entry] };
+  await commit(context, [
+    record(full, null, bytes),
+    record(`${stemOf(full)}.orig.json`, null, bytes),
+    record(`${stemOf(full)}.comments.json`, null, jsonBytes(comments)),
+    record(catalogFile(project), catalog.revision, jsonBytes(nextCatalog)),
+  ], [{ name: 'void.changed', resourceId: id, revision: hashBytes(bytes), data: { resourceId: id, revision: hashBytes(bytes), operation: 'create' } }]);
+  rememberExternal(context, id, hashBytes(bytes), document);
+  return view(entry, document, hashBytes(bytes));
+}
+
+export async function replaceText(context, id, input) {
+  const found = await textBundle(context, id);
+  assertCanEdit(context, found.entry);
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The text changed since it was read.');
+  const incoming = validateText(input.document);
+  preserveUnknown(found.document, incoming);
+  const changes = textChanges(found.document, incoming);
+  incoming.rev = (found.document.rev || 0) + (changes.length > 0 ? 1 : 0);
+  if (changes.length === 0) return view(found.entry, found.document, found.loaded.revision);
+  const bytes = jsonBytes(incoming);
+  const entries = [record(found.file, found.loaded.revision, bytes)];
+  const orig = `${stemOf(found.file)}.orig.json`;
+  const origLoaded = await loadBytes(orig);
+  if (!origLoaded.bytes) entries.push(record(orig, null, found.loaded.bytes));
+  const versions = `${stemOf(found.file)}.versions.jsonl`;
+  const history = await loadBytes(versions);
+  const at = clock(context);
+  const lines = `${changes.map((change) => JSON.stringify({ at, rev: incoming.rev, ...change })).join('\n')}\n`;
+  entries.push(record(versions, history.revision, Buffer.concat([history.bytes ?? Buffer.alloc(0), Buffer.from(lines)])));
+  const revision = hashBytes(bytes);
+  await commit(context, entries, [{ name: 'void.changed', resourceId: id, revision, data: { resourceId: id, revision, operation: 'replace' } }]);
+  rememberExternal(context, id, revision, incoming);
+  return view(found.entry, incoming, revision);
+}
+
+function assertRange(source, start, end) {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length) fail(422, 'invalid_range', 'The range is outside the text.');
+  const splitsPair = (index) => {
+    if (index <= 0 || index >= source.length) return false;
+    const previous = source.charCodeAt(index - 1);
+    const here = source.charCodeAt(index);
+    return previous >= 0xd800 && previous <= 0xdbff && here >= 0xdc00 && here <= 0xdfff;
+  };
+  if (splitsPair(start) || splitsPair(end)) fail(422, 'invalid_range', 'The range splits a character.');
+  for (const match of source.matchAll(/<\/?[bi]>/g)) {
+    const from = match.index;
+    const to = from + match[0].length;
+    if ((start > from && start < to) || (end > from && end < to)) fail(422, 'invalid_range', 'The range splits a markup tag.');
+  }
+}
+
+function applySlice(source, start, end, replacement, expected) {
+  assertRange(source, start, end);
+  if (source.slice(start, end) !== expected) fail(409, 'range_changed', 'The text at that range changed.');
+  return source.slice(0, start) + replacement + source.slice(end);
+}
+
+async function historyEntry(file, beforeRevision, lines) {
+  const versions = `${stemOf(file)}.versions.jsonl`;
+  const history = await loadBytes(versions);
+  const next = Buffer.concat([history.bytes ?? Buffer.alloc(0), Buffer.from(lines)]);
+  return { versions, entry: record(versions, history.revision ?? beforeRevision, next), history };
+}
+
+export async function replaceRange(context, id, input) {
+  const found = await textBundle(context, id);
+  assertCanEdit(context, found.entry);
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The text changed since it was read.');
+  const page = found.document.pages.find((item) => item.k === input.k);
+  if (!page || typeof page[input.lang] !== 'string') fail(422, 'invalid_range', 'The page language does not exist.');
+  const mode = input.mode ?? 'apply';
+  if (mode === 'propose') return proposeRange(context, found, input);
+  const next = applySlice(page[input.lang], input.start, input.end, input.replacement ?? '', input.expectedText);
+  const document = structuredClone(found.document);
+  document.pages.find((item) => item.k === input.k)[input.lang] = next;
+  document.rev = (document.rev || 0) + 1;
+  const bytes = jsonBytes(document);
+  const entries = [record(found.file, found.loaded.revision, bytes)];
+  const orig = await loadBytes(`${stemOf(found.file)}.orig.json`);
+  if (!orig.bytes) entries.push(record(`${stemOf(found.file)}.orig.json`, null, found.loaded.bytes));
+  const at = clock(context);
+  const line = `${JSON.stringify({ at, rev: document.rev, k: input.k, lang: input.lang, before: page[input.lang], after: next })}\n`;
+  const history = await historyEntry(found.file, null, line);
+  entries.push(history.entry);
+  const revision = hashBytes(bytes);
+  await commit(context, entries, [{ name: 'void.changed', resourceId: id, revision, data: { resourceId: id, revision, operation: 'range' } }]);
+  rememberExternal(context, id, revision, document);
+  return { editor: view(found.entry, document, revision), proposal: null };
+}
+
+async function proposeRange(context, found, input) {
+  if (!input.threadId || input.expectedCommentsRevision === undefined) fail(422, 'invalid_body', 'A proposal needs a thread and a comments revision.');
+  applySlice(found.document.pages.find((item) => item.k === input.k)[input.lang], input.start, input.end, input.replacement ?? '', input.expectedText);
+  const comments = await loadComments(found);
+  if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
+  const thread = comments.value.threads.find((item) => item.id === input.threadId);
+  if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
+  const { author, authorId } = actor(context);
+  const message = {
+    id: randomUUID(), author, authorId, at: clock(context), text: input.replacement || 'Suggested edit',
+    proposal: {
+      id: randomUUID(), state: 'pending', k: input.k, lang: input.lang, start: input.start, end: input.end,
+      expectedText: input.expectedText, replacement: input.replacement ?? '', baseRevision: found.loaded.revision,
+      createdBy: authorId, createdAt: clock(context), decidedBy: null, decidedAt: null,
+    },
+  };
+  assignIds(comments.value, found.entry.id);
+  thread.messages.push(message);
+  thread.status = 'open';
+  const bytes = jsonBytes(comments.value);
+  const revision = hashBytes(bytes);
+  const notices = await noticePlan(context, message.id, found.entry.id, recipientsFor(context, found.entry.attached, authorId));
+  await admitComment(context, message.id);
+  await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
+    { name: 'comment.changed', resourceId: found.entry.id, data: { resourceId: found.entry.id, thread, commentsRevision: revision, operation: 'reply' } },
+    { name: 'void.proposal.changed', resourceId: found.entry.id, data: { resourceId: found.entry.id, proposal: { ...message.proposal, resourceId: found.entry.id, threadId: thread.id, commentsRevision: revision }, commentsRevision: revision } },
+    ...notices.events,
+  ]);
+  return { editor: view(found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: found.entry.id, threadId: thread.id, commentsRevision: revision } };
+}
+
+export async function listProposals(context, id, query = {}) {
+  const found = await textBundle(context, id);
+  const comments = await loadComments(found);
+  const state = query.state ?? 'pending';
+  const items = [];
+  for (const thread of comments.value.threads) {
+    for (const message of thread.messages ?? []) {
+      if (!message.proposal || (state !== 'all' && message.proposal.state !== state)) continue;
+      items.push({ ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: comments.revision });
+    }
+  }
+  return { items };
+}
+
+export async function answerProposal(context, id, proposalId, input) {
+  if (context.principal?.audience === 'agent') fail(403, 'forbidden', 'The agent cannot accept a proposal.');
+  const found = await textBundle(context, id);
+  const comments = await loadComments(found);
+  if (input.expectedRevision !== found.loaded.revision || input.expectedCommentsRevision !== comments.revision) {
+    fail(409, 'revision_conflict', 'The text changed since it was read.');
+  }
+  let message = null;
+  let thread = null;
+  for (const item of comments.value.threads) {
+    message = (item.messages ?? []).find((entry) => entry.proposal?.id === proposalId) ?? null;
+    if (message) { thread = item; break; }
+  }
+  if (!message) fail(404, 'not_found', 'The proposal does not exist.');
+  if (message.proposal.state !== 'pending') fail(409, 'proposal_resolved', 'The proposal was already answered.');
+  const decidedAt = clock(context);
+  const decidedBy = actor(context).authorId;
+  if (input.decision === 'discard') {
+    message.proposal.state = 'discarded';
+    message.proposal.decidedBy = decidedBy;
+    message.proposal.decidedAt = decidedAt;
+    const bytes = jsonBytes(comments.value);
+    const revision = hashBytes(bytes);
+    await commit(context, [record(comments.file, comments.revision, bytes)], [
+      { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision }, commentsRevision: revision } },
+    ]);
+    return { editor: view(found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision } };
+  }
+  if (message.proposal.baseRevision !== found.loaded.revision) fail(409, 'proposal_stale', 'The proposal no longer matches the text.');
+  const page = found.document.pages.find((item) => item.k === message.proposal.k);
+  const source = page?.[message.proposal.lang];
+  if (typeof source !== 'string' || source.slice(message.proposal.start, message.proposal.end) !== message.proposal.expectedText) {
+    fail(409, 'proposal_stale', 'The proposal no longer matches the text.');
+  }
+  const document = structuredClone(found.document);
+  const next = applySlice(source, message.proposal.start, message.proposal.end, message.proposal.replacement, message.proposal.expectedText);
+  document.pages.find((item) => item.k === message.proposal.k)[message.proposal.lang] = next;
+  document.rev = (document.rev || 0) + 1;
+  message.proposal.state = 'accepted';
+  message.proposal.decidedBy = decidedBy;
+  message.proposal.decidedAt = decidedAt;
+  const bytes = jsonBytes(document);
+  const commentBytes = jsonBytes(comments.value);
+  const at = clock(context);
+  const line = `${JSON.stringify({ at, rev: document.rev, k: message.proposal.k, lang: message.proposal.lang, before: source, after: next })}\n`;
+  const history = await historyEntry(found.file, null, line);
+  const entries = [record(found.file, found.loaded.revision, bytes), record(comments.file, comments.revision, commentBytes), history.entry];
+  const orig = await loadBytes(`${stemOf(found.file)}.orig.json`);
+  if (!orig.bytes) entries.push(record(`${stemOf(found.file)}.orig.json`, null, found.loaded.bytes));
+  const revision = hashBytes(bytes);
+  const commentsRevision = hashBytes(commentBytes);
+  await commit(context, entries, [
+    { name: 'void.changed', resourceId: id, revision, data: { resourceId: id, revision, operation: 'accept' } },
+    { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision }, commentsRevision } },
+  ]);
+  rememberExternal(context, id, revision, document);
+  return { editor: view(found.entry, document, revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision } };
+}
+
+function commentText(value) {
+  if (typeof value !== 'string') fail(422, 'invalid_body', 'The comment needs text.');
+  const text = value.replace(/\r\n?/g, '\n').trim();
+  if (!text || text.length > 10000) fail(422, 'invalid_body', 'The comment needs text of at most 10000 characters.');
+  return text;
+}
+
+function recipientsFor(context, attached, authorId) {
+  const list = [...new Set(attached ?? [])].filter((item) => item !== authorId);
+  if (context.principal?.audience === 'agent' && authorId !== 'root:master' && !list.includes('root:master')) list.push('root:master');
+  return list;
+}
+
+async function noticePlan(context, messageId, resourceId, recipients) {
+  if (!context.paths?.mind || recipients.length === 0) return { entries: [], events: [] };
+  const file = path.join(context.paths.mind, 'user', 'relay', 'fanout', `${messageId}.json`);
+  const loaded = await loadBytes(file);
+  const parsed = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-fanout-v1', messageId, notices: [] };
+  const events = [];
+  for (const unitId of recipients) {
+    const key = `${messageId}:${unitId}`;
+    if (parsed.notices.some((item) => item.key === key)) continue;
+    parsed.notices.push({ key, unitId, state: 'pending', resourceId });
+    events.push({ name: 'notification.changed', unitId, resourceId, data: { noticeKey: key, unitId, resourceId, state: 'pending', error: null } });
+  }
+  if (events.length === 0) return { entries: [], events: [] };
+  return { entries: [record(file, loaded.revision, Buffer.from(`${canonicalJson(parsed)}\n`))], events };
+}
+
+async function admitComment(context, id) {
+  if (!context.paths?.localDirectory || !context.paths?.machine) return;
+  const ledger = openLedger({ store: context.store, paths: context.paths, now: context.now, machine: context.paths.machine });
+  await admitMessage(ledger, { id, record: canonicalJson({ id, kind: 'comment' }) });
+}
+
+export async function notifyAttached(context, input) {
+  const planned = await noticePlan(context, input.messageId, input.resourceId, input.recipients ?? []);
+  if (planned.entries.length > 0) await commit(context, planned.entries, planned.events);
+  return planned.events.map((event) => event.data.noticeKey);
+}
+
+export async function listComments(context, id, query = {}) {
+  const found = await resourceOf(context, id);
+  const loaded = await loadComments(found);
+  const projected = projectComments(loaded.value, found.entry.id);
+  const status = query.status ?? 'all';
+  const threads = (projected.threads ?? []).filter((thread) => status === 'all' || thread.status === status);
+  const pages = found.entry.kind === 'void' ? await currentPages(context, found) : [];
+  return { items: threads.map((thread) => ({ ...thread, place: found.entry.kind === 'void' ? place(pages, thread) : null })), commentsRevision: loaded.revision };
+}
+
+async function currentPages(context, found) {
+  if (found.entry.kind !== 'void') return [];
+  const loaded = await loadBytes(inside(found.project.localPath, found.entry.path));
+  if (!loaded.bytes) return [];
+  return parseJson(loaded.bytes).pages ?? [];
+}
+
+function validateAnchor(found, document, anchor) {
+  if (!anchor || typeof anchor !== 'object') fail(422, 'invalid_body', 'The anchor is not valid.');
+  if (found.entry.kind === 'void') {
+    const page = document.pages.find((item) => item.k === anchor.k);
+    const source = page?.[anchor.lang];
+    if (typeof source !== 'string') fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
+    const rendered = plain(source);
+    if (rendered.slice(anchor.start, anchor.end) !== anchor.quote) fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
+    return createAnchor(rendered, anchor.start, anchor.end, anchor.lang, anchor.k);
+  }
+  if (anchor.screen) {
+    const screen = (document.screens ?? []).find((item) => item.id === anchor.screen);
+    if (!screen) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
+    if (anchor.element && !findNode(document, anchor.element)) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
+  }
+  if (typeof anchor.label === 'string' && anchor.label.length > 160) fail(422, 'invalid_body', 'The anchor label is too long.');
+  return anchor;
+}
+
+export async function createComment(context, id, input) {
+  const found = await resourceOf(context, id);
+  assertCanEdit(context, found.entry);
+  const text = commentText(input.text);
+  const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : (await boardFile(context, id)).document;
+  const fileRevision = found.entry.kind === 'void'
+    ? (await loadBytes(inside(found.project.localPath, found.entry.path))).revision
+    : (await loadBytes(inside(found.project.localPath, found.entry.path))).revision;
+  if (input.expectedRevision !== fileRevision) fail(409, 'revision_conflict', 'The document changed since it was read.');
+  const comments = await loadComments(found);
+  if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
+  const anchor = validateAnchor(found, document, input.anchor);
+  const { author, authorId } = actor(context);
+  const thread = {
+    id: randomUUID(), anchor, to: null, status: 'open', layer: found.entry.kind === 'blueprint' ? 'design' : undefined,
+    messages: [{ id: randomUUID(), author, authorId, at: clock(context), text }],
+  };
+  if (thread.layer === undefined) delete thread.layer;
+  assignIds(comments.value, found.entry.id);
+  comments.value.threads.push(thread);
+  const bytes = jsonBytes(comments.value);
+  const revision = hashBytes(bytes);
+  const messageId = thread.messages[0].id;
+  const notices = await noticePlan(context, messageId, id, recipientsFor(context, found.entry.attached, authorId));
+  await admitComment(context, messageId);
+  await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
+    { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision, operation: 'create' } },
+    ...notices.events,
+  ]);
+  return { thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision };
+}
+
+export async function replyComment(context, id, threadId, input) {
+  const found = await resourceOf(context, id);
+  assertCanEdit(context, found.entry);
+  const text = commentText(input.text);
+  const comments = await loadComments(found);
+  if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
+  const thread = comments.value.threads.find((item) => item.id === threadId);
+  if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
+  const { author, authorId } = actor(context);
+  const message = { id: randomUUID(), author, authorId, at: clock(context), text };
+  assignIds(comments.value, found.entry.id);
+  thread.messages.push(message);
+  thread.status = 'open';
+  const bytes = jsonBytes(comments.value);
+  const revision = hashBytes(bytes);
+  const notices = await noticePlan(context, message.id, id, recipientsFor(context, found.entry.attached, authorId));
+  await admitComment(context, message.id);
+  await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
+    { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: 'reply' } },
+    ...notices.events,
+  ]);
+  return { thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision };
+}
+
+export async function setCommentStatus(context, id, threadId, input) {
+  const found = await resourceOf(context, id);
+  assertCanEdit(context, found.entry);
+  if (input.status !== 'open' && input.status !== 'resolved') fail(422, 'invalid_body', 'The status must be open or resolved.');
+  const comments = await loadComments(found);
+  if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
+  const thread = comments.value.threads.find((item) => item.id === threadId);
+  if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
+  thread.status = input.status;
+  const bytes = jsonBytes(comments.value);
+  const revision = hashBytes(bytes);
+  await commit(context, [record(comments.file, comments.revision, bytes)], [
+    { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: input.status === 'resolved' ? 'resolve' : 'reopen' } },
+  ]);
+  return { thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision };
+}
+
+export async function observeExternal(context, id) {
+  const found = await resourceOf(context, id);
+  const file = inside(found.project.localPath, found.entry.path);
+  const loaded = await loadBytes(file);
+  if (!loaded.bytes) return { changed: false, issue: true };
+  if (!context.externalHashes) context.externalHashes = new Map();
+  if (!context.snapshots) context.snapshots = new Map();
+  if (!context.externalIssues) context.externalIssues = new Map();
+  if (context.externalHashes.get(id) === loaded.revision) return { changed: false };
+  let document;
+  try {
+    document = validateText(parseJson(loaded.bytes));
+  } catch {
+    if (context.externalIssues.get(id) !== loaded.revision) {
+      context.externalIssues.set(id, loaded.revision);
+      context.store.events.push({ name: 'issue.changed', resourceId: id, data: { resourceId: id, issue: 'malformed' } });
+    }
+    return { changed: false, issue: true };
+  }
+  const previous = context.snapshots.get(id);
+  context.externalHashes.set(id, loaded.revision);
+  context.snapshots.set(id, document);
+  const changes = previous ? textChanges(previous, document) : [];
+  if (changes.length === 0) return { changed: false };
+  const at = clock(context);
+  const line = `${changes.map((change) => JSON.stringify({ at, rev: document.rev || 0, ...change, by: 'outside' })).join('\n')}\n`;
+  const history = await historyEntry(file, null, line);
+  await commit(context, [history.entry], [{ name: 'void.changed', resourceId: id, data: { resourceId: id, operation: 'import' } }]);
+  return { changed: true };
+}
+
+export { findAnchor, place };
+
