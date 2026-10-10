@@ -506,10 +506,10 @@ const terminalCopy = {
   },
   es: {
     required: "Se requiere un valor.",
-    invalidNumber: "Ingresá un número entero.",
+    invalidNumber: "Ingresar un número entero.",
     onDemand: "Bajo demanda",
     auto: "Automático",
-    paths: "separá las rutas con ;",
+    paths: "separar las rutas con ;",
     noFiles: "No se escribirá ningún archivo.",
     warning: "Aviso",
     writePreview: "Vista previa",

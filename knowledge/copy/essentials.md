@@ -55,7 +55,7 @@ Each value applies until the project's voice file says otherwise. Measured and C
 | Date in a changelog | ISO 8601, `2026-09-18` | Keep a Changelog 1.1.0 |
 | Time | `en` `3:30 PM`; `es` `15:30`; `es-419` `3:30 p.m.`, all from the formatter | CLDR 48 short time |
 | Quotation marks | English “ ” then ‘ ’; Spanish « » then “ ” then ‘ ’ | CLDR 48 `en`; RAE DPD, comillas |
-| Spanish register | Neutral tú in sentences, infinitive on buttons and menu items | Practice, [options.md](options.md#spanish-register) |
+| Spanish register | Neutral impersonal: *se* or the third person in sentences, infinitive for every action, never voseo or tuteo | Practice, [options.md](options.md#spanish-register) |
 | Spanish greeting | `Hola, {first_name}:` with a colon, never a comma | RAE DPD, dos puntos 2.9 |
 | Email sender | The product for product mail; the person for mail sent on their behalf | Convention, [messages.md](messages.md#email) |
 | Changelog categories | Added, Changed, Deprecated, Removed, Fixed, Security, kept in English in every language | Keep a Changelog 1.1.0 and its Spanish translation |

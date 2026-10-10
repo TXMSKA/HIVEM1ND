@@ -36,8 +36,8 @@ const LANTERN = {
   es: {
     title: "El camino de los faroles",
     paras: [
-      "Mara enciende el primer farol al borde del pantano. El camino es tranquilo, y el viejo puente solo resiste si lo cruzas despacio.",
-      "Sigue los faroles hacia el norte. Cada uno que enciendas muestra un poco más del camino.",
+      "Mara enciende el primer farol al borde del pantano. El camino es tranquilo, y el viejo puente solo resiste si se cruza despacio.",
+      "Seguir los faroles hacia el norte. Cada uno que se enciende muestra un poco más del camino.",
     ],
   },
 };
