@@ -3,6 +3,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { createApi, request } from "../gui/app/api.mjs";
+import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundary, validUtf16Boundary } from "../gui/app/markup.mjs";
+import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
   editedBoard,
   hitBoardNode,
@@ -260,6 +262,89 @@ test("blueprint edits keep unknown fields and refuse a lossy save", async (t) =>
   assert.equal(orphan.place, null);
   assert.equal(editors.current.authoritative.document.sentinel, "document-sentinel");
 });
+
+test("void edits keep source boundaries, history and proposals", async (t) => {
+  const welcome = "<b>Welcome</b>\nA first paragraph.";
+  assert.equal(plainText(welcome).slice(0, 7), "Welcome");
+  assert.equal(sourceBoundary(welcome, 0, "end"), 3);
+  assert.equal(welcome.slice(3, 10), "Welcome");
+  assert.equal(boundaryInsideTag(welcome, 1), true);
+  assert.throws(() => rangeRequest({ document: { pages: [{ k: "Intro.Welcome", en: welcome }] }, revision: "a".repeat(64) }, "Intro.Welcome", "en", 1, 2, "x"), /invalid/);
+  const emoji = "A😀B";
+  assert.equal(validUtf16Boundary(emoji, 2), false);
+  assert.equal(validUtf16Boundary(emoji, 1), true);
+  const rendered = renderMarkup(fakeDocument(), "<script>alert(1)</script><b>Hi</b>");
+  assert.equal(hasTag(rendered, "SCRIPT"), false);
+  assert.equal(hasTag(rendered, "B"), true);
+  assert.match(textOf(rendered), /<script>alert\(1\)<\/script>/);
+  const focus = enterFocus({ mode: "document", tools: true, page: "Intro.Welcome", pages: [{ k: "Intro.Welcome" }, { k: "Notes.Next" }] });
+  moveFocus(focus, "ArrowRight");
+  assert.equal(focus.page, "Notes.Next");
+  assert.equal(focus.tools, false);
+  moveFocus(focus, "ArrowRight");
+  assert.equal(focus.page, "Notes.Next");
+  showTools(focus);
+  leaveFocus(focus);
+  assert.equal(focus.mode, "document");
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const editors = createEditors();
+  const origPath = join(fixture.root, "repositories", "shop", "docs", "release.orig.json");
+  const historyPath = join(fixture.root, "repositories", "shop", "docs", "release.versions.jsonl");
+  const original = await readFile(origPath);
+  const historyBefore = (await readFile(historyPath, "utf8")).trim().split(/\n/).length;
+  const texts = await loadCatalog(api, editors, "void");
+  const release = texts.find((item) => item.title === "Release notes");
+  await openEditor(api, editors, release);
+  const proposal = editors.current.authoritative.proposals.find((item) => item.replacement === "Hello");
+  await answerProposal(api, editors.current, proposal, "accept");
+  const document = editors.current.authoritative.document;
+  assert.equal(document.pages[0].en.includes("<b>Hello</b>"), true);
+  assert.equal(document.pages[0].es.includes("Bienvenida"), true);
+  assert.equal(document.sentinel, "void-sentinel");
+  assert.equal(document.pages[0].sentinel, "void-page-sentinel");
+  assert.equal(document.rev, 2);
+  assert.deepEqual(await readFile(origPath), original);
+  assert.equal((await readFile(historyPath, "utf8")).trim().split(/\n/).length, historyBefore + 1);
+  const second = editors.current.authoritative.proposals.find((item) => item.replacement === "opening");
+  await assert.rejects(answerProposal(api, editors.current, second, "accept"), (error) => error.code === "proposal_stale");
+  assert.equal(second.state, "pending");
+  const revision = editors.current.revision;
+  await answerProposal(api, editors.current, second, "discard");
+  assert.equal(editors.current.revision, revision);
+  assert.equal(editors.current.authoritative.proposals.find((item) => item.id === second.id).state, "discarded");
+  const next = document.pages.find((page) => page.k === "Notes.Next");
+  await saveRange(api, editors.current, "Notes.Next", "en", 0, next.en.length, "<b>Next 😀</b> <script>no</script>");
+  const saved = editors.current.authoritative.document.pages.find((page) => page.k === "Notes.Next").en;
+  assert.equal(saved, "<b>Next 😀</b> <script>no</script>");
+  assert.equal(editors.current.authoritative.document.pages.find((page) => page.k === "Notes.Next").sentinel, "void-next-sentinel");
+  assert.equal((await readFile(historyPath, "utf8")).trim().split(/\n/).length, historyBefore + 2);
+  assert.deepEqual(await readFile(origPath), original);
+});
+
+function fakeDocument() {
+  const create = (tagName) => ({
+    tagName,
+    children: [],
+    append(child) { this.children.push(child); },
+  });
+  return {
+    createDocumentFragment() { return create("#fragment"); },
+    createElement(name) { return create(name.toUpperCase()); },
+    createTextNode(text) { return { tagName: "#text", textContent: text, children: [], append() {} }; },
+  };
+}
+
+function hasTag(node, name) {
+  if (node.tagName === name) return true;
+  return (node.children ?? []).some((child) => hasTag(child, name));
+}
+
+function textOf(node) {
+  if (node.tagName === "#text") return node.textContent;
+  return (node.children ?? []).map(textOf).join("");
+}
 
 function fullBoard() {
   return {

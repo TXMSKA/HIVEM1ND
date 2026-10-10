@@ -1638,7 +1638,9 @@ function routeTable() {
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", PATCH: { capability: "editor.write", validate: validatePatchNode } },
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", DELETE: { capability: "editor.write", validate: validateDeleteNode } },
     { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateText } },
-    { pattern: "/void/texts/:resourceId", GET: { query: [] } },
+    { pattern: "/void/texts/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateTextPut } },
+    { pattern: "/void/texts/:resourceId/ranges", POST: { capability: "editor.write", validate: validateRange } },
+    { pattern: "/void/texts/:resourceId/proposals/:proposalId/answer", POST: { capability: "proposal.answer", validate: validateProposalAnswer } },
     { pattern: "/void/texts/:resourceId/proposals", GET: { query: ["q", "limit", "cursor", "state"] } },
     { pattern: "/editors/:resourceId/attachments", GET: { query: [] } },
     { pattern: "/editors/:resourceId/comments", GET: { query: ["q", "limit", "cursor", "status"] }, POST: { capability: "comment.write", validate: validateComment } },
@@ -2873,6 +2875,162 @@ async function prepareAsset(fx, resourceId, body) {
   };
 }
 
+function validateTextPut(body) {
+  requireObject(body, ["document", "expectedRevision"]);
+  requireKeys(body, ["document", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!body.document || typeof body.document !== "object" || !Array.isArray(body.document.pages)) throw new HttpError(422, "invalid_document", "The document is not valid.");
+}
+
+function validateRange(body) {
+  requireObject(body, ["k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision", "mode", "threadId", "expectedCommentsRevision"]);
+  requireKeys(body, ["k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!Number.isInteger(body.start) || !Number.isInteger(body.end)) throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+}
+
+function validateProposalAnswer(body) {
+  requireObject(body, ["decision", "expectedRevision", "expectedCommentsRevision"]);
+  requireKeys(body, ["decision", "expectedRevision", "expectedCommentsRevision"]);
+  if (!["accept", "discard"].includes(body.decision)) throw new HttpError(422, "invalid_body", "The decision is not valid.");
+  revisionField(body.expectedRevision);
+  revisionField(body.expectedCommentsRevision);
+}
+
+async function prepareTextPut(fx, resourceId, body) {
+  const editor = await mutableText(fx, resourceId, body.expectedRevision);
+  assertTextCompatible(editor.document, body.document);
+  const document = structuredClone(body.document);
+  delete document.history;
+  document.rev = (editor.document.rev ?? 0) + 1;
+  return writeText(fx, editor, document, { k: document.pages?.[0]?.k ?? null, lang: "en", before: "", after: "" });
+}
+
+async function prepareRange(fx, resourceId, body) {
+  const editor = await mutableText(fx, resourceId, body.expectedRevision);
+  const source = textSource(editor.document, body.k, body.lang);
+  if (body.end < body.start || !validTextBoundary(source, body.start) || !validTextBoundary(source, body.end) || insideTag(source, body.start) || insideTag(source, body.end)) {
+    throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+  }
+  if (source.slice(body.start, body.end) !== body.expectedText) throw new HttpError(409, "range_changed", "The source range changed.");
+  const document = structuredClone(editor.document);
+  const page = document.pages.find((item) => item.k === body.k);
+  page[body.lang] = `${source.slice(0, body.start)}${body.replacement}${source.slice(body.end)}`;
+  document.rev = (document.rev ?? 0) + 1;
+  return writeText(fx, editor, document, { k: body.k, lang: body.lang, before: body.expectedText, after: body.replacement });
+}
+
+async function prepareProposal(fx, params, body) {
+  const editor = await mutableText(fx, params.resourceId, body.expectedRevision);
+  if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
+  const proposal = editor.proposals.find((item) => item.id === params.proposalId);
+  if (!proposal) throw new HttpError(404, "not_found", "The proposal was not found.");
+  if (proposal.state !== "pending") throw new HttpError(409, "proposal_resolved", "The proposal was already answered.");
+  const source = textSource(editor.document, proposal.k, proposal.lang);
+  const stale = proposal.baseRevision !== editor.revision || source.slice(proposal.start, proposal.end) !== proposal.expectedText;
+  if (body.decision === "accept" && stale) throw new HttpError(409, "proposal_stale", "The suggestion no longer matches.");
+  const threads = structuredClone(editor.threads);
+  const thread = threads.find((item) => (item.messages ?? []).some((message) => message.proposal?.id === proposal.id));
+  const message = thread.messages.find((item) => item.proposal?.id === proposal.id);
+  message.proposal = { ...message.proposal, state: body.decision === "accept" ? "accepted" : "discarded", decidedBy: "root:master", decidedAt: clock(fx).toISOString() };
+  if (body.decision === "discard") {
+    const comments = writeComments(fx, editor, threads, thread, 200);
+    return { ...comments, status: 200, data: { ...comments.data, proposal: message.proposal, editor: { ...editor, commentsRevision: comments.data.commentsRevision, threads, proposals: threads.flatMap(proposalList) } } };
+  }
+  const document = structuredClone(editor.document);
+  const page = document.pages.find((item) => item.k === proposal.k);
+  page[proposal.lang] = `${source.slice(0, proposal.start)}${proposal.replacement}${source.slice(proposal.end)}`;
+  document.rev = (document.rev ?? 0) + 1;
+  const saved = await writeText(fx, editor, document, { k: proposal.k, lang: proposal.lang, before: proposal.expectedText, after: proposal.replacement });
+  const comments = writeComments(fx, { ...editor, threads }, threads, thread, 200);
+  return {
+    status: 200,
+    data: { editor: { ...saved.data, commentsRevision: comments.data.commentsRevision, threads, proposals: threads.flatMap(proposalList) }, proposal: message.proposal },
+    writes: [...saved.writes, ...comments.writes],
+    events: [...saved.events, ...comments.events],
+  };
+}
+
+function proposalList(thread) {
+  return (thread.messages ?? []).flatMap((message) => (message.proposal ? [{ ...message.proposal, threadId: thread.id }] : []));
+}
+
+function textSource(document, k, lang) {
+  const page = document.pages?.find((item) => item.k === k);
+  const source = page?.[lang];
+  if (typeof source !== "string") throw new HttpError(422, "invalid_range", "The selected source range is invalid.");
+  return source;
+}
+
+function validTextBoundary(source, offset) {
+  if (!Number.isInteger(offset) || offset < 0 || offset > source.length) return false;
+  const before = source.charCodeAt(offset - 1);
+  const after = source.charCodeAt(offset);
+  return !(before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff);
+}
+
+function insideTag(source, offset) {
+  const tags = ["<b>", "</b>", "<i>", "</i>"];
+  let index = 0;
+  while (index < source.length) {
+    const tag = tags.find((item) => source.startsWith(item, index));
+    if (!tag) {
+      index += 1;
+      continue;
+    }
+    if (offset > index && offset < index + tag.length) return true;
+    index += tag.length;
+  }
+  return false;
+}
+
+async function mutableText(fx, resourceId, expectedRevision) {
+  const editor = await editorFor(fx, resourceId);
+  if (editor.kind !== "void" || editor.readOnly || !editor.document) throw new HttpError(409, "read_only_resource", "The resource is read only.");
+  if (editor.revision !== expectedRevision) throw new HttpError(409, "revision_conflict", "The text was changed elsewhere.");
+  return editor;
+}
+
+function assertTextCompatible(before, after) {
+  for (const key of Object.keys(before)) {
+    if (["rev", "pages", "title"].includes(key)) continue;
+    if (stableJson(before[key]) !== stableJson(after?.[key])) throw new HttpError(409, "unsupported_fields_lost", "The edit dropped editor fields.");
+  }
+  for (const page of before.pages ?? []) {
+    const next = (after.pages ?? []).find((item) => item.k === page.k);
+    if (!next) continue;
+    for (const key of Object.keys(page)) {
+      if (["en", "es", "k"].includes(key)) continue;
+      if (stableJson(page[key]) !== stableJson(next[key])) throw new HttpError(409, "unsupported_fields_lost", "The edit dropped editor fields.");
+    }
+  }
+}
+
+async function writeText(fx, editor, document, change) {
+  const bytes = Buffer.from(stableJson(document));
+  const revision = sha256(bytes);
+  const historyPath = editorFile(fx, editor.project, editor.path).replace(/\.json$/, ".versions.jsonl");
+  let prior = Buffer.alloc(0);
+  let beforeRevision = null;
+  try {
+    prior = await readFile(historyPath);
+    beforeRevision = sha256(prior);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const line = `${JSON.stringify({ at: clock(fx).toISOString(), rev: document.rev, k: change.k, lang: change.lang, before: change.before, after: change.after })}\n`;
+  const history = Buffer.concat([prior, Buffer.from(line)]);
+  return {
+    status: 200,
+    data: { ...editor, document, revision, file: undefined },
+    writes: [
+      { path: editorFile(fx, editor.project, editor.path), beforeRevision: editor.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") },
+      { path: historyPath, beforeRevision, afterRevision: sha256(history), afterBytesBase64: history.toString("base64") },
+    ],
+    events: [{ name: "void.changed", resourceId: editor.id, data: { resourceId: editor.id, revision } }],
+  };
+}
+
 async function readAsset(fx, resourceId, assetId) {
   const editor = requireEditor(await projection(fx), resourceId);
   const folder = editorFile(fx, editor.project, "docs/flows/assets");
@@ -3157,6 +3315,9 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId" && body.changes) return preparePatchNode(fx, params, body);
   if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId") return prepareDeleteNode(fx, params, body);
   if (pattern === "/editors/:resourceId/assets") return prepareAsset(fx, params.resourceId, body);
+  if (pattern === "/void/texts/:resourceId") return prepareTextPut(fx, params.resourceId, body);
+  if (pattern === "/void/texts/:resourceId/ranges") return prepareRange(fx, params.resourceId, body);
+  if (pattern === "/void/texts/:resourceId/proposals/:proposalId/answer") return prepareProposal(fx, params, body);
   if (pattern === "/chats") return prepareChat(fx, body, principal);
   if (pattern === "/chats/:chatId") return prepareChatPatch(fx, params.chatId, body);
   if (pattern === "/layout") return prepareLayout(fx, body);

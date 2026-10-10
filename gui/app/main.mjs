@@ -45,6 +45,7 @@ import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
+import { answerProposal, beginTextEdit, enterFocus, leaveFocus, moveFocus, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -88,6 +89,13 @@ export async function mount(root, env = globalThis) {
     hierarchy: { shown: new Map(), collapsed: new Set() },
     restoreSearch: false,
   };
+  const view = root.ownerDocument.defaultView;
+  view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
+  root.addEventListener?.("pointermove", () => {
+    if (app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
+    showTools(app.voidState);
+    renderShell(app);
+  });
   renderStatus(app, "loading");
   if (!api.token) {
     renderSignedOut(app);
@@ -117,10 +125,11 @@ export function navigate(app, mode) {
 
 export function renderShell(app) {
   const document = app.root.ownerDocument;
+  document.documentElement.dataset.mode = app.mode;
   const t = (key, variables) => text(app.language, key, variables);
   const view = app.store.view;
   const counts = view?.counts ?? {};
-  const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop" });
+  const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode });
   shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
@@ -206,6 +215,7 @@ function publish(app) {
   const document = app.root.ownerDocument;
   document.documentElement.lang = app.language;
   document.documentElement.dataset.look = app.look;
+  document.documentElement.dataset.mode = app.mode;
   renderShell(app);
   announce(app.root, text(app.language, "loadingView"));
 }
@@ -274,7 +284,7 @@ function renderWorkspace(app, t, view, counts) {
   if (app.mode === "map") {
     ensureMap(app);
     stage.append(element(document, "div", { class: "map" }));
-  } else if (app.mode === "blueprint" || app.mode === "document") {
+  } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
     stage.append(renderEditor(app, t));
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
@@ -495,10 +505,107 @@ function boardPoint(svg, event) {
   return { x: local.x, y: local.y };
 }
 
+function voidSurface(app, document, editor, t) {
+  if (!app.voidState) app.voidState = { mode: app.mode, tools: app.mode !== "focus", page: editor.page ?? editor.authoritative.document.pages?.[0]?.k, pages: editor.authoritative.document.pages };
+  app.voidState.pages = editor.authoritative.document.pages;
+  editor.page = app.voidState.page;
+  editor.language = app.language;
+  const host = element(document, "div", { class: "void-page", "data-void": "true" });
+  renderDocument(document, host, editor);
+  const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
+  const source = element(document, "textarea", { "data-source": "true" });
+  source.value = editor.draftText || (editor.authoritative.document.pages.find((page) => page.k === editor.page)?.[app.language] ?? "");
+  source.addEventListener("input", () => {
+    editor.draftText = source.value;
+    editor.dirty = true;
+  });
+  tools.append(source);
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "save-range",
+    onclick: () => saveVoid(app, editor, source.value),
+  }, t("send")));
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "enter-focus",
+    onclick: (event) => {
+      app.focusReturn = event.currentTarget;
+      enterFocus(app.voidState);
+      app.mode = "focus";
+      renderShell(app);
+    },
+  }, t("focus")));
+  tools.append(element(document, "button", {
+    type: "button", class: "btn", "data-action": "comment-quote",
+    onclick: () => commentOnQuote(app, editor),
+  }, t("comment")));
+  const proposals = editor.authoritative.proposals ?? [];
+  const list = element(document, "div", { class: "editor-comments" });
+  for (const proposal of proposals) {
+    const block = renderProposal(document, proposal);
+    if (proposal.state === "pending" && app.store.capabilities.includes("proposal.answer")) {
+      block.append(element(document, "button", { type: "button", class: "btn", "data-action": "accept-change", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "accept") }, t("acceptChange")));
+      block.append(element(document, "button", { type: "button", class: "btn", "data-action": "discard", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "discard") }, t("discard")));
+    }
+    list.append(block);
+  }
+  return element(document, "div", {}, host, tools, list);
+}
+
+function saveVoid(app, editor, value) {
+  const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
+  const lang = app.language === "es" ? "es" : "en";
+  const current = page[lang];
+  beginTextEdit(editor, page.k, lang);
+  editor.draftText = value;
+  editor.dirty = true;
+  let start = 0;
+  while (start < current.length && start < value.length && current[start] === value[start]) start += 1;
+  let end = current.length;
+  let valueEnd = value.length;
+  while (end > start && valueEnd > start && current[end - 1] === value[valueEnd - 1]) {
+    end -= 1;
+    valueEnd -= 1;
+  }
+  saveRange(app.api, editor, page.k, lang, start, end, value.slice(start, valueEnd)).then(() => renderShell(app)).catch((error) => {
+    editor.conflict = { code: error.code };
+    noteEditor(app, error);
+  });
+}
+
+function commentOnQuote(app, editor) {
+  const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
+  const lang = app.language === "es" ? "es" : "en";
+  const anchor = textAnchor(editor, page.k, lang, 0, 7);
+  createComment(app.api, app.editors, anchor, editor.commentText || anchor.quote).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+}
+
+function answerVoid(app, editor, proposal, decision) {
+  answerProposal(app.api, editor, proposal, decision).then(() => renderShell(app)).catch((error) => {
+    if (error.code === "proposal_stale") editor.conflict = { code: error.code };
+    noteEditor(app, error);
+  });
+}
+
+function onFocusKey(app, event) {
+  if (app.mode !== "focus" || !app.voidState) return;
+  const tag = event.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) return;
+  if (event.key === "Escape") {
+    leaveFocus(app.voidState);
+    app.mode = "document";
+    renderShell(app);
+    app.focusReturn?.focus?.();
+    return;
+  }
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+  moveFocus(app.voidState, event.key);
+  event.preventDefault();
+  renderShell(app);
+}
+
 function renderEditor(app, t) {
   const document = app.root.ownerDocument;
   const editors = editorsOf(app);
-  const kind = app.mode === "document" ? "void" : "blueprint";
+  const kind = app.mode === "blueprint" ? "blueprint" : "void";
   queueCatalog(app, kind);
   const current = editors.current?.kind === kind ? editors.current : null;
   const title = current?.authoritative?.title ?? current?.authoritative?.legacy?.id ?? t(app.mode);
@@ -509,6 +616,7 @@ function renderEditor(app, t) {
   panel.append(element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }));
   if (current?.conflict) panel.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
   if (current?.kind === "blueprint" && current.authoritative?.document) panel.append(boardSurface(app, document, current, t));
+  if (current?.kind === "void" && current.authoritative?.document) panel.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
     panel.append(element(document, "p", { "data-legacy": current.authoritative.legacy.path ?? "", text: t("conversionRequired") }));
   }

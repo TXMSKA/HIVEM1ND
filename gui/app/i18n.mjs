@@ -128,6 +128,8 @@ const COPY = {
   nodeName: ["Node name", "Nombre del nodo"],
   upload: ["Upload", "Subir"],
   unresolved: ["Unresolved link", "Enlace sin destino"],
+  acceptChange: ["Accept change", "Aceptar el cambio"],
+  discard: ["Discard", "Descartar"],
 };
 
 const DICTIONARIES = {
