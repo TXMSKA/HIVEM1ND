@@ -277,6 +277,17 @@ function groupPlans(prepared, plans) {
 async function runGroup(sync, id, ops, events, roots) {
   const file = path.join(sync.paths.localDirectory, 'received', 'groups', id + '.json');
   const existing = await readJsonAbsolute(file);
+  if (!existing) {
+    for (const op of ops) {
+      if (op.kind !== 'write' || op.conflict) continue;
+      const current = await readRegular(op.file);
+      op.priorHash = current ? hashBytes(current) : null;
+      if (current) {
+        op.hidden = `${op.file}.import-hidden`;
+        await writeDurable(sync.store, op.hidden, current, roots);
+      }
+    }
+  }
   const progress = existing ?? { id, done: 0, emitted: false, ops, events };
   if (!existing) await writeDurable(sync.store, file, Buffer.from(`${JSON.stringify(progress)}\n`, 'utf8'), roots);
   while (progress.done < progress.ops.length) {
@@ -301,6 +312,14 @@ async function runGroup(sync, id, ops, events, roots) {
 async function perform(sync, op, roots) {
   if (op.kind === 'write') {
     const bytes = Buffer.from(op.bytes, 'base64');
+    if (!op.conflict && Object.hasOwn(op, 'priorHash')) {
+      const current = await readRegular(op.file);
+      const currentHash = current ? hashBytes(current) : null;
+      if (current && currentHash !== op.priorHash && !current.equals(bytes)) {
+        await writeDurable(sync.store, `${op.file}.conflict-replay-${currentHash.slice(0, 8)}`, current, roots);
+        return;
+      }
+    }
     if (op.conflict) {
       const existing = await readRegular(op.file);
       if (existing?.equals(bytes)) return;
