@@ -119,16 +119,48 @@ async function observeUnlocked(sync, target, options) {
   if (!deleted && options.bytes == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
   const nextHash = deleted ? null : hashBytes(Buffer.isBuffer(options.bytes) ? options.bytes : Buffer.from(options.bytes));
   if (options.applied === true) {
-    const id = uuidV8(['applied', sync.machine, key, nextHash ?? 'deleted', at]);
-    await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: nextHash, deleted, at, id })}\n`, 'utf8'));
+    const id = typeof options.id === 'string' ? options.id : uuidV8(['applied', sync.machine, key, nextHash ?? 'deleted', at]);
+    const machine = typeof options.machine === 'string' ? options.machine : sync.machine;
+    await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: nextHash, at, machine, id, deleted })}\n`, 'utf8'));
     return { staged: false, applied: true };
   }
   const marker = await readJson(sync, markerPath(sync, key));
   if (marker) {
     const matches = marker.deleted === true ? deleted : marker.hash === nextHash;
-    if (!matches) return { staged: false, held: true };
-    await writeVersion(sync, key, { hash: nextHash, at, machine: sync.machine, id: marker.id, deleted });
+    if (!matches) {
+      const pendingLocal = deleted
+        ? { hash: null, deleted: true, at }
+        : { hash: nextHash, deleted: false, at, bytes: Buffer.from(options.bytes).toString('base64') };
+      await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: marker.hash, at: marker.at, machine: marker.machine, id: marker.id, deleted: marker.deleted === true, pendingLocal })}\n`, 'utf8'));
+      return { staged: false, held: true };
+    }
+    await writeVersion(sync, key, {
+      hash: marker.hash,
+      at: marker.at,
+      machine: marker.machine,
+      id: marker.id,
+      deleted: marker.deleted === true,
+    });
     await removeFile(sync, markerPath(sync, key));
+    if (marker.pendingLocal && marker.pendingLocal.hash !== marker.hash) {
+      const pending = marker.pendingLocal;
+      const winner = {
+        hash: marker.hash,
+        at: marker.at,
+        machine: marker.machine,
+        id: marker.id,
+        deleted: marker.deleted === true,
+      };
+      const [change] = await stageUnlocked(sync, [{
+        target: normalized,
+        bytes: pending.deleted === true ? null : Buffer.from(pending.bytes, 'base64'),
+        deleted: pending.deleted === true,
+        at: pending.at,
+        baseHash: marker.deleted === true ? null : marker.hash,
+      }]);
+      await writeVersion(sync, key, winner);
+      return { staged: true, cleared: true, change };
+    }
     return { staged: false, cleared: true };
   }
   const pending = (await stagedChanges(sync)).find((change) => targetKey(change.target) === key && change.hash === nextHash && change.operation === (deleted ? 'delete' : 'put'));
