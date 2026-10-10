@@ -41,12 +41,14 @@
   },
   "scripts": {
     "lint": "markdownlint-cli2",
-    "test": "node --test test/*.test.mjs",
+    "test": "node -e \"const fs=require('node:fs'),cp=require('node:child_process');const files=fs.readdirSync('test',{withFileTypes:true}).filter(entry=>entry.isFile()&&entry.name.endsWith('.test.mjs')).map(entry=>'test/'+entry.name).sort();const result=cp.spawnSync(process.execPath,['--test',...files],{stdio:'inherit'});if(result.error)throw result.error;process.exit(result.status??1)\"",
+    "test:core": "node -e \"const fs=require('node:fs'),cp=require('node:child_process');const files=fs.readdirSync('test',{withFileTypes:true}).filter(entry=>entry.isFile()&&entry.name.endsWith('.test.mjs')&&!entry.name.startsWith('gui-')).map(entry=>'test/'+entry.name).sort();const result=cp.spawnSync(process.execPath,['--test',...files],{stdio:'inherit'});if(result.error)throw result.error;process.exit(result.status??1)\"",
     "build": "node scripts/build.mjs",
     "start": "node cli/index.mjs service run",
     "dev": "node cli/index.mjs init --gui",
     "pack:win": "electron-builder --win --x64 --dir --publish never",
-    "dist:win": "npm run pack:win && node scripts/zip-win.mjs"
+    "installer:win": "node scripts/build-installer.mjs",
+    "dist:win": "node scripts/build-installer.mjs"
   },
   "dependencies": {
     "@clack/prompts": "1.8.1",
