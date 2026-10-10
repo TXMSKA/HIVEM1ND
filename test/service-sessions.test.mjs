@@ -1,4 +1,6 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -139,4 +141,63 @@ test('spawned work stays ambiguous and only one of two claims creates a session'
   assert.equal(results.filter((item) => item.result?.state === 'started').length, 1);
   assert.equal(results.filter((item) => item.code === 'unit_in_use').length, 1);
   assert.equal(calls.create, 1);
+});
+
+test('a wrapper resolves to the executable and a missing login does not register', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-native-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin');
+  await mkdir(bin, { recursive: true });
+  const executable = path.join(bin, 'claude.exe');
+  await writeFile(executable, '');
+  await writeFile(path.join(root, 'claude.cmd'), `"%dp0%\\bin\\claude.exe" %*\n`);
+  const probe = await probeClients({ env: { PATH: root, PATHEXT: '.CMD;.EXE' }, platform: 'win32' });
+  assert.equal(probe.claude.installed, true);
+  assert.equal(probe.claude.nativeSupport, false);
+  assert.equal(probe.claude.command, executable);
+  const launches = [];
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write() {}, end() {} };
+  child.pid = 4242;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    child.emit('exit', 1);
+  };
+  const denied = createNativeAdapter('claude', {
+    command: executable,
+    spawn(command, args, options) {
+      launches.push({ command, args, options });
+      queueMicrotask(() => child.stdout.emit('data', 'Not logged in\n'));
+      return child;
+    },
+  });
+  await assert.rejects(() => denied.create({ cwd: root }), { code: 'client_unavailable' });
+  assert.equal(launches[0].options.shell, false);
+  assert.equal(launches[0].options.windowsHide, true);
+  assert.equal(launches[0].args.includes('--session-id'), true);
+  assert.equal(launches[0].args.some((arg) => /dangerously-skip-permissions/i.test(arg)), false);
+  assert.equal(child.killed, true);
+  const owned = new EventEmitter();
+  owned.stdout = new EventEmitter();
+  owned.stderr = new EventEmitter();
+  owned.stdin = { write() {}, end() {} };
+  owned.pid = 4243;
+  owned.kill = () => owned.emit('exit', 0);
+  const started = createNativeAdapter('claude', {
+    command: executable,
+    spawn(_command, args) {
+      const session = args[args.indexOf('--session-id') + 1];
+      queueMicrotask(() => owned.stdout.emit('data', `${JSON.stringify({ type: 'system', subtype: 'init', session_id: session })}\n`));
+      return owned;
+    },
+  });
+  const created = await started.create({ cwd: root });
+  assert.equal(created.owned, true);
+  const stopped = await started.stop({ owned: true, pid: created.pid });
+  assert.equal(stopped.acknowledged, true);
+  assert.equal(stopped.exitCode, 0);
+  await started.close();
 });

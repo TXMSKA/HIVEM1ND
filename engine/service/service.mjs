@@ -676,9 +676,9 @@ function startWakeController(nonce) {
 
 function openNativeAdapters() {
   const adapters = {
-    claude: createNativeAdapter('claude'),
-    codex: createNativeAdapter('codex'),
-    cursor: createNativeAdapter('cursor'),
+    claude: createNativeAdapter('claude', { live: true }),
+    codex: createNativeAdapter('codex', { live: true }),
+    cursor: createNativeAdapter('cursor', { live: true }),
   };
   return {
     adapters,
