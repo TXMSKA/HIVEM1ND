@@ -102,3 +102,29 @@ A second loopback page hosted two embedded desktop viewers. One changed to high 
 | 390x844, then 1440x900 | modern | en | Phone can write an existing chat and accept a reviewable task. It exposes no editor, unit creation, pin, undo, or revoke. A wide viewport grants nothing. | Three phone modes and no editor buttons. The chat showed Phone note. Task 029 became done. Pin, undo, revoke, settings, and new unit were absent. At 1440 the layout stayed phone and the editor buttons stayed absent. Viewer requests were 0. The console was empty. | none | this file |
 | 390x844 | modern | en | Keyboard, touch, and 12-hour expiry are visible. | Tab focused an input inside the shell. Touch on Hierarchy set the mode to hierarchy. After 12 hours the next send showed invalid_session. No secret was present. | none | this file |
 | 1440x900 | high-contrast and modern | es and en | Two embeds change independently. A forged message does nothing. Closing one leaves the other connected. | Two ready messages. The edited viewer became high contrast and Spanish. The other stayed modern English and showed Hierarchy. Forged messages did not change the first look. One dirty message was sent. Close showed Abrir HIVEM1ND de nuevo. The other shell stayed desktop. A third origin's frame tree did not contain the viewer document. The console was empty. | none | this file |
+
+## Step 14 final scenarios
+
+These rows collect the browser observations above. Node tests cover paging, wire failures, and import boundaries. They are not treated as browser passes. The fixture is the standard cast unless a row names another scenario. No OS login unit, native session, or service on the real mind was started.
+
+| Scenario | Viewport | Look | Language | Result | Observed | Failure | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1200 items, search, folds, and the last row | 1440x900 | modern | en | pass | The large fixture showed 1211 units. Search found unit-1200. End kept the last row inside the list. | none | Step 4 |
+| 1, 4, 40, and 400 item pages |  |  |  | node only | The shell test pages those counts. They were not opened again in the browser. | none | shell test |
+| Modern and high contrast | 1440x900, 1024x768, and 720x450 at device scale 2 | both | en | pass | Modern was rgb(15, 11, 19). High contrast was rgb(5, 5, 5). | none | Step 3 |
+| English and Spanish | 1440x900 | modern | en and es | pass | Spanish chrome used Mapa, Documento, and Configuración. English returned with lang en. | none | Steps 3 and 12 |
+| 1440x900, 1024x768, and 200 percent | those sizes | modern | en | pass | The desktop shell kept its bars and scrolling panels. The 200 percent row used a 720 by 450 viewport at device scale 2. | none | Step 3 |
+| 390x844 phone width | 390x844, then 1440 | modern | en | pass | The phone layout stayed phone when the viewport became 1440 wide. | none | Step 13 |
+| Keyboard focus | 1440x900 and 390x844 | modern | en | pass | End, arrows, Escape, and Tab moved focus inside the open surface. | none | Steps 4, 11, and 13 |
+| Reduced motion | 1440x900 | modern | en | pass | An inline 1s transition was 1s. With prefers-reduced-motion set to reduce, matchMedia was true and the computed duration was 0s. | none | this file |
+| Lead direction, group independence, unavailable machine, and session outcomes | 1440x900 | modern | en | pass | Confirm and cancel were distinct. One group target was invalid_lead. OFFLINE was named. The session went queued, failed, stopping, and stopped. | none | Step 6 |
+| Unlisted chat and older history | 1440x900 | modern | en | pass | A direct chat opened, a group was empty, pin and unlist reversed, and 400 messages kept the anchor. | none | Step 7 |
+| Queued approval, expired approval, lead-gated delivery, and undo conflict | 1440x900 | modern | en | pass | Task 030 could not be accepted. Task 029 was accepted. Undo then showed undo_conflict. Approve waited for the owner. The expired approval remained. Waiting went from 5 to 4. | none | Step 8 |
+| Unknown board fields, safe image, and an outside edit | 1440x900 | modern, then high contrast | en | pass | The board kept its nodes and unresolved link. The image href was a blob URL under docs/flows/assets. The draft survived an outside change. | none | Step 10 |
+| Void source, emoji, stale proposal, and Focus | 1440x900 | modern | en | pass | Bold text changed, a script tag stayed text, the stale proposal was discarded, and Focus moved between pages. | none | Step 11 |
+| Watch off, waiting, and following | 1440x900 | modern | en | pass | Watch waited, then followed the attached unit, then stopped. | none | Step 9 |
+| Grant replacement, 12-hour expiry, and QR scan | 1440x900 | modern | en | pass, scan not done | Replacement showed two links. Both symbols matched the bounded encoder. After 12 hours the secrets were gone. | A phone camera was not available, so the symbol was not scanned. | Step 12 |
+| Phone forbidden actions and expiry | 390x844 | modern | en | pass | The phone posted an existing chat and accepted a reviewable task. Editor, unit, pin, undo, and revoke controls were absent. A later send showed invalid_session. | none | Step 13 |
+| Two isolated embeds | 1440x900 | high contrast and modern | es and en | pass | One viewer changed look and language and reported dirty. Closing it left the other on Hierarchy. Forged messages did nothing. | none | Step 13 |
+
+Offline stream replay, a stream reset, and an uncertain dropped mutation were exercised by the transport and action node tests. They were not repeated as a separate browser row in this pass. The rendering, focus, and scrolling rows above are the browser record.
