@@ -31,13 +31,14 @@ import {
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
-import { addNode, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, uploadAsset } from "./blueprint.mjs";
+import { addNode, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
 import { announce, element, icon, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
   createEditors,
+  createResource,
   groupCatalog,
   handleActivity,
   loadCatalog,
@@ -49,6 +50,7 @@ import {
   openEditor,
   reapplyEditorDraft,
   refreshRemoteEditor,
+  registerResource,
   replyComment,
   resolveComment,
   setAttachments,
@@ -64,7 +66,7 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, beginTextEdit, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
+import { answerProposal, beginTextEdit, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, renderDocument, renderProposal, replaceDocument, saveRange, showTools, textAnchor } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -806,6 +808,7 @@ function boardSurface(app, document, editor, t) {
     type: "button", class: "btn", "data-action": "comment-node",
     onclick: () => commentOnNode(app, editor),
   }, t("comment")));
+  if (canEditResources(app)) tools.append(structureTools(app, document, editor, t));
   return element(document, "div", {}, host, tools);
 }
 
@@ -904,6 +907,14 @@ function voidSurface(app, document, editor, t) {
     type: "button", class: "btn", "data-action": "comment-quote",
     onclick: () => commentOnQuote(app, editor),
   }, t("comment")));
+  if (canEditResources(app) && app.mode === "document") {
+    syncStructureDraft(app, editor);
+    const title = editorField(document, app, t, "documentTitle", "resourceTitle", "document-title");
+    tools.append(title, element(document, "button", {
+      type: "button", class: "btn", "data-action": "replace-document",
+      onclick: () => replaceVoidDocument(app, editor),
+    }, t("replaceDocument")));
+  }
   const proposals = editor.proposals ?? [];
   const list = element(document, "div", { class: "editor-comments" });
   for (const proposal of proposals) {
@@ -1007,7 +1018,15 @@ function renderEditor(app, t) {
   if (current?.kind === "blueprint" && current.authoritative?.document) panel.append(boardSurface(app, document, current, t));
   if (current?.kind === "void" && current.authoritative?.document) panel.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
-    panel.append(element(document, "p", { "data-legacy": current.authoritative.legacy.path ?? "", text: t("conversionRequired") }));
+    const path = current.authoritative.legacy.path ?? "";
+    panel.append(element(document, "p", { "data-legacy": path, text: path }));
+    panel.append(element(document, "p", { text: t("conversionRequired") }));
+    if (canEditResources(app)) {
+      panel.append(element(document, "button", {
+        type: "button", class: "btn", "data-action": "copy-json",
+        onclick: () => submitJsonCopy(app, current),
+      }, t("copyJson")));
+    }
   }
   if (editors.error?.code === "corrupt_resource") panel.append(element(document, "p", { text: t("corruptResource") }));
   const catalogRows = [];
@@ -1031,6 +1050,8 @@ function renderEditor(app, t) {
     onActivate: (row) => selectEditor(app, row.item),
   });
   panel.append(list);
+  const forms = resourceForms(app, document, t);
+  if (forms) panel.append(forms);
   if (!current) return panel;
   const draft = element(document, "textarea", {
     class: "editor-compose",
@@ -1156,6 +1177,228 @@ function resolveThread(app, threadId) {
 function noteEditor(app, error) {
   if (app.editors) app.editors.error = error;
   noteAction(app, error);
+}
+
+function canEditResources(app) {
+  return (app.store.capabilities ?? []).includes("editor.write");
+}
+
+function editorDraft(app) {
+  if (!app.editorDraft) app.editorDraft = { project: "shop", path: "", createPath: "", id: "", title: "", width: "", height: "", documentTitle: "" };
+  return app.editorDraft;
+}
+
+function editorField(document, app, t, key, labelKey, field) {
+  const input = element(document, "input", { "data-field": field, "aria-label": t(labelKey) });
+  input.value = editorDraft(app)[key] ?? "";
+  input.addEventListener("input", () => { editorDraft(app)[key] = input.value; });
+  return input;
+}
+
+function syncStructureDraft(app, current) {
+  if (!current || app.structureResource === current.resourceId) return;
+  app.structureResource = current.resourceId;
+  const draft = editorDraft(app);
+  const screen = current.authoritative?.document?.screens?.[0];
+  draft.width = screen ? String(screen.w ?? "") : "";
+  draft.height = screen ? String(screen.h ?? "") : "";
+  draft.documentTitle = current.authoritative?.document?.title ?? current.authoritative?.title ?? "";
+}
+
+function resourceForms(app, document, t) {
+  if (!canEditResources(app)) return null;
+  const kind = app.mode === "blueprint" ? "blueprint" : "void";
+  const box = element(document, "div", { class: "editor-actions", "data-editor-forms": kind });
+  box.append(
+    editorField(document, app, t, "project", "registerProject", "register-project"),
+    editorField(document, app, t, "path", "registerPath", "register-path"),
+    element(document, "button", {
+      type: "button", class: "btn", "data-action": "register-resource", "data-kind": kind,
+      onclick: () => submitRegister(app, kind),
+    }, t("registerResource")),
+    editorField(document, app, t, "id", "resourceId", "create-id"),
+    editorField(document, app, t, "title", "resourceTitle", "create-title"),
+    editorField(document, app, t, "createPath", "registerPath", "create-path"),
+    element(document, "button", {
+      type: "button", class: "btn", "data-action": "create-resource", "data-kind": kind,
+      onclick: () => submitCreate(app, kind),
+    }, t("createResource")),
+  );
+  return box;
+}
+
+function submitRegister(app, kind) {
+  const draft = editorDraft(app);
+  registerResource(app.api, { kind, project: draft.project.trim(), path: draft.path.trim() })
+    .then((result) => openCreated(app, result.data, kind))
+    .catch((error) => noteEditor(app, error));
+}
+
+function submitCreate(app, kind) {
+  const draft = editorDraft(app);
+  const id = draft.id.trim();
+  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(id)) {
+    noteEditor(app, { code: "invalid_document" });
+    return;
+  }
+  const title = draft.title.trim() || id;
+  const path = draft.createPath.trim() || (kind === "blueprint" ? `docs/flows/boards/${id}.json` : `docs/${id}.json`);
+  const document = kind === "blueprint" ? starterBoard(id, title) : starterText(id, title);
+  createResource(app.api, kind, { project: draft.project.trim(), path, document })
+    .then((result) => openCreated(app, result.data, kind))
+    .catch((error) => noteEditor(app, error));
+}
+
+function submitJsonCopy(app, current) {
+  const legacy = current?.authoritative?.legacy;
+  const id = jsonCopyId(legacy?.path ?? "");
+  if (!id || !canEditResources(app)) return;
+  const project = current.authoritative.project || editorDraft(app).project;
+  const path = `docs/flows/boards/${id}.json`;
+  if (path === legacy.path) return;
+  createResource(app.api, "blueprint", { project, path, document: starterBoard(id, legacy.id || id) })
+    .then((result) => openCreated(app, result.data, "blueprint"))
+    .catch((error) => noteEditor(app, error));
+}
+
+function jsonCopyId(path) {
+  const base = String(path).split("/").pop()?.replace(/\.mjs$/i, "") ?? "";
+  return /^[a-z0-9][a-z0-9-]{0,40}$/.test(base) ? base : "";
+}
+
+function openCreated(app, data, kind) {
+  const editors = editorsOf(app);
+  const summary = { id: data.id, kind: data.kind ?? kind, title: data.title ?? data.id };
+  editors.loadedKind = null;
+  editors.catalogLoading = false;
+  app.store.selected.resourceId = summary.id;
+  return openEditor(app.api, editors, summary).then(() => {
+    queueCatalog(app, summary.kind === "void" ? "void" : "blueprint");
+    if (!app.disposed) renderShell(app);
+  });
+}
+
+function starterBoard(id, title) {
+  return {
+    formatVersion: 1,
+    id,
+    title,
+    note: "",
+    pages: [
+      { id: "main", title: "Main", objects: [], order: ["empty", "next"], start: "empty" },
+      { id: "more", title: "More", objects: [], order: [] },
+    ],
+    screens: [
+      screenBox("empty", "Empty", 0),
+      screenBox("next", "Next", 420),
+    ],
+    links: [],
+    components: [],
+    fonts: [],
+    threads: [],
+  };
+}
+
+function screenBox(id, title, x) {
+  return {
+    id,
+    title,
+    pageId: "main",
+    x,
+    y: 0,
+    w: 390,
+    h: 844,
+    root: { id: `${id}-root`, name: "Root", t: "box", place: { x: 0, y: 0 }, w: 390, h: 844, dir: "stack", kids: [] },
+  };
+}
+
+function starterText(id, title) {
+  return { formatVersion: 1, id, title, pages: [{ k: "Intro.Welcome", en: "", es: "" }] };
+}
+
+function structureTools(app, document, editor, t) {
+  syncStructureDraft(app, editor);
+  const board = editor.authoritative?.document;
+  const tools = element(document, "div", { class: "editor-actions", "data-structure": "true" });
+  if (!board || editor.authoritative.readOnly) return tools;
+  const canMovePage = (board.pages?.length ?? 0) >= 2;
+  const canMoveScreen = (board.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2);
+  const canLink = (board.screens?.length ?? 0) >= 2;
+  tools.append(
+    editorField(document, app, t, "width", "screenWidth", "screen-width"),
+    editorField(document, app, t, "height", "screenHeight", "screen-height"),
+    element(document, "button", { type: "button", class: "btn", "data-action": "resize-screen", onclick: () => resizeBoard(app, editor) }, t("resizeScreen")),
+    element(document, "button", { type: "button", class: "btn", "data-action": "move-page", disabled: canMovePage ? null : "", onclick: () => moveBoardPage(app, editor) }, t("movePage")),
+    element(document, "button", { type: "button", class: "btn", "data-action": "move-screen", disabled: canMoveScreen ? null : "", onclick: () => moveBoardScreen(app, editor) }, t("moveScreen")),
+    element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", onclick: () => addBoardLink(app, editor) }, t("addLink")),
+  );
+  return tools;
+}
+
+function resizeBoard(app, editor) {
+  const draft = editorDraft(app);
+  const width = Number(draft.width);
+  const height = Number(draft.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 16000 || height > 16000) return;
+  const selected = app.editors?.focus?.screenId;
+  saveBoardStructure(app, editor, (document) => {
+    const screen = document.screens?.find((item) => item.id === selected) ?? document.screens?.[0];
+    if (!screen) return;
+    screen.w = width;
+    screen.h = height;
+    if (screen.root?.t === "box") {
+      screen.root.w = width;
+      screen.root.h = height;
+    }
+  });
+}
+
+function moveBoardPage(app, editor) {
+  if ((editor.authoritative?.document?.pages?.length ?? 0) < 2) return;
+  saveBoardStructure(app, editor, (document) => {
+    const [first, second] = document.pages;
+    document.pages.splice(0, 2, second, first);
+  });
+}
+
+function moveBoardScreen(app, editor) {
+  if (!(editor.authoritative?.document?.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2)) return;
+  saveBoardStructure(app, editor, (document) => {
+    const page = document.pages.find((item) => (item.order?.length ?? 0) >= 2);
+    const [first, second, ...rest] = page.order;
+    page.order = [second, first, ...rest];
+  });
+}
+
+function addBoardLink(app, editor) {
+  const screens = editor.authoritative?.document?.screens ?? [];
+  if (screens.length < 2) return;
+  const from = screens[0].id;
+  const to = screens[1].id;
+  const id = `link-${from}-${to}`;
+  if ((editor.authoritative.document.links ?? []).some((link) => link.id === id)) return;
+  saveBoardStructure(app, editor, (document) => {
+    document.links = [...(document.links ?? []), { id, from, to, transition: "cut" }];
+  });
+}
+
+function saveBoardStructure(app, editor, edit) {
+  if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
+  const next = editedBoard(editor.authoritative, edit);
+  replaceBoard(app.api, editor, next.document).then(() => {
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
+}
+
+function replaceVoidDocument(app, editor) {
+  if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
+  const title = editorDraft(app).documentTitle.trim();
+  if (!title) return;
+  const next = structuredClone(editor.authoritative.document);
+  next.title = title;
+  replaceDocument(app.api, editor, next).then(() => {
+    if (!app.disposed) renderShell(app);
+  }).catch((error) => noteEditor(app, error));
 }
 
 function ensureMap(app) {

@@ -1002,6 +1002,115 @@ test("waiting opens from either navigation surface and refreshes without a selec
   assert.equal(phone.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='undo']"), null);
 });
 
+test("desktop registers a path, copies a legacy module, and edits structure without rewriting read-only bytes", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const legacyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.mjs");
+  const originalFile = join(fixture.root, "repositories", "shop", "docs", "release.orig.json");
+  const legacyBytes = await readFile(legacyFile);
+  const originalBytes = await readFile(originalFile);
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (_input, init) => {
+    if (!init?.body || (init.method !== "POST" && init.method !== "PUT")) return;
+    writes.push({ method: init.method, url: String(_input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.root.querySelector("[data-action='register-resource']")?.getAttribute("data-kind") === "blueprint", "The registration form was not shown.");
+  typeInput(desktop.root.querySelector("[data-field='register-path']"), "docs/flows/boards/legacy-cart.mjs", 0, 0);
+  click(desktop.root.querySelector("[data-action='register-resource']"));
+  await waitFor(() => desktop.root.querySelector("[data-legacy]")?.textContent === "docs/flows/boards/legacy-cart.mjs", "The original module path was not shown.");
+  assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
+  click(desktop.root.querySelector("[data-action='copy-json']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.legacy == null && desktop.root.querySelector("[data-action='resize-screen']"), "The JSON copy did not open.");
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+  const copied = writes.find((item) => item.method === "POST" && item.body?.document?.id === "legacy-cart");
+  assert.equal(copied.body.path, "docs/flows/boards/legacy-cart.json");
+  const copyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.json");
+  assert.equal(JSON.parse((await readFile(copyFile)).toString("utf8")).id, "legacy-cart");
+  assert.equal((await readFile(copyFile)).includes(Buffer.from("export const board")), false);
+
+  await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-field='screen-width']"), "The Cart board did not open.");
+  assert.equal(desktop.root.querySelector("[data-action='move-page']")?.getAttribute("disabled"), "");
+  assert.equal(desktop.root.querySelector("[data-action='add-link']")?.getAttribute("disabled"), "");
+  const cartRevision = desktop.app.editors.current.revision;
+  typeInput(desktop.root.querySelector("[data-field='screen-width']"), "400", 0, 3);
+  typeInput(desktop.root.querySelector("[data-field='screen-height']"), "844", 0, 3);
+  click(desktop.root.querySelector("[data-action='resize-screen']"));
+  await waitFor(() => desktop.app.editors.current?.revision !== cartRevision, "The screen resize was not saved.");
+  const resized = writes.filter((item) => item.method === "PUT" && item.body?.document?.screens).at(-1);
+  assert.equal(resized.body.expectedRevision, cartRevision);
+  assert.equal(resized.body.document.sentinel, "document-sentinel");
+  assert.equal(resized.body.document.screens[0].sentinel, "screen-sentinel");
+  assert.equal(resized.body.document.screens[0].w, 400);
+  assert.equal(resized.body.document.screens[0].root.w, 400);
+  assert.equal(resized.body.document.screens[0].root.sentinel, "node-sentinel");
+  assert.equal(resized.body.document.links[0].to, "missing-screen");
+  assert.equal(resized.body.document.links[0].sentinel, "link-sentinel");
+  assert.equal(resized.body.document.pages[0].sentinel, "page-sentinel");
+
+  typeInput(desktop.root.querySelector("[data-field='create-id']"), "sample-board", 0, 12);
+  typeInput(desktop.root.querySelector("[data-field='create-title']"), "Sample", 0, 6);
+  click(desktop.root.querySelector("[data-action='create-resource']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board", "The new board did not open.");
+  const createdRevision = desktop.app.editors.current.revision;
+  click(desktop.root.querySelector("[data-action='move-page']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.[0]?.id === "more", "The page order was not saved.");
+  assert.equal(writes.filter((item) => item.method === "PUT" && item.body?.document?.id === "sample-board").at(-1).body.expectedRevision, createdRevision);
+  const screenRevision = desktop.app.editors.current.revision;
+  click(desktop.root.querySelector("[data-action='move-screen']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.id === "main")?.order?.[0] === "next", "The screen order was not saved.");
+  assert.equal(writes.filter((item) => item.method === "PUT" && item.body?.document?.id === "sample-board").at(-1).body.expectedRevision, screenRevision);
+  const linkRevision = desktop.app.editors.current.revision;
+  click(desktop.root.querySelector("[data-action='add-link']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.links?.some((link) => link.from === "empty" && link.to === "next"), "The internal link was not saved.");
+  const linked = writes.filter((item) => item.method === "PUT" && item.body?.document?.id === "sample-board").at(-1);
+  assert.equal(linked.body.expectedRevision, linkRevision);
+  assert.equal(linked.body.document.links[0].transition, "cut");
+  assert.equal(linked.body.document.pages[1].id, "main");
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-action='replace-document']"), "The text did not open.");
+  const textRevision = desktop.app.editors.current.revision;
+  const textRev = desktop.app.editors.current.authoritative.document.rev;
+  typeInput(desktop.root.querySelector("[data-field='document-title']"), "Revised notes", 0, 13);
+  click(desktop.root.querySelector("[data-action='replace-document']"));
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.title === "Revised notes", "The document replacement was not saved.");
+  const replaced = writes.filter((item) => item.method === "PUT" && item.body?.document?.pages && !item.body.document.screens).at(-1);
+  assert.equal(replaced.body.expectedRevision, textRevision);
+  assert.equal(Object.hasOwn(replaced.body.document, "rev"), false);
+  assert.equal(replaced.body.document.sentinel, "void-sentinel");
+  assert.equal(desktop.app.editors.current.authoritative.document.rev, textRev + 1);
+  assert.equal(desktop.app.editors.current.authoritative.document.pages[0].sentinel, "void-page-sentinel");
+  assert.deepEqual(await readFile(originalFile), originalBytes);
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+
+  const phone = await bootApp(fixture.phoneUrl, 390, []);
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone", "The phone shell did not appear.");
+  phone.app.mode = "blueprint";
+  renderShell(phone.app);
+  assert.equal(phone.root.querySelector("[data-action='register-resource']"), null);
+  assert.equal(phone.root.querySelector("[data-action='create-resource']"), null);
+  assert.equal(phone.root.querySelector("[data-action='copy-json']"), null);
+  assert.equal(phone.root.querySelector("[data-action='resize-screen']"), null);
+  phone.app.mode = "document";
+  renderShell(phone.app);
+  assert.equal(phone.root.querySelector("[data-action='replace-document']"), null);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -1150,12 +1259,14 @@ function createTestDocument(width = 390) {
     createElement(tag) { return make(tag, null); },
     createElementNS(namespace, tag) { return make(tag, namespace); },
     createTextNode(value) { return make("#text", null, String(value)); },
+    createDocumentFragment() { return make("#fragment", null); },
   };
   const view = { parent: null, innerWidth: width, innerHeight: 844, addEventListener() {}, removeEventListener() {}, requestAnimationFrame() { return 0; }, postMessage() {} };
   document.defaultView = view;
   function make(tag, namespace, text = "") {
     const node = {
       tag,
+      tagName: tag.startsWith("#") ? "" : String(tag).toUpperCase(),
       namespace,
       children: [],
       attributes: new Map(),
