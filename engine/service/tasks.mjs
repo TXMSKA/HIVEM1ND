@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, hashBytes, isPersonAlias, parseTaskId, parseUnitId, replaceHeader } from './identity.mjs';
+import { CoreError, hashBytes, isPersonAlias, parseTaskId, parseUnitId, replaceHeader, taskDirectory } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
@@ -12,20 +12,24 @@ const EDGES = new Set(['open>review', 'review>done', 'review>open', 'done>closed
 
 export async function loadTask(context, taskId) {
   const parsed = parseTaskId(taskId);
-  const directory = path.join(context.paths.mind, 'user', 'tasks');
-  let names = [];
-  try {
-    names = (await readdir(directory)).filter((name) => name.endsWith('.md') && !name.includes('.conflict-')).sort();
-  } catch (error) {
-    if (error?.code === 'ENOENT') throw new CoreError(404, 'task_not_found', 'The task does not exist.');
-    throw error;
-  }
-  for (const name of names) {
-    const relative = `user/tasks/${name}`;
-    const bytes = await readBytes(context.store, absolute(context, relative));
-    if (!bytes) continue;
-    const task = describe(bytes, relative, parsed.id, context.aliases ?? []);
-    if (task?.id === parsed.id) return { ...task, ...(await assigneeLead(context, task.toId)) };
+  const directories = [taskDirectory(parsed.scope)];
+  if (directories[0] !== 'user/tasks') directories.push('user/tasks');
+  for (const relativeDir of directories) {
+    const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
+    let names = [];
+    try {
+      names = (await readdir(directory)).filter((name) => name.endsWith('.md') && !name.includes('.conflict-')).sort();
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const name of names) {
+      const relative = `${relativeDir}/${name}`;
+      const bytes = await readBytes(context.store, absolute(context, relative));
+      if (!bytes) continue;
+      const task = describe(bytes, relative, parsed.id, context.aliases ?? []);
+      if (task?.id === parsed.id) return { ...task, ...(await assigneeLead(context, task.toId)) };
+    }
   }
   throw new CoreError(404, 'task_not_found', 'The task does not exist.');
 }

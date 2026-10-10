@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, uuidV8 } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
@@ -79,7 +79,7 @@ export async function postChat(context, chatId, input) {
 export async function postMailbox(context, unitId, input) {
   parseUnitId(unitId);
   const message = await buildMessage(context, input, { toId: unitId, threadId: input?.replyTo ?? null, destination: 'mailbox' });
-  const file = `user/inbox/${parseUnitId(unitId).unit}/${fileStamp(context)}-${context.paths.machine}-${message.id}.md`;
+  const file = `${inboxDirectory(parseUnitId(unitId))}/${fileStamp(context)}-${context.paths.machine}-${message.id}.md`;
   await charge(context, message.id, message.bytes);
   await commitOne(context, file, null, message.bytes, [
     { name: 'message.created', data: { chatId: null, mailboxId: unitId, message: message.projected } },
@@ -115,7 +115,7 @@ export async function readMailbox(context, unitId, input) {
   const ids = requireIds(input?.messageIds);
   const found = [];
   for (const id of ids) {
-    const match = await findInbox(context, parsed.unit, id);
+    const match = await findInbox(context, parsed, id);
     if (!match) throw new CoreError(404, 'message_not_found', 'A mailbox message does not exist.');
     found.push(match);
   }
@@ -393,21 +393,24 @@ async function collectReceipts(directory, read) {
   }
 }
 
-async function findInbox(context, unit, id) {
-  const directory = path.join(context.paths.mind, 'user', 'inbox', unit);
-  let names = [];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-  for (const name of names) {
-    if (!name.endsWith('.md')) continue;
-    const relative = `user/inbox/${unit}/${name}`;
-    const bytes = await readBytes(context.store, absolute(context, relative));
-    if (!bytes) continue;
-    if (headerMap(bytes).get('id') === id) return { id, name, relative, bytes };
+async function findInbox(context, parsed, id) {
+  const dirs = [inboxDirectory(parsed), `user/inbox/${parsed.unit}`];
+  for (const relativeDir of dirs) {
+    const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
+    let names = [];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue;
+      const relative = `${relativeDir}/${name}`;
+      const bytes = await readBytes(context.store, absolute(context, relative));
+      if (!bytes) continue;
+      if (headerMap(bytes).get('id') === id) return { id, name, relative, bytes };
+    }
   }
   return null;
 }

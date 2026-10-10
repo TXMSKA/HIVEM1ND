@@ -200,6 +200,25 @@ export function resolvePerson(value, { aliases = [] } = {}) {
   return masterIdentity();
 }
 
+export function scopeDirectory(scope) {
+  const canonical = canonicalScope(scope);
+  if (canonical.kind === 'root') return 'user';
+  if (canonical.kind === 'environment') return `user/environments/${canonical.name}`;
+  return `user/projects/${canonical.name}`;
+}
+
+export function unitStatePath(parsed) {
+  return `${scopeDirectory(parsed.scope)}/state/${parsed.unit}.md`;
+}
+
+export function taskDirectory(scope) {
+  return `${scopeDirectory(scope)}/tasks`;
+}
+
+export function inboxDirectory(parsed) {
+  return `${scopeDirectory(parsed.scope)}/inbox/${parsed.unit}`;
+}
+
 function unitScope(unit) {
   if (unit.scopeId || typeof unit.scope === 'string' || unit.scope?.kind) return canonicalScope(unit.scopeId ?? unit.scope);
   if (unit.project) return canonicalScope({ kind: 'project', name: unit.project, environment: unit.environment ?? null });

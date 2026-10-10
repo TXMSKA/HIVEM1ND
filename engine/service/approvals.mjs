@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate } from './projection.mjs';
@@ -465,10 +465,14 @@ async function readTombstones(context) {
 }
 
 async function readState(context, parsed) {
-  const relative = `user/state/${parsed.unit}.md`;
+  const relative = unitStatePath(parsed);
   const bytes = await readBytes(context.store, absolute(context, relative));
-  if (!bytes || headerValue(bytes, 'unit-id') !== parsed.id) return null;
-  return { relative, bytes };
+  if (bytes && headerValue(bytes, 'unit-id') === parsed.id) return { relative, bytes };
+  const legacy = `user/state/${parsed.unit}.md`;
+  if (legacy === relative) return null;
+  const old = await readBytes(context.store, absolute(context, legacy));
+  if (!old || headerValue(old, 'unit-id') !== parsed.id) return null;
+  return { relative: legacy, bytes: old };
 }
 
 async function readJson(context, relative) {
