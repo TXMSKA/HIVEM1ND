@@ -143,7 +143,11 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
     let response;
     try {
       if (method === 'initialize') {
-        response = { protocolVersion: SUPPORTED_PROTOCOLS.includes(params.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOLS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '1.0.0' } };
+        if (!SUPPORTED_PROTOCOLS.includes(params.protocolVersion)) {
+          stdout.write(`${JSON.stringify(rpcError(id ?? null, -32602, 'Unsupported protocol version'))}\n`);
+          continue;
+        }
+        response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '1.0.0' } };
       } else if (method === 'ping') response = {};
       else if (method === 'tools/list') response = { tools: RELAY_TOOLS };
       else if (method === 'tools/call') {

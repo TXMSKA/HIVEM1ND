@@ -52,7 +52,7 @@ function hookHandler(options) {
   const { client, event, mindPath, kitPath, unit, nodePath, platform } = options;
   if (client === 'claude') {
     const args = [path.join(kitPath, 'cli', 'index.mjs'), 'relay', 'hook', '--client', client, '--event', event, '--mind-path', mindPath];
-    return { type: 'command', command: nodePath, args, timeout: 5, ...(event === 'PreToolUse' ? { async: true } : {}) };
+    return { type: 'command', command: nodePath, args, timeout: event === 'PreToolUse' ? 130 : 5 };
   }
   return { type: 'command', command: hookCommand(options), timeout: 5 };
 }

@@ -1,10 +1,7 @@
 import { createRelay } from './store.mjs';
 import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { claudeWakeCapability, spawnClaudeWakeWorker, sendClaudeWake } from './claude-wake.mjs';
+import { claudeWakeCapability, sendClaudeWake } from './claude-wake.mjs';
 import { cursorWakeCapability } from './cursor-wake.mjs';
-import { spawnLocalWakeWorker } from './local-wake.mjs';
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -16,8 +13,6 @@ const REMINDER_EVENTS = {
   codex: new Set(['SessionStart', 'UserPromptSubmit']),
   cursor: new Set(['sessionStart', 'postToolUse']),
 };
-const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
-
 export function hookContext(client, input = {}) {
   const candidate = input.session_id ?? input.sessionId ?? input.conversation_id ?? input.session?.id ?? null;
   const nativeSessionId = typeof candidate === 'string' && candidate.length <= 180 && !/[\u0000-\u001f\u007f]/.test(candidate) ? candidate : null;
@@ -64,13 +59,6 @@ async function runClaudeWakeLifecycle({ event, mindPath, nativeSessionId, env = 
       stderr.write(`Relay Claude wake unavailable: ${capability.reason}.\n`);
       return null;
     }
-    try {
-      const spawnWorker = wakeWorkerSpawner ?? spawnClaudeWakeWorker;
-      const child = spawnWorker({ cliPath: CLI_PATH, mindPath, binding, env });
-      child.ready.catch(() => stderr.write('Relay Claude wake worker could not start.\n'));
-    } catch {
-      stderr.write('Relay Claude wake worker could not start.\n');
-    }
   } else if (event === 'UserPromptSubmit' || event === 'PreToolUse') {
     await controller.observeActivity(binding, { activity: 'busy' });
   } else if (event === 'Stop') {
@@ -94,12 +82,6 @@ async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process
   if (!capability.available) {
     stderr.write(`Relay Cursor wake unavailable: ${capability.reason}.\n`);
     return null;
-  }
-  try {
-    const child = (wakeWorkerSpawner ?? spawnLocalWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
-    child.ready.catch(() => stderr.write('Relay Cursor wake worker could not start.\n'));
-  } catch {
-    stderr.write('Relay Cursor wake worker could not start.\n');
   }
   return binding;
 }

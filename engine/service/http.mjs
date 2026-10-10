@@ -15,6 +15,7 @@ import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
+import { dispatch as dispatchMcp } from './mcp.mjs';
 
 const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
 const STATIC_FILES = new Set([
@@ -238,7 +239,11 @@ export async function createHttpServer(options) {
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
     const headerBytes = Object.entries(req.headers).reduce((sum, [key, value]) => sum + key.length + String(value).length, 0);
     checkLimits(bucket, { url: req.url ?? '', headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
-    if (requested.path === '/mcp' || requested.path.startsWith('/app/') || requested.path === '/' || requested.path.startsWith('/gui/')) {
+    if (requested.path === '/mcp') {
+      await serveMcp(req, res, options, credentials);
+      return;
+    }
+    if (requested.path.startsWith('/app/') || requested.path === '/' || requested.path.startsWith('/gui/')) {
       await serveEdge(req, res, requested.path, { assetDir: options.assetDir, viewers });
       return;
     }
@@ -334,15 +339,52 @@ function splitTarget(value) {
   return { path, search };
 }
 
-async function serveEdge(req, res, pathname, { assetDir, viewers }) {
-  if (pathname === '/mcp') {
-    if (req.method !== 'POST') {
-      const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
-      error.allow = 'POST';
-      throw error;
-    }
-    throw new CoreError(503, 'service_unavailable', 'The MCP bridge is not available yet.');
+async function serveMcp(req, res, options, credentials) {
+  if (req.method !== 'POST') {
+    const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
+    error.allow = 'POST';
+    throw error;
   }
+  const accept = headerOne(req, 'accept') ?? '';
+  if (!accept.includes('application/json') || !accept.includes('text/event-stream')) {
+    throw new CoreError(406, 'invalid_body', 'Accept must include application/json and text/event-stream.');
+  }
+  const header = headerOne(req, 'authorization') ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const credential = token ? credentials.verify(token) : null;
+  if (!credential) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  let message;
+  try {
+    message = JSON.parse((await readRaw(req)).toString('utf8') || 'null');
+  } catch {
+    respond(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+    return;
+  }
+  const type = String(req.headers['content-type'] ?? '');
+  if (!type.startsWith('application/json')) throw new CoreError(415, 'invalid_body', 'Content-Type must be application/json.');
+  const domain = domainContext(options, credential, options.bus);
+  domain.credential = credential;
+  const outcome = await dispatchMcp(domain, message);
+  if (outcome.notification) {
+    res.writeHead(202, { 'cache-control': 'no-store' });
+    res.end();
+    return;
+  }
+  respond(res, 200, outcome);
+}
+
+async function readRaw(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1000000) throw new CoreError(413, 'request_too_large', 'The body is too large.');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function serveEdge(req, res, pathname, { assetDir, viewers }) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
     error.allow = 'GET';

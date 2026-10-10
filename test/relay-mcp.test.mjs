@@ -32,17 +32,19 @@ test('stdio MCP negotiates supported version and binds explicit native identity 
   const mindPath = await fixture(context);
   const { lines } = await run(mindPath, [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 'future-version' } },
+    { jsonrpc: '2.0', id: 6, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
     { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' } } },
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'reminder', arguments: { nativeSessionId: 'native-1', client: 'codex' } } },
     { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'reminder', arguments: {} } },
   ]);
-  assert.equal(lines[0].result.protocolVersion, '2025-11-25');
-  assert.ok(lines[1].result.tools.some((tool) => tool.name === 'register'));
-  assert.equal(lines[2].result.structuredContent.unit, 'overseer');
-  assert.deepEqual(lines[3].result.structuredContent, { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
+  assert.equal(lines[0].error.code, -32602);
+  assert.equal(lines[1].result.protocolVersion, '2025-03-26');
+  assert.ok(lines[2].result.tools.some((tool) => tool.name === 'register'));
+  assert.equal(lines[3].result.structuredContent.unit, 'overseer');
   assert.deepEqual(lines[4].result.structuredContent, { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
+  assert.deepEqual(lines[5].result.structuredContent, { unit: 'overseer', unread: 0, from: [], text: '', registered: true });
 });
 
 test('OpenCode identifies itself as a supported Relay MCP registration client', async (context) => {

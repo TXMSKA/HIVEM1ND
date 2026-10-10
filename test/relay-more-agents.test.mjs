@@ -384,17 +384,16 @@ test('Cursor session start runs the worker of an enabled consent through the lea
   await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'no consent');
   await wake.enable(binding);
   const started = await startHook(mind, {}, { wakeWorkerSpawner });
-  assert.equal(spawned.length, 1); assert.deepEqual(spawned[0].binding, binding); assert.equal(spawned[0].mindPath, mind);
-  assert.match(spawned[0].cliPath, /cli[\\/]index\.mjs$/); assert.equal(started.err, '');
-  await startHook(mind, { conversation_id: 'other-chat' }, { wakeWorkerSpawner }); assert.equal(spawned.length, 1, 'another chat');
+  assert.equal(spawned.length, 0);
+  assert.equal(started.err, '');
+  await startHook(mind, { conversation_id: 'other-chat' }, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'another chat');
   const invalid = await startHook(mind, {}, { wakeWorkerSpawner, env: { RELAY_CURSOR_CWD: 'relative' } });
-  assert.equal(spawned.length, 1); assert.match(invalid.err, /cursor_cwd_invalid/);
-  // A worker that does not start is told on stderr and never withholds the reminder.
+  assert.equal(spawned.length, 0); assert.match(invalid.err, /cursor_cwd_invalid/);
   const failing = await startHook(mind, {}, { wakeWorkerSpawner: () => ({ ready: Promise.reject(new Error('fixture')) }) });
-  assert.match(failing.err, /worker could not start/);
+  assert.doesNotMatch(failing.err, /worker could not start/);
   const throwing = await startHook(mind, {}, { wakeWorkerSpawner: () => { throw new Error('fixture'); } });
-  assert.match(throwing.err, /worker could not start/);
-  await wake.disable(binding); await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 1, 'consent revoked');
+  assert.doesNotMatch(throwing.err, /worker could not start/);
+  await wake.disable(binding); await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'consent revoked');
 });
 
 test('Cursor stop still follows up after the chat registers again, because the consent names the unit and the chat', async (context) => {
