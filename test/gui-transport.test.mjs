@@ -355,6 +355,7 @@ test("reset keeps the latest snapshot and drops a stale 400-item page", async ()
     },
   });
   const store = createStore();
+  store.capabilities = ["viewer.write"];
   store.selected.unitId = "root:master";
   store.viewport.scale = 2;
   setDraft(store, "doc", { text: "keep" });
@@ -374,6 +375,52 @@ test("reset keeps the latest snapshot and drops a stale 400-item page", async ()
   assert.equal(calls.some((url) => url.endsWith("/api/v1/view")), true);
   assert.equal(calls.some((url) => url.endsWith("/api/v1/settings")), true);
   assert.equal(calls.some((url) => url.endsWith("/api/v1/viewer")), true);
+});
+
+test("phone reset skips viewer, drains only after permitted reads, and keeps a failed reset recoverable", async () => {
+  const calls = [];
+  const { api } = harness({
+    fetch: async (url) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/view")) {
+        return jsonResponse(200, envelope({
+          units: [{ id: "root:master", revision: "22", context: "latest", unit: "master" }],
+          chats: [],
+          tasks: [],
+        }, `${SERVICE}:8`));
+      }
+      if (String(url).endsWith("/settings")) return jsonResponse(200, envelope({ settings: { look: "modern" }, revision: "11" }));
+      if (String(url).includes("/units/")) return jsonResponse(200, envelope({ id: "root:master", revision: "33", context: "from-event" }));
+      return jsonResponse(403, { error: { code: "phone_read_only", message: "The phone cannot read this.", requestId: "x", details: {}, retryAt: null } });
+    },
+  });
+  const phone = createStore();
+  phone.capabilities = ["read", "chat.post", "task.accept"];
+  phone.buffer.push(unitEvent(`${SERVICE}:12`, { id: "root:master", revision: "33", context: "from-event" }));
+  await applyReset(phone, api);
+  assert.equal(phone.paused, false);
+  assert.equal(phone.failure, null);
+  assert.equal(calls.some((url) => url.endsWith("/api/v1/viewer")), false);
+  assert.equal(calls.some((url) => url.endsWith("/api/v1/settings")), true);
+  assert.equal(phone.indexes.units.get("root:master").context, "from-event");
+
+  const held = [];
+  const failing = createStore();
+  failing.capabilities = ["read"];
+  failing.buffer.push(unitEvent(`${SERVICE}:4`, { id: "root:master", revision: "9", context: "waiting" }));
+  const failingApi = harness({
+    fetch: async (url) => {
+      if (String(url).endsWith("/settings")) {
+        return jsonResponse(500, { error: { code: "unavailable", message: "The service is unavailable.", requestId: "x", details: {}, retryAt: null } });
+      }
+      return jsonResponse(200, envelope({ units: [], chats: [], tasks: [] }, `${SERVICE}:2`));
+    },
+  }).api;
+  await assert.rejects(applyReset(failing, failingApi), (error) => error.code === "unavailable");
+  assert.equal(failing.paused, true);
+  assert.equal(failing.failure.code, "unavailable");
+  assert.equal(failing.buffer.length, 1);
+  assert.equal(held.length, 0);
 });
 
 test("the fixture retries one lost layout write and reset sees the latest record", async (context) => {

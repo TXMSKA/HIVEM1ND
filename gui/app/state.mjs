@@ -92,6 +92,7 @@ export async function loadSnapshot(store, api) {
   indexView(store, response.data);
   store.cursor = response.meta.eventCursor;
   store.snapshotReady = true;
+  if (store.paused) return { paged: false, cursor: store.cursor };
   store.paused = false;
   await drainBuffer(store, api);
   return { paged: false, cursor: store.cursor };
@@ -154,24 +155,30 @@ export async function applyReset(store, api) {
   store.pages.clear();
   store.pending.clear();
   store.cursor = null;
-  const snapshot = await loadSnapshot(store, api);
-  if (store.mode === "paged") return snapshot;
-  store.paused = true;
-  await Promise.all(openPaths(store).map((path) => request(api, "GET", path).then((response) => {
-    if (path === "/settings") store.settings = response.data;
-    if (path === "/viewer") store.viewer = response.data;
-    if (path.includes("/comments") || path.includes("/attachments") || path.includes("/boards/") || path.includes("/texts/")) {
-      const editor = response.data?.id ? response.data : null;
-      if (editor) commit(store, `editor:${editor.id}`, editor);
-    }
-  })));
-  store.paused = false;
-  await drainBuffer(store, api);
-  return snapshot;
+  try {
+    const snapshot = await loadSnapshot(store, api);
+    if (store.mode === "paged") return snapshot;
+    await Promise.all(openPaths(store).map((path) => request(api, "GET", path).then((response) => {
+      if (path === "/settings") store.settings = response.data;
+      if (path === "/viewer") store.viewer = response.data;
+      if (path.includes("/comments") || path.includes("/attachments") || path.includes("/boards/") || path.includes("/texts/")) {
+        const editor = response.data?.id ? response.data : null;
+        if (editor) commit(store, `editor:${editor.id}`, editor);
+      }
+    })));
+    store.failure = null;
+    store.paused = false;
+    await drainBuffer(store, api);
+    return snapshot;
+  } catch (error) {
+    store.failure = error;
+    throw error;
+  }
 }
 
 function openPaths(store) {
-  const paths = ["/settings", "/viewer"];
+  const paths = ["/settings"];
+  if (store.capabilities?.includes("viewer.write")) paths.push("/viewer");
   for (const [id, kind] of store.open.editors) {
     paths.push(kind === "void" ? `/void/texts/${encodeURIComponent(id)}` : `/blueprint/boards/${encodeURIComponent(id)}`);
   }

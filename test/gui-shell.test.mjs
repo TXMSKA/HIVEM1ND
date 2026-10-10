@@ -15,7 +15,7 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
-import { createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
+import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
@@ -541,6 +541,11 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   const phone = await bootApp(fixture.phoneUrl, 390, urls);
   t.after(() => dispose(phone.app));
   await until(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone");
+  const beforeReset = urls.length;
+  await applyReset(phone.app.store, phone.app.api);
+  assert.equal(phone.app.store.paused, false);
+  assert.equal(phone.app.store.failure, null);
+  assert.equal(urls.slice(beforeReset).some((url) => url.includes("/viewer")), false);
   assert.equal(phone.app.embed ?? null, null);
   assert.equal(phone.view.innerWidth, 390);
   navigate(phone.app, "map");
