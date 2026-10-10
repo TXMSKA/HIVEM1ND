@@ -119,6 +119,29 @@ export function reloadList(list) {
   return loadAll(list, generation);
 }
 
+export async function collectPages(api, path, options = {}) {
+  const items = [];
+  let cursor = null;
+  let total = 0;
+  let issues = [];
+  let commentsRevision = null;
+  let guard = 0;
+  do {
+    const query = { ...(options.query ?? {}), limit: String(options.limit ?? options.query?.limit ?? 100) };
+    if (cursor) query.cursor = cursor;
+    const send = options.request ?? request;
+    const result = await send(api, "GET", path, { params: options.params, query, signal: options.signal });
+    const page = result.data ?? {};
+    items.push(...(page.items ?? []));
+    total = page.total ?? items.length;
+    if (page.issues?.length) issues = page.issues;
+    commentsRevision = page.commentsRevision ?? commentsRevision;
+    cursor = page.nextCursor ?? null;
+    guard += 1;
+  } while (cursor && guard < 10000);
+  return { items, total, issues, nextCursor: cursor, commentsRevision };
+}
+
 export async function loadAll(list, generation = list.generation) {
   let guard = 0;
   do {

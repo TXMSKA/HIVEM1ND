@@ -22,6 +22,7 @@ import {
   markMailboxRead,
   measureVisible,
   messageWindow,
+  findDirectChat,
   openDirectChat,
   openGroupChat,
   openMailbox,
@@ -57,7 +58,7 @@ import {
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
-import { createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
+import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
@@ -1009,18 +1010,26 @@ function renderEditor(app, t) {
     panel.append(element(document, "p", { "data-legacy": current.authoritative.legacy.path ?? "", text: t("conversionRequired") }));
   }
   if (editors.error?.code === "corrupt_resource") panel.append(element(document, "p", { text: t("corruptResource") }));
-  const list = element(document, "div", { class: "editor-list" });
+  const catalogRows = [];
   for (const group of groupCatalog(editors.catalog)) {
     for (const item of group.items) {
-      list.append(element(document, "button", {
-        type: "button",
-        class: "btn",
-        "data-resource": item.id,
-        "aria-pressed": String(current?.resourceId === item.id),
-        onclick: () => selectEditor(app, item),
-      }, `${group.project} ${item.title}`));
+      catalogRows.push({
+        id: item.id,
+        kind: "editor",
+        text: `${group.project} ${item.title}`,
+        pos: catalogRows.length + 1,
+        setsize: editors.catalogTotal ?? editors.catalog.length,
+        item,
+      });
     }
   }
+  const list = element(document, "div", { class: "editor-list list", "data-editor-total": String(editors.catalogTotal ?? editors.catalog.length) });
+  const catalogWindow = editors.catalogWindow ?? { scrollTop: 0, rowHeight: 36, height: 0, focusId: current?.resourceId ?? null };
+  editors.catalogWindow = catalogWindow;
+  renderWindow(document, list, catalogWindow, catalogRows, {
+    selectedId: current?.resourceId,
+    onActivate: (row) => selectEditor(app, row.item),
+  });
   panel.append(list);
   if (!current) return panel;
   const draft = element(document, "textarea", {
@@ -1034,27 +1043,55 @@ function renderEditor(app, t) {
   });
   draft.value = current.draftText ?? "";
   panel.append(draft);
-  const attached = new Set(current.attached ?? []);
-  const picker = element(document, "div", { class: "attach-list", "data-attached": [...attached].join(" ") });
-  for (const unit of app.unitList?.catalog ?? []) {
-    const box = element(document, "label", {},
-      element(document, "input", { type: "checkbox", "data-unit": unit.id, ...(attached.has(unit.id) ? { checked: "true" } : {}) }),
-      ` ${unit.unit}`,
-    );
-    picker.append(box);
+  if (current.attachmentResource !== current.resourceId) {
+    current.attachmentChoice = new Set(current.attached ?? []);
+    current.attachmentResource = current.resourceId;
   }
+  const choice = current.attachmentChoice;
+  const units = app.unitList?.catalog ?? [];
+  const picker = element(document, "div", { class: "attach-list list", "data-attached": [...choice].join(" "), "data-attach-total": String(units.length) });
+  const attachWindow = editors.attachWindow ?? { scrollTop: 0, rowHeight: 36, height: 0, focusId: null };
+  editors.attachWindow = attachWindow;
+  renderWindow(document, picker, attachWindow, units.map((unit, index) => ({
+    id: unit.id,
+    kind: "unit",
+    text: `${choice.has(unit.id) ? "* " : ""}${unit.unit}`,
+    pos: index + 1,
+    setsize: units.length,
+    unit,
+  })), {
+    onActivate: (row) => {
+      if (choice.has(row.id)) choice.delete(row.id);
+      else if (choice.size >= 256) editors.error = { code: "invalid_body" };
+      else choice.add(row.id);
+      renderShell(app);
+    },
+  });
   const actions = element(document, "div", { class: "editor-actions" });
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app, picker) }, t("attach")));
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app, picker) }, t("watch")));
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app) }, t("attach")));
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => stopWatch(app.api, editors).then(() => renderShell(app)).catch((error) => noteEditor(app, error)) }, t("stopWatch")));
   panel.append(picker, actions);
-  const comments = element(document, "div", { class: "editor-comments" });
-  for (const thread of current.threads ?? []) {
+  const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
+  const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
+  for (const thread of (current.threads ?? []).slice(0, commentBound)) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
     box.append(element(document, "p", { text: (thread.messages ?? []).map((message) => message.text).join(" ") }));
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
     comments.append(box);
+  }
+  if ((current.threads?.length ?? 0) > commentBound) {
+    comments.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "more-comments",
+      text: t("loadOlder"),
+      onclick: () => {
+        current.commentWindow = commentBound + 40;
+        renderShell(app);
+      },
+    }));
   }
   const compose = element(document, "textarea", {
     "data-comment": "true",
@@ -1086,17 +1123,14 @@ function selectEditor(app, summary) {
   }).catch((error) => noteEditor(app, error));
 }
 
-function checkedUnits(picker) {
-  return [...picker.querySelectorAll("input[data-unit]")].filter((input) => input.checked).map((input) => input.getAttribute("data-unit"));
+function saveAttachments(app) {
+  const choice = editorsOf(app).current?.attachmentChoice;
+  setAttachments(app.api, editorsOf(app), [...(choice ?? [])]).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
 
-function saveAttachments(app, picker) {
-  setAttachments(app.api, editorsOf(app), checkedUnits(picker)).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
-}
-
-function followEditor(app, picker) {
+function followEditor(app) {
   const editors = editorsOf(app);
-  const unitId = checkedUnits(picker)[0] ?? editors.current?.attached?.[0];
+  const unitId = [...(editors.current?.attachmentChoice ?? [])][0] ?? editors.current?.attached?.[0];
   if (!unitId || !editors.current) return;
   startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
@@ -1787,12 +1821,7 @@ function takePendingChat(app) {
 }
 
 function openExistingDirect(app, unitId) {
-  Promise.all([
-    request(app.api, "GET", "/chats", { query: { unitId, listed: "true", limit: "50" } }),
-    request(app.api, "GET", "/chats", { query: { unitId, listed: "false", limit: "50" } }),
-  ]).then(([listed, hidden]) => {
-    const chats = [...(listed.data.items ?? []), ...(hidden.data.items ?? [])];
-    const chat = chats.find((item) => item.members?.length === 2 && item.members.includes(unitId) && item.members.includes("root:master"));
+  findDirectChat(app.api, unitId).then((chat) => {
     app.tab = "chats";
     if (chat) {
       app.phoneChatNote = false;
@@ -1931,7 +1960,23 @@ function renderInspector(app, t, selected) {
   if (caps.includes("approval.answer")) {
     for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
   }
-  for (const task of data.tasks ?? []) {
+  const tasks = data.tasks ?? [];
+  const taskHost = element(document, "div", { class: "task-window list", "data-task-total": String(data.taskTotal ?? tasks.length) });
+  const taskList = app.taskWindow ?? { scrollTop: 0, rowHeight: 36, height: 0, focusId: app.openTaskId ?? null };
+  app.taskWindow = taskList;
+  if (tasks.length >= 100) {
+    renderWindow(document, taskHost, taskList, tasks.map((task, index) => ({
+      id: task.id,
+      kind: "task",
+      text: `${task.number ?? ""} ${task.title ?? ""}`.trim(),
+      pos: index + 1,
+      setsize: data.taskTotal ?? tasks.length,
+      task,
+    })), { onActivate: (row) => { app.openTaskId = row.id; renderShell(app); } });
+    panel.append(taskHost);
+  }
+  const visibleTasks = tasks.length >= 100 ? tasks.filter((task) => task.id === app.openTaskId).slice(0, 1) : tasks;
+  for (const task of visibleTasks) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
     const phone = app.layout === "phone" || app.store.audience === "phone";
     panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
@@ -1947,19 +1992,27 @@ function loadInspector(app, unitId) {
   const ticket = (app.inspectorTicket ?? 0) + 1;
   app.inspectorTicket = ticket;
   Promise.all([
-    request(app.api, "GET", "/tasks", { query: { unitId, status: "open,review,done,closed", limit: "50" } }),
-    request(app.api, "GET", "/approvals", { query: { unitId, state: "pending", limit: "50" } }),
-    request(app.api, "GET", "/approvals", { query: { unitId, state: "expired", limit: "20" } }),
+    collectPages(app.api, "/tasks", { query: { unitId, status: "open,review,done,closed" }, limit: 50 }),
+    collectPages(app.api, "/approvals", { query: { unitId, state: "pending" }, limit: 50 }),
+    collectPages(app.api, "/approvals", { query: { unitId, state: "expired" }, limit: 20 }),
     request(app.api, "GET", `/units/${encodeURIComponent(unitId)}`),
-    request(app.api, "GET", "/waiting", { query: { limit: "50" } }),
+    collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }),
   ]).then(([tasks, approvals, expired, unit, waiting]) => {
     if (app.disposed || ticket !== app.inspectorTicket) return;
     app.inspectorData = {
       unitId,
-      tasks: tasks.data.items ?? [],
-      approvals: [...(approvals.data.items ?? []), ...(expired.data.items ?? [])],
+      tasks: tasks.items,
+      taskTotal: tasks.total,
+      taskIssues: tasks.issues,
+      taskNext: tasks.nextCursor,
+      approvals: [...approvals.items, ...expired.items],
+      approvalTotal: approvals.total + expired.total,
+      approvalIssues: [...approvals.issues, ...expired.issues],
       grants: unit.data.approvalGrants ?? [],
-      waiting: waiting.data.items ?? [],
+      waiting: waiting.items,
+      waitingTotal: waiting.total,
+      waitingIssues: waiting.issues,
+      waitingNext: waiting.nextCursor,
     };
     renderShell(app);
   }).catch((error) => noteAction(app, error));

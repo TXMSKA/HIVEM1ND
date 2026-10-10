@@ -1,4 +1,5 @@
 import { createOperation, request } from "./api.mjs";
+import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
 
 export function createEditors() {
@@ -39,21 +40,15 @@ export async function loadCatalog(api, editors, kind, query = "") {
   const ticket = editors.catalogTicket + 1;
   editors.catalogTicket = ticket;
   const route = kind === "void" ? "/void/texts" : "/blueprint/boards";
-  const items = [];
-  let cursor = null;
-  do {
-    const result = await request(api, "GET", route, {
-      query: { limit: "50", ...(query ? { q: query } : {}), ...(cursor ? { cursor } : {}) },
-    });
-    if (editors.catalogTicket !== ticket) return editors.catalog;
-    items.push(...(result.data.items ?? []));
-    cursor = result.data.nextCursor ?? null;
-  } while (cursor);
+  const page = await collectPages(api, route, { query: query ? { q: query } : {}, limit: 50 });
   if (editors.catalogTicket !== ticket) return editors.catalog;
-  editors.catalog = items;
+  editors.catalog = page.items;
+  editors.catalogTotal = page.total;
+  editors.catalogIssues = page.issues;
+  editors.catalogNext = page.nextCursor;
   editors.catalogKind = kind;
   editors.loadedKind = kind;
-  return items;
+  return page.items;
 }
 
 export async function openEditor(api, editors, summary) {
@@ -92,6 +87,7 @@ export async function openEditor(api, editors, summary) {
   editors.current = next;
   editors.error = null;
   if (next.kind === "void") await loadProposals(api, editors);
+  await loadComments(api, editors);
   return next;
 }
 
@@ -127,14 +123,19 @@ export async function setAttachments(api, editors, attached) {
 
 export async function loadComments(api, editors) {
   const current = editors.current;
-  const result = await request(api, "GET", "/editors/:resourceId/comments", {
+  const page = await collectPages(api, "/editors/:resourceId/comments", {
     params: { resourceId: current.resourceId },
-    query: { status: "all", limit: "200" },
+    query: { status: "all" },
+    limit: 50,
   });
-  current.threads = result.data.items ?? [];
-  current.commentsRevision = result.data.commentsRevision ?? null;
+  current.threads = page.items;
+  current.commentsTotal = page.total;
+  current.commentsIssues = page.issues;
+  current.commentsNext = page.nextCursor;
+  current.commentsRevision = page.commentsRevision ?? current.commentsRevision ?? null;
+  current.commentWindow = current.commentWindow ?? 40;
   current.commentsStale = false;
-  return result;
+  return page;
 }
 
 export async function createComment(api, editors, anchor, text) {

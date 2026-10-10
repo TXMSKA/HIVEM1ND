@@ -74,7 +74,7 @@ test("editor comments, attachments and Watch stay on their own revisions", async
   assert.equal(reopened.data.notifications[0].state, "pending");
   assert.equal(reopened.data.thread.messages.at(-1).text, "Fixture reply");
   const comments = await loadComments(api, editors);
-  assert.ok(comments.data.items.some((thread) => thread.id === created.data.thread.id && thread.place == null));
+  assert.ok(comments.items.some((thread) => thread.id === created.data.thread.id && thread.place == null));
   opened.draftText = "local draft";
   opened.dirty = true;
   editors.drafts.set(board.id, opened);
@@ -336,7 +336,7 @@ test("blueprint edits keep unknown fields and refuse a lossy save", async (t) =>
   await openEditor(api, editors, cart);
   await removeNode(api, editors.current, "label");
   const comments = await loadComments(api, editors);
-  const orphan = comments.data.items.find((thread) => thread.anchor?.element === "label");
+  const orphan = comments.items.find((thread) => thread.anchor?.element === "label");
   assert.ok(orphan);
   assert.equal(orphan.place, null);
   assert.equal(editors.current.authoritative.document.sentinel, "document-sentinel");

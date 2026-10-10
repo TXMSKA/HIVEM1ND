@@ -1,4 +1,5 @@
 import { createOperation, request, retryOperation } from "./api.mjs";
+import { collectPages } from "./lists.mjs";
 
 export function createThread(chat = null) {
   return {
@@ -20,6 +21,14 @@ export function createThread(chat = null) {
 
 export async function openDirectChat(api, memberIds) {
   return openConversation(api, memberIds);
+}
+
+export async function findDirectChat(api, unitId) {
+  const [listed, hidden] = await Promise.all([
+    collectPages(api, "/chats", { query: { unitId, listed: "true" }, limit: 50 }),
+    collectPages(api, "/chats", { query: { unitId, listed: "false" }, limit: 50 }),
+  ]);
+  return [...listed.items, ...hidden.items].find((item) => item.members?.length === 2 && item.members.includes(unitId) && item.members.includes("root:master")) ?? null;
 }
 
 export async function openGroupChat(api, memberIds, title) {

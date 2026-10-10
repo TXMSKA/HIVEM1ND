@@ -12,9 +12,9 @@ import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
-import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
+import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
-import { startWatch } from "../gui/app/editors.mjs";
+import { setAttachments, startWatch } from "../gui/app/editors.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -165,6 +165,37 @@ test("an expired cursor reloads once and an invalid cursor does not retry", asyn
   assert.equal(invalid.list.status, "error");
   assert.equal(invalid.list.error.code, "invalid_cursor");
   assert.equal(invalid.calls.filter((query) => query.cursor).length, 1);
+});
+
+test("later collection pages stay available and compact windows stay under 100 rows", async () => {
+  const seen = [];
+  const page = await collectPages({}, "/chats", {
+    limit: 50,
+    query: { unitId: "project:shop:executor-shop", listed: "true" },
+    request: async (_api, _method, _path, options) => {
+      seen.push(options.query.cursor ?? "");
+      if (!options.query.cursor) {
+        return { data: { items: [{ id: "page-1" }], total: 2, issues: [{ code: "malformed_record", message: "The record could not be read." }], nextCursor: "more" } };
+      }
+      return { data: { items: [{ id: "page-2" }], total: 2, issues: [], nextCursor: null } };
+    },
+  });
+  assert.deepEqual(seen, ["", "more"]);
+  assert.deepEqual(page.items.map((item) => item.id), ["page-1", "page-2"]);
+  assert.equal(page.total, 2);
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.issues[0].code, "malformed_record");
+
+  const host = createTestDocument(1440).document.createElement("div");
+  host.clientHeight = 900;
+  const list = { scrollTop: 0, rowHeight: 36, height: 900, focusId: null };
+  const rows = Array.from({ length: 1200 }, (_, index) => ({ id: `row-${index}`, kind: "editor", text: `Row ${index}`, pos: index + 1, setsize: 1200 }));
+  renderWindow(host.ownerDocument, host, list, rows, {});
+  const mounted = host.querySelectorAll("[data-row]").length;
+  assert.equal(mounted < 100, true);
+  assert.equal(mounted > 0, true);
+
+  await assert.rejects(setAttachments({}, { current: { resourceId: "board", attachmentRevision: null, attached: [] } }, Array.from({ length: 257 }, (_, index) => `unit-${index}`)), (error) => error.code === "invalid_body");
 });
 
 test("a stale collection generation cannot overwrite a newer page", () => {
