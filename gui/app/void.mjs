@@ -72,6 +72,43 @@ export function renderProposal(document, proposal) {
   return block;
 }
 
+export async function loadProposals(api, editors) {
+  const current = editors.current;
+  if (!current || current.kind !== "void") return current?.proposals ?? [];
+  const ticket = (editors.proposalTicket ?? 0) + 1;
+  editors.proposalTicket = ticket;
+  const items = [];
+  for (const state of ["pending", "accepted", "discarded"]) {
+    let cursor = null;
+    do {
+      const result = await request(api, "GET", "/void/texts/:resourceId/proposals", {
+        params: { resourceId: current.resourceId },
+        query: { limit: "50", state, ...(cursor ? { cursor } : {}) },
+      });
+      if (editors.proposalTicket !== ticket || editors.current?.resourceId !== current.resourceId) return editors.current?.proposals ?? [];
+      items.push(...(result.data.items ?? []));
+      cursor = result.data.nextCursor ?? null;
+    } while (cursor);
+  }
+  if (editors.proposalTicket !== ticket || editors.current?.resourceId !== current.resourceId) return editors.current?.proposals ?? [];
+  const byId = new Map(items.map((item) => [item.id, item]));
+  current.proposals = [...byId.values()];
+  return current.proposals;
+}
+
+export function noteProposal(editors, data) {
+  const current = editors.drafts?.get(data?.resourceId) ?? (editors.current?.resourceId === data?.resourceId ? editors.current : null);
+  rememberProposal(current, data?.proposal, data?.commentsRevision);
+}
+
+export function rememberProposal(editor, proposal, commentsRevision) {
+  if (!editor || !proposal?.id) return;
+  const items = editor.proposals ?? [];
+  const index = items.findIndex((item) => item.id === proposal.id);
+  editor.proposals = index >= 0 ? items.map((item) => item.id === proposal.id ? { ...item, ...proposal } : item) : [...items, proposal];
+  if (commentsRevision) editor.commentsRevision = commentsRevision;
+}
+
 export async function answerProposal(api, editor, proposal, decision) {
   const operation = createOperation({
     method: "POST",
@@ -81,9 +118,7 @@ export async function answerProposal(api, editor, proposal, decision) {
   });
   const result = await request(api, "POST", operation.path, { operation });
   acceptText(editor, result.data.editor ?? result.data);
-  const next = result.data.proposal;
-  editor.proposals = (editor.proposals ?? editor.authoritative?.proposals ?? []).map((item) => item.id === next.id ? next : item);
-  if (editor.authoritative) editor.authoritative.proposals = editor.proposals;
+  rememberProposal(editor, result.data.proposal, result.data.editor?.commentsRevision ?? result.data.commentsRevision);
   return result;
 }
 
@@ -124,11 +159,14 @@ export function visibleText(source) {
 
 function acceptText(editor, data) {
   if (!data?.document && !data?.revision) return;
-  editor.revision = data.revision ?? editor.revision;
-  editor.commentsRevision = data.commentsRevision ?? editor.commentsRevision;
-  editor.authoritative = { ...editor.authoritative, ...data };
-  editor.document = data.document ?? editor.document;
-  editor.baseRevision = data.revision ?? editor.baseRevision;
+  const rest = { ...data };
+  delete rest.proposals;
+  editor.revision = rest.revision ?? editor.revision;
+  editor.commentsRevision = rest.commentsRevision ?? editor.commentsRevision;
+  editor.authoritative = { ...editor.authoritative, ...rest };
+  delete editor.authoritative.proposals;
+  editor.document = rest.document ?? editor.document;
+  editor.baseRevision = rest.revision ?? editor.baseRevision;
 }
 
 function line(document, value) {

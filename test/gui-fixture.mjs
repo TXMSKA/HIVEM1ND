@@ -1929,7 +1929,9 @@ async function readData(fx, snap, spec, params, query) {
     noneQuery(query);
     const editor = requireEditor(snap, params.resourceId);
     if (editor.corrupt) throw new HttpError(409, "corrupt_resource", "The comment sidecar is unreadable.");
-    return editor;
+    const published = { ...editor };
+    delete published.proposals;
+    return published;
   }
   if (pattern === "/void/texts/:resourceId/proposals") {
     const editor = requireEditor(snap, params.resourceId);

@@ -1,4 +1,5 @@
 import { createOperation, request } from "./api.mjs";
+import { loadProposals } from "./void.mjs";
 
 export function createEditors() {
   return {
@@ -90,6 +91,7 @@ export async function openEditor(api, editors, summary) {
   editors.drafts.set(summary.id, next);
   editors.current = next;
   editors.error = null;
+  if (next.kind === "void") await loadProposals(api, editors);
   return next;
 }
 
