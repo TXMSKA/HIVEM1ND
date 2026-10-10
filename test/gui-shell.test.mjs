@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
+import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
+import { encodeHomeQr } from "../gui/app/qr.mjs";
+import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { presentation, shellLayout } from "../gui/app/main.mjs";
 import { createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
+import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
+import { createGuiFixture } from "./gui-fixture.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
@@ -59,7 +66,7 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
 });
 
 test("the shell has no remote assets, token storage, or inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs"];
+  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     assert.equal(source.includes("localStorage"), false, file);
@@ -78,7 +85,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("session="), false);
   const main = sources[1][1];
   const imports = [...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).sort();
-  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
+  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[3][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);
@@ -322,4 +329,121 @@ function mounted(host) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test("the bounded home QR matches its golden matrices", () => {
+  const payload = "http://192.168.1.23:43123/#home=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  assert.equal(qrDigest(encodeHomeQr(payload)), "83549c0a12eb68c8716657575309cb4255bb529bfd795aebb1570b256ec34549");
+  assert.equal(qrDigest(encodeHomeQr("x".repeat(106))), "28571cbdad17176449c375be5ff4484c96ab69a72384c1fbe30595e2a902a1f5");
+  assert.throws(() => encodeHomeQr("x".repeat(107)), RangeError);
+  assert.throws(() => encodeHomeQr("café"), RangeError);
+  const expiry = updateExpiry({ enabled: true, expiresAt: "2026-10-10T12:00:01.000Z" }, Date.parse("2026-10-10T12:00:00.000Z"));
+  assert.equal(expiry.remainingSeconds, 1);
+  assert.equal(expiry.expired, false);
+  assert.equal(updateExpiry({ enabled: true, expiresAt: "2026-10-10T12:00:00.000Z" }, Date.parse("2026-10-10T12:00:00.000Z")).expired, true);
+});
+
+test("home grants are replaced, expired and kept out of settings storage", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const settingsFile = join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "settings.json");
+  const before = await readFile(settingsFile);
+  const current = await request(api, "GET", "/settings");
+  assert.equal(Object.hasOwn(current.data.home, "key"), false);
+  assert.equal(JSON.stringify(current.data).includes(FIXTURE_HOME_KEY), false);
+  await assert.rejects(saveSettings(api, "0".repeat(64), { look: "high-contrast" }), (error) => error.code === "revision_conflict");
+  assert.deepEqual(await readFile(settingsFile), before);
+  const phoneToken = await exchangeHome(fixture, FIXTURE_HOME_KEY);
+  const phone = apiFrom(`${fixture.origin}/#session=${phoneToken}`);
+  await assert.rejects(saveSettings(phone, current.data.revision, { language: "es" }), (error) => error.code === "phone_read_only");
+  await assert.rejects(openHome(phone), (error) => error.code === "phone_read_only");
+  await assert.rejects(openHome(api, ["8.8.8.8"]), (error) => error.code === "invalid_home_address");
+  await assert.rejects(openHome(api, ["192.168.1.23", "192.168.1.23"]), (error) => error.code === "invalid_home_address");
+  assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 200);
+  const operation = createOperation({
+    method: "POST",
+    path: "/settings/home-network",
+    body: { enabled: true, addresses: ["192.168.1.23", "192.168.1.24"] },
+  });
+  const opened = await request(api, "POST", "/settings/home-network", { operation });
+  const repeated = await retryOperation(api, operation);
+  assert.equal(opened.status, 201);
+  assert.equal(repeated.data.key, opened.data.key);
+  assert.deepEqual(opened.data.qrPayloads, opened.data.links);
+  assert.equal(opened.data.links[0].startsWith("http://192.168.1.23:"), true);
+  assert.equal(opened.data.links[1].startsWith("http://192.168.1.24:"), true);
+  assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 401);
+  assert.equal((await exchangeRaw(fixture, opened.data.key)).status, 200);
+  assert.equal(JSON.stringify((await request(api, "GET", "/settings")).data).includes(opened.data.key), false);
+  await assertAbsent(fixture.root, opened.data.key);
+  const state = { grant: null, home: null, expectGrant: true, selected: 0 };
+  takeGrant(state, opened.data);
+  noteHomeChange(state, { reason: "replaced", home: { enabled: true, openedAt: opened.data.openedAt, expiresAt: opened.data.expiresAt, addresses: opened.data.addresses, remainingSeconds: 1 } });
+  assert.equal(state.grant.key, opened.data.key);
+  noteHomeChange(state, { reason: "replaced", home: { enabled: true, openedAt: "2026-10-10T13:00:00.000Z", expiresAt: "2026-10-11T01:00:00.000Z", addresses: [], remainingSeconds: 1 } });
+  assert.equal(state.grant, null);
+  applySettingsRead(state, { settings: { look: "modern" }, revision: "a".repeat(64), service: {}, home: { enabled: true, key: opened.data.key, expiresAt: opened.data.expiresAt } });
+  assert.equal(state.grant, null);
+  const closed = await closeHome(api);
+  assert.equal(closed.data.enabled, false);
+  assert.equal((await exchangeRaw(fixture, opened.data.key)).status, 410);
+  clearGrant(state);
+  const saved = await saveSettings(api, current.data.revision, { language: "es" });
+  assert.equal(saved.data.settings.language, "es");
+  assert.equal(saved.data.settings.look, "modern");
+});
+
+test("a failed home binding leaves no active grant", async (t) => {
+  const fixture = await createGuiFixture({ scenario: "home-bind-failure" });
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  await assert.rejects(openHome(api, ["192.168.1.23"]), (error) => error.code === "listener_unavailable");
+  const settings = await request(api, "GET", "/settings");
+  assert.equal(settings.data.home.enabled, false);
+  assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 410);
+});
+
+function qrDigest(matrix) {
+  const text = matrix.map((row) => row.map((cell) => (cell ? "1" : "0")).join("")).join("\n");
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function apiFrom(url) {
+  const parsed = new URL(url);
+  return createApi({
+    location: { origin: parsed.origin, pathname: parsed.pathname, search: parsed.search, hash: parsed.hash },
+    history: { replaceState() {} },
+    fetch: globalThis.fetch.bind(globalThis),
+  });
+}
+
+async function exchangeHome(fixture, key) {
+  const response = await exchangeRaw(fixture, key);
+  assert.equal(response.status, 200);
+  return response.json.data.token;
+}
+
+async function exchangeRaw(fixture, key) {
+  const home = new URL(fixture.phoneUrl);
+  const response = await fetch(`${home.origin}/api/v1/auth/home`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: home.origin },
+    body: JSON.stringify({ key }),
+  });
+  return { status: response.status, json: await response.json() };
+}
+
+async function assertAbsent(root, secret) {
+  const entries = await readdir(root, { recursive: true });
+  for (const entry of entries) {
+    const file = join(root, entry);
+    let body = "";
+    try {
+      body = await readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+    assert.equal(body.includes(secret), false, String(entry));
+  }
 }

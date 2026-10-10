@@ -44,6 +44,7 @@ import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, r
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
+import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, beginTextEdit, enterFocus, leaveFocus, moveFocus, renderDocument, renderProposal, saveRange, showTools, textAnchor } from "./void.mjs";
 import { synchronize } from "./stream.mjs";
@@ -125,6 +126,8 @@ export function navigate(app, mode) {
 
 export function renderShell(app) {
   const document = app.root.ownerDocument;
+  document.documentElement.lang = app.language;
+  document.documentElement.dataset.look = app.look;
   document.documentElement.dataset.mode = app.mode;
   const t = (key, variables) => text(app.language, key, variables);
   const view = app.store.view;
@@ -141,6 +144,7 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   app.api.live && (app.api.live.stopped = true);
+  if (app.homeState) clearGrant(app.homeState);
   releaseAssets(app.editors?.current);
   disposeApi(app.api);
 }
@@ -148,6 +152,7 @@ export function dispose(app) {
 async function onStream(app, event) {
   if (app.disposed) return;
   await acceptStreamEvent(app.store, app.api, event);
+  if (event?.name === "home.changed") noteHome(app, dataOf(event));
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
     return;
@@ -204,6 +209,9 @@ async function loadPresentation(app) {
   app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
   app.language = choice.language === "es" ? "es" : "en";
   app.layout = shellLayout(app.store.capabilities);
+  const home = homeState(app);
+  applySettingsRead(home, app.store.settings);
+  app.store.settings.home = home.home;
   publish(app);
 }
 
@@ -286,6 +294,8 @@ function renderWorkspace(app, t, view, counts) {
     stage.append(element(document, "div", { class: "map" }));
   } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
     stage.append(renderEditor(app, t));
+  } else if (app.mode === "settings") {
+    stage.append(settingsSurface(app, document, t));
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
   }
@@ -829,6 +839,129 @@ function statusKey(status) {
   if (status === "working") return "statusWorking";
   if (status === "idle") return "statusIdle";
   return "statusUnknown";
+}
+
+function settingsSurface(app, document, t) {
+  const home = homeState(app);
+  const info = app.store.settings ?? {};
+  if (info.home) home.home = { enabled: Boolean(info.home.enabled), openedAt: info.home.openedAt ?? null, expiresAt: info.home.expiresAt ?? null, addresses: info.home.addresses ?? [], remainingSeconds: info.home.remainingSeconds ?? 0 };
+  if (!app.settingsSync && !app.settingsSyncLoading) {
+    app.settingsSyncLoading = true;
+    request(app.api, "GET", "/sync").then((result) => {
+      app.settingsSync = result.data;
+      app.settingsSyncLoading = false;
+      if (!app.disposed && app.mode === "settings") renderShell(app);
+    }).catch(() => {
+      app.settingsSyncLoading = false;
+    });
+  }
+  const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ message: issue.message }));
+  return renderSettings(document, {
+    settings: info.settings,
+    revision: info.revision,
+    service: info.service,
+    home: home.home,
+    grant: home.grant,
+    selected: home.selected ?? 0,
+    issues,
+    limits: app.settingsSync?.limits,
+    syncLabel: t(info.service?.syncState === "error" ? "syncError" : syncCopy(app.sync)),
+    canWrite: app.store.capabilities.includes("settings.write"),
+    canManage: app.store.capabilities.includes("home.manage"),
+    now: Date.now(),
+  }, t, {
+    onLook: (look) => chooseSetting(app, { look }),
+    onLanguage: (language) => chooseSetting(app, { language }),
+    onOpen: (raw, replacing) => beginHome(app, raw, replacing),
+    onClose: () => endHome(app),
+    onSelect: (index) => {
+      home.selected = index;
+      renderShell(app);
+    },
+  });
+}
+
+function homeState(app) {
+  if (!app.homeState) app.homeState = { grant: null, home: app.store.settings?.home ?? null, expectGrant: false, selected: 0 };
+  return app.homeState;
+}
+
+function noteHome(app, data) {
+  const home = homeState(app);
+  noteHomeChange(home, data);
+  if (data?.home && app.store.settings) app.store.settings.home = home.home;
+}
+
+function dataOf(event) {
+  return event?.envelope?.data ?? {};
+}
+
+async function chooseSetting(app, patch) {
+  try {
+    const result = await saveSettings(app.api, app.store.settings?.revision ?? null, patch);
+    app.store.settings.settings = result.data.settings;
+    app.store.settings.revision = result.data.revision;
+    const choice = presentation(app.store.viewer, result.data.settings);
+    app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+    app.language = choice.language === "es" ? "es" : "en";
+    if (!app.disposed) renderShell(app);
+  } catch (error) {
+    if (error.code === "revision_conflict") {
+      try {
+        const latest = await request(app.api, "GET", "/settings");
+        applySettingsRead(homeState(app), latest.data);
+        app.store.settings = latest.data;
+      } catch {
+        // The visible error remains the conflict.
+      }
+    }
+    noteAction(app, error);
+  }
+}
+
+function beginHome(app, raw, replacing) {
+  const run = () => enableHome(app, raw);
+  if (!replacing) {
+    run();
+    return;
+  }
+  const t = (key) => text(app.language, key);
+  showDialog(app.root.ownerDocument, {
+    title: t("homeReplace"),
+    body: t("homeReplaceBody"),
+    confirm: t("homeReplace"),
+    cancel: t("cancel"),
+    onConfirm: run,
+  });
+}
+
+async function enableHome(app, raw) {
+  const addresses = String(raw ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  const home = homeState(app);
+  home.expectGrant = true;
+  try {
+    const result = await openHome(app.api, addresses);
+    takeGrant(home, result.data);
+    if (app.store.settings) app.store.settings.home = home.home;
+    if (!app.disposed) renderShell(app);
+  } catch (error) {
+    home.expectGrant = false;
+    if (error.code === "listener_unavailable") clearGrant(home);
+    noteAction(app, error);
+  }
+}
+
+async function endHome(app) {
+  try {
+    const result = await closeHome(app.api);
+    const home = homeState(app);
+    clearGrant(home);
+    home.home = result.data;
+    if (app.store.settings) app.store.settings.home = result.data;
+    if (!app.disposed) renderShell(app);
+  } catch (error) {
+    noteAction(app, error);
+  }
 }
 
 function renderFooter(app, t) {

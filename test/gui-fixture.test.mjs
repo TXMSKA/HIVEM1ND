@@ -95,9 +95,9 @@ test("reads use the contract envelope, real revisions, and malformed-record issu
   const layout = await request(fixture, "GET", "/api/v1/layout");
   const bytes = await readFile(path.join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "layout.json"));
   assert.equal(layout.body.data.revision, sha256(bytes));
-  const missing = await fetch(`${fixture.origin}/app/main.mjs`);
-  assert.equal(missing.status, 404);
-  assert.match(missing.headers.get("content-security-policy"), /default-src 'self'/);
+  const shell = await fetch(`${fixture.origin}/app/main.mjs`);
+  assert.equal(shell.status, 200);
+  assert.match(shell.headers.get("content-security-policy"), /default-src 'self'/);
 });
 
 test("host, origin, and token failures use the contract status codes", async (context) => {
