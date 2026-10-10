@@ -43,7 +43,7 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { openTaskDetail, renderApproval, renderGrants, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
 import { createPagedList, loadAll, reloadList, renderWindow, setQuery } from "./lists.mjs";
-import { applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
+import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applySettingsRead, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
@@ -847,9 +847,12 @@ function noteEditor(app, error) {
 
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
-  const saved = app.store.layout?.layout ?? { nodes: {}, groups: {} };
+  const saved = app.store.layout ?? { layout: { nodes: {}, groups: {} }, revision: null };
   if (!app.mapState) app.mapState = createMap({ units, saved, api: app.api });
-  else app.mapState.units = units;
+  else {
+    app.mapState.units = units;
+    adoptInitialLayout(app.mapState, saved);
+  }
   app.mapState.api = app.api;
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
   app.mapState.onSelect = (id) => {

@@ -56,6 +56,14 @@ function deferred() {
   return { promise, resolve };
 }
 
+async function untilCalled(calls, count) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (calls.length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("The layout request was not sent.");
+}
+
 test("two rapid drags persist the latest coordinate and a remote move survives", async () => {
   const calls = [];
   const map = createMap({
@@ -78,6 +86,95 @@ test("two rapid drags persist the latest coordinate and a remote move survives",
   assert.deepEqual(calls[0].body.nodes.a, { x: 8, y: 8 });
   assert.equal(calls[0].body.nodes.b, undefined);
   assert.deepEqual(map.positions.b, { x: 9, y: 9 });
+  assert.deepEqual(map.positions.a, { x: 8, y: 8 });
+});
+
+test("an unchanged-base conflict retries once with the latest revision and a new operation", async () => {
+  const calls = [];
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const generation = () => map.pending.get("a")?.generation;
+  map.transport = async (operation) => {
+    calls.push(operation);
+    if (operation.method === "GET") return { data: layout({ a: { x: 1, y: 1 } }, "b".repeat(64)) };
+    const patches = calls.filter((item) => item.method === "PATCH").length;
+    if (patches === 1) {
+      const error = new Error("conflict");
+      error.code = "revision_conflict";
+      throw error;
+    }
+    if (patches > 2) throw new Error("retried more than once");
+    return { data: layout({ a: operation.body.nodes.a }, "c".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 4, y: 4 });
+  const pendingGeneration = generation();
+  await flushLayout(map);
+  const patches = calls.filter((item) => item.method === "PATCH");
+  assert.equal(patches.length, 2);
+  assert.equal(patches[0].body.expectedRevision, "a".repeat(64));
+  assert.equal(patches[1].body.expectedRevision, "b".repeat(64));
+  assert.notEqual(patches[0].id, patches[1].id);
+  assert.deepEqual(patches[1].body.nodes.a, { x: 4, y: 4 });
+  assert.equal(map.pending.has("a"), false);
+  assert.equal(pendingGeneration, 1);
+  assert.deepEqual(map.positions.a, { x: 4, y: 4 });
+});
+
+test("a newer drag during an in-flight save keeps its generation and is persisted", async () => {
+  const calls = [];
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const gate = deferred();
+  map.transport = async (operation) => {
+    calls.push(operation);
+    if (calls.length === 1) await gate.promise;
+    return { data: layout({ a: operation.body.nodes.a }, calls.length === 1 ? "b".repeat(64) : "c".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 5, y: 5 });
+  const firstGeneration = map.pending.get("a").generation;
+  const saving = flushLayout(map);
+  queueLayoutPatch(map, "a", { x: 8, y: 8 });
+  const latestGeneration = map.pending.get("a").generation;
+  assert.equal(latestGeneration > firstGeneration, true);
+  gate.resolve();
+  await saving;
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].body.nodes.a, { x: 5, y: 5 });
+  assert.deepEqual(calls[1].body.nodes.a, { x: 8, y: 8 });
+  assert.notEqual(calls[0].id, calls[1].id);
+  assert.equal(calls[1].body.expectedRevision, "b".repeat(64));
+  assert.equal(map.pending.has("a"), false);
+  assert.deepEqual(map.positions.a, { x: 8, y: 8 });
+});
+
+test("a newer drag during an unchanged-base conflict is saved with the latest revision", async () => {
+  const calls = [];
+  const map = createMap({ units: [{ id: "a" }], saved: layout({ a: { x: 1, y: 1 } }) });
+  const gate = deferred();
+  map.transport = async (operation) => {
+    calls.push(operation);
+    if (operation.method === "GET") return { data: layout({ a: { x: 1, y: 1 } }, "b".repeat(64)) };
+    const patches = calls.filter((item) => item.method === "PATCH");
+    if (patches.length === 1) {
+      await gate.promise;
+      const error = new Error("conflict");
+      error.code = "revision_conflict";
+      throw error;
+    }
+    return { data: layout({ a: operation.body.nodes.a }, "c".repeat(64)) };
+  };
+  queueLayoutPatch(map, "a", { x: 4, y: 4 });
+  const saving = flushLayout(map);
+  await untilCalled(calls, 1);
+  const during = map.pending.get("a").generation;
+  queueLayoutPatch(map, "a", { x: 8, y: 8 });
+  assert.equal(map.pending.get("a").generation > during, true);
+  gate.resolve();
+  await saving;
+  const patches = calls.filter((item) => item.method === "PATCH");
+  assert.equal(patches.length, 2);
+  assert.equal(patches[1].body.expectedRevision, "b".repeat(64));
+  assert.notEqual(patches[0].id, patches[1].id);
+  assert.deepEqual(patches[1].body.nodes.a, { x: 8, y: 8 });
+  assert.equal(map.pending.has("a"), false);
   assert.deepEqual(map.positions.a, { x: 8, y: 8 });
 });
 
