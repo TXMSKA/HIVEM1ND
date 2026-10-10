@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +13,10 @@ export const NODE_ZIP_NAME = 'node-v22.23.3-win-x64.zip';
 export const NODE_ZIP_SHA256 = '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71';
 export const NODE_EXE_SHA256 = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e';
 export const BROWSER_ASSETS = Object.freeze(['index.html', 'styles.css', 'app.js']);
+export const NODE_EXE_NAME = 'node-v22.23.3-win-x64/node.exe';
+export const NODE_LICENSE_NAME = 'node-v22.23.3-win-x64/LICENSE';
+export const NODE_ENTRY_LIMIT = 86973768;
+export const NODE_VERSION = 'v22.23.3';
 
 const DOS_TIME = 0;
 const DOS_DATE = (1 << 5) | 1;
@@ -38,11 +44,25 @@ function rejectName(name) {
   if (typeof name !== 'string' || name === '' || name.includes('\\') || name.includes('\0') || path.win32.isAbsolute(name) || path.posix.isAbsolute(name)) {
     throw Object.assign(new Error('The archive name is not a relative path.'), { code: 'zip_rejected' });
   }
-  for (const part of name.split('/')) {
+  const text = name.endsWith('/') ? name.slice(0, -1) : name;
+  if (text === '') throw Object.assign(new Error('The archive name leaves its root.'), { code: 'zip_rejected' });
+  for (const part of text.split('/')) {
     if (part === '' || part === '.' || part === '..') {
       throw Object.assign(new Error('The archive name leaves its root.'), { code: 'zip_rejected' });
     }
   }
+}
+
+function zipError(message) {
+  return Object.assign(new Error(message), { code: 'zip_rejected' });
+}
+
+function acceptExtra(bytes, start, length) {
+  if (length === 0) return;
+  if (length !== 36 || start + length > bytes.length) throw zipError('An unsupported extra field was rejected.');
+  const id = bytes.readUInt16LE(start);
+  const size = bytes.readUInt16LE(start + 2);
+  if (id !== 0x000a || size !== 32) throw zipError('An unsupported extra field was rejected.');
 }
 
 function sha256(bytes) {
@@ -55,9 +75,11 @@ export function writeZip(files, options = {}) {
     const data = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data);
     const method = file.method ?? 0;
     if (method !== 0 && method !== 8) throw Object.assign(new Error('Only stored and deflated entries are written.'), { code: 'zip_rejected' });
+    const extra = Buffer.isBuffer(file.extra) ? file.extra : Buffer.alloc(0);
+    acceptExtra(extra, 0, extra.length);
     const stored = method === 8 ? deflateRawSync(data) : data;
     assertZipBounds({ count: files.length, offset: 0, size: stored.length });
-    return { name: file.name, data, stored, method, crc: crc32(data) };
+    return { name: file.name, data, stored, method, extra, mode: file.mode ?? 0o100644, crc: crc32(data) };
   });
   entries.sort((left, right) => Buffer.compare(Buffer.from(left.name), Buffer.from(right.name)));
   const seen = new Set();
@@ -79,8 +101,8 @@ export function writeZip(files, options = {}) {
     header.writeUInt32LE(entry.stored.length, 18);
     header.writeUInt32LE(entry.data.length, 22);
     header.writeUInt16LE(name.length, 26);
-    header.writeUInt16LE(0, 28);
-    locals.push({ offset, bytes: Buffer.concat([header, name, entry.stored]) });
+    header.writeUInt16LE(entry.extra.length, 28);
+    locals.push({ offset, bytes: Buffer.concat([header, name, entry.extra, entry.stored]) });
     offset += locals[locals.length - 1].bytes.length;
     assertZipBounds({ count: entries.length, offset, size: entry.stored.length });
   }
@@ -101,13 +123,13 @@ export function writeZip(files, options = {}) {
     header.writeUInt32LE(entry.stored.length, 20);
     header.writeUInt32LE(entry.data.length, 24);
     header.writeUInt16LE(name.length, 28);
-    header.writeUInt16LE(0, 30);
+    header.writeUInt16LE(entry.extra.length, 30);
     header.writeUInt16LE(0, 32);
     header.writeUInt16LE(0, 34);
     header.writeUInt16LE(0, 36);
-    header.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+    header.writeUInt32LE((entry.mode << 16) >>> 0, 38);
     header.writeUInt32LE(local.offset, 42);
-    centrals.push(Buffer.concat([header, name]));
+    centrals.push(Buffer.concat([header, name, entry.extra]));
   }
   const central = Buffer.concat(centrals);
   assertZipBounds({ count: entries.length, offset: centralStart, size: central.length });
@@ -137,6 +159,8 @@ export function readArchive(bytes, options = {}) {
   if (centralOffset + centralSize !== end) throw Object.assign(new Error('The central directory is not contiguous.'), { code: 'zip_rejected' });
   const entries = [];
   const names = new Set();
+  const ranges = [];
+  let aggregate = 0;
   let cursor = centralOffset;
   for (let index = 0; index < count; index += 1) {
     if (cursor + 46 > zip.length || zip.readUInt32LE(cursor) !== 0x02014b50) {
@@ -150,30 +174,61 @@ export function readArchive(bytes, options = {}) {
     const nameLength = zip.readUInt16LE(cursor + 28);
     const extraLength = zip.readUInt16LE(cursor + 30);
     const commentLength = zip.readUInt16LE(cursor + 32);
+    const external = zip.readUInt32LE(cursor + 38);
     const localOffset = zip.readUInt32LE(cursor + 42);
-    if (extraLength !== 0 || commentLength !== 0 || compressed === ZIP32 || uncompressed === ZIP32) {
-      throw Object.assign(new Error('ZIP64, encryption, and extra fields are rejected.'), { code: 'zip_rejected' });
+    if (cursor + 46 + nameLength + extraLength + commentLength > end) throw zipError('The central directory is truncated.');
+    if (commentLength !== 0 || compressed === ZIP32 || uncompressed === ZIP32 || zip.readUInt16LE(cursor + 34) === 0xffff) {
+      throw zipError('ZIP64, encryption, and comments are rejected.');
     }
+    acceptExtra(zip, cursor + 46 + nameLength, extraLength);
     if ((flags & 0x0001) !== 0 || (flags & 0x0008) !== 0) {
-      throw Object.assign(new Error('Encrypted or descriptor entries are rejected.'), { code: 'zip_rejected' });
+      throw zipError('Encrypted or descriptor entries are rejected.');
     }
-    if (method !== 0 && method !== 8) throw Object.assign(new Error('The compression method is not accepted.'), { code: 'zip_rejected' });
+    if (method !== 0 && method !== 8) throw zipError('The compression method is not accepted.');
+    const unix = external >>> 16;
+    if ((unix & 0o170000) === 0o120000 || (external & 0x400) !== 0) throw zipError('The archive contains a link.');
     const name = zip.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8');
+    const directory = name.endsWith('/') || (external & 0x10) !== 0 || (unix & 0o170000) === 0o040000;
     rejectName(name);
-    if (names.has(name)) throw Object.assign(new Error('The archive repeats a name.'), { code: 'zip_rejected' });
+    if (names.has(name)) throw zipError('The archive repeats a name.');
     names.add(name);
-    const cap = options.maxOutput ?? 64_000_000;
-    if (uncompressed > cap || compressed > cap) throw Object.assign(new Error('The entry is larger than the output cap.'), { code: 'zip_rejected' });
-    if (localOffset + 30 + nameLength + compressed > zip.length || zip.readUInt32LE(localOffset) !== 0x04034b50) {
-      throw Object.assign(new Error('The local header offset is not accepted.'), { code: 'zip_rejected' });
+    if (directory && (uncompressed !== 0 || compressed !== 0)) throw zipError('A directory entry is not empty.');
+    const cap = name === NODE_EXE_NAME || name === NODE_LICENSE_NAME ? (options.nodeLimit ?? NODE_ENTRY_LIMIT) : (options.maxOutput ?? 64_000_000);
+    if (!directory && (uncompressed > cap || compressed > cap)) throw zipError('The entry is larger than the output cap.');
+    aggregate += uncompressed;
+    if (aggregate > (options.maxAggregate ?? 512_000_000)) throw zipError('The archive exceeds the output cap.');
+    if (localOffset >= centralOffset || zip.readUInt32LE(localOffset) !== 0x04034b50) {
+      throw zipError('The local header offset is not accepted.');
     }
+    const localFlags = zip.readUInt16LE(localOffset + 6);
+    const localMethod = zip.readUInt16LE(localOffset + 8);
+    const localCrc = zip.readUInt32LE(localOffset + 14);
+    const localCompressed = zip.readUInt32LE(localOffset + 18);
+    const localUncompressed = zip.readUInt32LE(localOffset + 22);
     const localNameLength = zip.readUInt16LE(localOffset + 26);
-    const stored = zip.subarray(localOffset + 30 + localNameLength, localOffset + 30 + localNameLength + compressed);
-    const data = method === 8 ? inflateRawSync(stored, { maxOutputLength: cap }) : stored;
-    if (data.length !== uncompressed) throw Object.assign(new Error('The expanded size does not match.'), { code: 'zip_rejected' });
-    if (crc32(data) !== crc) throw Object.assign(new Error('The entry checksum does not match.'), { code: 'zip_rejected' });
-    entries.push({ name, data, crc });
-    cursor += 46 + nameLength;
+    const localExtraLength = zip.readUInt16LE(localOffset + 28);
+    if ((localFlags & 0x0001) !== 0 || (localFlags & 0x0008) !== 0 || localMethod !== method || localCrc !== crc || localCompressed !== compressed || localUncompressed !== uncompressed) {
+      throw zipError('The local header does not match the central directory.');
+    }
+    const localName = zip.subarray(localOffset + 30, localOffset + 30 + localNameLength).toString('utf8');
+    if (localName !== name) throw zipError('The local header name does not match.');
+    acceptExtra(zip, localOffset + 30 + localNameLength, localExtraLength);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressed;
+    if (dataEnd > centralOffset) throw zipError('The local header offset is not accepted.');
+    for (const range of ranges) {
+      if (localOffset < range.end && dataEnd > range.start) throw zipError('The archive overlaps an entry.');
+    }
+    ranges.push({ start: localOffset, end: dataEnd });
+    const wanted = !options.only || options.only.includes(name);
+    if (!directory && wanted) {
+      const stored = zip.subarray(dataStart, dataEnd);
+      const data = method === 8 ? inflateRawSync(stored, { maxOutputLength: cap }) : stored;
+      if (data.length !== uncompressed) throw zipError('The expanded size does not match.');
+      if (crc32(data) !== crc) throw zipError('The entry checksum does not match.');
+      entries.push({ name, data, crc });
+    }
+    cursor += 46 + nameLength + extraLength + commentLength;
   }
   return entries;
 }
@@ -208,21 +263,59 @@ export function readInputs(argv) {
   return input;
 }
 
-export async function verifyRuntime(zipPath) {
+export async function verifyRuntime(zipPath, options = {}) {
   if (!zipPath) throw Object.assign(new Error(`Pass --node-zip <absolute-file> pointing at ${NODE_ZIP_NAME}. The build does not download it.`), { code: 'missing_runtime' });
   const bytes = await readFile(zipPath);
   const digest = sha256(bytes);
   if (digest !== NODE_ZIP_SHA256) {
     throw Object.assign(new Error('The pinned Node archive digest does not match. No download was performed.'), { code: 'runtime_digest' });
   }
-  const entries = readArchive(bytes);
-  const executable = entries.find((entry) => entry.name.endsWith('/node.exe'));
-  const license = entries.find((entry) => entry.name.endsWith('/LICENSE'));
+  const entries = readArchive(bytes, { only: [NODE_EXE_NAME, NODE_LICENSE_NAME] });
+  const executable = entries.find((entry) => entry.name === NODE_EXE_NAME);
+  const license = entries.find((entry) => entry.name === NODE_LICENSE_NAME);
   if (!executable || sha256(executable.data) !== NODE_EXE_SHA256) {
     throw Object.assign(new Error('The extracted Node executable digest does not match the pin.'), { code: 'runtime_digest' });
   }
   if (!license) throw Object.assign(new Error('The Node license is missing from the pinned archive.'), { code: 'runtime_digest' });
-  return { digest, executable: executable.data, license: license.data, available: true };
+  const version = await confirmRuntimeVersion(executable.data, options);
+  return { digest, executable: executable.data, license: license.data, version, available: true };
+}
+
+export async function confirmRuntimeVersion(executable, options = {}) {
+  const stage = await mkdtemp(path.join(tmpdir(), 'hivem1nd-runtime-'));
+  const exe = path.join(stage, 'node.exe');
+  const spawnOptions = {
+    shell: false,
+    windowsHide: true,
+    cwd: stage,
+    env: { PATH: '', SystemRoot: process.env.SystemRoot ?? '' },
+  };
+  try {
+    await writeFile(exe, executable);
+    const output = options.spawn
+      ? await options.spawn(exe, ['--version'], spawnOptions)
+      : await capture(exe, ['--version'], spawnOptions);
+    const version = String(output ?? '').trim();
+    if (version !== NODE_VERSION) {
+      throw Object.assign(new Error(`The staged runtime reported ${version || 'no version'}, expected ${NODE_VERSION}.`), { code: 'runtime_version' });
+    }
+    return version;
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}
+
+function capture(file, args, spawnOptions) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) reject(Object.assign(new Error('The staged runtime did not report its version.'), { code: 'runtime_version' }));
+      else resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+  });
 }
 
 export function productionPackages(lock) {
@@ -280,11 +373,39 @@ export function installerScript() {
   return '@echo off\r\n"%~dp0runtime\\node.exe" "%~dp0installer.mjs"\r\n';
 }
 
-export function manifestDocument(files, runtime = 'unverified') {
+export function installerEntry() {
+  return `import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const manifest = JSON.parse(await readFile(path.join(here, 'manifest.json'), 'utf8'));
+if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {
+  throw new Error('The installer manifest is not valid.');
+}
+for (const file of manifest.files) {
+  if (file.name === 'manifest.json') continue;
+  const bytes = await readFile(path.join(here, file.name));
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (digest !== file.sha256 || bytes.length !== file.bytes) {
+    throw new Error('A payload file does not match the manifest.');
+  }
+}
+if (process.argv.includes('--dry-run') || manifest.label === 'dry-run') {
+  console.log('dry-run');
+} else {
+  console.log('installer ready');
+}
+`;
+}
+
+export function manifestDocument(files, runtime = 'unverified', label = 'release') {
   return {
     format: 'hivem1nd-installer-v1',
     version: '3.0.0',
     runtime,
+    label,
     files: files.map((file) => ({
       name: file.name,
       bytes: file.data.length,
@@ -312,7 +433,8 @@ export function build(options = {}) {
     data: Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data),
   }));
   if (!files.some((file) => file.name === 'install.cmd')) files.push({ name: 'install.cmd', data: Buffer.from(installerScript()) });
-  const manifest = Buffer.from(`${JSON.stringify(manifestDocument(files, options.runtime ?? 'unverified'))}\n`);
+  const label = options.label ?? (options.dryRun === true ? 'dry-run' : 'release');
+  const manifest = Buffer.from(`${JSON.stringify(manifestDocument(files, options.runtime ?? 'unverified', label))}\n`);
   files.push({ name: 'manifest.json', data: manifest });
   const zip = writeZip(files);
   return {
@@ -334,8 +456,18 @@ export async function dryRun(options = {}) {
     localDirectory: options.localDirectory ?? 'C:\\local',
     sid: options.sid ?? 'S-1-5-21-1',
   });
+  let staged = null;
+  let importSmoke = 'not-run';
+  if (options.files && options.stageRoot) {
+    staged = await stagePayload(options.files, options.stageRoot);
+    if (options.spawn) {
+      await smokeImports(staged, { spawn: options.spawn });
+      importSmoke = 'passed';
+    }
+  }
   return {
     dryRun: true,
+    label: 'dry-run',
     os: false,
     osCalls: 0,
     commands: plan.commands,
@@ -343,7 +475,102 @@ export async function dryRun(options = {}) {
     script: installerScript(),
     browserAssets: options.browserAssets ?? 'unavailable',
     activated: false,
+    staged,
+    importSmoke,
   };
+}
+
+export async function stagePayload(files, stageRoot) {
+  const staged = path.join(path.resolve(stageRoot), 'dry-run-stage');
+  await mkdir(staged, { recursive: true });
+  for (const file of files) {
+    rejectName(file.name);
+    const target = path.join(staged, file.name);
+    const relative = path.relative(staged, target);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Refusing to stage a path outside the dry-run root.');
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, file.data);
+  }
+  return staged;
+}
+
+export async function smokeImports(stage, options = {}) {
+  const node = path.join(stage, 'runtime', 'node.exe');
+  const spawnOptions = {
+    shell: false,
+    windowsHide: true,
+    cwd: stage,
+    env: { PATH: '', SystemRoot: process.env.SystemRoot ?? '' },
+  };
+  const script = "import '@clack/prompts'; import 'jsonc-parser'; import 'smol-toml';";
+  if (options.spawn) {
+    await options.spawn(node, ['--input-type=module', '-e', script], spawnOptions);
+    return;
+  }
+  await capture(node, ['--input-type=module', '-e', script], spawnOptions);
+}
+
+const PAYLOAD_ROOTS = Object.freeze(['cli', 'engine', 'gui', 'roles', 'commands', 'features', 'knowledge', 'migrations', 'fixtures', 'assets']);
+const PAYLOAD_FILES = Object.freeze(['rules.md', 'files.md', 'uninstall.cmd', 'README.md', 'LICENSE', 'CONTRIBUTING.md', 'CHANGELOG.md', 'package.json']);
+
+function payloadSkipped(name, modules) {
+  return /^(user|test|dist|\.git|\.claude|\.codex|\.cursor)(\/|$)/.test(name)
+    || /(^|\/)(AGENTS|CLAUDE|memo)\.md$/.test(name)
+    || (modules !== true && name.includes('node_modules/'))
+    || name.endsWith('.env');
+}
+
+async function walkPayload(directory, prefix, modules = false) {
+  const files = [];
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return files;
+    throw error;
+  }
+  for (const entry of entries) {
+    const name = `${prefix}${entry.name}`;
+    if (payloadSkipped(name, modules)) continue;
+    const full = path.join(directory, entry.name);
+    const state = await lstat(full);
+    if (state.isSymbolicLink()) throw new Error(`Refusing a linked payload file: ${name}`);
+    if (state.isDirectory()) files.push(...await walkPayload(full, `${name}/`, modules));
+    else if (state.isFile()) files.push({ name, data: await readFile(full) });
+  }
+  return files;
+}
+
+export async function collectPayload(options) {
+  const packageRoot = options.packageRoot ?? root;
+  const files = [
+    { name: 'runtime/node.exe', data: Buffer.from(options.executable) },
+    { name: 'runtime/LICENSE', data: Buffer.from(options.license) },
+    { name: 'installer.mjs', data: Buffer.from(installerEntry()) },
+    { name: 'install.cmd', data: Buffer.from(installerScript()) },
+  ];
+  for (const directory of PAYLOAD_ROOTS) files.push(...await walkPayload(path.join(packageRoot, directory), `${directory}/`));
+  for (const name of PAYLOAD_FILES) {
+    try {
+      files.push({ name, data: await readFile(path.join(packageRoot, name)) });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  const packages = await verifyInstalled(packageRoot, productionPackages(options.lock));
+  if (packages.length !== 8) throw new Error(`Expected 8 production packages, found ${packages.length}.`);
+  for (const item of packages) files.push(...await walkPayload(path.join(packageRoot, item.key), `${item.key}/`, true));
+  if (options.includeBrowser === true) {
+    const assetDir = options.assetDir ?? path.join(packageRoot, 'gui', 'app');
+    await assertReleaseAssets(assetDir);
+    for (const name of BROWSER_ASSETS) {
+      const payloadName = `gui/app/${name}`;
+      if (!files.some((file) => file.name === payloadName)) {
+        files.push({ name: payloadName, data: await readFile(path.join(assetDir, name)) });
+      }
+    }
+  }
+  return files;
 }
 
 export async function cleanStage(target, rootDir) {
@@ -395,8 +622,38 @@ export async function main(argv) {
     throw new Error(`Pass --node-zip <absolute-file> pointing at ${NODE_ZIP_NAME}. The build does not download it.`);
   }
   if (input.dryRun !== true) await assertReleaseAssets(input.assetDir ?? path.join(root, 'gui', 'app'));
-  await verifyRuntime(input.nodeZip);
-  const artifact = build({ dryRun: input.dryRun, release: input.dryRun !== true, browserAssets: input.dryRun ? 'unavailable' : 'packaged' });
+  const runtime = await verifyRuntime(input.nodeZip);
+  const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
+  const files = await collectPayload({
+    executable: runtime.executable,
+    license: runtime.license,
+    lock,
+    includeBrowser: input.dryRun !== true,
+    assetDir: input.assetDir,
+  });
+  const artifact = build({
+    files,
+    dryRun: input.dryRun,
+    release: input.dryRun !== true,
+    runtime: runtime.digest,
+    browserAssets: input.dryRun ? 'unavailable' : 'packaged',
+    label: input.dryRun ? 'dry-run' : 'release',
+  });
+  if (input.dryRun) {
+    const stageRoot = await mkdtemp(path.join(tmpdir(), 'hivem1nd-dry-run-'));
+    try {
+      const staged = await stagePayload(files, stageRoot);
+      await smokeImports(staged);
+      artifact.plan = await dryRun({
+        nodePath: path.join(staged, 'runtime', 'node.exe'),
+        cliPath: path.join(staged, 'cli', 'index.mjs'),
+        workingDirectory: staged,
+      });
+      artifact.importSmoke = 'passed';
+    } finally {
+      await rm(stageRoot, { recursive: true, force: true });
+    }
+  }
   if (input.output) {
     await mkdir(path.dirname(path.resolve(input.output)), { recursive: true });
     await writeFile(input.output, artifact.zip);

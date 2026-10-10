@@ -9,7 +9,7 @@ import { parseArgs } from '../cli/index.mjs';
 import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
-import { assertReleaseAssets, assertZipBounds, build, cleanStage, dryRun, main, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -326,6 +326,7 @@ test('installer archives are reproducible and reject malicious containers', asyn
   const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
   const packages = productionPackages(lock);
+  assert.equal(packages.length, 8);
   assert.equal(packages.some((item) => item.name === '@clack/prompts'), true);
   assert.equal(packages.some((item) => item.name === 'electron'), false);
   await verifyInstalled(packageRoot, packages);
@@ -342,4 +343,75 @@ test('installer archives are reproducible and reject malicious containers', asyn
     }
   }
   assert.match(runtime, /unavailable|verified|digest mismatch/);
+});
+
+test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offline', async (context) => {
+  assert.ok(NODE_ENTRY_LIMIT >= 86973768);
+  const extra = Buffer.alloc(36);
+  extra.writeUInt16LE(0x000a, 0);
+  extra.writeUInt16LE(32, 2);
+  const archive = writeZip([
+    { name: 'node-v22.23.3-win-x64/', data: Buffer.alloc(0) },
+    { name: NODE_EXE_NAME, data: Buffer.alloc(20, 1), extra },
+    { name: 'node-v22.23.3-win-x64/LICENSE', data: Buffer.from('license'), extra },
+  ]);
+  const entries = readArchive(archive, { maxOutput: 10, only: [NODE_EXE_NAME, 'node-v22.23.3-win-x64/LICENSE'] });
+  assert.deepEqual(entries.map((entry) => entry.name), ['node-v22.23.3-win-x64/LICENSE', NODE_EXE_NAME]);
+  const bad = Buffer.from(archive);
+  const at = bad.indexOf(extra);
+  bad.writeUInt16LE(0x0001, at);
+  assert.throws(() => readArchive(bad), { code: 'zip_rejected' });
+  assert.throws(() => readArchive(writeZip([{ name: 'link.txt', data: Buffer.from('target'), mode: 0o120000 }])), { code: 'zip_rejected' });
+  const version = await confirmRuntimeVersion(Buffer.from('MZ'), {
+    spawn(file, args, options) {
+      assert.equal(args[0], '--version');
+      assert.equal(options.shell, false);
+      assert.equal(options.env.PATH, '');
+      assert.equal(file.endsWith(`${path.sep}node.exe`), true);
+      return 'v22.23.3\n';
+    },
+  });
+  assert.equal(version, 'v22.23.3');
+  await assert.rejects(() => confirmRuntimeVersion(Buffer.from('MZ'), { spawn: () => 'v22.0.0\n' }), { code: 'runtime_version' });
+
+  const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
+  const payload = await collectPayload({
+    executable: Buffer.from('runtime'),
+    license: Buffer.from('node-license'),
+    lock,
+    packageRoot,
+    includeBrowser: false,
+  });
+  const names = new Set(payload.map((file) => file.name));
+  assert.equal(names.has('runtime/node.exe'), true);
+  assert.equal(names.has('runtime/LICENSE'), true);
+  assert.equal(names.has('installer.mjs'), true);
+  assert.equal(names.has('install.cmd'), true);
+  for (const item of productionPackages(lock)) assert.equal(names.has(`${item.key}/package.json`), true);
+  assert.equal([...names].some((name) => name.startsWith('node_modules/electron/')), false);
+  const artifact = build({ files: payload.slice(0, 4), dryRun: true, runtime: 'verified', label: 'dry-run' });
+  const manifest = JSON.parse(readArchive(artifact.zip).find((entry) => entry.name === 'manifest.json').data.toString('utf8'));
+  assert.equal(manifest.label, 'dry-run');
+  assert.equal(manifest.files.some((file) => file.name === 'installer.mjs'), true);
+
+  const stageRoot = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(stageRoot, { recursive: true, force: true }));
+  const planned = await dryRun({
+    files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: Buffer.from('staged') }],
+    stageRoot,
+    cliPath: 'C:\\Program Files\\kit\\cli\\index.mjs',
+    spawn(file, args, options) {
+      assert.equal(options.env.PATH, '');
+      assert.equal(options.shell, false);
+      assert.match(args.at(-1), /@clack\/prompts/);
+      assert.equal(file.endsWith(`${path.sep}node.exe`), true);
+      return '';
+    },
+  });
+  assert.equal(planned.label, 'dry-run');
+  assert.equal(planned.osCalls, 0);
+  assert.equal(planned.activated, false);
+  assert.equal(planned.importSmoke, 'passed');
+  assert.equal(await readFile(path.join(planned.staged, 'notes.txt'), 'utf8'), 'staged');
 });
