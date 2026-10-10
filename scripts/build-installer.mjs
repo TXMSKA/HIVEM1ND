@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
@@ -593,27 +593,109 @@ export async function cleanStage(target, rootDir) {
   await rm(resolved, { recursive: true, force: true });
 }
 
+function insideRoot(rootDir, target) {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(target));
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Refusing a path outside the install root.');
+  }
+}
+
+async function assertRealChain(target, rootDir) {
+  let current = path.resolve(target);
+  const base = path.resolve(rootDir);
+  while (true) {
+    try {
+      const state = await lstat(current);
+      if (state.isSymbolicLink()) throw new Error('Refusing to follow a link.');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (current === base) return;
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error('Refusing to leave the install root.');
+    current = parent;
+  }
+}
+
+function hashesMatch(files, manifest) {
+  for (const item of manifest?.files ?? []) {
+    if (item.name === 'manifest.json') continue;
+    const file = (files ?? []).find((entry) => entry.name === item.name);
+    const data = Buffer.from(file?.data ?? []);
+    if (!file || data.length !== item.bytes || sha256(data) !== item.sha256) {
+      throw Object.assign(new Error('A payload file does not match the manifest.'), { code: 'payload_mismatch' });
+    }
+  }
+}
+
 export async function installPayload(options) {
   if (options.dryRun !== false) return { dryRun: true, activated: false };
+  const rootDir = path.resolve(options.root ?? path.dirname(path.resolve(options.destination)));
   const destination = path.resolve(options.destination);
-  const stage = `${destination}.stage`;
+  insideRoot(rootDir, destination);
+  await assertRealChain(destination, rootDir);
+  if (options.manifest) hashesMatch(options.files, options.manifest);
+  if (options.active || options.identity) {
+    if (options.active?.mind !== options.identity?.mind || options.active?.service !== options.identity?.service) {
+      throw Object.assign(new Error('The active mind or service does not match this payload.'), { code: 'identity_mismatch' });
+    }
+  }
+  const nonce = randomBytes(4).toString('hex');
+  const stage = path.join(rootDir, `${path.basename(destination)}.${options.version ?? '3.0.0'}.${nonce}.stage`);
+  insideRoot(rootDir, stage);
+  await assertRealChain(stage, rootDir);
+  let created = false;
+  let backup = null;
+  let moved = false;
   try {
-    const state = await lstat(destination);
-    if (state.isSymbolicLink()) throw new Error('Refusing to activate over a link.');
+    await mkdir(stage);
+    created = true;
+    const rootReal = await realpath(rootDir);
+    const stageReal = await realpath(stage);
+    insideRoot(rootReal, stageReal);
+    for (const file of options.files ?? []) {
+      rejectName(file.name);
+      const target = path.resolve(stageReal, file.name);
+      insideRoot(stageReal, target);
+      await assertRealChain(path.dirname(target), stageReal);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, file.data);
+    }
+    if (options.smoke === true) await smokeImports(stageReal, { spawn: options.spawn });
+    let existing = null;
+    try {
+      existing = await lstat(destination);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (existing?.isSymbolicLink()) throw new Error('Refusing to activate over a link.');
+    if (existing) {
+      backup = path.join(rootDir, `${path.basename(destination)}.${nonce}.backup`);
+      insideRoot(rootDir, backup);
+      await rename(destination, backup);
+      moved = true;
+    }
+    await rename(stage, destination);
+    created = false;
+    return { dryRun: false, activated: true, destination, backup };
   } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
+    if (moved && backup) await rename(backup, destination).catch(() => {});
+    throw error;
+  } finally {
+    if (created) {
+      const state = await lstat(stage).catch(() => null);
+      if (state && !state.isSymbolicLink()) {
+        const rootReal = await realpath(rootDir).catch(() => null);
+        const stageReal = await realpath(stage).catch(() => null);
+        if (rootReal && stageReal) {
+          const relative = path.relative(rootReal, stageReal);
+          if (relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+            await rm(stage, { recursive: true, force: true });
+          }
+        }
+      }
+    }
   }
-  await mkdir(stage, { recursive: true });
-  for (const file of options.files ?? []) {
-    rejectName(file.name);
-    const target = path.join(stage, file.name);
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, file.data);
-  }
-  await rm(destination, { recursive: true, force: true });
-  const { rename } = await import('node:fs/promises');
-  await rename(stage, destination);
-  return { dryRun: false, activated: true, destination };
 }
 
 export async function main(argv) {
