@@ -1,8 +1,9 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
-import { readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
+import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection } from './projection.mjs';
@@ -166,10 +167,19 @@ export async function serveStatic(assetDir, name) {
   if (!assetDir) throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
   if (!STATIC_FILES.has(name)) throw new CoreError(404, 'not_found', 'The asset is not available.');
   const root = await realpath(assetDir).catch(() => { throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.'); });
+  await assertNoLinks(root);
   const target = path.resolve(root, name);
   const relative = path.relative(root, target);
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new CoreError(404, 'not_found', 'The asset is not available.');
-  const bytes = await readFile(target).catch((error) => {
+  await assertNoLinks(target);
+  const stats = await lstat(target).catch((error) => {
+    if (error?.code === 'ENOENT') throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
+    throw error;
+  });
+  if (stats.isSymbolicLink() || !stats.isFile()) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  const final = await realpath(target);
+  if (final !== root && !final.startsWith(`${root}${path.sep}`)) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  const bytes = await readFile(final).catch((error) => {
     if (error?.code === 'ENOENT') throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
     throw error;
   });

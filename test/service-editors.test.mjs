@@ -1,5 +1,5 @@
 import { request } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
@@ -107,7 +107,7 @@ test('attachments can be replaced and a removed node comment stays readable', as
 });
 
 test('a stale revision conflicts and assets reject traversal, markup and oversized files', async (t) => {
-  const { context } = await shop(t);
+  const { context, localPath, fixture } = await shop(t);
   const created = await createBoard(context, { project: 'shop', document: sketch() });
   const next = structuredClone(created.document);
   next.title = 'Cart two';
@@ -124,8 +124,24 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   await assert.rejects(() => updateNode(context, created.id, added.nodeId, { changes: { t: 'vector' }, expectedRevision: renamed.revision }), { status: 422, code: 'invalid_node' });
   const asset = await createAsset(context, created.id, { data: PNG.toString('base64') });
   assert.match(asset.src, /^assets\/[0-9a-f-]{36}\.png$/);
+  const referenced = structuredClone(renamed.document);
+  referenced.note = asset.src;
+  const stored = await replaceBoard(context, created.id, { document: referenced, expectedRevision: renamed.revision });
   const read = await readAsset(context, created.id, asset.src.slice('assets/'.length));
   assert.equal(read.bytes[0], 0x89);
+  assert.equal(stored.revision.length > 0, true);
+  const stray = `${randomUUID()}.png`;
+  await writeFile(path.join(localPath, 'docs', 'flows', 'assets', stray), PNG);
+  await assert.rejects(() => readAsset(context, created.id, stray), { status: 404, code: 'not_found' });
+  const outside = path.join(fixture.root, 'outside-asset');
+  await mkdir(outside, { recursive: true });
+  const linked = `${randomUUID()}.png`;
+  await symlink(outside, path.join(localPath, 'docs', 'flows', 'assets', linked), 'junction');
+  const linkedDocument = structuredClone(referenced);
+  linkedDocument.note = `assets/${linked}`;
+  const linkedBoard = await replaceBoard(context, created.id, { document: linkedDocument, expectedRevision: stored.revision });
+  assert.equal(linkedBoard.revision.length > 0, true);
+  await assert.rejects(() => readAsset(context, created.id, linked), (error) => error.code === 'unsafe_path');
   await assert.rejects(() => readAsset(context, created.id, '../secret.png'), { status: 404, code: 'not_found' });
   await assert.rejects(() => createAsset(context, created.id, { data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });
   await assert.rejects(() => createAsset(context, created.id, { data: Buffer.alloc(10000001, 1).toString('base64') }), { status: 413, code: 'request_too_large' });

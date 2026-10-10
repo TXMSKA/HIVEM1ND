@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8 } from './identity.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
+import { assertNoLinks } from './paths.mjs';
 import { commitTransaction } from './store.mjs';
 
 const ASSET_LIMIT = 10000000;
@@ -35,13 +36,36 @@ function jsonBytes(value) {
 }
 
 async function loadBytes(file) {
+  await assertNoLinks(file);
   try {
+    const stats = await lstat(file);
+    if (stats.isSymbolicLink()) fail(422, 'unsafe_path', 'Refusing to follow a link.');
+    if (!stats.isFile()) fail(404, 'not_found', 'The resource does not exist.');
     const bytes = await readFile(file);
     return { bytes, revision: hashBytes(bytes) };
   } catch (error) {
+    if (error instanceof CoreError) throw error;
     if (error?.code === 'ENOENT') return { bytes: null, revision: null };
     throw error;
   }
+}
+
+async function contained(root, file) {
+  await assertNoLinks(root);
+  await assertNoLinks(file);
+  const base = await realpath(root).catch(() => path.resolve(root));
+  let stats;
+  try {
+    stats = await lstat(file);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (stats.isSymbolicLink()) fail(422, 'unsafe_path', 'Refusing to follow a link.');
+  if (!stats.isFile()) fail(404, 'not_found', 'The resource does not exist.');
+  const final = await realpath(file);
+  if (final !== base && !final.startsWith(`${base}${path.sep}`)) fail(422, 'unsafe_path', 'Refusing to follow a link.');
+  return final;
 }
 
 function parseJson(bytes, code = 'corrupt_resource') {
@@ -122,6 +146,9 @@ export function validateBoard(document) {
 }
 
 async function commit(context, entries, events = []) {
+  for (const entry of entries) {
+    if (entry.recordPath) await assertNoLinks(entry.recordPath);
+  }
   const result = await commitTransaction(context.store, { id: randomUUID(), entries, events });
   if (context.bus) {
     for (const event of events) context.bus.emit(event);
@@ -203,6 +230,7 @@ async function resourceOf(context, id) {
 export async function readEditor(context, id) {
   const { project, entry } = await resourceOf(context, id);
   const file = inside(project.localPath, entry.path);
+  await contained(project.localPath, file);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
   if (entry.kind === 'void') return view(entry, validateText(parseJson(loaded.bytes)), loaded.revision);
@@ -401,6 +429,10 @@ export async function readAsset(context, id, assetId) {
   const found = await resourceOf(context, id);
   if (typeof assetId !== 'string' || !/^[0-9a-f-]{36}\.(png|jpg|webp)$/.test(assetId)) fail(404, 'not_found', 'The asset does not exist.');
   const file = inside(found.project.localPath, `docs/flows/assets/${assetId}`);
+  const document = await loadBytes(inside(found.project.localPath, found.entry.path));
+  const text = document.bytes ? document.bytes.toString('utf8') : '';
+  if (!text.includes(`docs/flows/assets/${assetId}`) && !text.includes(`assets/${assetId}`)) fail(404, 'not_found', 'The asset is not referenced.');
+  await contained(found.project.localPath, file);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(404, 'not_found', 'The asset does not exist.');
   const kind = sniff(loaded.bytes);
@@ -520,6 +552,7 @@ async function textBundle(context, id) {
   const found = await resourceOf(context, id);
   if (found.entry.kind !== 'void') fail(404, 'not_found', 'The resource does not exist.');
   const file = inside(found.project.localPath, found.entry.path);
+  await contained(found.project.localPath, file);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
   return { ...found, file, loaded, document: parseJson(loaded.bytes) };
