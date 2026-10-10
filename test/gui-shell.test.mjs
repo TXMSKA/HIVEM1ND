@@ -1633,6 +1633,35 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   assert.match(focusCss, /box-shadow:\s*none/);
 });
 
+test("mounted map circles use translated status and keep pan", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector("[data-unit-id='root:overseer']"), "The map circles did not render.");
+  const overseer = desktop.root.querySelector("[data-unit-id='root:overseer']");
+  const lead = desktop.root.querySelector("[data-unit-id='env:web:overlord-web']");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  const shop = desktop.root.querySelector("[data-unit-id='project:shop:executor-shop']");
+  assert.equal(overseer.getAttribute("data-ring"), "overseer");
+  assert.equal(overseer.className.includes("is-overseer"), true);
+  assert.equal(overseer.querySelector("[data-role-icon='crown']") != null, true);
+  assert.equal(overseer.querySelector("[data-map-label]").textContent, "overseer");
+  assert.equal(lead.getAttribute("data-ring"), "lead");
+  assert.equal(lead.className.includes("is-lead"), true);
+  assert.equal(shop.getAttribute("data-role"), executor.role);
+  assert.equal(shop.querySelector("[data-map-label]").textContent, executor.unit);
+  assert.equal(desktop.root.querySelector("[data-action='pan']") != null, true);
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  const status = desktop.root.querySelector("[data-unit-id='project:shop:executor-shop']").querySelector("[data-status]");
+  const key = { working: "statusWorking", waiting: "statusWaiting", idle: "statusIdle", out: "statusOut", quota: "statusQuota" }[status.getAttribute("data-status")] ?? "statusUnknown";
+  assert.equal(status.getAttribute("aria-label"), text("es", key));
+  desktop.app.mapState.selection = new Set(["root:overseer"]);
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-unit-id='root:overseer']").className.includes("is-selected"), true);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

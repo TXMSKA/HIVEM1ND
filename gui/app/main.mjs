@@ -1690,6 +1690,12 @@ function finishMap(app) {
     messageGroup: text(app.language, "messageGroup"),
     connect: text(app.language, "connect"),
     pan: text(app.language, "pan"),
+    statusWorking: text(app.language, "statusWorking"),
+    statusWaiting: text(app.language, "statusWaiting"),
+    statusIdle: text(app.language, "statusIdle"),
+    statusOut: text(app.language, "statusOut"),
+    statusQuota: text(app.language, "statusQuota"),
+    statusUnknown: text(app.language, "statusUnknown"),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
   takePendingChat(app);

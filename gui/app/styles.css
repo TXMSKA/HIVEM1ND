@@ -22,6 +22,8 @@
   --radius-panel: 20px;
   --radius-control: 12px;
   --radius-pill: 999px;
+  --radius-circle: 50%;
+  --node-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
   --gap: 12px;
   --bar: 52px;
   --footer: 30px;
@@ -60,6 +62,8 @@
   --radius-panel: 10px;
   --radius-control: 8px;
   --radius-pill: 8px;
+  --radius-circle: 50%;
+  --node-shadow: none;
   --editor-side: 240px;
   --editor-comments: 380px;
   --qr-dark: #000000;
@@ -343,14 +347,49 @@ button, input { font: inherit; color: inherit; }
   margin-left: -28px;
   margin-top: -28px;
   border: var(--panel-border);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-circle);
   background: var(--card);
   color: var(--text);
+  box-shadow: var(--node-shadow);
   font-size: 11px;
   line-height: 1.1;
   overflow: visible;
+  display: grid;
+  place-items: center;
+  padding: 0;
 }
-.map-node[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.map-node .icon { width: 18px; height: 18px; }
+.map-label {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.map-status {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: var(--radius-circle);
+  border: 2px solid var(--bg);
+  background: var(--idle);
+  box-sizing: content-box;
+}
+.map-status[data-status="working"] { background: var(--working); }
+.map-status[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 2.5px var(--waiting); }
+.map-status[data-status="idle"] { background: var(--idle); }
+.map-status[data-status="out"],
+.map-status[data-status="quota"] { background: var(--mute); }
+.map-node.is-person { background: var(--text); color: var(--bg); border: 0; }
+.map-node.is-overseer { border: 2px solid var(--text); }
+.map-node.is-lead { border: 2px solid var(--ring); box-shadow: 0 0 0 4px var(--panel), 0 0 0 5.5px var(--ring), var(--node-shadow); }
+.map-node.is-selected { border: 2px solid var(--accent); box-shadow: 0 0 0 6px var(--card), var(--node-shadow); }
 .map-handle {
   position: absolute;
   right: -4px;

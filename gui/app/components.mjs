@@ -9,6 +9,12 @@ const ICONS = {
   settings: "M4 7h10M18 7h2M4 12h2M10 12h10M4 17h12",
   close: "M6 6l12 12M18 6 6 18",
   alert: "M12 4 3 19h18zM12 10v4M12 16h.1",
+  crown: "M3 8l4 4 5-7 5 7 4-4-2 11H5z",
+  person: [{ tag: "circle", cx: "12", cy: "8", r: "4" }, { tag: "path", d: "M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" }],
+  adjutant: [{ tag: "circle", cx: "9", cy: "8", r: "4" }, { tag: "path", d: "M2 21c0-4 3-7 7-7s7 3 7 7" }, { tag: "path", d: "M16 11l2 2 4-4" }],
+  executor: [{ tag: "rect", x: "3", y: "4", width: "18", height: "16", rx: "2" }, { tag: "path", d: "M7 9l3 3-3 3M13 15h4" }],
+  genesis: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z",
+  executive: [{ tag: "path", d: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12" }, { tag: "circle", cx: "16", cy: "6", r: "2" }, { tag: "circle", cx: "10", cy: "12", r: "2" }, { tag: "circle", cx: "18", cy: "18", r: "2" }],
 };
 
 export function element(document, tag, attributes = {}, ...children) {
@@ -25,15 +31,20 @@ export function element(document, tag, attributes = {}, ...children) {
 }
 
 export function icon(document, name) {
-  const pathData = ICONS[name];
-  if (!pathData) throw new Error(`Unknown icon: ${name}`);
+  const spec = ICONS[name];
+  if (!spec) throw new Error(`Unknown icon: ${name}`);
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("class", "icon");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", pathData);
-  svg.append(path);
+  const parts = typeof spec === "string" ? [{ tag: "path", d: spec }] : spec;
+  for (const part of parts) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", part.tag);
+    for (const [key, value] of Object.entries(part)) {
+      if (key !== "tag") node.setAttribute(key, value);
+    }
+    svg.append(node);
+  }
   return svg;
 }
 

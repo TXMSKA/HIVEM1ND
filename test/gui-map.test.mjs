@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   edgeEndpoints,
@@ -241,6 +242,58 @@ test("collapsed scope groups hide their members and rendered nodes keep paint or
   assert.equal(centered, true);
   assert.equal(map.centered, "lead");
   assert.deepEqual([...map.selection], ["lead"]);
+});
+
+test("map circles keep role, status, and the name below the icon", async () => {
+  const overseer = unit("overseer", "overseer", "overseer", "root");
+  overseer.status = "idle";
+  const lead = unit("lead", "web", "overlord", "environment", "web");
+  lead.status = "waiting";
+  const child = unit("child", "shop", "executor", "project", "shop", "lead");
+  child.status = "working";
+  const master = unit("master", "master", "master", "root");
+  const map = createMap({
+    units: [overseer, lead, child, master],
+    saved: {
+      nodes: {
+        overseer: { x: 10, y: 10 },
+        lead: { x: 40, y: 40 },
+        child: { x: 80, y: 40 },
+        master: { x: 10, y: 80 },
+      },
+      groups: {},
+    },
+  });
+  const labels = { statusIdle: "Inactivo", statusWaiting: "En espera", statusWorking: "Trabajando", statusUnknown: "Desconocido" };
+  const host = createHost();
+  renderMap(host.ownerDocument, host, map, labels);
+  const boss = host.querySelector("[data-unit-id='overseer']");
+  assert.equal(boss.getAttribute("data-role"), "overseer");
+  assert.equal(boss.getAttribute("data-ring"), "overseer");
+  assert.equal(boss.className.includes("is-overseer"), true);
+  assert.equal(boss.querySelector("[data-role-icon='crown']") != null, true);
+  assert.equal(boss.querySelector("[data-status='idle']").getAttribute("aria-label"), "Inactivo");
+  assert.equal(boss.querySelector("[data-map-label='overseer']").textContent, "overseer");
+  const web = host.querySelector("[data-unit-id='lead']");
+  assert.equal(web.getAttribute("data-role"), "overlord");
+  assert.equal(web.getAttribute("data-ring"), "lead");
+  assert.equal(web.className.includes("is-lead"), true);
+  assert.equal(web.querySelector("[data-role-icon='hierarchy']") != null, true);
+  assert.equal(host.querySelector("[data-unit-id='child']").querySelector("[data-status='working']").getAttribute("aria-label"), "Trabajando");
+  assert.equal(host.querySelector("[data-unit-id='master']").getAttribute("data-ring"), "person");
+  assert.equal(host.querySelector("[data-unit-id='master']").querySelector("[data-role-icon='person']") != null, true);
+  map.selection = new Set(["lead"]);
+  renderMap(host.ownerDocument, host, map, labels);
+  assert.equal(host.querySelector("[data-unit-id='lead']").getAttribute("data-selected"), "true");
+  assert.equal(host.querySelector("[data-unit-id='lead']").className.includes("is-selected"), true);
+  assert.equal(host.querySelector("[data-action='pan']") != null, true);
+  assert.equal(host.querySelector("[data-handle='connect']") != null, true);
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const modern = css.split('[data-look="high-contrast"]')[0];
+  const contrast = css.split('[data-look="high-contrast"]')[1];
+  assert.match(modern, /--radius-circle:\s*50%/);
+  assert.match(contrast, /--radius-circle:\s*50%/);
+  assert.match(css, /\.map-node\s*\{[^}]*border-radius:\s*var\(--radius-circle\)/);
 });
 
 function unit(id, name, role, kind, scopeName = null, leadId = null) {

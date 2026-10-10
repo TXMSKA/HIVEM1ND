@@ -1,4 +1,5 @@
 import { createOperation, request as apiRequest, retryOperation } from "./api.mjs";
+import { icon } from "./components.mjs";
 import {
   edgeEndpoints,
   groupKeyForUnit,
@@ -107,13 +108,27 @@ export function renderMap(document, host, map, labels = {}) {
     const screen = toScreen(node, rect, map.view);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "map-node";
     button.dataset.unitId = node.id;
     button.setAttribute("data-unit-id", node.id);
     button.style.left = `${screen.x - rect.left}px`;
     button.style.top = `${screen.y - rect.top}px`;
-    button.setAttribute("aria-pressed", String(map.selection.has(node.id)));
-    button.textContent = node.label;
+    const selected = map.selection.has(node.id);
+    button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : ""].filter(Boolean).join(" ");
+    button.setAttribute("aria-pressed", String(selected));
+    button.setAttribute("data-role", node.role);
+    button.setAttribute("data-ring", node.overseer ? "overseer" : node.lead ? "lead" : node.person ? "person" : "unit");
+    if (selected) button.setAttribute("data-selected", "true");
+    const mark = icon(document, roleIcon(node.role));
+    mark.setAttribute("data-role-icon", roleIcon(node.role));
+    const marker = document.createElement("i");
+    marker.className = "map-status";
+    marker.setAttribute("data-status", node.status);
+    marker.setAttribute("role", "img");
+    marker.setAttribute("aria-label", markerLabel(labels, node.status));
+    const name = document.createElement("span");
+    name.className = "map-label";
+    name.setAttribute("data-map-label", node.label);
+    name.textContent = node.label;
     const handle = document.createElement("button");
     handle.type = "button";
     handle.className = "map-handle";
@@ -122,7 +137,7 @@ export function renderMap(document, host, map, labels = {}) {
     handle.setAttribute("data-unit-id", node.id);
     handle.setAttribute("data-handle", "connect");
     handle.setAttribute("aria-label", "Connect");
-    button.append(handle);
+    button.append(mark, marker, name, handle);
     layer.append(button);
   }
   const actions = document.createElement("div");
@@ -401,6 +416,11 @@ export function paintNodes(map) {
 
 function visibleNodes(map) {
   const indexed = new Map(map.units.map((unit) => [unit.id, unit]));
+  const leads = new Set();
+  for (const unit of map.units) {
+    if (unit.leadId) leads.add(unit.leadId);
+    if (unit.role === "overlord") leads.add(unit.id);
+  }
   return [...map.units].sort(byId).flatMap((unit) => {
     const key = groupKeyForUnit(unit, indexed);
     if (key && scopeCollapsed(map.saved, key)) return [];
@@ -413,8 +433,34 @@ function visibleNodes(map) {
       radius: map.radius,
       label: unit.unit,
       leadId: unit.leadId ?? null,
+      role: unit.role ?? "",
+      status: unit.status ?? "unknown",
+      lead: unit.role !== "overseer" && leads.has(unit.id),
+      overseer: unit.role === "overseer",
+      person: unit.role === "master",
     }];
   });
+}
+
+function roleIcon(role) {
+  if (role === "master") return "person";
+  if (role === "overseer") return "crown";
+  if (role === "overlord") return "hierarchy";
+  if (role === "adjutant") return "adjutant";
+  if (role === "executive") return "executive";
+  if (role === "genesis" || role === "incubator") return "genesis";
+  return "executor";
+}
+
+function markerLabel(labels, status) {
+  const names = {
+    working: labels.statusWorking,
+    waiting: labels.statusWaiting,
+    idle: labels.statusIdle,
+    out: labels.statusOut,
+    quota: labels.statusQuota,
+  };
+  return names[status] || labels.statusUnknown || "Unknown";
 }
 
 function outlines(map, nodes) {
