@@ -978,7 +978,8 @@ function commentOnNode(app, editor) {
       node = found;
     }
   }
-  const text = editor.commentText || "On the node.";
+  const supplied = typeof editor.commentText === "string" ? editor.commentText : "";
+  if (!supplied.trim()) return;
   createComment(app.api, app.editors, {
     screen: screen.id,
     screenTitle: screen.title,
@@ -986,7 +987,7 @@ function commentOnNode(app, editor) {
     label: node.name ?? node.id,
     path: [node.name ?? node.id],
     point: { x: Math.round(node.place?.x ?? 0), y: Math.round(node.place?.y ?? 0) },
-  }, text).then(() => {
+  }, supplied).then(() => {
     syncViewerDirty(app);
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteEditor(app, error));
@@ -1412,8 +1413,9 @@ function addEditorComment(app, compose) {
 
 function replyToThread(app, threadId) {
   const editors = editorsOf(app);
-  const text = editors.current?.commentText || "Noted.";
-  replyComment(app.api, editors, threadId, text).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  const supplied = editors.current?.commentText;
+  if (typeof supplied !== "string" || !supplied.trim()) return;
+  replyComment(app.api, editors, threadId, supplied).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
 }
 
 function resolveThread(app, threadId) {
@@ -2053,7 +2055,7 @@ const SESSION_COPY = {
   starting: "sessionStarting",
   started: "sessionStarted",
   failed: "sessionFailed",
-  expired: "sessionExpired",
+  expired: "sessionRequestExpired",
   stopping: "sessionStopping",
   stopped: "sessionStopped",
 };

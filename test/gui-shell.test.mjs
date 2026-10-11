@@ -1804,6 +1804,79 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "totally_unknown");
 });
 
+test("request expiry stays separate from reopening guidance and comments require text", async (t) => {
+  assert.equal(text("en", "sessionExpired"), "This session ended. Open HIVEM1ND again.");
+  assert.equal(text("es", "sessionExpired"), "Esta sesión terminó. Abrir HIVEM1ND de nuevo.");
+  assert.equal(text("en", "sessionRequestExpired"), "The session request expired.");
+  assert.equal(text("es", "sessionRequestExpired"), "La solicitud de sesión expiró.");
+
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (!init?.body || init.method !== "POST") return;
+    writes.push({ url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector("[data-handle='connect']"), "The connect handle did not appear.");
+  assert.equal(desktop.root.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Connect");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Conectar");
+  desktop.app.language = "en";
+  renderShell(desktop.app);
+
+  await fixture.control.emit("session.request.changed", {
+    requestId: "11111111-1111-4111-8111-111111111111",
+    unitId: "root:overseer",
+    machine: "DESKTOP",
+    state: "expired",
+    sessionId: null,
+    error: null,
+  });
+  await waitFor(() => noteText(desktop) === "The session request expired.", "Request expiry reused the reopening sentence.");
+  assert.notEqual(noteText(desktop), "This session ended. Open HIVEM1ND again.");
+
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='comment-node']"), "The node comment control did not appear.");
+  const commentBodies = () => writes.filter((item) => item.url.includes("/comments")).map((item) => item.body.text);
+  click(desktop.root.querySelector("[data-action='comment-node']"));
+  await delay(40);
+  assert.equal(commentBodies().includes("On the node."), false);
+  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
+  click(desktop.root.querySelector("[data-action='comment-node']"));
+  await delay(40);
+  assert.equal(commentBodies().includes("On the node."), false);
+  assert.equal(commentBodies().some((item) => item?.trim?.() === ""), false);
+  typeInput(desktop.root.querySelector("[data-comment]"), "Pinned here", 0, 11);
+  click(desktop.root.querySelector("[data-action='comment-node']"));
+  await waitFor(() => commentBodies().includes("Pinned here"), "The supplied node comment was not sent.");
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='reply']"), "The reply control did not appear.");
+  const replies = () => writes.filter((item) => item.url.includes("/replies")).map((item) => item.body.text);
+  click(desktop.root.querySelector("[data-action='reply']"));
+  await delay(40);
+  assert.equal(replies().includes("Noted."), false);
+  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
+  click(desktop.root.querySelector("[data-action='reply']"));
+  await delay(40);
+  assert.equal(replies().includes("Noted."), false);
+  typeInput(desktop.root.querySelector("[data-comment]"), "A reply", 0, 7);
+  click(desktop.root.querySelector("[data-action='reply']"));
+  await waitFor(() => replies().includes("A reply"), "The supplied reply was not sent.");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

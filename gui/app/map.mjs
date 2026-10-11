@@ -136,7 +136,7 @@ export function renderMap(document, host, map, labels = {}) {
     handle.dataset.handle = "connect";
     handle.setAttribute("data-unit-id", node.id);
     handle.setAttribute("data-handle", "connect");
-    handle.setAttribute("aria-label", "Connect");
+    handle.setAttribute("aria-label", labels.connect ?? "Connect");
     button.append(mark, marker, name, handle);
     layer.append(button);
   }

@@ -238,6 +238,7 @@ test("collapsed scope groups hide their members and rendered nodes keep paint or
   map.selection = new Set(["lead", "child"]);
   renderMap(host.ownerDocument, host, map);
   assert.equal(host.querySelector("[data-action='connect']").textContent, "Connect");
+  assert.equal(host.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Connect");
   const centered = centerUnit(map, "lead", { width: 200, height: 100, left: 0, top: 0 });
   assert.equal(centered, true);
   assert.equal(map.centered, "lead");
@@ -264,7 +265,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
       groups: {},
     },
   });
-  const labels = { statusIdle: "Inactivo", statusWaiting: "En espera", statusWorking: "Trabajando", statusUnknown: "Desconocido" };
+  const labels = { connect: "Conectar", statusIdle: "Inactivo", statusWaiting: "En espera", statusWorking: "Trabajando", statusUnknown: "Desconocido" };
   const host = createHost();
   renderMap(host.ownerDocument, host, map, labels);
   const boss = host.querySelector("[data-unit-id='overseer']");
@@ -287,7 +288,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.equal(host.querySelector("[data-unit-id='lead']").getAttribute("data-selected"), "true");
   assert.equal(host.querySelector("[data-unit-id='lead']").className.includes("is-selected"), true);
   assert.equal(host.querySelector("[data-action='pan']") != null, true);
-  assert.equal(host.querySelector("[data-handle='connect']") != null, true);
+  assert.equal(host.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Conectar");
   const css = await readFile("gui/app/styles.css", "utf8");
   const modern = css.split('[data-look="high-contrast"]')[0];
   const contrast = css.split('[data-look="high-contrast"]')[1];

@@ -88,7 +88,7 @@ const COPY = {
   sessionStarting: ["The session is starting.", "La sesión está iniciando."],
   sessionStarted: ["The session started.", "La sesión inició."],
   sessionFailed: ["The session failed. Nothing was launched.", "La sesión falló. No se inició nada."],
-  sessionExpired: ["The session request expired.", "La solicitud de sesión expiró."],
+  sessionRequestExpired: ["The session request expired.", "La solicitud de sesión expiró."],
   sessionStopping: ["The session is stopping.", "La sesión se está deteniendo."],
   sessionStopped: ["The session stopped.", "La sesión se detuvo."],
   machineUnavailable: ["{machine} is unavailable.", "{machine} no está disponible."],
