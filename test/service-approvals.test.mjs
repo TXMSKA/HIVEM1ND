@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { answerApproval, approvalRevision, consumeAnswers, consumeRevocations, normalizeAction, readApproval, recoverApprovals, requestApproval, revokeGrant } from '../engine/service/approvals.mjs';
+import { openSync } from '../engine/sync/store.mjs';
 import { canonicalJson } from '../engine/service/identity.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -301,4 +302,49 @@ test('approval detail supplies the revision, selected answer and target owner', 
   assert.equal(event.source.kind, 'gui');
   assert.equal(event.source.id, fixture.machine);
   assert.notEqual(event.unitId, 'root:master');
+});
+
+test('approval commits notify the running pulse with the staged transaction', async (t) => {
+  const { fixture, context, master, sessionId } = await service(t);
+  const native = liveNative(sessionId);
+  context.native = native;
+  master.native = native;
+  const shop = path.join(fixture.root, 'shop');
+  await mkdir(shop);
+  const sync = openSync({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: [{ name: 'shop', localPath: shop }],
+  });
+  sync.machine = 'SYNCBOX';
+  const pulsed = [];
+  const pulse = { changed: async (ids) => { pulsed.push([...ids]); return { scheduled: true }; } };
+  context.sync = sync;
+  context.pulse = pulse;
+  context.projects = [{ name: 'shop', localPath: shop }];
+  master.sync = sync;
+  master.pulse = pulse;
+  master.projects = context.projects;
+  const created = await requestApproval(context, { action: 'process.run', pattern: pattern(), display: 'Build', alwaysAllowed: true });
+  assert.equal(pulsed.length > 0, true);
+  assert.equal(context.syncOutcome, 'pending');
+  const requested = pulsed.at(-1);
+  const staged = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'staging', 'changes', `${requested[0]}.json`), 'utf8'));
+  assert.equal(staged.machine, 'SYNCBOX');
+  assert.match(staged.transactionId, /^[0-9a-f-]{36}$/);
+  const beforeAnswer = pulsed.length;
+  const waiting = await consumeAnswers(context, created.approval.id);
+  assert.equal(waiting[0].state, 'pending');
+  assert.equal(pulsed.length, beforeAnswer);
+  const revision = approvalRevision({ request: await requestBytes(fixture, created.approval.id), answers: [] });
+  const resolved = await answerApproval(master, created.approval.id, { decision: 'approve-always', expectedRevision: revision });
+  assert.equal(pulsed.length > beforeAnswer, true);
+  const afterAnswer = pulsed.length;
+  const again = await consumeAnswers(context, created.approval.id);
+  assert.equal(again[0].replayed, true);
+  assert.equal(pulsed.length, afterAnswer);
+  const state = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'));
+  await revokeGrant(master, UNIT, resolved.grantId, { expectedRevision: revisionOf(state) });
+  assert.equal(pulsed.length > afterAnswer, true);
 });

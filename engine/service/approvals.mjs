@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8 } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate, readDetail } from './projection.mjs';
@@ -537,15 +537,29 @@ async function revocationRequests(context) {
 }
 
 async function commitFiles(context, records, events) {
-  await commitTransaction(context.store, { id: randomUUID(), entries: records, events: [] });
-  const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  const stage = records.filter((record) => record.resource.startsWith('user/')).map((record) => ({
-    target: { kind: 'mind', path: record.resource },
-    bytes: Buffer.isBuffer(record.afterBytes) ? record.afterBytes : Buffer.from(record.afterBytesBase64, 'base64'),
-  }));
+  const id = randomUUID();
+  await commitTransaction(context.store, { id, entries: records, events: [] });
+  const sync = context.sync ?? openSync({
+    store: context.store,
+    paths: context.paths,
+    now: () => context.now(),
+    projects: context.projects ?? [],
+  });
+  const stage = records.filter((record) => record.resource.startsWith('user/')).map((record) => {
+    const bytes = Buffer.isBuffer(record.afterBytes) ? record.afterBytes : Buffer.from(record.afterBytesBase64, 'base64');
+    return {
+      target: { kind: 'mind', path: record.resource },
+      bytes,
+      id: uuidV8(['approval-change', id, record.resource, hashBytes(bytes)]),
+    };
+  });
   if (stage.length) {
-    const changes = await stageTransaction(sync, stage);
+    const changes = await stageTransaction(sync, stage, { transactionId: id });
     noteSync(context, changes.length ? 'pending' : 'local');
+    if (typeof context.pulse?.changed === 'function') {
+      const result = await context.pulse.changed(changes.map((change) => change.id));
+      if (result?.published === true) noteSync(context, 'published');
+    }
   }
   const enriched = [];
   for (const event of events) {
