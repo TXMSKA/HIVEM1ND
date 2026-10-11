@@ -281,18 +281,16 @@ export async function createHttpServer(options) {
     schedule: options.schedule,
     bucket: { peers: new Map(), grantFailures: [] },
   };
-  homeState.serve = (req, res) => {
-    dispatch(req, res).catch(() => {
-      if (!res.headersSent) res.writeHead(500).end();
-    });
-  };
   const principals = new Map();
   const compiled = routeTable().map(compile);
   const sockets = new Set();
-  const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
+  const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
+  homeState.serve = (req, res) => acceptRequest(req, res);
+
+  function acceptRequest(req, res) {
     const timer = setTimeout(() => {
       if (!req.complete && !req.destroyed) req.destroy();
-    }, 15000);
+    }, options.bodyTimeoutMs ?? 15000);
     timer.unref?.();
     const stopTimer = () => clearTimeout(timer);
     req.on('end', stopTimer);
@@ -319,7 +317,7 @@ export async function createHttpServer(options) {
         }
       } catch { /* the request is already gone */ }
     });
-  });
+  }
 
   async function dispatch(req, res) {
     const headerBytes = rawHeaderBytes(req);

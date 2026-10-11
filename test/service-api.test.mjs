@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { approvalRevision } from '../engine/service/approvals.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
+import { eligibleAddresses } from '../engine/service/home.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { writeBeat } from '../engine/service/service.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
@@ -402,6 +403,97 @@ test('home enable is memory-only and loopback cannot exchange it', async (t) => 
   assert.equal(exchanged.status, 403);
   assert.equal(JSON.stringify(opened.json.error ?? {}).includes(opened.json.data.key), false);
 });
+
+test('a home listener keeps denial status, headers and the body deadline', async (t) => {
+  const address = eligibleAddresses()[0];
+  assert.ok(address, 'a private interface is required');
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    interfaces: () => [address],
+    bodyTimeoutMs: 300,
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  const opened = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
+    token: local.json.data.token,
+    body: { enabled: true },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(opened.status, 201);
+  const origin = new URL(opened.json.data.addresses[0].origin);
+  const denied = await lanCall(origin, 'POST', '/api/v1/auth/home', { code: 'ZZZZZZ' });
+  assert.equal(denied.status, 401);
+  assert.equal(denied.json.error.code, 'invalid_home_key');
+  assert.equal(denied.raw.length > 0, true);
+  assert.equal(denied.headers['cache-control'], 'no-store');
+  assert.equal(denied.headers['x-content-type-options'], 'nosniff');
+  assert.equal(denied.headers['referrer-policy'], 'no-referrer');
+  const desktop = await lanCall(origin, 'PATCH', '/api/v1/settings', { language: 'es' }, {
+    authorization: `Bearer ${local.json.data.token}`,
+    'idempotency-key': randomUUID(),
+  });
+  assert.equal(desktop.status, 403);
+  assert.equal(desktop.json.error.code, 'forbidden');
+  assert.equal(desktop.headers['cache-control'], 'no-store');
+  assert.equal(desktop.raw.length > 0, true);
+  const stalled = await new Promise((resolve) => {
+    const req = request({
+      host: origin.hostname,
+      port: origin.port,
+      method: 'POST',
+      path: '/api/v1/auth/home',
+      headers: {
+        host: origin.host,
+        'content-type': 'application/json',
+        'content-length': '64',
+      },
+    }, (res) => resolve({ status: res.statusCode }));
+    req.on('error', () => resolve({ closed: true }));
+    req.flushHeaders();
+    req.write('{');
+    setTimeout(() => resolve({ hung: true }), 1000);
+  });
+  assert.equal(stalled.hung, undefined);
+  assert.notEqual(stalled.status, 500);
+});
+
+function lanCall(origin, method, target, body, headers = {}) {
+  const payload = Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: origin.hostname,
+      port: origin.port,
+      method,
+      path: target,
+      headers: {
+        host: origin.host,
+        origin: origin.origin,
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        ...headers,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const json = raw.length > 0 ? JSON.parse(raw) : null;
+        resolve({ status: res.statusCode, headers: res.headers, raw, json });
+      });
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
