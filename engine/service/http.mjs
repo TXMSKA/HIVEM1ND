@@ -712,17 +712,21 @@ async function approvalOwner(domain, approvalId) {
 }
 
 async function resourceAttached(domain, resourceId, unitId) {
-  for (const project of domain.projects ?? []) {
-    if (!project?.localPath) continue;
-    try {
-      const parsed = JSON.parse(await readFile(path.join(project.localPath, 'docs', 'flows', 'resources.json'), 'utf8'));
-      const entry = (parsed.resources ?? []).find((item) => item.id === resourceId);
-      if (entry) return (entry.attached ?? []).includes(unitId);
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
+  const binding = path.join(domain.paths.mind, 'user', 'relay', 'editors', `${resourceId}.json`);
+  try {
+    const parsed = JSON.parse(await readFile(binding, 'utf8'));
+    return (parsed.attached ?? []).includes(unitId);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
   }
-  return false;
+  try {
+    const catalog = JSON.parse(await readFile(path.join(domain.paths.mind, 'user', 'gui', 'resources.json'), 'utf8'));
+    const entry = (catalog.resources ?? []).find((item) => item.id === resourceId);
+    return (entry?.attached ?? []).includes(unitId);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function bodyExpect(route) {
@@ -791,7 +795,13 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/blueprint/boards' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'blueprint' }) };
   if (route.template === '/void/texts' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'void' }) };
   if ((route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId') && route.method === 'GET') return { status: 200, body: await readEditor(domain, id) };
-  if (route.template === '/editors/register') return { status: 201, body: await registerResource(domain, body) };
+  if (route.template === '/editors/register') {
+    const registered = await registerResource(domain, body);
+    const status = registered.httpStatus ?? 201;
+    const body = { ...registered };
+    delete body.httpStatus;
+    return { status, body };
+  }
   if (route.template === '/blueprint/boards' && route.method === 'POST') return { status: 201, body: await createBoard(domain, body) };
   if (route.template === '/void/texts' && route.method === 'POST') return { status: 201, body: await createText(domain, body) };
   if (route.template === '/blueprint/boards/:resourceId' && route.method === 'PUT') return { status: 200, body: await replaceBoard(domain, id, body) };

@@ -79,8 +79,25 @@ test('a module stays read-only and a board id cannot be registered twice', async
   const created = await createBoard(context, { project: 'shop', document: sketch('cart') });
   await assert.rejects(() => createBoard(context, { project: 'shop', path: 'docs/flows/boards/other.json', document: sketch('cart') }), { status: 409, code: 'board_id_exists' });
   await assert.rejects(() => createBoard(context, { project: 'shop', path: created.path, document: sketch('other') }), { status: 409, code: 'resource_exists' });
+  const sidecar = path.join(localPath, 'docs', 'notes.orig.json');
+  await writeFile(sidecar, '{}\n');
   const found = await discoverResources(context, 'shop');
   assert.equal(found.some((item) => item.legacyId === 'legacy' && item.readOnly === true), true);
+  assert.equal(found.some((item) => item.path.endsWith('.orig.json')), false);
+  const again = await registerResource(context, { project: 'shop', path: 'docs/flows/boards/legacy.mjs', kind: 'blueprint' });
+  assert.equal(again.httpStatus, 200);
+  assert.equal(again.id, registered.id);
+  const notes = path.join(localPath, 'docs', 'notes.json');
+  await writeFile(notes, `${JSON.stringify({ title: 'Notes', rev: 0, pages: [{ k: 'A', en: 'Hi' }] })}\n`);
+  const voided = await registerResource(context, { project: 'shop', path: 'docs/notes.json', kind: 'void' });
+  assert.equal(voided.kind, 'void');
+  assert.equal(voided.httpStatus, 201);
+  const repeated = await registerResource(context, { project: 'shop', path: 'docs/notes.json', kind: 'void' });
+  assert.equal(repeated.httpStatus, 200);
+  assert.equal(repeated.id, voided.id);
+  await assert.rejects(() => writeAttachments(context, created.id, { attached: ['root:builder', 'root:builder'], expectedRevision: null }), { code: 'invalid_body' });
+  await assert.rejects(() => writeAttachments(context, created.id, { attached: ['not a unit'], expectedRevision: null }), { code: 'invalid_unit' });
+  await assert.rejects(() => writeAttachments(context, created.id, { attached: ['root:builder'], expectedRevision: null }), { code: 'unknown_unit' });
 });
 
 test('an absent project is unavailable', async (t) => {

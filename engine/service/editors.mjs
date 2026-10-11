@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
-import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8 } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
@@ -81,6 +81,14 @@ function catalogFile(context) {
   return path.join(context.paths.mind, 'user', 'gui', 'resources.json');
 }
 
+function bindingFile(context, id) {
+  return path.join(context.paths.mind, 'user', 'relay', 'editors', `${id}.json`);
+}
+
+function editorId(kind, project, relative) {
+  return uuidV8(['editor', kind, project, relative.split('\\').join('/')]);
+}
+
 function indexFile(project) {
   return path.join(project.localPath, 'docs', 'flows', 'boards', 'index.json');
 }
@@ -105,12 +113,19 @@ function view(entry, document, revision) {
     id: entry.id,
     kind: entry.kind,
     project: entry.project,
+    title: document?.title || entry.legacyId || '',
     path: entry.path,
     legacyId: entry.legacyId,
     readOnly: entry.readOnly === true,
-    attached: [...(entry.attached ?? [])],
     revision,
+    attached: [...(entry.attached ?? [])],
+    openThreads: 0,
+    activity: null,
     document,
+    legacy: null,
+    attachmentRevision: null,
+    commentsRevision: null,
+    threads: [],
   };
 }
 
@@ -192,19 +207,44 @@ function record(file, before, bytes) {
   return { resource: file, recordPath: file, beforeRevision: before, afterBytes: bytes };
 }
 
+function voidSidecar(name) {
+  return name.endsWith('.orig.json') || name.endsWith('.comments.json') || name.endsWith('.versions.jsonl');
+}
+
 export async function discoverResources(context, projectName) {
   const project = projectOf(context, projectName);
-  const dir = path.join(project.localPath, 'docs', 'flows', 'boards');
-  let names = [];
-  try {
-    names = await readdir(dir);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  return names
-    .filter((name) => name.endsWith('.json') || name.endsWith('.mjs'))
-    .filter((name) => name !== 'index.json')
-    .map((name) => ({ project: projectName, path: `docs/flows/boards/${name}`, legacyId: name.replace(/\.(json|mjs)$/, ''), readOnly: name.endsWith('.mjs') }));
+  const root = path.join(project.localPath, 'docs');
+  const found = [];
+  const walk = async (dir, relative) => {
+    let names = [];
+    try {
+      names = await readdir(dir);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      return;
+    }
+    for (const name of names) {
+      if (voidSidecar(name) || name === 'index.json') continue;
+      const next = relative ? `${relative}/${name}` : name;
+      const full = path.join(dir, name);
+      const stat = await lstat(full);
+      if (stat.isDirectory()) {
+        await walk(full, next);
+        continue;
+      }
+      if (!name.endsWith('.json') && !name.endsWith('.mjs')) continue;
+      const kind = next.startsWith('flows/boards/') ? 'blueprint' : 'void';
+      found.push({
+        project: projectName,
+        path: `docs/${next}`,
+        kind,
+        legacyId: name.replace(/\.(json|mjs)$/, ''),
+        readOnly: kind === 'blueprint' && name.endsWith('.mjs'),
+      });
+    }
+  };
+  await walk(root, '');
+  return found;
 }
 
 export async function registerResource(context, input) {
@@ -213,15 +253,21 @@ export async function registerResource(context, input) {
   const full = inside(project.localPath, relative);
   const loaded = await loadBytes(full);
   if (!loaded.bytes) fail(404, 'not_found', 'The resource does not exist.');
-  const readOnly = relative.endsWith('.mjs');
-  const document = readOnly ? null : validateBoard(parseJson(loaded.bytes));
+  const kind = input.kind === 'void' ? 'void' : 'blueprint';
+  const readOnly = kind === 'blueprint' && relative.endsWith('.mjs');
+  const document = readOnly ? null : kind === 'void' ? parseJson(loaded.bytes) : validateBoard(parseJson(loaded.bytes));
   const legacyId = document?.id ?? path.basename(relative).replace(/\.(json|mjs)$/, '');
   const catalog = await readCatalog(context);
-  if (catalog.value.resources.some((item) => item.project === project.name && item.legacyId === legacyId)) fail(409, 'board_id_exists', 'That board id is already registered.');
-  if (catalog.value.resources.some((item) => item.project === project.name && item.path === relative)) fail(409, 'resource_exists', 'That path is already registered.');
+  const id = editorId(kind, project.name, relative);
+  const existing = catalog.value.resources.find((item) => item.id === id || (item.project === project.name && item.path === relative));
+  if (existing) {
+    const current = view(existing, document, loaded.revision);
+    current.httpStatus = 200;
+    return current;
+  }
   const entry = {
-    id: randomUUID(),
-    kind: input.kind ?? 'blueprint',
+    id,
+    kind,
     project: project.name,
     path: relative,
     legacyId,
@@ -230,7 +276,9 @@ export async function registerResource(context, input) {
   };
   const next = { ...catalog.value, resources: [...catalog.value.resources, entry] };
   await commit(context, [record(catalogFile(context), catalog.revision, jsonBytes(next))]);
-  return view(entry, document, loaded.revision);
+  const created = view(entry, document, loaded.revision);
+  created.httpStatus = 201;
+  return created;
 }
 
 export async function list(context, query = {}) {
@@ -297,7 +345,7 @@ export async function createBoard(context, input) {
   const comments = await loadBytes(commentsFile(project, document.id));
   if (comments.bytes) fail(409, 'resource_exists', 'That path is already registered.');
   const entry = {
-    id: randomUUID(),
+    id: editorId('blueprint', project.name, relative),
     kind: 'blueprint',
     project: project.name,
     path: relative,
@@ -416,19 +464,66 @@ export async function readComments(context, id) {
 }
 
 export async function readAttachments(context, id) {
-  const { catalog, entry } = await resourceOf(context, id);
-  return { attached: [...(entry.attached ?? [])], revision: catalog.revision };
+  const found = await resourceOf(context, id);
+  const loaded = await loadBytes(bindingFile(context, id));
+  if (!loaded.bytes) return { attached: [...(found.entry.attached ?? [])], revision: null };
+  const value = parseJson(loaded.bytes);
+  return { attached: [...(value.attached ?? [])], revision: loaded.revision };
 }
 
 export async function writeAttachments(context, id, input) {
   const found = await resourceOf(context, id);
-  if (input.expectedRevision !== found.catalog.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
-  if (!Array.isArray(input.attached) || input.attached.some((item) => typeof item !== 'string')) fail(422, 'invalid_body', 'Attachments must be unit ids.');
-  const resources = found.catalog.value.resources.map((item) => (item.id === id ? { ...item, attached: [...input.attached] } : item));
-  const next = { ...found.catalog.value, resources };
-  const bytes = jsonBytes(next);
-  await commit(context, [record(catalogFile(context), found.catalog.revision, bytes)]);
-  return { attached: [...input.attached], revision: hashBytes(bytes) };
+  const file = bindingFile(context, id);
+  const loaded = await loadBytes(file);
+  if (input.expectedRevision !== loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
+  const attached = await canonicalAttachments(context, input.attached);
+  const bytes = jsonBytes({
+    format: 'hivem1nd-editor-binding-v1',
+    resourceId: id,
+    kind: found.entry.kind,
+    attached,
+    updatedAt: clock(context),
+  });
+  const revision = hashBytes(bytes);
+  await commit(context, [record(file, loaded.revision, bytes)], [{
+    name: 'editor.attachments.changed',
+    resourceId: id,
+    data: { resourceId: id, attached, revision },
+  }]);
+  return { attached, revision: hashBytes(bytes) };
+}
+
+async function canonicalAttachments(context, list) {
+  if (!Array.isArray(list) || list.length > 256) fail(422, 'invalid_body', 'Attachments must be unit ids.');
+  const seen = new Set();
+  const attached = [];
+  for (const item of list) {
+    let parsed;
+    try {
+      parsed = parseUnitId(item);
+    } catch {
+      fail(422, 'invalid_unit', 'The unit id is not canonical.');
+    }
+    if (seen.has(parsed.id)) fail(422, 'invalid_body', 'Attachments must be unique unit ids.');
+    seen.add(parsed.id);
+    attached.push(parsed);
+  }
+  for (const parsed of attached) {
+    if (!(await unitOnMind(context, parsed))) fail(422, 'unknown_unit', 'The unit does not exist.');
+  }
+  return attached.map((parsed) => parsed.id);
+}
+
+async function unitOnMind(context, parsed) {
+  if (parsed.id === 'root:master') return true;
+  const file = path.join(context.paths.mind, 'user', 'state', `${parsed.unit}.md`);
+  try {
+    const text = await readFile(file, 'utf8');
+    return text.includes(`unit-id: ${parsed.id}`);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function sniff(bytes) {
