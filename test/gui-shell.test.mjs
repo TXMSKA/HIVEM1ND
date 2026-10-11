@@ -2534,10 +2534,13 @@ test("counts, clocks, and session facts follow the active language", () => {
   assert.equal(clock.includes(stamp), false);
   assert.equal(formatWhen("en", stamp).includes(stamp), false);
   assert.equal(formatWhen("en", "not-a-date"), "not-a-date");
-  const one = limitsUsage("en", { used: 1, max: 2 }, { used: 1, max: 2 });
-  assert.equal(one.includes("1 of 2 message"), true);
-  assert.equal(one.includes("messages"), false);
-  assert.equal(limitsUsage("en", { used: 12, max: 60 }, { used: 50000000, max: 50000000 }).includes("50,000,000"), true);
+  assert.equal(limitsUsage("en", { used: 0, max: 0 }, { used: 0, max: 0 }), "0 of 0 messages and 0 of 0 sync bytes.");
+  assert.equal(limitsUsage("en", { used: 1, max: 1 }, { used: 1, max: 1 }), "1 of 1 message and 1 of 1 sync byte.");
+  assert.equal(limitsUsage("en", { used: 1, max: 2 }, { used: 1, max: 2 }), "1 of 2 messages and 1 of 2 sync bytes.");
+  assert.equal(limitsUsage("en", { used: 12, max: 60 }, { used: 1, max: 50000000 }), "12 of 60 messages and 1 of 50,000,000 sync bytes.");
+  assert.equal(limitsUsage("es", { used: 0, max: 0 }, { used: 0, max: 1 }), "0 de 0 mensajes y 0 de 1 byte de sincronización.");
+  assert.equal(limitsUsage("es", { used: 1, max: 1 }, { used: 2, max: 60 }), "1 de 1 mensaje y 2 de 60 bytes de sincronización.");
+  assert.equal(limitsUsage("es", { used: 2, max: 60 }, { used: 1, max: 1 }), "2 de 60 mensajes y 1 de 1 byte de sincronización.");
   const { document } = createTestDocument();
   const t = (key, variables) => text("en", key, variables);
   const idle = renderSession(document, {

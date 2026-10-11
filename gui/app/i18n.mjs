@@ -388,8 +388,8 @@ export function formatClock(language, value) {
 }
 
 export function limitsUsage(language, messages = {}, bytes = {}) {
-  const messageForm = pluralForm(language, messages.used ?? 0);
-  const byteForm = pluralForm(language, bytes.used ?? 0);
+  const messageForm = pluralForm(language, messages.max ?? 0);
+  const byteForm = pluralForm(language, bytes.max ?? 0);
   return text(language, `limitsUsage${messageForm}${byteForm}`, {
     messages: formatNumber(language, messages.used ?? 0),
     max: formatNumber(language, messages.max ?? 0),
