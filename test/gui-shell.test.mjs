@@ -2878,6 +2878,115 @@ test("a failed connection stays open and retries the same targets", async (t) =>
   assert.deepEqual(writes[0].body, writes[1].body);
 });
 
+test("failure causes and empty lists name the resource and its next step", async (t) => {
+  assert.equal(text("en", "requestTimeout"), "The request timed out.");
+  assert.equal(text("es", "requestTimeout"), "La solicitud agotó el tiempo.");
+  assert.equal(text("en", "requestLimited"), "The request limit was reached.");
+  assert.equal(text("es", "commentHintText"), "Seleccionar texto y escribir el comentario.");
+  assert.throws(() => text("en", "emptyList"), /Unknown copy key: emptyList/);
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-look='high-contrast']"), "Settings did not open.");
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", status: 503, code: "timeout" });
+  click(desktop.root.querySelector("[data-look='high-contrast']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.error?.code === "timeout", "The timeout was not recorded.");
+  const timeoutText = desktop.root.querySelector("[data-activity='settings']")?.textContent ?? "";
+  assert.equal(timeoutText.includes("The request timed out."), true);
+  assert.equal(timeoutText.includes("Try again."), true);
+  assert.equal(desktop.root.querySelector("[data-action='retry-activity']") != null, true);
+
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", status: 503, code: "service_unavailable" });
+  click(desktop.root.querySelector("[data-action='retry-activity']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.error?.code === "service_unavailable", "The unavailable cause was not recorded.");
+  const unavailableText = desktop.root.querySelector("[data-activity='settings']")?.textContent ?? "";
+  assert.equal(unavailableText.includes("The service is unavailable."), true);
+  assert.equal(unavailableText.includes("Try again."), true);
+
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", status: 429, code: "request_rate_limited" });
+  click(desktop.root.querySelector("[data-action='retry-activity']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.error?.code === "request_rate_limited", "The limit cause was not recorded.");
+  const limitedText = desktop.root.querySelector("[data-activity='settings']")?.textContent ?? "";
+  assert.equal(limitedText.includes("The request limit was reached."), true);
+  assert.equal(limitedText.includes("Try again."), true);
+  assert.equal(limitedText.includes("Wait and try again."), false);
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-comment]"), "The comment field did not open.");
+  assert.equal(desktop.root.querySelector("[data-comment]").closest("label").querySelector(".field-hint").textContent, "Select text, then write the comment.");
+  assert.equal(desktop.root.querySelector("[data-disabled-reason='comment']")?.textContent, "Select text before commenting on it.");
+  assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Choose a screen or node")), false);
+  desktop.app.editors.current.threads = [];
+  desktop.app.editors.current.commentsTotal = 0;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='comments']")?.textContent, "No comments yet. Select text, then write one.");
+
+  desktop.app.editors.catalog = [];
+  desktop.app.editors.catalogTotal = 0;
+  desktop.app.editors.loadedKind = "void";
+  desktop.app.editors.catalogLoading = false;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='void']")?.textContent, "No texts yet. Create or register one.");
+  assert.equal(desktop.root.querySelector("[data-action='open-create']")?.textContent, "Create");
+  assert.equal(desktop.root.querySelector("[data-action='refresh-catalog']")?.textContent, "Refresh");
+  assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Nothing to show yet.")), false);
+
+  navigate(desktop.app, "map");
+  await waitFor(() => desktop.app.unitList && desktop.app.unitList.status !== "loading", "The unit list did not settle.");
+  if (desktop.app.store.view) desktop.app.store.view.issues = [];
+  desktop.app.unitList.issues = [];
+  desktop.app.unitList.query = "zzzz-no-match";
+  desktop.app.unitList.status = "empty";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='issues']")?.textContent, "No issues to review. Refresh to check again.");
+  assert.equal(desktop.root.querySelector("[data-action='refresh-issues']")?.textContent, "Refresh");
+  assert.equal(desktop.root.querySelector("[data-action='clear-search']")?.textContent, "Clear search");
+
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.app.waitingList && desktop.app.waitingList.status !== "loading" && desktop.root.querySelector("[data-waiting-surface]"), "Waiting did not open.");
+  desktop.app.waitingList.items = [];
+  desktop.app.waitingList.total = 0;
+  desktop.app.waitingList.status = "empty";
+  renderShell(desktop.app);
+  const waiting = desktop.root.querySelector("[data-waiting-surface]");
+  assert.equal(waiting.querySelector("[data-empty='waiting']")?.textContent, "Nothing is waiting.");
+  assert.equal(waiting.querySelector("[data-empty-next='waiting']")?.textContent, "Open the map to find who is waiting.");
+  assert.equal(waiting.querySelector("[data-action='show-map']")?.textContent, "Show the map");
+  assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Nothing to show yet.")), false);
+
+  desktop.app.waitingOpen = false;
+  navigate(desktop.app, "chats");
+  await waitFor(() => desktop.app.chatList?.catalog?.length, "The chat list did not load.");
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-composer]"), "The composer did not open.");
+  desktop.app.thread.messages = [];
+  desktop.app.thread.total = 0;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='chat']")?.textContent, "No messages yet. Write one below.");
+
+  click(desktop.root.querySelector("[data-action='mailbox']"));
+  await waitFor(() => desktop.root.querySelector("[data-mailbox-unit]"), "The mailbox list did not open.");
+  const unitId = desktop.root.querySelector("[data-mailbox-unit]").getAttribute("data-mailbox-unit");
+  click(desktop.root.querySelector(`[data-mailbox-unit="${unitId}"]`));
+  await waitFor(() => desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`), "The mailbox history did not open.");
+  desktop.app.mailbox.items = [];
+  desktop.app.mailbox.optimistic = null;
+  desktop.app.mailbox.pending = false;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='mailbox']")?.textContent, "No mailbox messages. Write one below.");
+  assert.equal(desktop.root.querySelector("[data-mailbox-compose]") != null, true);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

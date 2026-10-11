@@ -177,9 +177,13 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   return block;
 }
 
-export function renderWaiting(document, items, t, onOpen) {
+export function renderWaiting(document, items, t, onOpen, emptyAction = null) {
   const block = element(document, "section", { class: "waiting-list", "data-waiting": String(items?.length ?? 0) });
-  if (!items?.length) block.append(element(document, "p", { text: t("emptyList") }));
+  if (!items?.length) {
+    block.append(element(document, "p", { "data-empty": "waiting", text: t("emptyWaiting") }));
+    block.append(element(document, "p", { class: "field-hint", "data-empty-next": "waiting", text: t("emptyWaitingNext") }));
+    if (emptyAction) block.append(emptyAction);
+  }
   for (const item of items ?? []) {
     const attrs = {
       "data-waiting-item": item.id,

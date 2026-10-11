@@ -817,7 +817,7 @@ function renderWorkspace(app, t, view, counts) {
     const issues = trackDisclosure(app, element(document, "details", { class: "phone-issues", "data-phone-issues": "true" }), "phone-issues");
     issues.append(element(document, "summary", { text: cardinal(app.language, "issueCount", issueItems.length) }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyIssues") }));
+    if (!issueItems.length) issues.append(emptyIssues(app, document, t));
     side = element(document, "aside", { class: "panel side" },
       element(document, "h2", { "data-phone-title": "true", text: phoneTitle }),
       issues,
@@ -826,7 +826,7 @@ function renderWorkspace(app, t, view, counts) {
   } else {
     const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyIssues") }));
+    if (!issueItems.length) issues.append(emptyIssues(app, document, t));
     side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
   }
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
@@ -964,8 +964,11 @@ function renderWaitingSurface(app, t) {
   }
   const items = list.items ?? [];
   const range = windowRange(list.scrollTop, list.height || 640, list.rowHeight || 36, items.length);
-  if (list.status !== "loading" || items.length) {
-    surface.append(renderWaiting(document, items.slice(range.start, range.end), t, (item) => openWaitingItem(app, item)));
+  if (!items.length && list.status !== "loading") {
+    surface.append(renderWaiting(document, [], t, (item) => openWaitingItem(app, item), showMapButton(app, document, t)));
+  } else if (items.length) {
+    const visible = items.slice(range.start, range.end);
+    if (visible.length) surface.append(renderWaiting(document, visible, t, (item) => openWaitingItem(app, item)));
   }
   surface.append(renderWaitingRecord(app, t));
   return surface;
@@ -1117,6 +1120,7 @@ function renderCollection(app, t) {
   app.activeRows = rows;
   app.activeHandlers = handlers;
   block.append(search, total, host);
+  if (list.status === "empty" && list.query) block.append(clearSearchButton(document, t, list));
   if (list.status === "empty" && !list.query) {
     const next = emptyCollectionAction(app, document, t, list);
     if (next) block.append(next);
@@ -1124,15 +1128,50 @@ function renderCollection(app, t) {
   return block;
 }
 
+function emptyIssues(app, document, t) {
+  const block = element(document, "div");
+  block.append(element(document, "p", { "data-empty": "issues", text: t("emptyIssues") }));
+  if (app.unitList) {
+    block.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "refresh-issues",
+      text: t("refreshList"),
+      onclick: () => reloadList(app.unitList),
+    }));
+  }
+  return block;
+}
+
+function showMapButton(app, document, t) {
+  return element(document, "button", {
+    type: "button",
+    class: "btn",
+    "data-action": "show-map",
+    text: t("showMap"),
+    onclick: () => navigate(app, "hierarchy"),
+  });
+}
+
+function clearSearchButton(document, t, list) {
+  return element(document, "button", {
+    type: "button",
+    class: "btn",
+    "data-action": "clear-search",
+    text: t("clearSearch"),
+    onclick: () => setQuery(list, ""),
+  });
+}
+
 function emptyCollectionText(t, name) {
   if (name === "chats") return t("emptyChats");
   if (name === "waiting") return t("emptyWaiting");
   if (name === "units") return t("emptyUnits");
-  return t("emptyList");
+  return t("emptyCollection");
 }
 
 function emptyCollectionAction(app, document, t, list) {
-  if (list.name === "units") {
+  if (list.name === "units" || (list.name !== "chats" && list.name !== "waiting")) {
     return element(document, "button", {
       type: "button",
       class: "btn",
@@ -1141,16 +1180,7 @@ function emptyCollectionAction(app, document, t, list) {
       onclick: () => reloadList(list),
     });
   }
-  if (list.name === "chats" || list.name === "waiting") {
-    return element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "show-map",
-      text: t("showMap"),
-      onclick: () => navigate(app, "hierarchy"),
-    });
-  }
-  return null;
+  return showMapButton(app, document, t);
 }
 
 function editorsOf(app) {
@@ -1184,7 +1214,7 @@ function queueCatalog(app, kind) {
     } finally {
       editors.catalogLoading = false;
     }
-  }, (error) => noteEditor(app, error));
+  }, (error) => noteEditor(app, error, `catalog:${kind}`));
 }
 
 function boardSurface(app, document, editor, t) {
@@ -1698,6 +1728,23 @@ function renderEditorSurfaces(app, t) {
     onActivate: (row) => selectEditor(app, row.item),
   });
   if (editors.catalogLoading) catalog.append(progressMark(document, t("loadingList"), { "data-catalog-progress": "true" }));
+  else if (editors.loadedKind === kind && (editors.catalog?.length ?? 0) === 0) {
+    const editable = canEditResources(app);
+    const emptyKey = kind === "blueprint"
+      ? (editable ? "emptyBoards" : "emptyBoardsRead")
+      : (editable ? "emptyTexts" : "emptyTextsRead");
+    catalog.append(element(document, "p", { "data-empty": kind, text: t(emptyKey) }));
+    catalog.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "refresh-catalog",
+      text: t("refreshList"),
+      onclick: () => {
+        editors.loadedKind = null;
+        queueCatalog(app, kind);
+      },
+    }));
+  }
   catalog.append(list);
   const forms = resourceForms(app, document, t);
   if (forms) catalog.append(forms);
@@ -1742,6 +1789,12 @@ function renderEditorSurfaces(app, t) {
   }
   tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
+  if (!(current.threads?.length)) {
+    comments.append(element(document, "p", {
+      "data-empty": "comments",
+      text: t(current.kind === "void" ? "emptyCommentsText" : "emptyCommentsBoard"),
+    }));
+  }
   const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
   for (const thread of (current.threads ?? []).slice(0, commentBound)) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
@@ -1793,14 +1846,14 @@ function renderEditorSurfaces(app, t) {
     setCommentEnabled(button, commentCanSubmit(app, field.value));
   };
   owner.addEventListener?.("selectionchange", app.onCommentSelection);
-  const commentField = labeledField(document, t("comment"), t("commentHint"), compose);
+  const commentField = labeledField(document, t("comment"), t(commentHintKey(app)), compose);
   commentButton.setAttribute("aria-describedby", compose.getAttribute("aria-describedby"));
   if (!commentCanSubmit(app, compose.value)) {
     const reason = element(document, "p", {
       id: "reason-comment",
       class: "field-hint",
       "data-disabled-reason": "comment",
-      text: currentCommentAnchor(app) ? t("commentNeedsText") : t("commentNeedsTarget"),
+      text: currentCommentAnchor(app) ? t("commentNeedsText") : t(commentMissingKey(app)),
     });
     commentButton.setAttribute("aria-describedby", "reason-comment");
     commentsColumn.append(comments, commentField, commentButton, reason);
@@ -1848,6 +1901,14 @@ function followEditor(app) {
   });
 }
 
+function commentHintKey(app) {
+  return app.editors?.current?.kind === "void" ? "commentHintText" : "commentHint";
+}
+
+function commentMissingKey(app) {
+  return app.editors?.current?.kind === "void" ? "quoteNeedsSelection" : "commentNeedsTarget";
+}
+
 function commentCanSubmit(app, value) {
   return Boolean(currentCommentAnchor(app)) && typeof value === "string" && value.trim().length > 0;
 }
@@ -1887,7 +1948,7 @@ function addEditorComment(app, compose) {
   current.commentText = value;
   const anchor = currentCommentAnchor(app);
   if (!anchor || !value.trim()) {
-    explain(app, anchor ? "commentNeedsText" : "commentNeedsTarget");
+    explain(app, anchor ? "commentNeedsText" : commentMissingKey(app));
     return;
   }
   sendEditorComment(app, current, anchor, value);
@@ -3049,6 +3110,38 @@ const ACTION_COPY = {
   nothing_to_undo: "nothingToUndo",
   undo_conflict: "undoConflict",
   request_failed: "actionFailed",
+  timeout: "requestTimeout",
+  service_unavailable: "unavailable",
+  mind_unavailable: "mindUnavailable",
+  internal_error: "internalError",
+  request_rate_limited: "requestLimited",
+  message_rate_limited: "requestLimited",
+  sync_rate_limited: "requestLimited",
+  auth_rate_limited: "requestLimited",
+  not_found: "missingRecord",
+  invalid_body: "rejectedRequest",
+  invalid_json: "rejectedRequest",
+  unknown_field: "rejectedRequest",
+  invalid_query: "rejectedRequest",
+  invalid_cursor: "rejectedRequest",
+  invalid_host: "rejectedRequest",
+  invalid_path: "rejectedRequest",
+  invalid_response: "rejectedRequest",
+  method_not_allowed: "rejectedRequest",
+  unsupported_media_type: "rejectedRequest",
+  uri_too_long: "rejectedRequest",
+  invalid_session: "sessionInvalid",
+  invalid_origin: "actionForbidden",
+  loopback_only: "actionForbidden",
+  peer_not_allowed: "actionForbidden",
+  not_attached: "actionForbidden",
+  home_expired: "homeExpired",
+  approval_expired: "approvalExpired",
+  body_too_large: "tooLarge",
+  message_too_large: "tooLarge",
+  view_too_large: "tooLarge",
+  resource_too_large: "tooLarge",
+  pack_too_large: "tooLarge",
 };
 
 const TASK_COPY = {
@@ -3613,7 +3706,10 @@ function chatPanel(app, t) {
     start: thread.windowStart ?? 0,
   });
   thread.windowStart = windowed.start;
-  if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
+  if (!windowed.items.length) {
+    const canPost = (app.store.capabilities ?? []).includes("chat.post");
+    transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+  }
   for (const message of windowed.items) {
     const own = unitById(app, message.fromId)?.role === "master";
     const article = element(document, "article", { class: own ? "bubble own" : "bubble", "data-from": message.fromId ?? "", "data-own": own ? "true" : "false" });
@@ -3760,7 +3856,10 @@ function renderMailbox(app, t) {
     history.append(element(document, "p", { text: t("mailboxHistory") }));
     const visibleMail = [...(box.items ?? [])];
     if (box.optimistic) visibleMail.unshift(box.optimistic);
-    if (!visibleMail.length && !box.pending) history.append(element(document, "p", { "data-empty": "true", text: t("mailboxEmpty") }));
+    if (!visibleMail.length && !box.pending) {
+      const canPost = (app.store.capabilities ?? []).includes("chat.post");
+      history.append(element(document, "p", { "data-empty": "mailbox", text: t(canPost ? "mailboxEmpty" : "mailboxEmptyRead") }));
+    }
     for (const message of visibleMail) {
       if (message.pending) {
         const row = element(document, "p", {
@@ -4069,7 +4168,7 @@ function renderInspector(app, t, selected) {
     cards.append(openTaskDetail(document, task, t));
   }
   if (cards.children?.length) panel.append(cards);
-  details.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
+  details.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item), data.waiting?.length ? null : showMapButton(app, document, t)));
   panel.append(details);
   return panel;
 }
