@@ -19,10 +19,15 @@ import { addNode, answerProposal, createAsset, createBoard, createComment, creat
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
+export const EMBEDDED_BROWSER_FILES = Object.freeze({
+  'mark.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n',
+});
+
 export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs',
+  'mark.svg',
 ]);
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
@@ -195,8 +200,9 @@ export function respond(res, status, body, headers = {}) {
 }
 
 export async function serveStatic(assetDir, name) {
-  if (!assetDir) throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
   if (!STATIC_FILES.has(name)) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  if (Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) return Buffer.from(EMBEDDED_BROWSER_FILES[name]);
+  if (!assetDir) throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
   const root = await realpath(assetDir).catch(() => { throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.'); });
   await assertNoLinks(root);
   const target = path.resolve(root, name);
@@ -349,7 +355,7 @@ export async function createHttpServer(options) {
       await serveMcp(req, res, options, credentials);
       return;
     }
-    if (requested.path.startsWith('/app/') || requested.path === '/' || requested.path.startsWith('/gui/')) {
+    if (requested.path.startsWith('/app/') || requested.path === '/' || requested.path === '/mark.svg' || requested.path.startsWith('/gui/')) {
       await serveEdge(req, res, requested.path, { assetDir: options.assetDir, viewers });
       return;
     }
@@ -553,7 +559,7 @@ function expireIdleBuckets(principals, now) {
 
 function principalBucket(principals, req, pathname, credential, now) {
   expireIdleBuckets(principals, now);
-  const anonymous = pathname === '/' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
+  const anonymous = pathname === '/' || pathname === '/mark.svg' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
     || pathname === '/api/v1/auth/local' || pathname === '/api/v1/auth/home' || pathname === '/api/v1/auth/logout';
   const key = !anonymous && credential?.token ? `principal:${credential.token}` : `peer:${peerAddress(req)}`;
   let bucket = principals.get(key);
@@ -571,7 +577,7 @@ async function serveEdge(req, res, pathname, { assetDir, viewers }) {
     error.allow = 'GET';
     throw error;
   }
-  let name = 'index.html';
+  let name = pathname === '/mark.svg' ? 'mark.svg' : 'index.html';
   if (pathname.startsWith('/gui/')) {
     const viewerId = decodeId(decodeURIComponent(pathname.split('/')[2] ?? ''));
     if (!viewers.has(viewerId)) throw new CoreError(404, 'not_found', 'The viewer does not exist.');
@@ -1269,6 +1275,7 @@ function retryAfter(retryAt, now) {
 }
 
 function contentType(name) {
+  if (name.endsWith('.svg')) return 'image/svg+xml; charset=utf-8';
   if (name.endsWith('.css')) return 'text/css; charset=utf-8';
   if (name.endsWith('.mjs') || name.endsWith('.js')) return 'text/javascript; charset=utf-8';
   return 'text/html; charset=utf-8';

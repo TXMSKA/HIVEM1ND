@@ -266,6 +266,13 @@ test('phone writes are rejected and static absence leaves the API usable', async
   assert.equal(denied.status, 403);
   const missing = await call(core.http.port, 'GET', '/');
   assert.equal(missing.status, 503);
+  const icon = await call(core.http.port, 'GET', '/mark.svg');
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers['content-type'], /image\/svg\+xml/);
+  assert.match(icon.raw, /<svg/);
+  const appIcon = await call(core.http.port, 'GET', '/app/mark.svg');
+  assert.equal(appIcon.status, 200);
+  assert.match(appIcon.raw, /<svg/);
   const still = await call(core.http.port, 'GET', '/api/v1/tasks', { token });
   assert.equal(still.status, 200);
   const traversal = await call(core.http.port, 'GET', '/app/../package.json');

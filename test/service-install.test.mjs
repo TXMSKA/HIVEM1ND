@@ -564,6 +564,9 @@ test('release packaging uses the served browser modules', async (t) => {
     await writeFile(path.join(app, name), body);
   }
   await assertReleaseAssets(app);
+  await rm(path.join(app, 'mark.svg'));
+  await writeFile(path.join(app, 'index.html'), '<link rel="icon" href="mark.svg">\n<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n');
+  await assertReleaseAssets(app);
   await writeFile(path.join(app, 'main.mjs'), "import './extra.mjs';\n");
   await assert.rejects(() => assertReleaseAssets(app), /browser asset extra\.mjs/);
   await rm(path.join(app, 'main.mjs'));

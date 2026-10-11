@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BROWSER_STATIC_FILES } from '../engine/service/http.mjs';
+import { BROWSER_STATIC_FILES, EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -544,6 +544,7 @@ export async function referencedBrowserFiles(assetDir) {
     try {
       text = await readFile(path.join(assetDir, name), 'utf8');
     } catch (error) {
+      if (error?.code === 'ENOENT' && Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) continue;
       if (error?.code === 'ENOENT') throw new Error(`Release packaging needs browser asset ${name}.`);
       throw error;
     }
@@ -559,6 +560,7 @@ export async function assertReleaseAssets(assetDir) {
   const required = new Set([...BROWSER_ASSETS, ...referenced]);
   for (const name of required) {
     if (!BROWSER_ASSETS.includes(name)) throw new Error(`Release packaging needs browser asset ${name}.`);
+    if (Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) continue;
     try {
       await access(path.join(assetDir, name));
     } catch {
@@ -708,9 +710,17 @@ export async function collectPayload(options) {
     await assertReleaseAssets(assetDir);
     for (const name of BROWSER_ASSETS) {
       const payloadName = `gui/app/${name}`;
-      if (!files.some((file) => file.name === payloadName)) {
-        files.push({ name: payloadName, data: await readFile(path.join(assetDir, name)) });
+      if (files.some((file) => file.name === payloadName)) continue;
+      if (Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) {
+        const disk = path.join(assetDir, name);
+        const data = await readFile(disk).catch((error) => {
+          if (error?.code === 'ENOENT') return Buffer.from(EMBEDDED_BROWSER_FILES[name]);
+          throw error;
+        });
+        files.push({ name: payloadName, data });
+        continue;
       }
+      files.push({ name: payloadName, data: await readFile(path.join(assetDir, name)) });
     }
   }
   return files;
