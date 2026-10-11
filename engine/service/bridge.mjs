@@ -20,6 +20,9 @@ export async function openBridge(options = {}) {
     credentials,
     agents,
     adapters: options.adapters ?? {},
+    relay: options.relay ?? null,
+    operations: options.operations ?? {},
+    settled: new Map(),
     server: null,
   };
   const server = createServer((socket) => accept(socket, bridge));
@@ -108,6 +111,28 @@ function accept(socket, bridge) {
       socket.end(`${JSON.stringify({ id: message.id ?? null, error: 'unauthorized' })}\n`);
       return;
     }
-    socket.end(`${JSON.stringify({ id: message.id, result: { accepted: true, operation: message.operation } })}\n`);
+    perform(bridge, message.operation, message.binding ?? {}).then((result) => {
+      socket.end(`${JSON.stringify({ id: message.id, result })}\n`);
+    }).catch((error) => {
+      socket.end(`${JSON.stringify({ id: message.id, error: error?.code || 'delivery_failed' })}\n`);
+    });
   });
+}
+
+async function perform(bridge, operation, binding) {
+  const deliveryId = typeof binding?.deliveryId === 'string' ? binding.deliveryId : '';
+  if (deliveryId && bridge.settled.has(deliveryId)) return bridge.settled.get(deliveryId);
+  const handler = bridge.operations?.[operation] ?? bridge.relay?.[operation];
+  if (typeof handler !== 'function') {
+    throw new CoreError(503, 'service_unavailable', 'The bridge operation is not available.');
+  }
+  let result;
+  try {
+    result = await handler(binding);
+  } catch (error) {
+    if (error?.code === 'delivery_failed') return { delivered: false, state: 'failed', code: 'delivery_failed', deliveryId: deliveryId || null };
+    throw error;
+  }
+  if (deliveryId && (result?.state === 'submitted' || result?.state === 'ambiguous')) bridge.settled.set(deliveryId, result);
+  return result;
 }

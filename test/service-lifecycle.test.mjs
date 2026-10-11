@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attachNative, dispatchLocal } from '../engine/service/bridge.mjs';
+import { attachNative, closeBridge, dispatchLocal, openBridge } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
 import { createChat, postChat } from '../engine/service/chats.mjs';
 import { canonicalJson } from '../engine/service/identity.mjs';
@@ -131,8 +131,7 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   try {
     assert.equal(started.bridge.endpoint.startsWith('\\\\.\\pipe\\hivem1nd-'), true);
     assert.equal(started.bridge.port, undefined);
-    const accepted = await dispatchLocal(started.bridge, 'register', { unitId: binding.unitId });
-    assert.equal(accepted.accepted, true);
+    await assert.rejects(() => dispatchLocal(started.bridge, 'register', { unitId: binding.unitId }), (error) => error.code === 'INVALID_INPUT');
     await assert.rejects(() => dispatchLocal(started.bridge, 'exec', {}), { code: 'invalid_body' });
     await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, nativeSessionId: 'native-1', handshake: true }), (error) => error.code === 'stop_unavailable');
     started.bridge.adapters = {
@@ -147,6 +146,34 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   } finally {
     await stopService(started);
   }
+});
+
+test('a comment delivery is submitted once and a failure is not acceptance', async (t) => {
+  let calls = 0;
+  const bridge = await openBridge({
+    operations: {
+      async send(binding) {
+        calls += 1;
+        assert.equal(binding.deliveryId, 'comment-1');
+        return { delivered: true, state: 'submitted', deliveryId: binding.deliveryId };
+      },
+      async wake() {
+        throw Object.assign(new Error('The notice was not delivered.'), { code: 'delivery_failed' });
+      },
+    },
+  });
+  t.after(() => closeBridge(bridge));
+  const first = await dispatchLocal(bridge, 'send', { deliveryId: 'comment-1', unitId: 'project:shop:executor-shop' });
+  const second = await dispatchLocal(bridge, 'send', { deliveryId: 'comment-1', unitId: 'project:shop:executor-shop' });
+  assert.equal(calls, 1);
+  assert.equal(first.state, 'submitted');
+  assert.deepEqual(second, first);
+  assert.equal(first.accepted, undefined);
+  const failed = await dispatchLocal(bridge, 'wake', { deliveryId: 'comment-2' });
+  assert.equal(failed.delivered, false);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.code, 'delivery_failed');
+  assert.equal(failed.accepted, undefined);
 });
 
 test('the HTTP event stream stays up beside the service guard', async (t) => {

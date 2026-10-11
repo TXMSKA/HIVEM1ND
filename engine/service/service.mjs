@@ -13,6 +13,8 @@ import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, wa
 import { createPulse } from '../sync/pulse.mjs';
 import { openSync, stageBaselines } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
+import { createRelay } from '../relay/store.mjs';
+import { createRelayWakeController } from '../relay/wake.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './security.mjs';
@@ -70,7 +72,8 @@ export async function startService(options) {
     });
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;
-    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now });
+    handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
+    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now, relay: handle.relay });
     handle.adapters = openNativeAdapters(options.env ?? process.env);
     handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
@@ -180,7 +183,7 @@ export async function adoptWake(options, { nonce } = {}) {
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
   } catch (error) {
-    if (error?.code === 'ENOENT') return wakeResult([], nonce);
+    if (error?.code === 'ENOENT') return finishWake([], options, nonce);
     throw error;
   }
   const policies = [];
@@ -194,7 +197,17 @@ export async function adoptWake(options, { nonce } = {}) {
     const prior = merged.get(id);
     merged.set(id, prior ? mergePolicy(prior, policy) : policy);
   }
-  return wakeResult([...merged.values()], nonce);
+  return finishWake([...merged.values()], options, nonce);
+}
+
+async function finishWake(policies, options, nonce) {
+  return {
+    policies,
+    workersSpawned: 0,
+    signaled: [],
+    nonce,
+    controller: await startWakeController(options, nonce),
+  };
 }
 
 export async function writeBeat(options, state) {
@@ -681,22 +694,35 @@ function createRuntimeStore(paths, options) {
   return store;
 }
 
-function wakeResult(policies, nonce) {
-  return { policies, workersSpawned: 0, signaled: [], nonce, controller: startWakeController(nonce) };
-}
-
-function startWakeController(nonce) {
-  let timer = setInterval(() => {}, 1000);
-  timer.unref?.();
+async function startWakeController(options, nonce) {
+  const wake = await createRelayWakeController({
+    mindPath: options.paths.mind,
+    hostname: options.paths.machine,
+    pollIntervalMs: 1000,
+    clock: {
+      now: () => options.now?.() ?? Date.now(),
+      sleep(ms, signal) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          timer.unref?.();
+          signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+        });
+      },
+    },
+    sink: options.wakeSink ?? (async () => ({ status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' })),
+  });
   let closed = false;
   return {
     started: true,
     nonce: nonce ?? null,
+    wake,
     close() {
-      if (closed) return;
+      if (closed) return null;
       closed = true;
-      clearInterval(timer);
-      timer = null;
+      return wake.stopAll('stopped');
     },
   };
 }
