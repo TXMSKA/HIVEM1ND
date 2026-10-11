@@ -807,9 +807,11 @@ function renderWorkspace(app, t, view, counts) {
   );
   const issueItems = view?.issues ?? app.unitList?.issues ?? [];
   const collection = renderCollection(app, t);
-  const phoneTitle = app.tab === "chats"
-    ? (app.thread?.chat?.title || t("chats"))
-    : app.mode === "waiting" ? t("waiting") : t("hierarchy");
+  const phoneTitle = app.mode === "waiting"
+    ? t("waiting")
+    : app.tab === "chats"
+      ? (app.thread?.chat?.title || t("chats"))
+      : t("hierarchy");
   let side;
   if (app.layout === "phone") {
     const issues = trackDisclosure(app, element(document, "details", { class: "phone-issues", "data-phone-issues": "true" }), "phone-issues");
@@ -830,7 +832,7 @@ function renderWorkspace(app, t, view, counts) {
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
     ?? null;
-  const stageTitle = app.layout === "phone" && app.tab === "chats" ? phoneTitle : t(app.mode);
+  const stageTitle = app.layout === "phone" ? phoneTitle : t(app.mode);
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { "data-stage-title": "true", text: stageTitle }),
   );
@@ -2913,6 +2915,7 @@ function renderStatus(app, key) {
 }
 
 function viewTitle(app, t) {
+  if (app.mode === "waiting") return t("waiting");
   if (app.layout === "phone" && app.tab === "chats") return app.thread?.chat?.title || t("chats");
   return t(app.mode);
 }
