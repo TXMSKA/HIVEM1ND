@@ -769,11 +769,12 @@ async function convertedAsset(context, bytes, kind) {
     env: context.env,
     handles: [],
   });
+  if (Array.isArray(converted?.issues) && converted.issues.length > 0) fail(422, 'invalid_asset', 'The asset is not a verified image.');
   if (converted?.converted !== true || !Buffer.isBuffer(converted.bytes)) return { bytes, kind };
   const nextKind = sniff(converted.bytes);
   const nextSize = nextKind ? imageSize(converted.bytes, nextKind.type) : null;
   if (!nextKind || nextKind.type !== converted.contentType || !nextSize || nextSize.width < 1 || nextSize.height < 1 || nextSize.width > 16384 || nextSize.height > 16384) {
-    return { bytes, kind };
+    fail(422, 'invalid_asset', 'The asset is not a verified image.');
   }
   return { bytes: converted.bytes, kind: nextKind };
 }

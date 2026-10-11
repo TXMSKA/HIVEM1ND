@@ -290,6 +290,17 @@ test('a present converter stores WebP and a missing converter keeps the original
     spawn() { throw new Error('converter'); },
   }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64'), immutable: true });
   assert.match(historical.src, /\.png$/);
+  await assert.rejects(() => createAsset({
+    ...context,
+    converter: 'ffmpeg',
+    spawn() {
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    },
+  }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 422, code: 'invalid_asset' });
 });
 
 test('the board routes keep an unknown field through HTTP', async (t) => {
