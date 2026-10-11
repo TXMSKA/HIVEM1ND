@@ -2,6 +2,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, parseTaskId, parseUnitId, resolvePerson, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
+import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 
 const VIEW_LIMIT = 16000000;
 const OBSERVATION_MS = 15 * 60 * 1000;
@@ -236,12 +237,13 @@ async function loadMind(context) {
   const machines = await readMachines(context, now, issues);
   const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues);
   const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
+  const registered = new Set((context.projects ?? []).filter((item) => item?.localPath).map((item) => item.name));
   const projects = [];
   for (const name of await childNames(mind, 'user/projects')) {
     const product = await readJsonRecord(mind, `user/projects/${name}/product.json`, 'hivem1nd-product-v1', issues);
-    projects.push({ id: `project:${name}`, name, title: product?.value?.title ?? name, path: `user/projects/${name}` });
+    projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
   }
-  projects.sort((left, right) => left.name.localeCompare(right.name));
+  projects.sort((left, right) => left.id.localeCompare(right.id));
   return { units, sessions, messages, tasks, chats, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
 }
 
@@ -319,6 +321,81 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     closed: tasks.filter((task) => task.status === 'closed').length,
     unread: loaded.messages.filter((message) => message.read === false).length,
     issues: issues.length,
+  };
+}
+
+function projectRecord(name, product, units, available) {
+  const stage = ['alpha', 'beta', 'release'].includes(product?.stage) ? product.stage : null;
+  const requirements = product?.requirements;
+  const shaped = requirements && ['alpha', 'beta', 'release'].every((key) => Number.isInteger(requirements[key]?.total) && Number.isInteger(requirements[key]?.met));
+  return {
+    id: name,
+    environment: typeof product?.environment === 'string' ? product.environment : null,
+    title: typeof product?.title === 'string' ? product.title : name,
+    unitIds: units.filter((unit) => unit.scope?.kind === 'project' && unit.scope?.name === name && unit.id).map((unit) => unit.id).sort(),
+    available,
+    product: shaped || stage || typeof product?.updated === 'string'
+      ? {
+          stage,
+          updated: typeof product?.updated === 'string' ? product.updated : null,
+          requirements: {
+            alpha: counts(requirements?.alpha),
+            beta: counts(requirements?.beta),
+            release: counts(requirements?.release),
+          },
+        }
+      : null,
+  };
+}
+
+function counts(value) {
+  return {
+    total: Number.isInteger(value?.total) && value.total >= 0 ? value.total : 0,
+    met: Number.isInteger(value?.met) && value.met >= 0 ? value.met : 0,
+  };
+}
+
+export function serviceRecord(context) {
+  const outcome = context?.syncOutcome;
+  const syncState = outcome === 'pending' ? 'pending' : outcome === 'error' ? 'error' : 'idle';
+  return {
+    machine: context?.paths?.machine ?? null,
+    version: '3.0.0',
+    originKind: context?.paths?.origin ? 'folder' : null,
+    syncState,
+  };
+}
+
+export async function readSync(context) {
+  let pendingChanges = 0;
+  if (context.sync) {
+    const { listStaged } = await import('../sync/store.mjs');
+    pendingChanges = (await listStaged(context.sync)).length;
+  }
+  let limits = idleLimits();
+  if (context.ledger) {
+    const { limitsFor } = await import('../sync/limits.mjs');
+    limits = await limitsFor(context.ledger);
+  }
+  const outcome = context.syncOutcome;
+  const state = limits.state === 'paused' ? 'paused' : outcome === 'pending' ? 'pending' : outcome === 'error' ? 'error' : 'idle';
+  return {
+    state,
+    pendingChanges,
+    limits,
+    incoming: [],
+    retryAt: limits.retryAt ?? null,
+    error: null,
+  };
+}
+
+function idleLimits() {
+  return {
+    messages: { used: 0, max: MESSAGE_MAX, windowSeconds: MESSAGE_WINDOW_MS / 1000 },
+    messageBytes: { max: MESSAGE_BYTES_MAX },
+    syncBytes: { used: 0, max: SYNC_BYTES_MAX, windowSeconds: SYNC_WINDOW_MS / 1000 },
+    state: 'normal',
+    retryAt: null,
   };
 }
 
@@ -578,6 +655,7 @@ function collectionItems(view, name, query = {}) {
   if (name === 'units' || name === 'leads') return name === 'leads' ? view.units.filter((unit) => view.leads.includes(unit.id)) : view.units;
   if (name === 'squads') return view.squads;
   if (name === 'machines') return view.machines;
+  if (name === 'projects') return view.projects;
   if (name === 'sessions') return view.sessions;
   if (name === 'chats') return view.chats;
   if (name === 'tasks') return view.tasks;

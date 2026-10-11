@@ -695,6 +695,17 @@ test('every contract route has a success result and an authority or boundary fai
   for (const template of ['/view', '/units', '/leads', '/squads', '/projects', '/machines', '/sync', '/sessions', '/layout', '/settings', '/chats', '/mailboxes', '/approvals', '/tasks', '/waiting']) {
     const response = await call(port, 'GET', `/api/v1${template}`, { token });
     expectStatus(response, 200, template);
+    if (template === '/projects') assert.equal(Array.isArray(response.json.data.items), true);
+    if (template === '/sync') {
+      assert.equal(response.json.data.state, 'idle');
+      assert.equal(typeof response.json.data.pendingChanges, 'number');
+      assert.equal(response.json.data.items, undefined);
+    }
+    if (template === '/settings') {
+      assert.equal(response.json.data.service.machine, fixture.machine);
+      assert.equal(response.json.data.service.version, '3.0.0');
+      assert.equal(response.json.data.service.syncState, 'idle');
+    }
     hit('GET', template);
   }
   const homeDenied = await call(port, 'POST', '/api/v1/auth/home', { body: { key: 'not-a-grant' } });

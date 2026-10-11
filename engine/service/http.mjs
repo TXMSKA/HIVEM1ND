@@ -7,7 +7,7 @@ import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
-import { readCollection, readDetail, readProjection } from './projection.mjs';
+import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
@@ -938,6 +938,7 @@ async function invoke(route, scope) {
   if (route.template === '/grant-revocations/:requestId') return { status: 200, body: await readRevocation(domain, params.requestId) };
   if (route.template === '/session-requests/:requestId') return { status: 200, body: projectSessionRequest(await readStartRequest(domain, params.requestId)) };
   if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
+  if (route.template === '/sync' && route.method === 'GET') return { status: 200, body: await readSync(domain) };
   if (route.handler === 'collection') {
     const next = numbers(query);
     if (params.chatId) next.chatId = params.chatId;
@@ -954,7 +955,11 @@ async function invoke(route, scope) {
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
   if (route.handler === 'settings') {
     const detail = safeSettings(await readDetail(domain, 'settings'), credential);
-    return { status: 200, body: { ...detail, home: homeStatus(homeState) } };
+    const service = serviceRecord(domain);
+    if (credential?.audience === 'phone') {
+      return { status: 200, body: { settings: detail.settings, revision: detail.revision, service, home: homeStatus(homeState) } };
+    }
+    return { status: 200, body: { ...detail, service, home: homeStatus(homeState) } };
   }
   if (route.handler === 'createUnit') {
     const created = await createUnit(domain, body);
