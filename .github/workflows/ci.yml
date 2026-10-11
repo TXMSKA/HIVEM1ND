@@ -23,6 +23,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: node scripts/secret-scan.mjs
       - run: npm run lint
       - run: npm test
       - run: npm run build
