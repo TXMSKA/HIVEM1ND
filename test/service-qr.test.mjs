@@ -71,7 +71,7 @@ test('home grants expire exactly, revoke tokens and hide secrets', async (t) => 
   const liveKey = context.grant.key;
   advanceClock(fixture, 43200000);
   await assert.rejects(() => exchange(context, { key: liveKey }, '192.168.1.23'), { code: 'home_expired' });
-  await assert.rejects(async () => credentials.verify(second.token), { status: 401, code: 'unauthorized' });
+  await assert.rejects(async () => credentials.verify(second.token), { status: 401, code: 'invalid_session' });
   assert.equal(events.at(-1).data.reason, 'expired');
   assert.equal(events.at(-1).data.home.enabled, false);
   const addresses = eligibleAddresses({

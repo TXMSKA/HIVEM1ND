@@ -348,7 +348,8 @@ function textField(input, name) {
 }
 
 function headerField(input, name, max) {
-  const value = textField(input, name, max);
+  const value = textField(input, name);
+  if (value.length > max) throw new CoreError(422, 'invalid_body', `The ${name} must be at most ${max} characters.`);
   if (/[\u0000-\u001f]/.test(value)) throw new CoreError(422, 'invalid_body', `The ${name} cannot contain a control character.`);
   return value;
 }

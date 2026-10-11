@@ -805,9 +805,9 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/editors/register') {
     const registered = await registerResource(domain, body);
     const status = registered.httpStatus ?? 201;
-    const body = { ...registered };
-    delete body.httpStatus;
-    return { status, body };
+    const payload = { ...registered };
+    delete payload.httpStatus;
+    return { status, body: payload };
   }
   if (route.template === '/blueprint/boards' && route.method === 'POST') return { status: 201, body: await createBoard(domain, body) };
   if (route.template === '/void/texts' && route.method === 'POST') return { status: 201, body: await createText(domain, body) };

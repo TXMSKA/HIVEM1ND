@@ -364,7 +364,7 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
       // A failed final beat must not leave the watcher or the pulse open.
     }
   }
-  runtime.pulse.close();
+  await runtime.pulse.close().done;
   if (runtime.unwatch) await runtime.unwatch();
   await closeOrigin(runtime.origin);
 }

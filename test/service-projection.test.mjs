@@ -75,7 +75,7 @@ test('projection keeps duplicate names, one overseer, full counts, and deduped w
   await writeFile(path.join(root, 'user', 'state', 'broken.md'), 'this is not a state\n');
   await writeFile(path.join(root, 'user', 'tasks', '029-review.md'), stateFile({
     id: 'project:shop:029', title: 'Review me', status: 'review', 'from-id': 'root:master', 'to-id': 'project:shop:executor-shop', date: '2026-10-10',
-  }, 'Approved for review by overseer on 2026-10-10\n'));
+  }, '## Report\nApproved for review by overseer on 2026-10-10\n'));
   await writeFile(path.join(root, 'user', 'inbox', 'master', 'ask.md'), stateFile({
     id: 'message-ask', 'to-id': 'root:master', 'reply-requested': 'true', subject: 'Need a decision', timestamp: '2026-10-10T12:00:00.000Z',
   }));

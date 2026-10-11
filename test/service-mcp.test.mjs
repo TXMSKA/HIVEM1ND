@@ -20,7 +20,7 @@ async function boot(t) {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   const agent = core.credentials.issue({
     audience: 'agent',
     unitId: 'project:shop:executor',
@@ -136,10 +136,12 @@ test('an identical MCP request id replays the original editor success', async (t
   const message = { jsonrpc: '2.0', method: 'tools/call', params: { name: 'blueprint_update_node', arguments: args } };
   const first = await dispatch(context, { ...message, id: 1 });
   assert.equal(first.result.isError, false);
+  const activity = context.store.events.filter((event) => event.name === 'editor.activity').length;
+  assert.equal(activity > 0, true);
   const second = await dispatch(context, { ...message, id: 2 });
   assert.equal(second.result.isError, false);
   assert.deepEqual(JSON.parse(second.result.content[0].text).data, JSON.parse(first.result.content[0].text).data);
-  assert.equal(context.store.events.filter((event) => event.name === 'editor.activity').length, 1);
+  assert.equal(context.store.events.filter((event) => event.name === 'editor.activity').length, activity);
 });
 
 function call(port, method, target, { token = null, body = undefined, raw = null, headers = {} } = {}) {

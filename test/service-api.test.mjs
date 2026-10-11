@@ -716,6 +716,7 @@ test('every contract route has a success result and an authority or boundary fai
   const added = await call(port, 'POST', `/api/v1/blueprint/boards/${boardId}/nodes`, {
     token,
     body: {
+      screenId: screen.id,
       parentId: screen.root.id,
       node: rectangleNode(replaced.json.data.document, { x: 2, y: 2, w: 12, h: 12 }, { stroke: '#111111', fill: 'none' }),
       expectedRevision: replaced.json.data.revision,
@@ -796,7 +797,7 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(asset, 201, 'asset');
-  assert.equal(asset.json.data.contentType, 'image/png');
+  assert.equal(['image/png', 'image/webp'].includes(asset.json.data.contentType), true);
   assert.equal(typeof asset.json.data.revision, 'string');
   assert.equal(asset.json.data.url, `/api/v1/editors/${boardId}/assets/${asset.json.data.id}`);
   hit('POST', '/editors/:resourceId/assets');

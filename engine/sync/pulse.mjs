@@ -190,7 +190,8 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     closed = true;
     scheduleToken += 1;
     clearTimer();
-    return { pending: pending.length };
+    const done = Promise.resolve(flushing).catch(() => null);
+    return { pending: pending.length, done };
   }
 
   async function currentLimits() {
