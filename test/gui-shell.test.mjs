@@ -2490,7 +2490,7 @@ test("an editor action names its failure and waits inside its dialog", async (t)
   click(desktop.root.querySelector("[data-action='add-node']"));
   assert.equal(nodePosts, 1);
   releaseNodes();
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.screens?.some((screen) => JSON.stringify(screen).includes("added-1")), "The shape was not saved.");
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.screens?.some((screen) => screen.root.kids.some((node) => node.name === "Added")), "The shape was not saved.");
 
   desktop.app.mode = "map";
   desktop.app.chatList.status = "empty";
@@ -2876,6 +2876,38 @@ test("a failed connection stays open and retries the same targets", async (t) =>
   assert.equal(writes.length, 2);
   assert.equal(writes[0].key, writes[1].key);
   assert.deepEqual(writes[0].body, writes[1].body);
+});
+
+test("a reopened board gives each added shape a distinct persisted identity", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const created = [];
+  const mounts = [];
+  t.after(() => { for (const desktop of mounts) dispose(desktop.app); });
+  let expectedCount = null;
+  for (let index = 0; index < 2; index += 1) {
+    const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+      if (init?.method === "POST" && String(input).includes("/nodes")) created.push(JSON.parse(init.body).node.id);
+    });
+    mounts.push(desktop);
+    navigate(desktop.app, "blueprint");
+    await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+    const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+    desktop.app.editors.catalogWindow.height = 4000;
+    renderShell(desktop.app);
+    click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+    await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The board did not open.");
+    const kids = () => desktop.app.editors.current.authoritative.document.screens[0].root.kids;
+    if (expectedCount === null) expectedCount = kids().length;
+    assert.equal(kids().length, expectedCount);
+    click(desktop.root.querySelector("[data-action='add-node']"));
+    expectedCount += 1;
+    await waitFor(() => kids().length === expectedCount, "The new shape was not persisted after reopening.");
+    assert.equal(kids().some((node) => node.id === created[index]), true);
+    dispose(desktop.app);
+  }
+  assert.equal(created.length, 2);
+  assert.notEqual(created[0], created[1]);
 });
 
 test("failure causes and empty lists name the resource and its next step", async (t) => {

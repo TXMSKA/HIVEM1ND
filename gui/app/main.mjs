@@ -33,7 +33,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -1327,9 +1327,7 @@ function boardSurface(app, document, editor, t) {
 function addBoardShape(app, editor, screen) {
   const key = `shape:${editor.resourceId}`;
   if (activityPending(app, key)) return app.activity.get(key).promise;
-  const count = (app.editors.shapeCount ?? 0) + 1;
-  app.editors.shapeCount = count;
-  const node = { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] };
+  const node = { id: `added-${operationId()}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] };
   return editorAct(app, key, text(app.language, "addShape"), async (record) => {
     await addNode(app.api, editor, {
       screenId: screen.id,
@@ -1340,13 +1338,12 @@ function addBoardShape(app, editor, screen) {
 }
 
 function addImageNode(app, editor, screen, asset) {
-  const count = (app.editors.shapeCount ?? 0) + 1;
-  app.editors.shapeCount = count;
+  const nodeId = `image-${operationId()}`;
   return editorAct(app, `image:${editor.resourceId}:${asset.src}`, text(app.language, "working"), async (record) => {
     await addNode(app.api, editor, {
       screenId: screen.id,
       parentId: screen.root.id,
-      node: { id: `image-${count}`, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
+      node: { id: nodeId, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
     }, record.operation);
   });
 }
