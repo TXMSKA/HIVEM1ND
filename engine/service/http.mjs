@@ -864,6 +864,7 @@ function domainContext(options, credential, bus) {
     ledger: options.ledger ?? null,
     sync: options.sync ?? null,
     pulse: options.pulse ?? null,
+    credentials: options.credentials ?? null,
     principal: {
       unitId: audience === 'agent' ? credential.unitId : 'root:master',
       audience,

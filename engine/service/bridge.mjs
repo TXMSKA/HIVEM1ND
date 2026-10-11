@@ -1,8 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { CoreError, isUuid, parseUnitId } from './identity.mjs';
+import { CoreError, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { createCredentialStore } from './security.mjs';
 
 const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake']);
@@ -20,6 +21,8 @@ export async function openBridge(options = {}) {
     credentials,
     agents,
     adapters: options.adapters ?? {},
+    paths: options.paths ?? null,
+    now: options.now ?? (() => Date.now()),
     relay: options.relay ?? null,
     operations: options.operations ?? {},
     settled: new Map(),
@@ -70,14 +73,17 @@ export async function attachNative(bridge, proof) {
   const adapter = bridge.adapters?.[proof.client];
   const confirmed = adapter?.confirm ? await adapter.confirm({ ...proof, unitId: unit.id }) : false;
   if (confirmed !== true) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
+  const bound = await boundSession(bridge, proof, unit.id);
   const previous = bridge.agents.get(unit.id);
   if (previous) bridge.credentials.revoke(previous);
   const issued = bridge.credentials.issue({
     audience: 'agent',
     unitId: unit.id,
-    sessionId: proof.nativeSessionId,
+    sessionId: bound.sessionId,
+    wakeId: bound.wakeId,
     capabilities: ['own'],
     attached: true,
+    expiresAt: bound.expiresAt,
   });
   bridge.agents.set(unit.id, issued.token);
   return { attached: true, unitId: unit.id, token: issued.token };
@@ -85,6 +91,76 @@ export async function attachNative(bridge, proof) {
 
 export async function closeBridge(bridge) {
   if (bridge?.close) await bridge.close();
+}
+
+async function boundSession(bridge, proof, unitId) {
+  const mind = bridge.paths?.mind;
+  if (!mind) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
+  const sessionId = uuidV8(['session', proof.machine, proof.client, proof.nativeSessionId, unitId]);
+  const registration = await newestRegistration(mind, sessionId, proof, unitId);
+  if (!registration || await sessionStopped(mind, sessionId)) {
+    throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
+  }
+  const wake = await activeWake(bridge, proof, unitId);
+  if (!wake) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
+  return { sessionId, wakeId: wake.wakeId, expiresAt: wake.expiresAt };
+}
+
+async function newestRegistration(mind, sessionId, proof, unitId) {
+  const names = await jsonNames(path.join(mind, 'user', 'relay', 'sessions'));
+  let match = null;
+  for (const name of names) {
+    const record = await readJson(path.join(mind, 'user', 'relay', 'sessions', name));
+    if (!record || record.sessionId !== sessionId) continue;
+    if (record.machine !== proof.machine || record.client !== proof.client || record.nativeSessionId !== proof.nativeSessionId || record.unitId !== unitId) continue;
+    if (!match || String(record.registeredAt ?? '') >= String(match.registeredAt ?? '')) match = record;
+  }
+  return match;
+}
+
+async function sessionStopped(mind, sessionId) {
+  if (!isUuid(sessionId)) return true;
+  const names = await jsonNames(path.join(mind, 'user', 'relay', 'session-status', sessionId));
+  for (const name of names) {
+    const record = await readJson(path.join(mind, 'user', 'relay', 'session-status', sessionId, name));
+    if (record?.state === 'stopped') return true;
+  }
+  return false;
+}
+
+async function activeWake(bridge, proof, unitId) {
+  const now = bridge.now?.() ?? Date.now();
+  const directory = path.join(bridge.paths.mind, 'user', 'relay', 'wake', 'policies');
+  const names = await jsonNames(directory);
+  let chosen = null;
+  for (const name of names) {
+    const policy = await readJson(path.join(directory, name));
+    const binding = policy?.binding ?? {};
+    if (binding.unitId !== unitId || binding.nativeSessionId !== proof.nativeSessionId || binding.client !== proof.client || binding.machine !== proof.machine) continue;
+    if (policy.enabled !== true || policy.pausedReason) continue;
+    const deadline = Date.parse(policy.deadlineAt);
+    if (!Number.isFinite(deadline) || deadline <= now) continue;
+    const wakeId = typeof policy.key === 'string' && policy.key.length > 0 ? policy.key : name.slice(0, -5);
+    if (!chosen || deadline < chosen.deadline) chosen = { wakeId, expiresAt: new Date(deadline).toISOString(), deadline };
+  }
+  return chosen;
+}
+
+async function jsonNames(directory) {
+  try {
+    return (await readdir(directory)).filter((name) => /^[A-Za-z0-9._-]+\.json$/.test(name));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function readJson(file) {
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function accept(socket, bridge) {

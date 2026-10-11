@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { attachNative, closeBridge, dispatchLocal, openBridge } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
 import { createChat, postChat } from '../engine/service/chats.mjs';
-import { canonicalJson } from '../engine/service/identity.mjs';
+import { canonicalJson, uuidV8 } from '../engine/service/identity.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
@@ -128,6 +128,7 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   assert.equal(adopted.controller.started, true);
   adopted.controller.close();
   const started = await startService(options);
+  let replacedToken = null;
   try {
     assert.equal(started.bridge.endpoint.startsWith('\\\\.\\pipe\\hivem1nd-'), true);
     assert.equal(started.bridge.port, undefined);
@@ -137,16 +138,56 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
     started.bridge.adapters = {
       codex: { async confirm(proof) { return proof.nativeSessionId === 'native-1' && proof.machine === fixture.machine; } },
     };
+    await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-1' }), (error) => error.code === 'stop_unavailable');
+    const firstId = await writeObservedSession(fixture, binding);
+    await writeActiveWake(fixture, binding, 'wake-native-1', '2026-10-10T18:00:00.000Z');
     const attached = await attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-1' });
-    assert.equal(started.credentials.verify(attached.token).audience, 'agent');
+    const first = started.credentials.verify(attached.token);
+    assert.equal(first.audience, 'agent');
+    assert.equal(first.sessionId, firstId);
+    assert.notEqual(first.sessionId, 'native-1');
+    assert.equal(first.wakeId, 'wake-native-1');
+    assert.equal(first.expiresAt, '2026-10-10T18:00:00.000Z');
+    const secondBinding = { ...binding, nativeSessionId: 'native-2' };
+    const secondId = await writeObservedSession(fixture, secondBinding);
+    await writeActiveWake(fixture, secondBinding, 'wake-native-2', '2026-10-12T11:00:00.000Z');
     started.bridge.adapters.codex.confirm = async (proof) => proof.nativeSessionId === 'native-2';
     const replaced = await attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-2' });
+    replacedToken = replaced.token;
     assert.notEqual(replaced.token, attached.token);
     assert.throws(() => started.credentials.verify(attached.token), { code: 'invalid_session' });
+    const second = started.credentials.verify(replaced.token);
+    assert.equal(second.sessionId, secondId);
+    assert.equal(second.wakeId, 'wake-native-2');
+    const held = fixture.clock.now;
+    fixture.clock.now = Date.parse('2026-10-13T00:00:00.000Z');
+    assert.throws(() => started.credentials.verify(replaced.token), { code: 'invalid_session' });
+    fixture.clock.now = held;
+    await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', secondId), { recursive: true });
+    await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', secondId, 'stopped.json'), JSON.stringify({ sessionId: secondId, state: 'stopped' }));
+    await assert.rejects(() => attachNative(started.bridge, { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-2' }), (error) => error.code === 'stop_unavailable');
   } finally {
     await stopService(started);
   }
+  assert.throws(() => started.credentials.verify(replacedToken), { code: 'invalid_session' });
 });
+
+async function writeObservedSession(fixture, binding) {
+  const sessionId = uuidV8(['session', binding.machine, binding.client, binding.nativeSessionId, binding.unitId]);
+  const directory = path.join(fixture.paths.mind, 'user', 'relay', 'sessions');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${sessionId}.json`), JSON.stringify({
+    sessionId, unitId: binding.unitId, client: binding.client, machine: binding.machine,
+    nativeSessionId: binding.nativeSessionId, registeredAt: '2026-10-10T12:00:00.000Z',
+  }));
+  return sessionId;
+}
+
+async function writeActiveWake(fixture, binding, key, deadlineAt) {
+  const directory = path.join(fixture.paths.mind, 'user', 'relay', 'wake', 'policies');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${key}.json`), JSON.stringify({ key, enabled: true, deadlineAt, binding }));
+}
 
 test('a comment delivery is submitted once and a failure is not acceptance', async (t) => {
   let calls = 0;

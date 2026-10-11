@@ -281,6 +281,7 @@ export async function stopSession(context, sessionId, input = {}) {
     reason: 'native-acknowledged',
   };
   await writeJson(context, `user/relay/session-status/${sessionId}/${randomUUID()}.json`, status);
+  context.credentials?.revokeSession?.(sessionId);
   if (context.watch && journal.unitId) {
     const { clearUnit } = await import('./watch.mjs');
     clearUnit(context.watch, journal.unitId);

@@ -145,6 +145,7 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
         audience: input.audience,
         unitId: input.unitId ?? null,
         sessionId: input.sessionId ?? null,
+        wakeId: input.wakeId ?? null,
         capabilities: input.audience === 'desktop' ? [...DESKTOP] : input.audience === 'phone' ? [...PHONE] : input.capabilities ?? [],
         expiresAt: input.expiresAt ?? null,
         viewerId: input.viewerId ?? null,
@@ -171,6 +172,11 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
     },
     revoke(token) {
       records.delete(token);
+    },
+    revokeSession(sessionId) {
+      for (const [token, record] of records) {
+        if (record.sessionId === sessionId) records.delete(token);
+      }
     },
     revokeAudience(audience) {
       for (const [token, record] of records) {

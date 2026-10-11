@@ -73,7 +73,8 @@ export async function startService(options) {
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;
     handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
-    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now, relay: handle.relay });
+    handle.credentials.revokeAudience('agent');
+    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now, relay: handle.relay, paths });
     handle.adapters = openNativeAdapters(options.env ?? process.env);
     handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
@@ -257,6 +258,7 @@ export async function composeCore(options) {
 
 export async function stopService(handle) {
   if (!handle || handle.attached) return { stopped: false };
+  handle.credentials?.revokeAudience('agent');
   await closeOwned(handle, { beat: true });
   const raw = await readFile(lockPath(handle.options)).catch(() => null);
   const parsed = parseLock(raw);

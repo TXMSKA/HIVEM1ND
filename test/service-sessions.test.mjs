@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { clientRecords, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, recoverStarts, registerNative, stopSession } from '../engine/service/adapters.mjs';
 import { openNativeAdapters } from '../engine/service/service.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
+import { createCredentialStore } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const UNIT = 'project:shop:executor-shop';
@@ -82,7 +83,11 @@ test('a fixture launch preloads once, does not leak endpoints, and stops only an
   const inbox = await readdir(path.join(fixture.paths.mind, 'user', 'inbox', 'executor-shop'));
   assert.equal(inbox.length, 1);
   await assert.rejects(() => stopSession(context, started.result.sessionId, { confirmed: false }), { code: 'invalid_body' });
+  const credentials = createCredentialStore({ now: () => fixture.clock.now });
+  const agent = credentials.issue({ audience: 'agent', unitId: UNIT, sessionId: started.result.sessionId, expiresAt: '2026-10-10T18:00:00.000Z' });
+  context.credentials = credentials;
   const status = await stopSession(context, started.result.sessionId, { confirmed: true });
+  assert.throws(() => credentials.verify(agent.token), { code: 'invalid_session' });
   assert.equal(status.state, 'stopping');
   assert.equal(status.sessionId, started.result.sessionId);
   assert.equal(signaled.length, 1);
