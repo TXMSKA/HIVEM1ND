@@ -658,6 +658,36 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   assert.equal(question.title, 'the registry name');
 });
 
+test('collection filters accept typed queries and hide closed tasks by default', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW };
+  await mkdir(path.join(root, 'user', 'tasks'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'open-chat'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'relay', 'chats', 'hidden-chat'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'tasks', '010.md'), stateFile({
+    id: 'root:010', title: 'Open work', status: 'open', 'to-id': 'root:master',
+  }));
+  await writeFile(path.join(root, 'user', 'tasks', '011.md'), stateFile({
+    id: 'root:011', title: 'Filed', status: 'closed', 'to-id': 'root:master',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'open-chat', 'chat.md'), stateFile({
+    id: 'open-chat', title: 'Open', kind: 'direct', members: '["root:master"]', listed: 'true', pinned: 'false',
+  }));
+  await writeFile(path.join(root, 'user', 'relay', 'chats', 'hidden-chat', 'chat.md'), stateFile({
+    id: 'hidden-chat', title: 'Hidden', kind: 'direct', members: '["root:master"]', listed: 'false', pinned: 'true',
+  }));
+  const tasks = await readCollection(context, 'tasks');
+  assert.deepEqual(tasks.items.map((item) => item.id), ['root:010']);
+  const closed = await readCollection(context, 'tasks', { status: 'open,closed' });
+  assert.deepEqual(closed.items.map((item) => item.id).sort(), ['root:010', 'root:011']);
+  const hidden = await readCollection(context, 'chats', { listed: 'false' });
+  assert.deepEqual(hidden.items.map((item) => item.id), ['hidden-chat']);
+  const pinned = await readCollection(context, 'chats', { listed: 'false', pinned: 'true' });
+  assert.deepEqual(pinned.items.map((item) => item.id), ['hidden-chat']);
+  await assert.rejects(() => readCollection(context, 'tasks', { q: 'x'.repeat(201) }), { code: 'invalid_query' });
+});
+
 test('machine clients are the probed availability records without executable paths', async (t) => {
   const fixture = await mind(t);
   const bin = path.join(fixture.root, 'bin');

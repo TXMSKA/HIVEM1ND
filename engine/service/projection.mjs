@@ -281,7 +281,7 @@ function assemble(loaded, query, aliases = [], machine = null) {
   }
   const leads = [...new Set([canonical?.id, ...units.map((unit) => unit.leadId)].filter(Boolean))];
   const squads = buildSquads(units);
-  const listedChats = loaded.chats.filter((chat) => query.listed === false ? true : chat.listed !== false);
+  const listedChats = loaded.chats.filter((chat) => chatListed(chat, query));
   const project = query.project ?? null;
   const visibleUnits = project ? units.filter((unit) => inProjectChain(unit, project, units)) : units;
   visibleUnits.sort(unitOrder);
@@ -670,10 +670,36 @@ function collectionItems(view, name, query = {}) {
 }
 
 function matchesQuery(item, name, query) {
+  if (query.q != null && String(query.q).length > 200) throw new CoreError(422, 'invalid_query', 'The search is longer than 200 characters.');
   if (query.q && !searchText(item, name).toLowerCase().includes(String(query.q).toLowerCase())) return false;
-  if (query.status && item.status !== query.status) return false;
-  if (query.unitId && item.unitId !== query.unitId && item.id !== query.unitId && item.toId !== query.unitId) return false;
+  if (name === 'tasks' && (query.status == null || query.status === '')) {
+    if (item.status === 'closed') return false;
+  } else if (query.status) {
+    const allowed = String(query.status).split(',').map((part) => part.trim()).filter(Boolean);
+    if (allowed.some((part) => !['open', 'review', 'done', 'closed', 'unknown', 'out', 'quota', 'waiting', 'working', 'idle'].includes(part))) {
+      throw new CoreError(422, 'invalid_query', 'The status filter is not valid.');
+    }
+    if (!allowed.includes(item.status)) return false;
+  }
+  if (query.unitId && item.unitId !== query.unitId && item.id !== query.unitId && item.toId !== query.unitId && !(Array.isArray(item.members) && item.members.includes(query.unitId))) return false;
+  if (query.machine && item.machine !== query.machine) return false;
+  if (query.leadId && item.leadId !== query.leadId) return false;
+  if (query.state && name !== 'messages' && item.state !== query.state) return false;
+  if (query.kind && item.kind !== query.kind) return false;
+  if (query.pinned != null && query.pinned !== '' && item.pinned !== queryFlag(query.pinned)) return false;
+  if (name === 'chats' && query.listed != null && query.listed !== '' && item.listed !== queryFlag(query.listed)) return false;
   return true;
+}
+
+function queryFlag(value) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new CoreError(422, 'invalid_query', 'The boolean filter is not valid.');
+}
+
+function chatListed(chat, query) {
+  if (query.listed == null || query.listed === '') return chat.listed !== false;
+  return chat.listed === queryFlag(query.listed);
 }
 
 function searchText(item, name) {
