@@ -15,22 +15,16 @@ const STARTABLE = new Set(CLIENTS);
 
 export async function probeClients(options = {}) {
   const env = options.env ?? process.env;
-  const found = {
-    claude: await findExecutable('claude', env),
-    codex: await findExecutable('codex', env),
-    cursor: await findExecutable('agent', env),
-  };
-  const cursor = await cursorAgentCommand({ env, platform: options.platform ?? process.platform });
+  const platform = options.platform ?? process.platform;
   const reports = {};
   for (const client of CLIENTS) {
-    const located = client === 'cursor' ? null : await unwrapLaunch(found[client], client);
-    const command = client === 'cursor'
-      ? (path.isAbsolute(cursor.command) ? cursor.command : null)
-      : located?.command ?? null;
+    const located = await locateClient(client, env, platform);
+    const unwrapped = located && client !== 'cursor' ? await unwrapLaunch(located.command, client) : null;
+    const command = client === 'cursor' ? located?.command ?? null : unwrapped?.command ?? null;
     const installed = Boolean(command);
     let version = null;
     if (installed && options.spawnVersion === true && !String(command).toLowerCase().endsWith('.cmd')) {
-      version = await versionOf(command, client === 'cursor' ? cursor.args : [], options);
+      version = await versionOf(command, client === 'cursor' ? located.args ?? [] : [], options);
     }
     reports[client] = {
       client,
@@ -298,7 +292,9 @@ async function launch(context, request) {
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
   const adapter = adapterFor(context, request.client);
-  const created = await adapter.create({ ...request, cwd: context.projects?.[0]?.localPath ?? null });
+  const cwd = registeredProjectCwd(context, request.unitId);
+  if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
+  const created = await adapter.create({ ...request, cwd });
   const pid = created.pid;
   context.ownedPids ??= new Set();
   context.ownedPids.add(pid);
@@ -485,13 +481,110 @@ function launchArgs(client, request = {}) {
   return ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--session-id', request.nativeSessionId ?? randomUUID()];
 }
 
-export async function resolveLaunch(client, env = process.env, platform = process.platform, request = {}) {
+const EXPLICIT_EXECUTABLE = {
+  claude: 'HIVEM1ND_CLAUDE',
+  codex: 'HIVEM1ND_CODEX',
+  cursor: 'HIVEM1ND_CURSOR',
+};
+
+function explicitExecutable(client, env) {
+  const key = EXPLICIT_EXECUTABLE[client];
+  if (!key || env[key] == null || env[key] === '') return undefined;
+  const value = env[key];
+  if (typeof value !== 'string' || !path.isAbsolute(value) || /[\0\r\n]/.test(value)) return null;
+  return value;
+}
+
+async function regularFile(file) {
+  try {
+    const stats = await lstat(file);
+    return stats.isFile() && !stats.isSymbolicLink() ? file : null;
+  } catch {
+    return null;
+  }
+}
+
+async function discoverCodex(env) {
+  if (typeof env.LOCALAPPDATA !== 'string' || !path.isAbsolute(env.LOCALAPPDATA)) return null;
+  const bin = path.join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin');
+  let names;
+  try {
+    names = await readdir(bin, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const found = [];
+  for (const entry of names.slice(0, 32)) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (entry.name === '.' || entry.name === '..' || entry.name.includes('..')) continue;
+    const directory = path.join(bin, entry.name);
+    try {
+      const stats = await lstat(directory);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    const file = await regularFile(path.join(directory, 'codex.exe'));
+    if (!file) continue;
+    const stats = await lstat(file);
+    found.push({ file, mtime: stats.mtimeMs });
+  }
+  found.sort((left, right) => right.mtime - left.mtime || left.file.localeCompare(right.file));
+  return found[0]?.file ?? null;
+}
+
+async function discoverClaude(env) {
+  const homes = [env.USERPROFILE, env.HOME].filter((item) => typeof item === 'string' && path.isAbsolute(item));
+  for (const home of homes) {
+    for (const relative of [['.local', 'bin', 'claude.exe'], ['.local', 'bin', 'claude.cmd']]) {
+      const file = await regularFile(path.join(home, ...relative));
+      if (file) return file;
+    }
+  }
+  if (typeof env.APPDATA === 'string' && path.isAbsolute(env.APPDATA)) {
+    return regularFile(path.join(env.APPDATA, 'npm', 'claude.cmd'));
+  }
+  return null;
+}
+
+async function locateClient(client, env, platform) {
+  const explicit = explicitExecutable(client, env);
+  if (explicit === null) return null;
+  if (explicit) {
+    const file = await regularFile(explicit);
+    if (!file) return null;
+    return { command: file, args: [] };
+  }
   if (client === 'cursor') {
     const cursor = await cursorAgentCommand({ env, platform });
     if (!path.isAbsolute(cursor.command)) return null;
-    return { command: cursor.command, args: [...cursor.args, 'acp'] };
+    const file = await regularFile(cursor.command);
+    if (!file) return null;
+    return { command: file, args: cursor.args };
   }
-  return unwrapLaunch(await findExecutable(client, env), client, request);
+  const onPath = await findExecutable(client, env);
+  if (onPath) return { command: onPath, args: [] };
+  const discovered = client === 'codex' ? await discoverCodex(env) : client === 'claude' ? await discoverClaude(env) : null;
+  return discovered ? { command: discovered, args: [] } : null;
+}
+
+export async function resolveLaunch(client, env = process.env, platform = process.platform, request = {}) {
+  const located = await locateClient(client, env, platform);
+  if (!located) return null;
+  if (client === 'cursor') return { command: located.command, args: [...located.args, ...launchArgs(client, request)] };
+  return unwrapLaunch(located.command, client, request);
+}
+
+function registeredProjectCwd(context, unitId) {
+  let projectName = null;
+  try {
+    projectName = parseUnitId(unitId).project;
+  } catch {
+    projectName = null;
+  }
+  if (!projectName) return null;
+  const project = (context.projects ?? []).find((item) => item?.name === projectName && typeof item.localPath === 'string' && item.eligible !== false);
+  return project?.localPath ?? null;
 }
 
 async function unwrapLaunch(file, client, request = {}) {
@@ -531,13 +624,13 @@ function unavailable() {
 }
 
 function loginFailed(text) {
-  return /not logged in|requiresopenaiauth|uv_os_get_passwd|enomem/i.test(text);
+  return /not logged in|requires\s+openai\s+auth|requiresopenaiauth"\s*:\s*true|uv_os_get_passwd|enomem/i.test(String(text));
 }
 
 async function handshake(client, child, request, timeoutMs) {
   const incoming = readLines(child, timeoutMs);
   try {
-    if (client === 'claude') return await claudeHandshake(request, incoming);
+    if (client === 'claude') return await claudeHandshake(child, request, incoming);
     if (client === 'codex') return await codexHandshake(child, request, incoming);
     return await cursorHandshake(child, request, incoming);
   } finally {
@@ -545,7 +638,17 @@ async function handshake(client, child, request, timeoutMs) {
   }
 }
 
-async function claudeHandshake(request, incoming) {
+function startupInstruction(request) {
+  const lines = [`Unit: ${request.unitId ?? ''}`];
+  if (typeof request.job === 'string' && request.job) lines.push(`Job: ${request.job}`);
+  if (typeof request.model === 'string' && request.model) lines.push(`Model: ${request.model}`);
+  if (typeof request.leadId === 'string' && request.leadId) lines.push(`Lead: ${request.leadId}`);
+  lines.push('Read the unit role, job and lead from the registered files and stay ready.');
+  return lines.join('\n');
+}
+
+async function claudeHandshake(child, request, incoming) {
+  sendLine(child, { type: 'user', message: { role: 'user', content: startupInstruction(request) } });
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const line = await incoming.line();
     if (loginFailed(line) || loginFailed(incoming.stderr())) throw unavailable();
@@ -561,38 +664,89 @@ async function claudeHandshake(request, incoming) {
   throw unavailable();
 }
 
+function openRpc(child, incoming) {
+  let nextId = 1;
+  let reading = false;
+  const pending = new Map();
+  const failAll = (error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+  };
+  const ensureLoop = () => {
+    if (reading) return;
+    reading = true;
+    const run = (async () => {
+      try {
+        while (pending.size > 0) {
+          const line = await incoming.line();
+          if (loginFailed(line) || loginFailed(incoming.stderr())) throw unavailable();
+          let message;
+          try {
+            message = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (message.id == null || !pending.has(message.id)) continue;
+          const waiter = pending.get(message.id);
+          pending.delete(message.id);
+          if (message.error || loginFailed(JSON.stringify(message))) waiter.reject(unavailable());
+          else waiter.resolve(message);
+        }
+      } catch (error) {
+        failAll(error instanceof CoreError ? error : unavailable());
+      } finally {
+        reading = false;
+      }
+    })();
+    run.catch(() => {});
+  };
+  return {
+    call(method, params) {
+      const id = nextId;
+      nextId += 1;
+      const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      const message = { jsonrpc: '2.0', id, method };
+      if (params !== undefined) message.params = params;
+      sendLine(child, message);
+      ensureLoop();
+      return promise;
+    },
+    notify(method, params) {
+      const message = { jsonrpc: '2.0', method };
+      if (params !== undefined) message.params = params;
+      sendLine(child, message);
+    },
+  };
+}
+
 async function codexHandshake(child, request, incoming) {
-  sendLine(child, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } } });
-  const init = JSON.parse(await incoming.line());
+  if (!request.cwd) throw unavailable();
+  const rpc = openRpc(child, incoming);
+  const init = await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
   if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
-  sendLine(child, { jsonrpc: '2.0', method: 'initialized' });
-  sendLine(child, { jsonrpc: '2.0', id: 2, method: 'account/read' });
-  const account = JSON.parse(await incoming.line());
-  if (loginFailed(JSON.stringify(account)) || !account.result?.account || account.result.requiresOpenaiAuth === true) throw unavailable();
-  const params = { cwd: request.cwd ?? process.cwd() };
+  rpc.notify('initialized');
+  const account = await rpc.call('account/read');
+  if (loginFailed(JSON.stringify(account)) || account.result?.account == null || account.result?.requiresOpenaiAuth === true) throw unavailable();
+  const params = { cwd: request.cwd };
   if (request.model) params.model = request.model;
-  sendLine(child, { jsonrpc: '2.0', id: 3, method: 'thread/start', params });
-  const thread = JSON.parse(await incoming.line());
+  const thread = await rpc.call('thread/start', params);
   if (!thread.result?.thread?.id) throw unavailable();
   return thread.result.thread.id;
 }
 
 async function cursorHandshake(child, request, incoming) {
-  sendLine(child, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+  if (!request.cwd) throw unavailable();
+  const rpc = openRpc(child, incoming);
+  const init = await rpc.call('initialize', {
+    protocolVersion: 1,
+    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
   });
-  const init = JSON.parse(await incoming.line());
   if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
   const method = (init.result?.authMethods ?? []).find((item) => /existing|login/i.test(`${item.id ?? ''} ${item.name ?? item}`));
   if (!method) throw unavailable();
-  sendLine(child, { jsonrpc: '2.0', id: 2, method: 'authenticate', params: { methodId: method.id ?? method } });
-  const auth = JSON.parse(await incoming.line());
+  const auth = await rpc.call('authenticate', { methodId: method.id ?? method });
   if (auth.error || loginFailed(JSON.stringify(auth))) throw unavailable();
-  sendLine(child, { jsonrpc: '2.0', id: 3, method: 'session/new', params: { cwd: request.cwd ?? process.cwd(), mcpServers: [] } });
-  const session = JSON.parse(await incoming.line());
+  const session = await rpc.call('session/new', { cwd: request.cwd, mcpServers: [] });
   if (!session.result?.sessionId) throw unavailable();
   return session.result.sessionId;
 }

@@ -71,6 +71,8 @@ export async function startService(options) {
     handle.runtime = await openServiceSync({ ...options, paths }, paths);
     handle.listener = options.listener ? await options.listener() : null;
     handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now });
+    handle.adapters = openNativeAdapters(options.env ?? process.env);
+    handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
       ...options,
       paths,
@@ -80,11 +82,10 @@ export async function startService(options) {
       ledger: handle.runtime.ledger,
       sync: handle.runtime.sync,
       pulse: handle.runtime.pulse,
+      adapters: handle.adapters.adapters,
     });
     bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
-    handle.adapters = openNativeAdapters();
-    handle.bridge.adapters = handle.adapters.adapters;
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     handle.beat = await armServiceBeat(handle.runtime);
     return handle;
@@ -319,6 +320,7 @@ async function openServiceSync(options, paths) {
     beatTimer: null,
     closed: false,
     lastError: null,
+    env: options.env ?? process.env,
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   try {
@@ -699,11 +701,12 @@ function startWakeController(nonce) {
   };
 }
 
-function openNativeAdapters() {
+export function openNativeAdapters(env = process.env, hooks = {}) {
+  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs };
   const adapters = {
-    claude: createNativeAdapter('claude', { live: true }),
-    codex: createNativeAdapter('codex', { live: true }),
-    cursor: createNativeAdapter('cursor', { live: true }),
+    claude: createNativeAdapter('claude', shared),
+    codex: createNativeAdapter('codex', shared),
+    cursor: createNativeAdapter('cursor', shared),
   };
   return {
     adapters,
