@@ -46,6 +46,41 @@ export function noteSync(context, state) {
   if ((SYNC_RANK[context.syncOutcome] ?? -1) < SYNC_RANK[state]) context.syncOutcome = state;
 }
 
+export async function recordSyncFailure(sync, error) {
+  const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'sync_failed';
+  const record = {
+    format: 'hivem1nd-sync-failure-v1',
+    code,
+    message: 'Sync failed.',
+    retryAt: typeof error?.retryAt === 'string' && TIME.test(error.retryAt) ? error.retryAt : null,
+    at: timestamp(sync.now()),
+  };
+  await atomicWrite(sync.store, failurePath(sync), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'));
+  return record;
+}
+
+export async function clearSyncFailure(sync) {
+  await unlink(failurePath(sync)).catch((error) => {
+    if (error?.code !== 'ENOENT') throw error;
+  });
+}
+
+export async function readSyncFailure(sync) {
+  const bytes = await readBytes(sync.store, failurePath(sync));
+  if (!bytes) return null;
+  try {
+    const parsed = JSON.parse(bytes.toString('utf8'));
+    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || typeof parsed.code !== 'string') return null;
+    return { code: parsed.code, message: 'Sync failed.', retryAt: parsed.retryAt ?? null };
+  } catch {
+    return null;
+  }
+}
+
+function failurePath(sync) {
+  return path.join(sync.paths.localDirectory, 'outgoing', 'failure.json');
+}
+
 export async function stageBaselines(sync, at = timestamp(sync.now())) {
   const staged = [];
   for (const target of await eligibleTargets(sync)) {

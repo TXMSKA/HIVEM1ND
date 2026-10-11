@@ -1084,7 +1084,7 @@ async function invoke(route, scope) {
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
   if (route.handler === 'settings') {
     const detail = safeSettings(await readDetail(domain, 'settings'), credential);
-    const service = serviceRecord(domain);
+    const service = await serviceRecord(domain);
     if (credential?.audience === 'phone') {
       return { status: 200, body: { settings: detail.settings, revision: detail.revision, service, home: homeStatus(homeState) } };
     }

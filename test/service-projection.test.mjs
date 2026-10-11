@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { createEventBus, publishDomainEvents, revisionRelation } from '../engine/service/events.mjs';
 import { randomUUID } from 'node:crypto';
 import { hashText } from '../engine/service/identity.mjs';
-import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
+import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, readSync, serviceRecord, statusFor, waitingFor } from '../engine/service/projection.mjs';
+import { openLedger } from '../engine/sync/limits.mjs';
+import { openSync, recordSyncFailure, stageTransaction } from '../engine/sync/store.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
 import { clientRecords, probeClients } from '../engine/service/adapters.mjs';
@@ -692,6 +694,36 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   const question = view.waiting.find((item) => item.kind === 'question');
   assert.equal(question.id, `question:root:overseer:${hashText('the registry name')}`);
   assert.equal(question.title, 'the registry name');
+});
+
+test('pending sync work stays pending and a failure stays visible', async (t) => {
+  const fixture = await mind(t);
+  const sync = openSync({ store: fixture.store, paths: fixture.paths, now: () => NOW, projects: [] });
+  const ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => NOW, machine: fixture.paths.machine });
+  const context = { store: fixture.store, paths: fixture.paths, now: () => NOW, sync, ledger };
+  await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/note.txt' }, bytes: Buffer.from('local') }]);
+  await writeFile(ledger.file, `${JSON.stringify({
+    format: 'hivem1nd-sync-ledger-v1',
+    admitted: [],
+    outgoing: [],
+    incoming: { LAPTOP: [{ id: 'pack-1', at: '2026-10-10T12:00:00.000Z', messages: 1, bytes: 20 }] },
+    applied: {},
+    notices: [],
+  })}\n`);
+  const pending = await readSync(context);
+  assert.equal(pending.state, 'pending');
+  assert.equal(pending.pendingChanges > 0, true);
+  assert.equal(pending.error, null);
+  assert.equal(pending.incoming[0].machine, 'LAPTOP');
+  assert.equal(pending.incoming[0].limits.messages.used, 1);
+  assert.equal((await serviceRecord(context)).syncState, 'pending');
+  await recordSyncFailure(sync, { code: 'sync_rate_limited', retryAt: '2026-10-10T12:05:00.000Z' });
+  const failed = await readSync({ ...context, syncOutcome: 'idle' });
+  assert.equal(failed.state, 'error');
+  assert.equal(failed.error.code, 'sync_rate_limited');
+  assert.equal(failed.error.message, 'Sync failed.');
+  assert.equal(failed.retryAt, '2026-10-10T12:05:00.000Z');
+  assert.equal((await serviceRecord({ ...context, syncOutcome: 'idle' })).syncState, 'error');
 });
 
 test('collection filters accept typed queries and hide closed tasks by default', async (t) => {

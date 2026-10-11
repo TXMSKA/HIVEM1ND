@@ -414,38 +414,125 @@ function counts(value) {
   };
 }
 
-export function serviceRecord(context) {
-  const outcome = context?.syncOutcome;
-  const syncState = outcome === 'pending' ? 'pending' : outcome === 'error' ? 'error' : 'idle';
+export async function serviceRecord(context) {
+  const sync = await readSync(context);
   return {
     machine: context?.paths?.machine ?? null,
     version: '3.0.0',
     originKind: context?.paths?.origin ? 'folder' : null,
-    syncState,
+    syncState: sync.state,
   };
 }
 
 export async function readSync(context) {
+  const sync = context.sync ?? null;
   let pendingChanges = 0;
-  if (context.sync) {
+  if (sync) {
     const { listStaged } = await import('../sync/store.mjs');
-    pendingChanges = (await listStaged(context.sync)).length;
+    pendingChanges = (await listStaged(sync)).length;
   }
   let limits = idleLimits();
   if (context.ledger) {
     const { limitsFor } = await import('../sync/limits.mjs');
     limits = await limitsFor(context.ledger);
   }
-  const outcome = context.syncOutcome;
-  const state = limits.state === 'paused' ? 'paused' : outcome === 'pending' ? 'pending' : outcome === 'error' ? 'error' : 'idle';
+  const incoming = await incomingStatus(context, sync);
+  const failure = sync ? await (await import('../sync/store.mjs')).readSyncFailure(sync) : null;
+  const prepared = sync ? await publicationPrepared(sync) : false;
+  const queued = sync ? await pendingPacks(sync) : 0;
+  let state = 'idle';
+  if (limits.state === 'paused') state = 'paused';
+  else if (prepared) state = 'publishing';
+  else if (failure) state = 'error';
+  else if (pendingChanges > 0 || queued > 0) state = 'pending';
   return {
     state,
     pendingChanges,
     limits,
-    incoming: [],
-    retryAt: limits.retryAt ?? null,
-    error: null,
+    incoming,
+    retryAt: state === 'error' ? failure?.retryAt ?? limits.retryAt ?? null : limits.retryAt ?? null,
+    error: state === 'error' ? { code: failure.code, message: failure.message } : null,
   };
+}
+
+async function incomingStatus(context, sync) {
+  const names = new Set();
+  if (context.ledger?.file && context.ledger.store) {
+    const { readBytes } = await import('./store.mjs');
+    const raw = await readBytes(context.ledger.store, context.ledger.file);
+    if (raw) {
+      try {
+        const data = JSON.parse(raw.toString('utf8'));
+        for (const machine of Object.keys(data.incoming ?? {})) names.add(machine);
+      } catch {
+        names.clear();
+      }
+    }
+  }
+  if (sync?.paths?.localDirectory) {
+    const root = path.join(sync.paths.localDirectory, 'received', 'pending');
+    let machines = [];
+    try {
+      machines = await readdir(root);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    for (const machine of machines) {
+      let files = [];
+      try {
+        files = await readdir(path.join(root, machine));
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+        continue;
+      }
+      if (files.some((name) => name.endsWith('.json'))) names.add(machine);
+    }
+  }
+  const limitsFor = context.ledger ? (await import('../sync/limits.mjs')).limitsFor : null;
+  const incoming = [];
+  for (const machine of [...names].filter((name) => typeof name === 'string' && name.length > 0).sort()) {
+    incoming.push({ machine, limits: limitsFor ? await limitsFor(context.ledger, 'receipt', machine) : idleLimits() });
+  }
+  return incoming;
+}
+
+async function pendingPacks(sync) {
+  const root = path.join(sync.paths.localDirectory, 'received', 'pending');
+  let machines = [];
+  try {
+    machines = await readdir(root);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 0;
+    throw error;
+  }
+  let count = 0;
+  for (const machine of machines) {
+    let files = [];
+    try {
+      files = await readdir(path.join(root, machine));
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    count += files.filter((name) => name.endsWith('.json')).length;
+  }
+  return count;
+}
+
+async function publicationPrepared(sync) {
+  const file = path.join(sync.paths.localDirectory, 'outgoing', 'publication.json');
+  let text = null;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  try {
+    return JSON.parse(text)?.phase === 'prepared';
+  } catch {
+    return false;
+  }
 }
 
 function idleLimits() {

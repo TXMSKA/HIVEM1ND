@@ -4,7 +4,7 @@ import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
 import { countLogicalMessages, decodePack, encodePack, packFileName } from './pack.mjs';
 import { prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
-import { ackPublished, listStaged, readObject } from './store.mjs';
+import { ackPublished, clearSyncFailure, listStaged, readObject, recordSyncFailure } from './store.mjs';
 
 export function nextDue(now, first, last, limits) {
   if (first === null) return null;
@@ -146,6 +146,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     }
     const ids = chosen.flat().map((change) => change.id);
     await ackPublished(sync, ids);
+    await clearSyncFailure(sync);
     if (deferred.length > 0) pending = [...deferred.flat().map((change) => change.id), ...pending];
     if (pending.length === 0) {
       first = null;
@@ -294,6 +295,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   }
 
   async function failOnce(error) {
+    await recordSyncFailure(sync, error);
     const notice = await claimLimitNotice(ledger, 'publication');
     if (notice.created) events.push({ type: 'sync.error', code: error?.code ?? 'internal_error', noticeId: notice.id });
   }
