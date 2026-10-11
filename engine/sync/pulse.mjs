@@ -3,7 +3,7 @@ import { CoreError, canonicalJson, hashBytes } from '../service/identity.mjs';
 import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
 import { countLogicalMessages, decodePack, encodePack, packFileName } from './pack.mjs';
-import { publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
+import { prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
 import { ackPublished, listStaged, readObject } from './store.mjs';
 
 export function nextDue(now, first, last, limits) {
@@ -168,10 +168,11 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   }
 
   async function beat(record) {
+    const clean = prepareServiceBeat(origin.machine, record);
     const limits = await limitsFor(ledger, 'publication');
-    if (limits.state === 'paused') return { published: false, state: limits.state };
+    if (limits.state === 'paused') return { published: false, state: limits.state, record: clean };
     try {
-      const body = Buffer.from(canonicalJson(record));
+      const body = Buffer.from(canonicalJson(clean));
       await chargeMetadata(ledger, {
         machine: origin.machine,
         path: `machines/${origin.machine}/service.json`,
@@ -179,11 +180,11 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
         bytes: body.length,
       });
     } catch (error) {
-      if (error?.code === 'sync_rate_limited' || error?.code === 'pack_too_large') return { published: false, state: 'paused' };
+      if (error?.code === 'sync_rate_limited' || error?.code === 'pack_too_large') return { published: false, state: 'paused', record: clean };
       throw error;
     }
-    await sendBeat(record);
-    return { published: true };
+    await sendBeat(clean);
+    return { published: true, record: clean };
   }
 
   function close() {

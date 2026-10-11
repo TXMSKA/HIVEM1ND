@@ -468,6 +468,7 @@ async function openServiceSync(options, paths) {
     closed: false,
     lastError: null,
     env: options.env ?? process.env,
+    clientOptions: Array.isArray(options.clients) ? options.clients : null,
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   try {
@@ -488,10 +489,13 @@ async function openServiceSync(options, paths) {
 
 async function publishServiceBeat(runtime, state) {
   if (!runtime.clientRecords) {
-    try {
-      runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, platform: process.platform }));
-    } catch {
-      runtime.clientRecords = clientRecords({});
+    if (runtime.clientOptions) runtime.clientRecords = runtime.clientOptions;
+    else {
+      try {
+        runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, platform: process.platform }));
+      } catch {
+        runtime.clientRecords = clientRecords({});
+      }
     }
   }
   const record = {

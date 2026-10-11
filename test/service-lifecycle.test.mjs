@@ -627,6 +627,68 @@ function patchDirty(handle) {
   });
 }
 
+test('a published heartbeat keeps installed clients on the machine list', async (t) => {
+  const { fixture, options } = await optionsFor(t, await freePort());
+  const started = await startService({
+    ...options,
+    clients: [
+      { id: 'codex', enabled: true, installed: true, command: 'C:\\secret\\codex.exe' },
+      { id: 'codex', enabled: false, installed: false },
+      { id: 'cursor', enabled: false, installed: true },
+      { id: 'claude', enabled: 'yes', installed: true },
+      { id: 'opencode', enabled: true, installed: true },
+    ],
+  });
+  try {
+    const expected = [
+      { id: 'codex', enabled: true, installed: true },
+      { id: 'cursor', enabled: false, installed: true },
+    ];
+    const beat = JSON.parse(await readFile(path.join(fixture.root, 'origin', 'machines', fixture.machine, 'service.json'), 'utf8'));
+    assert.deepEqual(beat.clients, expected);
+    assert.equal(JSON.stringify(beat).includes('codex.exe'), false);
+    const local = await jsonCall(started.http.port, 'POST', '/api/v1/auth/local', {
+      token: started.bootstrap.secret,
+      body: { embedded: false, hostOrigin: null, look: null, language: null },
+    });
+    assert.equal(local.status, 201);
+    const machines = await jsonCall(started.http.port, 'GET', '/api/v1/machines', { token: local.json.data.token });
+    assert.equal(machines.status, 200);
+    const machine = machines.json.data.items.find((item) => item.id === fixture.machine);
+    assert.deepEqual(machine.clients, expected);
+  } finally {
+    await stopService(started);
+  }
+});
+
+function jsonCall(port, method, target, { token = null, body = undefined } = {}) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port,
+      method,
+      path: target,
+      headers: {
+        host: `127.0.0.1:${port}`,
+        origin: `http://127.0.0.1:${port}`,
+        ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, json: raw ? JSON.parse(raw) : null });
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.end(payload);
+    else req.end();
+  });
+}
+
 function call(origin, token) {
   const url = new URL('/api/v1/viewer', origin);
   return new Promise((resolve, reject) => {

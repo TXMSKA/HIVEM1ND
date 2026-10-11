@@ -1,7 +1,7 @@
 import { watch } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, validateMachineName } from '../service/identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, validateMachineName } from '../service/identity.mjs';
 import { assertNoLinks } from '../service/paths.mjs';
 import { decodePack, packFileName, validateHead } from './pack.mjs';
 
@@ -96,22 +96,40 @@ export async function publishPack(origin, packBytes) {
   return { sequence, hash: digest, bytes: bytes.length, replayed: false };
 }
 
-export async function publishBeat(origin, beat) {
-  if (!beat || beat.format !== 'hivem1nd-service-v1' || beat.machine !== origin.machine) {
+export function prepareServiceBeat(machine, beat) {
+  if (!beat || beat.format !== 'hivem1nd-service-v1' || beat.machine !== machine) {
     throw new CoreError(422, 'invalid_record_owner', 'A machine publishes only its own heartbeat.');
   }
   if (beat.state !== 'running' && beat.state !== 'stopped') throw new CoreError(422, 'invalid_body', 'The heartbeat state is not valid.');
   if (!TIME.test(beat.heartbeatAt ?? '') || !TIME.test(beat.startedAt ?? '')) throw new CoreError(422, 'invalid_body', 'The heartbeat time must be UTC.');
-  const record = {
+  return {
     format: 'hivem1nd-service-v1',
-    machine: origin.machine,
+    machine,
     state: beat.state,
     version: beat.version,
     heartbeatAt: beat.heartbeatAt,
     startedAt: beat.startedAt,
+    clients: heartbeatClients(beat.clients),
   };
+}
+
+export async function publishBeat(origin, beat) {
+  const record = prepareServiceBeat(origin.machine, beat);
   await writeJson(origin, path.join(machineDir(origin, origin.machine), 'service.json'), record);
   return record;
+}
+
+function heartbeatClients(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const records = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || !CLIENTS.includes(item.id) || seen.has(item.id)) continue;
+    if (typeof item.enabled !== 'boolean' || typeof item.installed !== 'boolean') continue;
+    seen.add(item.id);
+    records.push({ id: item.id, enabled: item.enabled, installed: item.installed });
+  }
+  return records;
 }
 
 export async function readHead(origin, machine) {
