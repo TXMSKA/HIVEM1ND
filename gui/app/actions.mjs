@@ -1,23 +1,28 @@
 import { createOperation, request } from "./api.mjs";
 
-export async function connectUnits(api, source, targets) {
+export async function connectUnits(api, source, targets, retained = null) {
+  const saved = retained instanceof Map ? retained : new Map();
   const results = [];
-  for (const target of targets) {
+  for (const target of targets ?? []) {
     if (!target || target.id === source?.id || target.role === "master" || looksLikeCycle(source, target)) {
-      results.push({ id: target?.id ?? null, error: { code: "invalid_lead", message: "The lead is not valid." } });
+      results.push({ id: target?.id ?? null, error: { code: "invalid_lead", message: "The lead is not valid." }, uncertain: false });
       continue;
     }
-    const operation = createOperation({
+    const body = { leadId: source.id, confirmed: true, expectedRevision: target.revision };
+    const operation = saved.get(target.id) ?? createOperation({
       method: "PUT",
       path: "/units/:unitId/lead",
       params: { unitId: target.id },
-      body: { leadId: source.id, confirmed: true, expectedRevision: target.revision },
+      body,
     });
+    saved.set(target.id, operation);
     try {
       const result = await request(api, "PUT", operation.path, { operation });
-      results.push({ id: target.id, data: result.data, operation });
+      results.push({ id: target.id, data: result.data, operation, uncertain: false });
     } catch (error) {
-      results.push({ id: target.id, error, operation });
+      if (error && typeof error === "object" && error.operation == null) error.operation = operation;
+      const uncertain = error?.code === "timeout" || api.uncertain?.has?.(operation.id) === true;
+      results.push({ id: target.id, error, operation, uncertain });
     }
   }
   return results;

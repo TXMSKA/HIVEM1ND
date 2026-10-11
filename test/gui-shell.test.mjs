@@ -2016,9 +2016,11 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   await waitFor(() => desktop.app.mapState?.onConnect && desktop.app.unitList?.catalog?.some((unit) => unit.id === "root:master"), "The map did not load.");
   desktop.app.mapState.onConnect({ source: "env:web:overlord-web", target: "root:master" });
   click(desktop.document.querySelector("dialog").querySelector(".primary"));
-  await waitFor(() => noteText(desktop) === "That connection is not valid.", "The connection note was not translated.");
-  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "invalid_lead");
-  assert.equal(noteText(desktop).includes("root:master"), false);
+  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent === "That connection is not valid.", "The connection note was not translated.");
+  assert.equal(desktop.document.querySelector("[data-dialog-error]").getAttribute("data-code"), "invalid_lead");
+  assert.equal(desktop.document.querySelector("[data-dialog-error]").textContent.includes("root:master"), false);
+  click(desktop.document.querySelector("dialog").querySelector("button"));
+  await waitFor(() => desktop.document.querySelector("dialog") == null, "Cancel did not close the connection dialog.");
 
   const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
@@ -2596,6 +2598,49 @@ test("a lost settings or home response retries the same mutation", async (t) => 
   assert.deepEqual(homeWrites[0].body, homeWrites[1].body);
   const home = await request(desktop.app.api, "GET", "/settings");
   assert.equal(home.data.home.enabled, true);
+});
+
+test("a failed connection stays open and retries the same targets", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    const target = String(input);
+    if (init?.method !== "PUT" || !target.includes("/lead")) return;
+    writes.push({
+      path: decodeURIComponent(new URL(target).pathname),
+      key: headerValue(init.headers, "Idempotency-Key"),
+      body: JSON.parse(init.body),
+    });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.mapState?.onConnect && desktop.app.unitList?.catalog?.length, "The map did not offer a connection.");
+  const units = desktop.app.unitList.catalog;
+  const master = units.find((unit) => unit.role === "master");
+  const target = units.find((unit) => unit.role !== "master" && unit.leadId && unit.revision);
+  const source = units.find((unit) => unit.id === target.leadId);
+  desktop.app.mapState.onConnect({ source: source.id, target: master.id });
+  await waitFor(() => desktop.document.querySelector("dialog")?.getAttribute("open") != null, "The connection dialog did not open.");
+  click(desktop.document.querySelector("button.primary"));
+  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not valid"), "A rejected connection did not stay in the dialog.");
+  assert.equal(desktop.document.querySelector("dialog").getAttribute("open") != null, true);
+  assert.equal(writes.length, 0);
+  click(desktop.document.querySelector("dialog").querySelector("button"));
+  await waitFor(() => desktop.document.querySelector("dialog") == null, "Cancel did not close the dialog.");
+
+  desktop.app.mapState.onConnect({ source: source.id, target: target.id });
+  await waitFor(() => desktop.document.querySelector("button.primary"), "The connection dialog did not return.");
+  fixture.control.setFault({ method: "PUT", path: `/api/v1/units/${target.id}/lead`, dropAfterCommit: true });
+  click(desktop.document.querySelector("button.primary"));
+  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not known yet"), "An unknown connection result did not stay open.");
+  assert.equal(desktop.document.querySelector("dialog").getAttribute("open") != null, true);
+  const retry = desktop.document.querySelector("dialog").querySelector("button.primary");
+  assert.equal(retry.children.some((child) => child.textContent === "Retry"), true);
+  click(retry);
+  await waitFor(() => desktop.document.querySelector("dialog") == null, "A resolved connection did not close.");
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].key, writes[1].key);
+  assert.deepEqual(writes[0].body, writes[1].body);
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {

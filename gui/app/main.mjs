@@ -2934,6 +2934,8 @@ function confirmConnection(app, sourceId, targetIds) {
   const source = unitById(app, sourceId);
   const targets = targetIds.map((id) => unitById(app, id)).filter(Boolean);
   if (!source || !targets.length) return;
+  const operations = new Map();
+  const done = new Set();
   const body = targets.map((target) => text(app.language, "confirmConnect", { member: target.unit, lead: source.unit })).join(" ");
   showDialog(app.root.ownerDocument, {
     title: text(app.language, "connect"),
@@ -2942,17 +2944,30 @@ function confirmConnection(app, sourceId, targetIds) {
     cancel: text(app.language, "cancel"),
     retry: text(app.language, "retry"),
     onConfirm: async () => {
-      const results = await connectUnits(app.api, source, targets);
-      showOutcome(app, results.map((result) => {
-        const target = targets.find((item) => item.id === result.id);
-        const unit = target?.unit || text(app.language, "unknown");
-        if (result.error) return actionText(app.language, result.error.code, { unit });
-        return text(app.language, "unitConnected", { unit, lead: source.unit });
-      }).join(" "), results.map((result) => result.error?.code ?? "connected").join(","));
+      const pending = targets.filter((target) => !done.has(target.id));
+      const results = await connectUnits(app.api, source, pending, operations);
+      const failed = [];
+      for (const result of results) {
+        if (result.operation) operations.set(result.id, result.operation);
+        if (result.error) failed.push(result);
+        else done.add(result.id);
+      }
+      if (failed.length) {
+        const error = new Error(failed.map((result) => connectCause(app, targets.find((item) => item.id === result.id), result)).join(" "));
+        error.code = failed.some((result) => result.uncertain) ? "unknown_result" : (failed[0].error?.code ?? "request_failed");
+        throw error;
+      }
+      showOutcome(app, targets.map((target) => text(app.language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
       if (app.unitList) await reloadList(app.unitList);
       if (!app.disposed) renderShell(app);
     },
   });
+}
+
+function connectCause(app, target, result) {
+  const unit = target?.unit || text(app.language, "unknown");
+  if (result.uncertain) return text(app.language, "unknownResult", { unit });
+  return actionText(app.language, result.error?.code, { unit });
 }
 
 const UNIT_ROLES = ["adjutant", "executive", "executor", "genesis", "incubator", "master", "overlord", "overseer"];

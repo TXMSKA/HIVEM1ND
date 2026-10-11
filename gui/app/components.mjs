@@ -141,6 +141,7 @@ export function showDialog(document, { title, body, confirm, cancel, retry, onCo
         setBusy(confirmButton, false);
         showConfirm(retry || "Retry");
         const note = element(document, "p", { class: "action-note", "data-dialog-error": "true", role: "alert", text: error?.message || "The action failed." });
+        if (error?.code) note.setAttribute("data-code", error.code);
         if (typeof dialog.insertBefore === "function") dialog.insertBefore(note, actions);
         else {
           const index = dialog.children.indexOf(actions);

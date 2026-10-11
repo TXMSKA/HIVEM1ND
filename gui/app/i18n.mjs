@@ -104,6 +104,7 @@ const COPY = {
   machineUnavailable: ["{machine} is unavailable.", "{machine} no está disponible."],
   machineDown: ["The machine is unavailable.", "La máquina no está disponible."],
   actionFailed: ["The action failed. Try again.", "La acción falló. Volver a intentar."],
+  unknownResult: ["The result for {unit} is not known yet. Try again.", "El resultado de {unit} todavía no se conoce. Volver a intentar."],
   acceptNeedsReview: ["Accept is available when the task is in review.", "Aceptar está disponible cuando la tarea está en revisión."],
   sendBackNeedsReview: ["Send back is available for a reviewable task.", "Devolver está disponible para una tarea revisable."],
   commentNeedsText: ["Write a comment before sending it.", "Escribir un comentario antes de enviarlo."],
