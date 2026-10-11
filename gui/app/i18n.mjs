@@ -1,6 +1,7 @@
 const COPY = {
   loading: ["Loading.", "Cargando."],
   loadingView: ["Reading the mind.", "Leyendo la mente."],
+  skipToContent: ["Skip to the workspace", "Saltar al espacio de trabajo"],
   reopenTitle: ["Open HIVEM1ND again", "Abrir HIVEM1ND de nuevo"],
   reopenBody: ["This page no longer has a session.", "Esta página ya no tiene una sesión."],
   homePrompt: ["Enter the home code on this device.", "Introducir el código de casa en este dispositivo."],

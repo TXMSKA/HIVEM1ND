@@ -34,7 +34,7 @@ import {
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
-import { announce, element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
+import { element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -253,9 +253,20 @@ function paintShell(app) {
   const view = app.store.view;
   const counts = view?.counts ?? {};
   const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode, "data-tab": app.tab });
-  shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
+  const heading = viewTitle(app, t);
+  document.title = `${heading} · HIVEM1ND`;
+  const workspace = renderWorkspace(app, t, view, counts);
+  workspace.setAttribute("id", "workspace");
+  shell.append(
+    element(document, "a", { class: "skip", href: "#workspace", text: t("skipToContent") }),
+    element(document, "h1", { class: "sr", text: heading }),
+    renderBar(app, t, counts),
+    workspace,
+    renderFooter(app, t),
+  );
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
+  syncLiveRegions(app);
   paintActivity(app, shell);
   restoreInputFocus(app);
   finishList(app);
@@ -491,7 +502,7 @@ async function onStream(app, event) {
   }
   if (editors && event?.name === "editor.attachments.changed") noteAttachmentEvent(editors, data);
   if (editors && event?.name === "editor.asset.created") await noteAssetEvent(app, data);
-  if (editors && event?.name === "notification.changed") noteDelivery(editors, data);
+  if (editors && event?.name === "notification.changed") noteDelivery(app, editors, data);
   if (event?.name === "sync.conflict") noteSyncConflict(app, data);
   if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
     noteRemote(editors, data);
@@ -565,7 +576,7 @@ async function noteAssetEvent(app, data) {
   editors.selectedNodeId = selected;
 }
 
-function noteDelivery(editors, data) {
+function noteDelivery(app, editors, data) {
   const current = editors.current;
   if (!current || data?.resourceId !== current.resourceId || !data.state) return;
   const notices = [...(current.notices ?? [])];
@@ -574,6 +585,11 @@ function noteDelivery(editors, data) {
   if (index >= 0) notices[index] = { ...notices[index], ...next };
   else notices.push(next);
   current.notices = notices;
+  const copy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
+  const key = copy[data.state];
+  if (!key) return;
+  const failed = data.state === "failed" || data.state === "ambiguous";
+  showOutcome(app, text(app.language, key), data.state, failed ? "error" : "status");
 }
 
 function noteSyncConflict(app, data) {
@@ -581,7 +597,7 @@ function noteSyncConflict(app, data) {
     copyPath: String(data?.copyPath ?? ""),
     winnerMachine: String(data?.winnerMachine ?? ""),
   };
-  showOutcome(app, text(app.language, "syncConflict", { path: app.syncConflict.copyPath || text(app.language, "unknown") }), "sync_conflict");
+  showOutcome(app, text(app.language, "syncConflict", { path: app.syncConflict.copyPath || text(app.language, "unknown") }), "sync_conflict", "error");
 }
 
 async function loadPresentation(app, options = {}) {
@@ -626,7 +642,6 @@ function publish(app) {
   document.documentElement.dataset.look = app.look;
   document.documentElement.dataset.mode = app.mode;
   renderShell(app);
-  announce(app.root, text(app.language, "loadingView"));
 }
 
 function renderBar(app, t, counts) {
@@ -701,12 +716,11 @@ function renderWorkspace(app, t, view, counts) {
   if (app.mode === "focus") return renderFocusWorkspace(app, t);
   if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
-  const tabs = element(document, "div", { class: "tabs", role: "tablist" });
+  const tabs = element(document, "div", { class: "tabs" });
   for (const tab of ["hierarchy", "chats"]) {
     tabs.append(element(document, "button", {
       type: "button",
       class: "tab",
-      role: "tab",
       "aria-pressed": String(app.tab === tab),
       onclick: () => navigate(app, tab),
     }, icon(document, tab), t(tab)));
@@ -2665,6 +2679,36 @@ function renderStatus(app, key) {
   const document = app.root.ownerDocument;
   const label = text(app.language, key);
   app.root.replaceChildren(element(document, "p", { id: "status", role: "status" }, progressMark(document, label)));
+  ensureLive(app);
+  app.liveStatus.textContent = label;
+  app.liveError.textContent = "";
+}
+
+function viewTitle(app, t) {
+  if (app.layout === "phone" && app.tab === "chats") return app.thread?.chat?.title || t("chats");
+  return t(app.mode);
+}
+
+function ensureLive(app) {
+  const document = app.root.ownerDocument;
+  const body = document.body;
+  if (!app.liveStatus?.parent) {
+    app.liveStatus = element(document, "div", { id: "live-status", class: "live", role: "status", "aria-live": "polite", "data-live": "status" });
+    body.append(app.liveStatus);
+  }
+  if (!app.liveError?.parent) {
+    app.liveError = element(document, "div", { id: "live-error", class: "live", role: "alert", "aria-live": "assertive", "data-live": "error" });
+    body.append(app.liveError);
+  }
+}
+
+function syncLiveRegions(app) {
+  ensureLive(app);
+  app.liveStatus.textContent = "";
+  app.liveError.textContent = "";
+  if (!app.actionNote) return;
+  const region = app.actionTone === "error" ? app.liveError : app.liveStatus;
+  region.textContent = app.actionNote;
 }
 
 function brand(document) {
@@ -2730,9 +2774,10 @@ const TASK_COPY = {
   closed: "taskClosed",
 };
 
-function showOutcome(app, note, code = null) {
+function showOutcome(app, note, code = null, tone = "status") {
   app.actionNote = note;
   app.actionCode = code;
+  app.actionTone = tone;
 }
 
 function explain(app, key) {
@@ -3571,7 +3616,7 @@ function submitComposer(app, composer) {
 }
 
 function noteAction(app, error) {
-  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null);
+  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null, "error");
   if (!app.disposed) renderShell(app);
 }
 

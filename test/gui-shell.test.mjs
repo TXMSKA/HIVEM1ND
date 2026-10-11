@@ -2279,6 +2279,7 @@ test("editor events refresh attachments, assets, delivery and conflicts", async 
     error: { code: "not_attached", message: "The unit is not attached." },
   });
   await waitFor(() => desktop.root.querySelector("[data-notice='failed']"), "The delivery failure was not shown.");
+  assert.equal(desktop.document.querySelector("[data-live='error']")?.textContent, "The notice failed. Nothing was delivered.");
 
   await fixture.control.emit("sync.conflict", {
     target: { kind: "mind", path: "units/shop.md" },
@@ -2287,6 +2288,7 @@ test("editor events refresh attachments, assets, delivery and conflicts", async 
     at: "2026-10-10T12:00:00.000Z",
   });
   await waitFor(() => desktop.root.querySelector("[data-sync-conflict]")?.textContent.includes("conflicts/shop.md"), "The sync conflict was not shown.");
+  assert.equal(desktop.document.querySelector("[data-live='error']")?.textContent.includes("conflicts/shop.md"), true);
   assert.equal(desktop.root.querySelector("[data-comment]").value, "Keep this draft");
   assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
 });
@@ -2367,6 +2369,40 @@ test("disabled controls explain how to continue", async (t) => {
   typeInput(desktop.root.querySelector("[data-field='screen-width']"), "no", 0, 2);
   click(desktop.root.querySelector("[data-action='resize-screen']"));
   await waitFor(() => noteText(desktop) === "Enter a whole width and height before resizing.", "The resize reason was not shown.");
+});
+
+test("the shell has one heading, a skip link, and stable live regions", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  const headings = desktop.root.querySelectorAll("h1");
+  assert.equal(headings.length, 1);
+  assert.equal(headings[0].textContent, "Map");
+  assert.equal(desktop.document.title, "Map · HIVEM1ND");
+  assert.equal(desktop.document.title.includes("\u2014"), false);
+  const skip = desktop.root.querySelector("a.skip");
+  assert.equal(skip?.getAttribute("href"), "#workspace");
+  assert.equal(skip.textContent, "Skip to the workspace");
+  assert.equal(desktop.root.querySelector("[id='workspace']") != null, true);
+  assert.equal(desktop.root.querySelector("[role='tab']"), null);
+  assert.equal(desktop.root.querySelector("[role='tablist']"), null);
+  const status = desktop.document.querySelector("[data-live='status']");
+  const error = desktop.document.querySelector("[data-live='error']");
+  assert.equal(status?.parent === desktop.document.body, true);
+  assert.equal(error?.parent === desktop.document.body, true);
+  assert.equal(status.getAttribute("aria-live"), "polite");
+  assert.equal(error.getAttribute("role"), "alert");
+  assert.equal(status.textContent, "");
+  assert.equal(status.textContent.includes("Reading the mind."), false);
+  renderShell(desktop.app);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelector("[data-live='status']").textContent, "");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("h1").textContent, "Mapa");
+  assert.equal(desktop.document.title, "Mapa · HIVEM1ND");
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {
