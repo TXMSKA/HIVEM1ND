@@ -48,6 +48,9 @@ test('direct chats are reused, groups stay bounded, and history survives unlist'
   const chat = await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', first.chat.id, 'chat.md'), 'utf8');
   assert.equal(chat.includes('listed: false'), true);
   assert.equal(chat.includes('pinned: true'), true);
+  const reopened = await createChat(context, { members: ['project:shop:executor-shop'] });
+  assert.equal(reopened.chat.listed, true);
+  await assert.rejects(() => patchChat(context, first.chat.id, { pinned: 'yes', expectedRevision: reopened.chat.revision }), { code: 'invalid_body' });
 });
 
 test('posts keep the credential author, reject cross-chat replies, and cap complete bytes', async (t) => {
@@ -56,8 +59,16 @@ test('posts keep the credential author, reject cross-chat replies, and cap compl
   const other = await createChat(context, { members: ['env:web:overlord-web'] });
   const subjectOnly = await postChat(context, chat.chat.id, { body: '', subject: 'Subject only' });
   assert.equal(subjectOnly.message.body, '');
-  const attached = await postMailbox(context, 'project:shop:executor-shop', { body: '', attachments: [{ kind: 'task', id: 'project:shop:029' }] });
-  assert.equal(attached.message.attachments.length, 1);
+  const attached = await postMailbox(context, 'project:shop:executor-shop', { body: '', attachments: [{ path: 'user/projects/shop/tasks/029.md', kind: 'task' }] });
+  assert.equal(attached.message.attachments[0].path, 'user/projects/shop/tasks/029.md');
+  await assert.rejects(() => postMailbox(context, 'project:shop:missing-unit', { body: 'No' }), { code: 'unknown_unit' });
+  await assert.rejects(() => postChat(context, chat.chat.id, { body: 'Hi', subject: 'Bad\nfrom-id: root:builder' }), { code: 'invalid_body' });
+  await assert.rejects(() => postChat(context, chat.chat.id, { body: 'Hi', priority: 'high' }), { code: 'invalid_body' });
+  await assert.rejects(() => postChat(context, chat.chat.id, { subject: 's'.repeat(241) }), { code: 'invalid_body' });
+  const wide = await postChat(context, chat.chat.id, { body: 'a'.repeat(100001) });
+  assert.equal(wide.message.body.length, 100001);
+  const savedWide = await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.chat.id, `${wide.message.id}.md`), 'utf8');
+  assert.equal(savedWide.includes('to: chat'), true);
   const forged = await postChat(context, chat.chat.id, { body: 'Mine', fromId: 'project:shop:executor-shop' });
   const saved = await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.chat.id, `${forged.message.id}.md`), 'utf8');
   assert.equal(saved.includes('from-id: root:master'), true);

@@ -21,7 +21,17 @@ export async function createChat(context, input) {
   const direct = selected.length === 1;
   const id = direct ? uuidV8(['direct-chat', members]) : randomUUID();
   const existing = await readBytes(context.store, chatPath(context, id));
-  if (existing) return { status: 200, chat: parseChat(existing, id), created: false };
+  if (existing) {
+    const current = parseChat(existing, id);
+    if (direct && current.listed === false) {
+      const next = replaceLine(existing, 'listed', 'true');
+      await commitOne(context, `user/relay/chats/${id}/chat.md`, hashBytes(existing), next, [
+        { name: 'chat.changed', data: { chat: parseChat(next, id) } },
+      ]);
+      return { status: 200, chat: parseChat(next, id), created: false };
+    }
+    return { status: 200, chat: current, created: false };
+  }
   const title = input.title ?? (direct ? parseUnitId(selected[0]).unit : members.filter((item) => item !== 'root:master').join(', ').slice(0, 240));
   const bytes = Buffer.from(`id: ${id}\ntitle: ${title}\nmembers: ${canonicalJson(members)}\npinned: false\nlisted: true\ncreated: ${stamp(context)}\ncreated-by: ${author(context)}\nkind: ${direct ? 'direct' : 'group'}\n\n`);
   await commitOne(context, `user/relay/chats/${id}/chat.md`, null, bytes, [
@@ -39,8 +49,10 @@ export async function patchChat(context, chatId, input) {
   const current = await readBytes(context.store, absolute(context, relative));
   if (!current) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
   let next = current;
-  if (hasPinned) next = replaceLine(next, 'pinned', input.pinned === true ? 'true' : 'false');
-  if (hasListed) next = replaceLine(next, 'listed', input.listed === true ? 'true' : 'false');
+  if (hasPinned && typeof input.pinned !== 'boolean') throw new CoreError(422, 'invalid_body', 'Pinned must be a boolean.');
+  if (hasListed && typeof input.listed !== 'boolean') throw new CoreError(422, 'invalid_body', 'Listed must be a boolean.');
+  if (hasPinned) next = replaceLine(next, 'pinned', input.pinned ? 'true' : 'false');
+  if (hasListed) next = replaceLine(next, 'listed', input.listed ? 'true' : 'false');
   await commitOne(context, relative, input.expectedRevision, next, [
     { name: 'chat.changed', data: { chat: parseChat(next, chatId) } },
   ]);
@@ -53,7 +65,7 @@ export async function postChat(context, chatId, input) {
   if (!chat.members.includes(fromId) && context.principal?.audience !== 'desktop') {
     throw new CoreError(403, 'not_chat_member', 'The author is not a member of this chat.');
   }
-  const message = await buildMessage(context, input, { toId: `chat:${chatId}`, threadId: chatId, destination: 'chat' });
+  const message = await buildMessage(context, input, { toId: `chat:${chatId}`, threadId: chatId, destination: 'chat', legacyTo: 'chat' });
   if (input?.replyTo) {
     const reply = await readBytes(context.store, absolute(context, `user/relay/chats/${chatId}/${input.replyTo}.md`));
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this chat.');
@@ -78,7 +90,12 @@ export async function postChat(context, chatId, input) {
 
 export async function postMailbox(context, unitId, input) {
   parseUnitId(unitId);
-  const message = await buildMessage(context, input, { toId: unitId, threadId: input?.replyTo ?? null, destination: 'mailbox' });
+  if (!(await unitExists(context, unitId))) throw new CoreError(422, 'unknown_unit', 'The recipient does not exist.');
+  if (input?.replyTo) {
+    const reply = await findInbox(context, parseUnitId(unitId), input.replyTo);
+    if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this mailbox.');
+  }
+  const message = await buildMessage(context, input, { toId: unitId, threadId: input?.replyTo ?? null, destination: 'mailbox', legacyTo: parseUnitId(unitId).unit });
   const file = `${inboxDirectory(parseUnitId(unitId))}/${fileStamp(context)}-${context.paths.machine}-${message.id}.md`;
   await charge(context, message.id, message.bytes);
   await commitOne(context, file, null, message.bytes, [
@@ -139,12 +156,21 @@ export async function readMailbox(context, unitId, input) {
     format: 'hivem1nd-mailbox-read-v1',
     id: batchId,
     unitId: parsed.id,
+    machine: context.paths.machine,
     sources: moving.map((item) => item.relative),
     archives: entries.map((item) => item.relative),
   };
   entries.push({ relative: `user/relay/mailbox-reads/${batchId}.json`, before: null, bytes: Buffer.from(`${canonicalJson(journal)}\n`) });
+  for (const item of moving) {
+    entries.push({
+      relative: `user/relay/tombstones/${item.id}.json`,
+      before: null,
+      bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-tombstone-v1', id: item.id, unitId: parsed.id, machine: context.paths.machine, source: item.relative })}\n`),
+    });
+  }
+  const unread = Math.max(0, (await inboxCount(context, parsed)) - moving.length);
   await commitMany(context, entries, [
-    { name: 'message.read', data: { chatId: null, mailboxId: parsed.id, readerId: author(context), messageIds: moving.map((item) => item.id), unread: 0 } },
+    { name: 'message.read', data: { chatId: null, mailboxId: parsed.id, readerId: author(context), messageIds: moving.map((item) => item.id), unread } },
   ]);
   await removeSources(context, moving.map((item) => item.relative));
   return { unitId: parsed.id, readIds: moving.map((item) => item.id), alreadyReadIds };
@@ -275,26 +301,30 @@ export async function recoverMailboxReads(context) {
 }
 
 async function buildMessage(context, input, target) {
-  const body = typeof input?.body === 'string' ? input.body : '';
-  const subject = typeof input?.subject === 'string' ? input.subject : '';
-  const attachments = Array.isArray(input?.attachments) ? input.attachments : [];
-  if (attachments.length > 64) throw new CoreError(422, 'invalid_body', 'A message can include at most 64 attachments.');
+  const body = textField(input, 'body');
+  const subject = headerField(input, 'subject', 240);
+  if (input?.replyTo != null && (typeof input.replyTo !== 'string' || /[\u0000-\u001f]/.test(input.replyTo))) {
+    throw new CoreError(422, 'invalid_reply', 'The reply target is not a message id.');
+  }
+  const attachments = attachmentList(input?.attachments);
   if (!body && !subject && attachments.length === 0) throw new CoreError(422, 'invalid_body', 'A message needs a body, subject, or attachment.');
-  if (body.length > 100000) throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');
+  const priority = enumField(input, 'priority', ['normal', 'urgent'], 'normal');
+  const replyRequested = booleanField(input, 'replyRequested', false);
   const id = randomUUID();
   const fromId = author(context);
   const lines = [
     `id: ${id}`,
     `from: ${parseUnitId(fromId).unit}`,
     `from-id: ${fromId}`,
+    `to: ${target.legacyTo ?? target.toId}`,
     `to-id: ${target.toId}`,
     `machine: ${context.paths.machine}`,
     `timestamp: ${stamp(context)}`,
-    `priority: ${input?.priority === 'urgent' ? 'urgent' : 'normal'}`,
+    `priority: ${priority}`,
     `subject: ${subject}`,
     `thread-id: ${target.threadId ?? id}`,
     `reply-to: ${input?.replyTo ?? ''}`,
-    `reply-requested: ${input?.replyRequested === true ? 'true' : 'false'}`,
+    `reply-requested: ${replyRequested ? 'true' : 'false'}`,
     `attachments: ${canonicalJson(attachments)}`,
     'kind: message',
   ];
@@ -305,10 +335,46 @@ async function buildMessage(context, input, target) {
     bytes,
     projected: {
       id, fromId, toId: target.toId, machine: context.paths.machine, timestamp: stamp(context), date: null,
-      priority: input?.priority === 'urgent' ? 'urgent' : 'normal', subject, body, threadId: target.threadId ?? id,
-      replyTo: input?.replyTo ?? null, replyRequested: input?.replyRequested === true, attachments, kind: 'message', read: false, notice: null,
+      priority, subject, body, threadId: target.threadId ?? id,
+      replyTo: input?.replyTo ?? null, replyRequested, attachments, kind: 'message', read: false, notice: null,
     },
   };
+}
+
+function textField(input, name) {
+  if (input == null || !Object.hasOwn(input, name) || input[name] == null) return '';
+  if (typeof input[name] !== 'string') throw new CoreError(422, 'invalid_body', `The ${name} must be text.`);
+  return input[name];
+}
+
+function headerField(input, name, max) {
+  const value = textField(input, name, max);
+  if (/[\u0000-\u001f]/.test(value)) throw new CoreError(422, 'invalid_body', `The ${name} cannot contain a control character.`);
+  return value;
+}
+
+function enumField(input, name, allowed, fallback) {
+  if (input == null || !Object.hasOwn(input, name) || input[name] == null) return fallback;
+  if (!allowed.includes(input[name])) throw new CoreError(422, 'invalid_body', `The ${name} is not one of the allowed values.`);
+  return input[name];
+}
+
+function booleanField(input, name, fallback) {
+  if (input == null || !Object.hasOwn(input, name) || input[name] == null) return fallback;
+  if (typeof input[name] !== 'boolean') throw new CoreError(422, 'invalid_body', `The ${name} must be a boolean.`);
+  return input[name];
+}
+
+function attachmentList(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 64) throw new CoreError(422, 'invalid_body', 'A message can include at most 64 attachments.');
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || typeof item.path !== 'string' || item.path.length < 1 || item.path.length > 2048 || /[\u0000-\u001f]/.test(item.path)) {
+      throw new CoreError(422, 'invalid_body', 'An attachment needs a path of at most 2048 characters.');
+    }
+    if (item.kind != null && typeof item.kind !== 'string') throw new CoreError(422, 'invalid_body', 'An attachment kind must be text.');
+    return { path: item.path, kind: item.kind ?? null };
+  });
 }
 
 function fanoutFor(message, members, fromId) {
@@ -390,6 +456,18 @@ async function collectReceipts(directory, read) {
       const parsed = JSON.parse(await readFile(full, 'utf8'));
       for (const id of parsed.messageIds ?? []) read.add(id);
     }
+  }
+}
+
+async function inboxCount(context, parsed) {
+  const relativeDir = inboxDirectory(parsed);
+  const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
+  try {
+    const names = await readdir(directory);
+    return names.filter((name) => name.endsWith('.md')).length;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 0;
+    throw error;
   }
 }
 
