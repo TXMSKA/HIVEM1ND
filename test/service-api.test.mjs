@@ -1001,3 +1001,30 @@ test('the package exports the GUI host from the root and from ./gui', async () =
   assert.equal(typeof root.startGui, 'function');
   assert.equal(typeof root.closeGuiHost, 'function');
 });
+
+test('an oversized body returns body_too_large and the service keeps answering', async (t) => {
+  const { core, token } = await boot(t);
+  const port = core.http.port;
+  const modest = await call(port, 'POST', '/api/v1/units', {
+    token,
+    body: { unit: 'builder', role: 'executor', scope: 'root', machine: 'DESKTOP', note: 'x'.repeat(1_100_000) },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.notEqual(modest.status, 413);
+  const oversized = await call(port, 'POST', '/api/v1/units', {
+    token,
+    body: { unit: 'builder', role: 'executor', scope: 'root', machine: 'DESKTOP', note: 'x'.repeat(2_100_000) },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.json.error.code, 'body_too_large');
+  const board = await call(port, 'PUT', `/api/v1/blueprint/boards/${randomUUID()}`, {
+    token,
+    body: { expectedRevision: 'a'.repeat(64), document: { note: 'x'.repeat(2_100_000) } },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.notEqual(board.status, 413);
+  const alive = await call(port, 'GET', '/api/v1/units', { token });
+  assert.equal(alive.status, 200);
+  assert.deepEqual(alive.json.data.items, []);
+});

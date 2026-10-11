@@ -116,14 +116,19 @@ export function decodeId(raw) {
   return raw;
 }
 
-export async function readJsonBody(req, { expect = 'any', limit = 1000000 } = {}) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) throw new CoreError(413, 'request_too_large', 'The body is too large.');
-    chunks.push(chunk);
-  }
+const JSON_LIMIT = 2_000_000;
+const REPLACEMENT_LIMIT = 16_000_000;
+
+function bodyLimitFor(route, pathname) {
+  if (pathname === '/mcp' || route?.template?.endsWith('/assets')) return REPLACEMENT_LIMIT;
+  if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
+  if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
+  return JSON_LIMIT;
+}
+
+export async function readJsonBody(req, { expect = 'any', limit = JSON_LIMIT } = {}) {
+  const bytes = await readStream(req, limit);
+  const size = bytes.length;
   if (size === 0) {
     if (expect === 'json') throw new CoreError(422, 'invalid_body', 'A JSON body is required.');
     return null;
@@ -132,7 +137,7 @@ export async function readJsonBody(req, { expect = 'any', limit = 1000000 } = {}
   const type = String(req.headers['content-type'] ?? '');
   if (!type.startsWith('application/json')) throw new CoreError(415, 'invalid_body', 'Content-Type must be application/json.');
   try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed = JSON.parse(bytes.toString('utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CoreError(422, 'invalid_body', 'The body must be a JSON object.');
     return parsed;
   } catch (error) {
@@ -269,21 +274,38 @@ export async function createHttpServer(options) {
       if (!res.headersSent) res.writeHead(500).end();
     });
   };
-  const bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
+  const principals = new Map();
   const compiled = routeTable().map(compile);
   const sockets = new Set();
-  const server = createServer((req, res) => {
-    dispatch(req, res).catch(async (error) => {
-      if (res.headersSent || res.writableEnded) {
-        res.destroy();
-        return;
+  const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
+    const timer = setTimeout(() => {
+      if (!req.complete && !req.destroyed) req.destroy();
+    }, 15000);
+    timer.unref?.();
+    const stopTimer = () => clearTimeout(timer);
+    req.on('end', stopTimer);
+    res.on('finish', stopTimer);
+    dispatch(req, res).catch((error) => {
+      stopTimer();
+      try {
+        if (!res.headersSent && !res.writableEnded) {
+          const status = error instanceof CoreError ? error.status : 500;
+          const headers = {};
+          if (error?.retryAt) headers['retry-after'] = retryAfter(error.retryAt, options.now?.() ?? Date.now());
+          if (error?.allow) headers.allow = error.allow;
+          respond(res, status, safeError(error, randomUUID()), headers);
+        } else {
+          res.destroy();
+        }
+      } catch {
+        try { res.destroy(); } catch { /* the socket is already closed */ }
       }
-      for await (const chunk of req) void chunk;
-      const status = error instanceof CoreError ? error.status : 500;
-      const headers = {};
-      if (error?.retryAt) headers['retry-after'] = retryAfter(error.retryAt, options.now?.() ?? Date.now());
-      if (error?.allow) headers.allow = error.allow;
-      respond(res, status, safeError(error, randomUUID()), headers);
+      try {
+        if (!req.destroyed && !req.readableEnded) {
+          req.on('error', () => {});
+          req.resume();
+        }
+      } catch { /* the request is already gone */ }
     });
   });
 
@@ -298,6 +320,7 @@ export async function createHttpServer(options) {
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
     const headerBytes = Object.entries(req.headers).reduce((sum, [key, value]) => sum + key.length + String(value).length, 0);
+    const bucket = principalBucket(principals, req);
     checkLimits(bucket, { url: req.url ?? '', headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
@@ -320,7 +343,7 @@ export async function createHttpServer(options) {
       throw error;
     }
     const params = paramsOf(route, relative);
-    const bodyLimit = route.template.endsWith('/assets') ? 16000000 : 1000000;
+    const bodyLimit = bodyLimitFor(route, requested.path);
     const body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
     if (route.handler === 'authLocal') await credentialFor(req, route, credentials, listener, options);
     rejectUnknown(route, body);
@@ -429,7 +452,7 @@ async function serveMcp(req, res, options, credentials) {
   if (credential.audience !== 'agent') throw new CoreError(403, 'forbidden', 'MCP accepts only a local agent credential.');
   let message;
   try {
-    message = JSON.parse((await readRaw(req)).toString('utf8') || 'null');
+    message = JSON.parse((await readStream(req, REPLACEMENT_LIMIT)).toString('utf8') || 'null');
   } catch {
     respond(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
     return;
@@ -447,15 +470,35 @@ async function serveMcp(req, res, options, credentials) {
   respond(res, 200, outcome);
 }
 
-async function readRaw(req) {
+async function readStream(req, limit) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 1000000) throw new CoreError(413, 'request_too_large', 'The body is too large.');
-    chunks.push(chunk);
+  let tooLarge = false;
+  try {
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > limit) tooLarge = true;
+      else chunks.push(chunk);
+    }
+  } catch (error) {
+    if (tooLarge) throw new CoreError(413, 'body_too_large', 'The body is too large.');
+    if (req.destroyed) throw new CoreError(408, 'request_timeout', 'The request body was not received in time.');
+    throw error;
   }
+  if (tooLarge) throw new CoreError(413, 'body_too_large', 'The body is too large.');
   return Buffer.concat(chunks);
+}
+
+function principalBucket(principals, req) {
+  const header = headerOne(req, 'authorization') ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+  const key = token || req.socket?.remoteAddress || 'anonymous';
+  let bucket = principals.get(key);
+  if (!bucket) {
+    bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
+    principals.set(key, bucket);
+  }
+  return bucket;
 }
 
 async function serveEdge(req, res, pathname, { assetDir, viewers }) {

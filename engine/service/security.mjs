@@ -235,7 +235,7 @@ export function checkLimits(bucket, input, now = Date.now()) {
   bucket.peers ??= new Map();
   bucket.grantFailures ??= [];
   if (typeof input.url === 'string' && input.url.length > 2048) throw new CoreError(414, 'request_too_large', 'The request target is too long.');
-  if ((input.headerBytes ?? 0) > 16384) throw new CoreError(431, 'request_too_large', 'The request headers are too large.');
+  if ((input.headerBytes ?? 0) > 8192) throw new CoreError(431, 'request_too_large', 'The request headers are too large.');
   bucket.requests = bucket.requests.filter((at) => now - at < window);
   if (bucket.requests.length >= 240) throw new CoreError(429, 'rate_limited', 'Too many requests.', {}, new Date(bucket.requests[0] + window).toISOString());
   if (input.stream === true && bucket.streams.size >= 4) throw new CoreError(429, 'rate_limited', 'Too many streams.', {}, new Date(now + 1000).toISOString());
