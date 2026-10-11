@@ -88,7 +88,7 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
 });
 
 test("the shell has no remote assets, token storage, or inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
+  const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     assert.equal(source.includes("localStorage"), false, file);
@@ -102,17 +102,20 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.match(html, /lang="en"/);
   assert.match(html, /href="\/app\/styles\.css"/);
   assert.equal(html.includes("mark.svg"), false);
-  assert.match(html, /rel="icon" href="data:image\/svg\+xml/);
-  assert.equal(html.includes("%23bdcd79"), true);
+  assert.match(html, /rel="icon" href="\/app\/favicon\.svg"/);
+  assert.equal(html.includes("data:image"), false);
+  const icon = sources[1][1];
+  assert.equal(icon.includes("#bdcd79"), true);
+  assert.ok(Buffer.byteLength(icon) < 2048);
   await assert.rejects(readFile("gui/app/mark.svg"), (error) => error.code === "ENOENT");
   assert.match(html, /src="\/app\/main\.mjs"/);
   assert.equal(/<script(?![^>]*\ssrc=)/.test(html), false);
   assert.equal(html.includes("<style"), false);
   assert.equal(html.includes("session="), false);
-  const main = sources[1][1];
+  const main = sources[2][1];
   const imports = [...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
-  const css = sources[3][1];
+  const css = sources[4][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);
   assert.match(css, /--accent:\s*#bdcd79/);

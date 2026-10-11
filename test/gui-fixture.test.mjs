@@ -98,6 +98,16 @@ test("reads use the contract envelope, real revisions, and malformed-record issu
   const shell = await fetch(`${fixture.origin}/app/main.mjs`);
   assert.equal(shell.status, 200);
   assert.match(shell.headers.get("content-security-policy"), /default-src 'self'/);
+  const icon = await fetch(`${fixture.origin}/app/favicon.svg`);
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers.get("content-type") ?? "", /^image\/svg\+xml/);
+  const iconText = await icon.text();
+  assert.equal(iconText.includes("#bdcd79"), true);
+  assert.equal(iconText.includes("data:"), false);
+  const page = await fetch(`${fixture.origin}/`);
+  const pageText = await page.text();
+  assert.match(pageText, /href="\/app\/favicon\.svg"/);
+  assert.equal(pageText.includes("data:image"), false);
 });
 
 test("host, origin, and token failures use the contract status codes", async (context) => {
