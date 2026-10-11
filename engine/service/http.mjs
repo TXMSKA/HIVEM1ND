@@ -12,7 +12,7 @@ import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { enqueueStart, readStartRequest, stopSession } from './adapters.mjs';
+import { enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
@@ -936,7 +936,7 @@ async function invoke(route, scope) {
   if (route.template === '/approvals/:approvalId/answers/:answerId') return { status: 200, body: await readAnswerResult(domain, params.approvalId, params.answerId) };
   if (route.template === '/units/:unitId/approval-grants') return { status: 200, body: await listGrants(domain, params.unitId, query) };
   if (route.template === '/grant-revocations/:requestId') return { status: 200, body: await readRevocation(domain, params.requestId) };
-  if (route.template === '/session-requests/:requestId') return { status: 200, body: await readStartRequest(domain, params.requestId) };
+  if (route.template === '/session-requests/:requestId') return { status: 200, body: projectSessionRequest(await readStartRequest(domain, params.requestId)) };
   if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
   if (route.handler === 'collection') {
     const next = numbers(query);
@@ -964,8 +964,14 @@ async function invoke(route, scope) {
     const connected = await connectLead(domain, params.unitId, body);
     return { status: 200, body: connected.unit };
   }
-  if (route.handler === 'enqueueStart') return { status: 202, body: await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision }) };
-  if (route.handler === 'stopSession') return { status: 200, body: await stopSession(domain, params.sessionId) };
+  if (route.handler === 'enqueueStart') {
+    const queued = await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision });
+    return { status: 202, body: projectSessionRequest(queued) };
+  }
+  if (route.handler === 'stopSession') {
+    const stopped = await stopSession(domain, params.sessionId, body ?? {});
+    return { status: 202, body: { sessionId: stopped.sessionId, state: 'stopping' } };
+  }
   if (route.handler === 'patchLayout') {
     await patchLayout(domain, body);
     return { status: 200, body: await readDetail(domain, 'layout') };

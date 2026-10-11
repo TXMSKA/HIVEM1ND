@@ -745,13 +745,17 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(started, 202, 'start session');
-  assert.equal(started.json.data.result.state, 'started');
+  assert.equal(started.json.data.state, 'started');
+  assert.equal(started.json.data.request, undefined);
   hit('POST', '/units/:unitId/session');
-  const requestId = started.json.data.request.id;
-  const sessionId = started.json.data.result.sessionId;
+  const requestId = started.json.data.requestId;
+  const sessionId = started.json.data.sessionId;
   const requestDetail = await call(port, 'GET', `/api/v1/session-requests/${requestId}`, { token });
   expectStatus(requestDetail, 200, 'session request');
-  assert.equal(requestDetail.json.data.request.id, requestId);
+  assert.equal(requestDetail.json.data.requestId, requestId);
+  assert.equal(requestDetail.json.data.unitId, 'root:executor');
+  assert.equal(requestDetail.json.data.state, 'started');
+  assert.equal(requestDetail.json.data.sessionId, sessionId);
   hit('GET', '/session-requests/:requestId');
   const sessions = await call(port, 'GET', '/api/v1/sessions', { token });
   assert.equal(sessions.json.data.items.some((item) => item.id === sessionId), true);
@@ -760,8 +764,9 @@ test('every contract route has a success result and an authority or boundary fai
     body: { confirmed: true },
     headers: { 'idempotency-key': randomUUID() },
   });
-  expectStatus(stopped, 200, 'stop session');
-  assert.equal(stopped.json.data.state, 'stopped');
+  expectStatus(stopped, 202, 'stop session');
+  assert.equal(stopped.json.data.sessionId, sessionId);
+  assert.equal(stopped.json.data.state, 'stopping');
   hit('POST', '/sessions/:sessionId/stop');
 
   const currentLayout = await call(port, 'GET', '/api/v1/layout', { token });

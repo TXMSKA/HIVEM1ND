@@ -81,12 +81,13 @@ test('a fixture launch preloads once, does not leak endpoints, and stops only an
   assert.equal(again.result.state, 'started');
   const inbox = await readdir(path.join(fixture.paths.mind, 'user', 'inbox', 'executor-shop'));
   assert.equal(inbox.length, 1);
-  const status = await stopSession(context, started.result.sessionId);
-  assert.equal(status.state, 'stopped');
-  assert.equal(status.reason, 'native-acknowledged');
+  await assert.rejects(() => stopSession(context, started.result.sessionId, { confirmed: false }), { code: 'invalid_body' });
+  const status = await stopSession(context, started.result.sessionId, { confirmed: true });
+  assert.equal(status.state, 'stopping');
+  assert.equal(status.sessionId, started.result.sessionId);
   assert.equal(signaled.length, 1);
   const external = await registerNative(context, { client: 'codex', nativeSessionId: 'external-1', unitId: UNIT });
-  await assert.rejects(() => stopSession(context, external.sessionId), (error) => error.code === 'stop_unavailable');
+  await assert.rejects(() => stopSession(context, external.sessionId, { confirmed: true }), (error) => error.code === 'stop_unavailable');
   assert.equal(signaled.length, 1);
 });
 

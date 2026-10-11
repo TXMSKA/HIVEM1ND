@@ -245,7 +245,26 @@ export async function registerNative(context, input) {
   return registration;
 }
 
-export async function stopSession(context, sessionId) {
+export function projectSessionRequest(value) {
+  const request = value?.request ?? value ?? {};
+  const result = value?.result ?? null;
+  return {
+    requestId: request.id ?? request.requestId ?? null,
+    unitId: request.unitId ?? null,
+    machine: result?.machine ?? request.targetMachine ?? request.machine ?? null,
+    state: result?.state ?? value?.state ?? 'queued',
+    sessionId: result?.sessionId ?? null,
+    error: result?.error ?? null,
+    expiresAt: request.expiresAt ?? null,
+  };
+}
+
+export async function stopSession(context, sessionId, input = {}) {
+  if (input?.confirmed !== true) throw new CoreError(422, 'invalid_body', 'Stopping a session needs confirmation.');
+  const registration = await registrationFor(context, sessionId);
+  if (registration?.machine && registration.machine !== context.paths.machine) {
+    throw new CoreError(409, 'remote_session', 'The session belongs to another machine.');
+  }
   const journal = (await listJournals(context)).find((item) => item.sessionId === sessionId);
   if (!journal?.pid || !context.ownedPids?.has(journal.pid)) {
     throw new CoreError(409, 'stop_unavailable', 'The session is not an owned native process.');
@@ -266,7 +285,23 @@ export async function stopSession(context, sessionId) {
     const { clearUnit } = await import('./watch.mjs');
     clearUnit(context.watch, journal.unitId);
   }
-  return status;
+  return { sessionId, state: 'stopping' };
+}
+
+async function registrationFor(context, sessionId) {
+  const directory = path.join(context.paths.mind, 'user', 'relay', 'sessions');
+  let names = [];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  for (const name of names) {
+    const record = await readJson(context, `user/relay/sessions/${name}`);
+    if (record?.sessionId === sessionId) return record;
+  }
+  return null;
 }
 
 async function launch(context, request) {
