@@ -661,6 +661,53 @@ test('a published heartbeat keeps installed clients on the machine list', async 
   }
 });
 
+test('a wake credential is rejected as soon as its policy stops', async (t) => {
+  const { fixture, options } = await optionsFor(t, await freePort());
+  const binding = { unit: 'master', unitId: 'root:master', nativeSessionId: 'native-live', client: 'codex', machine: fixture.machine };
+  const sessionId = await writeObservedSession(fixture, binding);
+  const generation = randomUUID();
+  const policy = {
+    key: 'wake-live-key',
+    enabled: true,
+    generation,
+    deadlineAt: '2026-10-10T18:00:00.000Z',
+    pausedReason: null,
+    binding,
+  };
+  await writeWakePolicy(fixture, policy);
+  options.adapters = { codex: { async confirm(proof) { return proof.nativeSessionId === 'native-live'; } } };
+  const started = await startService(options);
+  try {
+    const proof = { unitId: binding.unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native-live' };
+    const attached = await attachNative(started.bridge, proof);
+    assert.equal(started.credentials.verify(attached.token).wakeId, 'wake-live-key');
+    await writeWakePolicy(fixture, { ...policy, enabled: false });
+    assert.throws(() => started.credentials.verify(attached.token), { code: 'invalid_session' });
+    await writeWakePolicy(fixture, policy);
+    const paused = await attachNative(started.bridge, proof);
+    await writeWakePolicy(fixture, { ...policy, pausedReason: 'handoff-budget-exhausted' });
+    assert.throws(() => started.credentials.verify(paused.token), { code: 'invalid_session' });
+    await writeWakePolicy(fixture, policy);
+    const current = await attachNative(started.bridge, proof);
+    await writeWakePolicy(fixture, { ...policy, generation: randomUUID() });
+    assert.throws(() => started.credentials.verify(current.token), { code: 'invalid_session' });
+    await writeWakePolicy(fixture, policy);
+    const live = await attachNative(started.bridge, proof);
+    assert.equal(started.credentials.verify(live.token).sessionId, sessionId);
+    await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', sessionId), { recursive: true });
+    await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'session-status', sessionId, 'stopped.json'), JSON.stringify({ sessionId, state: 'stopped' }));
+    assert.throws(() => started.credentials.verify(live.token), { code: 'invalid_session' });
+  } finally {
+    await stopService(started);
+  }
+});
+
+async function writeWakePolicy(fixture, policy) {
+  const directory = path.join(fixture.paths.mind, 'user', 'relay', 'wake', 'policies');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${policy.key}.json`), JSON.stringify(policy));
+}
+
 function jsonCall(port, method, target, { token = null, body = undefined } = {}) {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {

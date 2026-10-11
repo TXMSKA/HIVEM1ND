@@ -81,6 +81,7 @@ export async function attachNative(bridge, proof) {
     unitId: unit.id,
     sessionId: bound.sessionId,
     wakeId: bound.wakeId,
+    generation: bound.generation,
     capabilities: ['own'],
     attached: true,
     expiresAt: bound.expiresAt,
@@ -103,7 +104,7 @@ async function boundSession(bridge, proof, unitId) {
   }
   const wake = await activeWake(bridge, proof, unitId);
   if (!wake) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
-  return { sessionId, wakeId: wake.wakeId, expiresAt: wake.expiresAt };
+  return { sessionId, wakeId: wake.wakeId, generation: wake.generation, expiresAt: wake.expiresAt };
 }
 
 async function newestRegistration(mind, sessionId, proof, unitId) {
@@ -141,7 +142,8 @@ async function activeWake(bridge, proof, unitId) {
     const deadline = Date.parse(policy.deadlineAt);
     if (!Number.isFinite(deadline) || deadline <= now) continue;
     const wakeId = typeof policy.key === 'string' && policy.key.length > 0 ? policy.key : name.slice(0, -5);
-    if (!chosen || deadline < chosen.deadline) chosen = { wakeId, expiresAt: new Date(deadline).toISOString(), deadline };
+    const generation = typeof policy.generation === 'string' ? policy.generation : null;
+    if (!chosen || deadline < chosen.deadline) chosen = { wakeId, expiresAt: new Date(deadline).toISOString(), deadline, generation };
   }
   return chosen;
 }

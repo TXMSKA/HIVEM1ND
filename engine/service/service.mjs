@@ -17,7 +17,7 @@ import { createRelay } from '../relay/store.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
-import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './security.mjs';
+import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, wakeBindingLive } from './security.mjs';
 import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
@@ -60,6 +60,7 @@ export async function startService(options) {
     await acquireServiceLock(handle);
     await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
+    handle.credentials.bindWake((record) => wakeBindingLive(paths.mind, record, options.now?.() ?? Date.now()));
     await recoverApprovals({
       store: options.store,
       paths,

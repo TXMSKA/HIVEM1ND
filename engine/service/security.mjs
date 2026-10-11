@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, lstatSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -237,9 +237,59 @@ function remember(events, event, file) {
   if (lines.length > SECURITY_RETENTION) writeFileSync(file, `${lines.slice(-SECURITY_RETENTION).join('\n')}\n`, { mode: 0o600 });
 }
 
+export function wakeBindingLive(mind, record, now) {
+  if (!mind || !record?.wakeId || !/^[A-Za-z0-9._-]{1,80}$/.test(record.wakeId)) return false;
+  const file = path.join(mind, 'user', 'relay', 'wake', 'policies', `${record.wakeId}.json`);
+  let policy;
+  try {
+    const state = lstatSync(file);
+    if (state.isSymbolicLink() || !state.isFile()) return false;
+    policy = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!policy || policy.enabled !== true || policy.pausedReason) return false;
+  if (record.generation && policy.generation !== record.generation) return false;
+  if (policy.unlimited !== true) {
+    const deadline = Date.parse(policy.deadlineAt);
+    if (!Number.isFinite(deadline) || deadline <= now) return false;
+  }
+  const binding = policy.binding ?? {};
+  if (record.unitId && binding.unitId && binding.unitId !== record.unitId) return false;
+  if (record.sessionId && sessionMarkedStopped(mind, record.sessionId)) return false;
+  return true;
+}
+
+function sessionMarkedStopped(mind, sessionId) {
+  if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/i.test(sessionId)) return true;
+  const directory = path.join(mind, 'user', 'relay', 'session-status', sessionId);
+  let names;
+  try {
+    const state = lstatSync(directory);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+    names = readdirSync(directory);
+  } catch (error) {
+    return error?.code !== 'ENOENT';
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const file = path.join(directory, name);
+    try {
+      const state = lstatSync(file);
+      if (state.isSymbolicLink() || !state.isFile()) continue;
+      const record = JSON.parse(readFileSync(file, 'utf8'));
+      if (record?.state === 'stopped') return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function createCredentialStore({ now = () => Date.now() } = {}) {
   const records = new Map();
   let sink = null;
+  let wakeReader = null;
   const noteRevoked = (record) => sink?.record({
     type: 'credential.revoked',
     actor: record?.unitId ?? record?.audience ?? null,
@@ -251,6 +301,9 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
     bindSecurity(next) {
       sink = next;
     },
+    bindWake(reader) {
+      wakeReader = typeof reader === 'function' ? reader : null;
+    },
     issue(input) {
       const secret = randomBytes(32);
       const token = secret.toString('base64url');
@@ -260,6 +313,7 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
         unitId: input.unitId ?? null,
         sessionId: input.sessionId ?? null,
         wakeId: input.wakeId ?? null,
+        generation: input.generation ?? null,
         capabilities: input.audience === 'desktop' ? [...DESKTOP] : input.audience === 'phone' ? [...PHONE] : input.capabilities ?? [],
         expiresAt: input.expiresAt ?? null,
         viewerId: input.viewerId ?? null,
@@ -282,7 +336,19 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
       if (!timingSafeEqual(left, right) || supplied.length !== left.length || expired) {
         throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
       }
+      if (record.wakeId && wakeReader && wakeReader(record) !== true) {
+        records.delete(token);
+        noteRevoked(record);
+        throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
+      }
       return { ...record, secret: undefined, token };
+    },
+    revokeWake(wakeId) {
+      for (const [token, record] of records) {
+        if (record.wakeId !== wakeId) continue;
+        records.delete(token);
+        noteRevoked(record);
+      }
     },
     revoke(token) {
       const record = records.get(token);
