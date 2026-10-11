@@ -994,6 +994,10 @@ async function loadEditors(fx, issues) {
 }
 
 async function projection(fx) {
+  if (fx.readGate) {
+    fx.readWaits = (fx.readWaits ?? 0) + 1;
+    await fx.readGate;
+  }
   if (!fx.cache) fx.cache = await buildProjection(fx);
   return fx.cache;
 }
@@ -1767,10 +1771,10 @@ async function handleRead(fx, principal, spec, params, query, requestId) {
     if (principal.audience === "phone") throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
     throw new HttpError(403, "forbidden", "This credential cannot do that.");
   }
-  const snap = await projection(fx);
   const cursor = cursorNow(fx);
-    spec.principal = principal;
-    const data = await readData(fx, snap, spec, params, query);
+  const snap = await projection(fx);
+  spec.principal = principal;
+  const data = await readData(fx, snap, spec, params, query);
   return success(fx, present(principal, data), requestId, cursor);
 }
 
@@ -2055,15 +2059,39 @@ function sendError(response, error, requestId) {
   });
 }
 
-async function readBody(request) {
+const GENERAL_BODY = 2_000_000;
+const LARGE_BODY = 16_000_000;
+
+function bodyLimit(method, apiPath) {
+  if (method === "PUT" && (/^\/blueprint\/boards\/[^/]+$/.test(apiPath) || /^\/void\/texts\/[^/]+$/.test(apiPath))) return LARGE_BODY;
+  if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/void/texts")) return LARGE_BODY;
+  if (method === "POST" && (/^\/void\/texts\/[^/]+\/ranges$/.test(apiPath) || /^\/editors\/[^/]+\/assets$/.test(apiPath))) return LARGE_BODY;
+  return GENERAL_BODY;
+}
+
+async function readBody(request, limit = GENERAL_BODY) {
   const chunks = [];
   let total = 0;
   for await (const chunk of request) {
     total += chunk.length;
-    if (total > 2_000_000) throw new HttpError(413, "body_too_large", "The request body is too large.");
+    if (total > limit) throw new HttpError(413, "body_too_large", "The request body is too large.");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+function canonicalOrigin(value) {
+  if (typeof value !== "string") return null;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== "/") return null;
+  if (value !== parsed.origin) return null;
+  return parsed.origin;
 }
 
 function staticHeaders(frameAncestors, deny) {
@@ -2137,10 +2165,10 @@ async function handleApi(fx, request, response, audience) {
   if ([...url.searchParams.keys()].some((key) => key === "token" || key === "access_token")) {
     throw new HttpError(400, "invalid_query", "The query is not valid.");
   }
-  if (await serveStatic(fx, request, response, audience)) return;
-  if (!url.pathname.startsWith("/api/v1/")) throw new HttpError(404, "not_found", "The route was not found.");
   const origin = request.headers.origin;
   if (origin !== undefined && origin !== audience.origin) throw new HttpError(403, "invalid_origin", "The request origin is invalid.");
+  if (await serveStatic(fx, request, response, audience)) return;
+  if (!url.pathname.startsWith("/api/v1/")) throw new HttpError(404, "not_found", "The route was not found.");
   const writing = !["GET", "HEAD"].includes(request.method);
   if (writing && origin !== audience.origin) throw new HttpError(403, "invalid_origin", "The request origin is required.");
   const apiPath = url.pathname.slice("/api/v1".length);
@@ -2177,7 +2205,7 @@ async function handleApi(fx, request, response, audience) {
     sendJson(response, 200, body);
     return;
   }
-  const raw = await readBody(request);
+  const raw = await readBody(request, bodyLimit(request.method, apiPath));
   const type = String(request.headers["content-type"] ?? "");
   if (!type.includes("application/json")) throw new HttpError(415, "unsupported_media_type", "JSON is required.");
   let body;
@@ -2771,7 +2799,7 @@ async function prepareComment(fx, resourceId, body) {
     place: body.anchor?.screen ? { screenId: body.anchor.screen, nodeId: body.anchor.element ?? null, x: body.anchor.point?.x ?? 0, y: body.anchor.point?.y ?? 0 } : null,
     messages: [{ id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
   };
-  return writeComments(fx, editor, [...editor.threads, thread], thread);
+  return writeComments(fx, editor, [...editor.threads, thread], thread, 201, "create");
 }
 
 async function prepareReply(fx, params, body) {
@@ -2784,7 +2812,7 @@ async function prepareReply(fx, params, body) {
     status: "open",
     messages: [...(thread.messages ?? []), { id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
   };
-  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200);
+  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200, "reply");
 }
 
 async function prepareThreadStatus(fx, params, body) {
@@ -2793,7 +2821,8 @@ async function prepareThreadStatus(fx, params, body) {
   const thread = editor.threads.find((item) => item.id === params.threadId);
   if (!thread) throw new HttpError(404, "thread_not_found", "The thread was not found.");
   const next = { ...thread, status: body.status };
-  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200);
+  const operation = body.status === "resolved" ? "resolve" : "reopen";
+  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200, operation);
 }
 
 async function prepareAttachments(fx, resourceId, body) {
@@ -2866,7 +2895,7 @@ function commentsPath(fx, editor) {
   return join(repo, "docs", "flows", "comments", `${editor.legacy?.id ?? editor.document?.id}.json`);
 }
 
-function writeComments(fx, editor, threads, thread, status = 201) {
+function writeComments(fx, editor, threads, thread, status = 201, operation = "create") {
   const document = { threads: threads.map((item) => ({ ...item, revision: undefined })) };
   const bytes = Buffer.from(stableJson(document));
   const commentsRevision = sha256(bytes);
@@ -2879,7 +2908,7 @@ function writeComments(fx, editor, threads, thread, status = 201) {
       notifications: [{ unitId: editor.attached[0] ?? null, state: failed && editor.attached.includes(failed) ? "failed" : "pending" }],
     },
     writes: [{ path: commentsPath(fx, editor), beforeRevision: editor.commentsRevision, afterRevision: commentsRevision, afterBytesBase64: bytes.toString("base64") }],
-    events: [{ name: "comment.changed", resourceId: editor.id, data: { resourceId: editor.id, thread, commentsRevision } }],
+    events: [{ name: "comment.changed", resourceId: editor.id, data: { resourceId: editor.id, thread, commentsRevision, operation } }],
   };
 }
 
@@ -2995,7 +3024,13 @@ async function prepareCreateEditor(fx, kind, body) {
     status: 201,
     data: { id, kind, project: body.project, title: document.title ?? document.id, path, readOnly: false, revision, document, legacy: null, attached, threads: [], commentsRevision: null, attachmentRevision, proposals: [] },
     writes,
-    events: [{ name: kind === "void" ? "void.changed" : "blueprint.changed", resourceId: id, data: { resourceId: id, revision } }],
+    events: [{
+      name: kind === "void" ? "void.changed" : "blueprint.changed",
+      resourceId: id,
+      data: kind === "void"
+        ? { resourceId: id, revision, rev: document.rev ?? 0, operation: "create", k: null, lang: null }
+        : { resourceId: id, revision, operation: "create", nodeId: null },
+    }],
   };
 }
 
@@ -3058,7 +3093,7 @@ async function prepareBoardPut(fx, resourceId, body) {
   if (editor.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The board was changed elsewhere.", { currentRevision: editor.revision });
   assertCompatible(editor.document, body.document);
   assertNewLinks(editor.document, body.document);
-  return writeBoard(fx, editor, body.document, { document: body.document });
+  return writeBoard(fx, editor, body.document, { operation: "replace" });
 }
 
 async function prepareAddNode(fx, resourceId, body) {
@@ -3074,7 +3109,7 @@ async function prepareAddNode(fx, resourceId, body) {
   const nextParent = findNode(document.screens.find((item) => item.id === body.screenId).root, body.parentId);
   nextParent.node.kids = [...(nextParent.node.kids ?? [])];
   nextParent.node.kids.splice(index, 0, body.node);
-  return writeBoard(fx, editor, document, { editor: null, nodeId: body.node.id });
+  return writeBoard(fx, editor, document, { operation: "add-node", nodeId: body.node.id, respondNode: true });
 }
 
 async function preparePatchNode(fx, params, body) {
@@ -3083,7 +3118,7 @@ async function preparePatchNode(fx, params, body) {
   const document = structuredClone(editor.document);
   const found = findInDocument(document, params.nodeId);
   mergeNode(found.node, body.changes);
-  return writeBoard(fx, editor, document, {});
+  return writeBoard(fx, editor, document, { operation: "update-node", nodeId: params.nodeId });
 }
 
 async function prepareDeleteNode(fx, params, body) {
@@ -3093,7 +3128,7 @@ async function prepareDeleteNode(fx, params, body) {
   if (removed.root) throw new HttpError(422, "root_node", "The root node cannot be removed.");
   if (!removed.ids) throw new HttpError(404, "node_not_found", "The node was not found.");
   document.links = (document.links ?? []).filter((link) => !removed.ids.has(link.element));
-  return writeBoard(fx, editor, document, {});
+  return writeBoard(fx, editor, document, { operation: "remove-node", nodeId: params.nodeId });
 }
 
 async function prepareAsset(fx, resourceId, body) {
@@ -3148,7 +3183,7 @@ async function prepareTextPut(fx, resourceId, body) {
   const document = structuredClone(body.document);
   delete document.history;
   document.rev = (editor.document.rev ?? 0) + 1;
-  return writeText(fx, editor, document, { k: document.pages?.[0]?.k ?? null, lang: "en", before: "", after: "" });
+  return writeText(fx, editor, document, { operation: "replace", k: null, lang: null, before: "", after: "" });
 }
 
 async function prepareRange(fx, resourceId, body) {
@@ -3163,7 +3198,7 @@ async function prepareRange(fx, resourceId, body) {
   const page = document.pages.find((item) => item.k === body.k);
   page[body.lang] = `${source.slice(0, body.start)}${body.replacement}${source.slice(body.end)}`;
   document.rev = (document.rev ?? 0) + 1;
-  const saved = await writeText(fx, editor, document, { k: body.k, lang: body.lang, before: body.expectedText, after: body.replacement });
+  const saved = await writeText(fx, editor, document, { operation: "replace-range", k: body.k, lang: body.lang, before: body.expectedText, after: body.replacement });
   return { status: saved.status, data: { editor: saved.data, proposal: null }, writes: saved.writes, events: saved.events };
 }
 
@@ -3203,7 +3238,7 @@ async function proposeRange(fx, editor, body) {
     }],
   };
   const updated = threads.map((item) => item.id === thread.id ? next : item);
-  const comments = writeComments(fx, editor, updated, next, 200);
+  const comments = writeComments(fx, editor, updated, next, 200, "reply");
   const published = { ...proposal, resourceId: editor.id, threadId: thread.id, commentsRevision: comments.data.commentsRevision };
   return {
     status: 200,
@@ -3238,15 +3273,15 @@ async function prepareProposal(fx, params, body) {
   const message = thread.messages.find((item) => item.proposal?.id === proposal.id);
   message.proposal = { ...message.proposal, state: body.decision === "accept" ? "accepted" : "discarded", decidedBy: "root:master", decidedAt: clock(fx).toISOString() };
   if (body.decision === "discard") {
-    const comments = writeComments(fx, editor, threads, thread, 200);
+    const comments = writeComments(fx, editor, threads, thread, 200, "reply");
     return { ...comments, status: 200, data: { ...comments.data, proposal: message.proposal, editor: { ...editor, commentsRevision: comments.data.commentsRevision, threads, proposals: threads.flatMap(proposalList) } } };
   }
   const document = structuredClone(editor.document);
   const page = document.pages.find((item) => item.k === proposal.k);
   page[proposal.lang] = `${source.slice(0, proposal.start)}${proposal.replacement}${source.slice(proposal.end)}`;
   document.rev = (document.rev ?? 0) + 1;
-  const saved = await writeText(fx, editor, document, { k: proposal.k, lang: proposal.lang, before: proposal.expectedText, after: proposal.replacement });
-  const comments = writeComments(fx, { ...editor, threads }, threads, thread, 200);
+  const saved = await writeText(fx, editor, document, { operation: "replace-range", k: proposal.k, lang: proposal.lang, before: proposal.expectedText, after: proposal.replacement });
+  const comments = writeComments(fx, { ...editor, threads }, threads, thread, 200, "reply");
   return {
     status: 200,
     data: { editor: { ...saved.data, commentsRevision: comments.data.commentsRevision, threads, proposals: threads.flatMap(proposalList) }, proposal: message.proposal },
@@ -3331,7 +3366,11 @@ async function writeText(fx, editor, document, change) {
       { path: editorFile(fx, editor.project, editor.path), beforeRevision: editor.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") },
       { path: historyPath, beforeRevision, afterRevision: sha256(history), afterBytesBase64: history.toString("base64") },
     ],
-    events: [{ name: "void.changed", resourceId: editor.id, data: { resourceId: editor.id, revision } }],
+    events: [{
+      name: "void.changed",
+      resourceId: editor.id,
+      data: { resourceId: editor.id, revision, rev: document.rev ?? 0, operation: change.operation ?? "replace", k: change.k ?? null, lang: change.lang ?? null },
+    }],
   };
 }
 
@@ -3375,9 +3414,13 @@ function writeBoard(fx, editor, document, data) {
   const editorData = { ...editor, document, revision, file: undefined, corrupt: undefined };
   return {
     status: 200,
-    data: data.nodeId ? { editor: editorData, nodeId: data.nodeId } : editorData,
+    data: data.respondNode ? { editor: editorData, nodeId: data.nodeId } : editorData,
     writes: [{ path: editorFile(fx, editor.project, editor.path), beforeRevision: editor.revision, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }],
-    events: [{ name: "blueprint.changed", resourceId: editor.id, data: { resourceId: editor.id, revision } }],
+    events: [{
+      name: "blueprint.changed",
+      resourceId: editor.id,
+      data: { resourceId: editor.id, revision, operation: data.operation ?? "replace", nodeId: data.nodeId ?? null },
+    }],
   };
 }
 
@@ -3543,13 +3586,14 @@ async function prepareTaskStatus(fx, taskId, body, principal) {
   if (task.status === "review" && body.status === "open" && !String(body.note ?? "").trim()) throw new HttpError(422, "note_required", "A note is required.");
   const previous = await readFile(task.file);
   const next = Buffer.from(replaceStatus(previous.toString("utf8"), body.status, body.note));
-  fx.taskUndo.set(taskId, previous);
+  const changeId = uuid();
+  fx.taskUndo.set(taskId, { bytes: previous, changeId });
   const updated = { ...publicTask(task), status: body.status, reviewable: false, undoAvailable: true, revision: sha256(next) };
   return {
     status: 200,
-    data: { task: updated, changeId: uuid() },
+    data: { task: updated, changeId },
     writes: [{ path: task.file, beforeRevision: task.revision, afterRevision: updated.revision, afterBytesBase64: next.toString("base64") }],
-    events: [{ name: "task.changed", data: { task: updated } }],
+    events: [{ name: "task.changed", data: { task: updated, changeId, undoOf: null } }],
   };
 }
 
@@ -3560,14 +3604,15 @@ async function prepareUndo(fx, taskId, body) {
   if (task.revision !== body.expectedRevision) throw new HttpError(409, "undo_conflict", "The task was changed elsewhere.");
   const previous = fx.taskUndo.get(taskId);
   if (!previous) throw new HttpError(409, "nothing_to_undo", "There is nothing to undo.");
-  const restored = /^status: (.+)$/m.exec(previous.toString("utf8"))?.[1] ?? task.status;
-  const updated = { ...publicTask(task), status: restored, revision: sha256(previous), undoAvailable: false };
+  const restored = /^status: (.+)$/m.exec(previous.bytes.toString("utf8"))?.[1] ?? task.status;
+  const changeId = uuid();
+  const updated = { ...publicTask(task), status: restored, revision: sha256(previous.bytes), undoAvailable: false };
   fx.taskUndo.delete(taskId);
   return {
     status: 200,
-    data: { task: updated, changeId: uuid(), undoOf: taskId },
-    writes: [{ path: task.file, beforeRevision: task.revision, afterRevision: updated.revision, afterBytesBase64: previous.toString("base64") }],
-    events: [{ name: "task.changed", data: { task: updated } }],
+    data: { task: updated, changeId, undoOf: previous.changeId },
+    writes: [{ path: task.file, beforeRevision: task.revision, afterRevision: updated.revision, afterBytesBase64: previous.bytes.toString("base64") }],
+    events: [{ name: "task.changed", data: { task: updated, changeId, undoOf: previous.changeId } }],
   };
 }
 
@@ -3691,11 +3736,12 @@ async function handleAuth(fx, request, response, audience, path, requestId) {
     requireObject(body, ["embedded", "hostOrigin", "look", "language"]);
     requireKeys(body, ["embedded", "hostOrigin", "look", "language"]);
     if (typeof body.embedded !== "boolean") throw new HttpError(422, "invalid_body", "The request body is not valid.");
-    if (body.embedded && (typeof body.hostOrigin !== "string" || !/^https?:\/\/[^/]+$/.test(body.hostOrigin))) {
-      throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
-    }
+    const hostOrigin = body.embedded ? canonicalOrigin(body.hostOrigin) : null;
+    if (body.embedded && !hostOrigin) throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
     if (!body.embedded && body.hostOrigin !== null) throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
-    const viewer = createViewer(fx, { embedded: body.embedded, hostOrigin: body.hostOrigin, look: body.look, language: body.language, audience: "desktop" });
+    if (![null, "modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
+    if (![null, "en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The language is not valid.");
+    const viewer = createViewer(fx, { embedded: body.embedded, hostOrigin, look: body.look, language: body.language, audience: "desktop" });
     sendJson(response, 201, success(fx, {
       token: viewer.token, viewerId: viewer.viewerId, origin: fx.desktop.origin, url: viewer.url,
       capabilities: viewer.capabilities, expiresAt: null,
@@ -3941,6 +3987,18 @@ export async function createGuiFixture(options = {}) {
       emit(name, data, source) {
         return enqueue(fx, async () => publish(fx, [{ name, data, source: source ?? serviceSource(), global: true }], fx.primary));
       },
+      holdReads() {
+        if (fx.readGate) return;
+        fx.readWaits = 0;
+        fx.readGate = new Promise((resolve) => { fx.releaseReads = resolve; });
+      },
+      releaseReads() {
+        const release = fx.releaseReads;
+        fx.readGate = null;
+        fx.releaseReads = null;
+        release?.();
+      },
+      readsWaiting() { return fx.readWaits ?? 0; },
       replay(id) {
         return enqueue(fx, async () => {
           const record = fx.ring.find((item) => item.id === id);
@@ -4018,7 +4076,7 @@ export async function createGuiFixture(options = {}) {
           const bytes = Buffer.from(stableJson(document));
           await writeAtomic(editorFile(fx, editor.project, editor.path), bytes);
           invalidate(fx);
-          publish(fx, [{ name: "blueprint.changed", resourceId, global: true, data: { resourceId, revision: sha256(bytes) } }], fx.primary);
+          publish(fx, [{ name: "blueprint.changed", resourceId, global: true, data: { resourceId, revision: sha256(bytes), operation: "import", nodeId: null } }], fx.primary);
         });
       },
       setLook(look) {
@@ -4149,6 +4207,10 @@ export async function createGuiFixture(options = {}) {
     async close() {
       if (fx.closed) return;
       fx.closed = true;
+      const release = fx.releaseReads;
+      fx.readGate = null;
+      fx.releaseReads = null;
+      release?.();
       disconnectStreams(fx);
       await closeServers(fx);
       await fx.tail;

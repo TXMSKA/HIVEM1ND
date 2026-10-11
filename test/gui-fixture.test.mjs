@@ -274,6 +274,161 @@ test("a third hash during recovery is a fixture journal conflict", async (contex
   await assert.rejects(() => fixture.control.restart(), /Fixture journal conflict/);
 });
 
+test("fixture bounds check origin before files and publish complete resource events", async (context) => {
+  const fixture = await open(context);
+  const foreign = await fetch(`${fixture.origin}/app/main.mjs`, { headers: { Origin: "http://evil.example" } });
+  const foreignText = await foreign.text();
+  assert.equal(foreign.status, 403);
+  assert.equal(JSON.parse(foreignText).error.code, "invalid_origin");
+  assert.equal(foreignText.includes("export function"), false);
+  const localFile = await fetch(`${fixture.origin}/app/main.mjs`);
+  assert.equal(localFile.status, 200);
+  await localFile.arrayBuffer();
+
+  const entries = await readdir(fixture.root, { recursive: true });
+  const bootstrap = entries.find((entry) => String(entry).endsWith("bootstrap.json"));
+  const secret = JSON.parse(await readFile(path.join(fixture.root, String(bootstrap)), "utf8")).secret;
+  const local = (body) => fetch(`${fixture.origin}/api/v1/auth/local`, {
+    method: "POST",
+    headers: { Origin: fixture.origin, "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+    body: JSON.stringify(body),
+  }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  for (const hostOrigin of ["http://user:pass@example.com", "http://example.com/app", "http://example.com?x=1", "http://example.com#x", "HTTP://example.com"]) {
+    const rejected = await local({ embedded: true, hostOrigin, look: null, language: null });
+    assert.equal(rejected.status, 422);
+    assert.equal(rejected.body.error.code, "invalid_host_origin");
+  }
+  const look = await local({ embedded: true, hostOrigin: "https://embed.example", look: "comic", language: null });
+  assert.equal(look.status, 422);
+  assert.equal(look.body.error.code, "invalid_body");
+  const language = await local({ embedded: true, hostOrigin: "https://embed.example", look: "modern", language: "fr" });
+  assert.equal(language.status, 422);
+  const accepted = await local({ embedded: true, hostOrigin: "https://embed.example", look: "high-contrast", language: "es" });
+  assert.equal(accepted.status, 201);
+
+  const postBytes = async (method, route, size) => {
+    const response = await fetch(`${fixture.origin}${route}`, {
+      method,
+      headers: { ...fixture.headers, "Content-Type": "application/json" },
+      body: Buffer.alloc(size, 0x78),
+    });
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
+  };
+  const general = await postBytes("POST", "/api/v1/units", 2_000_001);
+  assert.equal(general.status, 413);
+  assert.equal(general.body.error.code, "body_too_large");
+  const replacement = await postBytes("PUT", "/api/v1/blueprint/boards/missing", 2_000_001);
+  assert.equal(replacement.status, 400);
+  assert.equal(replacement.body.error.code, "invalid_json");
+  const upload = await postBytes("POST", "/api/v1/editors/missing/assets", 2_000_001);
+  assert.equal(upload.status, 400);
+  assert.equal(upload.body.error.code, "invalid_json");
+  const ceiling = await postBytes("PUT", "/api/v1/void/texts/missing", 16_000_001);
+  assert.equal(ceiling.status, 413);
+  assert.equal(ceiling.body.error.code, "body_too_large");
+
+  fixture.control.holdReads();
+  try {
+    const pending = request(fixture, "GET", "/api/v1/view");
+    for (let attempt = 0; attempt < 50 && fixture.control.readsWaiting() < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fixture.control.readsWaiting() > 0, true);
+    const eventId = await fixture.control.emit("service.changed", { machine: { id: "LAPTOP", version: "3.0.1", state: "running", answers: true } });
+    fixture.control.releaseReads();
+    const viewed = await pending;
+    const cursor = /^([0-9a-f-]{36}):(\d+)$/.exec(viewed.body.meta.eventCursor);
+    const emitted = /^([0-9a-f-]{36}):(\d+)$/.exec(eventId);
+    assert.equal(cursor[1], emitted[1]);
+    assert.equal(Number(cursor[2]) < Number(emitted[2]), true);
+  } finally {
+    fixture.control.releaseReads();
+  }
+
+  const board = await request(fixture, "POST", "/api/v1/blueprint/boards", {
+    key: randomUUID(),
+    body: {
+      project: "shop",
+      document: { formatVersion: 1, id: "bound-board", title: "Bound", screens: [{ id: "main", title: "Main", root: { id: "root", t: "box", kids: [] } }] },
+    },
+  });
+  assert.equal(board.status, 201);
+  const added = await request(fixture, "POST", `/api/v1/blueprint/boards/${board.body.data.id}/nodes`, {
+    key: randomUUID(),
+    body: {
+      screenId: "main",
+      parentId: "root",
+      node: { id: "extra", t: "text", name: "Extra" },
+      expectedRevision: board.body.data.revision,
+    },
+  });
+  assert.equal(added.status, 200);
+  const text = await request(fixture, "POST", "/api/v1/void/texts", {
+    key: randomUUID(),
+    body: { project: "shop", path: "docs/bound.json", document: { formatVersion: 1, id: "bound-text", title: "Bound", pages: [{ k: "Intro", en: "Hello" }] } },
+  });
+  assert.equal(text.status, 201);
+  const ranged = await request(fixture, "POST", `/api/v1/void/texts/${text.body.data.id}/ranges`, {
+    key: randomUUID(),
+    body: { k: "Intro", lang: "en", start: 0, end: 5, expectedText: "Hello", replacement: "Hi", expectedRevision: text.body.data.revision },
+  });
+  assert.equal(ranged.status, 200);
+  const boards = await request(fixture, "GET", "/api/v1/blueprint/boards?limit=50");
+  const cart = boards.body.data.items.find((item) => item.title === "Cart");
+  const current = await request(fixture, "GET", `/api/v1/blueprint/boards/${cart.id}`);
+  const comment = await request(fixture, "POST", `/api/v1/editors/${cart.id}/comments`, {
+    key: randomUUID(),
+    body: {
+      text: "A note.",
+      expectedRevision: current.body.data.revision,
+      expectedCommentsRevision: current.body.data.commentsRevision,
+      anchor: { screen: null, screenTitle: null, element: null, label: "Board", path: [], point: { x: 0, y: 0 } },
+    },
+  });
+  assert.equal(comment.status, 201);
+  const tasks = await request(fixture, "GET", "/api/v1/tasks?limit=50");
+  const openTask = tasks.body.data.items.find((item) => item.status === "open");
+  const moved = await request(fixture, "POST", `/api/v1/tasks/${encodeURIComponent(openTask.id)}/status`, {
+    key: randomUUID(),
+    body: { status: "review", expectedRevision: openTask.revision },
+  });
+  assert.equal(moved.status, 200);
+  const undone = await request(fixture, "POST", `/api/v1/tasks/${encodeURIComponent(openTask.id)}/undo`, {
+    key: randomUUID(),
+    body: { expectedRevision: moved.body.data.task.revision },
+  });
+  assert.equal(undone.status, 200);
+  assert.equal(undone.body.data.undoOf, moved.body.data.changeId);
+  const ledgerFile = (await filesUnder(fixture.root)).find((file) => file.endsWith(`${path.sep}event-ledger.json`));
+  const records = JSON.parse(await readFile(ledgerFile, "utf8")).records;
+  const named = (name) => records.filter((record) => record.name === name).map((record) => record.data);
+  const createdBoard = named("blueprint.changed").find((data) => data.operation === "create");
+  assert.equal(createdBoard.resourceId, board.body.data.id);
+  assert.match(createdBoard.revision, /^[0-9a-f]{64}$/);
+  assert.equal(createdBoard.nodeId, null);
+  const nodeEvent = named("blueprint.changed").find((data) => data.operation === "add-node");
+  assert.equal(nodeEvent.nodeId, "extra");
+  const createdText = named("void.changed").find((data) => data.operation === "create");
+  assert.equal(createdText.resourceId, text.body.data.id);
+  assert.equal(createdText.rev, 1);
+  assert.equal(createdText.k, null);
+  assert.equal(createdText.lang, null);
+  const rangedEvent = named("void.changed").find((data) => data.operation === "replace-range");
+  assert.equal(rangedEvent.k, "Intro");
+  assert.equal(rangedEvent.lang, "en");
+  assert.equal(typeof rangedEvent.rev, "number");
+  const commentEvent = named("comment.changed").find((data) => data.operation === "create");
+  assert.equal(commentEvent.resourceId, cart.id);
+  assert.equal(commentEvent.thread.id, comment.body.data.thread.id);
+  assert.match(commentEvent.commentsRevision, /^[0-9a-f]{64}$/);
+  const taskEvent = named("task.changed").find((data) => data.changeId === moved.body.data.changeId);
+  assert.equal(taskEvent.task.id, openTask.id);
+  assert.equal(taskEvent.undoOf, null);
+  const undoEvent = named("task.changed").find((data) => data.changeId === undone.body.data.changeId);
+  assert.equal(undoEvent.undoOf, moved.body.data.changeId);
+});
+
 test("the fixture import graph stays inside Node built-ins and its own helper", async () => {
   const allowed = new Set(["node:http", "node:crypto", "node:fs/promises", "node:path", "node:os", "node:url", "./gui-data.mjs"]);
   const seen = new Set();
