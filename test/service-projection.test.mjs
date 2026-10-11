@@ -484,6 +484,12 @@ test('scoped records, terminal sessions and chat fields stay in the projection',
   const builder = view.units.find((unit) => unit.id === 'project:shop:builder');
   assert.ok(builder);
   assert.deepEqual(builder.sessionIds, []);
+  assert.equal(view.mind.machine, 'DESKTOP');
+  assert.equal(view.units.find((unit) => unit.id === 'project:shop:builder').path, undefined);
+  const squad = view.squads.find((item) => item.id === 'lead:root:overseer');
+  assert.equal(squad.members.includes('project:shop:builder'), true);
+  assert.notEqual(builder.status, 'unknown');
+  assert.equal(squad.rollup[builder.status] >= 1, true);
   assert.equal(view.projects[0].id, 'shop');
   assert.equal(view.projects[0].title, 'Shop');
   assert.equal(view.projects[0].available, false);

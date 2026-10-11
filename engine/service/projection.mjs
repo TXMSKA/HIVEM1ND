@@ -120,7 +120,7 @@ export async function readCollection(context, name, query = {}) {
 }
 
 async function projectRecords(context, query) {
-  return assemble(await loadMind(context), query, context.aliases ?? []);
+  return assemble(await loadMind(context), query, context.aliases ?? [], context.paths?.machine ?? null);
 }
 
 export async function readDetail(context, name, id, scope = {}) {
@@ -247,7 +247,7 @@ async function loadMind(context) {
   return { units, sessions, messages, tasks, chats, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
 }
 
-function assemble(loaded, query, aliases = []) {
+function assemble(loaded, query, aliases = [], machine = null) {
   const waiting = waitingFor([
     ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
       id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
@@ -259,16 +259,20 @@ function assemble(loaded, query, aliases = []) {
     ...(loaded.approvals ?? []),
   ]);
   const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
-  const units = loaded.units.map((unit) => ({
-    ...unit,
-    status: statusFor({
-      malformed: unit.malformed,
-      state: unit.state,
-      quota: quotaFor(loaded.sessions, unit.id),
-      waiting: waitingUnits.has(unit.id),
-      activity: activityFor(loaded.sessions, unit.id),
-    }),
-  }));
+  const units = loaded.units.map((unit) => {
+    const published = {
+      ...unit,
+      status: statusFor({
+        malformed: unit.malformed,
+        state: unit.state,
+        quota: quotaFor(loaded.sessions, unit.id),
+        waiting: waitingUnits.has(unit.id),
+        activity: activityFor(loaded.sessions, unit.id),
+      }),
+    };
+    delete published.path;
+    return published;
+  });
   const overseers = units.filter((unit) => unit.role === 'overseer' && !unit.malformed);
   const canonical = overseers.find((unit) => unit.id === 'root:overseer') ?? overseers[0] ?? null;
   const issues = [...loaded.issues];
@@ -282,7 +286,7 @@ function assemble(loaded, query, aliases = []) {
   const visibleUnits = project ? units.filter((unit) => inProjectChain(unit, project, units)) : units;
   visibleUnits.sort(unitOrder);
   const view = {
-    mind: { version: '3.0.0', machine: query.machine ?? null, project },
+    mind: { version: '3.0.0', machine, project },
     units: visibleUnits,
     leads,
     squads,
