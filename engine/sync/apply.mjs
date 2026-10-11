@@ -279,7 +279,7 @@ function markerOp(item, raw) {
   return {
     kind: 'marker',
     key,
-    bytes: Buffer.from(`${canonicalJson({ hash: hashBytes(raw), deleted: false, at: item.change.at, id })}\n`, 'utf8').toString('base64'),
+    bytes: Buffer.from(`${canonicalJson({ hash: hashBytes(raw), deleted: false, at: item.change.at, machine: item.change.machine, id })}\n`, 'utf8').toString('base64'),
   };
 }
 

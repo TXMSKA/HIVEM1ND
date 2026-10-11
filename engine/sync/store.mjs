@@ -172,16 +172,18 @@ async function observeUnlocked(sync, target, options) {
     await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: nextHash, at, machine, id, deleted })}\n`, 'utf8'));
     return { staged: false, applied: true };
   }
-  const marker = await readJson(sync, markerPath(sync, key));
-  if (marker) {
+  const storedMarker = await readJson(sync, markerPath(sync, key));
+  if (storedMarker) {
+    const marker = await completeMarker(sync, key, storedMarker);
     const matches = marker.deleted === true ? deleted : marker.hash === nextHash;
     if (!matches) {
       const pendingLocal = deleted
         ? { hash: null, deleted: true, at }
         : { hash: nextHash, deleted: false, at, bytes: Buffer.from(source).toString('base64') };
-      await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson({ hash: marker.hash, at: marker.at, machine: marker.machine, id: marker.id, deleted: marker.deleted === true, pendingLocal })}\n`, 'utf8'));
+      await atomicWrite(sync.store, markerPath(sync, key), Buffer.from(`${canonicalJson(markerBody(marker, { pendingLocal }))}\n`, 'utf8'));
       return { staged: false, held: true };
     }
+    if (typeof marker.machine !== 'string' || !marker.machine) return { staged: false, quarantined: true };
     await writeVersion(sync, key, {
       hash: marker.hash,
       at: marker.at,
@@ -504,6 +506,48 @@ async function readVersions(sync) {
     throw new CoreError(422, 'corrupt_resource', 'The sync version record is not valid.');
   }
   return parsed;
+}
+
+function markerBody(marker, extra = {}) {
+  const record = {
+    hash: marker.hash ?? null,
+    at: marker.at,
+    id: marker.id,
+    deleted: marker.deleted === true,
+    ...extra,
+  };
+  if (typeof marker.machine === 'string' && marker.machine) record.machine = marker.machine;
+  return record;
+}
+
+async function completeMarker(sync, key, marker) {
+  if (typeof marker.machine === 'string' && marker.machine) return marker;
+  const versions = await readVersions(sync);
+  const known = versions.targets?.[key];
+  const sameBytes = known && known.hash === (marker.hash ?? null) && known.deleted === (marker.deleted === true) && typeof known.machine === 'string';
+  if (sameBytes) return { ...marker, machine: known.machine, id: typeof marker.id === 'string' ? marker.id : known.id };
+  const machine = await machineFromMarkerId(sync, key, marker);
+  return machine ? { ...marker, machine } : marker;
+}
+
+async function machineFromMarkerId(sync, key, marker) {
+  if (typeof marker.id !== 'string' || typeof marker.hash !== 'string' || typeof marker.at !== 'string') return null;
+  const directory = path.join(sync.paths.localDirectory, 'received');
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  const matches = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (entry.name === 'groups' || entry.name === 'pending') continue;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.name)) continue;
+    if (uuidV8(['applied', entry.name, key, marker.hash, marker.at]) === marker.id) matches.push(entry.name);
+  }
+  return matches.length === 1 ? matches[0] : null;
 }
 
 async function writeVersion(sync, key, value) {

@@ -1,4 +1,5 @@
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,8 @@ import { applyPack, compareVersions } from '../engine/sync/apply.mjs';
 import { limitsFor, openLedger } from '../engine/sync/limits.mjs';
 import { closeOrigin, openOrigin, publishBeat, publishPack, readHead, watchOrigin } from '../engine/sync/origin.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
-import { openSync, stageTransaction } from '../engine/sync/store.mjs';
+import { startService, stopService } from '../engine/service/service.mjs';
+import { listStaged, openSync, stageBaselines, stageTransaction, targetKey } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
@@ -561,3 +563,68 @@ test('an origin watcher reports a real head change and does not poll while idle'
   assert.equal(events.length, count);
   await close();
 });
+
+test('an applied pack restarts without republishing, including a marker that omitted its machine', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const raw = Buffer.from('laptop note');
+  const target = { kind: 'mind', path: 'user/note.txt' };
+  const applied = await applyPack(desktop, pack([put(target, raw)], [{ hash: hashBytes(raw), raw }]), { ledger: null });
+  assert.equal(applied.status, 'applied');
+  const key = targetKey(target);
+  const markerFile = path.join(fixture.paths.localDirectory, 'staging', 'applied', `${key}.json`);
+  const marker = JSON.parse(await readFile(markerFile, 'utf8'));
+  assert.equal(marker.machine, 'LAPTOP');
+  delete marker.machine;
+  await writeFile(markerFile, `${JSON.stringify(marker)}\n`);
+  const port = await freePort();
+  const options = {
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    userKey: 'apply-restart',
+    guardPort: port,
+    listener: async () => ({ close: async () => {} }),
+  };
+  let running = null;
+  try {
+    running = await startService(options);
+    await stopService(running);
+    running = await startService(options);
+    await stopService(running);
+    running = null;
+  } finally {
+    if (running) await stopService(running);
+  }
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'note.txt'), 'utf8'), 'laptop note');
+  const staged = await listStaged(desktop);
+  assert.equal(staged.some((change) => change.target?.path === 'user/note.txt'), false);
+  const versions = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'sync-versions.json'), 'utf8'));
+  assert.equal(versions.targets[key].machine, 'LAPTOP');
+});
+
+test('an applied marker that cannot name its publisher is quarantined without republishing', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const target = { kind: 'mind', path: 'user/orphan.txt' };
+  await writeFile(path.join(fixture.paths.mind, 'user', 'orphan.txt'), 'kept');
+  const key = targetKey(target);
+  await mkdir(path.join(fixture.paths.localDirectory, 'staging', 'applied'), { recursive: true });
+  await writeFile(path.join(fixture.paths.localDirectory, 'staging', 'applied', `${key}.json`), JSON.stringify({
+    hash: hashBytes(Buffer.from('kept')),
+    deleted: false,
+    at: AT,
+    id: 'not-derived-from-a-publisher',
+  }));
+  const staged = await stageBaselines(desktop);
+  assert.equal(staged.some((change) => change.target?.path === 'user/orphan.txt'), false);
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'orphan.txt'), 'utf8'), 'kept');
+  const again = await stageBaselines(desktop);
+  assert.equal(again.some((change) => change.target?.path === 'user/orphan.txt'), false);
+});
+
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
