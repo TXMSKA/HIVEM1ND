@@ -761,7 +761,7 @@ async function codexHandshake(child, request, incoming) {
   const init = await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
   if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
   rpc.notify('initialized');
-  const account = await rpc.call('account/read');
+  const account = await rpc.call('account/read', {});
   if (loginFailed(JSON.stringify(account)) || account.result?.account == null || account.result?.requiresOpenaiAuth === true) throw unavailable();
   const params = { cwd: request.cwd };
   if (request.model) params.model = request.model;

@@ -306,8 +306,15 @@ test('installed Codex is discovered off PATH and notifications are not replies',
   assert.equal(seen[0].options.shell, false);
   assert.equal(seen[0].options.windowsHide, true);
   const written = seen[0].child.written.join('');
+  const lines = seen[0].child.written.map((line) => JSON.parse(line));
+  const initialize = lines.find((line) => line.method === 'initialize');
+  const account = lines.find((line) => line.method === 'account/read');
+  const thread = lines.find((line) => line.method === 'thread/start');
   assert.equal(written.includes('do-not-embed-this-prompt'), false);
-  assert.equal(written.includes('"method":"account/read"'), true);
+  assert.equal(initialize.id, 1);
+  assert.equal(account.id, 2);
+  assert.deepEqual(account.params, {});
+  assert.equal(thread.id, 3);
   assert.equal(written.includes(JSON.stringify(shop).slice(1, -1)), true);
 
   const deniedChild = [];
@@ -329,6 +336,9 @@ test('installed Codex is discovered off PATH and notifications are not replies',
     (error) => error.code === 'client_unavailable',
   );
   assert.equal(deniedChild[0].killed, true);
+  const deniedAccount = deniedChild[0].written.map((line) => JSON.parse(line)).find((line) => line.method === 'account/read');
+  assert.equal(deniedAccount.id, 2);
+  assert.deepEqual(deniedAccount.params, {});
 });
 
 test('Cursor correlates authenticate replies and Claude receives the startup instruction first', async (t) => {
