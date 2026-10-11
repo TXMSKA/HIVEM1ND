@@ -633,3 +633,19 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   assert.equal(await readFile(path.join(mind, 'keep.txt'), 'utf8'), 'mind');
   assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
 });
+
+test('CI pins action commits and the install policy ignores scripts', async () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const ci = await readFile(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const release = await readFile(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  const policy = await readFile(path.join(root, '.npmrc'), 'utf8');
+  assert.match(ci, /permissions:\s+contents: read/);
+  assert.match(ci, /npm ci --ignore-scripts/);
+  for (const text of [ci, release]) {
+    assert.equal(/uses: actions\/[A-Za-z0-9-]+@v\d+/.test(text), false);
+    const pins = [...text.matchAll(/uses: actions\/[A-Za-z0-9-]+@([0-9a-f]{40})/g)].map((match) => match[1]);
+    assert.equal(pins.length > 0, true);
+  }
+  assert.match(policy, /^ignore-scripts=true$/m);
+  assert.match(policy, /^min-release-age=7$/m);
+});
