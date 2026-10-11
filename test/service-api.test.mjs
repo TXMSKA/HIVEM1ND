@@ -99,7 +99,12 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(created.status, 201);
+  assert.equal(created.json.data.id, 'root:builder');
   assert.equal(created.json.data.unit, 'builder');
+  assert.equal(created.json.data.role, 'executor');
+  assert.equal(created.json.data.machine, fixture.machine);
+  assert.equal(typeof created.json.data.revision, 'string');
+  assert.equal(created.json.data.status, 'idle');
   assert.equal(created.json.meta.sync, 'pending');
   const listed = await call(core.http.port, 'GET', '/api/v1/units', { token });
   assert.equal(listed.json.data.items.some((item) => item.unit === 'builder'), true);

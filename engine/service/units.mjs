@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, validateName, validateRole, canonicalScope } from './identity.mjs';
-import { answersFor } from './projection.mjs';
+import { answersFor, readDetail } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -184,11 +184,19 @@ async function finish(context, prepared, transaction) {
     const published = await context.pulse.changed(changes.map((item) => item.id));
     if (published?.published === true) noteSync(context, 'published');
   }
+  const projected = new Map();
   for (const event of prepared.events) {
+    const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;
+    if (!id || projected.has(id)) continue;
+    projected.set(id, await readDetail(context, 'units', id));
+  }
+  for (const event of prepared.events) {
+    const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;
+    if (id && projected.has(id)) event.data = { unit: projected.get(id) };
     context.store.events.push(event);
     context.bus?.emit(event);
   }
-  return { ...result, replayed: false };
+  return { ...result, replayed: false, unit: [...projected.values()].at(-1) ?? null };
 }
 
 function transactionOf(context, entries, events) {

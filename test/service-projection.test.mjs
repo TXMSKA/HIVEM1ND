@@ -311,7 +311,16 @@ test('unit, lead, layout, and settings writes are validated before any file chan
   );
   assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md')).then(() => true, () => false), false);
   const receipt = { principal: 'desktop', key: randomUUID(), method: 'POST', path: '/api/v1/units', body: { unit: 'overseer' }, requestId: randomUUID() };
-  await createUnit(context, { unit: 'overseer', role: 'overseer', scope: 'root', machine: 'DESKTOP' }, { receipt });
+  const overseer = await createUnit(context, { unit: 'overseer', role: 'overseer', scope: 'root', machine: 'DESKTOP' }, { receipt });
+  assert.equal(overseer.unit.id, 'root:overseer');
+  assert.equal(overseer.unit.role, 'overseer');
+  assert.equal(overseer.unit.machine, 'DESKTOP');
+  assert.equal(typeof overseer.unit.revision, 'string');
+  assert.equal(overseer.unit.status, 'idle');
+  const changed = fixture.store.events.filter((event) => event.name === 'unit.changed').at(-1);
+  assert.equal(changed.data.unit.id, 'root:overseer');
+  assert.equal(changed.data.unit.role, 'overseer');
+  assert.equal(changed.data.unit.revision, overseer.unit.revision);
   const again = await createUnit(context, { unit: 'overseer', role: 'overseer', scope: 'root', machine: 'DESKTOP' }, { receipt });
   assert.equal(again.replayed, true);
   assert.equal(fixture.store.events.filter((event) => event.name === 'unit.changed').length, 1);

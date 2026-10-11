@@ -957,12 +957,12 @@ async function invoke(route, scope) {
     return { status: 200, body: { ...detail, home: homeStatus(homeState) } };
   }
   if (route.handler === 'createUnit') {
-    await createUnit(domain, body);
-    return { status: 201, body: { unit: body.unit, role: body.role } };
+    const created = await createUnit(domain, body);
+    return { status: 201, body: created.unit };
   }
   if (route.handler === 'connectLead') {
-    await connectLead(domain, params.unitId, body);
-    return { status: 200, body: { unitId: params.unitId, leadId: body.leadId ?? null } };
+    const connected = await connectLead(domain, params.unitId, body);
+    return { status: 200, body: connected.unit };
   }
   if (route.handler === 'enqueueStart') return { status: 202, body: await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision }) };
   if (route.handler === 'stopSession') return { status: 200, body: await stopSession(domain, params.sessionId) };

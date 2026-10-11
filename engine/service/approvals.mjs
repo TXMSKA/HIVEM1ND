@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
-import { paginate } from './projection.mjs';
+import { paginate, readDetail } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocks } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -547,7 +547,16 @@ async function commitFiles(context, records, events) {
     const changes = await stageTransaction(sync, stage);
     noteSync(context, changes.length ? 'pending' : 'local');
   }
-  publishDomainEvents(context, events);
+  const enriched = [];
+  for (const event of events) {
+    const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;
+    if (!id) {
+      enriched.push(event);
+      continue;
+    }
+    enriched.push({ ...event, data: { unit: await readDetail(context, 'units', id) } });
+  }
+  publishDomainEvents(context, enriched);
 }
 
 function entry(context, relative, before, bytes) {
