@@ -402,7 +402,7 @@ test('a loopback projection read returns the same list shape', async (t) => {
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')).token));
+      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')).data.token));
     });
     req.on('error', reject);
     req.end(payload);

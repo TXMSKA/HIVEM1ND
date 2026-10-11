@@ -270,7 +270,7 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
     token: core.bootstrap.secret,
     body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
-  const token = local.json.token;
+  const token = local.json.data.token;
   const document = sketch();
   document.script = 'from http';
   const created = await call(core.http.port, 'POST', '/api/v1/blueprint/boards', {

@@ -152,7 +152,7 @@ async function loginViewer(port, secret) {
   });
   if (!response.ok) return null;
   const body = await response.json();
-  return body?.url ?? null;
+  return body?.data?.url ?? null;
 }
 
 export async function installService(input, options = {}) {

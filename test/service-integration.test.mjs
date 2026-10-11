@@ -80,8 +80,8 @@ async function boot(t) {
     await dispose(fixture);
   });
   const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
-  assert.equal(local.status, 200);
-  return { fixture, core, localPath, token: local.json.token, port: core.http.port };
+  assert.equal(local.status, 201);
+  return { fixture, core, localPath, token: local.json.data.token, port: core.http.port };
 }
 
 test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and logout', async (t) => {

@@ -184,7 +184,7 @@ test('the HTTP event stream stays up beside the service guard', async (t) => {
       headers: {
         host: `127.0.0.1:${core.http.port}`,
         origin: `http://127.0.0.1:${core.http.port}`,
-        authorization: `Bearer ${local.token}`,
+        authorization: `Bearer ${local.data.token}`,
       },
     }, (res) => {
       let raw = '';

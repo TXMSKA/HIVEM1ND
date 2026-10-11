@@ -46,18 +46,19 @@ export async function startGui(input = {}) {
       look: input.look ?? null,
       language: input.language ?? null,
     }, service.secret);
-    if (auth.status !== 200 || !auth.json?.token || !auth.json?.viewerId || !auth.json?.url) {
+    const session = auth.json?.data;
+    if (auth.status !== 201 || !session?.token || !session.viewerId || !session.url) {
       fail(auth.status ?? 503, auth.json?.error?.code ?? 'service_unavailable', 'The viewer could not sign in.');
     }
-    token = auth.json.token;
-    const viewerId = auth.json.viewerId;
+    token = session.token;
+    const viewerId = session.viewerId;
     const handle = {
       origin: service.origin.origin,
-      url: auth.json.url,
+      url: session.url,
       token,
       viewerId,
       embedded,
-      capabilities: auth.json.capabilities,
+      capabilities: session.capabilities,
       dirty: false,
       look: input.look ?? null,
       language: input.language ?? null,

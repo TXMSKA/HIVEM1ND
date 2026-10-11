@@ -35,8 +35,10 @@ async function boot(t, { assetDir = null } = {}) {
     token: core.bootstrap.secret,
     body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
-  assert.equal(local.status, 200);
-  return { fixture, core, paths, token: local.json.token, viewerId: local.json.viewerId };
+  assert.equal(local.status, 201);
+  assert.equal(local.json.meta.sync, 'local');
+  assert.equal(local.json.token, undefined);
+  return { fixture, core, paths, token: local.json.data.token, viewerId: local.json.data.viewerId };
 }
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
@@ -383,14 +385,14 @@ test('home enable is memory-only and loopback cannot exchange it', async (t) => 
   });
   const key = randomUUID();
   const opened = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
-    token: local.json.token,
+    token: local.json.data.token,
     body: { enabled: true },
     headers: { 'idempotency-key': key },
   });
   assert.equal(opened.status, 201);
   assert.equal(typeof opened.json.data.key, 'string');
   const again = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
-    token: local.json.token,
+    token: local.json.data.token,
     body: { enabled: true },
     headers: { 'idempotency-key': key },
   });
@@ -441,8 +443,10 @@ test('every contract route has a success result and an authority or boundary fai
     token: core.bootstrap.secret,
     body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
-  expectStatus(local, 200, 'auth local');
-  const token = local.json.token;
+  expectStatus(local, 201, 'auth local');
+  assert.equal(local.json.meta.sync, 'local');
+  assert.equal(local.json.token, undefined);
+  const token = local.json.data.token;
   const seen = new Set(['POST /auth/local']);
   const hit = (method, template) => seen.add(`${method} ${template}`);
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
@@ -1001,7 +1005,7 @@ test('caller listener options cannot relabel the loopback socket', async (t) => 
     token: core.bootstrap.secret,
     body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
-  assert.equal(local.status, 200);
+  assert.equal(local.status, 201);
   const desktop = core.credentials.issue({ audience: 'desktop', capabilities: ['read', 'unit.create'], expiresAt: '2027-01-01T00:00:00.000Z' });
   const phone = core.credentials.issue({ audience: 'phone', expiresAt: '2027-01-01T00:00:00.000Z' });
   const allowed = await call(core.http.port, 'GET', '/api/v1/units', { token: desktop.token });

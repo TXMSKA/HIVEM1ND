@@ -28,7 +28,7 @@ async function boot(t) {
     attached: true,
     capabilities: ['own'],
   });
-  return { core, token: agent.token, desktop: local.json.token, port: core.http.port };
+  return { core, token: agent.token, desktop: local.json.data.token, port: core.http.port };
 }
 
 test('HTTP MCP accepts only the pinned protocol and lists the editor tools', async (t) => {

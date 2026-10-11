@@ -390,14 +390,19 @@ export async function createHttpServer(options) {
       });
       return;
     }
-    if (route.handler === 'authLocal' || route.handler === 'authHome' || route.handler === 'logout') {
+    const readCursor = typeof bus.captureCursor === 'function' ? bus.captureCursor() : null;
+    const readAt = new Date(options.now?.() ?? Date.now()).toISOString();
+    if (route.handler === 'logout') {
       const outcome = await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress, watch });
       respond(res, outcome.status, outcome.body ?? undefined, outcome.headers);
       return;
     }
+    if (route.handler === 'authLocal' || route.handler === 'authHome') {
+      const outcome = applySync(await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress, watch }), domain);
+      respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
+      return;
+    }
     const run = async () => applySync(await invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState }), domain);
-    const readCursor = typeof bus.captureCursor === 'function' ? bus.captureCursor() : null;
-    const readAt = new Date(options.now?.() ?? Date.now()).toISOString();
     if (route.handler === 'home') {
       const outcome = applySync(await rememberHome(homeMemory, credential, req, relative, body, requestId, run), domain);
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
@@ -1042,7 +1047,7 @@ async function runAuth(route, scope) {
     scope.viewers.set(viewerId, { presentation: null, dirty: false, ...presentation });
     const origin = scope.options.bootstrap?.record?.origin ?? `http://127.0.0.1:${scope.listener.port}`;
     return {
-      status: 200,
+      status: 201,
       body: {
         token: issued.token,
         viewerId,

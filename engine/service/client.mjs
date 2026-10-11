@@ -265,10 +265,10 @@ async function issueViewer(origin, secret) {
     path: '/api/v1/auth/local',
     body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
-  if (response.status !== 200 || typeof response.json?.token !== 'string') {
+  if (response.status !== 201 || typeof response.json?.data?.token !== 'string') {
     throw new CoreError(503, 'bootstrap_unavailable', 'The local viewer could not be issued.');
   }
-  return response.json;
+  return response.json.data;
 }
 
 async function logoutViewer(origin, token) {

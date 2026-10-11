@@ -183,15 +183,19 @@ test('local login requires the protected bootstrap secret and binds only the vie
     token: secret,
     body: { embedded: false, hostOrigin: null, look: 'high-contrast', language: 'es' },
   });
-  assert.equal(opened.status, 200);
-  assert.equal(opened.json.capabilities.length, 22);
-  assert.equal(opened.json.expiresAt, null);
-  const reused = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: opened.json.token, body: {} });
+  assert.equal(opened.status, 201);
+  assert.equal(opened.json.contract, 'hivem1nd-gui-v3');
+  assert.equal(opened.json.meta.sync, 'local');
+  assert.equal(opened.json.token, undefined);
+  assert.equal(typeof opened.json.data.token, 'string');
+  assert.equal(opened.json.data.capabilities.length, 22);
+  assert.equal(opened.json.data.expiresAt, null);
+  const reused = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: opened.json.data.token, body: {} });
   assert.equal(reused.status, 401);
   assert.equal(reused.json.error.code, 'invalid_bootstrap');
   const session = await requestJson(httpPort, 'GET', '/api/v1/units', { token: secret });
   assert.equal(session.status, 401);
-  const viewer = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: opened.json.token });
+  const viewer = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: opened.json.data.token });
   assert.equal(viewer.json.data.look, 'high-contrast');
   assert.equal(viewer.json.data.language, 'es');
   assert.equal(viewer.json.data.embedded, false);
@@ -205,7 +209,7 @@ test('local login requires the protected bootstrap secret and binds only the vie
   assert.match(doubled, /^HTTP\/1\.1 400\b/);
   assert.match(doubled, /invalid_host/);
   const forwarded = await requestJson(httpPort, 'GET', '/api/v1/viewer', {
-    token: opened.json.token,
+    token: opened.json.data.token,
     headers: { 'x-forwarded-host': 'evil.example', 'x-forwarded-for': '1.2.3.4' },
   });
   assert.equal(forwarded.status, 200);
@@ -213,14 +217,14 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   for (let index = 0; index < 240; index += 1) {
-    const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.token });
+    const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.data.token });
     assert.equal(once.status, 200);
   }
-  const limited = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.token });
+  const limited = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.data.token });
   assert.equal(limited.status, 429);
   assert.equal(limited.json.error.code, 'request_rate_limited');
   assert.ok(Number(limited.headers['retry-after']) >= 1);
-  const still = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: spared.json.token });
+  const still = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: spared.json.data.token });
   assert.equal(still.status, 200);
   const page = await requestJson(httpPort, 'GET', '/');
   assert.notEqual(page.status, 429);
