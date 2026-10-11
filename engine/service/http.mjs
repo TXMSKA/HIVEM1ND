@@ -148,6 +148,16 @@ export async function readJsonBody(req, { expect = 'any', limit = JSON_LIMIT } =
   }
 }
 
+function syncValue(value) {
+  return value === 'local' || value === 'pending' || value === 'published' ? value : 'local';
+}
+
+function applySync(outcome, domain) {
+  const stated = outcome?.sync;
+  if (stated === 'local' || stated === 'pending' || stated === 'published') return outcome;
+  return { ...outcome, sync: domain?.syncOutcome ?? 'local' };
+}
+
 function successEnvelope(outcome, meta) {
   return {
     contract: 'hivem1nd-gui-v3',
@@ -156,7 +166,7 @@ function successEnvelope(outcome, meta) {
       requestId: meta.requestId,
       readAt: meta.readAt,
       eventCursor: meta.eventCursor,
-      sync: outcome.sync ?? null,
+      sync: syncValue(outcome.sync),
       replayed: outcome.replayed === true,
     },
   };
@@ -385,17 +395,17 @@ export async function createHttpServer(options) {
       respond(res, outcome.status, outcome.body ?? undefined, outcome.headers);
       return;
     }
-    const run = () => invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState });
+    const run = async () => applySync(await invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState }), domain);
     const readCursor = typeof bus.captureCursor === 'function' ? bus.captureCursor() : null;
     const readAt = new Date(options.now?.() ?? Date.now()).toISOString();
     if (route.handler === 'home') {
-      const outcome = await rememberHome(homeMemory, credential, req, relative, body, requestId, run);
+      const outcome = applySync(await rememberHome(homeMemory, credential, req, relative, body, requestId, run), domain);
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
     }
-    const outcome = route.method === 'GET'
+    const outcome = applySync(route.method === 'GET'
       ? await run()
-      : await mutate(options, credential, req, relative, body, requestId, eventCursor, run);
+      : await mutate(options, credential, req, relative, body, requestId, eventCursor, run), domain);
     if (credential?.audience === 'agent') await agentScope(route, domain, credential, params, body);
     if (outcome.status === 204) {
       respond(res, 204);
@@ -1008,6 +1018,7 @@ async function mutate(options, credential, req, relative, body, requestId, event
     await atomicWrite(options.store, path.join(options.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
       ...receipt,
       status: outcome.status ?? 200,
+      sync: outcome.sync ?? 'local',
       response: outcome.body ?? null,
     })}\n`));
     return outcome;

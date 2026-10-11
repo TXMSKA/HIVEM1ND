@@ -96,7 +96,7 @@ export async function readProjection(context, query = {}) {
   const envelope = {
     contract: 'hivem1nd-gui-v3',
     data: view,
-    meta: { requestId: null, readAt: null, eventCursor: null, sync: null, replayed: false },
+    meta: { requestId: null, readAt: null, eventCursor: null, sync: 'local', replayed: false },
   };
   if (Buffer.byteLength(JSON.stringify(envelope)) > VIEW_LIMIT) {
     throw new CoreError(413, 'view_too_large', 'The view exceeds 16 MB. Request the individual lists.');

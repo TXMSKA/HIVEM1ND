@@ -6,7 +6,7 @@ import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
 import { commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
-import { openSync, stageTransaction } from '../sync/store.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const EDGES = new Set(['open>review', 'review>done', 'review>open', 'done>closed', 'closed>open']);
 
@@ -189,7 +189,8 @@ async function commitChange(context, task, change) {
   };
   const result = await commitTransaction(context.store, transaction);
   const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  await stageTransaction(sync, stage);
+  const changes = await stageTransaction(sync, stage);
+  noteSync(context, changes.length ? 'pending' : 'local');
   publishDomainEvents(context, events);
   return { ...result, replayed: false, body: transaction.response.body };
 }

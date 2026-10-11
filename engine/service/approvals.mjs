@@ -6,7 +6,7 @@ import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocks } from './store.mjs';
-import { openSync, stageTransaction } from '../sync/store.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
 const ACTIONS = new Set(['process.run', 'file.write', 'network.request']);
@@ -510,7 +510,10 @@ async function commitFiles(context, records, events) {
     target: { kind: 'mind', path: record.resource },
     bytes: Buffer.isBuffer(record.afterBytes) ? record.afterBytes : Buffer.from(record.afterBytesBase64, 'base64'),
   }));
-  if (stage.length) await stageTransaction(sync, stage);
+  if (stage.length) {
+    const changes = await stageTransaction(sync, stage);
+    noteSync(context, changes.length ? 'pending' : 'local');
+  }
   publishDomainEvents(context, events);
 }
 

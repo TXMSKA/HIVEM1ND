@@ -546,7 +546,7 @@ export async function withReceipt(store, input, operation) {
       if (existing.method !== input.method || existing.path !== input.path || existing.bodyHash !== bodyHash) {
         throw new CoreError(409, 'idempotency_conflict', 'This idempotency key was already used with a different request.');
       }
-      return { status: existing.status, body: existing.response, id: existing.requestId, replayed: true };
+      return { status: existing.status, body: existing.response, id: existing.requestId, replayed: true, sync: existing.sync ?? 'local' };
     }
     const now = store.now();
     const receipt = {

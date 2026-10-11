@@ -5,7 +5,7 @@ import { CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV
 import { publishDomainEvents } from './events.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
-import { openSync, stageTransaction } from '../sync/store.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const RECORD_MAX = 1000000;
 const MEMBER_MAX = 256;
@@ -409,7 +409,11 @@ async function commitMany(context, entries, events) {
   });
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   const changes = await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
-  if (context.pulse) await context.pulse.changed(changes.map((change) => change.id));
+  noteSync(context, changes.length ? 'pending' : 'local');
+  if (context.pulse) {
+    const result = await context.pulse.changed(changes.map((change) => change.id));
+    if (result?.published === true) noteSync(context, 'published');
+  }
   publishDomainEvents(context, events);
 }
 

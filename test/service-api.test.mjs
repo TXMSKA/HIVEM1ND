@@ -82,7 +82,13 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   assert.equal(view.json.contract, 'hivem1nd-gui-v3');
   assert.equal(typeof view.json.meta.readAt, 'string');
   assert.equal(typeof view.json.meta.eventCursor, 'string');
-  assert.equal(view.json.meta.sync, null);
+  assert.equal(view.json.meta.sync, 'local');
+  const settings = await call(core.http.port, 'GET', '/api/v1/settings', { token });
+  assert.equal(settings.status, 200);
+  assert.equal(settings.json.meta.sync, 'local');
+  const viewer = await call(core.http.port, 'GET', '/api/v1/viewer', { token });
+  assert.equal(viewer.status, 200);
+  assert.equal(viewer.json.meta.sync, 'local');
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
   const created = await call(core.http.port, 'POST', '/api/v1/units', {
     token,
@@ -91,6 +97,7 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   });
   assert.equal(created.status, 201);
   assert.equal(created.json.data.unit, 'builder');
+  assert.equal(created.json.meta.sync, 'pending');
   const listed = await call(core.http.port, 'GET', '/api/v1/units', { token });
   assert.equal(listed.json.data.items.some((item) => item.unit === 'builder'), true);
   const future = await call(core.http.port, 'POST', '/mcp', {
@@ -230,6 +237,8 @@ test('receipts replay the same response and reject a different route', async (t)
   });
   assert.equal(again.status, 200);
   assert.equal(again.json.meta.replayed, true);
+  assert.equal(again.json.meta.sync, first.json.meta.sync);
+  assert.equal(first.json.meta.sync, 'pending');
   assert.equal(again.json.data.settings.language, 'es');
   const other = await call(core.http.port, 'PATCH', '/api/v1/layout', {
     token,

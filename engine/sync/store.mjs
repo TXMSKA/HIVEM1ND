@@ -39,6 +39,13 @@ export async function stageTransaction(sync, entries, options = {}) {
   return withLocks(sync.store, [LOCK], () => stageUnlocked(sync, entries, options));
 }
 
+const SYNC_RANK = { local: 0, pending: 1, published: 2 };
+
+export function noteSync(context, state) {
+  if (!context || !Object.hasOwn(SYNC_RANK, state)) return;
+  if ((SYNC_RANK[context.syncOutcome] ?? -1) < SYNC_RANK[state]) context.syncOutcome = state;
+}
+
 export async function stageBaselines(sync, at = timestamp(sync.now())) {
   const staged = [];
   for (const target of await eligibleTargets(sync)) {

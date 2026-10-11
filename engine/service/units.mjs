@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, validateName, validateRole, canonicalScope } from './identity.mjs';
 import { answersFor } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
-import { openSync, stageTransaction } from '../sync/store.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 export async function createUnit(context, input, options = {}) {
   const run = () => createPrepared(context, input);
@@ -178,7 +178,8 @@ async function prepareCreate(context, input) {
 async function finish(context, prepared, transaction) {
   const result = await commitTransaction(context.store, transaction);
   const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  await stageTransaction(sync, prepared.stage);
+  const changes = await stageTransaction(sync, prepared.stage);
+  noteSync(context, changes.length ? 'pending' : 'local');
   for (const event of prepared.events) {
     context.store.events.push(event);
     context.bus?.emit(event);
