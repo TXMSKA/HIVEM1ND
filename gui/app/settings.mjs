@@ -1,5 +1,6 @@
 import { createOperation, request } from "./api.mjs";
 import { element, labeledField } from "./components.mjs";
+import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 
@@ -188,18 +189,13 @@ export function renderSettings(document, model, t, actions) {
     panel.append(element(document, "p", {
       "data-limits": limits.state ?? "normal",
       "data-retry-at": limits.retryAt ?? "",
-      text: t(limitsLabel(limits.state), { time: limits.retryAt ?? "" }),
+      text: t(limitsLabel(limits.state), { time: formatWhen(model.language, limits.retryAt) }),
     }));
     const messages = limits.messages ?? {};
     const bytes = limits.syncBytes ?? {};
     panel.append(element(document, "p", {
       "data-limit-usage": "true",
-      text: t("limitsUsage", {
-        messages: messages.used ?? 0,
-        max: messages.max ?? 0,
-        bytes: bytes.used ?? 0,
-        byteMax: bytes.max ?? 0,
-      }),
+      text: limitsUsage(model.language, messages, bytes),
     }));
   }
   const issues = element(document, "ul", { "data-issues": "true" });
@@ -225,8 +221,8 @@ function renderHome(document, model, t, actions) {
   if (!home?.enabled || expiry.expired) {
     block.append(element(document, "p", { text: t("homeClosed") }));
   } else {
-    block.append(element(document, "p", { text: t("homeActive", { time: home.expiresAt ?? "" }) }));
-    block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: t("homeRemaining", { count: expiry.remainingSeconds }) }));
+    block.append(element(document, "p", { text: t("homeActive", { time: formatWhen(model.language, home.expiresAt) }) }));
+    block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: cardinal(model.language, "homeRemaining", expiry.remainingSeconds) }));
   }
   const grant = !expiry.expired ? model.grant : null;
   if (grant?.qrPayloads?.length) block.append(renderHomeGrant(document, grant, model.selected ?? 0, t("qrTitle")));

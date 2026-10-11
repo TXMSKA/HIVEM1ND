@@ -59,7 +59,7 @@ import {
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { text } from "./i18n.mjs";
+import { cardinal, formatClock, formatNumber, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
@@ -663,7 +663,7 @@ function renderBar(app, t, counts) {
     "data-action": "waiting",
     "aria-pressed": String(app.waitingOpen === true || app.mode === "waiting"),
     onclick: () => openWaiting(app),
-  }, icon(document, "waiting"), t("waitingCount", { count: counts.waiting ?? 0 }));
+  }, icon(document, "waiting"), cardinal(app.language, "waitingCount", counts.waiting ?? 0));
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
@@ -728,9 +728,9 @@ function renderWorkspace(app, t, view, counts) {
   const summary = element(document, "section", { class: "summary" },
     element(document, "h2", { text: t("summaryTitle") }),
     element(document, "div", { class: "counts" },
-      element(document, "span", { text: t("unitCount", { count: counts.units ?? app.unitList?.catalog?.length ?? 0 }) }),
-      element(document, "span", { text: t("unreadCount", { count: counts.unread ?? 0 }) }),
-      element(document, "span", { text: t("issueCount", { count: counts.issues ?? 0 }) }),
+      element(document, "span", { text: cardinal(app.language, "unitCount", counts.units ?? app.unitList?.catalog?.length ?? 0) }),
+      element(document, "span", { text: t("unreadCount", { count: formatNumber(app.language, counts.unread ?? 0) }) }),
+      element(document, "span", { text: cardinal(app.language, "issueCount", counts.issues ?? 0) }),
     ),
   );
   const issueItems = view?.issues ?? app.unitList?.issues ?? [];
@@ -741,7 +741,7 @@ function renderWorkspace(app, t, view, counts) {
   let side;
   if (app.layout === "phone") {
     const issues = element(document, "details", { class: "phone-issues", "data-phone-issues": "true" });
-    issues.append(element(document, "summary", { text: t("issueCount", { count: issueItems.length }) }));
+    issues.append(element(document, "summary", { text: cardinal(app.language, "issueCount", issueItems.length) }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
     if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
     side = element(document, "aside", { class: "panel side" },
@@ -871,7 +871,7 @@ function renderWaitingSurface(app, t) {
   const total = list?.total ?? 0;
   surface.append(search, element(document, "p", {
     "data-waiting-total": String(total),
-    text: t("waitingCount", { count: total }),
+    text: cardinal(app.language, "waitingCount", total),
   }));
   if (!list) {
     surface.append(progressMark(document, t("loadingList")));
@@ -999,7 +999,7 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : t("emptyList")) : t("listTotal", { count: list.total ?? 0 });
+  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : t("emptyList")) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
   const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
   if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
@@ -2304,7 +2304,7 @@ function collectionRows(app, t, list) {
         const last = chat.lastMessage;
         const snippet = last?.body || last?.subject || "";
         const when = last?.timestamp || last?.date || "";
-        const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: chat.unread }) : "";
+        const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: formatNumber(app.language, chat.unread) }) : "";
         rows.push({
           id: chat.id,
           kind: "chat",
@@ -2330,7 +2330,7 @@ function collectionRows(app, t, list) {
       const scope = row.unit.scope?.name;
       const name = labels.get(row.label) > 1 && scope ? `${row.label} · ${scope}` : row.label;
       row.text = `${name} ${t(statusKey(row.unit.status))}`;
-    } else if (row.labelKey === "showMore") row.text = t("showMore", { count: row.count });
+    } else if (row.labelKey === "showMore") row.text = t("showMore", { count: formatNumber(app.language, row.count) });
     else if (row.labelKey) row.text = t(row.labelKey);
     else row.text = row.label ?? "";
   }
@@ -2569,14 +2569,14 @@ function renderFooter(app, t) {
   const machine = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine ?? "";
   const syncState = app.settingsSync?.state ?? (app.store.settings?.service?.syncState === "error" ? "error" : app.sync);
   const syncKey = syncCopy(syncState);
-  const time = clockText(app.readAt);
+  const time = formatClock(app.language, app.readAt);
   const footer = element(document, "footer", { class: "foot" },
     element(document, "span", { "data-service-machine": machine, text: t("serviceRunning", { machine }) }),
     element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
     element(document, "span", { text: t("lastRead", { time }) }),
   );
   if (Number.isInteger(app.settingsSync?.pendingChanges)) {
-    footer.append(element(document, "span", { "data-pending-changes": String(app.settingsSync.pendingChanges), text: t("pendingChanges", { count: app.settingsSync.pendingChanges }) }));
+    footer.append(element(document, "span", { "data-pending-changes": String(app.settingsSync.pendingChanges), text: cardinal(app.language, "pendingChanges", app.settingsSync.pendingChanges) }));
   }
   const stream = app.store.stream;
   if (stream?.state === "connecting" || stream?.state === "reconnecting") footer.append(progressMark(document, t("reconnecting"), { "data-stream": stream.state }));
@@ -2617,7 +2617,7 @@ function renderSignedOut(app) {
     element(document, "p", { text: app.phoneError ? t(app.phoneError) : t("reopenBody") }),
   );
   if (app.phoneRetryAfter != null && app.phoneRetryAfter !== "" && Number.isFinite(Number(app.phoneRetryAfter))) {
-    gate.append(element(document, "p", { "data-retry-after": String(app.phoneRetryAfter), text: t("retryWait", { seconds: app.phoneRetryAfter }) }));
+    gate.append(element(document, "p", { "data-retry-after": String(app.phoneRetryAfter), text: cardinal(app.language, "retryWait", app.phoneRetryAfter) }));
   }
   if (app.phoneBusy) gate.append(progressMark(document, t("checkingCode")));
   gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code), { value: app.phoneCode ?? "", busy: Boolean(app.phoneBusy) }));
@@ -2736,10 +2736,6 @@ function syncCopy(sync) {
   return "syncLocal";
 }
 
-function clockText(value) {
-  const match = String(value ?? "").match(/T(\d{2}:\d{2})/);
-  return match ? `${match[1]} UTC` : "";
-}
 
 const SESSION_COPY = {
   queued: "sessionQueued",
@@ -3624,7 +3620,7 @@ function renderInspector(app, t, selected) {
   const document = app.root.ownerDocument;
   const panel = element(document, "div", { class: "review-panel" });
   const data = app.inspectorData;
-  if (selected) panel.append(renderUnit(document, selected, t));
+  if (selected) panel.append(renderUnit(document, selected, t, app.language));
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {
       panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));

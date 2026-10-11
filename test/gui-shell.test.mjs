@@ -8,7 +8,7 @@ import { answerApproval, changeTaskStatus, startSession } from "../gui/app/actio
 import { textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
-import { DICTIONARIES, dictionaryKeys, text } from "../gui/app/i18n.mjs";
+import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
@@ -16,6 +16,7 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
 import { setAttachments, startWatch } from "../gui/app/editors.mjs";
+import { renderSession, renderUnit } from "../gui/app/inspector.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -1963,8 +1964,14 @@ test("settings and the footer follow sync, service, and issue changes", async (t
   await waitFor(() => desktop.root.querySelector("[data-sync='paused']")?.textContent === "Sync is paused", "The paused sync state was not shown.");
   assert.equal(desktop.root.querySelector("[data-pending-changes]")?.textContent, "4 changes waiting");
   assert.equal(desktop.root.querySelector("[data-limits='paused']")?.getAttribute("data-retry-at"), retryAt);
-  assert.equal(desktop.root.querySelector("[data-limits='paused']").textContent.includes(retryAt), true);
-  assert.equal(desktop.root.querySelector("[data-limit-usage]")?.textContent.includes("61 of 60"), true);
+  const limitText = desktop.root.querySelector("[data-limits='paused']").textContent;
+  assert.equal(limitText.includes(retryAt), false);
+  assert.equal(limitText.includes("2099"), true);
+  assert.equal(limitText.includes("T"), false);
+  const usage = desktop.root.querySelector("[data-limit-usage]")?.textContent ?? "";
+  assert.equal(usage.includes("61 of 60"), true);
+  assert.equal(usage.includes("50,000,000"), true);
+  assert.equal(usage.includes("50000000"), false);
   await fixture.control.emit("service.changed", { machine: { id: "LAPTOP", version: "3.0.1", state: "running", answers: true } });
   await waitFor(() => desktop.root.querySelector("[data-service-machine]")?.getAttribute("data-service-machine") === "LAPTOP", "The service machine was not updated.");
   await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: false });
@@ -2369,6 +2376,51 @@ test("disabled controls explain how to continue", async (t) => {
   typeInput(desktop.root.querySelector("[data-field='screen-width']"), "no", 0, 2);
   click(desktop.root.querySelector("[data-action='resize-screen']"));
   await waitFor(() => noteText(desktop) === "Enter a whole width and height before resizing.", "The resize reason was not shown.");
+});
+
+test("counts, clocks, and session facts follow the active language", () => {
+  assert.equal(cardinal("en", "unitCount", 1), "1 unit");
+  assert.equal(cardinal("en", "unitCount", 0), "0 units");
+  assert.equal(cardinal("es", "unitCount", 1), "1 unidad");
+  assert.equal(cardinal("es", "issueCount", 1), "1 incidencia");
+  assert.equal(cardinal("en", "pendingChanges", 1), "1 change waiting");
+  assert.equal(text("en", "nothingToUndo"), "No task change to undo.");
+  assert.equal(text("es", "nothingToUndo"), "No hay un cambio de tarea para deshacer.");
+  const stamp = "2026-10-10T12:00:00.000Z";
+  const clock = formatClock("en", stamp);
+  assert.equal(clock.includes("12:00"), true);
+  assert.equal(clock.includes(stamp), false);
+  assert.equal(formatWhen("en", stamp).includes(stamp), false);
+  assert.equal(formatWhen("en", "not-a-date"), "not-a-date");
+  const one = limitsUsage("en", { used: 1, max: 2 }, { used: 1, max: 2 });
+  assert.equal(one.includes("1 of 2 message"), true);
+  assert.equal(one.includes("messages"), false);
+  assert.equal(limitsUsage("en", { used: 12, max: 60 }, { used: 50000000, max: 50000000 }).includes("50,000,000"), true);
+  const { document } = createTestDocument();
+  const t = (key, variables) => text("en", key, variables);
+  const idle = renderSession(document, {
+    id: "s1",
+    activity: "idle",
+    quota: null,
+    wake: { enabled: true, pausedReason: "handoff-budget-exhausted" },
+  }, t);
+  assert.equal(idle.querySelector("[data-session-activity]").textContent, "The session is idle.");
+  assert.equal(idle.querySelector("[data-session-wake]").textContent.includes("handoff-budget"), false);
+  assert.equal(idle.querySelector("[data-session-wake]").textContent.includes("handoff"), true);
+  const busy = renderSession(document, {
+    id: "s2",
+    activity: "busy",
+    wake: { enabled: true, pausedReason: "not-a-known-reason" },
+  }, t);
+  const mark = busy.querySelector("[data-session-activity]");
+  assert.equal(mark.getAttribute("aria-label"), "The session is working.");
+  assert.equal(mark.children.some((child) => child.textContent === "The session is working."), true);
+  assert.equal(mark.getAttribute("aria-label").includes("busy"), false);
+  assert.equal(busy.querySelector("[data-session-wake]").textContent, "Wake is paused.");
+  const unit = renderUnit(document, { unit: "shop", date: stamp, context: "Keep this sentence." }, t, "en");
+  const dateLine = unit.querySelectorAll("p").find((node) => node.textContent.startsWith("Date"));
+  assert.equal(dateLine.textContent.includes(stamp), false);
+  assert.equal(unit.querySelectorAll("p").some((node) => node.textContent === "Keep this sentence."), true);
 });
 
 test("the shell has one heading, a skip link, and stable live regions", async (t) => {

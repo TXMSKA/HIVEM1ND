@@ -53,10 +53,13 @@ const COPY = {
   forbidden: ["This action is not available.", "Esta acción no está disponible."],
   later: ["This screen is not ready yet.", "Esta pantalla todavía no está lista."],
   viewTooLarge: ["The mind is too large to load at once.", "La mente es demasiado grande para cargarla de una vez."],
-  unitCount: ["{count} units", "{count} unidades"],
-  waitingCount: ["{count} waiting", "{count} pendientes"],
+  unitCountOne: ["{count} unit", "{count} unidad"],
+  unitCountOther: ["{count} units", "{count} unidades"],
+  waitingCountOne: ["{count} waiting", "{count} pendiente"],
+  waitingCountOther: ["{count} waiting", "{count} pendientes"],
   unreadCount: ["{count} unread", "{count} sin leer"],
-  issueCount: ["{count} issues", "{count} incidencias"],
+  issueCountOne: ["{count} issue", "{count} incidencia"],
+  issueCountOther: ["{count} issues", "{count} incidencias"],
   lastRead: ["Last read {time}", "Última lectura {time}"],
   syncLocal: ["Saved on this machine", "Guardado en esta máquina"],
   syncPending: ["Waiting to publish", "En espera de publicación"],
@@ -65,7 +68,8 @@ const COPY = {
   syncPaused: ["Sync is paused", "La sincronización está en pausa"],
   syncPublishing: ["Publishing changes", "Publicando cambios"],
   syncIdle: ["Sync is idle", "La sincronización está inactiva"],
-  pendingChanges: ["{count} changes waiting", "{count} cambios en espera"],
+  pendingChangesOne: ["{count} change waiting", "{count} cambio en espera"],
+  pendingChangesOther: ["{count} changes waiting", "{count} cambios en espera"],
   serviceRunning: ["Service on {machine}", "Servicio en {machine}"],
   openInspector: ["Open details", "Abrir detalles"],
   closeInspector: ["Close details", "Cerrar detalles"],
@@ -126,9 +130,14 @@ const COPY = {
   working: ["Working.", "Trabajando."],
   loadingClients: ["Loading installed clients.", "Cargando los clientes instalados."],
   savingDocument: ["Saving the document.", "Guardando el documento."],
-  retryWait: ["Try again in {seconds} seconds.", "Intentar de nuevo en {seconds} segundos."],
+  retryWaitOne: ["Try again in {count} second.", "Intentar de nuevo en {count} segundo."],
+  retryWaitOther: ["Try again in {count} seconds.", "Intentar de nuevo en {count} segundos."],
   attachFirst: ["Attach a unit before watching.", "Adjuntar una unidad antes de observar."],
   sessionWorking: ["The session is working.", "La sesión está trabajando."],
+  activityIdle: ["The session is idle.", "La sesión está ociosa."],
+  activityActive: ["The session is active.", "La sesión está activa."],
+  activityInactive: ["The session is inactive.", "La sesión está inactiva."],
+  activityUnknown: ["The session activity is unknown.", "La actividad de la sesión es desconocida."],
   unitCreated: ["The unit {unit} was created.", "Se creó la unidad {unit}."],
   unitConnected: ["{unit} now reports to {lead}.", "{unit} ahora reporta a {lead}."],
   invalidLead: ["That connection is not valid.", "Esa conexión no es válida."],
@@ -144,7 +153,7 @@ const COPY = {
   approvalResolved: ["The approval was already answered.", "La aprobación ya fue respondida."],
   statusUnchanged: ["The status is already set.", "El estado ya está definido."],
   reviewNotReady: ["The lead has not approved this delivery.", "El líder todavía no aprobó esta entrega."],
-  nothingToUndo: ["There is nothing to undo.", "No hay nada para deshacer."],
+  nothingToUndo: ["No task change to undo.", "No hay un cambio de tarea para deshacer."],
   undoConflict: ["The task changed elsewhere.", "La tarea cambió en otro lugar."],
   unitName: ["Name", "Nombre"],
   nameInvalid: ["Use a lowercase name made of letters, digits, dots, underscores, or hyphens.", "Usar un nombre en minúsculas, con letras, dígitos, puntos, guiones bajos o guiones."],
@@ -158,11 +167,16 @@ const COPY = {
   machine: ["Machine", "Máquina"],
   machineAnswers: ["Available", "Disponible"],
   machineSilent: ["Unavailable", "No disponible"],
-  sessionActivity: ["Activity", "Actividad"],
   sessionQuota: ["Quota", "Cupo"],
-  sessionWake: ["Wake", "Activación"],
-  wakeEnabled: ["Enabled", "Activado"],
-  wakePaused: ["Paused", "En pausa"],
+  wakeEnabledSentence: ["Wake is enabled.", "La activación está habilitada."],
+  wakeOff: ["Wake is off.", "La activación está apagada."],
+  wakeUnknown: ["Wake is unknown.", "La activación es desconocida."],
+  wakePausedUnknown: ["Wake is paused.", "La activación está en pausa."],
+  wakePausedHandoff: ["Wake is paused because the handoff budget is exhausted.", "La activación está en pausa porque se agotó el cupo de entregas."],
+  wakePausedDedupe: ["Wake is paused because the duplicate budget is exhausted.", "La activación está en pausa porque se agotó el cupo de duplicados."],
+  wakePausedError: ["Wake is paused because the error budget is exhausted.", "La activación está en pausa porque se agotó el cupo de errores."],
+  wakePausedExpired: ["Wake is paused because the window expired.", "La activación está en pausa porque la ventana expiró."],
+  wakePausedDisabled: ["Wake is paused because it is disabled.", "La activación está en pausa porque está deshabilitada."],
   requirements: ["Requirements", "Requisitos"],
   approvedBy: ["Approved by", "Aprobado por"],
   positionX: ["Position X", "Posición X"],
@@ -273,7 +287,10 @@ const COPY = {
   limitsSlowing: ["Publishing is slowing until {time}.", "La publicación se frena hasta {time}."],
   limitsPaused: ["Publishing is paused until {time}.", "La publicación está en pausa hasta {time}."],
   limitsError: ["Limit status is unavailable.", "El estado de los límites no está disponible."],
-  limitsUsage: ["{messages} of {max} messages and {bytes} of {byteMax} sync bytes.", "{messages} de {max} mensajes y {bytes} de {byteMax} bytes de sincronización."],
+  limitsUsageOneOne: ["{messages} of {max} message and {bytes} of {byteMax} sync byte.", "{messages} de {max} mensaje y {bytes} de {byteMax} byte de sincronización."],
+  limitsUsageOneOther: ["{messages} of {max} message and {bytes} of {byteMax} sync bytes.", "{messages} de {max} mensaje y {bytes} de {byteMax} bytes de sincronización."],
+  limitsUsageOtherOne: ["{messages} of {max} messages and {bytes} of {byteMax} sync byte.", "{messages} de {max} mensajes y {bytes} de {byteMax} byte de sincronización."],
+  limitsUsageOtherOther: ["{messages} of {max} messages and {bytes} of {byteMax} sync bytes.", "{messages} de {max} mensajes y {bytes} de {byteMax} bytes de sincronización."],
   homeAccess: ["Home access", "Acceso de casa"],
   homeOpen: ["Open home access", "Abrir el acceso de casa"],
   homeReplace: ["Replace home access", "Reemplazar el acceso de casa"],
@@ -281,7 +298,8 @@ const COPY = {
   homeClose: ["Close home access", "Cerrar el acceso de casa"],
   homeActive: ["Home access is open until {time}.", "El acceso de casa está abierto hasta {time}."],
   homeClosed: ["Home access is closed.", "El acceso de casa está cerrado."],
-  homeRemaining: ["{count} seconds remaining", "{count} segundos restantes"],
+  homeRemainingOne: ["{count} second remaining", "{count} segundo restante"],
+  homeRemainingOther: ["{count} seconds remaining", "{count} segundos restantes"],
   noGrantSecret: ["Open home access on this screen to show a new code.", "Abrir el acceso de casa en esta pantalla para mostrar un código nuevo."],
   qrTitle: ["Home access code", "Código de acceso de casa"],
   desktopChatRequired: ["A desktop conversation is required.", "Se requiere una conversación creada en el escritorio."],
@@ -300,6 +318,72 @@ export function text(language, key, variables = {}) {
   const dictionary = DICTIONARIES[language] ?? DICTIONARIES.en;
   if (!Object.hasOwn(dictionary, key)) throw new Error(`Unknown copy key: ${key}`);
   return dictionary[key].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
+}
+
+function locale(language) {
+  return language === "es" ? "es" : "en";
+}
+
+function pluralForm(language, count) {
+  const number = Number(count);
+  const safe = Number.isFinite(number) ? number : 0;
+  return new Intl.PluralRules(locale(language)).select(safe) === "one" ? "One" : "Other";
+}
+
+export function formatNumber(language, value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return new Intl.NumberFormat(locale(language)).format(number);
+}
+
+export function cardinal(language, key, count, variables = {}) {
+  const number = Number(count);
+  const safe = Number.isFinite(number) ? number : 0;
+  return text(language, `${key}${pluralForm(language, safe)}`, {
+    ...variables,
+    count: formatNumber(language, safe),
+  });
+}
+
+const WHEN = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZone: "UTC",
+};
+
+export function formatWhen(language, value) {
+  if (value == null || value === "") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(locale(language), WHEN).format(date);
+}
+
+export function formatClock(language, value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(locale(language), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  }).format(date);
+}
+
+export function limitsUsage(language, messages = {}, bytes = {}) {
+  const messageForm = pluralForm(language, messages.used ?? 0);
+  const byteForm = pluralForm(language, bytes.used ?? 0);
+  return text(language, `limitsUsage${messageForm}${byteForm}`, {
+    messages: formatNumber(language, messages.used ?? 0),
+    max: formatNumber(language, messages.max ?? 0),
+    bytes: formatNumber(language, bytes.used ?? 0),
+    byteMax: formatNumber(language, bytes.max ?? 0),
+  });
 }
 
 export function dictionaryKeys() {

@@ -1,7 +1,8 @@
 import { canAccept, canSendBack } from "./actions.mjs";
 import { element, labeledField, progressMark } from "./components.mjs";
+import { formatWhen } from "./i18n.mjs";
 
-export function renderUnit(document, unit, t) {
+export function renderUnit(document, unit, t, language = "en") {
   const card = element(document, "section", { class: "unit-card" });
   card.append(element(document, "h3", { text: unit?.unit ?? t("unknown") }));
   card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ?? t("unknown")}` }));
@@ -12,7 +13,7 @@ export function renderUnit(document, unit, t) {
     ["model", unit?.model],
     ["machine", unit?.machine],
     ["branch", unit?.branch],
-    ["date", unit?.date],
+    ["date", shownDate(language, unit?.date)],
   ];
   const details = element(document, "details", { class: "unit-details" });
   details.append(element(document, "summary", { text: t("details") }));
@@ -39,22 +40,49 @@ export function renderMachine(document, machine, t) {
   return block;
 }
 
+const ACTIVITY_COPY = {
+  busy: "sessionWorking",
+  working: "sessionWorking",
+  idle: "activityIdle",
+  active: "activityActive",
+  inactive: "activityInactive",
+};
+
+const WAKE_COPY = {
+  "handoff-budget-exhausted": "wakePausedHandoff",
+  "dedupe-budget-exhausted": "wakePausedDedupe",
+  "error-budget-exhausted": "wakePausedError",
+  expired: "wakePausedExpired",
+  disabled: "wakePausedDisabled",
+};
+
+function shownDate(language, value) {
+  if (value == null || value === "") return null;
+  return formatWhen(language, value);
+}
+
+function wakeSentence(t, wake) {
+  if (!wake) return t("wakeUnknown");
+  if (wake.pausedReason) return t(WAKE_COPY[wake.pausedReason] ?? "wakePausedUnknown");
+  return wake.enabled ? t("wakeEnabledSentence") : t("wakeOff");
+}
+
 export function renderSession(document, session, t) {
   if (!session) return element(document, "p", { text: t("unknown") });
   const block = element(document, "section", { "data-session": session.id, "data-session-state": session.state ?? "" });
   const activity = session.activity ?? "unknown";
+  const activityText = t(ACTIVITY_COPY[activity] ?? "activityUnknown");
   if (activity === "busy" || activity === "working") {
-    block.append(progressMark(document, t("sessionWorking"), { "data-session-activity": activity }));
+    block.append(progressMark(document, activityText, { "data-session-activity": activity }));
   } else {
-    block.append(element(document, "p", { "data-session-activity": activity, text: `${t("sessionActivity")}: ${activity === "unknown" ? t("unknown") : activity}` }));
+    block.append(element(document, "p", { "data-session-activity": activity, text: activityText }));
   }
   const quota = session.quota;
   const quotaText = quota == null ? t("unknown") : `${quota.remaining ?? t("unknown")}${quota.exhausted ? ` ${t("statusQuota")}` : ""}`;
   block.append(element(document, "p", { "data-session-quota": quota == null ? "unknown" : "known", text: `${t("sessionQuota")}: ${quotaText}` }));
   const wake = session.wake;
   const wakeState = !wake ? "unknown" : wake.pausedReason ? "paused" : wake.enabled ? "enabled" : "off";
-  const wakeText = wakeState === "unknown" ? t("unknown") : wakeState === "paused" ? `${t("wakePaused")} ${wake.pausedReason}` : wake.enabled ? t("wakeEnabled") : t("machineSilent");
-  block.append(element(document, "p", { "data-session-wake": wakeState, text: `${t("sessionWake")}: ${wakeText}` }));
+  block.append(element(document, "p", { "data-session-wake": wakeState, text: wakeSentence(t, wake) }));
   return block;
 }
 
