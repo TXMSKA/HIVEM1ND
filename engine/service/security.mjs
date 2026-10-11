@@ -158,13 +158,13 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
     },
     verify(token) {
       const record = records.get(token);
-      if (!record) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+      if (!record) throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
       const supplied = Buffer.from(String(token), 'base64url');
       const left = record.secret;
       const right = supplied.length === left.length ? supplied : left;
       const expired = record.expiresAt != null && now() >= Date.parse(record.expiresAt);
       if (!timingSafeEqual(left, right) || supplied.length !== left.length || expired) {
-        throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+        throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
       }
       return { ...record, secret: undefined, token };
     },
@@ -180,7 +180,7 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
 }
 
 export function authorize(credential, operation, object = {}) {
-  if (!credential) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  if (!credential) throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
   if (object.listener === 'lan' && credential.audience !== 'phone') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
   if (credential.audience === 'phone') {
     if (!PHONE.has(operation)) throw new CoreError(403, 'phone_read_only', 'Phone cannot change that.');
@@ -259,14 +259,30 @@ export function checkLimits(bucket, input, now = Date.now()) {
 }
 
 export function safeError(error, requestId) {
+  const known = error instanceof CoreError;
   return {
     error: {
-      code: typeof error?.code === 'string' ? error.code : 'internal',
-      message: 'The request failed.',
+      code: typeof error?.code === 'string' ? error.code : 'internal_error',
+      message: known && !leaks(error.message) ? error.message : 'The request failed.',
       requestId,
+      details: safeDetails(known ? error.details : null),
       retryAt: error?.retryAt ?? null,
     },
   };
+}
+
+function leaks(value) {
+  return typeof value === 'string' && /[A-Za-z]:\\|\/Users\/|token|secret|Bearer /i.test(value);
+}
+
+function safeDetails(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+  const details = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) details[key] = value;
+    else if (typeof value === 'string' && value.length <= 200 && !leaks(value)) details[key] = value;
+  }
+  return details;
 }
 
 function runTool(run, command, args) {

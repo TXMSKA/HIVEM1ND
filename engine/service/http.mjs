@@ -19,7 +19,6 @@ import { addNode, answerProposal, createAsset, createBoard, createComment, creat
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
-const PAGE_QUERY = ['limit', 'cursor', 'q', 'status', 'unitId', 'before'];
 const STATIC_FILES = new Set([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
@@ -136,14 +135,14 @@ export async function readJsonBody(req, { expect = 'any', limit = JSON_LIMIT } =
   }
   if (expect === 'none') throw new CoreError(422, 'invalid_body', 'This route does not accept a body.');
   const type = String(req.headers['content-type'] ?? '');
-  if (!type.startsWith('application/json')) throw new CoreError(415, 'invalid_body', 'Content-Type must be application/json.');
+  if (!type.startsWith('application/json')) throw new CoreError(415, 'unsupported_media_type', 'Content-Type must be application/json.');
   try {
     const parsed = JSON.parse(bytes.toString('utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CoreError(422, 'invalid_body', 'The body must be a JSON object.');
     return parsed;
   } catch (error) {
     if (error instanceof CoreError) throw error;
-    throw new CoreError(422, 'invalid_body', 'The body is not JSON.');
+    throw new CoreError(400, 'invalid_json', 'The body is not JSON.');
   }
 }
 
@@ -463,7 +462,7 @@ async function serveMcp(req, res, options, credentials) {
     return;
   }
   const type = String(req.headers['content-type'] ?? '');
-  if (!type.startsWith('application/json')) throw new CoreError(415, 'invalid_body', 'Content-Type must be application/json.');
+  if (!type.startsWith('application/json')) throw new CoreError(415, 'unsupported_media_type', 'Content-Type must be application/json.');
   const domain = domainContext(options, credential, options.bus);
   domain.credential = credential;
   const outcome = await dispatchMcp(domain, message);
@@ -561,25 +560,70 @@ function paramsOf(route, relative) {
 function parseQuery(search) {
   const raw = search.startsWith('?') ? search.slice(1) : search;
   if (raw.length === 0) return {};
-  const query = {};
+  const query = Object.create(null);
   for (const part of raw.split('&')) {
-    const [key, value = ''] = part.split('=');
-    if (query[key] !== undefined) throw new CoreError(422, 'invalid_query', 'A query field is repeated.');
-    query[decodeURIComponent(key)] = decodeURIComponent(value);
+    if (part.length === 0) continue;
+    const splitAt = part.indexOf('=');
+    const encodedKey = splitAt === -1 ? part : part.slice(0, splitAt);
+    const encodedValue = splitAt === -1 ? '' : part.slice(splitAt + 1);
+    let key;
+    let value;
+    try {
+      key = decodeURIComponent(encodedKey);
+      value = decodeURIComponent(encodedValue);
+    } catch {
+      throw new CoreError(400, 'invalid_query', 'The query is not encoded correctly.');
+    }
+    if (Object.hasOwn(query, key)) throw new CoreError(400, 'invalid_query', 'A query field is repeated.');
+    query[key] = value;
   }
   return query;
 }
 
+function rejectUnknownQuery(route, query) {
+  const allowed = new Set(allowedQuery(route));
+  for (const key of Object.keys(query)) {
+    if (!allowed.has(key)) throw new CoreError(400, 'invalid_query', 'The query contains an unknown field.');
+  }
+}
+
+function allowedQuery(route) {
+  const list = ['q', 'limit', 'cursor'];
+  const table = {
+    '/view': ['project'],
+    '/units': [...list, 'project', 'machine', 'leadId', 'status'],
+    '/leads': [...list, 'project'],
+    '/squads': [...list, 'project', 'leadId'],
+    '/projects': list,
+    '/machines': list,
+    '/sessions': [...list, 'unitId', 'machine', 'state'],
+    '/chats': [...list, 'unitId', 'listed', 'pinned'],
+    '/chats/:chatId/messages': [...list, 'before'],
+    '/mailboxes': list,
+    '/mailboxes/:unitId/messages': [...list, 'state'],
+    '/approvals': [...list, 'unitId', 'state'],
+    '/units/:unitId/approval-grants': list,
+    '/tasks': [...list, 'project', 'unitId', 'status'],
+    '/waiting': [...list, 'unitId', 'kind'],
+    '/blueprint/boards': [...list, 'project'],
+    '/void/texts': [...list, 'project'],
+    '/void/texts/:resourceId/proposals': [...list, 'state'],
+    '/editors/:resourceId/comments': [...list, 'status'],
+    '/events': ['unitId', 'chatId', 'resourceId'],
+  };
+  return table[route.template] ?? [];
+}
+
 async function credentialFor(req, route, credentials, listener, options) {
   if (route.handler === 'authLocal') {
-    if (listener.kind !== 'loopback') throw new CoreError(403, 'forbidden', 'Local login is only available on loopback.');
+    if (listener.kind !== 'loopback') throw new CoreError(403, 'loopback_only', 'Local login is only available on loopback.');
     await requireBootstrap(req, options, listener);
     return null;
   }
   if (route.handler === 'authHome') return null;
   const header = headerOne(req, 'authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  if (!token) throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
   const record = credentials.verify(token);
   if (listener.kind === 'lan' && record.audience !== 'phone') {
     throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
@@ -689,25 +733,26 @@ function bodyExpect(route) {
 
 function rejectUnknown(route, body) {
   if (!body) return;
-  const allowed = allowedBody(route.handler);
+  const allowed = allowedBody(route);
   if (!allowed) return;
   for (const key of Object.keys(body)) {
-    if (!allowed.has(key)) throw new CoreError(422, 'invalid_body', 'The body contains an unknown field.');
+    if (!allowed.has(key)) throw new CoreError(400, 'unknown_field', 'The body contains an unknown field.');
   }
 }
 
-function allowedBody(handler) {
+function allowedBody(route) {
+  if (route.template === '/editors/:resourceId/assets' && route.method === 'POST') return new Set(['contentType', 'bytesBase64']);
   const table = {
     createUnit: ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
     patchSettings: ['look', 'language', 'expectedRevision'],
     patchLayout: ['nodes', 'groups', 'expectedRevision'],
-    patchViewer: ['presentation', 'dirty', 'look', 'language'],
+    patchViewer: ['dirty', 'look', 'language'],
     createChat: ['members', 'title'],
     authLocal: ['embedded', 'hostOrigin', 'look', 'language'],
     authHome: ['key', 'code'],
     home: ['enabled', 'addresses'],
   };
-  return table[handler] ? new Set(table[handler]) : null;
+  return table[route.handler] ? new Set(table[route.handler]) : null;
 }
 
 function domainContext(options, credential, bus) {
@@ -887,41 +932,33 @@ async function invoke(route, scope) {
     await patchSettings(domain, body);
     return { status: 200, body: await readDetail(domain, 'settings') };
   }
-  if (route.handler === 'readViewer') return { status: 200, body: viewers.get(credential.viewerId) ?? { presentation: null, dirty: false } };
+  if (route.handler === 'readViewer') return { status: 200, body: viewerRecord(viewers.get(credential.viewerId), credential.viewerId) };
   if (route.handler === 'patchViewer') {
-    const current = { ...(viewers.get(credential.viewerId) ?? {}), ...body };
-    viewers.set(credential.viewerId, current);
-    scope.bus.emit({
-      name: 'viewer.changed',
-      viewerId: credential.viewerId,
-      data: {
-        viewerId: credential.viewerId,
-        embedded: current.embedded === true,
-        hostOrigin: current.hostOrigin ?? null,
-        look: current.look ?? null,
-        language: current.language ?? null,
-        dirty: current.dirty === true,
-      },
-    });
-    return { status: 200, body: current };
+    const current = viewers.get(credential.viewerId) ?? {};
+    if (!body || Object.keys(body).length === 0) throw new CoreError(422, 'invalid_body', 'The viewer patch needs a field.');
+    const next = { ...current };
+    if (Object.hasOwn(body, 'look')) {
+      if (body.look !== null && body.look !== 'modern' && body.look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
+      next.look = body.look;
+    }
+    if (Object.hasOwn(body, 'language')) {
+      if (body.language !== null && body.language !== 'en' && body.language !== 'es') throw new CoreError(422, 'invalid_body', 'The language is not supported.');
+      next.language = body.language;
+    }
+    if (Object.hasOwn(body, 'dirty')) {
+      if (typeof body.dirty !== 'boolean') throw new CoreError(422, 'invalid_body', 'dirty must be a boolean.');
+      next.dirty = body.dirty;
+    }
+    viewers.set(credential.viewerId, next);
+    const record = viewerRecord(next, credential.viewerId);
+    scope.bus.emit({ name: 'viewer.changed', viewerId: credential.viewerId, data: record });
+    return { status: 200, body: record };
   }
   throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
 }
 
 function validateQuery(route, query) {
-  const page = route.handler === 'editor' ? [...PAGE_QUERY, 'project', 'kind'] : PAGE_QUERY;
-  const allowed = route.method === 'GET' && route.handler !== 'detail' && route.handler !== 'layout' && route.handler !== 'settings' && route.handler !== 'readViewer' && route.handler !== 'events'
-    ? new Set(page)
-    : new Set();
-  if (route.template === '/approvals' || route.template === '/mailboxes/:unitId/messages') allowed.add('state');
-  if (route.handler === 'events') {
-    allowed.add('unitId');
-    allowed.add('chatId');
-    allowed.add('resourceId');
-  }
-  for (const key of Object.keys(query)) {
-    if (!allowed.has(key)) throw new CoreError(422, 'invalid_query', 'The query contains an unknown field.');
-  }
+  rejectUnknownQuery(route, query);
 }
 
 function numbers(query) {
@@ -1010,11 +1047,25 @@ async function runAuth(route, scope) {
   return { status: 204, body: null };
 }
 
+function viewerRecord(current, viewerId) {
+  return {
+    viewerId,
+    embedded: current?.embedded === true,
+    hostOrigin: current?.hostOrigin ?? null,
+    look: current?.look ?? null,
+    language: current?.language ?? null,
+    dirty: current?.dirty === true,
+  };
+}
+
 function localPresentation(body) {
   const value = body ?? {};
-  const embedded = value.embedded ?? false;
+  for (const key of ['embedded', 'hostOrigin', 'look', 'language']) {
+    if (!Object.hasOwn(value, key)) throw new CoreError(422, 'invalid_body', 'The local login body is incomplete.');
+  }
+  const embedded = value.embedded;
   if (typeof embedded !== 'boolean') throw new CoreError(422, 'invalid_body', 'embedded must be a boolean.');
-  const hostOrigin = value.hostOrigin ?? null;
+  const hostOrigin = value.hostOrigin;
   if (hostOrigin !== null && typeof hostOrigin !== 'string') throw new CoreError(422, 'invalid_body', 'hostOrigin must be a string or null.');
   if (hostOrigin !== null && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');
   if (embedded === true && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');

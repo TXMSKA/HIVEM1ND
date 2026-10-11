@@ -263,7 +263,7 @@ async function issueViewer(origin, secret) {
   const response = await request({ origin, token: secret, closed: false }, {
     method: 'POST',
     path: '/api/v1/auth/local',
-    body: {},
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
   if (response.status !== 200 || typeof response.json?.token !== 'string') {
     throw new CoreError(503, 'bootstrap_unavailable', 'The local viewer could not be issued.');

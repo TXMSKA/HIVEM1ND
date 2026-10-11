@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { approvalRevision } from '../engine/service/approvals.mjs';
@@ -14,6 +14,7 @@ import { createEventBus } from '../engine/service/events.mjs';
 import { routeTable } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
+describe('service api', { concurrency: false }, () => {
 async function boot(t, { assetDir = null } = {}) {
   const fixture = await makeCoreFixture();
   const origin = path.join(fixture.root, 'origin');
@@ -30,7 +31,10 @@ async function boot(t, { assetDir = null } = {}) {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
   assert.equal(local.status, 200);
   return { fixture, core, paths, token: local.json.token, viewerId: local.json.viewerId };
 }
@@ -108,10 +112,15 @@ test('method, query, path and body boundaries fail closed', async (t) => {
   assert.equal(method.status, 405);
   assert.equal(method.headers.allow, 'GET, POST');
   const repeated = await call(core.http.port, 'GET', '/api/v1/units?limit=1&limit=2', { token });
-  assert.equal(repeated.status, 422);
+  assert.equal(repeated.status, 400);
   assert.equal(repeated.json.error.code, 'invalid_query');
+  assert.deepEqual(repeated.json.error.details, {});
+  const collided = await call(core.http.port, 'GET', '/api/v1/units?limit=1&%6cimit=2', { token });
+  assert.equal(collided.status, 400);
+  assert.equal(collided.json.error.code, 'invalid_query');
   const unknown = await call(core.http.port, 'GET', '/api/v1/units?extra=1', { token });
-  assert.equal(unknown.status, 422);
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.json.error.code, 'invalid_query');
   const encoded = await call(core.http.port, 'GET', '/api/v1/units/%2e%2e', { token });
   assert.equal(encoded.status, 422);
   assert.equal(encoded.json.error.code, 'invalid_path');
@@ -138,6 +147,7 @@ test('method, query, path and body boundaries fail closed', async (t) => {
     req.end('nope');
   });
   assert.equal(plain.status, 415);
+  assert.equal(plain.json.error.code, 'unsupported_media_type');
   const missingKey = await call(core.http.port, 'PATCH', '/api/v1/settings', { token, body: { language: 'es' } });
   assert.equal(missingKey.status, 400);
   assert.equal(missingKey.json.error.code, 'idempotency_required');
@@ -146,8 +156,36 @@ test('method, query, path and body boundaries fail closed', async (t) => {
     body: { language: 'es', token: 'super-secret-token' },
     headers: { 'idempotency-key': randomUUID() },
   });
-  assert.equal(extra.status, 422);
+  assert.equal(extra.status, 400);
+  assert.equal(extra.json.error.code, 'unknown_field');
   assert.equal(extra.raw.includes('super-secret-token'), false);
+  const malformed = await new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'PATCH',
+      path: '/api/v1/settings',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'idempotency-key': randomUUID(),
+        'content-length': '1',
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+    });
+    req.on('error', reject);
+    req.end('{');
+  });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.json.error.code, 'invalid_json');
+  const anonymous = await call(core.http.port, 'GET', '/api/v1/units');
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.json.error.code, 'invalid_session');
   const bodied = await new Promise((resolve, reject) => {
     const req = request({
       host: '127.0.0.1',
@@ -330,7 +368,10 @@ test('home enable is memory-only and loopback cannot exchange it', async (t) => 
     await Promise.all(listeners.map((server) => new Promise((resolve) => server.close(() => resolve()))));
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
   const key = randomUUID();
   const opened = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
     token: local.json.token,
@@ -387,7 +428,10 @@ test('every contract route has a success result and an authority or boundary fai
     await dispose(fixture);
   });
   const port = core.http.port;
-  const local = await call(port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  const local = await call(port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
   expectStatus(local, 200, 'auth local');
   const token = local.json.token;
   const seen = new Set(['POST /auth/local']);
@@ -748,10 +792,13 @@ test('every contract route has a success result and an authority or boundary fai
   hit('PATCH', '/editors/:resourceId/comments/:threadId');
   const asset = await call(port, 'POST', `/api/v1/editors/${boardId}/assets`, {
     token,
-    body: { data: PNG.toString('base64') },
+    body: { contentType: 'image/png', bytesBase64: PNG.toString('base64') },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(asset, 201, 'asset');
+  assert.equal(asset.json.data.contentType, 'image/png');
+  assert.equal(typeof asset.json.data.revision, 'string');
+  assert.equal(asset.json.data.url, `/api/v1/editors/${boardId}/assets/${asset.json.data.id}`);
   hit('POST', '/editors/:resourceId/assets');
   const currentBoard = await call(port, 'GET', `/api/v1/blueprint/boards/${boardId}`, { token });
   expectStatus(currentBoard, 200, 'board before asset reference');
@@ -845,10 +892,20 @@ test('every contract route has a success result and an authority or boundary fai
   hit('GET', '/viewer');
   const patchedViewer = await call(port, 'PATCH', '/api/v1/viewer', {
     token,
-    body: { presentation: 'focus' },
+    body: { look: 'high-contrast', dirty: true },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(patchedViewer, 200, 'patch viewer');
+  assert.equal(patchedViewer.json.data.look, 'high-contrast');
+  assert.equal(patchedViewer.json.data.dirty, true);
+  assert.equal(patchedViewer.json.data.viewerId, viewer.json.data.viewerId);
+  const unchecked = await call(port, 'PATCH', '/api/v1/viewer', {
+    token,
+    body: { presentation: 'focus' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(unchecked.status, 400);
+  assert.equal(unchecked.json.error.code, 'unknown_field');
   hit('PATCH', '/viewer');
   const mcp = await call(port, 'POST', '/mcp', {
     token: agent.token,
@@ -913,7 +970,7 @@ test('every contract route has a success result and an authority or boundary fai
   assert.deepEqual(absent, []);
 });
 
-test('lan rejects desktop tokens and an agent cannot read the general mind', async (t) => {
+test('caller listener options cannot relabel the loopback socket', async (t) => {
   const fixture = await makeCoreFixture();
   const origin = path.join(fixture.root, 'origin');
   await mkdir(origin, { recursive: true });
@@ -923,20 +980,22 @@ test('lan rejects desktop tokens and an agent cannot read the general mind', asy
     now: () => fixture.clock.now,
     projects: [],
     listenerKind: 'lan',
-    bindAddress: '127.0.0.1',
-    netmask: '255.255.255.255',
+    bindAddress: '10.0.0.8',
+    netmask: '255.255.255.0',
   });
   t.after(async () => {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
-  assert.equal(local.status, 403);
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 200);
   const desktop = core.credentials.issue({ audience: 'desktop', capabilities: ['read', 'unit.create'], expiresAt: '2027-01-01T00:00:00.000Z' });
   const phone = core.credentials.issue({ audience: 'phone', expiresAt: '2027-01-01T00:00:00.000Z' });
-  const denied = await call(core.http.port, 'GET', '/api/v1/units', { token: desktop.token });
-  assert.equal(denied.status, 403);
-  assert.equal(denied.json.error.code, 'forbidden');
+  const allowed = await call(core.http.port, 'GET', '/api/v1/units', { token: desktop.token });
+  assert.equal(allowed.status, 200);
   const listed = await call(core.http.port, 'GET', '/api/v1/units', { token: phone.token });
   assert.equal(listed.status, 200);
   const write = await call(core.http.port, 'POST', '/api/v1/units', {
@@ -1037,4 +1096,5 @@ test('an oversized body returns body_too_large and the service keeps answering',
   const alive = await call(port, 'GET', '/api/v1/units', { token });
   assert.equal(alive.status, 200);
   assert.deepEqual(alive.json.data.items, []);
+});
 });

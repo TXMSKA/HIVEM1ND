@@ -439,22 +439,78 @@ function sniff(bytes) {
 
 export async function createAsset(context, id, input) {
   const found = await resourceOf(context, id);
-  let bytes;
-  try {
-    bytes = Buffer.from(input.data ?? '', 'base64');
-  } catch {
-    fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  const contentType = input?.contentType;
+  if (contentType !== 'image/png' && contentType !== 'image/jpeg' && contentType !== 'image/webp') {
+    fail(422, 'invalid_asset', 'The asset type is not supported.');
   }
-  if (bytes.length === 0 || bytes.length > ASSET_LIMIT) fail(413, 'request_too_large', 'The asset is too large.');
+  const encoded = input?.bytesBase64;
+  if (typeof encoded !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    fail(422, 'invalid_asset', 'The asset is not strict base64.');
+  }
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.toString('base64') !== encoded) fail(422, 'invalid_asset', 'The asset is not strict base64.');
+  if (bytes.length > ASSET_LIMIT) fail(413, 'asset_too_large', 'The asset is too large.');
   const head = bytes.subarray(0, 64).toString('utf8').trimStart().toLowerCase();
   if (head.startsWith('<svg') || head.startsWith('<html') || head.startsWith('<!doctype')) fail(422, 'invalid_asset', 'The asset is not a verified image.');
   const kind = sniff(bytes);
-  if (!kind) fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  if (!kind || kind.type !== contentType) fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  const size = imageSize(bytes, kind.type);
+  if (!size || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) {
+    fail(422, 'invalid_asset', 'The asset dimensions are not supported.');
+  }
   const name = `${randomUUID()}.${kind.ext}`;
   const relative = `docs/flows/assets/${name}`;
   const file = inside(found.project.localPath, relative);
-  await commit(context, [record(file, null, bytes)]);
-  return { src: `assets/${name}`, type: kind.type, bytes: bytes.length };
+  const revision = hashBytes(bytes);
+  const asset = {
+    id: name,
+    src: `assets/${name}`,
+    contentType: kind.type,
+    bytes: bytes.length,
+    revision,
+    url: `/api/v1/editors/${id}/assets/${name}`,
+  };
+  await commit(context, [record(file, null, bytes)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
+  return asset;
+}
+
+function imageSize(bytes, type) {
+  if (type === 'image/png') return pngSize(bytes);
+  if (type === 'image/jpeg') return jpegSize(bytes);
+  return webpSize(bytes);
+}
+
+function pngSize(bytes) {
+  if (bytes.length < 24 || bytes.toString('ascii', 12, 16) !== 'IHDR') return null;
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+function jpegSize(bytes) {
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) return null;
+    const marker = bytes[offset + 1];
+    if (marker === 0xd9 || marker === 0xda) return null;
+    const length = bytes.readUInt16BE(offset + 2);
+    if (length < 2 || offset + 2 + length > bytes.length) return null;
+    if (marker >= 0xc0 && marker <= 0xc2) return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
+    offset += 2 + length;
+  }
+  return null;
+}
+
+function webpSize(bytes) {
+  if (bytes.length < 30) return null;
+  const chunk = bytes.toString('ascii', 12, 16);
+  if (chunk === 'VP8X') return { width: 1 + bytes.readUIntLE(24, 3), height: 1 + bytes.readUIntLE(27, 3) };
+  if (chunk === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+    return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+  }
+  if (chunk === 'VP8L' && bytes[20] === 0x2f) {
+    const bits = bytes.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  return null;
 }
 
 export async function readAsset(context, id, assetId) {

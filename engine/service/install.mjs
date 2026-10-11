@@ -148,7 +148,7 @@ async function loginViewer(port, secret) {
   const response = await fetch(`http://127.0.0.1:${port}/api/v1/auth/local`, {
     method: 'POST',
     headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ embedded: false, look: 'light', language: 'en' }),
+    body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }),
   });
   if (!response.ok) return null;
   const body = await response.json();
