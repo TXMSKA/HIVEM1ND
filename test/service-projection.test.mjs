@@ -266,14 +266,14 @@ test('replay keeps the emitted snapshot and expires it without a newer event', (
   const subscription = bus.subscribe(desktop);
   const cursor = bus.captureCursor();
   const data = { unit: { id: 'root:master', name: 'before' } };
-  const source = { kind: 'unit', id: 'root:master', unitId: 'root:master' };
+  const source = { kind: 'gui', id: 'DESKTOP', unitId: 'root:master' };
   bus.emit({ name: 'unit.changed', resourceId: 'root:master', revision: 'a'.repeat(64), data, source });
   data.unit.name = 'after';
   source.kind = 'local';
   const replayed = bus.replay(subscription, cursor);
   const frame = replayed.frames.find((item) => item.name === 'unit.changed');
   assert.equal(frame.data.data.unit.name, 'before');
-  assert.deepEqual(frame.data.source, { kind: 'unit', id: 'root:master', unitId: 'root:master' });
+  assert.deepEqual(frame.data.source, { kind: 'gui', id: 'DESKTOP', unitId: 'root:master' });
   clock.now += 600001;
   assert.equal(bus.replay(subscription, cursor).reset, true);
   const operation = 'op-1';
@@ -288,15 +288,41 @@ test('replay keeps the emitted snapshot and expires it without a newer event', (
   assert.deepEqual(ready.frames.at(-1).data.data.capabilities, ['read', 'chat.post']);
 });
 
-test('a domain event is emitted once with a unit source', () => {
+test('agent delivery uses live chat membership and ignores a unit id as a resource', async (t) => {
+  const fixture = await mind(t);
+  const chatId = 'f359bb5c-9d80-4b96-ad33-e9b99e523f52';
+  const resourceId = '10943b49-2c8a-4b30-b3aa-2d431e34a551';
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId, 'chat.md'), `id: ${chatId}\nmembers: ["root:executor"]\n`);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'editors'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'editors', `${resourceId}.json`), JSON.stringify({ attached: ['root:executor'] }));
+  const bus = createEventBus({ now: () => NOW, machine: 'DESKTOP', mind: fixture.paths.mind });
+  const seen = [];
+  bus.subscribe({
+    stableId: 'agent-1', audience: 'agent', unitId: 'root:executor', chatIds: [], resourceIds: [],
+  }, {}, (frame) => seen.push(frame.name));
+  bus.emit({ name: 'unit.changed', data: { unit: { id: 'root:executor' } } });
+  bus.emit({ name: 'unit.changed', data: { unit: { id: 'root:other' } } });
+  bus.emit({ name: 'chat.changed', data: { chat: { id: chatId } } });
+  bus.emit({ name: 'chat.changed', data: { chat: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } } });
+  bus.emit({ name: 'blueprint.changed', resourceId, data: { resourceId } });
+  bus.emit({ name: 'blueprint.changed', resourceId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', data: { resourceId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } });
+  assert.deepEqual(seen, ['unit.changed', 'chat.changed', 'blueprint.changed']);
+  const unitFrame = bus.replay(bus.subscribe({ stableId: 'desktop', audience: 'desktop' }), `${bus.startupId}:0`);
+  const unitEvent = unitFrame.events.find((event) => event.name === 'unit.changed');
+  assert.equal(unitEvent.resourceId, null);
+});
+
+test('a domain event is emitted once with the acting client source', () => {
   const bus = createEventBus({ now: () => NOW, machine: 'DESKTOP' });
   const seen = [];
   bus.subscribe({ stableId: 'desktop', audience: 'desktop', viewerId: 'viewer-a' }, {}, (frame) => seen.push(frame));
-  const context = { store: { events: [] }, bus, paths: { machine: 'DESKTOP' }, principal: { unitId: 'root:master' } };
+  const context = { store: { events: [] }, bus, paths: { machine: 'DESKTOP' }, principal: { unitId: 'root:master', audience: 'desktop' } };
   publishDomainEvents(context, [{ name: 'chat.changed', data: { chat: { id: 'room' } } }]);
   assert.equal(context.store.events.length, 1);
   assert.equal(seen.length, 1);
-  assert.deepEqual(seen[0].data.source, { kind: 'unit', id: 'root:master', unitId: 'root:master' });
+  assert.deepEqual(seen[0].data.source, { kind: 'gui', id: 'DESKTOP', unitId: 'root:master' });
+  assert.equal(seen[0].data.source.kind === 'unit', false);
 });
 
 test('unit, lead, layout, and settings writes are validated before any file changes', async (t) => {

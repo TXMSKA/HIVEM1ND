@@ -14,6 +14,7 @@ export const EVENT_NAMES = [
   'sync.conflict', 'issue.changed',
 ];
 
+const SOURCE_KINDS = new Set(['gui', 'phone', 'cli', 'mcp', 'hook', 'sync', 'service']);
 const GLOBAL_EVENTS = new Set(['service.changed', 'settings.changed', 'sync.changed', 'sync.conflict', 'stream.reset', 'stream.ready']);
 const EDITOR_EVENTS = new Set(['blueprint.changed', 'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed', 'editor.asset.created', 'editor.activity']);
 const VIEWER_EVENTS = new Set(['viewer.changed', 'watch.changed']);
@@ -44,7 +45,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
       if (operations.has(marker)) return { emitted: false, duplicate: true, id: null };
       operations.add(marker);
     }
-    const resourceId = event.resourceId ?? event.data?.resourceId ?? event.data?.unit?.id ?? null;
+    const resourceId = event.resourceId ?? event.data?.resourceId ?? null;
     const revision = event.revision ?? event.data?.revision ?? null;
     if (resourceId && revision && revisionRelation(latestRevision(event.name, resourceId), revision) === 'equal') {
       return { emitted: false, duplicate: true, id: null };
@@ -208,10 +209,30 @@ function visible(principal, record, mind) {
   if (record.name === 'settings.changed' || record.name === 'sync.changed' || record.name === 'sync.conflict' || record.name === 'service.changed') return false;
   if (EDITOR_EVENTS.has(record.name)) return liveAttached(mind, record.resourceId).includes(principal.unitId);
   if (record.name.startsWith('session') || record.name.startsWith('approval')) return record.unitId === principal.unitId;
-  if (record.unitId && record.unitId !== principal.unitId) return false;
-  if (record.chatId && !(principal.chatIds ?? []).includes(record.chatId)) return false;
-  if (record.resourceId && !(principal.resourceIds ?? []).includes(record.resourceId)) return false;
-  return true;
+  if (record.chatId) return liveChatMember(mind, record.chatId, principal.unitId);
+  if (record.unitId) return record.unitId === principal.unitId;
+  return false;
+}
+
+function liveChatMember(root, chatId, unitId) {
+  if (!root || !isUuid(chatId) || typeof unitId !== 'string') return false;
+  const text = readText(path.join(root, 'user', 'relay', 'chats', chatId, 'chat.md'));
+  const line = text.split(/\r?\n/).find((item) => item.startsWith('members: '));
+  if (!line) return false;
+  try {
+    const members = JSON.parse(line.slice('members: '.length));
+    return Array.isArray(members) && members.includes(unitId);
+  } catch {
+    return false;
+  }
+}
+
+function readText(file) {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function liveAttached(root, resourceId) {
@@ -254,23 +275,39 @@ function capabilitiesFor(principal) {
 
 export function publishDomainEvents(context, events) {
   for (const event of events) {
-    context.store.events.push(event);
-    if (!context.bus) continue;
     const unitId = event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? context.principal?.unitId ?? null;
-    context.bus.emit({
-      ...event,
-      unitId,
-      source: event.source ?? (unitId
-        ? { kind: 'unit', id: unitId, unitId }
-        : { kind: 'service', id: context.paths?.machine ?? 'service', unitId: null }),
-    });
+    const stamped = { ...event, unitId, source: actingSource(event, context, unitId) };
+    context.store.events.push(stamped);
+    if (!context.bus) continue;
+    context.bus.emit(stamped);
   }
+}
+
+function actingSource(event, context, unitId) {
+  const given = event.source;
+  const machine = context.paths?.machine ?? 'service';
+  if (given && SOURCE_KINDS.has(given.kind)) {
+    return { kind: given.kind, id: given.id ?? machine, unitId: given.unitId ?? unitId };
+  }
+  return { kind: kindForAudience(context.principal?.audience), id: machine, unitId };
+}
+
+function kindForAudience(audience) {
+  if (audience === 'desktop') return 'gui';
+  if (audience === 'phone') return 'phone';
+  if (audience === 'agent') return 'mcp';
+  if (audience === 'cli') return 'cli';
+  if (audience === 'hook') return 'hook';
+  return 'service';
 }
 
 function sourceFor(event, machine) {
   const unitId = event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? null;
-  if (unitId) return { kind: 'unit', id: unitId, unitId };
-  return { kind: 'service', id: machine, unitId: null };
+  const given = event.source;
+  if (given && SOURCE_KINDS.has(given.kind)) {
+    return { kind: given.kind, id: given.id ?? machine, unitId: given.unitId ?? unitId };
+  }
+  return { kind: 'service', id: machine, unitId };
 }
 
 function parseCursor(cursor) {

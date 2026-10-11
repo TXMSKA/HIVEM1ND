@@ -670,7 +670,6 @@ function ownedEvent(context, loaded, name, approval) {
   return {
     name,
     unitId,
-    source: { kind: 'service', id: loaded?.binding?.machine ?? context.paths.machine, unitId },
     data: { approval },
   };
 }

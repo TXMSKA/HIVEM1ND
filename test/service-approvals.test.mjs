@@ -298,7 +298,7 @@ test('approval detail supplies the revision, selected answer and target owner', 
   assert.equal(detail.answer.decision, 'deny');
   const event = fixture.store.events.filter((item) => item.name === 'approval.answered').at(-1);
   assert.equal(event.unitId, UNIT);
-  assert.equal(event.source.kind, 'service');
+  assert.equal(event.source.kind, 'gui');
   assert.equal(event.source.id, fixture.machine);
   assert.notEqual(event.unitId, 'root:master');
 });
