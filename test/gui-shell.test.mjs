@@ -146,7 +146,9 @@ test("a newer query wins while an older fetch is still running", async () => {
     options.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
     pending.push(entry);
   });
+  list.scrollTop = 4000;
   const first = setQuery(list, "alpha");
+  assert.equal(list.scrollTop, 0);
   await delay(0);
   const second = setQuery(list, "beta");
   await delay(0);
@@ -201,6 +203,12 @@ test("later collection pages stay available and compact windows stay under 100 r
   const mounted = host.querySelectorAll("[data-row]").length;
   assert.equal(mounted < 100, true);
   assert.equal(mounted > 0, true);
+  list.scrollTop = 4000;
+  const short = rows.slice(0, 6);
+  short[5].text = "unit-1200 Out";
+  renderWindow(host.ownerDocument, host, list, short, {});
+  assert.equal(list.scrollTop, 0);
+  assert.match([...host.querySelectorAll("[data-row]")].map((row) => row.textContent).join("\n"), /unit-1200/);
 
   await assert.rejects(setAttachments({}, { current: { resourceId: "board", attachmentRevision: null, attached: [] } }, Array.from({ length: 257 }, (_, index) => `unit-${index}`)), (error) => error.code === "invalid_body");
 });
@@ -265,6 +273,18 @@ test("a reporting cycle is shown and keyboard focus reaches the final row", () =
   moveFocus(list, many, "end");
   renderWindow(host.ownerDocument, host, list, many, {});
   assert.equal(list.focusId, "project:bulk:unit-1200");
+  list.height = 581;
+  host.clientHeight = 293;
+  host.getBoundingClientRect = () => ({ top: 0, bottom: host.clientHeight });
+  const Node = host.constructor;
+  Node.prototype.getBoundingClientRect = function rect() {
+    if (this.getAttribute?.("data-id") === "project:bulk:unit-1200") return { top: 864, bottom: 900 };
+    return { top: 0, bottom: 36 };
+  };
+  const endEvent = { key: "End", target: { getAttribute: () => null }, preventDefault() {} };
+  for (const fn of host.listeners.get("keydown")) fn(endEvent);
+  assert.equal(list.focusId, "project:bulk:unit-1200");
+  assert.ok(list.scrollTop >= (1200 * list.rowHeight) - host.clientHeight);
   assert.equal(mounted(host).some((node) => node.getAttribute("data-id") === list.focusId), true);
   const app = { store: createStore(), layout: "desktop" };
   activateUnit(app, { id: "project:bulk:unit-1200" }, "keyboard");
@@ -634,6 +654,8 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   assert.equal(phone.root.querySelector(".mode"), null);
   assert.equal(phone.root.querySelector("[data-action='new-unit']"), null);
   assert.equal(phone.root.querySelector("[aria-label='Settings']"), null);
+  assert.equal(phone.root.querySelector(".stage"), null);
+  assert.equal((phone.root.textContent ?? "").includes("This screen is not ready yet."), false);
   const overseer = phone.app.unitList.catalog.find((unit) => unit.id === "root:overseer");
   phone.app.activeHandlers.onActivate({ id: overseer.id, kind: "unit", unit: overseer }, "double");
   await until(() => phone.app.phoneChatNote === true);
@@ -1030,6 +1052,11 @@ test("waiting opens from either navigation surface and refreshes without a selec
   click(desktop.root.querySelector("[data-waiting-surface]").querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"));
   await waitFor(() => desktop.root.querySelector("[data-waiting-record='approval']")?.querySelector("[data-action='approve']"), "The approval action was not offered.");
   assert.equal(desktop.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='revoke-grant']"), null);
+  navigate(desktop.app, "settings");
+  assert.equal(desktop.root.querySelector("[data-settings]") != null, true);
+  assert.equal(desktop.root.querySelector("[data-waiting-surface]"), null);
+  navigate(desktop.app, "map");
+  assert.equal(desktop.root.querySelector("[data-waiting-surface]") != null, true);
 
   const phone = await bootApp(fixture.phoneUrl, 390, []);
   t.after(() => dispose(phone.app));
@@ -1664,6 +1691,9 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   assert.equal(fresh != null && fresh !== stale, true);
   assert.equal(desktop.document.activeElement, fresh);
   assert.equal(fresh.closest("[data-editor-layout]")?.getAttribute("data-editor-layout"), "document");
+  navigate(desktop.app, "focus");
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
+  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "hidden");
   const css = await readFile("gui/app/styles.css", "utf8");
   const focusCss = css.slice(css.indexOf('[data-mode="focus"]'));
   assert.match(focusCss, /background:\s*#000000/);

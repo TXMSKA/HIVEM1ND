@@ -29,7 +29,7 @@ const HOME_MS = 12 * 3600_000;
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
-const APP_FILES = ["index.html", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs"];
+const APP_FILES = ["index.html", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "mark.svg", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs"];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 class HttpError extends Error {
@@ -2029,6 +2029,7 @@ function viewerData(viewer) {
 function contentType(name) {
   if (name.endsWith(".html")) return "text/html; charset=utf-8";
   if (name.endsWith(".css")) return "text/css; charset=utf-8";
+  if (name.endsWith(".svg")) return "image/svg+xml";
   return "text/javascript; charset=utf-8";
 }
 

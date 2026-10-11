@@ -43,6 +43,7 @@ export function setQuery(list, query) {
   list.controller?.abort();
   if (list.timer) clearTimeout(list.timer);
   list.query = String(query ?? "");
+  list.scrollTop = 0;
   const generation = startCollection(list.store, list.name);
   list.generation = generation;
   let resolve;
@@ -175,7 +176,11 @@ export function renderWindow(document, host, list, rows, handlers = {}) {
   host.listHandlers = handlers;
   const height = host.clientHeight || list.height || 0;
   if (height) list.height = height;
-  const range = windowRange(list.scrollTop, list.height || height, list.rowHeight, rows.length);
+  let range = windowRange(list.scrollTop, list.height || height, list.rowHeight, rows.length);
+  if (rows.length && range.start >= rows.length) {
+    list.scrollTop = 0;
+    range = windowRange(0, list.height || height, list.rowHeight, rows.length);
+  }
   const before = document.createElement("div");
   before.setAttribute("style", `height:${range.before}px`);
   const after = document.createElement("div");
@@ -232,6 +237,7 @@ function bindWindow(host, list) {
     const rows = host.currentRows ?? [];
     const targetId = event.target?.getAttribute?.("data-id");
     if (targetId) list.focusId = targetId;
+    if (host.clientHeight) list.height = host.clientHeight;
     if (event.key === "ArrowDown") moveFocus(list, rows, 1);
     else if (event.key === "ArrowUp") moveFocus(list, rows, -1);
     else if (event.key === "Home") moveFocus(list, rows, "home");
@@ -244,12 +250,44 @@ function bindWindow(host, list) {
       else host.listHandlers?.onActivate?.(row, "keyboard");
     } else return;
     event.preventDefault?.();
-    host.wantsFocus = true;
-    host.rendering = true;
-    renderWindow(host.ownerDocument, host, list, rows, host.listHandlers ?? {});
-    host.rendering = false;
-    host.wantsFocus = false;
+    placeFocus(host, list);
+    host.ownerDocument.defaultView?.requestAnimationFrame?.(() => {
+      if (!host.isConnected || list.focusId == null) return;
+      placeFocus(host, list);
+    });
   });
+}
+
+function placeFocus(host, list) {
+  const rows = host.currentRows ?? [];
+  if (host.clientHeight) list.height = host.clientHeight;
+  const index = rows.findIndex((row) => row.id === list.focusId);
+  if (index >= 0) {
+    const top = index * list.rowHeight;
+    const bottom = top + list.rowHeight;
+    const height = list.height || list.rowHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + height) list.scrollTop = Math.max(0, bottom - height);
+  }
+  host.wantsFocus = true;
+  host.rendering = true;
+  renderWindow(host.ownerDocument, host, list, rows, host.listHandlers ?? {});
+  revealFocused(host, list);
+  host.rendering = false;
+  host.wantsFocus = false;
+}
+
+function revealFocused(host, list) {
+  const focused = [...host.children].find((node) => node.getAttribute?.("data-id") === list.focusId);
+  if (!focused?.getBoundingClientRect || !host.getBoundingClientRect) return;
+  const rowBox = focused.getBoundingClientRect();
+  const listBox = host.getBoundingClientRect();
+  let delta = 0;
+  if (rowBox.top < listBox.top) delta = rowBox.top - listBox.top;
+  else if (rowBox.bottom > listBox.bottom + 1) delta = rowBox.bottom - listBox.bottom;
+  if (!delta) return;
+  list.scrollTop = Math.max(0, list.scrollTop + delta);
+  host.scrollTop = list.scrollTop;
 }
 
 function rememberCatalog(list) {

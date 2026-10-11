@@ -1,130 +1,72 @@
 # GUI browser checks
 
-Observations from Chrome against the isolated fixture. Each scenario used the desktop link printed by `test/gui-fixture.mjs`. The 200% rows use a 720 by 450 layout viewport at device scale 2. Screenshots stayed outside the repository. The session fragment was cleared on the first load. The credential was not present in the document. Console errors were empty in every row.
+Chrome headless against the isolated fixture on 10 October 2026. Captures are in `%TEMP%\hivem1nd-3-fix-gui\`. Rows below are from that run. A phone camera was not available.
 
-## Step 3 shell
+## Shell, looks, and viewports
 
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| Viewport | Look | Language | Result | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Set M shell, bar 52, footer 30, side 266, inspector 366, no clip, no console errors | Background rgb(15, 11, 19), accent #bdcd79, panel rgb(24, 18, 29), radius 20px. Bar 1440x52. Footer 1440x30 at top 870. Side 266x806. Stage 760x806. Inspector 366x806 at left 1062. Page scroll width matched the viewport. English copy showed Map, 4 waiting, Hierarchy, 11 units, 5 unread, 3 issues, the three service issue messages, the temporary panel message, empty inspector guidance, Service on DESKTOP, Saved on this machine, and Last read 12:00 UTC. | none | this file |
-| 1024x768 | modern | en | Narrow desktop keeps the desktop credential. Inspector is a dismissible panel. No clip and no console errors. | Same modern palette and English copy. Bar 1024x52. Footer at top 738. Side 266x674. Stage 722x674. Inspector display none until its header control opens it. Page scroll width matched the viewport. | none | this file |
-| 720x450 at device scale 2 | modern | en | 200% zoom keeps the bar, footer, and scrolling panels usable. | Bar wrapped to 91px and still showed Map, Blueprint, Document, Focus, and 4 waiting. Footer 720x30 at top 420. Side 266x317 with scroll height 469, so the issue list scrolls inside the panel. Stage 418x317. Inspector display none. Page scroll width matched the viewport. | none | this file |
-| 1440x900 | high-contrast | en | Set A: black surfaces, gold accent, 10px radius, same shell geometry. | Background rgb(5, 5, 5), accent #d4b06a, panel rgb(11, 11, 11), radius 10px. Geometry matched the modern 1440 row. English copy. | none | this file |
-| 1024x768 | high-contrast | en | Set A at the narrow desktop width. | High contrast palette and English copy. Geometry matched the modern 1024 row, including the closed inspector. | none | this file |
-| 720x450 at device scale 2 | high-contrast | en | Set A at 200% zoom. | High contrast palette. Bar height 95. Footer at top 420. Side scroll height 471 inside a 313px panel. Inspector display none. | none | this file |
-| 1440x900 | modern | es | Spanish chrome on the modern palette. | Language es. Copy included Mapa, Documento, Concentración, 4 pendientes, Jerarquía, Instantánea, 11 unidades, 5 sin leer, and 3 incidencias. Service issue text stayed in the service language. Geometry matched the modern 1440 row. | none | this file |
-| 1024x768 | modern | es | Spanish chrome at the narrow desktop width. | Spanish chrome and modern palette. Geometry matched the modern 1024 row. | none | this file |
-| 720x450 at device scale 2 | modern | es | Spanish chrome at 200% zoom. | Spanish chrome. Bar height 91. Footer at top 420. Side scroll height 490 inside a 317px panel. Inspector display none. | none | this file |
+| 1440x900 | modern | en | pass | Background rgb(15, 11, 19), accent #bdcd79, radius 20px. Bar 1440x52, footer 1440x30, side 266x806, stage 760x806, inspector 366x806. Map circles 56x56 with radius 50% and a Connect handle. Copy included Map, Blueprint, Document, Focus, 5 waiting, Hierarchy, 11 units, 5 unread, 3 issues, Service on DESKTOP, Saved on this machine, Last read 12:00 UTC. Hash empty, storage 0. | none | 1440-modern-en-map.png |
+| 1440x900 | high-contrast | en | pass | Background rgb(5, 5, 5), accent #d4b06a, radius 10px. Circle 56x56, radius 50%, handle Connect. Blueprint columns 240px 772px 380px. | none | 1440-contrast-en-map.png, 1440-contrast-en-blueprint.png |
+| 1440x900 | modern | es | pass | Look stayed modern. Handle Conectar, status En espera. Copy included Mapa, Documento, Concentración, 5 pendientes, Jerarquía, 11 unidades. | none | 1440-modern-es-map.png |
+| 1024x768 | modern | en | pass | Layout stayed desktop. Bar 1024x52, side 266x674. Map only. | none | 1024-modern-en-map.png |
+| 720x450, device scale 2 | modern | en | pass | visualViewport.scale 2 and deviceScaleFactor 2. | none | 720-scale2-modern-en-map.png |
+| 390x844 | modern | en | pass | Layout phone. Modes Hierarchy, Chats, Waiting. No new unit, no pin, hash empty, storage 0, no stage, and the body did not include "This screen is not ready yet." | none | 390-modern-en-phone.png |
+| 1440x900 | modern | en | pass | prefers-reduced-motion matched and a 1s transition computed as 0s. | none | browser |
+| 1440x900 | modern | en | pass | prefers-contrast: more matched. The look stayed modern. High contrast remains the Settings choice. | none | browser |
+| 1440x900 | mixed | mixed | pass | Desktop console errors empty. Desktop failed requests empty, including the mark icon. | none | cdp |
+| 390x844 | modern | en | pass | Phone console errors empty. Phone failed requests empty. | none | 390-modern-en-phone.png |
 
-## Step 4 lists
+## Screens
 
-The large fixture was opened at 1440x900. End moved focus to the last hierarchy row and kept that row inside the list pane. Searching `unit-1200` left the snapshot count at 1211 and the filtered total at 1. The bulk group showed that row. Enter selected it. A later unit change kept the same filtered row and total. Compact rows stayed under 100. There were no console errors.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| Viewport | Look | Language | Result | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Search reaches unit 1200. The group can be expanded. Keyboard activation selects it. Fewer than 100 compact rows are mounted. The total stays correct after a list change. | Before the search, 17 compact rows were mounted. The list scroll height was 612 and its client height was 293. End focused root:incubator inside the pane. The snapshot read 1211 units and the list total was 1211. After searching unit-1200 and activating that row with Enter, 3 compact rows were mounted, the filtered total was 1, the row read unit-1200 Out, and aria-selected was true. The snapshot still read 1211 units. After a unit change event, the filtered total stayed 1 and the same row stayed selected. | none | this file |
+| 1440x900 | modern | en | pass | Chats, Hierarchy, and Waiting opened from their controls. | none | 1440-modern-en-chats.png, 1440-modern-en-hierarchy.png, 1440-modern-en-waiting.png |
+| 1440x900 | modern | en | pass | Blueprint columns 228px 796px 368px. | none | 1440-modern-en-blueprint.png |
+| 1440x900 | modern | en | pass | Document opened Release notes. | none | 1440-modern-en-document.png |
+| 1440x900 | modern | en | pass | Focus background rgb(0, 0, 0). Bar, footer, and tools hidden. Text was Welcome and a first paragraph. Pointer movement showed the tools. Escape returned to Document. | none | 1440-modern-en-focus.png |
+| 1440x900 | modern | en | pass | One map drag moved master from left 698 to 778. | none | 1440-modern-en-drag.png |
 
-## Step 5 map
+## Lists
 
-A local drag moved one circle. Escape restored that drag. A reverse marquee selected the visible circles, including adjutant, executive, and overseer. Zoom moved a circle, and a second drag used the new scale. Double-clicking executor-shop in Hierarchy centered it and selected it. No layout write was part of this gate.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| Viewport | Look | Language | Result | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Free placement, local move, reverse marquee, zoom, cancelled drag, and Hierarchy double-click centers the unit. | Background rgb(15, 11, 19), accent #bdcd79. master moved from left 698 to 758. The following drag was cancelled and the circle returned to 758. The reverse marquee selected 9 circles, including root:adjutant, root:executive, and root:overseer. Wheel zoom moved overseer from 698 to 700.59375. Double-clicking project:shop:executor-shop set aria-pressed and its center delta to 0. The inspector read executor-shop Waiting. | none | this file |
-| 1440x900 | high-contrast | en | The same gestures on set A. | Background rgb(5, 5, 5), accent #d4b06a. master moved from 699 to 759 and the cancelled drag returned it there. The reverse marquee selected the same 9 circles. Zoom moved overseer from 699 to 701.6875. Hierarchy double-click centered executor-shop with center delta 0. | none | this file |
+| 1440x900 | modern | en | pass | 1 extra item: total 12, mounted rows 17. | none | browser |
+| 1440x900 | modern | en | pass | 4 extra items: total 15, mounted rows 17. | none | browser |
+| 1440x900 | modern | en | pass | 40 extra items: total 51, mounted rows 17. | none | browser |
+| 1440x900 | modern | en | pass | 400 extra items: total 411, mounted rows 17. | none | 1440-size-400.png |
+| 1440x900 | modern | en | pass | 1200 extra items: total 1211. Four bulk rows were mounted before the fold opened, then 10, still under 100. End focused root:incubator at position 1216 of 1216 inside the pane, with 17 rows mounted. Search unit-1200 showed 1 listed and that row inside the pane. | none | 1440-large-end.png, 1440-large-search.png |
 
-## Step 6 actions
+## Stream, sessions, and review
 
-Chrome at 1440x900 on the modern English shell. Dragging the overseer handle onto adjutant showed "adjutant will report to overseer." Cancel left the inspector note empty. Confirm recorded root:adjutant reporting to root:overseer. A group connect from overseer to adjutant and master showed both sentences. Confirm kept the adjutant result and recorded root:master invalid_lead. Creating a unit on OFFLINE showed "OFFLINE is unavailable." Starting overseer showed "The session is queued." The same request then showed "The session failed. Nothing was launched." Stopping the shop session showed "The session is stopping." and, after acknowledgment, "The session stopped."
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| Viewport | Look | Language | Result | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Confirm and cancel a connection. A group connect keeps one invalid target. An unavailable machine is named. A session goes queued, then failed. A stop goes stopping, then stopped. | Cancel copy was "adjutant will report to overseer." and the note stayed empty. Confirm recorded root:adjutant root:overseer. Group copy named adjutant and master. The result was root:adjutant root:overseer and root:master invalid_lead. The unavailable note was "OFFLINE is unavailable." The session note went from "The session is queued." to "The session failed. Nothing was launched." The stop note went from "The session is stopping." to "The session stopped." | none | this file |
+| 1440x900 | modern | en | pass | Offline stream: footer sync text included Sync needs attention. | none | 1440-offline.png |
+| 1440x900 | modern | en | pass | Replay of a slowing event left the pending count at 3. | none | browser |
+| 1440x900 | modern | en | pass | After the stream reset, the shell stayed up, the gate stayed closed, and the total stayed 11. | none | browser |
+| 1440x900 | modern | en | pass | The session request note was exactly The session request expired. | none | browser |
+| 1440x900 | modern | en | pass | A session went from The session is queued. to The session failed. Nothing was launched. | none | 1440-session.png |
+| 1440x900 | modern | en | pass | The shop machine form read No client is available on that machine. and confirm was disabled. | none | browser |
+| 1440x900 | modern | en | pass | Stop went from The session is stopping. to The session stopped. | none | browser |
+| 1440x900 | modern | en | pass | Two local drags moved master from 698 to 778 and from 330 to 370 while a remote layout event was applied. | none | 1440-two-drags.png |
+| 1440x900 | modern | en | pass | Confirm copy was adjutant will report to overseer. Cancel left the previous note unchanged. Confirm then named adjutant and overseer. | none | 1440-connect.png |
+| 1440x900 | modern | en | pass | Group connect named adjutant and executive, then cancel left the connection unsent. | none | browser |
+| 1440x900 | modern | en | pass | Task 030 accept was disabled. Task 029 accept was enabled. An expired approval stayed visible. | none | browser |
+| 1440x900 | modern | en | pass | Approve showed Answer queued. and the approval state became approved. The note did not become Denied. | none | browser |
+| 1440x900 | modern | en | pass | After an outside edit, undo on task 029 reported data-code undo_conflict. | none | browser |
+| 1440x900 | modern | en | pass | A late message appeared in the open transcript. Unlist removed the row, kept reopen, and set listed false. | none | browser |
+| 1440x900 | modern | en | not observed | A dropped mutation and a stale layout conflict were not driven. No retry control was looked for. | not exercised | none |
 
-## Step 7 chats
+## Document, Watch, home, phone, embeds
 
-Chrome at 1440x900 on the modern English shell. A hierarchy double-click selected executor-shop on the map and opened its direct chat. A new three-member group was empty. Two replies appeared. Pin, unlist, and reopen completed. Older history for 400 messages kept the anchor in place. Opening a mailbox did not mark it read.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
+| Viewport | Look | Language | Result | Observed | Failure | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Direct chat from a double-click, a three-member group, two replies, pin, unlist, reopen, older history, and a mailbox inspection that does not mark mail read. | executor-shop was aria-pressed and its direct chat opened. The new group read "No messages yet." and had 3 members. The transcript then showed First reply and Second reply. The chat pinned, left the list, and was listed again. After 400 messages, the total read 400 and the anchor delta was 0. The offline mailbox stayed "0 mailbox" on a second look. The shop mailbox stayed "1 read:false" on a second look. | none | this file |
-
-## Step 8 review
-
-Chrome at 1440x900 on the modern English shell, with executor-shop selected. The lead-gated delivery could not be accepted. Send back required a note and moved that task to open. The reviewable delivery was accepted, then an external edit made undo report undo_conflict. A pending approval went from Answer queued to Approved only after the owner result. An expired approval stayed visible. Grant revoke stayed pending. Waiting fell from 5 to 4 and did not empty while other items remained.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Pending approval becomes approved only after the owner result. Expired approval stays visible. Revoke stays pending. Lead-gated delivery is blocked. Accept, send back, and a conflicting undo are distinct. Waiting changes only after an outcome. | Accept on task 030 was disabled. Send back with a note set the note to open. Accept on task 029 set the note to done. After an external edit, undo showed undo_conflict. Approve showed Answer queued, then Approved. The expired approval remained. Revoke showed pending. Waiting went from 5 to 4. | none | this file |
-
-## Step 9 editors
-
-Chrome at 1440x900 on the modern English shell. Blueprint opened Cart. Two units were attached. A comment failed its notice, then a fixture reply reopened it and resolve closed it. Watch waited, followed the attached unit, and then stopped. A delayed board read lost to the newer selection, and the draft stayed.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Attach two units. Add, reply, and resolve a comment. A failed notice is followed by a fixture reply. Watch shows the resource and the following label, then stops. A delayed fetch does not replace the newer selection or its draft. | Attachments were project:shop:executor-shop and env:web:overlord-web. The comment Unplaced note showed failed. The reply was open and then resolved. The header was blueprint Cart. Watch waited for project:shop:executor-shop, then read Watching project:shop:executor-shop, then Following is off. After the delayed read the title stayed Cart and the draft stayed kept locally. The hash was empty and the console was empty. | none | this file |
-
-## Step 10 blueprint
-
-Chrome at 1440x900. Cart rendered its nested nodes and the unresolved legacy link, without drawing the full-editor effects. A nested text edit, an added shape, its removal, an uploaded image, a node comment, a watched focus, and an outside edit were checked on the modern look and again after the high-contrast look.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Render the full board, edit a nested node, add and remove a shape, upload an image, comment on a node, follow a committed focus, and keep a draft when the board changes elsewhere. | The board drew 2 nodes, an unresolved link, and no filter. The nested text became Total. A shape was added and then removed. The image source stayed under docs/flows/assets and its href was a blob URL. The comment read On the label. Focus landed on empty. The conflict read This document changed elsewhere. The draft is still here. The draft stayed local board draft. Background rgb(15, 11, 19). | none | this file |
-| 1440x900 | high-contrast | en | The same board remains on set A. | Background rgb(5, 5, 5). The board still showed 3 nodes after the image was added. The console was empty. | none | this file |
-
-## Step 11 document
-
-Chrome at 1440x900 on the modern English shell. Release notes rendered the bold quote and no script element. A comment used that quote. Accept changed Welcome to Hello. The second suggestion stayed pending with proposal_stale, then Discard marked it discarded. A saved range kept an emoji and the script tag as text. Focus was black, hid its tools, moved to Notes.Next and back to Intro.Welcome, showed the tools after the pointer moved, and Escape returned to Document with the same draft.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | modern | en | Edit bold text that contains an emoji, comment on the rendered quote, accept one suggestion, leave a stale suggestion pending, discard it, enter black Focus, move between pages with the arrow keys, reveal the tools with the pointer, and return with Escape. Uploaded markup does not run. The page and draft survive. | The bold text was Welcome and the page had no script element. The quote comment was Welcome. Accept made the bold text Hello. The other suggestion stayed pending and the note was proposal_stale, then its state became discarded. The saved page included the emoji and still had no script element. Focus background was rgb(0, 0, 0) and the tools were hidden. ArrowRight showed Notes.Next and ArrowLeft returned to Intro.Welcome. Pointer movement set the tools to visible. Escape returned to Document and the draft was kept void draft. The console was empty. | none | this file |
-
-## Step 12 settings
-
-Chrome at 1440x900. Settings changed the shared look and language. Replacing the open home grant asked for confirmation, then showed the two returned addresses. Each address drew its own returned payload. Advancing the fixture 12 hours closed the grant and removed the code and links. A phone camera was not available, so the symbol was not scanned. The rendered modules matched the bounded encoder for each returned payload, and the short code was not part of the symbol.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1440x900 | high-contrast, then modern | es, then en | Both looks and both languages change from Settings. | High contrast background was rgb(5, 5, 5). Modern background was rgb(15, 11, 19). Spanish showed Configuración with lang es, then English returned with lang en. | none | this file |
-| 1440x900 | modern | en | Replace a home grant, switch the bound link, and drop the secrets after 12 hours. Scan the rendered symbol with a phone camera. | The confirmation said Replacing home access revokes the current key, code, and phone sessions. Two returned links were shown. Switching links changed the symbol, and both symbols matched the bounded encoder for their returned payloads. The short code was not in the symbol. After 12 hours the home state was closed and the code and links were gone. The console was empty. | A phone camera was not available, so the symbol was not scanned. | this file |
-
-## Step 13 phone and embed
-
-Chrome opened the phone link at 390x844 on the modern English shell. The phone navigation was Hierarchy, Chats, and Waiting. It posted in the existing executor-shop chat and accepted the reviewable delivery. Editor modes, unit creation, settings, pin, undo, and grant revoke were absent. Widening the viewport left the phone credential in place. Tab focused an input in the shell. A touch on Hierarchy returned that mode. After the fixture advanced 12 hours, the next send showed invalid_session and no secret was on the page. The phone made no viewer request.
-
-A second loopback page hosted two embedded desktop viewers. One changed to high contrast and Spanish. The other stayed modern English and still showed Hierarchy. Forged contract and sibling messages left the first look in place. Typing in its document draft sent one dirty message. Closing it showed the Spanish reopen gate. The other viewer stayed on the desktop shell. A third origin did not receive the viewer document. The console was empty.
-
-| Viewport | Look | Language | Expected | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| 390x844, then 1440x900 | modern | en | Phone can write an existing chat and accept a reviewable task. It exposes no editor, unit creation, pin, undo, or revoke. A wide viewport grants nothing. | Three phone modes and no editor buttons. The chat showed Phone note. Task 029 became done. Pin, undo, revoke, settings, and new unit were absent. At 1440 the layout stayed phone and the editor buttons stayed absent. Viewer requests were 0. The console was empty. | none | this file |
-| 390x844 | modern | en | Keyboard, touch, and 12-hour expiry are visible. | Tab focused an input inside the shell. Touch on Hierarchy set the mode to hierarchy. After 12 hours the next send showed invalid_session. No secret was present. | none | this file |
-| 1440x900 | high-contrast and modern | es and en | Two embeds change independently. A forged message does nothing. Closing one leaves the other connected. | Two ready messages. The edited viewer became high contrast and Spanish. The other stayed modern English and showed Hierarchy. Forged messages did not change the first look. One dirty message was sent. Close showed Abrir HIVEM1ND de nuevo. The other shell stayed desktop. A third origin's frame tree did not contain the viewer document. The console was empty. | none | this file |
-
-## Step 14 final scenarios
-
-These rows collect the browser observations above. Node tests cover paging, wire failures, and import boundaries. They are not treated as browser passes. The fixture is the standard cast unless a row names another scenario. No OS login unit, native session, or service on the real mind was started.
-
-| Scenario | Viewport | Look | Language | Result | Observed | Failure | Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1200 items, search, folds, and the last row | 1440x900 | modern | en | pass | The large fixture showed 1211 units. Search found unit-1200. End kept the last row inside the list. | none | Step 4 |
-| 1, 4, 40, and 400 item pages |  |  |  | node only | The shell test pages those counts. They were not opened again in the browser. | none | shell test |
-| Modern and high contrast | 1440x900, 1024x768, and 720x450 at device scale 2 | both | en | pass | Modern was rgb(15, 11, 19). High contrast was rgb(5, 5, 5). | none | Step 3 |
-| English and Spanish | 1440x900 | modern | en and es | pass | Spanish chrome used Mapa, Documento, and Configuración. English returned with lang en. | none | Steps 3 and 12 |
-| 1440x900, 1024x768, and 200 percent | those sizes | modern | en | pass | The desktop shell kept its bars and scrolling panels. The 200 percent row used a 720 by 450 viewport at device scale 2. | none | Step 3 |
-| 390x844 phone width | 390x844, then 1440 | modern | en | pass | The phone layout stayed phone when the viewport became 1440 wide. | none | Step 13 |
-| Keyboard focus | 1440x900 and 390x844 | modern | en | pass | End, arrows, Escape, and Tab moved focus inside the open surface. | none | Steps 4, 11, and 13 |
-| Reduced motion | 1440x900 | modern | en | pass | An inline 1s transition was 1s. With prefers-reduced-motion set to reduce, matchMedia was true and the computed duration was 0s. | none | this file |
-| Lead direction, group independence, unavailable machine, and session outcomes | 1440x900 | modern | en | pass | Confirm and cancel were distinct. One group target was invalid_lead. OFFLINE was named. The session went queued, failed, stopping, and stopped. | none | Step 6 |
-| Unlisted chat and older history | 1440x900 | modern | en | pass | A direct chat opened, a group was empty, pin and unlist reversed, and 400 messages kept the anchor. | none | Step 7 |
-| Queued approval, expired approval, lead-gated delivery, and undo conflict | 1440x900 | modern | en | pass | Task 030 could not be accepted. Task 029 was accepted. Undo then showed undo_conflict. Approve waited for the owner. The expired approval remained. Waiting went from 5 to 4. | none | Step 8 |
-| Unknown board fields, safe image, and an outside edit | 1440x900 | modern, then high contrast | en | pass | The board kept its nodes and unresolved link. The image href was a blob URL under docs/flows/assets. The draft survived an outside change. | none | Step 10 |
-| Void source, emoji, stale proposal, and Focus | 1440x900 | modern | en | pass | Bold text changed, a script tag stayed text, the stale proposal was discarded, and Focus moved between pages. | none | Step 11 |
-| Watch off, waiting, and following | 1440x900 | modern | en | pass | Watch waited, then followed the attached unit, then stopped. | none | Step 9 |
-| Grant replacement, 12-hour expiry, and QR scan | 1440x900 | modern | en | pass, scan not done | Replacement showed two links. Both symbols matched the bounded encoder. After 12 hours the secrets were gone. | A phone camera was not available, so the symbol was not scanned. | Step 12 |
-| Phone forbidden actions and expiry | 390x844 | modern | en | pass | The phone posted an existing chat and accepted a reviewable task. Editor, unit, pin, undo, and revoke controls were absent. A later send showed invalid_session. | none | Step 13 |
-| Two isolated embeds | 1440x900 | high contrast and modern | es and en | pass | One viewer changed look and language and reported dirty. Closing it left the other on Hierarchy. Forged messages did nothing. | none | Step 13 |
-
-Offline stream replay, a stream reset, and an uncertain dropped mutation were exercised by the transport and action node tests. They were not repeated as a separate browser row in this pass. The rendering, focus, and scrolling rows above are the browser record.
+| 1440x900 | modern | en | pass | Release notes showed Welcome, no script element in the workspace, and 2 Accept change controls. Focus was rgb(0, 0, 0) with tools hidden. Escape returned to Document. | none | browser |
+| 1440x900 | modern | en | not observed | Plain-offset editing, an emoji save, and a stale proposal answer were not driven. | not exercised | none |
+| 1440x900 | modern | en | not observed | Unknown board fields were not edited. Blueprint was opened for columns and Watch only. | not exercised | none |
+| 1440x900 | modern | en | not observed | An image upload was not performed. The mark icon request did not fail. | not exercised | cdp |
+| 1440x900 | modern | en | pass | Watch showed Waiting for or Watching, then Following is off. | none | browser |
+| 1440x900 | modern | en | pass | Replace home warned that replacing access revokes the current key, code, and phone sessions. One QR and two links appeared. After 12 hours the grant was closed and the symbol was gone. | none | 1440-home-qr.png |
+| 1440x900 | modern | en | unavailable | A phone camera was not available, so the symbol was not scanned. | unavailable | 1440-home-qr.png |
+| 390x844 | modern | en | pass | No new unit, pin, undo, revoke, or settings. Hash empty, storage 0. An existing chat accepted Phone note. An accept control was not on that Waiting screen, so a task review was not performed. | none | 390-phone-actions.png |
+| 1440x900 | high-contrast and modern | es and en | pass | One embed changed to high contrast and Spanish. The other stayed modern, English, and desktop. Closing one showed the Spanish reopen sentence and left the other connected. | none | browser |

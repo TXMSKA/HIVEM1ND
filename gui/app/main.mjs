@@ -223,6 +223,7 @@ export function navigate(app, mode) {
   if (!allowed.includes(mode)) return;
   if (mode === "hierarchy" || mode === "chats") app.tab = mode;
   else app.mode = mode;
+  if (mode === "focus" && app.voidState) enterFocus(app.voidState);
   renderShell(app);
 }
 
@@ -598,15 +599,15 @@ function renderWorkspace(app, t, view, counts) {
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { text: t(app.mode) }),
   );
-  if (app.layout !== "phone" && app.waitingOpen) {
+  if (app.mode === "settings") {
+    stage.append(settingsSurface(app, document, t));
+  } else if (app.layout !== "phone" && app.waitingOpen) {
     stage.append(renderWaitingSurface(app, t));
   } else if (app.mode === "map") {
     ensureMap(app);
     stage.append(element(document, "div", { class: "map" }));
   } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
     stage.append(renderEditor(app, t));
-  } else if (app.mode === "settings") {
-    stage.append(settingsSurface(app, document, t));
   } else if (app.layout === "phone" && app.mode === "waiting") {
     stage.append(renderWaitingSurface(app, t));
   } else if (app.layout === "phone" && app.tab === "chats") {
@@ -636,7 +637,8 @@ function renderWorkspace(app, t, view, counts) {
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
-  return element(document, "div", { class: "workspace" }, side, stage, inspector);
+  const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
+  return element(document, "div", { class: "workspace" }, side, phoneHierarchy ? null : stage, inspector);
 }
 
 async function loadLists(app) {
