@@ -7,6 +7,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore, startService, stopService } from '../engine/service/service.mjs';
+import { CoreError } from '../engine/service/identity.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, protectLocalFile, safeError, stubAclRunner } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -76,7 +77,15 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   failure.stack = `Error\n at ${secret}`;
   const body = safeError(failure, 'request-1');
   assert.equal(JSON.stringify(body).includes(secret), false);
+  assert.equal(body.error.code, 'internal_error');
+  assert.equal(body.error.message, 'The request failed.');
+  assert.deepEqual(body.error.details, {});
+  assert.equal(body.error.retryAt, null);
   assert.equal(body.error.requestId, 'request-1');
+  const typed = safeError(new CoreError(429, 'request_rate_limited', 'Too many requests.', { remaining: 0 }, '2026-10-10T12:01:00.000Z'), 'request-2');
+  assert.equal(typed.error.code, 'request_rate_limited');
+  assert.equal(typed.error.details.remaining, 0);
+  assert.equal(typed.error.retryAt, '2026-10-10T12:01:00.000Z');
   const file = path.join(fixture.root, 'secret', 'bootstrap.json');
   await writeFile(file, '{}\n').catch(async () => {
     const { mkdir } = await import('node:fs/promises');
@@ -187,8 +196,9 @@ test('local login requires the protected bootstrap secret and binds only the vie
   assert.equal(viewer.json.data.language, 'es');
   assert.equal(viewer.json.data.embedded, false);
   const extra = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { unit: 'nope' } });
-  assert.equal(extra.status, 422);
-  const host = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { embedded: true, hostOrigin: 'file://local' } });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.json.error.code, 'unknown_field');
+  const host = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { embedded: true, hostOrigin: 'file://local', look: null, language: null } });
   assert.equal(host.status, 422);
   assert.equal(host.json.error.code, 'invalid_host_origin');
   const doubled = await rawHttp(httpPort, `GET /api/v1/units HTTP/1.1\r\nHost: 127.0.0.1:${httpPort}\r\nHost: evil.example\r\nConnection: close\r\n\r\n`);
@@ -199,8 +209,9 @@ test('local login requires the protected bootstrap secret and binds only the vie
     headers: { 'x-forwarded-host': 'evil.example', 'x-forwarded-for': '1.2.3.4' },
   });
   assert.equal(forwarded.status, 200);
-  const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
-  const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
+  const localBody = { embedded: false, hostOrigin: null, look: null, language: null };
+  const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
+  const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   for (let index = 0; index < 240; index += 1) {
     const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.token });
     assert.equal(once.status, 200);
@@ -214,7 +225,7 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const page = await requestJson(httpPort, 'GET', '/');
   assert.notEqual(page.status, 429);
   await writeFile(bootFile, '{}\n');
-  const closed = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
+  const closed = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   assert.equal(closed.status, 503);
   assert.equal(closed.json.error.code, 'bootstrap_unavailable');
   assert.equal(closed.json.token, undefined);

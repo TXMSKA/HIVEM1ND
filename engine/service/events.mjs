@@ -69,8 +69,8 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
   }
 
   function subscribe(principal, filters = {}, listener = undefined) {
-    if (!principal?.stableId) throw new CoreError(401, 'unauthorized', 'The event stream needs a principal.');
-    if (revoked.has(principal.stableId)) throw new CoreError(401, 'unauthorized', 'The credential is revoked.');
+    if (!principal?.stableId) throw new CoreError(401, 'invalid_session', 'The event stream needs a principal.');
+    if (revoked.has(principal.stableId)) throw new CoreError(401, 'invalid_session', 'The credential is revoked.');
     const subscriber = { principal, filters, listener: listener ?? (() => {}), closed: false, buffer: [], retain: listener === undefined };
     subscribers.add(subscriber);
     return subscriber;
@@ -79,7 +79,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
   function replay(subscriber, cursor) {
     prune();
     if (subscriber.closed || revoked.has(subscriber.principal.stableId)) {
-      throw new CoreError(401, 'unauthorized', 'The credential is revoked.');
+      throw new CoreError(401, 'invalid_session', 'The credential is revoked.');
     }
     const parsed = parseCursor(cursor);
     const frames = [];

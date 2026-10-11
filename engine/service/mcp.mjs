@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { CoreError, canonicalJson, isUuid } from './identity.mjs';
+import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { recordActivity } from './watch.mjs';
@@ -41,8 +42,17 @@ export function validateRpc(message) {
   return { ok: true };
 }
 
+function rpcFailure(idValue, code, message, errorCode) {
+  const requestId = typeof idValue === 'string' && isUuid(idValue) ? idValue : null;
+  return {
+    jsonrpc: '2.0',
+    id: idValue ?? null,
+    error: { code, message, data: safeError(new CoreError(400, errorCode, message), requestId).error },
+  };
+}
+
 function schemaError(idValue, message) {
-  return { jsonrpc: '2.0', id: idValue ?? null, error: { code: -32602, message } };
+  return rpcFailure(idValue, -32602, message, 'invalid_body');
 }
 
 function checkArgs(name, args) {
@@ -109,7 +119,7 @@ async function mutateTool(context, name, args) {
 
 export async function dispatch(context, message) {
   const valid = validateRpc(message);
-  if (!valid.ok) return { jsonrpc: '2.0', id: message?.id ?? null, error: { code: valid.code, message: valid.message } };
+  if (!valid.ok) return rpcFailure(message?.id ?? null, valid.code, valid.message, valid.code === -32700 ? 'invalid_json' : 'invalid_body');
   const { id: rpcId, method, params = {} } = message;
   if (method.startsWith('notifications/')) return { notification: true };
   if (method === 'initialize') {
@@ -128,7 +138,7 @@ export async function dispatch(context, message) {
         return toolFailure(rpcId, params.arguments ?? {}, error);
       }
     }
-    if (problem) return { jsonrpc: '2.0', id: rpcId ?? null, error: { code: problem.code, message: problem.message } };
+    if (problem) return rpcFailure(rpcId ?? null, problem.code, problem.message, problem.code === -32601 ? 'not_found' : 'invalid_body');
     try {
       const value = await callTool(context, params.name, params.arguments);
       return toolSuccess(rpcId, value);
@@ -136,7 +146,7 @@ export async function dispatch(context, message) {
       return toolFailure(rpcId, params.arguments ?? {}, error);
     }
   }
-  return { jsonrpc: '2.0', id: rpcId ?? null, error: { code: -32601, message: 'Method not found' } };
+  return rpcFailure(rpcId ?? null, -32601, 'Method not found', 'not_found');
 }
 
 function toolSuccess(rpcId, value) {
@@ -145,15 +155,7 @@ function toolSuccess(rpcId, value) {
 
 function toolFailure(rpcId, args, error) {
   const requestId = isUuid(args.requestId) ? args.requestId : (isUuid(rpcId) ? rpcId : null);
-  const body = {
-    error: {
-      code: typeof error?.code === 'string' ? error.code : 'internal',
-      message: 'The request failed.',
-      requestId,
-      details: error?.details && typeof error.details === 'object' ? error.details : {},
-      retryAt: error?.retryAt ?? null,
-    },
-  };
+  const body = safeError(error instanceof CoreError ? error : new CoreError(500, 'internal_error', 'The request failed.'), requestId);
   return { jsonrpc: '2.0', id: rpcId, result: { isError: true, content: [{ type: 'text', text: JSON.stringify(body) }] } };
 }
 

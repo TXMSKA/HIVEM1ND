@@ -262,7 +262,7 @@ export function safeError(error, requestId) {
   const known = error instanceof CoreError;
   return {
     error: {
-      code: typeof error?.code === 'string' ? error.code : 'internal_error',
+      code: known && typeof error.code === 'string' ? error.code : 'internal_error',
       message: known && !leaks(error.message) ? error.message : 'The request failed.',
       requestId,
       details: safeDetails(known ? error.details : null),

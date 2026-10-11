@@ -455,13 +455,13 @@ async function serveMcp(req, res, options, credentials) {
   const header = headerOne(req, 'authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   const credential = token ? credentials.verify(token) : null;
-  if (!credential) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  if (!credential) throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
   if (credential.audience !== 'agent') throw new CoreError(403, 'forbidden', 'MCP accepts only a local agent credential.');
   let message;
   try {
     message = JSON.parse((await readStream(req, REPLACEMENT_LIMIT)).toString('utf8') || 'null');
   } catch {
-    respond(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+    respond(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error', data: safeError(new CoreError(400, 'invalid_json', 'Parse error'), null).error } });
     return;
   }
   const type = String(req.headers['content-type'] ?? '');
