@@ -195,7 +195,13 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
   }
   await checkpoint(sync, decoded, packBytes, ledger);
   sync.store.events.push({ type: 'sync.applied', machine: decoded.header.machine, sequence: decoded.header.sequence });
-  return { status: 'applied', sequence: decoded.header.sequence, groups: completed };
+  return {
+    status: 'applied',
+    sequence: decoded.header.sequence,
+    machine: decoded.header.machine,
+    groups: completed,
+    changes: committedChanges(prepared, plans),
+  };
 }
 
 function planChange(item, localBytes, localVersion, located, tombstones) {
@@ -281,6 +287,30 @@ function markerOp(item, raw) {
     key,
     bytes: Buffer.from(`${canonicalJson({ hash: hashBytes(raw), deleted: false, at: item.change.at, machine: item.change.machine, id })}\n`, 'utf8').toString('base64'),
   };
+}
+
+function committedChanges(prepared, plans) {
+  const changes = [];
+  const seen = new Set();
+  prepared.forEach((item, index) => {
+    const plan = plans[index];
+    if (!plan?.version || plan.version.id !== item.change.id || seen.has(item.change.id)) return;
+    const wrote = item.change.operation === 'delete'
+      ? plan.ops.some((op) => op.kind === 'remove')
+      : plan.ops.some((op) => op.kind === 'write' && op.conflict !== true);
+    if (!wrote) return;
+    seen.add(item.change.id);
+    changes.push({
+      id: item.change.id,
+      transactionId: item.change.transactionId ?? null,
+      target: item.change.target,
+      operation: item.change.operation,
+      machine: item.change.machine,
+      at: item.change.at,
+      hash: item.change.hash ?? null,
+    });
+  });
+  return changes;
 }
 
 function groupPlans(prepared, plans) {

@@ -4,7 +4,7 @@ import { mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { CoreError, canonicalJson, uuidV8 } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, uuidV8 } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
 import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
 import { applyPack } from '../sync/apply.mjs';
@@ -18,7 +18,8 @@ import { createRelayWakeController } from '../relay/wake.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, wakeBindingLive } from './security.mjs';
-import { createEventBus } from './events.mjs';
+import { createEventBus, publishDomainEvents } from './events.mjs';
+import { projectChat, readDetail } from './projection.mjs';
 import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
@@ -60,6 +61,7 @@ export async function startService(options) {
     await acquireServiceLock(handle);
     await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
+    const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: paths.machine, mind: paths.mind });
     handle.credentials.bindWake((record) => wakeBindingLive(paths.mind, record, options.now?.() ?? Date.now()));
     await recoverApprovals({
       store: options.store,
@@ -72,7 +74,7 @@ export async function startService(options) {
       paths,
       now: options.now ?? (() => Date.now()),
     });
-    handle.runtime = await openServiceSync({ ...options, paths }, paths);
+    handle.runtime = await openServiceSync({ ...options, paths, bus }, paths);
     handle.listener = options.listener ? await options.listener() : null;
     handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
     handle.credentials.revokeAudience('agent');
@@ -94,7 +96,7 @@ export async function startService(options) {
     handle.http = await createHttpServer({
       ...options,
       paths,
-      bus: options.bus,
+      bus,
       credentials: handle.credentials,
       bootstrap: handle.bootstrapState,
       ledger: handle.runtime.ledger,
@@ -396,7 +398,7 @@ export async function composeCore(options) {
   const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine, mind: paths.mind });
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
   const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
-  const runtime = await openServiceSync({ ...options, paths }, paths);
+  const runtime = await openServiceSync({ ...options, paths, bus }, paths);
   const http = await createHttpServer({
     ...options,
     paths,
@@ -498,6 +500,7 @@ async function openServiceSync(options, paths) {
     beatTimer: null,
     closed: false,
     lastError: null,
+    bus: options.bus ?? null,
     env: options.env ?? process.env,
     clientOptions: Array.isArray(options.clients) ? options.clients : null,
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
@@ -577,12 +580,13 @@ async function reconcileOrigin(runtime) {
     for (let index = 1; index <= sequence; index += 1) {
       const packed = await readOriginPack(runtime.origin, machine, index);
       if (!packed) continue;
-      await applyPack(runtime.sync, packed, {
+      const applied = await applyPack(runtime.sync, packed, {
         provider,
         bindings,
         ledger: runtime.ledger,
         projects: runtime.sync.projects,
       });
+      await emitImported(runtime, applied);
     }
   }
   await retryPending(runtime, provider, bindings);
@@ -606,14 +610,214 @@ async function retryPending(runtime, provider, bindings) {
       if (!Number.isInteger(sequence)) continue;
       const packed = await readOriginPack(runtime.origin, machine.name, sequence);
       if (!packed) continue;
-      await applyPack(runtime.sync, packed, {
+      const applied = await applyPack(runtime.sync, packed, {
         provider,
         bindings,
         ledger: runtime.ledger,
         projects: runtime.sync.projects,
       });
+      await emitImported(runtime, applied);
     }
   }
+}
+
+async function emitImported(runtime, result) {
+  if (!runtime?.bus || result?.status !== 'applied' || result.replayed === true) return;
+  const selected = latestImported(result.changes ?? []);
+  if (selected.length === 0) return;
+  const context = {
+    paths: runtime.paths,
+    store: runtime.sync.store,
+    now: runtime.now,
+    projects: runtime.sync.projects ?? [],
+    principal: { audience: 'desktop', unitId: 'root:master' },
+  };
+  const sourceMachine = result.machine ?? selected[0].machine;
+  const events = [];
+  const collections = new Set();
+  for (const change of selected) {
+    try {
+      const built = await eventsForImported(runtime, context, change);
+      for (const event of built.events) events.push(event);
+      for (const name of built.collections) collections.add(name);
+    } catch (error) {
+      runtime.lastError = error;
+    }
+  }
+  if (collections.size > 0) {
+    events.push({
+      name: 'view.changed',
+      operationId: `sync-view:${sourceMachine}:${result.sequence}`,
+      source: { kind: 'sync', id: sourceMachine, unitId: null },
+      data: {
+        revision: hashBytes(Buffer.from(selected.map((item) => item.id).sort().join('\n'))),
+        collections: [...collections].sort(),
+      },
+    });
+  }
+  if (events.length === 0) return;
+  publishDomainEvents({ bus: runtime.bus, paths: runtime.paths, store: runtime.sync.store }, events);
+}
+
+function latestImported(changes) {
+  const unique = [];
+  const seen = new Set();
+  for (const change of changes) {
+    if (!change?.id || seen.has(change.id)) continue;
+    seen.add(change.id);
+    unique.push(change);
+  }
+  const byTarget = new Map();
+  for (const change of unique) byTarget.set(importedTargetKey(change.target), change);
+  return [...byTarget.values()];
+}
+
+function importedTargetKey(target) {
+  const file = slashPath(target?.path);
+  if (target?.kind === 'project') return `project\n${target.project ?? ''}\n${file}`;
+  return `mind\n${file}`;
+}
+
+function slashPath(value) {
+  return String(value ?? '').replaceAll('\\', '/');
+}
+
+function syncSource(change) {
+  return { kind: 'sync', id: change.machine, unitId: null };
+}
+
+async function eventsForImported(runtime, context, change) {
+  const target = change.target ?? {};
+  const file = slashPath(target.path);
+  if (!file || file.includes('.conflict-') || file.includes('/read/')) return { events: [], collections: [] };
+  if (target.kind === 'project') return editorImport(runtime, change, target, file);
+  return mindImport(runtime, context, change, file);
+}
+
+async function mindImport(runtime, context, change, file) {
+  const source = syncSource(change);
+  const message = /^user\/relay\/chats\/([^/]+)\/([^/]+)\.md$/.exec(file);
+  if (message && message[2] !== 'chat') {
+    if (change.operation === 'delete') return { events: [], collections: ['chats'] };
+    const chatId = message[1];
+    const projected = await readDetail(context, 'messages', message[2], { chatId });
+    const events = [{
+      name: 'message.created',
+      operationId: change.id,
+      chatId,
+      source,
+      data: { chatId, mailboxId: null, message: projected },
+    }];
+    try {
+      const chat = await projectChat(context, chatId);
+      events.push({ name: 'chat.changed', operationId: change.id, chatId, source, data: { chat } });
+    } catch (error) {
+      if (error?.code !== 'chat_not_found') throw error;
+    }
+    return { events, collections: ['chats'] };
+  }
+  const chatMeta = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
+  if (chatMeta) {
+    if (change.operation === 'delete') return { events: [], collections: ['chats'] };
+    const chat = await projectChat(context, chatMeta[1]);
+    return {
+      events: [{ name: 'chat.changed', operationId: change.id, chatId: chat.id, source, data: { chat } }],
+      collections: ['chats'],
+    };
+  }
+  const fallbackUnit = stateUnitId(file);
+  if (!fallbackUnit) return { events: [], collections: [] };
+  if (change.operation === 'delete') return { events: [], collections: ['units', 'leads', 'squads'] };
+  const bytes = await readFile(path.join(runtime.paths.mind, ...file.split('/')));
+  const unit = await readDetail(context, 'units', headerValue(bytes, 'unit-id') || fallbackUnit);
+  return {
+    events: [{ name: 'unit.changed', operationId: change.id, unitId: unit.id, source, data: { unit } }],
+    collections: ['units', 'leads', 'squads'],
+  };
+}
+
+function stateUnitId(file) {
+  const parts = file.split('/');
+  if (parts[0] !== 'user' || !file.endsWith('.md')) return null;
+  if (parts[1] === 'state' && parts.length === 3) return `root:${path.basename(parts[2], '.md').toLowerCase()}`;
+  if (parts[1] === 'environments' && parts[3] === 'state' && parts.length === 5) return `env:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
+  if (parts[1] === 'projects' && parts[3] === 'state' && parts.length === 5) return `project:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
+  return null;
+}
+
+function headerValue(bytes, name) {
+  const text = bytes.toString('utf8');
+  const split = text.indexOf('\n\n');
+  const head = split >= 0 ? text.slice(0, split) : text;
+  for (const line of head.split(/\r?\n/)) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    if (line.slice(0, colon).trim().toLowerCase() === name) return line.slice(colon + 1).trim();
+  }
+  return '';
+}
+
+async function editorImport(runtime, change, target, file) {
+  const kind = editorKind(file);
+  if (!kind) return { events: [], collections: [] };
+  if (change.operation === 'delete') return { events: [], collections: ['editors'] };
+  const project = (runtime.sync.projects ?? []).find((item) => item.name === target.project && item.localPath);
+  if (!project) return { events: [], collections: [] };
+  const bytes = await readFile(path.join(project.localPath, ...file.split('/')));
+  const revision = hashBytes(bytes);
+  const resourceId = await catalogResourceId(runtime, target.project, file, kind);
+  const source = syncSource(change);
+  if (kind === 'blueprint') {
+    return {
+      events: [{
+        name: 'blueprint.changed',
+        operationId: change.id,
+        resourceId,
+        revision,
+        source,
+        data: { resourceId, revision, operation: 'import', nodeId: null },
+      }],
+      collections: ['editors'],
+    };
+  }
+  let rev = null;
+  try {
+    rev = JSON.parse(bytes.toString('utf8'))?.rev ?? null;
+  } catch {
+    rev = null;
+  }
+  return {
+    events: [{
+      name: 'void.changed',
+      operationId: change.id,
+      resourceId,
+      revision,
+      source,
+      data: { resourceId, revision, rev, operation: 'import', k: null, lang: null },
+    }],
+    collections: ['editors'],
+  };
+}
+
+function editorKind(file) {
+  if (!file.startsWith('docs/')) return null;
+  const rest = file.slice('docs/'.length);
+  if (rest.endsWith('.orig.json') || rest.endsWith('.comments.json') || rest.endsWith('.versions.jsonl')) return null;
+  if (rest === 'flows/boards/index.json' || rest.startsWith('flows/assets/') || rest.startsWith('flows/comments/')) return null;
+  if (rest.startsWith('flows/boards/') && (rest.endsWith('.json') || rest.endsWith('.mjs'))) return 'blueprint';
+  if (rest.endsWith('.json') || rest.endsWith('.mjs')) return 'void';
+  return null;
+}
+
+async function catalogResourceId(runtime, project, file, kind) {
+  try {
+    const catalog = JSON.parse(await readFile(path.join(runtime.paths.mind, 'user', 'gui', 'resources.json'), 'utf8'));
+    const entry = (catalog?.resources ?? []).find((item) => item?.project === project && item?.path === file && typeof item.id === 'string');
+    if (entry) return entry.id;
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  return uuidV8(['editor', kind, project, file]);
 }
 
 async function mirrorBeat(runtime, machine) {

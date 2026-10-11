@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { addScreen, newSketch } from '../features/blueprint/review/sketch-format.mjs';
 import { createNativeAdapter, probeClients } from '../engine/service/adapters.mjs';
 import { exchange, openHome } from '../engine/service/home.mjs';
-import { hashBytes } from '../engine/service/identity.mjs';
+import { hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
 import { routeTable } from '../engine/service/http.mjs';
@@ -381,6 +381,107 @@ test('two machines share an origin and limits pause at the hard window', async (
   await assert.rejects(reservePublication(ledger, { id: 'more', messages: 0, bytes: 1 }), (error) => error.status === 429);
 });
 
+test('an open stream receives imported chat, unit, and editor events once', async (t) => {
+  const { fixture, core, localPath, token, port } = await boot(t);
+  const chatId = '55555555-5555-4555-8555-555555555555';
+  const messageId = '66666666-6666-4666-8666-666666666666';
+  const voidPath = 'docs/note.json';
+  const boardPath = 'docs/flows/boards/home.json';
+  const voidId = uuidV8(['editor', 'void', 'shop', voidPath]);
+  const boardId = uuidV8(['editor', 'blueprint', 'shop', boardPath]);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'gui'), { recursive: true });
+  await mkdir(path.join(localPath, 'docs', 'flows', 'boards'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId, 'chat.md'), `id: ${chatId}\ntitle: Probe\nmembers: ["root:master"]\npinned: false\nlisted: true\ncreated: ${AT}\ncreated-by: root:master\nkind: direct\n\n`);
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'builder.md'), 'unit: builder\nunit-id: root:builder\nrole: executor\nstate: in\nmachine: DESKTOP\n\nLocal.\n');
+  await writeFile(path.join(localPath, 'docs', 'note.json'), `${JSON.stringify({ rev: 1, pages: { en: 'local' } })}\n`);
+  await writeFile(path.join(localPath, 'docs', 'flows', 'boards', 'home.json'), `${JSON.stringify({ id: 'home', title: 'Local' })}\n`);
+  await writeFile(path.join(fixture.paths.mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
+    format: 'hivem1nd-resources-v1',
+    resources: [
+      { id: voidId, kind: 'void', project: 'shop', path: voidPath, legacyId: 'note', readOnly: false, attached: [] },
+      { id: boardId, kind: 'blueprint', project: 'shop', path: boardPath, legacyId: 'home', readOnly: false, attached: [] },
+    ],
+  })}\n`);
+  const outsider = [];
+  core.bus.subscribe({ audience: 'agent', unitId: 'root:stranger', stableId: 'stranger' }, {}, (frame) => outsider.push(frame));
+  const opened = await openEvents(port, token);
+  t.after(() => opened.req.destroy());
+  const messageBytes = Buffer.from(`id: ${messageId}\nfrom: master\nto: chat\nto-id: chat:${chatId}\nmachine: LAPTOP\ntimestamp: ${LATER}\npriority: normal\nsubject:\nthread-id: ${chatId}\nreply-to:\nreply-requested: false\nattachments: []\nkind: message\n\nQA043 clean incoming live probe`);
+  const unitBytes = Buffer.from('unit: builder\nunit-id: root:builder\nrole: executor\nstate: in\nmachine: LAPTOP\n\nUpdated from the other machine.\n');
+  const voidBytes = Buffer.from(`${JSON.stringify({ rev: 2, pages: { en: 'imported void' } })}\n`);
+  const boardBytes = Buffer.from(`${JSON.stringify({ id: 'home', title: 'Imported' })}\n`);
+  const transactionId = '77777777-7777-4777-8777-777777777777';
+  const messageChange = '11111111-1111-4111-8111-111111111111';
+  const unitChange = '22222222-2222-4222-8222-222222222222';
+  const voidChange = '33333333-3333-4333-8333-333333333333';
+  const boardChange = '44444444-4444-4444-8444-444444444444';
+  const laptop = await laptopOriginFor(fixture);
+  await publishPack(laptop, encodePack({
+    machine: 'LAPTOP',
+    sequence: 1,
+    changes: [
+      importedChange(messageChange, { kind: 'mind', path: `user/relay/chats/${chatId}/${messageId}.md` }, messageBytes, transactionId),
+      importedChange(unitChange, { kind: 'mind', path: 'user/state/builder.md' }, unitBytes, transactionId),
+      importedChange(voidChange, { kind: 'project', project: 'shop', path: voidPath }, voidBytes, transactionId),
+      importedChange(boardChange, { kind: 'project', project: 'shop', path: boardPath }, boardBytes, transactionId),
+    ],
+    objects: [messageBytes, unitBytes, voidBytes, boardBytes].map((raw) => ({ hash: hashBytes(raw), raw })),
+    dependencies: [],
+    transactions: [{ id: transactionId, changeIds: [messageChange, unitChange, voidChange, boardChange] }],
+  }));
+  const frames = await waitForFrames(opened, () => {
+    const parsed = sseFrames(opened.raw);
+    const names = parsed.map((frame) => frame.name);
+    return names.includes('message.created') && names.includes('unit.changed') && names.includes('void.changed') && names.includes('blueprint.changed') ? parsed : null;
+  }, core.runtime);
+  const message = frames.find((frame) => frame.name === 'message.created');
+  const chat = frames.find((frame) => frame.name === 'chat.changed');
+  const unit = frames.find((frame) => frame.name === 'unit.changed');
+  const text = frames.find((frame) => frame.name === 'void.changed');
+  const board = frames.find((frame) => frame.name === 'blueprint.changed');
+  assert.equal(message.data.source.kind, 'sync');
+  assert.equal(message.data.source.id, 'LAPTOP');
+  assert.equal(message.data.data.chatId, chatId);
+  assert.equal(message.data.data.mailboxId, null);
+  assert.equal(message.data.data.message.id, messageId);
+  assert.equal(message.data.data.message.body, 'QA043 clean incoming live probe');
+  assert.equal(chat.data.data.chat.lastMessage.body, 'QA043 clean incoming live probe');
+  assert.equal(unit.data.source.kind, 'sync');
+  assert.equal(unit.data.data.unit.id, 'root:builder');
+  assert.match(unit.data.data.unit.context, /Updated from the other machine/);
+  assert.equal(text.data.data.resourceId, voidId);
+  assert.equal(text.data.data.operation, 'import');
+  assert.equal(text.data.data.rev, 2);
+  assert.equal(text.data.source.kind, 'sync');
+  assert.equal(board.data.data.resourceId, boardId);
+  assert.equal(board.data.data.operation, 'import');
+  assert.equal(board.data.data.nodeId, null);
+  assert.equal(frames.filter((frame) => frame.name === 'view.changed').length, 1);
+  assert.deepEqual(frames.find((frame) => frame.name === 'view.changed').data.data.collections, ['chats', 'editors', 'leads', 'squads', 'units']);
+  assert.equal(outsider.length, 0);
+  const sameMessage = '88888888-8888-4888-8888-888888888888';
+  await publishPack(laptop, encodePack({
+    machine: 'LAPTOP',
+    sequence: 2,
+    changes: [importedChange(sameMessage, { kind: 'mind', path: `user/relay/chats/${chatId}/${messageId}.md` }, messageBytes, null, '2026-10-10T12:00:06.000Z')],
+    objects: [{ hash: hashBytes(messageBytes), raw: messageBytes }],
+    dependencies: [],
+    transactions: [],
+  }));
+  await waitForFile(path.join(fixture.paths.localDirectory, 'received', 'LAPTOP', '2.applied.json'), core.runtime);
+  await writeFile(path.join(fixture.paths.origin, 'machines', 'LAPTOP', 'again.txt'), 'again\n');
+  await delay(300);
+  const after = sseFrames(opened.raw);
+  assert.equal(after.filter((frame) => frame.name === 'message.created').length, 1);
+  assert.equal(after.filter((frame) => frame.name === 'unit.changed').length, 1);
+  assert.equal(after.filter((frame) => frame.name === 'void.changed').length, 1);
+  assert.equal(after.filter((frame) => frame.name === 'blueprint.changed').length, 1);
+  assert.equal(after.filter((frame) => frame.name === 'view.changed').length, 1);
+  assert.equal(outsider.length, 0);
+});
+
 test('home access expires, native login stays unverified, and stdio rejects an unknown protocol', async (t) => {
   const clock = { now: Date.parse(AT) };
   const listeners = [];
@@ -451,3 +552,138 @@ test('home access expires, native login stays unverified, and stdio rejects an u
     assert.equal(routes.some((route) => route.template === required), true);
   }
 });
+
+function importedChange(id, target, raw, transactionId, at = LATER) {
+  return {
+    format: 'hivem1nd-change-v1',
+    id,
+    machine: 'LAPTOP',
+    at,
+    target,
+    operation: 'put',
+    hash: hashBytes(raw),
+    size: raw.length,
+    baseHash: null,
+    messageId: null,
+    transactionId,
+  };
+}
+
+async function laptopOriginFor(fixture) {
+  const laptopMind = path.join(fixture.root, 'localappdata', 'Cosmic', 'laptop-mind');
+  await mkdir(path.join(laptopMind, 'user'), { recursive: true });
+  const laptopPaths = servicePaths({
+    platform: 'win32',
+    env: fixture.env,
+    home: fixture.home,
+    machine: 'LAPTOP',
+    mindPath: laptopMind,
+    originPath: fixture.paths.origin,
+  });
+  await mkdir(laptopPaths.localDirectory, { recursive: true });
+  const laptopStore = createStore({
+    root: fixture.root,
+    confineRoot: fixture.root,
+    mindPath: laptopMind,
+    localDirectory: laptopPaths.localDirectory,
+    now: () => fixture.clock.now,
+    events: [],
+  });
+  return openOrigin({ store: laptopStore, paths: laptopPaths, now: () => fixture.clock.now, machine: 'LAPTOP' });
+}
+
+function openEvents(port, token) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('event stream timed out')), 2000);
+    const opened = { raw: '', req: null };
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      method: 'GET',
+      path: '/api/v1/events',
+      headers: {
+        host: `127.0.0.1:${port}`,
+        origin: `http://127.0.0.1:${port}`,
+        authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      res.on('data', (chunk) => {
+        opened.raw += chunk.toString('utf8');
+        if (opened.raw.includes('event: stream.ready')) {
+          clearTimeout(timer);
+          resolve(opened);
+        }
+      });
+    });
+    opened.req = req;
+    req.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    req.end();
+  });
+}
+
+function sseFrames(raw) {
+  const frames = [];
+  for (const block of raw.split('\n\n')) {
+    let name = null;
+    let data = null;
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event: ')) name = line.slice('event: '.length);
+      if (line.startsWith('data: ')) data = line.slice('data: '.length);
+    }
+    if (!name || !data || name === 'stream.ready' || name === 'stream.reset') continue;
+    try {
+      frames.push({ name, data: JSON.parse(data) });
+    } catch {
+      continue;
+    }
+  }
+  return frames;
+}
+
+function waitForFrames(opened, ready, runtime, timeout = 5000) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      let value = null;
+      try {
+        value = ready();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (value) {
+        resolve(value);
+        return;
+      }
+      if (Date.now() - start > timeout) {
+        const error = runtime.lastError;
+        reject(new Error(`timed out waiting for imported events${error ? `: ${error.code ?? ''} ${error.message}` : ''}\n${opened.raw}`));
+        return;
+      }
+      setTimeout(tick, 25);
+    };
+    tick();
+  });
+}
+
+async function waitForFile(file, runtime, timeout = 5000) {
+  const start = Date.now();
+  while (Date.now() - start <= timeout) {
+    try {
+      await readFile(file);
+      return;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    await delay(25);
+  }
+  const failure = runtime.lastError;
+  throw new Error(`timed out waiting for ${path.basename(file)}${failure ? `: ${failure.code ?? ''} ${failure.message}` : ''}`);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
