@@ -274,7 +274,37 @@ async function verifiedDelivery(options, runtime, binding, input = {}) {
   if (gated) return gated;
   const live = await nativeSessionLive(options, runtime, binding);
   if (!live) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
-  return { status: 'submitted' };
+  const adapter = (runtime?.adapters ?? options.adapters)?.[binding?.client];
+  if (typeof adapter?.send !== 'function') return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  let result;
+  try {
+    result = await adapter.send({
+      unit: binding?.unit ?? null,
+      unitId: binding?.unitId ?? null,
+      nativeSessionId: binding?.nativeSessionId,
+      client: binding?.client,
+      machine: binding?.machine || options.paths?.machine,
+      text: typeof input?.text === 'string' ? input.text : '',
+      messageIds: Array.isArray(input?.messageIds) ? input.messageIds : [],
+      urgent: input?.urgent === true || binding?.urgent === true,
+    });
+  } catch {
+    return { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' };
+  }
+  return classifySend(result);
+}
+
+function classifySend(result) {
+  if (!result || typeof result !== 'object') return { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' };
+  if (result.ambiguous === true || result.status === 'ambiguous') {
+    return { status: 'ambiguous', reason: typeof result.reason === 'string' ? result.reason : 'SINK_AMBIGUOUS' };
+  }
+  if (result.submitted === true || result.status === 'submitted') return { status: 'submitted' };
+  return {
+    status: 'not_submitted',
+    reason: typeof result.reason === 'string' ? result.reason : 'SINK_NOT_SUBMITTED',
+    ...(result.deferred === true ? { deferred: true } : {}),
+  };
 }
 
 function deliveryGate(options, binding, input) {

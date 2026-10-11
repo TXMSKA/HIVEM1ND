@@ -52,6 +52,7 @@ export function createNativeAdapter(client, options = {}) {
   const fixture = options.fixture === true;
   const live = options.live === true || Boolean(options.command) || Boolean(options.spawn);
   const children = new Map();
+  const sessions = new Map();
   return {
     client,
     nativeSupport: false,
@@ -85,19 +86,46 @@ export function createNativeAdapter(client, options = {}) {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       if (child?.pid) children.set(child.pid, child);
+      let opened = null;
       try {
-        const nativeSessionId = await handshake(client, child, request, options.timeoutMs ?? 8000);
+        opened = await openOwnedChannel(client, child, request, options.timeoutMs ?? 8000);
         this.nativeSupport = true;
-        return { nativeSessionId, pid: child.pid, owned: true };
+        sessions.set(opened.nativeSessionId, {
+          nativeSessionId: opened.nativeSessionId,
+          pid: child.pid,
+          child,
+          incoming: opened.incoming,
+          rpc: opened.rpc,
+          unitId: request.unitId ?? null,
+          turnId: null,
+        });
+        return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true };
       } catch (error) {
+        opened?.incoming?.close();
         await finishChild(child);
         if (child?.pid) children.delete(child.pid);
         if (error instanceof CoreError && error.code === 'client_unavailable') throw error;
         throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       }
     },
-    async send() {
-      return { submitted: false, ambiguous: true };
+    async confirm(proof) {
+      if (!proof || proof.client !== client || typeof proof.nativeSessionId !== 'string') return false;
+      const session = sessions.get(proof.nativeSessionId);
+      if (!session?.child || session.child.exitCode != null || session.child.killed === true) return false;
+      if (proof.unitId && session.unitId && proof.unitId !== session.unitId) return false;
+      return true;
+    },
+    async send(input = {}) {
+      const session = sessions.get(input?.nativeSessionId);
+      if (!session?.child || session.child.exitCode != null || session.child.killed === true) return { submitted: false };
+      const text = typeof input.text === 'string' ? input.text : '';
+      try {
+        if (client === 'codex') return await submitCodex(session, text);
+        if (client === 'cursor') return await submitCursor(session, text);
+        return await submitClaude(session, text);
+      } catch {
+        return { submitted: false, ambiguous: true };
+      }
     },
     async observe() {
       return { activity: null, quota: null };
@@ -115,12 +143,15 @@ export function createNativeAdapter(client, options = {}) {
         options.signaled?.push(session.pid);
         return { acknowledged: true, exitCode: 0 };
       }
+      releaseSession(sessions, session.pid);
       const exitCode = await finishChild(child);
       children.delete(session.pid);
       options.signaled?.push(session.pid);
       return { acknowledged: exitCode !== null, exitCode };
     },
     async close() {
+      for (const item of sessions.values()) item.incoming?.close();
+      sessions.clear();
       await Promise.all([...children.values()].map((child) => finishChild(child)));
       children.clear();
     },
@@ -689,15 +720,72 @@ function loginFailed(text) {
   return /not logged in|requires\s+openai\s+auth|requiresopenaiauth"\s*:\s*true|uv_os_get_passwd|enomem/i.test(String(text));
 }
 
-async function handshake(client, child, request, timeoutMs) {
+async function openOwnedChannel(client, child, request, timeoutMs) {
   const incoming = readLines(child, timeoutMs);
   try {
-    if (client === 'claude') return await claudeHandshake(child, request, incoming);
-    if (client === 'codex') return await codexHandshake(child, request, incoming);
-    return await cursorHandshake(child, request, incoming);
-  } finally {
+    if (client === 'claude') {
+      const nativeSessionId = await claudeHandshake(child, request, incoming);
+      return { nativeSessionId, incoming, rpc: null };
+    }
+    const rpc = openRpc(child, incoming);
+    const nativeSessionId = client === 'codex' ? await codexHandshake(rpc, request) : await cursorHandshake(rpc, request);
+    return { nativeSessionId, incoming, rpc };
+  } catch (error) {
     incoming.close();
+    throw error;
   }
+}
+
+function releaseSession(sessions, pid) {
+  for (const [id, item] of sessions) {
+    if (item.pid !== pid) continue;
+    item.incoming?.close();
+    sessions.delete(id);
+  }
+}
+
+async function submitCodex(session, text) {
+  const input = [{ type: 'text', text }];
+  const started = session.turnId
+    ? await session.rpc.call('turn/steer', { threadId: session.nativeSessionId, expectedTurnId: session.turnId, input })
+    : await session.rpc.call('turn/start', { threadId: session.nativeSessionId, input });
+  const turnId = started?.result?.turn?.id;
+  if (typeof turnId !== 'string' || !turnId) return { submitted: false, ambiguous: true };
+  session.turnId = turnId;
+  return { submitted: true };
+}
+
+async function submitCursor(session, text) {
+  const prompted = await session.rpc.call('session/prompt', {
+    sessionId: session.nativeSessionId,
+    prompt: [{ type: 'text', text }],
+  });
+  if (!prompted?.result || typeof prompted.result !== 'object') return { submitted: false, ambiguous: true };
+  return { submitted: true };
+}
+
+async function submitClaude(session, text) {
+  try {
+    sendLine(session.child, { type: 'user', message: { role: 'user', content: text } });
+  } catch {
+    return { submitted: false };
+  }
+  try {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const line = await session.incoming.line();
+      let message;
+      try {
+        message = parseClaudeLine(line);
+      } catch {
+        continue;
+      }
+      if (message?.type === 'result' && message.is_error) return { submitted: false, ambiguous: true };
+      if (message?.type === 'assistant' || message?.type === 'result') return { submitted: true };
+    }
+  } catch {
+    return { submitted: false, ambiguous: true };
+  }
+  return { submitted: false, ambiguous: true };
 }
 
 function startupInstruction(request) {
@@ -781,9 +869,8 @@ function openRpc(child, incoming) {
   };
 }
 
-async function codexHandshake(child, request, incoming) {
+async function codexHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
-  const rpc = openRpc(child, incoming);
   const init = await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
   if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
   rpc.notify('initialized');
@@ -796,9 +883,8 @@ async function codexHandshake(child, request, incoming) {
   return thread.result.thread.id;
 }
 
-async function cursorHandshake(child, request, incoming) {
+async function cursorHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
-  const rpc = openRpc(child, incoming);
   const init = await rpc.call('initialize', {
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },

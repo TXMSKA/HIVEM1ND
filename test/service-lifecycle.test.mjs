@@ -1,5 +1,6 @@
 import './relay-local-state.mjs';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -14,6 +15,7 @@ import { canonicalJson, uuidV8 } from '../engine/service/identity.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { createRelay } from '../engine/relay/store.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
+import { createNativeAdapter } from '../engine/service/adapters.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -224,10 +226,17 @@ test('an eligible wake policy starts one worker and delivery needs a verified na
   await adopted.controller.close();
   const pid = 4242;
   options.ownedPids = new Set([pid]);
+  let sendCalls = 0;
+  let sendResult = { submitted: true };
   options.adapters = {
     codex: {
       async confirm(proof) {
         return proof.nativeSessionId === 'native-live' && proof.client === 'codex' && proof.machine === fixture.machine;
+      },
+      async send() {
+        sendCalls += 1;
+        if (sendResult instanceof Error) throw sendResult;
+        return sendResult;
       },
     },
   };
@@ -273,8 +282,124 @@ test('an eligible wake policy starts one worker and delivery needs a verified na
     const missing = await dispatchLocal(started.bridge, 'activity', { ...binding, nativeSessionId: 'native-other' });
     assert.equal(missing.verified, false);
     assert.equal(missing.activity, 'unknown');
+    assert.equal(sendCalls, 2);
+    sendResult = { submitted: false };
+    const rejected = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'idle', deliveryId: 'wake-rejected' });
+    assert.equal(rejected.delivered, false);
+    assert.equal(rejected.state, 'not_submitted');
+    assert.equal(sendCalls, 3);
+    sendResult = new Error('native submit failed');
+    const ambiguous = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'idle', deliveryId: 'wake-ambiguous' });
+    assert.equal(ambiguous.delivered, false);
+    assert.equal(ambiguous.state, 'ambiguous');
+    assert.equal(sendCalls, 4);
   } finally {
     await stopService(started);
+  }
+});
+
+test('an enabled policy keeps its canonical unit and one native call is the submission', async (t) => {
+  const { fixture, options } = await optionsFor(t, await freePort());
+  const relay = await createRelay({ mindPath: fixture.paths.mind, hostname: fixture.machine });
+  const registration = await relay.register({ unit: 'master', nativeSessionId: 'native-live', client: 'codex' });
+  const preparer = await createRelayWakeController({
+    mindPath: fixture.paths.mind,
+    hostname: fixture.machine,
+    clock: { now: () => fixture.clock.now, sleep: () => Promise.resolve() },
+    sink: async () => ({ status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' }),
+  });
+  const enabled = await preparer.enable({
+    unit: 'master',
+    nativeSessionId: 'native-live',
+    client: 'codex',
+    machine: fixture.machine,
+    windowHours: 4,
+  });
+  assert.equal(enabled.binding.unitId, registration.unitId);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.calls = [];
+  child.rejectSubmit = false;
+  child.stdin = {
+    write(text) {
+      const message = JSON.parse(String(text));
+      const emit = (body) => queueMicrotask(() => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: message.id, ...body })}\n`));
+      if (message.method === 'initialize') emit({ result: { userAgent: 'codex' } });
+      else if (message.method === 'account/read') emit({ result: { account: { type: 'chatgpt' }, requiresOpenaiAuth: false } });
+      else if (message.method === 'thread/start') emit({ result: { thread: { id: 'native-live' } } });
+      else if (message.method === 'turn/start' || message.method === 'turn/steer') {
+        child.calls.push(message);
+        if (child.rejectSubmit) emit({ error: { code: 1, message: 'rejected' } });
+        else emit({ result: { turn: { id: `turn-${child.calls.length}` } } });
+      }
+      return true;
+    },
+  };
+  child.pid = 5150;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    child.exitCode = 0;
+    child.emit('exit', 0);
+  };
+  const adapter = createNativeAdapter('codex', {
+    command: path.join(fixture.root, 'codex.exe'),
+    timeoutMs: 1000,
+    spawn() { return child; },
+  });
+  const created = await adapter.create({ cwd: fixture.root, unitId: registration.unitId });
+  assert.equal(created.nativeSessionId, 'native-live');
+  assert.equal(await adapter.confirm({
+    client: 'codex',
+    nativeSessionId: 'native-live',
+    unitId: registration.unitId,
+    machine: fixture.machine,
+  }), true);
+  await mkdir(path.join(fixture.paths.localDirectory, 'session-starts'), { recursive: true });
+  await writeFile(path.join(fixture.paths.localDirectory, 'session-starts', 'start.json'), JSON.stringify({
+    sessionId: registration.sessionId,
+    pid: child.pid,
+    requestId: 'wake-rpc',
+  }));
+  options.adapters = { codex: adapter };
+  options.ownedPids = new Set([child.pid]);
+  const started = await startService(options);
+  try {
+    const proof = {
+      unitId: registration.unitId,
+      client: 'codex',
+      machine: fixture.machine,
+      nativeSessionId: 'native-live',
+    };
+    const attached = await attachNative(started.bridge, proof);
+    assert.equal(attached.attached, true);
+    assert.equal(attached.unitId, registration.unitId);
+    const binding = {
+      unit: 'master',
+      unitId: registration.unitId,
+      nativeSessionId: 'native-live',
+      client: 'codex',
+      machine: fixture.machine,
+      sessionId: registration.sessionId,
+      activity: 'idle',
+      text: 'Read the unread message through Relay.',
+    };
+    const delivered = await dispatchLocal(started.bridge, 'wake', { ...binding, deliveryId: 'wake-rpc' });
+    assert.equal(delivered.delivered, true);
+    assert.equal(delivered.state, 'submitted');
+    assert.equal(child.calls.length, 1);
+    assert.equal(child.calls[0].method, 'turn/start');
+    assert.equal(child.calls[0].params.threadId, 'native-live');
+    assert.deepEqual(child.calls[0].params.input, [{ type: 'text', text: binding.text }]);
+    child.rejectSubmit = true;
+    const rejected = await dispatchLocal(started.bridge, 'wake', { ...binding, deliveryId: 'wake-rpc-rejected' });
+    assert.equal(rejected.delivered, false);
+    assert.equal(rejected.state, 'ambiguous');
+    assert.equal(child.calls.length, 2);
+  } finally {
+    await stopService(started);
+    await preparer.stopAll();
   }
 });
 

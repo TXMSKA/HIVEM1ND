@@ -740,12 +740,15 @@ export async function createRelay(options = {}) {
   }
 
   async function resolveWakeBinding(binding) {
-    validateArgs(binding, 'resolveWakeBinding', ['unit', 'nativeSessionId', 'client', 'machine']);
+    validateArgs(binding, 'resolveWakeBinding', ['unit', 'unitId', 'nativeSessionId', 'client', 'machine']);
     const unit = validUnit(binding.unit);
     const nativeSessionId = scalar(binding.nativeSessionId, 'nativeSessionId', 180);
     const client = scalar(binding.client, 'client', 80);
     const machine = safeMachine(binding.machine);
-    return currentWakeRegistration({ nativeSessionId, client, machine }, unit);
+    const registration = await currentWakeRegistration({ nativeSessionId, client, machine }, unit);
+    if (!registration) return null;
+    if (binding.unitId !== undefined && binding.unitId !== registration.unitId) return null;
+    return registration;
   }
 
   async function latestWakeRegistration(args) {

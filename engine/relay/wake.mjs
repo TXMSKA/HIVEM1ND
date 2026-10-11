@@ -64,8 +64,8 @@ function normalizeBinding(value, machine, { remote = false } = {}) {
 }
 
 function bindingHash(binding) {
-  const identity = binding.unitId ?? binding.unit;
-  return createHash('sha256').update(JSON.stringify([identity, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  // The canonical unit id is stored on the binding for attachment. The key stays the unit tuple so a lookup that does not repeat that id still finds the same policy, including policies written before the id was stored.
+  return createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
 }
 
 function iso(ms) { return new Date(ms).toISOString(); }
@@ -167,7 +167,7 @@ function freshPolicy(policy, now) {
 function expectedPolicy(policy, binding, key) {
   return Boolean(policy?.kind === 'relay-wake-policy' && policy.version === 1 && policy.key === key
     && plainObject(policy.binding) && ['unit', 'nativeSessionId', 'client', 'machine'].every((field) => policy.binding[field] === binding[field])
-    && (binding.unitId == null || policy.binding.unitId === binding.unitId));
+    && (binding.unitId == null || policy.binding.unitId == null || policy.binding.unitId === binding.unitId));
 }
 
 function validStoredPolicy(policy, binding, key) {
@@ -331,8 +331,9 @@ export async function createRelayWakeController(options = {}) {
 
   async function enable(args = {}) {
     if (!plainObject(args)) throw wakeError('WAKE_INVALID_POLICY', 'enable expects a policy object.');
-    const binding = makeBinding({ unit: args.unit, nativeSessionId: args.nativeSessionId, client: args.client, machine: args.machine });
-    const registration = await registered(binding);
+    const requested = makeBinding({ unit: args.unit, nativeSessionId: args.nativeSessionId, client: args.client, machine: args.machine });
+    const registration = await registered(requested);
+    const binding = makeBinding({ ...requested, unitId: registration.unitId });
     const window = policyWindow(args, nowMs(clock));
     const key = bindingHash(binding);
     const policy = {
