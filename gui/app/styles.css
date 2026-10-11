@@ -528,7 +528,19 @@ button, input { font: inherit; color: inherit; }
 .editor-comments { display: flex; flex-direction: column; gap: 8px; }
 .comment-box, .editor-compose { background: var(--card); color: var(--text); border-radius: var(--radius-control); padding: 8px; }
 .editor-compose textarea, .editor-compose input, .attach-list { width: 100%; }
-.board-host { overflow: auto; background: var(--card); border-radius: var(--radius-control); }
+.board-host { position: relative; overflow: auto; background: var(--card); border-radius: var(--radius-control); }
+.board-host > .board-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: calc(100% - 16px);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.board-host > .board-toolbar > * { flex: 0 0 auto; }
 .board-svg { width: 100%; height: 360px; background: var(--card2); }
 .board-svg text { fill: var(--text); font: 14px var(--font); }
 [data-mode="focus"] {
@@ -557,6 +569,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 [data-mode="focus"] .phone-nav,
 [data-mode="focus"] .editor-catalog,
 [data-mode="focus"] .editor-comments-column,
+[data-mode="focus"] .board-toolbar,
 [data-mode="focus"] .editor-tools,
 [data-mode="focus"] .attach-list { display: none; }
 [data-mode="focus"] .void-page { max-width: 640px; margin: 72px auto 0; color: var(--body); font-size: 17px; line-height: 1.8; }
@@ -575,7 +588,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .bubble[data-own="true"] .bubble-meta { color: inherit; }
 .bubble-meta { margin: 0; color: var(--mute); font-size: 12px; }
 .unit-facts { display: grid; gap: 4px 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: var(--card); border-radius: var(--radius-control); }
+.toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 8px; background: var(--card); border-radius: var(--radius-control); white-space: nowrap; }
 .action-cards { display: grid; gap: 8px; }
 .card { background: var(--card); border-radius: var(--radius-control); padding: 8px; }
 .comment-line { margin: 0 0 6px; }

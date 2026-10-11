@@ -1225,6 +1225,7 @@ function boardSurface(app, document, editor, t) {
   renderBoard(document, host, editor);
   const choose = (target) => chooseBoardTarget(app, editor, target);
   host.addEventListener("click", (event) => {
+    if (event.target?.closest?.("[data-toolbar='board']")) return;
     const marked = event.target?.closest?.("[data-node]");
     const screenMarked = event.target?.closest?.("[data-screen]");
     const svg = host.querySelector("svg");
@@ -1260,7 +1261,7 @@ function boardSurface(app, document, editor, t) {
     });
   });
   const nodes = editor.authoritative.document.screens?.[0];
-  const tools = element(document, "div", { class: "editor-tools toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
+  const tools = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
   const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
   name.addEventListener("input", () => {
@@ -1268,8 +1269,11 @@ function boardSurface(app, document, editor, t) {
     rememberFormDraft(app, "nodes", editor.resourceId, name.value);
   });
   const selectedNode = app.editors.selectedNodeId;
+  tools.append(element(document, "button", {
+    type: "button", class: "btn primary", "data-action": "add-node",
+    onclick: () => addBoardShape(app, editor, nodes),
+  }, t("addShape")));
   tools.append(labeledField(document, t("nodeName"), t("nodeNameHint"), name));
-  tools.append(boardOutline(app, document, editor, t));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "patch-node",
     disabled: selectedNode ? null : "",
@@ -1285,10 +1289,6 @@ function boardSurface(app, document, editor, t) {
       });
     },
   }, t("nodeName")));
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "add-node",
-    onclick: () => addBoardShape(app, editor, nodes),
-  }, t("addShape")));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "remove-node",
     disabled: selectedNode ? null : "",
@@ -1316,11 +1316,12 @@ function boardSurface(app, document, editor, t) {
     type: "button", class: "btn", "data-action": "comment-node",
     onclick: () => commentOnNode(app, editor),
   }, t("comment")));
-  if (canEditResources(app)) tools.append(structureTools(app, document, editor, t));
+  if (canEditResources(app)) appendStructureTools(app, document, editor, t, tools);
+  host.append(tools, boardOutline(app, document, editor, t));
   for (const issue of editor.assetIssues ?? []) {
-    tools.append(element(document, "p", { "data-asset-issue": issue.code, text: t("assetMissing") }));
+    host.append(element(document, "p", { "data-asset-issue": issue.code, text: t("assetMissing") }));
   }
-  return element(document, "div", {}, host, tools);
+  return host;
 }
 
 function addBoardShape(app, editor, screen) {
@@ -2303,11 +2304,11 @@ function starterText(id, title) {
   return { formatVersion: 1, id, title, pages: [{ k: "Intro.Welcome", en: "", es: "" }] };
 }
 
-function structureTools(app, document, editor, t) {
+function appendStructureTools(app, document, editor, t, tools) {
   syncStructureDraft(app, editor);
   const board = editor.authoritative?.document;
-  const tools = element(document, "div", { class: "editor-tools toolbar", role: "toolbar", "aria-label": t("blueprint"), "data-structure": "true", "data-toolbar": "structure" });
-  if (!board || editor.authoritative.readOnly) return tools;
+  if (!board || editor.authoritative.readOnly) return;
+  tools.setAttribute("data-structure", "true");
   const canMovePage = (board.pages?.length ?? 0) >= 2;
   const canMoveScreen = (board.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2);
   const canLink = (board.screens?.length ?? 0) >= 2;
@@ -2322,7 +2323,6 @@ function structureTools(app, document, editor, t) {
     element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", "aria-describedby": canLink ? null : "reason-add-link", onclick: () => addBoardLink(app, editor) }, t("addLink")),
     canLink ? null : element(document, "p", { id: "reason-add-link", class: "field-hint", "data-disabled-reason": "add-link", text: t("needLinkScreens") }),
   );
-  return tools;
 }
 
 function resizeBoard(app, editor) {

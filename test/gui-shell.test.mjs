@@ -2987,6 +2987,64 @@ test("failure causes and empty lists name the resource and its next step", async
   assert.equal(desktop.root.querySelector("[data-mailbox-compose]") != null, true);
 });
 
+test("the board toolbar is one row on the canvas", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart") || desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-toolbar='board']"), "The board toolbar did not appear.");
+  const resource = desktop.root.querySelector("[data-editor-column='resource']");
+  const comments = desktop.root.querySelector("[data-editor-column='comments']");
+  const host = resource.querySelector(".board-host");
+  const toolbar = host.querySelector("[data-toolbar='board']");
+  const editorTools = resource.querySelector("[data-editor-tools]");
+  assert.equal(toolbar?.getAttribute("role"), "toolbar");
+  assert.equal(toolbar.className.includes("board-toolbar"), true);
+  assert.equal(host.querySelectorAll("[role='toolbar']").length, 1);
+  assert.equal(columnIndex(resource, editorTools) < columnIndex(resource, host), true);
+  assert.equal(editorTools.querySelector("[data-action='attach']") != null, true);
+  assert.equal(editorTools.querySelector("[data-action='watch']") != null, true);
+  assert.equal(comments.querySelector("[data-toolbar='board']"), null);
+  assert.equal(comments.querySelector("[data-comment]") != null, true);
+  const actions = [...toolbar.querySelectorAll("[data-action]")].map((node) => node.getAttribute("data-action"));
+  assert.deepEqual(actions, ["add-node", "patch-node", "remove-node", "comment-node", "resize-screen", "move-page", "move-screen", "add-link"]);
+  assert.equal(toolbar.querySelector("[data-action='add-node']").className.includes("primary"), true);
+  assert.equal(toolbar.querySelector("[data-node-name]") != null, true);
+  assert.equal(toolbar.querySelector("[data-asset]") != null, true);
+  assert.equal(host.querySelector(".board-outline") != null, true);
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const rule = css.match(/\.board-host > \.board-toolbar \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.match(rule, /position:\s*absolute/);
+  assert.match(rule, /flex-wrap:\s*nowrap/);
+  assert.match(rule, /overflow-x:\s*auto/);
+  assert.match(rule, /white-space:\s*nowrap/);
+  assert.equal(rule.includes("flex-wrap: wrap"), false);
+  assert.match(css, /\[data-mode="focus"\] \.board-toolbar,/);
+  const narrowStart = css.indexOf("@media (max-width: 987px)");
+  const narrowOpen = css.indexOf("{", narrowStart);
+  let depth = 0;
+  let narrowEnd = narrowOpen;
+  for (let index = narrowOpen; index < css.length; index += 1) {
+    if (css[index] === "{") depth += 1;
+    else if (css[index] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        narrowEnd = index;
+        break;
+      }
+    }
+  }
+  assert.equal(css.slice(narrowStart, narrowEnd).includes("board-toolbar"), false);
+  assert.match(css, /\.toolbar\s*\{[^}]*flex-wrap:\s*nowrap/);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
