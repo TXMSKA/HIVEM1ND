@@ -605,12 +605,12 @@ test('the generated installer entry activates a temporary kit and a dry-run does
     { name: 'runtime/node.exe', data: Buffer.from('runtime') },
   ];
   const manifest = manifestDocument(files);
-  const identity = {
-    mindPath: path.join(local, 'Cosmic', 'mind'),
-    machine: 'DESKTOP',
-    localDirectory: path.join(local, 'Cosmic', 'hivem1nd-service', 'local'),
+  assert.equal(manifest.identity, undefined);
+  manifest.identity = {
+    mindPath: path.join(local, 'Cosmic', 'not-this-mind'),
+    machine: 'OTHER',
+    localDirectory: path.join(local, 'Cosmic', 'not-this-service'),
   };
-  manifest.identity = identity;
   await writeFile(path.join(payload, 'manifest.json'), `${JSON.stringify(manifest)}\n`);
   await writeFile(path.join(payload, 'installer.mjs'), installerEntry());
   assert.match(installerScript(), /%\*/);
@@ -644,6 +644,53 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   });
   assert.notEqual(blocked.status, 0);
   await assert.rejects(() => access(path.join(target, 'hivem1nd-kit')), { code: 'ENOENT' });
+  const mindPath = path.join(local, 'Cosmic', 'mind');
+  const machine = 'DESKTOP';
+  const ownedDirectory = path.join(local, 'Cosmic', 'hivem1nd-service', mindKeyFor(mindPath, 'win32'), machine);
+  await mkdir(ownedDirectory, { recursive: true });
+  await writeFile(path.join(ownedDirectory, 'config.json'), `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath,
+    machine,
+    origin: { kind: 'folder', path: path.join(local, 'Cosmic', 'origin') },
+    stagingPath: path.join(ownedDirectory, 'staging'),
+    port: 0,
+  })}\n`);
+  await writeFile(path.join(ownedDirectory, 'registration.json'), `${JSON.stringify({
+    format: 'hivem1nd-registration-v1',
+    installationId: 'owned',
+    executable: process.execPath,
+    arguments: [],
+    digest: 'owned-digest',
+  })}\n`);
+  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  const activeFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json');
+  await writeFile(activeFile, JSON.stringify({
+    pid: 9,
+    mindPath,
+    machine,
+    localDirectory: ownedDirectory,
+    startedAt: '2026-10-10T12:00:00.000Z',
+  }));
+  const failRunner = path.join(root, 'fail.mjs');
+  await writeFile(failRunner, 'process.exit(1);\n');
+  const rolled = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
+    env: { ...env, HIVEM1ND_REGISTRATION_RUNNER: failRunner },
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  assert.notEqual(rolled.status, 0);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const matched = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(matched.status, 0, matched.stderr);
+  assert.match(matched.stdout, /installed:/);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  await writeFile(activeFile, JSON.stringify({ pid: 9 }));
+  const malformed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.notEqual(malformed.status, 0);
+  assert.match(`${malformed.stderr}\n${malformed.stdout}`, /does not match/);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
   const mind = path.join(local, 'Cosmic', 'hivem1nd');
   await mkdir(mind, { recursive: true });
   await writeFile(path.join(mind, 'keep.txt'), 'mind');
@@ -652,7 +699,7 @@ test('the generated installer entry activates a temporary kit and a dry-run does
     pid: 9,
     mindPath: path.join(local, 'Cosmic', 'foreign-mind'),
     machine: 'DESKTOP',
-    localDirectory: identity.localDirectory,
+    localDirectory: ownedDirectory,
     startedAt: '2026-10-10T12:00:00.000Z',
   }));
   const refused = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
