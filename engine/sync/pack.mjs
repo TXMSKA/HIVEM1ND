@@ -33,9 +33,15 @@ export function compressObject(raw) {
 }
 
 export function decompressObject(compressed, maxOutputLength) {
+  const input = asBuffer(compressed);
   try {
-    return brotliDecompressSync(compressed, { maxOutputLength });
+    const result = brotliDecompressSync(input, { info: true, maxOutputLength });
+    if (!result?.engine || result.engine.bytesWritten !== input.length) {
+      throw new CoreError(422, 'invalid_pack', 'The compressed object is not a complete Brotli stream.');
+    }
+    return result.buffer;
   } catch (error) {
+    if (error instanceof CoreError) throw error;
     if (error?.code === 'ERR_BUFFER_TOO_LARGE') throw new CoreError(413, 'resource_too_large', 'An object exceeds its declared size.');
     throw new CoreError(422, 'invalid_pack', 'The compressed object is not a complete Brotli stream.');
   }

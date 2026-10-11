@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
-import { countLogicalMessages, decodePack, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
+import { countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
 import { ackPublished, eligibleTargets, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction } from '../engine/sync/store.mjs';
 import { assertContained, dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -502,4 +502,12 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   assert.equal(acked.length, 2);
   await assert.rejects(() => stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/credentials.json' }, bytes: Buffer.from('x') }]), (error) => error.code === 'invalid_pack');
   assertContained(fixture);
+});
+
+test('a Brotli object must consume every compressed byte', () => {
+  const raw = Buffer.from('raw');
+  const compressed = brotliCompressSync(raw);
+  assert.deepEqual(decompressObject(compressed, raw.length), raw);
+  const trailing = Buffer.concat([compressed, Buffer.from([0xaa, 0xbb])]);
+  assert.throws(() => decompressObject(trailing, raw.length), { code: 'invalid_pack' });
 });
