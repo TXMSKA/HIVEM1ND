@@ -174,6 +174,12 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   assert.equal(linkedBoard.revision.length > 0, true);
   await assert.rejects(() => readAsset(context, created.id, linked), (error) => error.code === 'unsafe_path');
   await assert.rejects(() => readAsset(context, created.id, '../secret.png'), { status: 404, code: 'not_found' });
+  const broken = Buffer.from(PNG);
+  broken[4] = 0x00;
+  await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: broken.toString('base64') }), { status: 422, code: 'invalid_asset' });
+  await writeFile(path.join(localPath, 'docs', 'flows', 'assets', asset.id), broken);
+  await assert.rejects(() => readAsset(context, created.id, asset.id), { status: 422, code: 'invalid_asset' });
+  await writeFile(path.join(localPath, 'docs', 'flows', 'assets', asset.id), PNG);
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.alloc(10000001, 1).toString('base64') }), { status: 413, code: 'asset_too_large' });
   const seen = [];
@@ -289,6 +295,17 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
   const read = await call(core.http.port, 'GET', `/api/v1/blueprint/boards/${created.json.data.id}`, { token });
   assert.equal(read.status, 200);
   assert.equal(read.json.data.document.script, 'from http');
+  const unauthenticated = await call(core.http.port, 'POST', `/api/v1/editors/${created.json.data.id}/assets`, {
+    body: { contentType: 'image/png', bytesBase64: 'qq' },
+    headers: { 'content-type': 'text/plain' },
+  });
+  assert.equal(unauthenticated.status, 401);
+  const missing = await call(core.http.port, 'POST', `/api/v1/editors/${randomUUID()}/assets`, {
+    token,
+    body: { contentType: 'image/png', bytesBase64: 'qq' },
+    headers: { 'content-type': 'text/plain', 'idempotency-key': randomUUID() },
+  });
+  assert.equal(missing.status, 404);
   const uploaded = await call(core.http.port, 'POST', `/api/v1/editors/${created.json.data.id}/assets`, {
     token,
     body: { contentType: 'image/png', bytesBase64: PNG.toString('base64') },

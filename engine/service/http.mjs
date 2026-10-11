@@ -372,14 +372,23 @@ export async function createHttpServer(options) {
     }
     const params = paramsOf(route, relative);
     const bodyLimit = bodyLimitFor(route, requested.path);
-    const body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
-    if (route.handler === 'authLocal') await credentialFor(req, route, credentials, listener, options);
-    rejectUnknown(route, body);
+    const deferAssetBody = route.method === 'POST' && route.template === '/editors/:resourceId/assets';
+    let body = null;
+    if (!deferAssetBody) {
+      body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
+      if (route.handler === 'authLocal') await credentialFor(req, route, credentials, listener, options);
+      rejectUnknown(route, body);
+    }
     const credential = route.handler === 'authLocal' ? null : await credentialFor(req, route, credentials, listener, options);
     const domain = domainContext(options, credential, bus);
+    if (deferAssetBody) await requireAttachment(domain, params.resourceId);
     const object = await objectFor(route, domain, credential, params, body);
     const operation = operationFor(route, credential, body);
     if (operation) authorize(credential, operation, { ...object, listener: listener.kind });
+    if (deferAssetBody) {
+      body = await readJsonBody(req, { expect: 'json', limit: bodyLimit });
+      rejectUnknown(route, body);
+    }
     if (route.handler === 'events') {
       const principal = {
         ...domain.principal,
