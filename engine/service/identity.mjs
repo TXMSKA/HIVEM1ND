@@ -51,7 +51,7 @@ function canonicalize(value, depth) {
   }
   if (!isPlainObject(value)) throw new CoreError(400, 'invalid_json', 'JSON contains a value that cannot be encoded.');
   const keys = Object.keys(value).sort();
-  const sorted = {};
+  const sorted = Object.create(null);
   for (const key of keys) {
     if (value[key] === undefined) throw new CoreError(400, 'invalid_json', 'JSON contains a value that cannot be encoded.');
     sorted[key] = canonicalize(value[key], depth + 1);
@@ -191,7 +191,6 @@ export function isPersonAlias(value, aliases = []) {
   const lower = text.toLowerCase();
   if (lower === 'user' || lower === 'master') return true;
   if (/^user@[^@\s]+$/i.test(text)) return true;
-  if (/^person:/i.test(text) && text.length > 'person:'.length) return true;
   return aliases.some((alias) => typeof alias === 'string' && alias.length > 0 && (alias.toLowerCase() === lower || `person:${alias}`.toLowerCase() === lower));
 }
 

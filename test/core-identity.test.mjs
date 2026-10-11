@@ -40,6 +40,9 @@ const REQUEST = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 test('canonical JSON, ids, and person aliases keep scope and spelling', () => {
   assert.equal(canonicalJson({ b: 1, a: { d: true, c: [1, { z: 1, y: 2 }] } }), '{"a":{"c":[1,{"y":2,"z":1}],"d":true},"b":1}');
+  const proto = JSON.parse('{"__proto__":{"hidden":1},"a":1}');
+  assert.equal(canonicalJson(proto), '{"__proto__":{"hidden":1},"a":1}');
+  assert.notEqual(canonicalJson(proto), canonicalJson(JSON.parse('{"a":1}')));
   assert.throws(() => canonicalJson({ value: Infinity }), { code: 'invalid_json' });
   assert.throws(() => canonicalJson({ value: Number.NaN }), { code: 'invalid_json' });
   let nested = 0;
@@ -63,7 +66,8 @@ test('canonical JSON, ids, and person aliases keep scope and spelling', () => {
   assert.notEqual(shop.id, web.id);
   assert.equal(parseTaskId('project:shop:029').number, '029');
   assert.equal(resolvePerson('user@DESKTOP').unitId, 'root:master');
-  assert.equal(resolvePerson('person:Alias.One').client, 'master');
+  assert.equal(resolvePerson('person:Alias.One'), null);
+  assert.equal(resolvePerson('person:Alias.One', { aliases: ['Alias.One'] }).unitId, 'root:master');
   assert.equal(resolvePerson('user-helper'), null);
 
   const units = [
