@@ -177,9 +177,13 @@ async function prepareCreate(context, input) {
 
 async function finish(context, prepared, transaction) {
   const result = await commitTransaction(context.store, transaction);
-  const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
+  const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   const changes = await stageTransaction(sync, prepared.stage);
   noteSync(context, changes.length ? 'pending' : 'local');
+  if (context.pulse) {
+    const published = await context.pulse.changed(changes.map((item) => item.id));
+    if (published?.published === true) noteSync(context, 'published');
+  }
   for (const event of prepared.events) {
     context.store.events.push(event);
     context.bus?.emit(event);

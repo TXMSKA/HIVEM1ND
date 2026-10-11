@@ -354,6 +354,69 @@ test('event streams replay from a cursor without leaking credentials', async (t)
   assert.equal(after.status, 401);
 });
 
+test('unit, lead, layout and settings changes reach the running pulse', async (t) => {
+  const fixture = await makeCoreFixture();
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const paths = { ...fixture.paths, origin };
+  const core = await composeCore({
+    store: fixture.store,
+    paths,
+    now: () => fixture.clock.now,
+    projects: [],
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const notified = [];
+  const original = core.runtime.pulse.changed.bind(core.runtime.pulse);
+  core.runtime.pulse.changed = async (ids) => {
+    notified.push(...ids);
+    return original(ids);
+  };
+  await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  const token = local.json.data.token;
+  const created = await call(core.http.port, 'POST', '/api/v1/units', {
+    token,
+    body: { unit: 'builder', role: 'executor', scope: 'root', machine: fixture.machine },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(created.status, 201);
+  const detail = await call(core.http.port, 'GET', '/api/v1/units/root:builder', { token });
+  const lead = await call(core.http.port, 'POST', '/api/v1/units', {
+    token,
+    body: { unit: 'lead', role: 'executor', scope: 'root', machine: fixture.machine },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(lead.status, 201);
+  const connected = await call(core.http.port, 'PUT', '/api/v1/units/root:builder/lead', {
+    token,
+    body: { confirmed: true, leadId: 'root:lead', expectedRevision: detail.json.data.revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(connected.status, 200);
+  const layout = await call(core.http.port, 'GET', '/api/v1/layout', { token });
+  const moved = await call(core.http.port, 'PATCH', '/api/v1/layout', {
+    token,
+    body: { nodes: { 'root:builder': { x: 1, y: 2 } }, expectedRevision: layout.json.data.revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(moved.status, 200);
+  const settings = await call(core.http.port, 'PATCH', '/api/v1/settings', {
+    token,
+    body: { language: 'es' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(settings.status, 200);
+  assert.equal(notified.length >= 4, true);
+  assert.equal(notified.every((id) => typeof id === 'string' && id.length > 0), true);
+});
+
 test('home enable is memory-only and loopback cannot exchange it', async (t) => {
   const fixture = await makeCoreFixture();
   const listeners = [];
