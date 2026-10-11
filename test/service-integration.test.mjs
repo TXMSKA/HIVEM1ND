@@ -111,7 +111,7 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
     headers: key(),
   });
   assert.equal(chat.status, 201);
-  const posted = await call(port, 'POST', `/api/v1/chats/${chat.json.data.chat.id}/messages`, {
+  const posted = await call(port, 'POST', `/api/v1/chats/${chat.json.data.id}/messages`, {
     token,
     body: { body: 'Ship the notes.' },
     headers: key(),

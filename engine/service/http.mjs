@@ -970,13 +970,19 @@ async function invoke(route, scope) {
     await patchLayout(domain, body);
     return { status: 200, body: await readDetail(domain, 'layout') };
   }
-  if (route.handler === 'createChat') return { status: 201, body: await createChat(domain, body) };
+  if (route.handler === 'createChat') {
+    const created = await createChat(domain, body);
+    return { status: created.status === 200 ? 200 : 201, body: created.chat };
+  }
   if (route.handler === 'postChat') {
     const sent = await postChat(domain, params.chatId, body);
     return { status: 201, body: sent.message };
   }
   if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
-  if (route.handler === 'patchChat') return { status: 200, body: await patchChat(domain, params.chatId, body) };
+  if (route.handler === 'patchChat') {
+    const patched = await patchChat(domain, params.chatId, body);
+    return { status: 200, body: patched.chat };
+  }
   if (route.handler === 'postMailbox') {
     const sent = await postMailbox(domain, params.unitId, body);
     return { status: 201, body: sent.message };

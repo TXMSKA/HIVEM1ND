@@ -779,7 +779,15 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(chat, 201, 'chat');
   hit('POST', '/chats');
-  const chatId = chat.json.data.chat.id;
+  const chatId = chat.json.data.id;
+  assert.equal(chat.json.data.kind, 'direct');
+  const reused = await call(port, 'POST', '/api/v1/chats', {
+    token,
+    body: { members: ['root:builder'], title: 'Release' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(reused, 200, 'reused direct chat');
+  assert.equal(reused.json.data.id, chatId);
   const chatDetail = await call(port, 'GET', `/api/v1/chats/${chatId}`, { token });
   expectStatus(chatDetail, 200, 'chat detail');
   hit('GET', '/chats/:chatId');
@@ -809,6 +817,8 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(pinned, 200, 'patch chat');
+  assert.equal(pinned.json.data.pinned, true);
+  assert.equal(pinned.json.data.chat, undefined);
   hit('PATCH', '/chats/:chatId');
 
   const mailed = await call(port, 'POST', '/api/v1/mailboxes/root:master/messages', {
@@ -1377,7 +1387,7 @@ test('an agent cannot read another unit chat or session request', async (t) => {
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(foreign.status, 201, foreign.raw);
-  const foreignId = foreign.json.data.chat.id;
+  const foreignId = foreign.json.data.id;
   const posted = await call(port, 'POST', `/api/v1/chats/${foreignId}/messages`, {
     token,
     body: { body: 'foreign-chat-secret' },
@@ -1390,7 +1400,7 @@ test('an agent cannot read another unit chat or session request', async (t) => {
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(own.status, 201, own.raw);
-  const ownId = own.json.data.chat.id;
+  const ownId = own.json.data.id;
   const requestId = randomUUID();
   const ownRequestId = randomUUID();
   const requestDir = path.join(fixture.paths.mind, 'user', 'relay', 'requests', fixture.machine);
