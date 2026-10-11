@@ -165,6 +165,47 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   await assert.rejects(() => readAsset(context, created.id, '../secret.png'), { status: 404, code: 'not_found' });
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.alloc(10000001, 1).toString('base64') }), { status: 413, code: 'asset_too_large' });
+  const seen = [];
+  context.bus = { emit(event) { seen.push(event); } };
+  const screenId = linkedBoard.document.screens[0].id;
+  const parentId = linkedBoard.document.screens[0].root.id;
+  const elsewhere = addScreen(structuredClone(linkedBoard.document), { title: 'Other', x: 400, y: 0 });
+  const tile = rectangleNode(linkedBoard.document, { x: 2, y: 2, w: 12, h: 12 }, { stroke: '#111111', fill: 'none' });
+  tile.mark = { keep: true, note: 'stay' };
+  await assert.rejects(() => addNode(context, created.id, {
+    screenId: elsewhere.id,
+    parentId,
+    node: tile,
+    expectedRevision: linkedBoard.revision,
+  }), { status: 422, code: 'invalid_parent' });
+  const placed = await addNode(context, created.id, { screenId, parentId, node: tile, expectedRevision: linkedBoard.revision });
+  assert.equal(seen.at(-2).data.operation, 'add-node');
+  assert.equal(seen.at(-2).data.nodeId, placed.nodeId);
+  assert.equal(seen.at(-1).data.focus.screenId, screenId);
+  assert.equal(seen.at(-1).data.focus.nodeId, placed.nodeId);
+  await assert.rejects(() => updateNode(context, created.id, placed.nodeId, { changes: { kids: [] }, expectedRevision: placed.editor.revision }), { status: 422, code: 'invalid_node' });
+  const merged = await updateNode(context, created.id, placed.nodeId, { changes: { mark: { note: 'next' } }, expectedRevision: placed.editor.revision });
+  const kept = merged.document.screens[0].root.kids.find((item) => item.id === placed.nodeId);
+  assert.equal(kept.mark.keep, true);
+  assert.equal(kept.mark.note, 'next');
+  const joined = structuredClone(merged.document);
+  const second = addScreen(joined, { title: 'Other', x: 400, y: 0 });
+  joined.links.push({ id: 'to-other', from: joined.screens[0].id, to: second.id, element: placed.nodeId, transition: 'cut' });
+  const withLink = await replaceBoard(context, created.id, { document: joined, expectedRevision: merged.revision });
+  const indexPath = path.join(localPath, 'docs', 'flows', 'boards', 'index.json');
+  const index = JSON.parse(await readFile(indexPath, 'utf8'));
+  index.find((item) => item.id === 'cart').badge = 'kept';
+  await writeFile(indexPath, `${JSON.stringify(index)}\n`);
+  const titled = structuredClone(withLink.document);
+  titled.title = 'Cart renamed';
+  const renamedTitle = await replaceBoard(context, created.id, { document: titled, expectedRevision: withLink.revision });
+  const savedIndex = JSON.parse(await readFile(indexPath, 'utf8'));
+  const row = savedIndex.find((item) => item.id === 'cart');
+  assert.equal(row.badge, 'kept');
+  assert.equal(row.title, 'Cart renamed');
+  const dropped = await removeNode(context, created.id, placed.nodeId, { expectedRevision: renamedTitle.revision });
+  assert.equal(dropped.document.links.some((link) => link.element === placed.nodeId), false);
+  assert.equal(seen.some((event) => event.name === 'blueprint.changed' && event.data.operation === 'remove-node' && event.data.nodeId === placed.nodeId), true);
 });
 
 test('a present converter stores WebP and a missing converter keeps the original', async (t) => {

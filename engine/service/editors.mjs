@@ -324,11 +324,73 @@ function indexEntry(document) {
   return { id: document.id, letter: title.slice(0, 1).toUpperCase(), short: title.slice(0, 24), title };
 }
 
-function addIndex(current, entry) {
+function mergeIndex(current, document) {
+  const entry = indexEntry(document);
   if (current == null) return [entry];
-  if (Array.isArray(current)) return [...current, entry];
-  const boards = Array.isArray(current.boards) ? [...current.boards, entry] : [entry];
+  if (Array.isArray(current)) {
+    const index = current.findIndex((item) => item?.id === document.id);
+    if (index < 0) return [...current, entry];
+    const next = [...current];
+    next[index] = { ...current[index], ...entry };
+    return next;
+  }
+  const boards = Array.isArray(current.boards) ? [...current.boards] : [];
+  const index = boards.findIndex((item) => item?.id === document.id);
+  if (index < 0) boards.push(entry);
+  else boards[index] = { ...boards[index], ...entry };
   return { ...current, boards };
+}
+
+function boardEvents(context, id, revision, operation, nodeId, screenId) {
+  const unitId = context.principal?.unitId ?? 'root:master';
+  return [
+    {
+      name: 'blueprint.changed',
+      resourceId: id,
+      data: { resourceId: id, revision, operation, nodeId: nodeId ?? null },
+    },
+    {
+      name: 'editor.activity',
+      resourceId: id,
+      unitId,
+      data: {
+        resourceId: id,
+        kind: 'blueprint',
+        unitId,
+        at: clock(context),
+        focus: nodeId ? { screenId: screenId ?? null, nodeId } : null,
+      },
+    },
+  ];
+}
+
+async function stageBoard(context, found, document, operation, nodeId, screenId) {
+  const bytes = jsonBytes(document);
+  const revision = hashBytes(bytes);
+  const index = await loadBytes(indexFile(found.project));
+  const comments = await loadComments(found);
+  const nextIndex = mergeIndex(index.bytes ? parseJson(index.bytes) : null, document);
+  await commit(context, [
+    record(found.file, found.loaded.revision, bytes),
+    record(catalogFile(context), found.catalog.revision, jsonBytes(found.catalog.value)),
+    record(indexFile(found.project), index.revision, jsonBytes(nextIndex)),
+    record(comments.file, comments.revision, jsonBytes(comments.value)),
+  ], boardEvents(context, found.entry.id, revision, operation, nodeId, screenId));
+  return view(found.entry, document, revision);
+}
+
+function deepMerge(target, changes, root = true) {
+  if (root && (Object.hasOwn(changes, 'id') || Object.hasOwn(changes, 't') || Object.hasOwn(changes, 'kids'))) {
+    fail(422, 'invalid_node', 'The node id, type and children cannot change.');
+  }
+  for (const [key, value] of Object.entries(changes)) {
+    const current = target[key];
+    if (value && typeof value === 'object' && !Array.isArray(value) && current && typeof current === 'object' && !Array.isArray(current)) {
+      deepMerge(current, value, false);
+    } else {
+      target[key] = value;
+    }
+  }
 }
 
 export async function createBoard(context, input) {
@@ -354,7 +416,7 @@ export async function createBoard(context, input) {
     attached: Array.isArray(input.attached) ? [...input.attached] : [],
   };
   const nextCatalog = { ...catalog.value, resources: [...catalog.value.resources, entry] };
-  const nextIndex = addIndex(index.bytes ? parseJson(index.bytes) : null, indexEntry(document));
+  const nextIndex = mergeIndex(index.bytes ? parseJson(index.bytes) : null, document);
   const sidecar = { board: document.id, threads: [] };
   const bytes = jsonBytes(document);
   await commit(context, [
@@ -362,7 +424,7 @@ export async function createBoard(context, input) {
     record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
     record(indexFile(project), index.revision, jsonBytes(nextIndex)),
     record(commentsFile(project, document.id), null, jsonBytes(sidecar)),
-  ]);
+  ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null));
   return view(entry, document, hashBytes(bytes));
 }
 
@@ -380,9 +442,7 @@ export async function replaceBoard(context, id, input) {
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const document = validateBoard(input.document);
   preserveUnknown(found.document, document);
-  const bytes = jsonBytes(document);
-  await commit(context, [record(found.file, found.loaded.revision, bytes)]);
-  return view(found.entry, document, hashBytes(bytes));
+  return stageBoard(context, found, document, 'replace', null, null);
 }
 
 function eachNode(document, visit) {
@@ -411,14 +471,14 @@ export async function addNode(context, id, input) {
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const located = findNode(found.document, input.parentId);
   if (!located || located.node.t !== 'box' || !Array.isArray(located.node.kids)) fail(422, 'invalid_parent', 'The parent must be a box.');
+  if (typeof input.screenId !== 'string' || located.screen?.id !== input.screenId) fail(422, 'invalid_parent', 'The parent must belong to the requested screen.');
   if (findNode(found.document, input.node?.id)) fail(409, 'node_exists', 'That node already exists.');
   const index = input.index ?? located.node.kids.length;
   if (!Number.isInteger(index) || index < 0 || index > located.node.kids.length) fail(422, 'invalid_parent', 'The index is outside the box.');
   located.node.kids.splice(index, 0, input.node);
   const document = validateBoard(found.document);
-  const bytes = jsonBytes(document);
-  await commit(context, [record(found.file, found.loaded.revision, bytes)]);
-  return { editor: view(found.entry, document, hashBytes(bytes)), nodeId: input.node.id };
+  const editor = await stageBoard(context, found, document, 'add-node', input.node.id, input.screenId);
+  return { editor, nodeId: input.node.id };
 }
 
 export async function updateNode(context, id, nodeId, input) {
@@ -427,14 +487,9 @@ export async function updateNode(context, id, nodeId, input) {
   const located = findNode(found.document, nodeId);
   if (!located) fail(404, 'node_not_found', 'The node does not exist.');
   const changes = input.changes ?? {};
-  if ((changes.id !== undefined && changes.id !== nodeId) || (changes.t !== undefined && changes.t !== located.node.t)) {
-    fail(422, 'invalid_node', 'The node id and type cannot change.');
-  }
-  Object.assign(located.node, changes, { id: nodeId, t: located.node.t });
+  deepMerge(located.node, changes);
   const document = validateBoard(found.document);
-  const bytes = jsonBytes(document);
-  await commit(context, [record(found.file, found.loaded.revision, bytes)]);
-  return view(found.entry, document, hashBytes(bytes));
+  return stageBoard(context, found, document, 'update-node', nodeId, located.screen?.id ?? null);
 }
 
 export async function removeNode(context, id, nodeId, input) {
@@ -443,6 +498,7 @@ export async function removeNode(context, id, nodeId, input) {
   const located = findNode(found.document, nodeId);
   if (!located) fail(404, 'node_not_found', 'The node does not exist.');
   if (!located.parent) fail(422, 'root_node', 'The root node cannot be removed.');
+  const screenId = located.screen?.id ?? null;
   const dropped = new Set();
   const collect = (node) => {
     dropped.add(node.id);
@@ -450,11 +506,9 @@ export async function removeNode(context, id, nodeId, input) {
   };
   collect(located.node);
   located.parent.kids = located.parent.kids.filter((kid) => kid.id !== nodeId);
-  found.document.links = (found.document.links ?? []).filter((link) => !dropped.has(link.from) && !dropped.has(link.to) && !dropped.has(link.fromNode) && !dropped.has(link.toNode));
+  found.document.links = (found.document.links ?? []).filter((link) => !dropped.has(link.element) && !dropped.has(link.fromNode) && !dropped.has(link.toNode));
   const document = validateBoard(found.document);
-  const bytes = jsonBytes(document);
-  await commit(context, [record(found.file, found.loaded.revision, bytes)]);
-  return view(found.entry, document, hashBytes(bytes));
+  return stageBoard(context, found, document, 'remove-node', nodeId, screenId);
 }
 
 export async function readComments(context, id) {
