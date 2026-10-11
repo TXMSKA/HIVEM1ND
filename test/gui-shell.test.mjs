@@ -2291,6 +2291,59 @@ test("editor events refresh attachments, assets, delivery and conflicts", async 
   assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
 });
 
+test("phone navigation stays compact and focus can leave the source", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const phone = await bootApp(fixture.phoneUrl, 390, []);
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone", "The phone shell did not appear.");
+  assert.equal([...phone.root.querySelectorAll("h2")].some((node) => node.textContent === "Snapshot"), false);
+  assert.equal(phone.root.querySelector("[data-phone-issues]")?.querySelector("summary")?.textContent.includes("issues"), true);
+  assert.equal(phone.root.querySelector("[data-phone-title]")?.textContent, "Hierarchy");
+  assert.equal(phone.root.querySelector("[data-phone-hint]")?.textContent, "Use the bottom buttons to switch views.");
+  assert.equal(phone.root.querySelector("[data-phone-mode='hierarchy']")?.getAttribute("aria-pressed"), "true");
+  await waitFor(() => phone.app.chatList?.catalog?.length, "The phone chat list did not load.");
+  click(phone.root.querySelector("[data-phone-mode='chats']"));
+  const chat = phone.app.chatList.catalog[0];
+  phone.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => phone.root.querySelector("[data-stage-title]")?.textContent === (chat.title || chat.id), "The phone conversation title was not shown.");
+  assert.equal(phone.root.querySelector("[data-stage-title]").textContent === "Hierarchy", false);
+  await waitFor(() => phone.root.querySelector(".bubble-meta"), "The phone message sender was not shown.");
+  await waitFor(() => {
+    const wanted = (phone.app.waitingList?.items ?? []).some((item) => item.kind === "approval" || item.kind === "review");
+    return !wanted || phone.root.querySelector("[data-phone-card]");
+  }, "The phone approval card did not appear.");
+  const css = await readFile("gui/app/styles.css", "utf8");
+  assert.match(css, /\.shell\[data-layout="phone"\] \.phone-nav button\[aria-pressed="true"\]/);
+  assert.match(css, /env\(safe-area-inset-bottom\)/);
+  assert.match(css, /border-radius:\s*var\(--radius-pill\)/);
+
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
+  click(desktop.root.querySelector("[data-action='enter-focus']"));
+  const source = desktop.root.querySelector("[data-source]");
+  source.focus();
+  for (const handler of desktop.view.listeners?.get("keydown") ?? []) {
+    handler({ key: "Escape", target: source, preventDefault() {} });
+  }
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
+  click(desktop.root.querySelector("[data-action='enter-focus']"));
+  for (const handler of desktop.root.listeners?.get("focusin") ?? []) handler();
+  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "visible");
+  assert.equal(desktop.root.querySelector("[data-action='leave-focus']")?.textContent, "Return to document");
+  assert.equal(desktop.root.querySelector("[data-focus-hint]") != null, true);
+  click(desktop.root.querySelector("[data-action='leave-focus']"));
+  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

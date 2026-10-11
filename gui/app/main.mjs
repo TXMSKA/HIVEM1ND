@@ -113,11 +113,14 @@ export async function mount(root, env = globalThis) {
   };
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
-  root.addEventListener?.("pointermove", () => {
+  const revealFocusTools = () => {
     if (app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
     showTools(app.voidState);
     renderShell(app);
-  });
+  };
+  root.addEventListener?.("pointermove", revealFocusTools);
+  root.addEventListener?.("pointerup", revealFocusTools);
+  root.addEventListener?.("focusin", revealFocusTools);
   renderStatus(app, "loading");
   if (!api.token && api.homeKey) {
     try {
@@ -717,16 +720,33 @@ function renderWorkspace(app, t, view, counts) {
     ),
   );
   const issueItems = view?.issues ?? app.unitList?.issues ?? [];
-  const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
-  for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-  if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
   const collection = renderCollection(app, t);
-  const side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
+  const phoneTitle = app.tab === "chats"
+    ? (app.thread?.chat?.title || t("chats"))
+    : app.mode === "waiting" ? t("waiting") : t("hierarchy");
+  let side;
+  if (app.layout === "phone") {
+    const issues = element(document, "details", { class: "phone-issues", "data-phone-issues": "true" });
+    issues.append(element(document, "summary", { text: t("issueCount", { count: issueItems.length }) }));
+    for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
+    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
+    side = element(document, "aside", { class: "panel side" },
+      element(document, "h2", { "data-phone-title": "true", text: phoneTitle }),
+      issues,
+      collection,
+    );
+  } else {
+    const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
+    for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
+    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
+    side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
+  }
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
     ?? null;
+  const stageTitle = app.layout === "phone" && app.tab === "chats" ? phoneTitle : t(app.mode);
   const stage = element(document, "section", { class: "panel stage" },
-    element(document, "h2", { text: t(app.mode) }),
+    element(document, "h2", { "data-stage-title": "true", text: stageTitle }),
   );
   if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
@@ -742,6 +762,20 @@ function renderWorkspace(app, t, view, counts) {
   } else if (app.layout === "phone" && app.tab === "chats") {
     stage.append(chatPanel(app, t));
     if (app.phoneChatNote) stage.append(element(document, "p", { "data-phone-chat": "required", text: t("desktopChatRequired") }));
+    const cards = (app.waitingList?.items ?? []).filter((item) => item.kind === "approval" || item.kind === "review");
+    if (cards.length) {
+      const host = element(document, "div", { class: "phone-cards", "data-phone-cards": "true" });
+      for (const item of cards.slice(0, 3)) {
+        host.append(element(document, "button", {
+          type: "button",
+          class: "btn",
+          "data-phone-card": item.kind,
+          text: item.title || item.kind,
+          onclick: () => openWaitingItem(app, item),
+        }));
+      }
+      stage.append(host);
+    }
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
   }
@@ -1290,14 +1324,30 @@ function voidSurface(app, document, editor, t) {
     onclick: () => saveVoid(app, editor, source.value),
   }));
   tools.append(sourceEdit);
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "enter-focus",
-    onclick: () => {
-      enterFocus(app.voidState);
-      app.mode = "focus";
-      renderShell(app);
-    },
-  }, t("focus")));
+  if (app.mode === "focus") {
+    tools.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "leave-focus",
+      text: t("returnToDocument"),
+      onclick: () => {
+        leaveFocus(app.voidState);
+        app.mode = "document";
+        renderShell(app);
+      },
+    }));
+    tools.append(element(document, "p", { class: "field-hint", "data-focus-hint": "true", text: t("focusHint") }));
+  } else {
+    tools.append(element(document, "button", {
+      type: "button", class: "btn", "data-action": "enter-focus",
+      text: t("focus"),
+      onclick: () => {
+        enterFocus(app.voidState);
+        app.mode = "focus";
+        renderShell(app);
+      },
+    }));
+  }
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "comment-quote",
     onclick: () => commentOnQuote(app, editor),
@@ -1370,15 +1420,15 @@ function answerVoid(app, editor, proposal, decision) {
 
 function onFocusKey(app, event) {
   if (app.mode !== "focus" || !app.voidState) return;
-  const tag = event.target?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) return;
-  if (event.key === "Escape") {
+  if (event.key === "Escape" && !app.root.ownerDocument.querySelector?.("dialog[open]")) {
     leaveFocus(app.voidState);
     app.mode = "document";
     renderShell(app);
     app.root.querySelector?.("[data-action='enter-focus']")?.focus?.();
     return;
   }
+  const tag = event.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) return;
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
   moveFocus(app.voidState, event.key);
   event.preventDefault();
@@ -2493,7 +2543,14 @@ function renderFooter(app, t) {
 
 function renderPhoneNav(app, t) {
   const current = app.mode === "waiting" ? "waiting" : app.tab;
-  return renderPhone(app.root.ownerDocument, t, PHONE_MODES, current, (mode) => navigate(app, mode), icon);
+  const document = app.root.ownerDocument;
+  const nav = renderPhone(document, t, PHONE_MODES, current, (mode) => navigate(app, mode), icon);
+  const hintId = "phone-nav-hint";
+  nav.setAttribute("aria-describedby", hintId);
+  return element(document, "div", { class: "phone-dock" },
+    element(document, "p", { id: hintId, class: "field-hint", "data-phone-hint": "true", text: t("phoneNavHint") }),
+    nav,
+  );
 }
 
 function renderSignedOut(app) {
