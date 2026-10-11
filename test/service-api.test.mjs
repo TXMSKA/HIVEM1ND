@@ -815,6 +815,13 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(posted, 201, 'chat message');
   assert.equal(posted.json.data.body, 'Ship the notes.');
   assert.equal(posted.json.data.notifications, undefined);
+  const forgedSender = await call(port, 'POST', `/api/v1/chats/${chatId}/messages`, {
+    token,
+    body: { body: 'Stolen', fromId: 'root:two', role: 'master' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(forgedSender, 400, 'forged sender');
+  assert.equal(forgedSender.json.error.code, 'unknown_field');
   hit('POST', '/chats/:chatId/messages');
   const messages = await call(port, 'GET', `/api/v1/chats/${chatId}/messages`, { token });
   expectStatus(messages, 200, 'chat messages');

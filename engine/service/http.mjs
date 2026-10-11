@@ -786,27 +786,66 @@ function bodyExpect(route) {
 }
 
 function rejectUnknown(route, body) {
-  if (!body) return;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return;
   const allowed = allowedBody(route);
-  if (!allowed) return;
-  for (const key of Object.keys(body)) {
-    if (!allowed.has(key)) throw new CoreError(400, 'unknown_field', 'The body contains an unknown field.');
+  if (allowed) {
+    for (const key of Object.keys(body)) {
+      if (!allowed.has(key)) throw new CoreError(400, 'unknown_field', 'The body contains an unknown field.');
+    }
   }
+  if (Object.hasOwn(body, 'document')) boundRecord(body.document, 'document', 16_000_000);
+  if (Object.hasOwn(body, 'changes')) boundRecord(body.changes, 'changes', 64_000);
+  if (Object.hasOwn(body, 'node')) boundRecord(body.node, 'node', 64_000);
+  if (Object.hasOwn(body, 'pattern')) boundRecord(body.pattern, 'pattern', 16_000);
+}
+
+function boundRecord(value, label, limit) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CoreError(422, 'invalid_body', `The ${label} must be an object.`);
+  if (Buffer.byteLength(JSON.stringify(value)) > limit) throw new CoreError(413, 'body_too_large', `The ${label} is too large.`);
 }
 
 function allowedBody(route) {
-  if (route.template === '/editors/:resourceId/assets' && route.method === 'POST') return new Set(['contentType', 'bytesBase64']);
   const table = {
-    createUnit: ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
-    patchSettings: ['look', 'language', 'expectedRevision'],
-    patchLayout: ['nodes', 'groups', 'expectedRevision'],
-    patchViewer: ['dirty', 'look', 'language'],
-    createChat: ['members', 'title'],
-    authLocal: ['embedded', 'hostOrigin', 'look', 'language'],
-    authHome: ['key', 'code'],
-    home: ['enabled', 'addresses'],
+    'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
+    'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
+    'POST /units/:unitId/session': ['client', 'prompt', 'model', 'expectedRevision'],
+    'POST /sessions/:sessionId/stop': ['confirmed'],
+    'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
+    'POST /chats': ['members', 'title'],
+    'POST /chats/:chatId/messages': ['body', 'subject', 'replyTo', 'attachments', 'priority'],
+    'POST /chats/:chatId/read': ['messageIds'],
+    'PATCH /chats/:chatId': ['pinned', 'listed', 'expectedRevision'],
+    'POST /mailboxes/:unitId/messages': ['body', 'subject', 'replyTo', 'attachments', 'priority'],
+    'POST /mailboxes/:unitId/read': ['messageIds'],
+    'POST /approvals/request': ['action', 'pattern', 'display', 'alwaysAllowed', 'chatId', 'operationId'],
+    'POST /approvals/:approvalId/answer': ['decision', 'expectedRevision'],
+    'DELETE /units/:unitId/approval-grants/:grantId': ['expectedRevision'],
+    'POST /tasks/:taskId/status': ['status', 'expectedRevision', 'note'],
+    'POST /tasks/:taskId/undo': ['expectedRevision'],
+    'PATCH /settings': ['look', 'language', 'expectedRevision'],
+    'POST /settings/home-network': ['enabled', 'addresses'],
+    'POST /auth/local': ['embedded', 'hostOrigin', 'look', 'language'],
+    'POST /auth/home': ['key', 'code'],
+    'POST /editors/register': ['project', 'path', 'kind'],
+    'POST /blueprint/boards': ['project', 'document', 'path', 'attached'],
+    'PUT /blueprint/boards/:resourceId': ['document', 'expectedRevision'],
+    'POST /blueprint/boards/:resourceId/nodes': ['screenId', 'parentId', 'node', 'expectedRevision'],
+    'PATCH /blueprint/boards/:resourceId/nodes/:nodeId': ['changes', 'expectedRevision'],
+    'DELETE /blueprint/boards/:resourceId/nodes/:nodeId': ['expectedRevision'],
+    'POST /void/texts': ['project', 'path', 'document', 'attached'],
+    'PUT /void/texts/:resourceId': ['document', 'expectedRevision'],
+    'POST /void/texts/:resourceId/ranges': ['k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'mode', 'threadId', 'expectedCommentsRevision'],
+    'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'expectedRevision', 'expectedCommentsRevision'],
+    'PUT /editors/:resourceId/attachments': ['attached', 'expectedRevision'],
+    'POST /editors/:resourceId/comments': ['text', 'expectedRevision', 'expectedCommentsRevision', 'anchor'],
+    'POST /editors/:resourceId/comments/:threadId/replies': ['text', 'expectedCommentsRevision'],
+    'PATCH /editors/:resourceId/comments/:threadId': ['status', 'expectedCommentsRevision'],
+    'POST /editors/:resourceId/assets': ['contentType', 'bytesBase64'],
+    'POST /watch': ['unitId', 'resourceId', 'chatId'],
+    'PATCH /viewer': ['dirty', 'look', 'language'],
   };
-  return table[route.handler] ? new Set(table[route.handler]) : null;
+  const fields = table[`${route.method} ${route.template}`];
+  return fields ? new Set(fields) : null;
 }
 
 function domainContext(options, credential, bus) {
