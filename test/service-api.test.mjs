@@ -12,7 +12,7 @@ import { eligibleAddresses } from '../engine/service/home.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { writeBeat } from '../engine/service/service.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
-import { routeTable } from '../engine/service/http.mjs';
+import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 describe('service api', { concurrency: false }, () => {
@@ -1353,6 +1353,41 @@ test('agent streams hide other units and event frames carry ids', async (t) => {
   assert.match(opened, /"cursor":/);
   assert.match(opened, /"capabilities":\[/);
 });
+
+test('a stalled event stream closes when the queue or drain deadline is exceeded', async () => {
+  const bus = createEventBus({ now: () => Date.now(), machine: 'DESKTOP' });
+  const principal = { stableId: 'desktop', audience: 'desktop', viewerId: 'viewer-a' };
+  const stalled = fakeStream();
+  serveEvents(stalled.res, bus, principal, null, { drainMs: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(stalled.ended, true);
+  const flooded = fakeStream();
+  const before = flooded.writes;
+  serveEvents(flooded.res, bus, principal, null, { drainMs: 15_000 });
+  bus.emit({ name: 'issue.changed', data: { issue: { path: null, code: 'x', message: 'x'.repeat(1_000_001) }, resolved: false } });
+  assert.equal(flooded.ended, true);
+  assert.equal(flooded.writes > before, true);
+});
+
+function fakeStream() {
+  const state = { writes: 0, ended: false };
+  state.res = {
+    writableEnded: false,
+    writeHead() {},
+    flushHeaders() {},
+    write() {
+      state.writes += 1;
+      return false;
+    },
+    end() {
+      state.ended = true;
+      state.res.writableEnded = true;
+    },
+    on() {},
+    once() {},
+  };
+  return state;
+}
 
 test('the package exports the GUI host from the root and from ./gui', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));

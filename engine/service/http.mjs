@@ -223,6 +223,9 @@ export async function serveStatic(assetDir, name) {
   return bytes;
 }
 
+const STREAM_QUEUE_BYTES = 1_000_000;
+const STREAM_DRAIN_MS = 15_000;
+
 export function serveEvents(res, bus, principal, cursor, extras = {}) {
   const headers = {
     'content-type': 'text/event-stream',
@@ -236,14 +239,17 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
   const filters = extras.filters ?? {};
   let subscriber;
   let stopped = false;
+  let queued = 0;
+  let drainTimer = null;
   const keepalive = setInterval(() => {
-    if (!res.writableEnded) res.write(': keepalive\n\n');
+    send(': keepalive\n\n');
   }, 15000);
   keepalive.unref?.();
   const cleanup = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(keepalive);
+    if (drainTimer) clearTimeout(drainTimer);
     bus.release(subscriber);
     extras.releaseSlot?.(subscriber);
   };
@@ -252,6 +258,33 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
     cleanup();
     if (!res.writableEnded) res.end();
     extras.req?.destroy();
+  };
+  const notePressure = (chunk, accepted) => {
+    if (accepted !== false || stopped) return;
+    queued += Buffer.byteLength(chunk);
+    if (queued > STREAM_QUEUE_BYTES) {
+      end();
+      return;
+    }
+    if (drainTimer) return;
+    drainTimer = setTimeout(() => end(), extras.drainMs ?? STREAM_DRAIN_MS);
+    drainTimer.unref?.();
+    res.once?.('drain', () => {
+      if (drainTimer) clearTimeout(drainTimer);
+      drainTimer = null;
+      queued = 0;
+    });
+  };
+  const send = (chunk) => {
+    if (stopped || res.writableEnded) return;
+    let accepted = true;
+    try {
+      accepted = res.write(chunk);
+    } catch {
+      end();
+      return;
+    }
+    notePressure(chunk, accepted);
   };
   subscriber = bus.subscribe(principal, filters, (frame) => {
     if (frame.name === 'closed') {
@@ -268,7 +301,7 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
       end();
       return;
     }
-    res.write(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
+    send(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
   });
   bus.replay(subscriber, cursor ?? null);
   res.on?.('close', cleanup);
