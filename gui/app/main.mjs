@@ -622,6 +622,7 @@ function renderWorkspace(app, t, view, counts) {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
+      "data-code": app.actionCode ?? "",
       "data-request": app.sessionRequestId ?? "",
       "data-answer": app.answerId ?? "",
       text: app.actionNote,
@@ -2057,6 +2058,42 @@ const SESSION_COPY = {
   stopped: "sessionStopped",
 };
 
+const ACTION_COPY = {
+  invalid_lead: "invalidLead",
+  machine_unavailable: "machineDown",
+  note_required: "noteRequired",
+  revision_conflict: "revisionConflict",
+  phone_read_only: "phoneReadOnly",
+  forbidden: "actionForbidden",
+  always_unavailable: "alwaysUnavailable",
+  approval_resolved: "approvalResolved",
+  status_unchanged: "statusUnchanged",
+  review_not_ready: "reviewNotReady",
+  nothing_to_undo: "nothingToUndo",
+  undo_conflict: "undoConflict",
+  request_failed: "actionFailed",
+};
+
+const TASK_COPY = {
+  open: "taskOpen",
+  review: "taskReview",
+  done: "taskDone",
+  closed: "taskClosed",
+};
+
+function showOutcome(app, note, code = null) {
+  app.actionNote = note;
+  app.actionCode = code;
+}
+
+function actionText(language, code, values) {
+  return text(language, ACTION_COPY[code] ?? "actionFailed", values);
+}
+
+function taskText(language, status) {
+  return text(language, TASK_COPY[status] ?? "actionFailed");
+}
+
 function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
@@ -2090,7 +2127,12 @@ function confirmConnection(app, sourceId, targetIds) {
     cancel: text(app.language, "cancel"),
     onConfirm: async () => {
       const results = await connectUnits(app.api, source, targets);
-      app.actionNote = results.map((result) => result.error ? `${result.id ?? "unit"} ${result.error.code}` : `${result.id} ${result.data?.leadId ?? ""}`).join(" ");
+      showOutcome(app, results.map((result) => {
+        const target = targets.find((item) => item.id === result.id);
+        const unit = target?.unit || text(app.language, "unknown");
+        if (result.error) return actionText(app.language, result.error.code, { unit });
+        return text(app.language, "unitConnected", { unit, lead: source.unit });
+      }).join(" "), results.map((result) => result.error?.code ?? "connected").join(","));
       if (app.unitList) await reloadList(app.unitList);
       if (!app.disposed) renderShell(app);
     },
@@ -2148,7 +2190,7 @@ async function openUnitForm(app) {
     const machineId = fieldValue(form, "machine");
     const machine = machines.find((item) => item.id === machineId);
     if (!machine?.answers) {
-      app.actionNote = text(app.language, "machineUnavailable", { machine: machineId });
+      showOutcome(app, text(app.language, "machineUnavailable", { machine: machineId }), "machine_unavailable");
       if (!app.disposed) renderShell(app);
       return;
     }
@@ -2166,12 +2208,13 @@ async function openUnitForm(app) {
         model: fieldValue(form, "model").trim() || null,
         position: readPosition(form),
       });
-      app.actionNote = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
+      const unit = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
+      showOutcome(app, text(app.language, "unitCreated", { unit }));
       if (app.unitList) await reloadList(app.unitList);
     } catch (error) {
-      app.actionNote = error?.code === "machine_unavailable"
+      showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? machineId })
-        : `${error?.code ?? "request_failed"}`;
+        : actionText(app.language, error?.code), error?.code ?? null);
     }
     if (!app.disposed) renderShell(app);
   });
@@ -2203,19 +2246,19 @@ async function openSessionForm(app, unit) {
   }, async (form) => {
     const client = fieldValue(form, "client");
     if (!clients.some((item) => item.id === client)) {
-      app.actionNote = text(app.language, "clientUnavailable");
+      showOutcome(app, text(app.language, "clientUnavailable"), "client_unavailable");
       if (!app.disposed) renderShell(app);
       return;
     }
     try {
       const started = await startSession(app.api, unit, client, fieldValue(form, "prompt").trim() || null);
       app.sessionRequestId = started.data.requestId;
-      app.actionNote = text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed");
+      showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed"), started.data.state ?? null);
       if (started.data.state === "queued" || started.data.state === "starting") await recheckTracked(app);
     } catch (error) {
-      app.actionNote = error?.code === "machine_unavailable"
+      showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? unit.machine })
-        : `${error?.code ?? "request_failed"}`;
+        : actionText(app.language, error?.code), error?.code ?? null);
     }
     if (!app.disposed) renderShell(app);
   });
@@ -2230,9 +2273,9 @@ function confirmStop(app, sessionId) {
     onConfirm: async () => {
       try {
         const stopped = await stopSession(app.api, sessionId);
-        app.actionNote = text(app.language, SESSION_COPY[stopped.data.state] ?? "sessionStopping");
+        showOutcome(app, text(app.language, SESSION_COPY[stopped.data.state] ?? "sessionStopping"), stopped.data.state ?? null);
       } catch (error) {
-        app.actionNote = error?.code ?? "request_failed";
+        showOutcome(app, actionText(app.language, error?.code), error?.code ?? null);
       }
       if (!app.disposed) renderShell(app);
     },
@@ -2321,14 +2364,14 @@ function leadChoices(app) {
 function noteSession(app, data) {
   const state = data.session?.state;
   if (!state || !SESSION_COPY[state]) return;
-  app.actionNote = text(app.language, SESSION_COPY[state]);
+  showOutcome(app, text(app.language, SESSION_COPY[state]), state);
 }
 
 function noteSessionRequest(app, data) {
   const state = data?.state;
   if (!state || !SESSION_COPY[state]) return;
   if (data.requestId) app.sessionRequestId = data.requestId;
-  app.actionNote = text(app.language, SESSION_COPY[state]);
+  showOutcome(app, text(app.language, SESSION_COPY[state]), state);
 }
 
 function chatPanel(app, t) {
@@ -2643,7 +2686,7 @@ function submitComposer(app, composer) {
 }
 
 function noteAction(app, error) {
-  app.actionNote = error?.code ?? "request_failed";
+  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null);
   if (!app.disposed) renderShell(app);
 }
 
@@ -2733,7 +2776,7 @@ function answerSelected(app, approval, decision) {
     app.answerApprovalId = next?.id ?? approval.id;
     if (next) replaceApproval(app, next);
     const label = next ? approvalLabel(app, next) : text(app.language, "answerQueued");
-    if (label) app.actionNote = label;
+    if (label) showOutcome(app, label, next?.state ?? "answering");
     if (finalApprovalState(next?.state)) refreshOwnerSurface(app, next.unitId ?? approval.unitId);
     else if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
@@ -2744,11 +2787,11 @@ function revokeSelectedGrant(app, unit, grant) {
     app.revocationRequestId = result.data.requestId ?? null;
     app.revocationUnitId = result.data.unitId ?? unit.id;
     if (result.data.state === "revoked") {
-      app.actionNote = text(app.language, "grantRevoked");
+      showOutcome(app, text(app.language, "grantRevoked"), "revoked");
       refreshOwnerSurface(app, app.revocationUnitId);
       return;
     }
-    app.actionNote = text(app.language, "grantPending");
+    showOutcome(app, text(app.language, "grantPending"), result.data.state ?? "pending");
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));
 }
@@ -2756,7 +2799,7 @@ function revokeSelectedGrant(app, unit, grant) {
 function setTaskStatus(app, task, status, note) {
   changeTaskStatus(app.api, task, status, note).then((result) => {
     if (status === "open") clearInputDraft(app, "note", task.id);
-    app.actionNote = result.data.task.status;
+    showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
     app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
     refreshWaiting(app);
   }).catch((error) => noteAction(app, error));
@@ -2764,7 +2807,7 @@ function setTaskStatus(app, task, status, note) {
 
 function undoSelected(app, task) {
   undoTask(app.api, task).then((result) => {
-    app.actionNote = result.data.task.status;
+    showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
     app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
     refreshWaiting(app);
   }).catch((error) => noteAction(app, error));
@@ -2808,13 +2851,13 @@ async function noteApproval(app, data) {
   if (!approval?.id) return;
   replaceApproval(app, approval);
   const label = approvalLabel(app, approval);
-  if (label) app.actionNote = label;
+  if (label) showOutcome(app, label, approval.state);
   if (finalApprovalState(approval.state)) await refreshOwnerSurface(app, approval.unitId);
 }
 
 async function noteGrant(app, data) {
   if (!data?.unitId || (data.operation !== "granted" && data.operation !== "revoked")) return;
-  if (data.operation === "revoked") app.actionNote = text(app.language, "grantRevoked");
+  if (data.operation === "revoked") showOutcome(app, text(app.language, "grantRevoked"), "revoked");
   await refreshOwnerSurface(app, data.unitId);
 }
 
@@ -2855,7 +2898,7 @@ async function recheckTracked(app) {
       });
       replaceApproval(app, approval.data);
       const label = approvalLabel(app, approval.data);
-      if (label) app.actionNote = label;
+      if (label) showOutcome(app, label, approval.data.state);
       if (finalApprovalState(approval.data.state)) await refreshOwnerSurface(app, approval.data.unitId);
     })());
   }

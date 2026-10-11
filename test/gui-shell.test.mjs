@@ -1764,6 +1764,46 @@ test("a replayed unit event is applied once and the cursor advances", async (t) 
   }
 });
 
+test("action notes use bilingual outcomes and keep wire codes for diagnostics", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.mapState?.onConnect && desktop.app.unitList?.catalog?.some((unit) => unit.id === "root:master"), "The map did not load.");
+  desktop.app.mapState.onConnect({ source: "env:web:overlord-web", target: "root:master" });
+  click(desktop.document.querySelector("dialog").querySelector(".primary"));
+  await waitFor(() => noteText(desktop) === "That connection is not valid.", "The connection note was not translated.");
+  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "invalid_lead");
+  assert.equal(noteText(desktop).includes("root:master"), false);
+
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-task='project:shop:030']"), "The task list did not load.");
+  click(desktop.root.querySelector("[data-task='project:shop:030']").querySelector("[data-action='send-back']"));
+  await waitFor(() => noteText(desktop) === "A note is required.", "The missing note was shown as a raw code.");
+  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "note_required");
+  click(desktop.root.querySelector("[data-task='project:shop:029']").querySelector("[data-action='accept']"));
+  await waitFor(() => noteText(desktop) === "The task is done.", "The task status was shown as a wire value.");
+  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "done");
+  assert.notEqual(noteText(desktop), "Approved");
+
+  desktop.app.language = "es";
+  await waitFor(() => desktop.root.querySelector("[data-task='project:shop:029']")?.querySelector("[data-action='undo']"), "Undo did not appear.");
+  click(desktop.root.querySelector("[data-task='project:shop:029']").querySelector("[data-action='undo']"));
+  await waitFor(() => noteText(desktop) === "La tarea está en revisión.", "The Spanish task outcome was not shown.");
+
+  fixture.control.setFault({ method: "POST", path: "/api/v1/units/root:adjutant/session", status: 422, code: "totally_unknown" });
+  desktop.app.language = "en";
+  const adjutant = desktop.app.unitList.catalog.find((unit) => unit.id === "root:adjutant");
+  desktop.app.activeHandlers.onActivate({ id: adjutant.id, kind: "unit", unit: adjutant }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === "root:adjutant", "The adjutant inspector did not open.");
+  click(desktop.root.querySelector("[data-action='start-session']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
+  click(desktop.document.querySelector("[data-form='session']").querySelector("[data-action='confirm-form']"));
+  await waitFor(() => noteText(desktop) === "The action failed.", "An unknown code was shown to the reader.");
+  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "totally_unknown");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
