@@ -36,6 +36,9 @@ Usage:
   hivem1nd view [--project <name>] [options]
   hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
+  hivem1nd service <install|uninstall|status|run> [--dry-run] [options]
+  hivem1nd task status <project> <id> <status> [--note <text>]
+  hivem1nd task undo <project> <id>
 
 Commands:
   init       Configure this machine in eight guided steps
@@ -46,6 +49,8 @@ Commands:
   view       Show chats, squads, what waits on the person, tasks, inbox and products
   relay     Send and read messages, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
+  service    Plan the user login service, or print its status
+  task       Change a task status or undo the last change through the service
 
 Relay options:
   --mind-path <path>       Path to the private mind
@@ -85,6 +90,12 @@ Uninstall options:
   --dry-run             Report the plan without removing anything
   --remove-mind         Also delete the mind folder when it is safe to
 
+Service options:
+  service install --dry-run    Print the login plan. This does not register a task.
+  --origin-kind <folder|onedrive>
+  --origin-path <path>         Explicit origin folder
+  --cosmic-path <path>         Cosmic parent. The mind folder hivem1nd is appended when no mind path is set.
+
 Pylon options:
   --state <branch|main> Store team state on its own branch or on main
   --ai-files            Allow shared AI files (default)
@@ -117,6 +128,9 @@ const VALUE_FLAGS = new Map([
   ["--environment", "environment"],
   ["--state", "state"],
   ["--project", "project"],
+  ["--origin-kind", "originKind"],
+  ["--origin-path", "originPath"],
+  ["--cosmic-path", "cosmicPath"],
 ]);
 
 const BOOLEAN_FLAGS = new Map([
@@ -133,8 +147,8 @@ const BOOLEAN_FLAGS = new Map([
 ]);
 
 const ALLOWED_FLAGS = {
-  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname"]),
-  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
+  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -145,6 +159,8 @@ const ALLOWED_FLAGS = {
 export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
+  if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
+  if (argv[0] === "task") return parseTaskArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
   if (argv.length === 1 && ["-h", "--help"].includes(argv[0])) return { help: true };
   if (argv.length === 1 && ["-v", "--version"].includes(argv[0])) return { version: true };
@@ -212,6 +228,93 @@ export function parseArgs(argv) {
   }
 
   return { command, options };
+}
+
+const SERVICE_FLAGS = new Set(["dryRun", "originKind", "originPath", "cosmicPath", "mindPath", "homeDir", "hostname", "json"]);
+
+function parseServiceArgs(tokens) {
+  const action = tokens[0];
+  if (!action || action === "--help" || action === "-h") return { command: "service", help: true };
+  if (!["install", "uninstall", "status", "run"].includes(action)) {
+    throw new CliUsageError("service requires install, uninstall, status or run.");
+  }
+  const options = { action };
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["-h", "--help"].includes(token)) return { command: "service", help: true };
+    if (VALUE_FLAGS.has(token)) {
+      const key = VALUE_FLAGS.get(token);
+      if (!SERVICE_FLAGS.has(key)) throw new CliUsageError(`${token} is not valid for service.`);
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError(`${token} requires a value.`);
+      options[key] = value;
+      index += 1;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(token)) {
+      const [key, value] = BOOLEAN_FLAGS.get(token);
+      if (!SERVICE_FLAGS.has(key)) throw new CliUsageError(`${token} is not valid for service.`);
+      options[key] = value;
+      continue;
+    }
+    if (token.startsWith("-")) throw new CliUsageError(`Unknown option: ${token}`);
+    throw new CliUsageError("service does not accept positional arguments.");
+  }
+  if (options.originKind && !["folder", "onedrive"].includes(options.originKind)) {
+    throw new CliUsageError("--origin-kind must be folder or onedrive.");
+  }
+  return { command: "service", options };
+}
+
+function parseTaskArgs(tokens) {
+  const action = tokens[0];
+  if (action !== "status" && action !== "undo") throw new CliUsageError("task requires status or undo.");
+  const options = { action };
+  const positional = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["-h", "--help"].includes(token)) return { command: "task", help: true };
+    if (token === "--note") {
+      if (action !== "status") throw new CliUsageError("--note is only valid for task status.");
+      if (Object.hasOwn(options, "note")) throw new CliUsageError("--note was provided more than once.");
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError("--note requires a value.");
+      options.note = value;
+      index += 1;
+      continue;
+    }
+    if (VALUE_FLAGS.has(token)) {
+      const key = VALUE_FLAGS.get(token);
+      if (!["mindPath", "homeDir", "hostname", "cosmicPath"].includes(key)) throw new CliUsageError(`${token} is not valid for task.`);
+      if (Object.hasOwn(options, key)) throw new CliUsageError(`${token} was provided more than once.`);
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError(`${token} requires a value.`);
+      options[key] = value;
+      index += 1;
+      continue;
+    }
+    if (token === "--json") {
+      if (options.json === true) throw new CliUsageError("--json was provided more than once.");
+      options.json = true;
+      continue;
+    }
+    if (token.startsWith("-")) throw new CliUsageError(`Unknown option: ${token}`);
+    positional.push(token);
+  }
+  if (action === "status") {
+    if (positional.length !== 3) throw new CliUsageError("task status requires a project, an id and a status.");
+    const [project, taskId, status] = positional;
+    if (!["open", "review", "done", "closed"].includes(status)) throw new CliUsageError("task status must be open, review, done or closed.");
+    options.project = project;
+    options.taskId = taskId.includes(":") ? taskId : `project:${project}:${taskId}`;
+    options.status = status;
+  } else {
+    if (positional.length !== 2) throw new CliUsageError("task undo requires a project and an id.");
+    const [project, taskId] = positional;
+    options.project = project;
+    options.taskId = taskId.includes(":") ? taskId : `project:${project}:${taskId}`;
+  }
+  return { command: "task", options };
 }
 
 const RELAY_VALUE_FLAGS = new Map([
@@ -462,6 +565,12 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     env,
     resume: options.resume === true,
     relaySetup: true,
+    serviceSetup: true,
+    serviceDryRun: lifecycle ? true : options.dryRun === true,
+    ...(lifecycle || options.dryRun === true ? {} : { serviceRunner: runRegistrationCommand, serviceStart: startUserService }),
+    ...(options.originKind ? { originKind: options.originKind } : {}),
+    ...(options.originPath ? { originPath: options.originPath } : {}),
+    ...(options.cosmicPath ? { cosmicPath: options.cosmicPath } : {}),
   };
 }
 
@@ -841,7 +950,10 @@ async function waitForServer(server, output) {
 async function runInit(options, dependencies, output) {
   if (options.gui) {
     const { createWizardServer } = dependencies.wizard ?? await import("../gui/server.mjs");
-    const server = await createWizardServer({ sessionOptions: setupOptions(options, { env: dependencies.env }) });
+    const server = await createWizardServer({
+      sessionOptions: setupOptions(options, { env: dependencies.env }),
+      openCompletedViewer: dependencies.openCompletedViewer,
+    });
     await (dependencies.openUrl ?? openLocalUrl)(server.url);
     await (dependencies.waitForServer ?? waitForServer)(server, output);
     return 0;
@@ -933,6 +1045,107 @@ async function runLifecycle(command, options, dependencies, output) {
   const text = options.json ? formatResult(result) : formatHumanResult(result);
   if (text) output.write(`${text}\n`);
   return result.completed === false ? 1 : 0;
+}
+
+async function runService(options, dependencies, output) {
+  const { installService, planRegistration, uninstallService } = dependencies.serviceInstall ?? await import("../engine/service/install.mjs");
+  if (!options.mindPath && !options.cosmicPath) {
+    output.write("Service commands need --mind-path or --cosmic-path. Nothing was discovered or written.\n");
+    return 1;
+  }
+  const mindPath = options.mindPath
+    ? path.resolve(options.mindPath)
+    : path.join(path.resolve(options.cosmicPath), "hivem1nd");
+  const registration = {
+    platform: process.platform,
+    nodePath: process.execPath,
+    cliPath: path.join(KIT_PATH, "cli", "index.mjs"),
+    mindPath,
+    workingDirectory: KIT_PATH,
+    localDirectory: options.cosmicPath ? path.resolve(options.cosmicPath) : path.dirname(mindPath),
+    home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
+    sid: dependencies.sid ?? "S-1-5-21-current",
+  };
+  const dry = options.dryRun === true;
+  if (options.action === "status") {
+    output.write("Service status is plan-only here. No login registration was queried on the operating system.\n");
+    return 0;
+  }
+  if (options.action === "run") {
+    const { runConfiguredService, stopService } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
+    let handle;
+    try {
+      handle = await runConfiguredService({
+        mindPath,
+        platform: dependencies.platform ?? process.platform,
+        env: dependencies.env ?? process.env,
+        home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
+        cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : undefined,
+        hostname: options.hostname,
+        aclRunner: dependencies.aclRunner,
+        confineRoot: dependencies.confineRoot,
+        now: dependencies.now,
+        userKey: dependencies.userKey,
+        guardPort: dependencies.guardPort,
+      });
+    } catch (error) {
+      output.write(`${error.code ?? "error"}: ${error.message}\n`);
+      return 1;
+    }
+    try {
+      await (dependencies.stop ?? waitForServiceStop());
+    } finally {
+      await stopService(handle);
+    }
+    output.write("Service stopped.\n");
+    return 0;
+  }
+  if (!dry && !dependencies.sid) {
+    const { aclRunnerFrom } = await import("../engine/service/security.mjs");
+    registration.sid = (dependencies.aclRunner ?? aclRunnerFrom(dependencies)).userSid();
+  }
+  const plan = planRegistration(registration);
+  if (options.action === "uninstall") {
+    if (options.dryRun === false && !dependencies.registrationRunner) {
+      output.write("Refusing to delete a login registration without an injected runner.\n");
+      return 1;
+    }
+    const removal = uninstallService(plan);
+    output.write(`${JSON.stringify({ dryRun: true, os: false, commands: removal.commands }, null, 2)}\n`);
+    return 0;
+  }
+  const installed = await installService(registration, {
+    dryRun: dry,
+    run: dependencies.registrationRunner ?? (dry ? null : runRegistrationCommand),
+    query: dependencies.queryRegistration,
+    aclRunner: dependencies.aclRunner,
+  });
+  output.write(`${JSON.stringify({ dryRun: dry, os: installed.os === true, action: installed.action, commands: installed.commands, digest: installed.digest }, null, 2)}\n`);
+  return 0;
+}
+
+async function startUserService(config) {
+  const { startConfiguredViewer } = await import("../engine/service/install.mjs");
+  return startConfiguredViewer(config);
+}
+
+function runRegistrationCommand(argv) {
+  return new Promise((resolve, reject) => {
+    import("node:child_process").then(({ spawn }) => {
+      const [file, ...args] = argv;
+      const child = spawn(file, args, { shell: false, windowsHide: true });
+      child.once("error", reject);
+      child.once("exit", (code) => (code === 0 ? resolve() : reject(new Error("The registration command failed."))));
+    }).catch(reject);
+  });
+}
+
+function waitForServiceStop() {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
 }
 
 async function runUninstall(options, dependencies, output) {
@@ -1145,8 +1358,8 @@ async function runRelay(options, dependencies, output) {
   if (action === "delivery" && !options.ids.length) throw new CliUsageError("relay delivery requires at least one --id.");
   if (action === "delivery" && (options.unit !== undefined || options.limit)) throw new CliUsageError("relay delivery answers for the registered unit and takes only --id.");
 
-  const { createRelay } = await import("../engine/relay/store.mjs");
-  const relay = await createRelay({
+  const { openRelayOperations } = await import("../engine/service/client.mjs");
+  const relay = await openRelayOperations({
     mindPath: options.mindPath,
     ...(options.hostname ? { hostname: options.hostname } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
@@ -1189,6 +1402,71 @@ async function runRelay(options, dependencies, output) {
   return 0;
 }
 
+async function runTask(options, dependencies, output, errorOutput) {
+  if (options.help) {
+    output.write(`${helpText()}\n`);
+    return 0;
+  }
+  if (!options.mindPath) {
+    errorOutput.write("Usage error: task requires --mind-path.\n");
+    return 2;
+  }
+  const { randomUUID } = await import("node:crypto");
+  const { bindNative, connectService, request } = await import("../engine/service/client.mjs");
+  if (dependencies.bridge || dependencies.proof) {
+    const bound = bindNative({}, { bridge: dependencies.bridge, proof: dependencies.proof });
+    if (!bound.nativeSupport) {
+      errorOutput.write("native_login_unverified: Native attachment needs a verified handshake.\n");
+      return 1;
+    }
+  }
+  const service = await connectService({
+    mindPath: options.mindPath,
+    platform: dependencies.platform,
+    env: dependencies.env,
+    home: options.homeDir,
+    cosmicPath: options.cosmicPath,
+    hostname: options.hostname,
+    aclRunner: dependencies.aclRunner,
+    confineRoot: dependencies.confineRoot,
+    now: dependencies.now,
+    userKey: dependencies.userKey,
+    guardPort: dependencies.guardPort,
+  });
+  const caller = { ...service, token: dependencies.agentToken ?? service.token };
+  try {
+    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}` });
+    if (current.status !== 200 || !current.json?.data?.revision) {
+      const code = current.json?.error?.code ?? "error";
+      errorOutput.write(`${code}: The request failed.\n`);
+      return current.status === 409 ? 3 : current.status === 422 ? 2 : 1;
+    }
+    const target = options.action === "undo"
+      ? `/api/v1/tasks/${encodeURIComponent(options.taskId)}/undo`
+      : `/api/v1/tasks/${encodeURIComponent(options.taskId)}/status`;
+    const body = options.action === "undo"
+      ? { expectedRevision: current.json.data.revision }
+      : { status: options.status, note: options.note ?? "", expectedRevision: current.json.data.revision };
+    const result = await request(caller, {
+      method: "POST",
+      path: target,
+      body,
+      headers: { "idempotency-key": randomUUID() },
+    });
+    if (result.status === 200) {
+      output.write(`${JSON.stringify(result.json?.data ?? null)}\n`);
+      return 0;
+    }
+    const code = result.json?.error?.code ?? "error";
+    errorOutput.write(`${code}: The request failed.\n`);
+    if (result.status === 409) return 3;
+    if (result.status === 422) return 2;
+    return 1;
+  } finally {
+    await service.release({ stop: true });
+  }
+}
+
 export async function runCli(argv, dependencies = {}) {
   const output = dependencies.stdout ?? process.stdout;
   const errorOutput = dependencies.stderr ?? process.stderr;
@@ -1204,6 +1482,10 @@ export async function runCli(argv, dependencies = {}) {
     }
     if (parsed.command === "init") {
       return await runInit(parsed.options, dependencies, output);
+    } else if (parsed.command === "service") {
+      return await runService(parsed.options, dependencies, output);
+    } else if (parsed.command === "task") {
+      return await runTask(parsed.options, dependencies, output, errorOutput);
     } else if (parsed.command === "uninstall") {
       return await runUninstall(parsed.options, dependencies, output);
     } else if (parsed.command === "relay") {

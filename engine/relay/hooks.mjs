@@ -1,10 +1,11 @@
-import { createRelay } from './store.mjs';
+import { openRelayOperations } from '../service/client.mjs';
 import os from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeWakeCapability, spawnClaudeWakeWorker, sendClaudeWake } from './claude-wake.mjs';
+import { claudeWakeCapability, sendClaudeWake } from './claude-wake.mjs';
 import { cursorWakeCapability } from './cursor-wake.mjs';
 import { spawnLocalWakeWorker } from './local-wake.mjs';
+
+const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -16,8 +17,6 @@ const REMINDER_EVENTS = {
   codex: new Set(['SessionStart', 'UserPromptSubmit']),
   cursor: new Set(['sessionStart', 'postToolUse']),
 };
-const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
-
 export function hookContext(client, input = {}) {
   const candidate = input.session_id ?? input.sessionId ?? input.conversation_id ?? input.session?.id ?? null;
   const nativeSessionId = typeof candidate === 'string' && candidate.length <= 180 && !/[\u0000-\u001f\u007f]/.test(candidate) ? candidate : null;
@@ -64,13 +63,6 @@ async function runClaudeWakeLifecycle({ event, mindPath, nativeSessionId, env = 
       stderr.write(`Relay Claude wake unavailable: ${capability.reason}.\n`);
       return null;
     }
-    try {
-      const spawnWorker = wakeWorkerSpawner ?? spawnClaudeWakeWorker;
-      const child = spawnWorker({ cliPath: CLI_PATH, mindPath, binding, env });
-      child.ready.catch(() => stderr.write('Relay Claude wake worker could not start.\n'));
-    } catch {
-      stderr.write('Relay Claude wake worker could not start.\n');
-    }
   } else if (event === 'UserPromptSubmit' || event === 'PreToolUse') {
     await controller.observeActivity(binding, { activity: 'busy' });
   } else if (event === 'Stop') {
@@ -104,8 +96,32 @@ async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process
   return binding;
 }
 
+export async function decidePermission({ correlationId = null, binding = null, waitForOwner = null, timeoutMs = 120000 } = {}) {
+  if (!correlationId || binding?.expired === true || typeof waitForOwner !== 'function') {
+    return { decision: 'ask', reason: 'native_fallback' };
+  }
+  let timer;
+  try {
+    const result = await Promise.race([
+      waitForOwner(correlationId),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (!result || result.correlationId !== correlationId || (result.decision !== 'allow' && result.decision !== 'deny')) {
+      return { decision: 'ask', reason: 'unmatched' };
+    }
+    return { decision: result.decision, correlationId };
+  } catch {
+    return { decision: 'ask', reason: 'native_fallback' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function runRelayHook({ client, event, mindPath, nativeSessionId, unit, stdin = process.stdin, stdout = process.stdout,
-  stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform }) {
+  stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform, waitForOwner = null }) {
   let input = {};
   try {
     const chunks = [];
@@ -166,8 +182,17 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       });
     }
     // Reading the inbox is the costly part of a hook, and an event that carries no notice would discard its answer.
+    if (client === 'claude' && hookEvent === 'PreToolUse' && typeof input.tool_name === 'string') {
+      const decision = await decidePermission({
+        correlationId: typeof input.correlation_id === 'string' ? input.correlation_id : null,
+        binding: input.binding ?? null,
+        waitForOwner,
+      });
+      stdout.write(`${JSON.stringify(decision)}\n`);
+      return decision;
+    }
     if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
-    const relay = await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
+    const relay = await openRelayOperations({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
     const reminder = await relay.reminder({
       ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),
       ...(nativeSessionId ?? context.nativeSessionId ? { nativeSessionId: nativeSessionId ?? context.nativeSessionId } : {}),

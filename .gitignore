@@ -1,4 +1,5 @@
 /user/
 node_modules/
+.tools/
 /dist/
 /*.tgz

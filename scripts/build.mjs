@@ -1,8 +1,10 @@
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
+import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
+import { assertReleaseAssets, missingPackagedBrowserAssets } from './build-installer.mjs';
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -46,12 +48,32 @@ for (const adapter of Object.values(WAKE_ADAPTERS)) {
   const name = path.relative(root, fileURLToPath(adapter.moduleUrl)).replaceAll('\\', '/');
   if (!included.has(name)) throw new Error(`Missing Relay adapter: ${name}`);
 }
-for (const required of ["cli/index.mjs", "engine/setup.mjs", "engine/lifecycle.mjs", "engine/uninstall.mjs", "engine/relay/store.mjs", "engine/relay/wake.mjs", "engine/relay/local-wake.mjs", "engine/relay/wake-adapters.mjs", "engine/relay/mcp.mjs", "engine/relay/config.mjs", "engine/relay/hooks.mjs", "gui/electron.mjs", "rules.md", "files.md", "uninstall.cmd", "roles/genesis.md", "features/relay-client-setup.md", "LICENSE"]) {
+for (const required of ["cli/index.mjs", "gui/index.mjs", "engine/setup.mjs", "engine/lifecycle.mjs", "engine/uninstall.mjs", "engine/relay/store.mjs", "engine/relay/wake.mjs", "engine/relay/local-wake.mjs", "engine/relay/wake-adapters.mjs", "engine/relay/mcp.mjs", "engine/relay/config.mjs", "engine/relay/hooks.mjs", "rules.md", "files.md", "uninstall.cmd", "roles/genesis.md", "features/relay-client-setup.md", "LICENSE"]) {
   if (!included.has(required)) throw new Error(`Missing package file: ${required}`);
+}
+for (const directory of ["engine/service", "engine/sync"]) {
+  for (const file of await sourceFiles(path.join(root, directory))) {
+    const name = path.relative(root, file).replaceAll("\\", "/");
+    if (!included.has(name)) throw new Error(`Missing package file: ${name}`);
+  }
+}
+let browserAssets = "browser assets unavailable for standalone packaging";
+try {
+  const appDir = path.join(root, "gui", "app");
+  const state = await lstat(appDir);
+  if (!state.isDirectory() || state.isSymbolicLink()) throw new Error("browser assets unavailable");
+  await assertReleaseAssets(appDir);
+  const missing = missingPackagedBrowserAssets(included, EMBEDDED_BROWSER_FILES);
+  if (missing.length > 0) throw new Error(`Missing browser asset: ${missing[0]}`);
+  browserAssets = "browser assets packaged";
+} catch (error) {
+  const message = String(error?.message ?? "");
+  if (message.startsWith("Missing browser asset") || message.startsWith("Release packaging needs")) throw error;
+  browserAssets = "browser assets unavailable for standalone packaging";
 }
 for (const name of included) {
   if (/^(user|test|dist|\.git|\.claude|\.codex|\.cursor)(\/|$)/.test(name) || /(^|\/)(AGENTS|CLAUDE|memo)\.md$/.test(name)) {
     throw new Error(`Private or development file in package: ${name}`);
   }
 }
-console.log(`Built ${manifest.name}@${manifest.version}: dist/${archive.filename} (${archive.files.length} files, ${counts.join(", ")}).`);
+console.log(`Built ${manifest.name}@${manifest.version}: dist/${archive.filename} (${archive.files.length} files, ${counts.join(", ")}). ${browserAssets}.`);

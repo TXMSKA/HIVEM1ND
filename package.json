@@ -1,11 +1,15 @@
 {
   "name": "hivem1nd",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "One mind for every coding agent.",
   "license": "MIT",
   "author": "TXMSKA",
   "type": "module",
-  "main": "gui/electron.mjs",
+  "main": "gui/index.mjs",
+  "exports": {
+    ".": "./gui/index.mjs",
+    "./gui": "./gui/index.mjs"
+  },
   "bin": {
     "hivem1nd": "cli/index.mjs"
   },
@@ -37,20 +41,26 @@
   },
   "scripts": {
     "lint": "markdownlint-cli2",
-    "test": "node --test test/*.test.mjs",
+    "test": "node -e \"const fs=require('node:fs'),cp=require('node:child_process');const files=fs.readdirSync('test',{withFileTypes:true}).filter(entry=>entry.isFile()&&entry.name.endsWith('.test.mjs')).map(entry=>'test/'+entry.name).sort();const result=cp.spawnSync(process.execPath,['--test',...files],{stdio:'inherit'});if(result.error)throw result.error;process.exit(result.status??1)\"",
+    "test:core": "node -e \"const fs=require('node:fs'),cp=require('node:child_process');const files=fs.readdirSync('test',{withFileTypes:true}).filter(entry=>entry.isFile()&&entry.name.endsWith('.test.mjs')&&!entry.name.startsWith('gui-')).map(entry=>'test/'+entry.name).sort();const result=cp.spawnSync(process.execPath,['--test',...files],{stdio:'inherit'});if(result.error)throw result.error;process.exit(result.status??1)\"",
     "build": "node scripts/build.mjs",
-    "start": "electron .",
+    "start": "node cli/index.mjs service run",
     "dev": "node cli/index.mjs init --gui",
     "pack:win": "electron-builder --win --x64 --dir --publish never",
-    "dist:win": "npm run pack:win && node scripts/zip-win.mjs"
+    "installer:win": "node scripts/build-installer.mjs",
+    "dist:win": "node scripts/build-installer.mjs",
+    "prepare": "node scripts/install-local.mjs"
   },
   "dependencies": {
     "@clack/prompts": "1.8.1",
     "jsonc-parser": "3.3.1",
-    "smol-toml": "1.8.0"
+    "smol-toml": "1.9.1"
   },
   "overrides": {
-    "smol-toml": "1.8.0"
+    "smol-toml": "1.9.1",
+    "http-cache-semantics": "4.3.0",
+    "katex": "0.19.0",
+    "global-agent": "4.1.3"
   },
   "devDependencies": {
     "electron": "44.3.0",

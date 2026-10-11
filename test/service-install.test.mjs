@@ -1,0 +1,731 @@
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseArgs } from '../cli/index.mjs';
+import { createWizardServer } from '../gui/server.mjs';
+import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
+import { mindKeyFor } from '../engine/service/paths.mjs';
+import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+
+const base = {
+  nodePath: 'C:\\Program Files\\node\\node.exe',
+  cliPath: 'C:\\kit\\cli\\index.mjs',
+  mindPath: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd',
+  workingDirectory: 'C:\\kit',
+  localDirectory: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd-service\\key\\DESKTOP',
+  sid: 'S-1-5-21-1',
+};
+
+test('registration plans stay dry and quote the current user', async () => {
+  const windows = await installService({ ...base, platform: 'win32' });
+  assert.equal(windows.dryRun, true);
+  assert.equal(windows.executed.length, 0);
+  assert.match(windows.commands[0], /^schtasks\.exe \/Create /);
+  assert.match(windows.body, /InteractiveToken/);
+  assert.match(windows.body, /LeastPrivilege/);
+  assert.equal(windows.body.includes('SYSTEM'), false);
+  assert.match(windows.body, /S-1-5-21-1/);
+  const mac = planRegistration({ ...base, platform: 'darwin', home: '/Users/ada', uid: 501, nodePath: '/usr/local/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/Users/ada/Library/Application Support/Cosmic/hivem1nd', workingDirectory: '/kit' });
+  assert.match(mac.commands[0], /launchctl bootstrap gui\/501/);
+  const linux = planRegistration({ ...base, platform: 'linux', home: '/home/ada', nodePath: '/usr/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/home/ada/.local/share/Cosmic/hivem1nd', workingDirectory: '/kit' });
+  assert.match(linux.body, /Restart=on-failure/);
+  assert.match(linux.commands[0], /systemctl --user daemon-reload/);
+  const removed = uninstallService(windows);
+  assert.match(removed.commands[0], /schtasks\.exe \/Delete/);
+  assert.equal(verifyOwnedRegistration(null, windows).reason, 'absent');
+  assert.equal(verifyOwnedRegistration({ digest: 'other' }, windows).reason, 'modified');
+  assert.equal(verifyOwnedRegistration({ digest: windows.digest }, windows).owned, true);
+  const config = bootstrapConfig({
+    mindPath: 'C:\\mind',
+    machine: 'DESKTOP',
+    stagingPath: 'C:\\local\\staging',
+    origin: { kind: 'folder', path: 'D:\\origin' },
+  });
+  assert.equal(config.format, 'hivem1nd-service-config-v1');
+  assert.equal(config.port, 0);
+  await assert.rejects(async () => bootstrapConfig({
+    mindPath: 'C:\\mind',
+    machine: 'DESKTOP',
+    stagingPath: 'C:\\mind\\staging',
+    origin: { kind: 'folder', path: 'D:\\origin' },
+    preset: 'quantum',
+  }), { code: 'unsupported_origin' });
+});
+
+test('registration quoting, reinstall, and failed phase recovery stay off the operating system', async (context) => {
+  const quoted = planRegistration({
+    platform: 'win32',
+    nodePath: 'C:\\Program Files\\node.exe',
+    cliPath: 'C:\\kit\\"tools"\\cli.mjs',
+    mindPath: 'C:\\Users\\Niño\\mind',
+    workingDirectory: 'C:\\work\\',
+    localDirectory: 'C:\\local',
+    sid: 'S-1-5-21-9',
+  });
+  assert.match(quoted.body, /Niño/);
+  assert.match(quoted.body, /&quot;/);
+  assert.equal(quoted.body.includes('SYSTEM'), false);
+  assert.equal(quoted.body.includes('HighestAvailable'), false);
+  assert.equal(quoted.encoding, 'utf-16le');
+  assert.throws(() => planRegistration({ ...base, platform: 'win32', cliPath: 'bad\npath' }), { code: 'invalid_path' });
+  const linux = planRegistration({
+    platform: 'linux',
+    nodePath: '/usr/bin/node',
+    cliPath: '/opt/kit/cli/index.mjs',
+    mindPath: '/home/ada/100% done',
+    workingDirectory: '/opt/kit',
+    home: '/home/ada',
+  });
+  assert.match(linux.body, /100%% done/);
+  assert.equal(linux.body.includes('100% done'), false);
+  assert.throws(() => planRegistration({
+    platform: 'linux',
+    nodePath: '/usr/bin/node',
+    cliPath: '/opt/kit/cli/index.mjs',
+    mindPath: '/home/ada/mind',
+    workingDirectory: '/opt/kit',
+    userManager: false,
+  }), { code: 'service_unavailable' });
+
+  const calls = [];
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const input = {
+    config: {
+      mindPath: 'C:\\mind',
+      machine: 'DESKTOP',
+      stagingPath: 'C:\\local\\staging',
+      origin: { kind: 'folder', path: 'D:\\origin' },
+    },
+    registration: { ...base, platform: 'win32', localDirectory: path.join(root, 'local') },
+  };
+  let persisted = 0;
+  const first = await runServicePhases(input, {
+    dryRun: false,
+    run: async (command) => { calls.push(command); },
+    persistConfig: async () => { persisted += 1; },
+    start: async () => { throw new Error('down'); },
+  });
+  assert.equal(first.status, 'failed');
+  assert.equal(first.phase, 'start');
+  assert.equal(first.viewerUrl, null);
+  const xml = await readFile(path.join(root, 'local', 'service-task.xml'));
+  assert.equal(xml[0], 0xff);
+  assert.equal(xml[1], 0xfe);
+  assert.match(xml.toString('utf16le'), /--mind-path/);
+  assert.equal(Array.isArray(calls[0]), true);
+  assert.equal(calls[0][0], 'schtasks.exe');
+  assert.equal(calls[0].includes('--mind'), false);
+  assert.equal(persisted, 1);
+  assert.equal(calls.length, 1);
+  const second = await runServicePhases(input, {
+    dryRun: false,
+    state: first.state,
+    current: { digest: first.state.installed.digest },
+    run: async (command) => { calls.push(command); },
+    persistConfig: async () => { persisted += 1; },
+    start: async () => ({ viewerUrl: 'http://127.0.0.1/gui/v#/' }),
+  });
+  assert.equal(second.status, 'started');
+  assert.equal(second.viewerUrl, 'http://127.0.0.1/gui/v#/');
+  assert.equal(persisted, 1);
+  assert.equal(calls.length, 1);
+  const third = await runServicePhases(input, {
+    dryRun: false,
+    state: second.state,
+    current: { digest: first.state.installed.digest },
+    run: async (command) => { calls.push(command); },
+    persistConfig: async () => { persisted += 1; },
+    start: async () => ({ viewerUrl: 'http://127.0.0.1/gui/v#/' }),
+  });
+  assert.equal(third.status, 'started');
+  assert.equal(calls.length, 1);
+  const foreign = await installService({ ...base, platform: 'win32' }, {
+    dryRun: false,
+    current: { digest: 'other' },
+    run: async () => { calls.push('foreign'); },
+  });
+  assert.equal(foreign.conflict, true);
+  assert.equal(foreign.commands.length, 0);
+  assert.equal(calls.includes('foreign'), false);
+  const same = await installService({ ...base, platform: 'win32' }, {
+    dryRun: false,
+    current: { digest: foreign.digest },
+    run: async () => { calls.push('same'); },
+  });
+  assert.equal(same.action, 'unchanged');
+  assert.equal(calls.includes('same'), false);
+  assert.equal(planRegistration({ ...base, platform: 'win32' }).name, 'HIVEM1ND-1');
+  assert.equal(planRegistration({ ...base, platform: 'win32' }).arguments.includes('--mind'), false);
+});
+
+test('a mismatched operating system registration is left in place', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const localDirectory = path.join(root, 'local');
+  const acl = stubAclRunner();
+  const calls = [];
+  const created = await installService({ ...base, platform: 'win32', localDirectory }, {
+    dryRun: false,
+    aclRunner: acl,
+    query: async () => ({ present: false }),
+    run: async (argv) => { calls.push(argv); },
+  });
+  assert.equal(created.action, 'create');
+  assert.equal(created.os, true);
+  assert.equal(acl.calls.some((call) => call.op === 'protect'), true);
+  assert.equal(calls[0][0], 'schtasks.exe');
+  const blocked = await installService({ ...base, platform: 'win32', localDirectory }, {
+    dryRun: false,
+    current: { installationId: 'ours', digest: created.digest },
+    query: async () => ({ present: true, installationId: 'foreign', executable: 'C:\\other.exe', arguments: [], digest: 'no' }),
+    run: async () => { calls.push('again'); },
+  });
+  assert.equal(blocked.conflict, true);
+  assert.equal(calls.includes('again'), false);
+  const mind = path.join(root, 'mind');
+  const directory = path.join(root, 'Cosmic', 'hivem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX');
+  await mkdir(directory, { recursive: true });
+  const record = {
+    format: 'hivem1nd-registration-v1',
+    installationId: 'ours',
+    executable: created.executable,
+    arguments: created.arguments,
+    name: created.name,
+    path: created.file,
+    body: created.body,
+    digest: created.digest,
+  };
+  const file = path.join(directory, 'registration.json');
+  await writeFile(file, `${JSON.stringify(record)}\n`);
+  const kept = await removeOwnedRegistration({
+    platform: 'win32',
+    mindPath: mind,
+    hostname: 'TESTBOX',
+    cosmicPath: path.join(root, 'Cosmic'),
+    dryRun: false,
+    query: async () => ({ present: true, installationId: 'foreign', executable: 'C:\\other.exe', arguments: [], digest: 'no' }),
+    run: async () => { throw new Error('deleted'); },
+  });
+  assert.match(kept.kept.reason, /left in place/);
+  assert.match(await readFile(file, 'utf8'), /ours/);
+  await assert.rejects(() => startConfiguredViewer({}, {
+    start: async () => ({ http: { port: 1 } }),
+    login: async () => 'http://127.0.0.1/gui/viewer#/',
+  }), { code: 'service_unavailable' });
+  const ready = await startConfiguredViewer({}, {
+    start: async () => ({ http: { port: 9 }, bootstrap: { secret: 's' } }),
+    login: async ({ port, secret }) => (port === 9 && secret === 's' ? 'http://127.0.0.1:9/gui/v#/' : null),
+  });
+  assert.equal(ready.viewerUrl, 'http://127.0.0.1:9/gui/v#/');
+});
+
+test('uninstall describes an owned registration and keeps a modified one', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const mind = path.join(root, 'mind');
+  const home = path.join(root, 'home');
+  const platform = process.platform;
+  const env = platform === 'win32'
+    ? { LOCALAPPDATA: path.join(root, 'local') }
+    : platform === 'darwin'
+      ? {}
+      : { XDG_DATA_HOME: path.join(root, 'share') };
+  const cosmic = platform === 'win32'
+    ? path.join(env.LOCALAPPDATA, 'Cosmic')
+    : platform === 'darwin'
+      ? path.join(home, 'Library', 'Application Support', 'Cosmic')
+      : path.join(env.XDG_DATA_HOME, 'Cosmic');
+  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, platform), 'TESTBOX');
+  await mkdir(directory, { recursive: true });
+  const body = '<Task>owned</Task>';
+  const record = {
+    format: 'hivem1nd-registration-v1',
+    executable: platform === 'win32' ? 'C:\\node.exe' : '/usr/bin/node',
+    arguments: [platform === 'win32' ? 'C:\\cli.mjs' : '/kit/cli.mjs'],
+    name: 'HIVEM1ND-service',
+    path: path.join(directory, 'service-task.xml'),
+    body,
+    digest: createHash('sha256').update(body).digest('hex'),
+  };
+  const file = path.join(directory, 'registration.json');
+  await writeFile(file, `${JSON.stringify(record)}\n`);
+  const described = await removeOwnedRegistration({
+    platform, mindPath: mind, hostname: 'TESTBOX', env, homeDir: home, dryRun: true,
+  });
+  assert.equal(described.described, true);
+  assert.equal(described.commands.length, 1);
+  record.digest = 'tampered';
+  await writeFile(file, `${JSON.stringify(record)}\n`);
+  const kept = await removeOwnedRegistration({
+    platform, mindPath: mind, hostname: 'TESTBOX', env, homeDir: home, dryRun: false, run: async () => { throw new Error('os'); },
+  });
+  assert.equal(kept.kept.path, file);
+  assert.match(await readFile(file, 'utf8'), /tampered/);
+});
+
+test('service install dry-run is a plan and the wizard opens one viewer', async (context) => {
+  const parsed = parseArgs(['service', 'install', '--dry-run', '--origin-kind', 'folder', '--origin-path', 'D:\\origin', '--cosmic-path', 'D:\\Cosmic', '--mind-path', 'D:\\Cosmic\\hivem1nd']);
+  assert.equal(parsed.command, 'service');
+  assert.equal(parsed.options.action, 'install');
+  assert.equal(parsed.options.dryRun, true);
+  assert.equal(parsed.options.originKind, 'folder');
+  const opened = [];
+  let number = 7;
+  const session = {
+    async getStep() { return { number, language: 'en', fields: [], values: {}, done: number === 8 }; },
+    async preview() { return { conflicts: [] }; },
+    async answer() {},
+    async install() {
+      number = 8;
+      return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' };
+    },
+  };
+  const server = await createWizardServer({
+    session,
+    token: 'a'.repeat(43),
+    openCompletedViewer: async (url) => { opened.push(url); },
+  });
+  context.after(() => server.close());
+  const response = await fetch(`${server.origin}/api/v1/install`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${server.token}`,
+      Origin: server.origin,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ confirm: true, conflicts: {} }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
+});
+
+function independentCrc(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+test('installer archives are reproducible and reject malicious containers', async (context) => {
+  const files = [
+    { name: 'notes/readme.txt', data: Buffer.from('alpha') },
+    { name: 'b.txt', data: Buffer.from('beta') },
+  ];
+  const first = build({ files, runtime: 'unverified' });
+  const second = build({ files, runtime: 'unverified' });
+  assert.equal(first.digest, second.digest);
+  assert.equal(first.zip.equals(second.zip), true);
+  assert.equal(first.zip.readUInt32LE(0), 0x04034b50);
+  assert.equal(first.zip.readUInt32LE(first.zip.length - 22), 0x06054b50);
+  const nameLength = first.zip.readUInt16LE(26);
+  const size = first.zip.readUInt32LE(22);
+  const data = first.zip.subarray(30 + nameLength, 30 + nameLength + size);
+  assert.equal(independentCrc(data), first.zip.readUInt32LE(14));
+  const entries = readArchive(first.zip);
+  assert.deepEqual(entries.map((entry) => entry.name), ['b.txt', 'install.cmd', 'manifest.json', 'notes/readme.txt']);
+  const broken = Buffer.from(first.zip);
+  broken[30 + nameLength] ^= 0xff;
+  assert.throws(() => readArchive(broken), { code: 'zip_rejected' });
+  const traversal = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  const from = Buffer.from('aa.txt');
+  const to = Buffer.from('../a/b');
+  let found = 0;
+  let offset = 0;
+  while (offset >= 0 && found < 2) {
+    offset = traversal.indexOf(from, offset);
+    if (offset < 0) break;
+    to.copy(traversal, offset);
+    found += 1;
+    offset += from.length;
+  }
+  assert.equal(found, 2);
+  assert.throws(() => readArchive(traversal), { code: 'zip_rejected' });
+  assert.throws(() => writeZip([{ name: '../x', data: Buffer.from('no') }]), { code: 'zip_rejected' });
+  assert.throws(() => writeZip([{ name: 'a', data: Buffer.from('1') }, { name: 'a', data: Buffer.from('2') }]), { code: 'zip_rejected' });
+  const odd = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  odd.writeUInt16LE(99, odd.readUInt32LE(odd.length - 6) + 10);
+  assert.throws(() => readArchive(odd), { code: 'zip_rejected' });
+  const shifted = Buffer.from(writeZip([{ name: 'aa.txt', data: Buffer.from('hi') }]));
+  const central = shifted.readUInt32LE(shifted.length - 6);
+  shifted.writeUInt32LE(0xfffffff0, central + 42);
+  assert.throws(() => readArchive(shifted), { code: 'zip_rejected' });
+  assert.throws(() => assertZipBounds({ count: 65536, offset: 0, size: 1 }), { code: 'zip_too_large' });
+  const expanded = writeZip([{ name: 'c.txt', data: Buffer.alloc(80, 7), method: 8 }]);
+  assert.throws(() => readArchive(expanded, { maxOutput: 10 }), { code: 'zip_rejected' });
+  const manifest = JSON.parse(entries.find((entry) => entry.name === 'manifest.json').data.toString('utf8'));
+  assert.equal(Object.hasOwn(manifest, 'user'), false);
+  assert.equal(JSON.stringify(manifest).includes('C:\\'), false);
+
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const stage = path.join(root, 'stage');
+  const child = path.join(stage, 'child');
+  await mkdir(child, { recursive: true });
+  await writeFile(path.join(child, 'note.txt'), 'keep');
+  await assert.rejects(() => cleanStage(stage, stage));
+  await assert.rejects(() => cleanStage(path.join(root, '..', 'outside'), stage));
+  const outside = path.join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  await writeFile(path.join(outside, 'safe.txt'), 'safe');
+  const link = path.join(stage, 'link');
+  await symlink(outside, link, 'junction');
+  await assert.rejects(() => cleanStage(link, stage));
+  assert.equal(await readFile(path.join(outside, 'safe.txt'), 'utf8'), 'safe');
+  await cleanStage(child, stage);
+  await assert.rejects(() => access(child), { code: 'ENOENT' });
+
+  const planned = await dryRun({ cliPath: 'C:\\Program Files\\kit\\cli\\index.mjs' });
+  assert.equal(planned.osCalls, 0);
+  assert.equal(planned.activated, false);
+  assert.equal(planned.browserAssets, 'unavailable');
+  assert.match(planned.script, /"%~dp0runtime\\node\.exe"/);
+  assert.match(planned.body, /&quot;C:\\Program Files\\kit\\cli\\index\.mjs&quot;/);
+  assert.throws(() => build({ release: true, browserAssets: 'unavailable' }), /browser assets/);
+  await assert.rejects(() => assertReleaseAssets(root), /browser asset/);
+  const fake = path.join(root, 'fake-node.zip');
+  await writeFile(fake, writeZip([{ name: 'node-v22.23.3-win-x64/node.exe', data: Buffer.from('not-node') }]));
+  const missing = path.join(root, 'artifact.zip');
+  await assert.rejects(() => main(['--node-zip', fake, '--dry-run', '--output', missing]), /digest/);
+  await assert.rejects(() => access(missing), { code: 'ENOENT' });
+  await assert.rejects(() => main(['--output', missing]), /does not download/);
+
+  const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
+  const packages = productionPackages(lock);
+  assert.equal(packages.length, 8);
+  assert.equal(packages.some((item) => item.name === '@clack/prompts'), true);
+  assert.equal(packages.some((item) => item.name === 'electron'), false);
+  await verifyInstalled(packageRoot, packages);
+  const cached = [process.env.HIVEM1ND_NODE_ZIP, path.join(os.homedir(), 'Downloads', 'node-v22.23.3-win-x64.zip')].filter(Boolean);
+  let runtime = 'pinned node-v22.23.3-win-x64.zip unavailable';
+  for (const candidate of cached) {
+    try {
+      await access(candidate);
+      await verifyRuntime(candidate);
+      runtime = `verified ${candidate}`;
+      break;
+    } catch (error) {
+      if (error?.code === 'runtime_digest') runtime = `pinned node archive digest mismatch at ${candidate}`;
+    }
+  }
+  assert.match(runtime, /unavailable|verified|digest mismatch/);
+});
+
+test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offline', async (context) => {
+  assert.ok(NODE_ENTRY_LIMIT >= 86973768);
+  const extra = Buffer.alloc(36);
+  extra.writeUInt16LE(0x000a, 0);
+  extra.writeUInt16LE(32, 2);
+  const archive = writeZip([
+    { name: 'node-v22.23.3-win-x64/', data: Buffer.alloc(0) },
+    { name: NODE_EXE_NAME, data: Buffer.alloc(20, 1), extra },
+    { name: 'node-v22.23.3-win-x64/LICENSE', data: Buffer.from('license'), extra },
+  ]);
+  const entries = readArchive(archive, { maxOutput: 10, only: [NODE_EXE_NAME, 'node-v22.23.3-win-x64/LICENSE'] });
+  assert.deepEqual(entries.map((entry) => entry.name), ['node-v22.23.3-win-x64/LICENSE', NODE_EXE_NAME]);
+  const bad = Buffer.from(archive);
+  const at = bad.indexOf(extra);
+  bad.writeUInt16LE(0x0001, at);
+  assert.throws(() => readArchive(bad), { code: 'zip_rejected' });
+  assert.throws(() => readArchive(writeZip([{ name: 'link.txt', data: Buffer.from('target'), mode: 0o120000 }])), { code: 'zip_rejected' });
+  const version = await confirmRuntimeVersion(Buffer.from('MZ'), {
+    spawn(file, args, options) {
+      assert.equal(args[0], '--version');
+      assert.equal(options.shell, false);
+      assert.equal(options.env.PATH, '');
+      assert.equal(file.endsWith(`${path.sep}node.exe`), true);
+      return 'v22.23.3\n';
+    },
+  });
+  assert.equal(version, 'v22.23.3');
+  await assert.rejects(() => confirmRuntimeVersion(Buffer.from('MZ'), { spawn: () => 'v22.0.0\n' }), { code: 'runtime_version' });
+
+  const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
+  const payload = await collectPayload({
+    executable: Buffer.from('runtime'),
+    license: Buffer.from('node-license'),
+    lock,
+    packageRoot,
+    includeBrowser: false,
+  });
+  const names = new Set(payload.map((file) => file.name));
+  assert.equal(names.has('runtime/node.exe'), true);
+  assert.equal(names.has('runtime/LICENSE'), true);
+  assert.equal(names.has('installer.mjs'), true);
+  assert.equal(names.has('install.cmd'), true);
+  for (const item of productionPackages(lock)) assert.equal(names.has(`${item.key}/package.json`), true);
+  assert.equal([...names].some((name) => name.startsWith('node_modules/electron/')), false);
+  const artifact = build({ files: payload.slice(0, 4), dryRun: true, runtime: 'verified', label: 'dry-run' });
+  const manifest = JSON.parse(readArchive(artifact.zip).find((entry) => entry.name === 'manifest.json').data.toString('utf8'));
+  assert.equal(manifest.label, 'dry-run');
+  assert.equal(manifest.files.some((file) => file.name === 'installer.mjs'), true);
+
+  const stageRoot = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(stageRoot, { recursive: true, force: true }));
+  const planned = await dryRun({
+    files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: Buffer.from('staged') }],
+    stageRoot,
+    cliPath: 'C:\\Program Files\\kit\\cli\\index.mjs',
+    spawn(file, args, options) {
+      assert.equal(options.env.PATH, '');
+      assert.equal(options.shell, false);
+      assert.match(args.at(-1), /@clack\/prompts/);
+      assert.equal(file.endsWith(`${path.sep}node.exe`), true);
+      return '';
+    },
+  });
+  assert.equal(planned.label, 'dry-run');
+  assert.equal(planned.osCalls, 0);
+  assert.equal(planned.activated, false);
+  assert.equal(planned.importSmoke, 'passed');
+  assert.equal(await readFile(path.join(planned.staged, 'notes.txt'), 'utf8'), 'staged');
+});
+
+test('activation keeps the previous payload and refuses a junction stage', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const outside = path.join(root, 'outside');
+  const kit = path.join(root, 'kit');
+  await mkdir(outside, { recursive: true });
+  await mkdir(kit, { recursive: true });
+  await writeFile(path.join(outside, 'secret.txt'), 'safe');
+  await writeFile(path.join(kit, 'previous.txt'), 'keep');
+  await symlink(outside, path.join(root, 'kit.stage'), 'junction');
+  await symlink(outside, path.join(root, 'linked'), 'junction');
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: path.join(root, 'linked', 'kit'),
+    files: [{ name: 'notes.txt', data: Buffer.from('new') }],
+  }), /link/);
+  assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'safe');
+  const notes = Buffer.from('new');
+  const manifest = {
+    files: [{ name: 'notes.txt', bytes: notes.length, sha256: createHash('sha256').update(notes).digest('hex') }],
+  };
+  const identity = { mindPath: path.join(root, 'mind'), machine: 'DESKTOP', localDirectory: path.join(root, 'service-local') };
+  const active = { ...identity, pid: 4, startedAt: '2026-10-10T12:00:00.000Z' };
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'notes.txt', data: notes }],
+    manifest,
+    identity,
+    active: { ...active, mindPath: path.join(root, 'foreign-mind') },
+  }), { code: 'identity_mismatch' });
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'notes.txt', data: notes }],
+    manifest,
+    active,
+  }), { code: 'identity_mismatch' });
+  assert.equal(await readFile(path.join(kit, 'previous.txt'), 'utf8'), 'keep');
+  const activated = await installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: notes }],
+    manifest,
+    identity,
+    active,
+    smoke: true,
+    spawn(file, args, options) {
+      assert.equal(options.env.PATH, '');
+      assert.equal(options.shell, false);
+      assert.match(String(args.at(-1)), /@clack\/prompts/);
+      return '';
+    },
+  });
+  assert.equal(activated.activated, true);
+  assert.equal(await readFile(path.join(kit, 'notes.txt'), 'utf8'), 'new');
+  assert.equal(await readFile(path.join(activated.backup, 'previous.txt'), 'utf8'), 'keep');
+  await assert.rejects(() => access(path.join(kit, 'previous.txt')), { code: 'ENOENT' });
+  assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'safe');
+  const names = await readdir(root);
+  assert.deepEqual(names.filter((name) => name.endsWith('.stage')), ['kit.stage']);
+});
+
+test('release packaging uses the served browser modules', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = path.join(root, 'app');
+  await mkdir(app);
+  assert.equal(BROWSER_ASSETS.includes('app.js'), false);
+  assert.equal(BROWSER_ASSETS.includes('main.mjs'), true);
+  for (const name of BROWSER_ASSETS) {
+    const body = name === 'index.html'
+      ? '<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n'
+      : name === 'main.mjs'
+        ? "import './api.mjs';\n"
+        : 'kept';
+    await writeFile(path.join(app, name), body);
+  }
+  await assertReleaseAssets(app);
+  const archived = new Set(BROWSER_ASSETS.filter((name) => !Object.hasOwn(EMBEDDED_BROWSER_FILES, name)).map((name) => `gui/app/${name}`));
+  assert.equal(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES).length, 0);
+  assert.equal(BROWSER_ASSETS.includes('mark.svg'), true);
+  assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), []);
+  archived.delete('gui/app/main.mjs');
+  assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), ['gui/app/main.mjs']);
+  await rm(path.join(app, 'mark.svg'));
+  await writeFile(path.join(app, 'index.html'), '<link rel="icon" href="mark.svg">\n<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n');
+  await assertReleaseAssets(app);
+  await writeFile(path.join(app, 'main.mjs'), "import './extra.mjs';\n");
+  await assert.rejects(() => assertReleaseAssets(app), /browser asset extra\.mjs/);
+  await rm(path.join(app, 'main.mjs'));
+  await assert.rejects(() => assertReleaseAssets(app), /browser asset main\.mjs/);
+});
+
+test('the generated installer entry activates a temporary kit and a dry-run does not', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const local = path.join(root, 'local');
+  const payload = path.join(root, 'payload');
+  await mkdir(path.join(payload, 'cli'), { recursive: true });
+  await mkdir(path.join(payload, 'runtime'), { recursive: true });
+  const cli = "process.stdout.write('setup');\n";
+  await writeFile(path.join(payload, 'cli', 'index.mjs'), cli);
+  await writeFile(path.join(payload, 'runtime', 'node.exe'), Buffer.from('runtime'));
+  const files = [
+    { name: 'cli/index.mjs', data: Buffer.from(cli) },
+    { name: 'runtime/node.exe', data: Buffer.from('runtime') },
+  ];
+  const manifest = manifestDocument(files);
+  assert.equal(manifest.identity, undefined);
+  manifest.identity = {
+    mindPath: path.join(local, 'Cosmic', 'not-this-mind'),
+    machine: 'OTHER',
+    localDirectory: path.join(local, 'Cosmic', 'not-this-service'),
+  };
+  await writeFile(path.join(payload, 'manifest.json'), `${JSON.stringify(manifest)}\n`);
+  await writeFile(path.join(payload, 'installer.mjs'), installerEntry());
+  assert.match(installerScript(), /%\*/);
+  const recorder = path.join(root, 'record.mjs');
+  const recordFile = path.join(root, 'recorded.txt');
+  await writeFile(recorder, "import { writeFile } from 'node:fs/promises';\nawait writeFile(process.env.RECORD_PATH, process.argv.slice(2).join('\\n'));\n");
+  const env = { ...process.env, LOCALAPPDATA: local, RECORD_PATH: recordFile, HIVEM1ND_REGISTRATION_RUNNER: recorder };
+  const dry = spawnSync(process.execPath, [path.join(payload, 'installer.mjs'), '--dry-run'], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /dry-run/);
+  assert.match(dry.stdout, /action: plan/);
+  assert.match(dry.stdout, /hivem1nd-kit/);
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd-kit')), { code: 'ENOENT' });
+  const installed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const recorded = await readFile(recordFile, 'utf8');
+  assert.match(recorded, /init/);
+  assert.match(recorded, /--gui/);
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd')), { code: 'ENOENT' });
+  const target = path.join(root, 'junction-target');
+  const linked = path.join(root, 'linked-local');
+  await mkdir(target, { recursive: true });
+  await mkdir(linked, { recursive: true });
+  await symlink(target, path.join(linked, 'Cosmic'), 'junction');
+  const blocked = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
+    env: { ...env, LOCALAPPDATA: linked },
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  assert.notEqual(blocked.status, 0);
+  await assert.rejects(() => access(path.join(target, 'hivem1nd-kit')), { code: 'ENOENT' });
+  const mindPath = path.join(local, 'Cosmic', 'mind');
+  const machine = 'DESKTOP';
+  const ownedDirectory = path.join(local, 'Cosmic', 'hivem1nd-service', mindKeyFor(mindPath, 'win32'), machine);
+  await mkdir(ownedDirectory, { recursive: true });
+  await writeFile(path.join(ownedDirectory, 'config.json'), `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath,
+    machine,
+    origin: { kind: 'folder', path: path.join(local, 'Cosmic', 'origin') },
+    stagingPath: path.join(ownedDirectory, 'staging'),
+    port: 0,
+  })}\n`);
+  await writeFile(path.join(ownedDirectory, 'registration.json'), `${JSON.stringify({
+    format: 'hivem1nd-registration-v1',
+    installationId: 'owned',
+    executable: process.execPath,
+    arguments: [],
+    digest: 'owned-digest',
+  })}\n`);
+  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  const activeFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json');
+  await writeFile(activeFile, JSON.stringify({
+    pid: 9,
+    mindPath,
+    machine,
+    localDirectory: ownedDirectory,
+    startedAt: '2026-10-10T12:00:00.000Z',
+  }));
+  const failRunner = path.join(root, 'fail.mjs');
+  await writeFile(failRunner, 'process.exit(1);\n');
+  const rolled = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
+    env: { ...env, HIVEM1ND_REGISTRATION_RUNNER: failRunner },
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  assert.notEqual(rolled.status, 0);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const matched = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(matched.status, 0, matched.stderr);
+  assert.match(matched.stdout, /installed:/);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  await writeFile(activeFile, JSON.stringify({ pid: 9 }));
+  const malformed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.notEqual(malformed.status, 0);
+  assert.match(`${malformed.stderr}\n${malformed.stdout}`, /does not match/);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const mind = path.join(local, 'Cosmic', 'hivem1nd');
+  await mkdir(mind, { recursive: true });
+  await writeFile(path.join(mind, 'keep.txt'), 'mind');
+  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  await writeFile(path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json'), JSON.stringify({
+    pid: 9,
+    mindPath: path.join(local, 'Cosmic', 'foreign-mind'),
+    machine: 'DESKTOP',
+    localDirectory: ownedDirectory,
+    startedAt: '2026-10-10T12:00:00.000Z',
+  }));
+  const refused = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.notEqual(refused.status, 0);
+  assert.match(`${refused.stderr}\n${refused.stdout}`, /does not match/);
+  assert.equal(await readFile(path.join(mind, 'keep.txt'), 'utf8'), 'mind');
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+});
+
+test('CI pins action commits and the install policy ignores scripts', async () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const ci = await readFile(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const release = await readFile(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  const policy = await readFile(path.join(root, '.npmrc'), 'utf8');
+  assert.match(ci, /permissions:\s+contents: read/);
+  assert.match(ci, /npm ci --ignore-scripts/);
+  for (const text of [ci, release]) {
+    assert.equal(/uses: actions\/[A-Za-z0-9-]+@v\d+/.test(text), false);
+    const pins = [...text.matchAll(/uses: actions\/[A-Za-z0-9-]+@([0-9a-f]{40})/g)].map((match) => match[1]);
+    assert.equal(pins.length > 0, true);
+  }
+  assert.match(policy, /^ignore-scripts=true$/m);
+  assert.match(policy, /^min-release-age=7$/m);
+  const readme = await readFile(path.join(root, 'engine', 'service', 'README.md'), 'utf8');
+  assert.match(readme, /whoami\.exe \/user/);
+  assert.match(readme, /icacls\.exe/);
+  assert.equal(readme.includes('.NET'), false);
+  assert.match(readme, /A real login registration was not verified/);
+});

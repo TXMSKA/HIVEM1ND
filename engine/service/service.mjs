@@ -1,0 +1,1270 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { watch } from 'node:fs';
+import { mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { CoreError, canonicalJson, hashBytes, uuidV8 } from './identity.mjs';
+import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
+import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
+import { applyPack } from '../sync/apply.mjs';
+import { openLedger } from '../sync/limits.mjs';
+import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
+import { createPulse } from '../sync/pulse.mjs';
+import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure, stageBaselines } from '../sync/store.mjs';
+import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
+import { createRelay } from '../relay/store.mjs';
+import { createRelayWakeController } from '../relay/wake.mjs';
+import { closeBridge, openBridge } from './bridge.mjs';
+import { bootstrapConfig } from './install.mjs';
+import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, wakeBindingLive } from './security.mjs';
+import { createEventBus, publishDomainEvents } from './events.mjs';
+import { projectChat, readDetail, readSync } from './projection.mjs';
+import { createHttpServer } from './http.mjs';
+import { recoverApprovals } from './approvals.mjs';
+import { deliverNotifications } from './chats.mjs';
+import { resolveActivity } from './watch.mjs';
+
+export function guardPortFor(userKey) {
+  const digest = createHash('sha256').update(String(userKey)).digest();
+  return 49152 + (digest.readUInt16BE(0) % 16384);
+}
+
+export async function startService(options) {
+  assertReady(options);
+  const userKey = await resolveUserKey(options);
+  const port = options.guardPort ?? guardPortFor(userKey);
+  const guard = createServer((socket) => socket.destroy());
+  try {
+    await listen(guard, port);
+  } catch (error) {
+    guard.close();
+    if (error?.code === 'EADDRINUSE') return attachOrStart({ ...options, userKey }, port);
+    throw error;
+  }
+  const nonce = randomUUID();
+  const handle = {
+    options,
+    userKey,
+    port,
+    guard,
+    nonce,
+    children: [],
+    signaled: [],
+    listener: null,
+    bridge: null,
+    beat: null,
+    credentials: options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) }),
+    bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
+  };
+  try {
+    await acquireServiceLock(handle);
+    await recoverTransactions(options.store);
+    const paths = servicePathsFor(options);
+    const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: paths.machine, mind: paths.mind });
+    handle.credentials.bindWake((record) => wakeBindingLive(paths.mind, record, options.now?.() ?? Date.now()));
+    await recoverApprovals({
+      store: options.store,
+      paths,
+      now: options.now ?? (() => Date.now()),
+      projects: options.projects ?? [],
+    });
+    await deliverNotifications({
+      store: options.store,
+      paths,
+      now: options.now ?? (() => Date.now()),
+    });
+    handle.runtime = await openServiceSync({ ...options, paths, bus }, paths);
+    handle.listener = options.listener ? await options.listener() : null;
+    handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
+    handle.credentials.revokeAudience('agent');
+    const bridgeRuntime = { adapters: options.adapters ?? null, ownedPids: options.ownedPids ?? new Set() };
+    handle.bridge = await openBridge({
+      credentials: handle.credentials,
+      now: options.now,
+      relay: handle.relay,
+      paths,
+      operations: bridgeOperations(handle.relay, options, bridgeRuntime),
+    });
+    handle.adapters = openNativeAdapters(options.env ?? process.env);
+    if (options.adapters) Object.assign(handle.adapters.adapters, options.adapters);
+    bridgeRuntime.adapters = handle.adapters.adapters;
+    bridgeRuntime.ownedPids = options.ownedPids ?? bridgeRuntime.ownedPids;
+    options.adapters = bridgeRuntime.adapters;
+    options.ownedPids = bridgeRuntime.ownedPids;
+    handle.bridge.adapters = handle.adapters.adapters;
+    handle.http = await createHttpServer({
+      ...options,
+      paths,
+      bus,
+      credentials: handle.credentials,
+      bootstrap: handle.bootstrapState,
+      ledger: handle.runtime.ledger,
+      sync: handle.runtime.sync,
+      pulse: handle.runtime.pulse,
+      adapters: handle.adapters.adapters,
+    });
+    bindRuntime(handle);
+    handle.adopted = await adoptWake(options, { nonce });
+    handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
+    handle.beat = await armServiceBeat(handle.runtime);
+    return handle;
+  } catch (error) {
+    await rollback(handle);
+    throw error;
+  }
+}
+
+export async function runConfiguredService(options = {}) {
+  const located = await readConfiguredMind(options);
+  const platform = options.platform ?? process.platform;
+  const paths = servicePaths({
+    platform,
+    env: options.env ?? process.env,
+    home: options.home ?? options.homeDir ?? os.homedir(),
+    mindPath: located.mindPath,
+    machine: located.config.machine,
+    originPath: located.config.origin.path,
+  });
+  if (path.resolve(paths.localDirectory) !== path.dirname(located.configFile)) {
+    throw new CoreError(422, 'invalid_path', 'The configured machine directory does not match the mind.');
+  }
+  if (path.resolve(paths.staging) !== path.resolve(located.config.stagingPath)) {
+    throw new CoreError(422, 'invalid_path', 'The configured staging path does not match the mind.');
+  }
+  const store = options.store ?? createRuntimeStore(paths, options);
+  return startService({
+    ...options,
+    store,
+    paths,
+    port: located.config.port,
+    userKey: options.userKey,
+    guardPort: options.guardPort,
+  });
+}
+
+export async function attachOrStart(options, port = options.guardPort) {
+  const deadline = Date.now() + (options.attachTimeoutMs ?? 10000);
+  let bootstrap = null;
+  let active = null;
+  while (Date.now() <= deadline) {
+    bootstrap = await readOptionalJson(bootstrapPath(options));
+    active = await readOptionalJson(activePath(options));
+    if (bootstrap && active && (!validBootstrap(bootstrap) || !validActive(active))) {
+      throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+    }
+    if (bootstrap && active) break;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  if (!bootstrap || !active) throw new CoreError(503, options.attachTimeoutMs == null ? 'service_start_timeout' : 'service_unavailable', 'The guard is occupied by something else.');
+  if (active.mindPath !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
+  if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
+    throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
+  }
+  const lock = parseLock(await readFile(lockPath(options)).catch(() => null));
+  const userKey = options.userKey ?? await resolveUserKey(options);
+  const digest = createHash('sha256').update(canonicalJson(identityOf(options, userKey, port, active.pid))).digest('hex');
+  if (!lock || lock.pid !== active.pid || lock.digest !== digest || !pidAlive(active.pid)) {
+    throw new CoreError(503, 'service_unavailable', 'The running service could not be verified.');
+  }
+  return { attached: true, port, bootstrap, active, mutated: false };
+}
+
+export async function acquireServiceLock(handle) {
+  const file = lockPath(handle.options);
+  const body = lockBody(handle);
+  const bytes = Buffer.from(`${canonicalJson(body)}\n`);
+  try {
+    await writeServiceRootFile(handle.options.store, file, bytes, { exclusive: true });
+    handle.lock = body;
+    return body;
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  const first = await readFile(file);
+  const parsed = parseLock(first);
+  const sameProcess = parsed?.pid === process.pid;
+  if (!parsed || (pidAlive(parsed.pid) && !sameProcess)) {
+    throw new CoreError(503, 'service_unavailable', 'The service lock is already held.');
+  }
+  const second = await readFile(file);
+  if (!first.equals(second)) throw new CoreError(503, 'service_unavailable', 'The service lock is already held.');
+  await writeServiceRootFile(handle.options.store, file, bytes, { exclusive: false });
+  handle.lock = body;
+  return body;
+}
+
+export async function adoptWake(options, { nonce } = {}) {
+  const directory = path.join(options.paths.mind, 'user', 'relay', 'wake', 'policies');
+  let names = [];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return finishWake([], options, nonce);
+    throw error;
+  }
+  const policies = [];
+  for (const name of names) {
+    const parsed = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+    policies.push(parsed);
+  }
+  const merged = new Map();
+  for (const policy of policies) {
+    const id = policy.binding?.unitId || policy.binding?.unit;
+    const prior = merged.get(id);
+    merged.set(id, prior ? mergePolicy(prior, policy) : policy);
+  }
+  return finishWake([...merged.values()], options, nonce);
+}
+
+async function finishWake(policies, options, nonce) {
+  const controller = await startWakeController(options, nonce);
+  const now = options.now?.() ?? Date.now();
+  let workersSpawned = 0;
+  for (const policy of policies) {
+    if (!eligibleWake(policy, options, now)) continue;
+    try {
+      controller.wake.start(policy.binding);
+      workersSpawned += 1;
+    } catch {
+      // A binding that cannot be normalized does not become a worker.
+    }
+  }
+  return { policies, workersSpawned, signaled: [], nonce, controller };
+}
+
+function eligibleWake(policy, options, now) {
+  const binding = policy?.binding;
+  if (policy?.kind !== 'relay-wake-policy' || policy.version !== 1) return false;
+  if (!binding?.unit || !binding.nativeSessionId || !binding.client || !binding.machine) return false;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(policy.generation ?? '')) return false;
+  if (binding.machine !== options.paths?.machine) return false;
+  if (policy.enabled !== true || policy.pausedReason) return false;
+  if (policy.activity?.value === 'unknown') return false;
+  if (policy.quota?.exhausted === true) return false;
+  if (policy.unlimited === true) return true;
+  const deadline = Date.parse(policy.deadlineAt);
+  return Number.isFinite(deadline) && deadline > now;
+}
+
+function bridgeOperations(relay, options, runtime) {
+  return {
+    register: (binding) => relay.register(binding),
+    send: (binding) => relay.send(binding),
+    read: (binding) => relay.read(binding),
+    history: (binding) => relay.history(binding),
+    reminder: (binding) => relay.reminder(binding),
+    activity: (binding) => activityOperation(options, runtime, binding),
+    wake: (binding) => wakeOperation(options, runtime, binding),
+  };
+}
+
+async function wakeOperation(options, runtime, binding) {
+  const delivery = await verifiedDelivery(options, runtime, binding, binding);
+  return bridgeDelivery(delivery, binding);
+}
+
+async function activityOperation(options, runtime, binding) {
+  const live = await nativeSessionLive(options, runtime, binding);
+  if (!live) return { activity: 'unknown', verified: false };
+  if (binding?.activity === 'busy' || binding?.activity === 'idle') return { activity: binding.activity, verified: true };
+  return { activity: 'unknown', verified: true };
+}
+
+async function verifiedDelivery(options, runtime, binding, input = {}) {
+  const gated = deliveryGate(options, binding, input);
+  if (gated) return gated;
+  const live = await nativeSessionLive(options, runtime, binding);
+  if (!live) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  const adapter = (runtime?.adapters ?? options.adapters)?.[binding?.client];
+  if (typeof adapter?.send !== 'function') return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  let result;
+  try {
+    result = await adapter.send({
+      unit: binding?.unit ?? null,
+      unitId: binding?.unitId ?? null,
+      nativeSessionId: binding?.nativeSessionId,
+      client: binding?.client,
+      machine: binding?.machine || options.paths?.machine,
+      text: typeof input?.text === 'string' ? input.text : '',
+      messageIds: Array.isArray(input?.messageIds) ? input.messageIds : [],
+      urgent: input?.urgent === true || binding?.urgent === true,
+    });
+  } catch {
+    return { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' };
+  }
+  return classifySend(result);
+}
+
+function classifySend(result) {
+  if (!result || typeof result !== 'object') return { status: 'ambiguous', reason: 'SINK_AMBIGUOUS' };
+  if (result.ambiguous === true || result.status === 'ambiguous') {
+    return { status: 'ambiguous', reason: typeof result.reason === 'string' ? result.reason : 'SINK_AMBIGUOUS' };
+  }
+  if (result.submitted === true || result.status === 'submitted') return { status: 'submitted' };
+  return {
+    status: 'not_submitted',
+    reason: typeof result.reason === 'string' ? result.reason : 'SINK_NOT_SUBMITTED',
+    ...(result.deferred === true ? { deferred: true } : {}),
+  };
+}
+
+function deliveryGate(options, binding, input) {
+  const activity = input?.activity ?? binding?.activity ?? 'unknown';
+  const urgent = input?.urgent === true || binding?.urgent === true;
+  if (activity === 'busy' && !urgent) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED', deferred: true };
+  if (activity !== 'idle' && !(activity === 'busy' && urgent)) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  const quota = input?.quota ?? binding?.quota;
+  if (quota?.exhausted === true) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  if (binding?.watch === true || input?.watch === true) {
+    const now = options.now?.() ?? Date.now();
+    const watched = options.watch ? resolveActivity(options.watch, binding?.unitId ?? binding?.unit, now) : null;
+    if (!watched) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  }
+  return null;
+}
+
+function bridgeDelivery(delivery, binding) {
+  const deliveryId = typeof binding?.deliveryId === 'string' ? binding.deliveryId : null;
+  if (delivery?.status === 'submitted') return { delivered: true, state: 'submitted', deliveryId };
+  const result = {
+    delivered: false,
+    state: delivery?.status === 'ambiguous' ? 'ambiguous' : 'not_submitted',
+    reason: delivery?.reason ?? 'SINK_NOT_SUBMITTED',
+    deliveryId,
+  };
+  if (delivery?.deferred === true) result.deferred = true;
+  return result;
+}
+
+async function nativeSessionLive(options, runtime, binding) {
+  if (!binding?.nativeSessionId || !binding?.client || !binding?.unit) return false;
+  const machine = binding.machine || options.paths?.machine;
+  if (!machine || binding.machine && binding.machine !== options.paths?.machine) return false;
+  const adapter = (runtime?.adapters ?? options.adapters)?.[binding.client];
+  if (typeof adapter?.confirm !== 'function') return false;
+  const confirmed = await adapter.confirm({
+    unitId: binding.unitId ?? null,
+    nativeSessionId: binding.nativeSessionId,
+    client: binding.client,
+    machine,
+  });
+  if (confirmed !== true) return false;
+  const sessionId = binding.sessionId
+    ?? (binding.unitId ? uuidV8(['session', machine, binding.client, binding.nativeSessionId, binding.unitId]) : null);
+  if (!sessionId) return false;
+  const directory = path.join(options.paths.localDirectory, 'session-starts');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  const owned = runtime?.ownedPids ?? options.ownedPids;
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    let journal;
+    try {
+      journal = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (journal?.sessionId !== sessionId || !Number.isInteger(journal.pid) || journal.pid <= 0) continue;
+    if (owned?.has(journal.pid)) return true;
+  }
+  return false;
+}
+
+export async function writeBeat(options, state) {
+  const record = {
+    format: 'hivem1nd-service-v1',
+    machine: options.paths.machine,
+    state,
+    version: '3.0.0',
+    heartbeatAt: new Date(options.now()).toISOString(),
+    startedAt: new Date(options.startedAt ?? options.now()).toISOString(),
+    clients: Array.isArray(options.clients) ? options.clients.map((item) => ({ id: item.id, enabled: item.enabled === true, installed: item.installed === true })) : [],
+  };
+  const directory = options.paths.origin ? path.join(options.paths.origin, 'machines', options.paths.machine) : options.paths.localDirectory;
+  const file = path.join(directory, 'service.json');
+  await writeDurable(options.store, file, Buffer.from(`${canonicalJson(record)}\n`), [options.paths.mind, options.paths.localDirectory, options.paths.origin, options.store.confineRoot]);
+  return record;
+}
+
+export async function composeCore(options) {
+  if (options.store && options.projects) bindProjects(options.store, options.projects);
+  const paths = servicePathsFor(options);
+  const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine, mind: paths.mind });
+  const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
+  const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
+  const runtime = await openServiceSync({ ...options, paths, bus }, paths);
+  const http = await createHttpServer({
+    ...options,
+    paths,
+    bus,
+    credentials,
+    bootstrap,
+    handlers: options.handlers ?? {},
+    ledger: runtime.ledger,
+    sync: runtime.sync,
+    pulse: runtime.pulse,
+  });
+  bindRuntime({ http, runtime });
+  try {
+    await publishBootstrap({ ...options, paths }, http.port, bootstrap);
+    await armServiceBeat(runtime);
+  } catch (error) {
+    await http.close();
+    throw error;
+  }
+  return { bus, credentials, http, bootstrap, runtime };
+}
+
+export async function stopService(handle) {
+  if (!handle || handle.attached) return { stopped: false };
+  handle.credentials?.revokeAudience('agent');
+  await closeOwned(handle, { beat: true });
+  const raw = await readFile(lockPath(handle.options)).catch(() => null);
+  const parsed = parseLock(raw);
+  if (handle.bootstrapState) handle.bootstrapState.valid = false;
+  if (parsed?.nonce === handle.nonce) {
+    await unlink(lockPath(handle.options)).catch(() => {});
+    await unlink(bootstrapPath(handle.options)).catch(() => {});
+    await unlink(activePath(handle.options)).catch(() => {});
+  }
+  if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
+  return { stopped: true, signaled: handle.signaled };
+}
+
+function mergePolicy(left, right) {
+  const deadline = earlier(left.deadlineAt, right.deadlineAt);
+  const maxHandoffs = Math.min(left.maxHandoffs ?? Infinity, right.maxHandoffs ?? Infinity);
+  const deliveries = { ...(left.deliveries ?? {}), ...(right.deliveries ?? {}) };
+  for (const id of new Set([...Object.keys(left.deliveries ?? {}), ...Object.keys(right.deliveries ?? {})])) {
+    deliveries[id] = dominate(left.deliveries?.[id], right.deliveries?.[id]);
+  }
+  return { ...left, deadlineAt: deadline, maxHandoffs, deliveries, unlimited: false, extended: left.extended === true && right.extended === true };
+}
+
+function dominate(left, right) {
+  const rank = { ambiguous: 3, submitted: 2, attempting: 1, not_submitted: 0, failed: 0 };
+  if (!left) return right;
+  if (!right) return left;
+  return (rank[left.state] ?? 0) >= (rank[right.state] ?? 0) ? left : right;
+}
+
+function earlier(left, right) {
+  const a = Date.parse(left ?? '');
+  const b = Date.parse(right ?? '');
+  if (!Number.isFinite(a)) return right;
+  if (!Number.isFinite(b)) return left;
+  return a <= b ? left : right;
+}
+
+function servicePathsFor(options) {
+  const paths = { ...options.paths };
+  if (!paths.origin) paths.origin = path.join(paths.localDirectory, 'origin');
+  return paths;
+}
+
+function quietTimer(fn, ms) {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  return timer;
+}
+
+function bindRuntime(handle) {
+  const closeHttp = handle.http.close.bind(handle.http);
+  handle.http.close = async () => {
+    await closeServiceSync(handle.runtime);
+    await closeHttp();
+  };
+}
+
+async function openServiceSync(options, paths) {
+  await mkdir(path.join(paths.origin, 'machines'), { recursive: true });
+  const now = options.now ?? (() => Date.now());
+  const sync = openSync({ store: options.store, paths, now, projects: options.projects ?? [] });
+  const origin = openOrigin({ store: options.store, paths, now, machine: paths.machine });
+  const ledger = openLedger({ store: options.store, paths, now, machine: paths.machine });
+  const pulse = createPulse({ sync, origin, ledger, now, setTimeout: quietTimer, clearTimeout });
+  const runtime = {
+    sync,
+    origin,
+    ledger,
+    pulse,
+    paths,
+    now,
+    beat: null,
+    beatTimer: null,
+    closed: false,
+    lastError: null,
+    bus: options.bus ?? null,
+    env: options.env ?? process.env,
+    clientOptions: Array.isArray(options.clients) ? options.clients : null,
+    startedAt: new Date(options.startedAt ?? now()).toISOString(),
+  };
+  try {
+    await stageBaselines(sync);
+    await pulse.resume();
+    runtime.unwatch = watchOrigin(origin, () => {
+      reconcileOrigin(runtime).catch((error) => {
+        runtime.lastError = error;
+      });
+    });
+    runtime.unwatchProject = watchProjects(paths.mind);
+    return runtime;
+  } catch (error) {
+    await closeServiceSync(runtime, { beat: false });
+    throw error;
+  }
+}
+
+async function publishServiceBeat(runtime, state) {
+  if (!runtime.clientRecords) {
+    if (runtime.clientOptions) runtime.clientRecords = runtime.clientOptions;
+    else {
+      try {
+        runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, platform: process.platform }));
+      } catch {
+        runtime.clientRecords = clientRecords({});
+      }
+    }
+  }
+  const record = {
+    format: 'hivem1nd-service-v1',
+    machine: runtime.paths.machine,
+    state,
+    version: '3.0.0',
+    heartbeatAt: new Date(runtime.now()).toISOString(),
+    startedAt: runtime.startedAt,
+    clients: runtime.clientRecords,
+  };
+  const result = await runtime.pulse.beat(record);
+  if (result.published) runtime.beat = result.record ?? record;
+  return runtime.beat;
+}
+
+async function closeServiceSync(runtime, { beat = true } = {}) {
+  if (!runtime || runtime.closed) return;
+  runtime.closed = true;
+  if (runtime.beatTimer) clearInterval(runtime.beatTimer);
+  runtime.beatTimer = null;
+  if (runtime.unwatchProject) await runtime.unwatchProject();
+  runtime.unwatchProject = null;
+  if (beat) {
+    try {
+      await publishServiceBeat(runtime, 'stopped');
+    } catch {
+      // A failed final beat must not leave the watcher or the pulse open.
+    }
+  }
+  await runtime.pulse.close().done;
+  if (runtime.unwatch) await runtime.unwatch();
+  await closeOrigin(runtime.origin);
+}
+
+async function reconcileOrigin(runtime) {
+  try {
+    await receiveOrigin(runtime);
+    const previous = await readInboundFailure(runtime.sync);
+    await clearInboundFailure(runtime.sync);
+    if (previous) await publishSyncState(runtime);
+  } catch (error) {
+    runtime.lastError = error;
+    await recordInboundFailure(runtime.sync, error);
+    await publishSyncState(runtime);
+    throw error;
+  }
+}
+
+async function publishSyncState(runtime) {
+  if (!runtime?.bus) return;
+  const snapshot = await readSync({
+    sync: runtime.sync,
+    ledger: runtime.ledger,
+    paths: runtime.paths,
+    now: runtime.now,
+  });
+  publishDomainEvents({
+    bus: runtime.bus,
+    paths: runtime.paths,
+    store: runtime.sync.store,
+  }, [{
+    name: 'sync.changed',
+    operationId: `sync-state:${snapshot.state}:${snapshot.error?.code ?? 'clear'}:${snapshot.retryAt ?? ''}`,
+    source: { kind: 'service', id: runtime.paths.machine, unitId: null },
+    data: {
+      state: snapshot.state,
+      pendingChanges: snapshot.pendingChanges,
+      limits: snapshot.limits,
+      retryAt: snapshot.retryAt,
+      error: snapshot.error,
+    },
+  }]);
+}
+
+async function receiveOrigin(runtime) {
+  const names = await listMachineNames(runtime.origin);
+  const bindings = await ownerBindings(runtime.sync);
+  const provider = {
+    async readHead(machine) { return readHead(runtime.origin, machine); },
+    async readPack(machine, sequence) { return readOriginPack(runtime.origin, machine, sequence); },
+  };
+  for (const machine of names) {
+    await mirrorBeat(runtime, machine);
+    if (machine === runtime.origin.machine) continue;
+    const head = await readHead(runtime.origin, machine);
+    const sequence = head?.sequence ?? 0;
+    for (let index = 1; index <= sequence; index += 1) {
+      const packed = await readOriginPack(runtime.origin, machine, index);
+      if (!packed) continue;
+      const applied = await applyPack(runtime.sync, packed, {
+        provider,
+        bindings,
+        ledger: runtime.ledger,
+        projects: runtime.sync.projects,
+      });
+      await emitImported(runtime, applied);
+    }
+  }
+  await retryPending(runtime, provider, bindings);
+}
+
+async function retryPending(runtime, provider, bindings) {
+  const root = path.join(runtime.paths.localDirectory, 'received', 'pending');
+  let machines = [];
+  try {
+    machines = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const machine of machines) {
+    if (!machine.isDirectory() || machine.isSymbolicLink()) continue;
+    const names = await readdir(path.join(root, machine.name));
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const sequence = Number(name.slice(0, -'.json'.length));
+      if (!Number.isInteger(sequence)) continue;
+      const packed = await readOriginPack(runtime.origin, machine.name, sequence);
+      if (!packed) continue;
+      const applied = await applyPack(runtime.sync, packed, {
+        provider,
+        bindings,
+        ledger: runtime.ledger,
+        projects: runtime.sync.projects,
+      });
+      await emitImported(runtime, applied);
+    }
+  }
+}
+
+async function emitImported(runtime, result) {
+  if (!runtime?.bus || result?.status !== 'applied' || result.replayed === true) return;
+  const selected = latestImported(result.changes ?? []);
+  if (selected.length === 0) return;
+  const context = {
+    paths: runtime.paths,
+    store: runtime.sync.store,
+    now: runtime.now,
+    projects: runtime.sync.projects ?? [],
+    principal: { audience: 'desktop', unitId: 'root:master' },
+  };
+  const sourceMachine = result.machine ?? selected[0].machine;
+  const events = [];
+  const collections = new Set();
+  for (const change of selected) {
+    try {
+      const built = await eventsForImported(runtime, context, change);
+      for (const event of built.events) events.push(event);
+      for (const name of built.collections) collections.add(name);
+    } catch (error) {
+      runtime.lastError = error;
+    }
+  }
+  if (collections.size > 0) {
+    events.push({
+      name: 'view.changed',
+      operationId: `sync-view:${sourceMachine}:${result.sequence}`,
+      source: { kind: 'sync', id: sourceMachine, unitId: null },
+      data: {
+        revision: hashBytes(Buffer.from(selected.map((item) => item.id).sort().join('\n'))),
+        collections: [...collections].sort(),
+      },
+    });
+  }
+  if (events.length === 0) return;
+  publishDomainEvents({ bus: runtime.bus, paths: runtime.paths, store: runtime.sync.store }, events);
+}
+
+function latestImported(changes) {
+  const unique = [];
+  const seen = new Set();
+  for (const change of changes) {
+    if (!change?.id || seen.has(change.id)) continue;
+    seen.add(change.id);
+    unique.push(change);
+  }
+  const byTarget = new Map();
+  for (const change of unique) byTarget.set(importedTargetKey(change.target), change);
+  return [...byTarget.values()];
+}
+
+function importedTargetKey(target) {
+  const file = slashPath(target?.path);
+  if (target?.kind === 'project') return `project\n${target.project ?? ''}\n${file}`;
+  return `mind\n${file}`;
+}
+
+function slashPath(value) {
+  return String(value ?? '').replaceAll('\\', '/');
+}
+
+function syncSource(change) {
+  return { kind: 'sync', id: change.machine, unitId: null };
+}
+
+async function eventsForImported(runtime, context, change) {
+  const target = change.target ?? {};
+  const file = slashPath(target.path);
+  if (!file || file.includes('.conflict-') || file.includes('/read/')) return { events: [], collections: [] };
+  if (target.kind === 'project') return editorImport(runtime, change, target, file);
+  return mindImport(runtime, context, change, file);
+}
+
+async function mindImport(runtime, context, change, file) {
+  const source = syncSource(change);
+  const message = /^user\/relay\/chats\/([^/]+)\/([^/]+)\.md$/.exec(file);
+  if (message && message[2] !== 'chat') {
+    if (change.operation === 'delete') return { events: [], collections: ['chats'] };
+    const chatId = message[1];
+    const projected = await readDetail(context, 'messages', message[2], { chatId });
+    const events = [{
+      name: 'message.created',
+      operationId: change.id,
+      chatId,
+      source,
+      data: { chatId, mailboxId: null, message: projected },
+    }];
+    try {
+      const chat = await projectChat(context, chatId);
+      events.push({ name: 'chat.changed', operationId: change.id, chatId, source, data: { chat } });
+    } catch (error) {
+      if (error?.code !== 'chat_not_found') throw error;
+    }
+    return { events, collections: ['chats'] };
+  }
+  const chatMeta = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
+  if (chatMeta) {
+    if (change.operation === 'delete') return { events: [], collections: ['chats'] };
+    const chat = await projectChat(context, chatMeta[1]);
+    return {
+      events: [{ name: 'chat.changed', operationId: change.id, chatId: chat.id, source, data: { chat } }],
+      collections: ['chats'],
+    };
+  }
+  const fallbackUnit = stateUnitId(file);
+  if (!fallbackUnit) return { events: [], collections: [] };
+  if (change.operation === 'delete') return { events: [], collections: ['units', 'leads', 'squads'] };
+  const bytes = await readFile(path.join(runtime.paths.mind, ...file.split('/')));
+  const unit = await readDetail(context, 'units', headerValue(bytes, 'unit-id') || fallbackUnit);
+  return {
+    events: [{ name: 'unit.changed', operationId: change.id, unitId: unit.id, source, data: { unit } }],
+    collections: ['units', 'leads', 'squads'],
+  };
+}
+
+function stateUnitId(file) {
+  const parts = file.split('/');
+  if (parts[0] !== 'user' || !file.endsWith('.md')) return null;
+  if (parts[1] === 'state' && parts.length === 3) return `root:${path.basename(parts[2], '.md').toLowerCase()}`;
+  if (parts[1] === 'environments' && parts[3] === 'state' && parts.length === 5) return `env:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
+  if (parts[1] === 'projects' && parts[3] === 'state' && parts.length === 5) return `project:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
+  return null;
+}
+
+function headerValue(bytes, name) {
+  const text = bytes.toString('utf8');
+  const split = text.indexOf('\n\n');
+  const head = split >= 0 ? text.slice(0, split) : text;
+  for (const line of head.split(/\r?\n/)) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    if (line.slice(0, colon).trim().toLowerCase() === name) return line.slice(colon + 1).trim();
+  }
+  return '';
+}
+
+async function editorImport(runtime, change, target, file) {
+  const kind = editorKind(file);
+  if (!kind) return { events: [], collections: [] };
+  if (change.operation === 'delete') return { events: [], collections: ['editors'] };
+  const project = (runtime.sync.projects ?? []).find((item) => item.name === target.project && item.localPath);
+  if (!project) return { events: [], collections: [] };
+  const bytes = await readFile(path.join(project.localPath, ...file.split('/')));
+  const revision = hashBytes(bytes);
+  const resourceId = await catalogResourceId(runtime, target.project, file, kind);
+  const source = syncSource(change);
+  if (kind === 'blueprint') {
+    return {
+      events: [{
+        name: 'blueprint.changed',
+        operationId: change.id,
+        resourceId,
+        revision,
+        source,
+        data: { resourceId, revision, operation: 'import', nodeId: null },
+      }],
+      collections: ['editors'],
+    };
+  }
+  let rev = null;
+  try {
+    rev = JSON.parse(bytes.toString('utf8'))?.rev ?? null;
+  } catch {
+    rev = null;
+  }
+  return {
+    events: [{
+      name: 'void.changed',
+      operationId: change.id,
+      resourceId,
+      revision,
+      source,
+      data: { resourceId, revision, rev, operation: 'import', k: null, lang: null },
+    }],
+    collections: ['editors'],
+  };
+}
+
+function editorKind(file) {
+  if (!file.startsWith('docs/')) return null;
+  const rest = file.slice('docs/'.length);
+  if (rest.endsWith('.orig.json') || rest.endsWith('.comments.json') || rest.endsWith('.versions.jsonl')) return null;
+  if (rest === 'flows/boards/index.json' || rest.startsWith('flows/assets/') || rest.startsWith('flows/comments/')) return null;
+  if (rest.startsWith('flows/boards/') && (rest.endsWith('.json') || rest.endsWith('.mjs'))) return 'blueprint';
+  if (rest.endsWith('.json') || rest.endsWith('.mjs')) return 'void';
+  return null;
+}
+
+async function catalogResourceId(runtime, project, file, kind) {
+  try {
+    const catalog = JSON.parse(await readFile(path.join(runtime.paths.mind, 'user', 'gui', 'resources.json'), 'utf8'));
+    const entry = (catalog?.resources ?? []).find((item) => item?.project === project && item?.path === file && typeof item.id === 'string');
+    if (entry) return entry.id;
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  return uuidV8(['editor', kind, project, file]);
+}
+
+async function mirrorBeat(runtime, machine) {
+  const source = path.join(runtime.paths.origin, 'machines', machine, 'service.json');
+  let bytes;
+  try {
+    bytes = await readFile(source);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return;
+  }
+  if (parsed?.format !== 'hivem1nd-service-v1') return;
+  const destination = path.join(runtime.paths.mind, 'machines', machine, 'service.json');
+  await atomicWrite(runtime.sync.store, destination, Buffer.from(`${canonicalJson(parsed)}\n`));
+}
+
+async function ownerBindings(sync) {
+  const bindings = { requests: {}, approvals: {}, revocations: {} };
+  await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'requests'), (record) => {
+    if (record?.format === 'hivem1nd-session-request-v1' && record.id) bindings.requests[record.id] = { targetMachine: record.targetMachine };
+  });
+  await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'approvals'), (record) => {
+    if (record?.format === 'hivem1nd-approval-v1' && record.id) bindings.approvals[record.id] = { machine: record.machine };
+    if (record?.format === 'hivem1nd-approval-binding-v1' && record.approvalId) {
+      bindings.approvals[record.approvalId] = { machine: record.machine ?? bindings.approvals[record.approvalId]?.machine };
+    }
+    if (record?.format === 'hivem1nd-grant-revocation-result-v1' && record.requestId) bindings.revocations[record.requestId] = { machine: record.machine };
+  });
+  return bindings;
+}
+
+async function readJsonTree(directory, visit) {
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await readJsonTree(full, visit);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      await visit(JSON.parse(await readFile(full, 'utf8')));
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+}
+
+function assertReady(options) {
+  if (!options?.paths?.mind || !options?.store) throw new CoreError(503, 'service_unavailable', 'The service needs a configured mind.');
+}
+
+async function publishBootstrap(options, httpPort, state) {
+  const now = options.now ?? (() => Date.now());
+  const startedAt = new Date(options.startedAt ?? now()).toISOString();
+  const origin = `http://127.0.0.1:${httpPort}`;
+  const secretBytes = randomBytes(32);
+  const secret = secretBytes.toString('base64url');
+  const record = { format: 'hivem1nd-bootstrap-v1', origin, secret, startedAt };
+  const active = {
+    pid: process.pid,
+    mindPath: options.paths.mind,
+    machine: options.paths.machine,
+    localDirectory: options.paths.localDirectory,
+    startedAt,
+  };
+  const local = { format: 'hivem1nd-service-local-v1', pid: process.pid, origin, startedAt };
+  const file = bootstrapPath(options);
+  try {
+    await writeDescriptor(options.store, activePath(options), Buffer.from(`${canonicalJson(active)}\n`));
+    await atomicWrite(options.store, path.join(options.paths.localDirectory, 'service.json'), Buffer.from(`${canonicalJson(local)}\n`));
+    await atomicWrite(options.store, file, Buffer.from(`${canonicalJson(record)}\n`));
+    state.file = file;
+    state.secretBytes = secretBytes;
+    state.secret = secret;
+    state.record = record;
+    state.valid = false;
+    await protectBootstrapFiles(path.dirname(file), file, {
+      aclRunner: options.aclRunner,
+      store: options.store,
+      fail: options.bootstrapFail === true,
+    });
+    state.valid = true;
+    return record;
+  } catch (error) {
+    state.valid = false;
+    state.secret = null;
+    state.secretBytes = null;
+    state.record = null;
+    if (state.file) await unlink(state.file).catch(() => {});
+    throw error;
+  }
+}
+
+function descriptorOf(handle) {
+  return identityOf(handle.options, handle.userKey, handle.port, process.pid);
+}
+
+function identityOf(options, userKey, port, pid) {
+  return {
+    format: 'hivem1nd-service-descriptor-v1',
+    mind: path.resolve(options.paths.mind),
+    machine: options.paths.machine,
+    userKey,
+    port,
+    pid,
+  };
+}
+
+async function readOptionalJson(file) {
+  let text;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
+  }
+}
+
+function validBootstrap(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (Object.keys(record).sort().join(',') !== 'format,origin,secret,startedAt') return false;
+  if (record.format !== 'hivem1nd-bootstrap-v1' || typeof record.origin !== 'string' || typeof record.startedAt !== 'string') return false;
+  return /^[A-Za-z0-9_-]{43}$/.test(record.secret) && Buffer.from(record.secret, 'base64url').length === 32;
+}
+
+function validActive(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (Object.keys(record).sort().join(',') !== 'localDirectory,machine,mindPath,pid,startedAt') return false;
+  return typeof record.mindPath === 'string'
+    && typeof record.machine === 'string'
+    && typeof record.localDirectory === 'string'
+    && Number.isInteger(record.pid)
+    && typeof record.startedAt === 'string';
+}
+
+function contained(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+async function writeDescriptor(store, destination, bytes) {
+  await writeServiceRootFile(store, destination, bytes, { exclusive: false, name: 'active.json' });
+}
+
+async function rollback(handle) {
+  if (handle.bootstrapState) handle.bootstrapState.valid = false;
+  if (handle.bootstrapState?.file) await unlink(handle.bootstrapState.file).catch(() => {});
+  await closeOwned(handle, { beat: false });
+  const raw = await readFile(lockPath(handle.options)).catch(() => null);
+  if (parseLock(raw)?.nonce === handle.nonce) await unlink(lockPath(handle.options)).catch(() => {});
+  if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
+}
+
+function listen(server, port) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+async function resolveUserKey(options) {
+  if (options.userKey) return String(options.userKey);
+  if (process.platform === 'win32') return aclRunnerFrom(options).userSid();
+  if (typeof process.getuid === 'function') return String(process.getuid());
+  throw new CoreError(503, 'bootstrap_unavailable', 'The current user could not be identified.');
+}
+
+async function readConfiguredMind(options) {
+  if (!options.mindPath) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? options.homeDir ?? os.homedir();
+  const cosmic = options.cosmicPath ? path.resolve(options.cosmicPath) : localCosmic({ platform, env, home });
+  const mindPath = path.resolve(options.mindPath);
+  const root = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mindPath, platform));
+  let entries = [];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+    throw error;
+  }
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const file = path.join(root, entry.name, 'config.json');
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(file, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
+    }
+    found.push({ machine: entry.name, file, parsed });
+  }
+  if (found.length === 0) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  const wanted = options.hostname ?? options.machine ?? null;
+  const chosen = wanted ? found.find((item) => item.machine === wanted || item.parsed?.machine === wanted) : found.length === 1 ? found[0] : null;
+  if (!chosen) throw new CoreError(409, 'service_mind_conflict', 'The configured machine does not match.');
+  if (chosen.parsed?.format !== 'hivem1nd-service-config-v1') throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
+  const config = bootstrapConfig(chosen.parsed);
+  if (path.resolve(config.mindPath) !== mindPath || config.machine !== chosen.machine) {
+    throw new CoreError(422, 'invalid_body', 'The configured mind does not match.');
+  }
+  return { cosmic, mindPath, config, configFile: chosen.file };
+}
+
+function createRuntimeStore(paths, options) {
+  const store = createStore({
+    root: paths.cosmic,
+    mindPath: paths.mind,
+    localDirectory: paths.localDirectory,
+    now: options.now ?? (() => Date.now()),
+    confineRoot: options.confineRoot ?? null,
+  });
+  if (options.aclRunner) store.aclRunner = options.aclRunner;
+  bindProjects(store, options.projects ?? []);
+  return store;
+}
+
+async function startWakeController(options, nonce) {
+  const wake = await createRelayWakeController({
+    mindPath: options.paths.mind,
+    hostname: options.paths.machine,
+    pollIntervalMs: 1000,
+    clock: {
+      now: () => options.now?.() ?? Date.now(),
+      sleep(ms, signal) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          timer.unref?.();
+          signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+        });
+      },
+    },
+    sink: options.wakeSink ?? ((input) => verifiedDelivery(options, { adapters: options.adapters, ownedPids: options.ownedPids }, input?.binding, input)),
+  });
+  let closed = false;
+  return {
+    started: true,
+    nonce: nonce ?? null,
+    wake,
+    close() {
+      if (closed) return null;
+      closed = true;
+      return wake.stopAll('stopped');
+    },
+  };
+}
+
+export function openNativeAdapters(env = process.env, hooks = {}) {
+  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs };
+  const adapters = {
+    claude: createNativeAdapter('claude', shared),
+    codex: createNativeAdapter('codex', shared),
+    cursor: createNativeAdapter('cursor', shared),
+  };
+  return {
+    adapters,
+    async close() {
+      await Promise.all(Object.values(adapters).map((adapter) => adapter.close()));
+    },
+  };
+}
+
+async function armServiceBeat(runtime) {
+  if (!runtime || runtime.closed || runtime.beatTimer) return runtime?.beat ?? null;
+  runtime.beat = await publishServiceBeat(runtime, 'running');
+  runtime.beatTimer = setInterval(() => {
+    publishServiceBeat(runtime, 'running').catch((error) => {
+      runtime.lastError = error;
+    });
+  }, 60000);
+  runtime.beatTimer.unref?.();
+  return runtime.beat;
+}
+
+function watchProjects(directory) {
+  let watcher = null;
+  try {
+    watcher = watch(directory, { persistent: false, recursive: process.platform === 'win32' || process.platform === 'darwin' }, () => {});
+    watcher.unref?.();
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  return async () => {
+    watcher?.close();
+    watcher = null;
+  };
+}
+
+async function closeOwned(handle, { beat = true } = {}) {
+  await handle.adopted?.controller?.close?.();
+  if (handle.adapters?.close) await handle.adapters.close().catch(() => {});
+  if (handle.http?.close) await handle.http.close().catch(() => {});
+  else if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat }).catch(() => {});
+  if (handle.listener?.close) await handle.listener.close().catch(() => {});
+  await closeBridge(handle.bridge).catch(() => {});
+}
+
+function lockBody(handle) {
+  return {
+    nonce: handle.nonce,
+    pid: process.pid,
+    digest: createHash('sha256').update(canonicalJson(descriptorOf(handle))).digest('hex'),
+  };
+}
+
+function parseLock(bytes) {
+  if (!bytes) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    if (!parsed || typeof parsed.nonce !== 'string' || !Number.isInteger(parsed.pid) || !/^[0-9a-f]{64}$/.test(parsed.digest ?? '')) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function serviceRootOf(options) {
+  return options.paths.serviceRoot ?? path.dirname(path.dirname(options.paths.localDirectory));
+}
+
+async function writeServiceRootFile(store, destination, bytes, { exclusive = false, name = null } = {}) {
+  const resolved = path.resolve(destination);
+  const expected = name ?? path.basename(resolved);
+  if (expected !== 'active.json' && expected !== 'service.lock') {
+    throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
+  }
+  const serviceRoot = path.resolve(path.dirname(path.dirname(store.localDirectory)));
+  if (path.resolve(serviceRoot, expected) !== resolved) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the service directory.');
+  if (store.confineRoot && !contained(store.confineRoot, resolved)) throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
+  await assertNoLinks(resolved, { root: store.confineRoot });
+  await mkdir(path.dirname(resolved), { recursive: true });
+  if (exclusive) {
+    const handle = await open(resolved, 'wx');
+    try {
+      await handle.writeFile(bytes);
+    } catch (error) {
+      await handle.close();
+      await unlink(resolved).catch(() => {});
+      throw error;
+    }
+    await handle.close();
+    return resolved;
+  }
+  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${randomBytes(8).toString('hex')}.tmp`);
+  await writeFile(temporary, bytes, { flag: 'wx' });
+  try {
+    await rename(temporary, resolved);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+  return resolved;
+}
+
+function lockPath(options) {
+  return options.paths.lockFile ?? path.join(serviceRootOf(options), 'service.lock');
+}
+
+function bootstrapPath(options) {
+  return path.join(options.paths.localDirectory, 'bootstrap.json');
+}
+
+function activePath(options) {
+  return options.paths.activeFile ?? path.join(path.dirname(path.dirname(options.paths.localDirectory)), 'active.json');
+}

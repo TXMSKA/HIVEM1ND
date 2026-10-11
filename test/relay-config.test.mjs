@@ -188,16 +188,14 @@ test('Claude and Cursor config schemas keep their native structure and Windows h
     assert.ok(claudeHooks[event], `Claude hook ${event} is configured`);
     assert.ok(!claudeHooks[event][0].hooks[0].args.includes('--unit'), 'global Claude hooks never fix a role for every chat');
   }
-  assert.equal(claudeHooks.PreToolUse[0].hooks[0].async, true);
+  assert.equal(claudeHooks.PreToolUse[0].hooks[0].async, undefined);
+  assert.ok(claudeHooks.PreToolUse[0].hooks[0].timeout >= 120);
   const cursor = buildClientConfig({ client: 'cursor', existing: { mcp: '{"version":1,"mcpServers":{"other":{}}}', hooks: '{"version":1,"hooks":{"beforeSubmitPrompt":[{"command":"echo keep"}]}}' }, kitPath: 'C:/kit', mindPath: 'C:/mind', platform: 'win32' });
   assert.equal(JSON.parse(cursor.mcp).mcpServers.other !== undefined, true);
   assert.equal(JSON.parse(cursor.hooks).hooks.beforeSubmitPrompt[0].command, 'echo keep');
   const cursorCommand = JSON.parse(cursor.hooks).hooks.sessionStart[0].command;
-  assert.match(cursorCommand, /^powershell\.exe -NoProfile -NonInteractive -EncodedCommand /);
-  const encoded = cursorCommand.split(' ').at(-1);
-  const cursorScript = Buffer.from(encoded, 'base64').toString('utf16le');
-  assert.match(cursorScript, /'relay' 'hook' '--client' 'cursor' '--event' 'sessionStart'/);
-  assert.doesNotMatch(cursorCommand, /ExecutionPolicy/);
+  assert.doesNotMatch(cursorCommand, /powershell|EncodedCommand|ExecutionPolicy/i);
+  assert.match(cursorCommand, /"relay" "hook" "--client" "cursor" "--event" "sessionStart"/);
 });
 
 test('malformed config prevents partial install and preserves both files', async (context) => {
@@ -405,7 +403,7 @@ test('Antigravity configure blocks invalid or unsafe settings and paths without 
   assert.equal(await readFile(file, 'utf8'), '{}');
 });
 
-test('the Windows hook command hands a payload with a byte order mark and accents to node intact', { skip: process.platform !== 'win32' && 'runs Windows PowerShell' }, async (context) => {
+test('the Windows hook command hands a payload with a byte order mark and accents to node intact', { skip: process.platform !== 'win32' && 'runs the Windows hook command' }, async (context) => {
   const mind = await mkdtemp(path.join(os.tmpdir(), 'relay-hook-encoding-'));
   context.after(() => rm(mind, { recursive: true, force: true }));
   const kitPath = path.resolve(import.meta.dirname, '..');

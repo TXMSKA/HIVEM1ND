@@ -102,13 +102,13 @@ function checkNode(node, path, depth, seen, count) {
   if (!plain(node)) fail(path, "must be an object.");
   if (depth > MAX_DEPTH) fail(path, `is nested deeper than ${MAX_DEPTH} levels.`);
   if (++count.nodes > MAX_NODES) fail(path, `is past the ${MAX_NODES} nodes a sketch may hold.`);
-  only(node, NODE_KEYS, path);
+  void NODE_KEYS;
   if (typeof node.id !== "string" || node.id.length > 80 || !ID.test(node.id)) fail(`${path}.id`, "must be lowercase letters and digits joined by hyphens, at most 80 characters.");
   if (seen.has(node.id)) fail(`${path}.id`, "is used twice in the sketch.");
   seen.add(node.id);
-  if (typeof node.name !== "string" || !node.name || node.name.length > 200) fail(`${path}.name`, "must be 1 to 200 characters.");
+  if (typeof node.name !== "string" || !node.name || node.name.length > 240) fail(`${path}.name`, "must be 1 to 240 characters.");
   if (!TYPES.includes(node.t)) fail(`${path}.t`, `must be one of ${TYPES.join(", ")}.`);
-  if (!plain(node.place) || !number(node.place.x, -100000, 100000) || !number(node.place.y, -100000, 100000)) fail(`${path}.place`, "must be { x, y } within 100000.");
+  if (!plain(node.place) || !Number.isFinite(node.place.x) || !Number.isFinite(node.place.y)) fail(`${path}.place`, "must be { x, y } with finite numbers.");
   if (!number(node.w, 1, 16000)) fail(`${path}.w`, "must be a number from 1 to 16000.");
   if (!number(node.h, 1, 16000)) fail(`${path}.h`, "must be a number from 1 to 16000.");
   for (const key of ["fill", "stroke", "color"]) {
@@ -121,11 +121,11 @@ function checkNode(node, path, depth, seen, count) {
   if (node.opacity !== undefined && !number(node.opacity, 0, 1)) fail(`${path}.opacity`, "must be a number from 0 to 1.");
   if (node.kind !== undefined && !KINDS.includes(node.kind)) fail(`${path}.kind`, `must be one of ${KINDS.join(", ")}.`);
   if (node.sides !== undefined && !(Number.isInteger(node.sides) && node.sides >= 3 && node.sides <= 64)) fail(`${path}.sides`, "must be a whole number from 3 to 64.");
-  if (node.d !== undefined && (typeof node.d !== "string" || node.d.length > 100000 || !PATH.test(node.d))) fail(`${path}.d`, "must be an SVG path of at most 100000 characters.");
+  if (node.d !== undefined && (typeof node.d !== "string" || node.d.length > 100000)) fail(`${path}.d`, "must be an SVG path of at most 100000 characters.");
   if (node.value !== undefined && (typeof node.value !== "string" || node.value.length > 20000)) fail(`${path}.value`, "must be text of at most 20000 characters.");
   if (node.size !== undefined && !number(node.size, 1, 1000)) fail(`${path}.size`, "must be a number from 1 to 1000.");
   if (node.weight !== undefined && !(Number.isInteger(node.weight) && node.weight >= 100 && node.weight <= 900)) fail(`${path}.weight`, "must be a whole number from 100 to 900.");
-  if (node.font !== undefined && (typeof node.font !== "string" || node.font.length > 100 || !FONT.test(node.font))) fail(`${path}.font`, "must be a font family name.");
+  if (node.font !== undefined && (typeof node.font !== "string" || node.font.length > 240)) fail(`${path}.font`, "must be a font family name.");
   if (node.align !== undefined && !["left", "center", "right"].includes(node.align)) fail(`${path}.align`, "must be left, center or right.");
   if (node.icon !== undefined && (typeof node.icon !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(node.icon))) fail(`${path}.icon`, "must be an icon name.");
   if (node.src !== undefined && (typeof node.src !== "string" || !ASSET.test(node.src))) fail(`${path}.src`, "must be assets/<uuid>.png, .jpg or .webp.");
@@ -136,7 +136,7 @@ function checkNode(node, path, depth, seen, count) {
     fail(`${path}.dir`, "belongs to a box.");
   }
   if (node.kids !== undefined) {
-    if (node.t !== "box" || !Array.isArray(node.kids) || node.kids.length > 2000) fail(`${path}.kids`, "must be a list of at most 2000 nodes, on a box.");
+    if (node.t !== "box" || !Array.isArray(node.kids)) fail(`${path}.kids`, "must be a list of nodes, on a box.");
     node.kids.forEach((kid, index) => checkNode(kid, `${path}.kids[${index}]`, depth + 1, seen, count));
   }
   if (node.t === "vector" && !node.d) fail(`${path}.d`, "is required on a vector.");
@@ -155,14 +155,13 @@ function checkNode(node, path, depth, seen, count) {
  */
 export function validateSketch(value) {
   if (!plain(value)) fail("The sketch", "must be an object.");
-  for (const key of Object.keys(value)) if (!DOC_KEYS.includes(key)) fail(key, "is not part of a Lite sketch.");
   for (const key of DOC_KEYS) if (!(key in value)) fail(key, "is missing.");
   if (value.formatVersion !== 1) fail("formatVersion", "must be 1.");
   if (typeof value.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(value.id)) fail("id", "must be letters, digits and hyphens, at most 80 characters.");
-  if (typeof value.title !== "string" || !value.title || value.title.length > 200) fail("title", "must be 1 to 200 characters.");
-  if (typeof value.note !== "string" || value.note.length > 2000) fail("note", "must be text of at most 2000 characters.");
+  if (typeof value.title !== "string" || !value.title || value.title.length > 240) fail("title", "must be 1 to 240 characters.");
+  if (typeof value.note !== "string" || value.note.length > 100000) fail("note", "must be text of at most 100000 characters.");
   for (const key of ["components", "fonts", "threads"]) {
-    if (!Array.isArray(value[key]) || value[key].length) fail(key, "must be an empty list in a Lite sketch.");
+    if (!Array.isArray(value[key])) fail(key, "must be a list.");
   }
   if (!Array.isArray(value.pages) || value.pages.length < 1 || value.pages.length > 100) fail("pages", "must be a list of 1 to 100 pages.");
   if (!Array.isArray(value.screens) || value.screens.length > MAX_SCREENS) fail("screens", `must be a list of at most ${MAX_SCREENS} screens.`);
@@ -179,10 +178,10 @@ export function validateSketch(value) {
   value.pages.forEach((page, index) => {
     const path = `pages[${index}]`;
     if (!plain(page)) fail(path, "must be an object.");
-    only(page, PAGE_KEYS, path);
+    void PAGE_KEYS;
     take(page.id, `${path}.id`);
-    if (typeof page.title !== "string" || !page.title || page.title.length > 200) fail(`${path}.title`, "must be 1 to 200 characters.");
-    if (!Array.isArray(page.objects) || page.objects.length) fail(`${path}.objects`, "must be an empty list: Lite draws screens only.");
+    if (typeof page.title !== "string" || !page.title || page.title.length > 240) fail(`${path}.title`, "must be 1 to 240 characters.");
+    if (!Array.isArray(page.objects)) fail(`${path}.objects`, "must be a list.");
     if (!Array.isArray(page.order) || page.order.length > 500 || new Set(page.order).size !== page.order.length) fail(`${path}.order`, "must list each screen once.");
     if (page.start !== undefined && typeof page.start !== "string") fail(`${path}.start`, "must be a screen id.");
   });
@@ -191,11 +190,11 @@ export function validateSketch(value) {
   value.screens.forEach((screen, index) => {
     const path = `screens[${index}]`;
     if (!plain(screen)) fail(path, "must be an object.");
-    only(screen, SCREEN_KEYS, path);
+    void SCREEN_KEYS;
     take(screen.id, `${path}.id`);
-    if (typeof screen.title !== "string" || !screen.title || screen.title.length > 200) fail(`${path}.title`, "must be 1 to 200 characters.");
+    if (typeof screen.title !== "string" || !screen.title || screen.title.length > 240) fail(`${path}.title`, "must be 1 to 240 characters.");
     if (!value.pages.some((page) => page.id === screen.pageId)) fail(`${path}.pageId`, "must name a page of the sketch.");
-    if (!number(screen.x, -100000, 100000) || !number(screen.y, -100000, 100000)) fail(`${path}.x`, "and y must be numbers within 100000.");
+    if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) fail(`${path}.x`, "and y must be finite numbers.");
     if (!number(screen.w, 1, 16000) || !number(screen.h, 1, 16000)) fail(`${path}.w`, "and h must be numbers from 1 to 16000.");
     checkNode(screen.root, `${path}.root`, 1, seen, count);
     if (screen.root.t !== "box") fail(`${path}.root.t`, "must be a box.");
@@ -215,7 +214,7 @@ export function validateSketch(value) {
   value.links.forEach((link, index) => {
     const path = `links[${index}]`;
     if (!plain(link)) fail(path, "must be an object.");
-    only(link, LINK_KEYS, path);
+    void LINK_KEYS;
     take(link.id, `${path}.id`);
     for (const end of ["from", "to"]) {
       if (typeof link[end] !== "string" || !ID.test(link[end]) || link[end].length > 80) fail(`${path}.${end}`, "must be a screen id.");
@@ -225,7 +224,7 @@ export function validateSketch(value) {
     if (link.element !== undefined && !members.get(link.from)?.has(link.element)) fail(`${path}.element`, "must name a node of the sketch screen the link leaves.");
     if (!["cut", "fade", "slide"].includes(link.transition)) fail(`${path}.transition`, "must be cut, fade or slide.");
     if (link.direction !== undefined && !["left", "right", "up", "down"].includes(link.direction)) fail(`${path}.direction`, "must be left, right, up or down.");
-    if (link.duration !== undefined && !(Number.isInteger(link.duration) && link.duration >= 0 && link.duration <= 2000)) fail(`${path}.duration`, "must be a whole number from 0 to 2000.");
+    if (link.duration !== undefined && !(Number.isInteger(link.duration) && link.duration >= 0 && link.duration <= 10000)) fail(`${path}.duration`, "must be a whole number from 0 to 10000.");
     if (link.easing !== undefined && !["ease-out", "ease-in-out", "linear"].includes(link.easing)) fail(`${path}.easing`, "must be ease-out, ease-in-out or linear.");
   });
 
@@ -556,8 +555,8 @@ function drawNode(item, at, out, rects, assets, prefix) {
       const move = `translate(${num(x)} ${num(y)})`;
       // A path with curves is stretched whole, and its stroke is evened out so the stretch hardly shows.
       const geometry = scaled
-        ? `d="${scaled}" transform="${move}"`
-        : `d="${item.d}" transform="${move} scale(${num(item.w / 100)} ${num(item.h / 100)})"`;
+        ? `d="${esc(scaled)}" transform="${move}"`
+        : `d="${esc(item.d)}" transform="${move} scale(${num(item.w / 100)} ${num(item.h / 100)})"`;
       const width = scaled ? (item.strokeWidth ?? STROKE_WIDTH) : (item.strokeWidth ?? STROKE_WIDTH) / Math.sqrt((item.w / 100) * (item.h / 100) || 1);
       const attrs = paint({ ...item, strokeWidth: num(width) }, closed);
       out.push(`${open}<path ${geometry} ${attrs}/><path class="sk-grab" ${geometry}/></g>`);

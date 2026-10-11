@@ -4,6 +4,7 @@ import path from 'node:path';
 import { loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine } from './install.mjs';
 import { atomicWriteFile, hashContent, machineManagedPath, machineReportPath, readMachineRecord } from './records.mjs';
+import { removeOwnedRegistration } from './service/install.mjs';
 
 const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
 const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
@@ -72,6 +73,20 @@ export async function uninstall(options = {}) {
   }
 
   const relay = await removeRelayEntries({ homeDir, env, mindPath, dryRun });
+  try {
+    const registration = await removeOwnedRegistration({
+      mindPath,
+      hostname,
+      env,
+      homeDir,
+      dryRun,
+      run: options.registrationRunner ?? null,
+    });
+    if (registration.kept) kept.push(registration.kept);
+    if (registration.removedPath) removed.push(registration.removedPath);
+  } catch (error) {
+    if (error?.code !== 'invalid_path') throw error;
+  }
 
   if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases);
 

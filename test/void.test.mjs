@@ -507,7 +507,7 @@ test('a comment reaches the agent through the person channel of Relay', async (c
   const inbox = path.join(mind, 'user', 'projects', 'alpha', 'inbox', 'executor-alpha');
   const [name] = await readdir(inbox);
   const message = await readFile(path.join(inbox, name), 'utf8');
-  assert.match(message, /^from: user$/m);
+  assert.match(message, /^from: master$/m);
   assert.match(message, /^subject: Void comment: Handbook \/ Intro\.Welcome$/m);
   assert.ok(message.includes(file.replace(/\.json$/, '.comments.json')));
   assert.match(message, /> First line here\./);
