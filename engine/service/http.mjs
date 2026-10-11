@@ -337,7 +337,11 @@ export async function createHttpServer(options) {
 
   function acceptRequest(req, res) {
     const timer = setTimeout(() => {
-      if (!req.complete && !req.destroyed) req.destroy();
+      if (req.complete || req.destroyed || res.headersSent || res.writableEnded) return;
+      try {
+        respond(res, 408, safeError(new CoreError(408, 'request_timeout', 'The request body was not received in time.'), randomUUID()));
+      } catch { /* the response is already closed */ }
+      if (!req.destroyed) req.destroy();
     }, options.bodyTimeoutMs ?? 15000);
     timer.unref?.();
     const stopTimer = () => clearTimeout(timer);

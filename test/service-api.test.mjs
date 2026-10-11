@@ -615,6 +615,55 @@ test('a home listener keeps denial status, headers and the body deadline', async
   assert.notEqual(stalled.status, 500);
 });
 
+test('an unfinished body ends as request_timeout', async (t) => {
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: [],
+    bodyTimeoutMs: 200,
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  const stalled = await new Promise((resolve) => {
+    const req = request({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'POST',
+      path: '/api/v1/units',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${local.json.data.token}`,
+        'content-type': 'application/json',
+        'content-length': '64',
+        'idempotency-key': randomUUID(),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, json: raw ? JSON.parse(raw) : null });
+      });
+    });
+    req.on('error', () => resolve({ closed: true }));
+    req.flushHeaders();
+    req.write('{');
+    setTimeout(() => resolve({ hung: true }), 1000);
+  });
+  assert.equal(stalled.hung, undefined);
+  assert.equal(stalled.status, 408);
+  assert.equal(stalled.json.error.code, 'request_timeout');
+});
+
 function lanCall(origin, method, target, body, headers = {}) {
   const payload = Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
