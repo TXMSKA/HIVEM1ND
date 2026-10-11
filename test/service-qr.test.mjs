@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { get as httpGet } from 'node:http';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createCredentialStore } from '../engine/service/security.mjs';
@@ -156,6 +156,76 @@ test('the home listener is the shared dispatcher and a correct key stays blocked
   await assert.rejects(() => exchange(context, { key: grant.key }, '192.168.1.40'), { code: 'auth_rate_limited' });
   await closeHome(context);
 });
+
+test('home close ends an open phone stream before the request deadline', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const available = eligibleAddresses();
+  const address = available[0];
+  assert.equal(typeof address?.address, 'string');
+  const events = [];
+  const context = {
+    now: () => fixture.clock.now,
+    bus: { emit(event) { events.push(event); } },
+    interfaces: () => available,
+    serve(_req, res) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write('event: stream.ready\ndata: {}\n\n');
+    },
+  };
+  t.after(() => closeHome(context));
+  const grant = await openHome(context, { addresses: [address.address] });
+  const stream = await openPhoneStream(grant.links[0]);
+  const started = Date.now();
+  const replaced = await openHome(context, { addresses: [address.address] });
+  assert.equal(Date.now() - started < 2000, true);
+  assert.equal(replaced.enabled, true);
+  assert.equal(events.some((event) => event.data.reason === 'replaced'), true);
+  await ended(stream);
+  const next = await openPhoneStream(replaced.links[0]);
+  const closing = Date.now();
+  const status = await closeHome(context);
+  assert.equal(Date.now() - closing < 2000, true);
+  assert.equal(status.enabled, false);
+  assert.deepEqual(status.addresses, []);
+  assert.equal(events.at(-1).data.reason, 'closed');
+  assert.equal(events.at(-1).data.home.enabled, false);
+  await ended(next);
+  const repeat = await closeHome(context);
+  assert.equal(repeat.enabled, false);
+  assert.equal(events.filter((event) => event.data.reason === 'closed').length, 1);
+});
+
+function ended(socket) {
+  if (socket.destroyed) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('phone stream stayed open')), 1000);
+    socket.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function openPhoneStream(link) {
+  const url = new URL(link);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(url.port), url.hostname);
+    socket.on('error', () => {});
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error('phone stream timed out'));
+    }, 2000);
+    socket.on('connect', () => {
+      socket.write(`GET /api/v1/events HTTP/1.1\r\nHost: ${url.host}\r\nConnection: keep-alive\r\n\r\n`);
+    });
+    socket.on('data', (chunk) => {
+      if (!String(chunk).includes('stream.ready')) return;
+      clearTimeout(timer);
+      resolve(socket);
+    });
+  });
+}
 
 function listenLoopback(address, closed) {
   const server = createServer((socket) => socket.destroy());

@@ -8,6 +8,7 @@ import { encodeQr } from './qr.mjs';
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const LIFETIME_MS = 43200000;
 const POLL_MS = 15000;
+const HOME_CLOSE_MS = 1000;
 
 export function eligibleAddresses(interfaces = networkInterfaces()) {
   const rows = flatten(interfaces).filter((item) => item.internal !== true && isPrivate(item.address) && !String(item.address).includes(':'));
@@ -146,13 +147,21 @@ function selectAddresses(available, requested) {
 
 async function bindAddress(context, address) {
   if (context.listen) return context.listen(address);
+  const sockets = new Set();
+  const responses = new Set();
   const server = createHttpServer((req, res) => {
+    responses.add(res);
+    res.on('close', () => responses.delete(res));
     if (context.serve) {
       context.serve(req, res);
       return;
     }
     res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('The home listener is not attached.');
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -164,8 +173,40 @@ async function bindAddress(context, address) {
     address: address.address,
     netmask: address.netmask,
     port: bound.port,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () => closeListener(server, sockets, responses),
   };
+}
+
+function closeListener(server, sockets, responses) {
+  endHomeStreams(responses, sockets);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      endHomeStreams(responses, sockets);
+      server.close();
+      finish();
+    }, HOME_CLOSE_MS);
+    timer.unref?.();
+    server.close(() => finish());
+  });
+}
+
+function endHomeStreams(responses, sockets) {
+  for (const response of responses) {
+    try {
+      if (!response.writableEnded) response.end();
+    } catch { /* The response is already finished. */ }
+  }
+  for (const socket of sockets) {
+    try { socket.end(); } catch { /* The socket is already finished. */ }
+    try { socket.destroy(); } catch { /* The socket is already finished. */ }
+  }
 }
 
 function arm(context, grant) {
