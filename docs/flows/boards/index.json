@@ -1,4 +1,5 @@
 [
+  { "id": "hivem1nd-3", "letter": "H3", "short": "3.0", "title": "HIVEM1ND 3.0: the approved screens" },
   { "id": "void", "letter": "VO", "short": "Void", "title": "Void: the text editor and viewer base" },
   { "id": "hivem1nd-view", "letter": "HV", "short": "View", "title": "HIVEM1ND view: the mind as a person sees it" },
   { "id": "hivem1nd-gui", "letter": "HG", "short": "GUI", "title": "HIVEM1ND GUI: one window for the whole kit" }
