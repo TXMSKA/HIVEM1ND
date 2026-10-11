@@ -695,7 +695,7 @@ async function unitOnMind(context, parsed) {
 }
 
 function sniff(bytes) {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return { type: 'image/png', ext: 'png' };
+  if (framedPng(bytes)) return { type: 'image/png', ext: 'png' };
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { type: 'image/jpeg', ext: 'jpg' };
   if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return { type: 'image/webp', ext: 'webp' };
   return null;
@@ -797,8 +797,30 @@ function imageSize(bytes, type) {
 }
 
 function pngSize(bytes) {
-  if (bytes.length < 24 || bytes.toString('ascii', 12, 16) !== 'IHDR') return null;
-  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  return framedPng(bytes);
+}
+
+function framedPng(bytes) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!Buffer.isBuffer(bytes) || bytes.length < signature.length || !bytes.subarray(0, signature.length).equals(signature)) return null;
+  let offset = signature.length;
+  let size = null;
+  let ended = false;
+  for (let chunks = 0; chunks < 64 && offset + 12 <= bytes.length; chunks += 1) {
+    const length = bytes.readUInt32BE(offset);
+    if (length > 16_000_000 || offset + 12 + length > bytes.length) return null;
+    const type = bytes.toString('ascii', offset + 4, offset + 8);
+    if (!/^[A-Za-z]{4}$/.test(type)) return null;
+    if (chunks === 0 && (type !== 'IHDR' || length !== 13)) return null;
+    if (type === 'IHDR') size = { width: bytes.readUInt32BE(offset + 8), height: bytes.readUInt32BE(offset + 12) };
+    offset += 12 + length;
+    if (type === 'IEND') {
+      ended = true;
+      break;
+    }
+  }
+  if (!ended || offset !== bytes.length || !size) return null;
+  return size;
 }
 
 function jpegSize(bytes) {
@@ -846,7 +868,10 @@ export async function readAsset(context, id, assetId) {
   const head = loaded.bytes.subarray(0, 64).toString('utf8').trimStart().toLowerCase();
   if (head.startsWith('<svg') || head.startsWith('<html') || head.startsWith('<!doctype')) fail(422, 'invalid_asset', 'The asset is not a verified image.');
   const kind = sniff(loaded.bytes);
-  if (!kind || !assetId.endsWith(`.${kind.ext}`)) fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  const size = kind ? imageSize(loaded.bytes, kind.type) : null;
+  if (!kind || !size || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384 || !assetId.endsWith(`.${kind.ext}`)) {
+    fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  }
   return { bytes: loaded.bytes, type: kind.type, revision: hashBytes(loaded.bytes) };
 }
 
