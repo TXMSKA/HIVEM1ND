@@ -346,7 +346,7 @@ async function publishServiceBeat(runtime, state) {
     startedAt: runtime.startedAt,
   };
   const result = await runtime.pulse.beat(record);
-  if (result.published) runtime.beat = result.record;
+  if (result.published) runtime.beat = result.record ?? record;
   return runtime.beat;
 }
 

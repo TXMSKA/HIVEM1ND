@@ -753,6 +753,16 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(asset, 201, 'asset');
   hit('POST', '/editors/:resourceId/assets');
+  const currentBoard = await call(port, 'GET', `/api/v1/blueprint/boards/${boardId}`, { token });
+  expectStatus(currentBoard, 200, 'board before asset reference');
+  const noted = structuredClone(currentBoard.json.data.document);
+  noted.note = asset.json.data.src;
+  const savedBoard = await call(port, 'PUT', `/api/v1/blueprint/boards/${boardId}`, {
+    token,
+    body: { document: noted, expectedRevision: currentBoard.json.data.revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(savedBoard, 200, 'board references the asset');
   const assetId = asset.json.data.src.slice('assets/'.length);
   const assetRead = await call(port, 'GET', `/api/v1/editors/${boardId}/assets/${assetId}`, { token });
   expectStatus(assetRead, 200, 'asset read');

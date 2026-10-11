@@ -67,7 +67,7 @@ test('posts keep the credential author, reject cross-chat replies, and cap compl
   const names = await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.chat.id));
   assert.equal(names.includes(`${foreign.message.id}.md`), false);
   await assert.rejects(() => postChat(context, chat.chat.id, { body: 'é'.repeat(500000) }), (error) => error.code === 'message_too_large');
-  const inbox = path.join(fixture.paths.mind, 'user', 'inbox', 'executor-shop');
+  const inbox = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop');
   assert.equal((await readdir(inbox)).length, 1);
 });
 
