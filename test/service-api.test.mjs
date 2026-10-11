@@ -777,13 +777,15 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(posted, 201, 'chat message');
+  assert.equal(posted.json.data.body, 'Ship the notes.');
+  assert.equal(posted.json.data.notifications, undefined);
   hit('POST', '/chats/:chatId/messages');
   const messages = await call(port, 'GET', `/api/v1/chats/${chatId}/messages`, { token });
   expectStatus(messages, 200, 'chat messages');
   hit('GET', '/chats/:chatId/messages');
   const read = await call(port, 'POST', `/api/v1/chats/${chatId}/read`, {
     token,
-    body: { messageIds: [posted.json.data.message.id] },
+    body: { messageIds: [posted.json.data.id] },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(read, 200, 'chat read');
@@ -803,11 +805,13 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(mailed, 201, 'mailbox post');
+  assert.equal(mailed.json.data.body, 'A note for master.');
+  assert.equal(mailed.json.data.message, undefined);
   hit('POST', '/mailboxes/:unitId/messages');
   const mailbox = await call(port, 'GET', '/api/v1/mailboxes/root:master/messages', { token });
   expectStatus(mailbox, 200, 'mailbox list');
   hit('GET', '/mailboxes/:unitId/messages');
-  const messageId = mailed.json.data.message.id;
+  const messageId = mailed.json.data.id;
   const message = await call(port, 'GET', `/api/v1/mailboxes/root:master/messages/${messageId}`, { token });
   expectStatus(message, 200, 'mailbox detail');
   hit('GET', '/mailboxes/:unitId/messages/:messageId');

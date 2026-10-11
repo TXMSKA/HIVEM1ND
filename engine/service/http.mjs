@@ -965,10 +965,16 @@ async function invoke(route, scope) {
     return { status: 200, body: await readDetail(domain, 'layout') };
   }
   if (route.handler === 'createChat') return { status: 201, body: await createChat(domain, body) };
-  if (route.handler === 'postChat') return { status: 201, body: await postChat(domain, params.chatId, body) };
+  if (route.handler === 'postChat') {
+    const sent = await postChat(domain, params.chatId, body);
+    return { status: 201, body: sent.message };
+  }
   if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
   if (route.handler === 'patchChat') return { status: 200, body: await patchChat(domain, params.chatId, body) };
-  if (route.handler === 'postMailbox') return { status: 201, body: await postMailbox(domain, params.unitId, body) };
+  if (route.handler === 'postMailbox') {
+    const sent = await postMailbox(domain, params.unitId, body);
+    return { status: 201, body: sent.message };
+  }
   if (route.handler === 'readMailbox') return { status: 200, body: await readMailbox(domain, params.unitId, body ?? {}) };
   if (route.handler === 'requestApproval') {
     const result = await requestApproval(domain, body);
