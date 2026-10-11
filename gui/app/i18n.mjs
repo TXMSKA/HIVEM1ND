@@ -133,6 +133,7 @@ const COPY = {
   savingLayout: ["Saving the map.", "Guardando el mapa."],
   layoutError: ["The map was not saved.", "El mapa no se guardó."],
   reconnecting: ["Reconnecting.", "Reconectando."],
+  streamStopped: ["The live connection stopped.", "La conexión en vivo se detuvo."],
   openingHome: ["Opening home access.", "Abriendo el acceso de casa."],
   closingHome: ["Closing home access.", "Cerrando el acceso de casa."],
   attaching: ["Attaching.", "Adjuntando."],

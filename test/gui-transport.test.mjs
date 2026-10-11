@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose, fetchAsset, operationId, request, retryOperation } from "../gui/app/api.mjs";
-import { FRAME_LIMIT, STREAM_HANDSHAKE_MS, STREAM_INACTIVITY_MS, close, createSseParser, decodeEvent, reconnectDelay, subscribe, synchronize } from "../gui/app/stream.mjs";
+import { FRAME_LIMIT, STREAM_HANDSHAKE_MS, STREAM_INACTIVITY_MS, STREAM_RETRY_ATTEMPTS, STREAM_RETRY_BUDGET_MS, close, createSseParser, decodeEvent, reconnectDelay, subscribe, synchronize } from "../gui/app/stream.mjs";
 import { acceptStreamEvent, applyEvent, applyReset, createStore, isAfterCursor, loadResource, loadSnapshot, setDraft } from "../gui/app/state.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 
@@ -333,6 +333,90 @@ test("reconnect waits on the capped schedule and stops when the credential ends"
   });
   synchronize(expired.api, createStore(), { schedule() { throw new Error("reconnect"); }, onEvent() {} });
   await waitFor(() => expired.api.token === null);
+});
+
+test("reconnection stops after a finite budget and keeps the session", async () => {
+  assert.equal(STREAM_HANDSHAKE_MS, REQUEST_DEADLINE_MS);
+  assert.equal(STREAM_INACTIVITY_MS, 45_000);
+  assert.equal(STREAM_RETRY_ATTEMPTS, 5);
+  assert.equal(STREAM_RETRY_BUDGET_MS, 30_000);
+
+  async function exhaust(now, fetch) {
+    const steps = [];
+    const store = createStore();
+    setDraft(store, "doc", { text: "keep" });
+    const { api } = harness({ fetch });
+    const token = api.token;
+    const live = synchronize(api, store, {
+      schedule(_delay, run) { steps.push(run); return steps.length; },
+      now,
+      random: () => 0.5,
+      onEvent() {},
+    });
+    await waitFor(() => steps.length === 1 || store.stream?.state === "error");
+    let runs = 0;
+    while (store.stream?.state !== "error") {
+      const run = steps.shift();
+      assert.equal(typeof run, "function");
+      run();
+      runs += 1;
+      assert.ok(runs <= STREAM_RETRY_ATTEMPTS);
+      await waitFor(() => steps.length === 1 || store.stream?.state === "error");
+    }
+    assert.equal(store.stream.error, "reconnect_exhausted");
+    assert.equal(store.drafts.get("doc").text, "keep");
+    assert.equal(api.token, token);
+    assert.equal(steps.length, 0);
+    close(live);
+    return runs;
+  }
+
+  const failures = await exhaust(() => 1000, async () => {
+    throw new ApiError(0, "timeout", "The event stream timed out.");
+  });
+  assert.equal(failures, STREAM_RETRY_ATTEMPTS - 1);
+
+  let clock = 10_000;
+  const elapsedSteps = [];
+  const elapsedStore = createStore();
+  setDraft(elapsedStore, "doc", { text: "keep" });
+  const elapsedApi = harness({
+    fetch: async () => { throw new ApiError(0, "timeout", "The event stream timed out."); },
+  }).api;
+  const elapsedToken = elapsedApi.token;
+  const elapsedLive = synchronize(elapsedApi, elapsedStore, {
+    schedule(_delay, run) { elapsedSteps.push(run); return elapsedSteps.length; },
+    now: () => clock,
+    random: () => 0.5,
+    onEvent() {},
+  });
+  await waitFor(() => elapsedSteps.length === 1);
+  assert.equal(elapsedStore.stream.state, "reconnecting");
+  clock = 10_000 + STREAM_RETRY_BUDGET_MS;
+  elapsedSteps.shift()();
+  await waitFor(() => elapsedStore.stream.state === "error");
+  assert.equal(elapsedStore.stream.error, "reconnect_exhausted");
+  assert.equal(elapsedStore.drafts.get("doc").text, "keep");
+  assert.equal(elapsedApi.token, elapsedToken);
+  assert.equal(elapsedSteps.length, 0);
+  close(elapsedLive);
+
+  const encoder = new TextEncoder();
+  const ready = `event: stream.ready\ndata: ${JSON.stringify({ contract: "hivem1nd-events-v3", data: { cursor: `${SERVICE}:1` } })}\n\n`;
+  let opened = 0;
+  const afterReady = await exhaust(() => 1000, async () => {
+    opened += 1;
+    if (opened === 1) {
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(ready));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    throw new ApiError(0, "timeout", "The event stream timed out.");
+  });
+  assert.equal(afterReady, STREAM_RETRY_ATTEMPTS);
 });
 
 test("snapshots, duplicate revisions, and late reads stay ordered", async () => {

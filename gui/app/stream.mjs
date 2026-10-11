@@ -4,6 +4,8 @@ export const FRAME_LIMIT = 16 * 1024 * 1024;
 export const STREAM_HANDSHAKE_MS = REQUEST_DEADLINE_MS;
 export const STREAM_INACTIVITY_MS = 45_000;
 const DELAYS = [1000, 2000, 4000, 8000, 15000];
+export const STREAM_RETRY_ATTEMPTS = DELAYS.length;
+export const STREAM_RETRY_BUDGET_MS = DELAYS.reduce((sum, value) => sum + value, 0);
 
 export function reconnectDelay(attempt, random = Math.random) {
   const base = DELAYS[Math.min(Math.max(attempt, 0), DELAYS.length - 1)];
@@ -175,10 +177,11 @@ export async function subscribe(api, { onEvent, onLifecycle, lastEventId, signal
 
 export function synchronize(api, store, options = {}) {
   close(api.live);
-  const live = { stopped: false, attempt: 0, timer: null, state: "connecting", error: null, retryIn: null };
+  const live = { stopped: false, failures: 0, since: null, verified: false, timer: null, state: "connecting", error: null, retryIn: null };
   api.live = live;
   const schedule = options.schedule ?? ((delay, run) => setTimeout(run, delay));
   const random = options.random ?? Math.random;
+  const now = options.now ?? (() => Date.now());
   noteStream(live, store, options, { state: "connecting" });
   const connect = async () => {
     if (live.stopped || api.closed) return;
@@ -189,16 +192,29 @@ export function synchronize(api, store, options = {}) {
         signal: controller.signal,
         query: options.query,
         lastEventId: options.cursor?.() ?? null,
-        onEvent: options.onEvent,
+        onEvent: async (event) => {
+          if (event?.name === "stream.ready") {
+            live.failures = 0;
+            live.since = null;
+            live.verified = true;
+          }
+          await options.onEvent?.(event);
+        },
         handshakeMs: options.handshakeMs,
         inactivityMs: options.inactivityMs,
         onLifecycle: (phase) => noteStream(live, store, options, { state: phase }),
       });
       if (live.stopped || api.closed) return;
-      live.attempt = 0;
-      const delay = reconnectDelay(0, random);
-      noteStream(live, store, options, { state: "reconnecting", retryIn: delay });
-      queue(delay);
+      if (live.verified) {
+        live.verified = false;
+        live.failures = 0;
+        live.since = null;
+        const delay = reconnectDelay(0, random);
+        noteStream(live, store, options, { state: "reconnecting", retryIn: delay });
+        queue(delay);
+        return;
+      }
+      retryOrStop(null);
     } catch (error) {
       if (live.stopped || api.closed || error?.name === "AbortError") return;
       if (error.status === 401 || error.status === 410) {
@@ -212,11 +228,25 @@ export function synchronize(api, store, options = {}) {
         noteStream(live, store, options, { state: "error", error: error.code });
         return;
       }
-      const delay = error.status === 429 ? (error.retryAfter ?? 1000) : reconnectDelay(live.attempt, random);
-      if (error.status !== 429) live.attempt = Math.min(live.attempt + 1, DELAYS.length - 1);
-      noteStream(live, store, options, { state: "reconnecting", error: error.code ?? "request_failed", retryIn: delay });
-      queue(delay);
+      if (live.verified) {
+        live.verified = false;
+        live.failures = 0;
+        live.since = null;
+      }
+      retryOrStop(error);
     }
+  };
+  const retryOrStop = (error) => {
+    if (live.since == null) live.since = now();
+    live.failures += 1;
+    const elapsed = now() - live.since;
+    if (live.failures >= STREAM_RETRY_ATTEMPTS || elapsed >= STREAM_RETRY_BUDGET_MS) {
+      noteStream(live, store, options, { state: "error", error: "reconnect_exhausted" });
+      return;
+    }
+    const delay = error?.status === 429 ? (error.retryAfter ?? 1000) : reconnectDelay(live.failures - 1, random);
+    noteStream(live, store, options, { state: "reconnecting", error: error?.code ?? "request_failed", retryIn: delay });
+    queue(delay);
   };
   const queue = (delay) => {
     if (live.stopped || api.closed) return;

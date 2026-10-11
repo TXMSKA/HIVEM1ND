@@ -2808,6 +2808,7 @@ function renderFooter(app, t) {
   const stream = app.store.stream;
   if (stream?.state === "connecting" || stream?.state === "reconnecting") footer.append(progressMark(document, t("reconnecting"), { "data-stream": stream.state }));
   if (stream?.state === "error") {
+    if (stream.error === "reconnect_exhausted") footer.append(element(document, "p", { "data-stream": "stopped", text: t("streamStopped") }));
     footer.append(element(document, "button", {
       type: "button",
       class: "btn",

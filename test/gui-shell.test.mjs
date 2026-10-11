@@ -1991,6 +1991,16 @@ test("settings and the footer follow sync, service, and issue changes", async (t
   assert.equal(desktop.root.querySelector("[data-limits='paused']").textContent.includes("en pausa"), true);
   await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: true });
   await waitFor(() => ![...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The resolved issue remained.");
+  const token = desktop.app.api.token;
+  desktop.app.store.stream = { state: "error", error: "reconnect_exhausted" };
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-stream='stopped']")?.textContent, "La conexión en vivo se detuvo.");
+  assert.equal(desktop.root.querySelector("[data-action='retry-stream']")?.textContent, "Reintentar");
+  assert.equal(desktop.app.api.token, token);
+  assert.equal(desktop.root.querySelector("[data-settings]") != null, true);
+  desktop.app.language = "en";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-stream='stopped']")?.textContent, "The live connection stopped.");
 });
 
 test("a replayed unit event is applied once and the cursor advances", async (t) => {
