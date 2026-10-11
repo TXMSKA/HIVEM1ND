@@ -305,6 +305,7 @@ async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion }) {
     }
     await migrate({
       userPath: path.join(mindPath, "user"),
+      progressDirectory: path.join(mindPath, ".migration"),
       fromVersion,
       toVersion,
       version: migration.version,

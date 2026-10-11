@@ -60,16 +60,24 @@ async function scopeDirectories(userPath) {
   return scopes;
 }
 
-export async function migrate({ userPath, faultAfterMoves = null } = {}) {
+export async function migrate({ userPath, faultAfterMoves = null, progressDirectory = null } = {}) {
   const root = path.resolve(userPath);
   const rootState = await stats(root);
   if (!rootState || rootState.isSymbolicLink() || !rootState.isDirectory()) return { moved: 0, notice: false };
-  const progressPath = path.join(root, 'relay', 'migration-3.0.0.json');
+  const progressRoot = path.resolve(progressDirectory ?? path.join(path.dirname(root), '.migration'));
+  const progressPath = path.join(progressRoot, 'migration-3.0.0.json');
   const store = createStore({
     root,
     mindPath: root,
     localDirectory: path.join(root, 'relay'),
     confineRoot: root,
+    autoRecover: false,
+  });
+  const progressStore = createStore({
+    root: progressRoot,
+    mindPath: progressRoot,
+    localDirectory: progressRoot,
+    confineRoot: progressRoot,
     autoRecover: false,
   });
   let progress = { format: 'hivem1nd-migration-3.0.0', completed: false, moves: [], stateConflict: false, notice: false };
@@ -82,7 +90,7 @@ export async function migrate({ userPath, faultAfterMoves = null } = {}) {
   const movedAlready = new Set(progress.moves.map((entry) => entry.from));
 
   async function checkpoint() {
-    await atomicWrite(store, progressPath, Buffer.from(`${JSON.stringify(progress)}\n`));
+    await atomicWrite(progressStore, progressPath, Buffer.from(`${JSON.stringify(progress)}\n`));
   }
 
   async function finishMove(source, target, bytes) {
