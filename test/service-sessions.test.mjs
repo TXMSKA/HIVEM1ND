@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { clientRecords, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, recoverStarts, registerNative, stopSession } from '../engine/service/adapters.mjs';
-import { openNativeAdapters } from '../engine/service/service.mjs';
+import { composeCore, openNativeAdapters } from '../engine/service/service.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -410,3 +412,93 @@ test('Cursor correlates authenticate replies and Claude receives the startup ins
   assert.equal(writes[0].includes('do-not-embed-this-prompt'), false);
   assert.equal(writes[0].includes('"type":"user"'), true);
 });
+
+test('a failed native start can be retried and an unconsumed request expires over HTTP', async (t) => {
+  const fixture = await makeCoreFixture();
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  const file = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await writeFile(file, state());
+  const projects = [];
+  const adapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: CODEX });
+  const core = await composeCore({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+    projects,
+    adapters: { codex: adapter },
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  const revision = hashBytes(await readFile(file));
+  const denied = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
+    token,
+    body: { client: 'codex', expectedRevision: revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(denied.status, 503);
+  assert.equal(denied.json.error.code, 'client_unavailable');
+  const reserved = await readdir(path.join(fixture.paths.localDirectory, 'session-starts')).catch((error) => error.code === 'ENOENT' ? [] : Promise.reject(error));
+  assert.equal(reserved.length, 0);
+  projects.push({ name: 'shop', localPath: fixture.root, eligible: true });
+  const retried = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
+    token,
+    body: { client: 'codex', expectedRevision: revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(retried.status, 202);
+  assert.equal(retried.json.data.state, 'started');
+  const queued = await enqueueStart({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+    projects,
+    adapters: { codex: adapter },
+    principal: { unitId: 'root:master', audience: 'desktop' },
+  }, { unitId: UNIT, client: 'codex', stateRevision: revision, targetMachine: 'LAPTOP' });
+  assert.equal(queued.status, 202);
+  assert.equal(queued.state, 'queued');
+  fixture.clock.now += 121000;
+  const expired = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${queued.request.id}`, { token });
+  assert.equal(expired.status, 200);
+  assert.equal(expired.json.data.state, 'expired');
+  assert.equal(expired.json.data.error.code, 'approval_expired');
+});
+
+function jsonCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port,
+      method,
+      path: target,
+      headers: {
+        host: `127.0.0.1:${port}`,
+        origin: `http://127.0.0.1:${port}`,
+        ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, json: raw ? JSON.parse(raw) : null });
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.end(payload);
+    else req.end();
+  });
+}

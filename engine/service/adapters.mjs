@@ -248,14 +248,21 @@ export async function registerNative(context, input) {
 export function projectSessionRequest(value) {
   const request = value?.request ?? value ?? {};
   const result = value?.result ?? null;
+  let state = result?.state ?? value?.state ?? 'queued';
+  let error = result?.error ?? null;
+  const expiresAt = request.expiresAt ?? null;
+  if (value?.consumed !== true && (!result || !TERMINAL.has(result.state)) && value?.now != null && expiresAt && Date.parse(expiresAt) <= value.now) {
+    state = 'expired';
+    error = error ?? { code: 'approval_expired', message: 'The start request expired.' };
+  }
   return {
     requestId: request.id ?? request.requestId ?? null,
     unitId: request.unitId ?? null,
     machine: result?.machine ?? request.targetMachine ?? request.machine ?? null,
-    state: result?.state ?? value?.state ?? 'queued',
+    state,
     sessionId: result?.sessionId ?? null,
-    error: result?.error ?? null,
-    expiresAt: request.expiresAt ?? null,
+    error,
+    expiresAt,
   };
 }
 
@@ -317,10 +324,13 @@ async function launch(context, request) {
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const state = await readBytes(context.store, statePath(context, request.unitId));
   if (!state || hashBytes(state) !== request.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
-  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && item.phase !== 'failed')) {
+  const cwd = registeredProjectCwd(context, request.unitId);
+  if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
+  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && item.phase !== 'failed' && item.pid != null)) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
   if (current?.phase === 'spawned' || current?.createAttempted === true) {
+    if (current.pid == null) await writeJournal(context, { ...current, phase: 'failed', pid: null });
     return finish(context, request, 'failed', null, { code: 'launch_ambiguous', message: 'The launch could not be proved.' });
   }
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
@@ -328,9 +338,16 @@ async function launch(context, request) {
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
   const adapter = adapterFor(context, request.client);
-  const cwd = registeredProjectCwd(context, request.unitId);
-  if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
-  const created = await adapter.create({ ...request, cwd });
+  let created;
+  try {
+    created = await adapter.create({ ...request, cwd });
+  } catch (error) {
+    if (error instanceof CoreError && (error.code === 'client_unavailable' || error.code === 'protocol_error')) {
+      await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
+      await writeResult(context, request, 'failed', null, { code: error.code, message: error.message });
+    }
+    throw error;
+  }
   const pid = created.pid;
   context.ownedPids ??= new Set();
   context.ownedPids.add(pid);
@@ -456,7 +473,16 @@ export async function readStartRequest(context, requestId) {
   const relative = await findRequest(context, requestId);
   const request = relative ? await readJson(context, relative) : null;
   if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
-  return { request, result: await latestResult(context, requestId) };
+  return withLocks(context.store, [`request:${requestId}`], async () => {
+    let result = await latestResult(context, requestId);
+    const current = (await listJournals(context)).find((item) => item.requestId === requestId) ?? null;
+    const consumed = current?.pid != null;
+    if (!consumed && (!result || !TERMINAL.has(result.state)) && Date.parse(request.expiresAt) <= context.now()) {
+      if (current && current.phase !== 'failed') await writeJournal(context, { ...current, phase: 'failed', pid: null });
+      result = await writeResult(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
+    }
+    return { request, result, now: context.now(), consumed };
+  });
 }
 
 function adapterFor(context, client) {
