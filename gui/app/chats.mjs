@@ -1,4 +1,4 @@
-import { createOperation, request, retryOperation } from "./api.mjs";
+import { createOperation, perform, request, retryOperation } from "./api.mjs";
 import { collectPages } from "./lists.mjs";
 
 export function createThread(chat = null) {
@@ -19,8 +19,8 @@ export function createThread(chat = null) {
   };
 }
 
-export async function openDirectChat(api, memberIds) {
-  return openConversation(api, memberIds);
+export async function openDirectChat(api, memberIds, retained = null) {
+  return openConversation(api, memberIds, undefined, retained);
 }
 
 export async function findDirectChat(api, unitId) {
@@ -31,8 +31,8 @@ export async function findDirectChat(api, unitId) {
   return [...listed.items, ...hidden.items].find((item) => item.members?.length === 2 && item.members.includes(unitId) && item.members.includes("root:master")) ?? null;
 }
 
-export async function openGroupChat(api, memberIds, title) {
-  return openConversation(api, memberIds, title);
+export async function openGroupChat(api, memberIds, title, retained = null) {
+  return openConversation(api, memberIds, title, retained);
 }
 
 export async function loadMessages(api, thread, older = false) {
@@ -222,14 +222,13 @@ function failMessage(thread, operation, error) {
   if (row) row.failed = true;
 }
 
-export async function manageChat(api, chat, change) {
-  const operation = createOperation({
+export async function manageChat(api, chat, change, retained = null) {
+  return perform(api, {
     method: "PATCH",
     path: "/chats/:chatId",
     params: { chatId: chat.id },
     body: { ...change, expectedRevision: chat.revision },
-  });
-  return request(api, "PATCH", operation.path, { operation });
+  }, retained);
 }
 
 export async function openMailbox(api, unitId, state = "unread", cursor = null) {
@@ -246,8 +245,8 @@ export async function loadMailboxMessage(api, unitId, messageId) {
   return request(api, "GET", `/mailboxes/${encodeURIComponent(unitId)}/messages/${encodeURIComponent(messageId)}`);
 }
 
-export async function postMailbox(api, unitId, draft) {
-  const operation = createOperation({
+export function postMailbox(api, unitId, draft, retained = null) {
+  const operation = retained ?? createOperation({
     method: "POST",
     path: "/mailboxes/:unitId/messages",
     params: { unitId },
@@ -259,7 +258,12 @@ export async function postMailbox(api, unitId, draft) {
       priority: draft.priority ?? "normal",
     },
   });
-  return request(api, "POST", operation.path, { operation });
+  const task = request(api, "POST", operation.path, { operation }).catch((error) => {
+    if (error && typeof error === "object") error.operation = operation;
+    throw error;
+  });
+  task.operation = operation;
+  return task;
 }
 
 export function canMarkMailbox(audience, capabilities, unitId) {
@@ -268,21 +272,19 @@ export function canMarkMailbox(audience, capabilities, unitId) {
   return names.includes("mailbox.read") || names.includes("master.read");
 }
 
-export async function markMailboxRead(api, unitId, messageIds) {
-  const operation = createOperation({
+export async function markMailboxRead(api, unitId, messageIds, retained = null) {
+  return perform(api, {
     method: "POST",
     path: "/mailboxes/:unitId/read",
     params: { unitId },
     body: { messageIds },
-  });
-  return request(api, "POST", operation.path, { operation });
+  }, retained);
 }
 
-async function openConversation(api, memberIds, title) {
+async function openConversation(api, memberIds, title, retained = null) {
   const body = { members: memberIds };
   if (title) body.title = title;
-  const operation = createOperation({ method: "POST", path: "/chats", body });
-  return request(api, "POST", "/chats", { operation });
+  return perform(api, { method: "POST", path: "/chats", body }, retained);
 }
 
 function mergeChronological(current, incoming) {

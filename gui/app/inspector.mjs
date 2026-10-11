@@ -52,17 +52,21 @@ export function renderSession(document, session, t) {
   return block;
 }
 
-export function renderGrants(document, grants, t, onRevoke) {
+export function renderGrants(document, grants, t, onRevoke, busyId = null) {
   const block = element(document, "section", { class: "grants" });
   for (const grant of grants ?? []) {
     const row = element(document, "article", { class: "grant" });
     row.append(element(document, "p", { "data-grant-action": grant.action ?? "", text: grant.action || t("unknown") }));
     row.append(element(document, "p", { "data-grant-pattern": "true", text: patternText(grant.pattern) || t("unknown") }));
+    const busy = busyId === grant.id;
+    if (busy) row.append(progressMark(document, t("working")));
     if (onRevoke) row.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "revoke-grant",
       "data-grant": grant.id,
+      "aria-busy": busy ? "true" : "false",
+      disabled: busy ? "" : null,
       text: t("revoke"),
       onclick: () => onRevoke(grant),
     }));
@@ -71,30 +75,40 @@ export function renderGrants(document, grants, t, onRevoke) {
   return block;
 }
 
-export function renderApproval(document, approval, t, onAnswer) {
+export function renderApproval(document, approval, t, onAnswer, busy = false) {
   const block = element(document, "section", { "data-approval": approval.id, "data-approval-state": approval.state });
   block.append(element(document, "p", { text: approval.display ?? approval.action ?? approval.id }));
+  if (busy) block.append(progressMark(document, t("answering"), { "data-approval-progress": approval.id }));
   if (approval.state === "pending") {
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "approve", text: t("approve"), onclick: () => onAnswer?.(approval, "approve") }));
-    if (approval.alwaysAllowed !== false) {
-      block.append(element(document, "button", { type: "button", class: "btn", "data-action": "approve-always", text: t("approveAlways"), onclick: () => onAnswer?.(approval, "approve-always") }));
-    }
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "deny", text: t("deny"), onclick: () => onAnswer?.(approval, "deny") }));
+    const button = (action, label) => element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": action,
+      "aria-busy": busy ? "true" : "false",
+      disabled: busy ? "" : null,
+      text: label,
+      onclick: () => onAnswer?.(approval, action),
+    });
+    block.append(button("approve", t("approve")));
+    if (approval.alwaysAllowed !== false) block.append(button("approve-always", t("approveAlways")));
+    block.append(button("deny", t("deny")));
   }
   return block;
 }
 
-export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task)) {
+export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task), busy = false) {
   const block = element(document, "section", { "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
   block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
+  if (busy) block.append(progressMark(document, t("working"), { "data-task-progress": task.id }));
   const accept = element(document, "button", {
     type: "button",
     class: "btn",
     "data-action": "accept",
+    "aria-busy": busy ? "true" : "false",
     text: t("accept"),
     onclick: () => onStatus?.(task, "done"),
   });
-  if (!canAccept(task)) accept.disabled = true;
+  if (!canAccept(task) || busy) accept.disabled = true;
   const note = element(document, "input", { "data-note": task.id, "aria-label": t("sendBack") });
   note.value = draft;
   note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
@@ -105,10 +119,19 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     text: t("sendBack"),
     onclick: () => onStatus?.(task, "open", note.value),
   });
-  if (!allowSendBack) back.disabled = true;
+  if (!allowSendBack || busy) back.disabled = true;
+  if (busy) back.setAttribute("aria-busy", "true");
   block.append(accept, note, back);
   if (task.undoAvailable && onUndo) {
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "undo", text: t("undo"), onclick: () => onUndo?.(task) }));
+    block.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "undo",
+      "aria-busy": busy ? "true" : "false",
+      disabled: busy ? "" : null,
+      text: t("undo"),
+      onclick: () => onUndo?.(task),
+    }));
   }
   return block;
 }

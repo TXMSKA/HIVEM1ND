@@ -80,6 +80,7 @@ export function runAction(bucket, key, { label, work, render, operation = null }
   }).catch((error) => {
     record.phase = "error";
     record.error = error;
+    if (error?.operation) record.operation = error.operation;
     bucket.set(key, record);
     render?.(record);
     throw error;

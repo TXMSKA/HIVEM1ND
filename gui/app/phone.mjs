@@ -1,5 +1,5 @@
 import { createOperation, request } from "./api.mjs";
-import { element } from "./components.mjs";
+import { element, progressMark } from "./components.mjs";
 
 export const PHONE_NAV = ["hierarchy", "chats", "waiting"];
 
@@ -36,7 +36,7 @@ export async function exchangeCode(api, code) {
   }
 }
 
-export function renderCodeEntry(document, t, onSubmit) {
+export function renderCodeEntry(document, t, onSubmit, options = {}) {
   const form = element(document, "form", { "data-code-entry": "true" });
   const input = element(document, "input", {
     "data-home-code": "true",
@@ -44,14 +44,20 @@ export function renderCodeEntry(document, t, onSubmit) {
     maxlength: "6",
     autocomplete: "off",
   });
-  input.value = "";
+  input.value = options.value ?? "";
   const submit = element(document, "button", { type: "submit", class: "btn", text: t("submitCode") });
+  if (options.busy) {
+    submit.disabled = true;
+    submit.setAttribute("aria-busy", "true");
+    submit.replaceChildren(progressMark(document, t("checkingCode")));
+  }
   form.append(input, submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const entered = input.value;
+    if (submit.disabled) return;
+    const code = input.value;
     input.value = "";
-    onSubmit?.(entered);
+    onSubmit?.(code);
   });
   return form;
 }

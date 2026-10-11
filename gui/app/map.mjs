@@ -171,7 +171,25 @@ export function renderMap(document, host, map, labels = {}) {
     connect.addEventListener("click", () => requestConnect(map));
     actions.append(message, connect);
   }
-  host.replaceChildren(svg, layer, actions);
+  const children = [svg, layer, actions];
+  if (map.persistState === "saving" || map.persistState === "error") {
+    const status = document.createElement("p");
+    status.className = "map-save";
+    status.setAttribute("data-layout-state", map.persistState);
+    status.setAttribute("aria-busy", map.persistState === "saving" ? "true" : "false");
+    status.textContent = map.persistState === "saving" ? (labels.savingLayout ?? "Saving the map.") : (labels.layoutError ?? "The map was not saved.");
+    if (map.persistState === "error") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "btn";
+      retry.setAttribute("data-action", "retry-layout");
+      retry.textContent = labels.retry ?? "Retry";
+      retry.addEventListener("click", () => map.onRetryLayout?.());
+      status.append(retry);
+    }
+    children.push(status);
+  }
+  host.replaceChildren(...children);
   bindMap(host, map);
   return nodes.map((node) => node.id);
 }
@@ -573,6 +591,8 @@ export async function flushLayout(map) {
   const operation = makeOperation(map, "PATCH", "/layout", body);
   const observedAtDispatch = map.layoutObservationGeneration;
   map.inFlight = operation;
+  map.persistState = "saving";
+  map.onPersist?.();
   try {
     const result = await callApi(map, operation);
     if (map.layoutObservationGeneration === observedAtDispatch) {
@@ -589,11 +609,15 @@ export async function flushLayout(map) {
       if (map.pendingGroups.get(id)?.generation === edit.generation) map.pendingGroups.delete(id);
     }
     renderPositions(map, overlay(map.authoritative.layout.nodes, map.pending));
+    map.persistState = "saved";
+    map.retryOperation = null;
   } catch (error) {
     if (error?.code === "revision_conflict") await reconcileLayoutConflict(map, batch);
     else map.retryOperation = operation;
+    map.persistState = map.retryOperation ? "error" : "saved";
   } finally {
     map.inFlight = null;
+    map.onPersist?.();
   }
   const followUp = !map.layoutConflict && !map.retryOperation && (
     [...map.pending.values()].some((edit) => edit.needsRetry || !edit.retried)

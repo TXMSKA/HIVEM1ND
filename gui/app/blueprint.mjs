@@ -1,4 +1,4 @@
-import { createOperation, fetchAsset, request } from "./api.mjs";
+import { fetchAsset, perform } from "./api.mjs";
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -106,67 +106,66 @@ export function renderNode(document, node, editor) {
   return group;
 }
 
-export async function patchNode(api, editor, nodeId, fields) {
-  const change = updateNodeOperation(editor, nodeId, fields);
-  const operation = createOperation({
+export async function patchNode(api, editor, nodeId, fields, retained = null) {
+  const change = retained ? null : updateNodeOperation(editor, nodeId, fields);
+  const result = await perform(api, {
     method: "PATCH",
     path: "/blueprint/boards/:resourceId/nodes/:nodeId",
     params: { resourceId: editor.resourceId, nodeId },
-    body: { changes: change.changes, expectedRevision: change.expectedRevision },
-  });
-  const result = await request(api, "PATCH", operation.path, { operation });
+    body: retained ? undefined : { changes: change.changes, expectedRevision: change.expectedRevision },
+  }, retained);
   acceptBoard(editor, result.data);
   return result;
 }
 
-export async function addNode(api, editor, body) {
-  const operation = createOperation({
+export async function addNode(api, editor, body, retained = null) {
+  const result = await perform(api, {
     method: "POST",
     path: "/blueprint/boards/:resourceId/nodes",
     params: { resourceId: editor.resourceId },
     body: { ...body, expectedRevision: editor.revision },
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+  }, retained);
   acceptBoard(editor, result.data.editor);
   return result;
 }
 
-export async function removeNode(api, editor, nodeId) {
-  const operation = createOperation({
+export async function removeNode(api, editor, nodeId, retained = null) {
+  const result = await perform(api, {
     method: "DELETE",
     path: "/blueprint/boards/:resourceId/nodes/:nodeId",
     params: { resourceId: editor.resourceId, nodeId },
     body: { expectedRevision: editor.revision },
-  });
-  const result = await request(api, "DELETE", operation.path, { operation });
+  }, retained);
   acceptBoard(editor, result.data);
   return result;
 }
 
-export async function replaceBoard(api, editor, document) {
-  const operation = createOperation({
+export async function replaceBoard(api, editor, document, retained = null) {
+  const result = await perform(api, {
     method: "PUT",
     path: "/blueprint/boards/:resourceId",
     params: { resourceId: editor.resourceId },
     body: { document, expectedRevision: editor.revision },
-  });
-  const result = await request(api, "PUT", operation.path, { operation });
+  }, retained);
   acceptBoard(editor, result.data);
   editor.dirty = false;
   editor.conflict = null;
   return result;
 }
 
-export async function uploadAsset(api, editor, file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.byteLength > 10 * 1024 * 1024) throw Object.assign(new Error("The asset is too large."), { code: "asset_too_large" });
-  const operation = createOperation({
-    method: "POST",
-    path: "/editors/:resourceId/assets",
-    params: { resourceId: editor.resourceId },
-    body: { contentType: file.type, bytesBase64: encodeBytes(bytes) },
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+export async function uploadAsset(api, editor, file, retained = null) {
+  let spec = { method: "POST", path: "/editors/:resourceId/assets", params: { resourceId: editor.resourceId }, body: {} };
+  if (!retained) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.byteLength > 10 * 1024 * 1024) throw Object.assign(new Error("The asset is too large."), { code: "asset_too_large" });
+    spec = {
+      method: "POST",
+      path: "/editors/:resourceId/assets",
+      params: { resourceId: editor.resourceId },
+      body: { contentType: file.type, bytesBase64: encodeBytes(bytes) },
+    };
+  }
+  const result = await perform(api, spec, retained);
   const image = await fetchAsset(api, result.data);
   if (!editor.assets) editor.assets = new Map();
   editor.assets.set(result.data.src, image);

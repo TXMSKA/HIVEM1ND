@@ -1,4 +1,4 @@
-import { createOperation, request } from "./api.mjs";
+import { createOperation, perform, request } from "./api.mjs";
 import { loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
@@ -112,30 +112,27 @@ export async function openEditor(api, editors, summary) {
   return next;
 }
 
-export async function registerResource(api, input) {
-  const operation = createOperation({ method: "POST", path: "/editors/register", body: input });
-  return request(api, "POST", "/editors/register", { operation });
+export async function registerResource(api, input, retained = null) {
+  return perform(api, { method: "POST", path: "/editors/register", body: input }, retained);
 }
 
-export async function createResource(api, kind, input) {
+export async function createResource(api, kind, input, retained = null) {
   const path = kind === "void" ? "/void/texts" : "/blueprint/boards";
-  const operation = createOperation({ method: "POST", path, body: input });
-  return request(api, "POST", path, { operation });
+  return perform(api, { method: "POST", path, body: input }, retained);
 }
 
-export async function setAttachments(api, editors, attached) {
+export async function setAttachments(api, editors, attached, retained = null) {
   const current = editors.current;
   if (!current) throw Object.assign(new Error("No editor is open."), { code: "invalid_body" });
   const unique = [];
   for (const id of attached) if (!unique.includes(id)) unique.push(id);
   if (unique.length > 256) throw Object.assign(new Error("Too many attached units."), { code: "invalid_body" });
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "PUT",
     path: "/editors/:resourceId/attachments",
     params: { resourceId: current.resourceId },
     body: { attached: unique, expectedRevision: current.attachmentRevision },
-  });
-  const result = await request(api, "PUT", operation.path, { operation });
+  }, retained);
   current.attached = result.data.attached;
   current.attachmentRevision = result.data.revision;
   current.notices = result.data.notifications ?? [];
@@ -159,9 +156,9 @@ export async function loadComments(api, editors) {
   return page;
 }
 
-export async function createComment(api, editors, anchor, text) {
+export async function createComment(api, editors, anchor, text, retained = null) {
   const current = editors.current;
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "POST",
     path: "/editors/:resourceId/comments",
     params: { resourceId: current.resourceId },
@@ -171,8 +168,7 @@ export async function createComment(api, editors, anchor, text) {
       expectedRevision: current.revision,
       expectedCommentsRevision: current.commentsRevision,
     },
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+  }, retained);
   current.commentsRevision = result.data.commentsRevision;
   current.threads = [...(current.threads ?? []), result.data.thread];
   current.notices = result.data.notifications ?? [];
@@ -180,50 +176,51 @@ export async function createComment(api, editors, anchor, text) {
   return result;
 }
 
-export async function replyComment(api, editors, threadId, text) {
+export async function replyComment(api, editors, threadId, text, retained = null) {
   const current = editors.current;
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "POST",
     path: "/editors/:resourceId/comments/:threadId/replies",
     params: { resourceId: current.resourceId, threadId },
     body: { text, expectedCommentsRevision: current.commentsRevision },
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+  }, retained);
   current.commentsRevision = result.data.commentsRevision;
   current.threads = (current.threads ?? []).map((thread) => thread.id === result.data.thread.id ? result.data.thread : thread);
   current.notices = result.data.notifications ?? [];
   return result;
 }
 
-export async function resolveComment(api, editors, threadId) {
+export async function resolveComment(api, editors, threadId, retained = null) {
   const current = editors.current;
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "PATCH",
     path: "/editors/:resourceId/comments/:threadId",
     params: { resourceId: current.resourceId, threadId },
     body: { status: "resolved", expectedCommentsRevision: current.commentsRevision },
-  });
-  const result = await request(api, "PATCH", operation.path, { operation });
+  }, retained);
   current.commentsRevision = result.data.commentsRevision;
   current.threads = (current.threads ?? []).map((thread) => thread.id === result.data.thread.id ? result.data.thread : thread);
   return result;
 }
 
-export async function startWatch(api, editors, input) {
-  const operation = createOperation({ method: "POST", path: "/watch", body: input });
-  const result = await request(api, "POST", "/watch", { operation });
+export async function startWatch(api, editors, input, retained = null) {
+  const result = await perform(api, { method: "POST", path: "/watch", body: input }, retained);
   editors.pendingStop = false;
   editors.watch = result.data;
   return result;
 }
 
-export function stopWatch(api, editors) {
+export function stopWatch(api, editors, retained = null) {
   const watch = editors.watch;
-  if (!watch?.watchId) return Promise.resolve(null);
+  if (!watch?.watchId && !retained) return Promise.resolve(null);
   editors.pendingStop = true;
-  const operation = createOperation({ method: "DELETE", path: "/watch/:watchId", params: { watchId: watch.watchId }, body: {} });
-  const pending = request(api, "DELETE", operation.path, { operation }).then((result) => {
-    if (editors.watch?.watchId === watch.watchId) editors.watch = null;
+  const pending = perform(api, {
+    method: "DELETE",
+    path: "/watch/:watchId",
+    params: { watchId: watch?.watchId },
+    body: {},
+  }, retained).then((result) => {
+    if (editors.watch?.watchId === watch?.watchId) editors.watch = null;
     editors.pendingStop = false;
     return result;
   }).catch((error) => {

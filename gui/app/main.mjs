@@ -61,7 +61,7 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
-import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, useIncomingPosition } from "./map.mjs";
+import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
@@ -149,6 +149,9 @@ async function bootSession(app, credential) {
   synchronize(app.api, app.store, {
     cursor: () => app.store.cursor,
     onEvent: (event) => onStream(app, event),
+    onState: () => {
+      if (!app.disposed && app.layout !== "unknown") renderShell(app);
+    },
   });
   try {
     await loadSnapshot(app.store, app.api);
@@ -229,6 +232,15 @@ export function navigate(app, mode) {
 }
 
 export function renderShell(app) {
+  app.rendering = true;
+  try {
+    paintShell(app);
+  } finally {
+    app.rendering = false;
+  }
+}
+
+function paintShell(app) {
   captureInputs(app);
   const document = app.root.ownerDocument;
   document.documentElement.lang = app.language;
@@ -691,13 +703,26 @@ function renderWaitingSurface(app, t) {
     "data-waiting-total": String(total),
     text: t("waitingCount", { count: total }),
   }));
-  if (!list || list.status === "loading") {
-    surface.append(element(document, "p", { text: t("loadingList") }));
+  if (!list) {
+    surface.append(progressMark(document, t("loadingList")));
     return surface;
+  }
+  if (list.status === "loading") surface.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  if (list.status === "error") {
+    surface.append(element(document, "p", { text: t("listError") }));
+    surface.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "retry-list",
+      text: t("retry"),
+      onclick: () => reloadList(list),
+    }));
   }
   const items = list.items ?? [];
   const range = windowRange(list.scrollTop, list.height || 640, list.rowHeight || 36, items.length);
-  surface.append(renderWaiting(document, items.slice(range.start, range.end), t, (item) => openWaitingItem(app, item)));
+  if (list.status !== "loading" || items.length) {
+    surface.append(renderWaiting(document, items.slice(range.start, range.end), t, (item) => openWaitingItem(app, item)));
+  }
   surface.append(renderWaitingRecord(app, t));
   return surface;
 }
@@ -705,36 +730,37 @@ function renderWaitingSurface(app, t) {
 function openWaitingItem(app, item) {
   if (!item) return;
   app.waitingItemId = item.id;
-  const caps = app.store.capabilities ?? [];
   if (item.unitId) app.store.selected.unitId = item.unitId;
+  const label = text(app.language, "loadingDetails", { name: item.title || item.id });
   if (item.approvalId) {
-    request(app.api, "GET", "/approvals/:approvalId", { params: { approvalId: item.approvalId } }).then((result) => {
+    settle(app, `waiting:${item.id}`, label, async () => {
+      const result = await request(app.api, "GET", "/approvals/:approvalId", { params: { approvalId: item.approvalId } });
       app.waitingRecord = { kind: "approval", approval: result.data, item };
-      if (!app.disposed) renderShell(app);
-    }).catch((error) => noteAction(app, error));
+    });
     return;
   }
   if (item.taskId) {
-    request(app.api, "GET", "/tasks/:taskId", { params: { taskId: item.taskId } }).then((result) => {
+    settle(app, `waiting:${item.id}`, label, async () => {
+      const result = await request(app.api, "GET", "/tasks/:taskId", { params: { taskId: item.taskId } });
       app.waitingRecord = { kind: "review", task: result.data, item };
-      if (!app.disposed) renderShell(app);
-    }).catch((error) => noteAction(app, error));
+    });
     return;
   }
   if (item.chatId) {
-    request(app.api, "GET", "/chats/:chatId", { params: { chatId: item.chatId } }).then((result) => {
+    settle(app, `waiting:${item.id}`, label, async () => {
+      const result = await request(app.api, "GET", "/chats/:chatId", { params: { chatId: item.chatId } });
       app.waitingRecord = { kind: "chat", chat: result.data, item };
       if (app.layout === "phone") app.mode = "hierarchy";
       app.tab = "chats";
-      showChat(app, result.data);
-    }).catch((error) => noteAction(app, error));
+      await showChat(app, result.data);
+    });
     return;
   }
   if (item.messageId) {
-    loadMailboxMessage(app.api, "root:master", item.messageId).then((result) => {
+    settle(app, `waiting:${item.id}`, label, async () => {
+      const result = await loadMailboxMessage(app.api, "root:master", item.messageId);
       app.waitingRecord = { kind: "message", message: result.data, item };
-      if (!app.disposed) renderShell(app);
-    }).catch((error) => noteAction(app, error));
+    });
     return;
   }
   app.waitingRecord = { kind: "question", item };
@@ -750,16 +776,17 @@ function renderWaitingRecord(app, t) {
   if (!record) return block;
   const caps = app.store.capabilities ?? [];
   if (record.kind === "approval" && record.approval && caps.includes("approval.answer")) {
-    block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision)));
+    block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${record.approval.id}`)));
     return block;
   }
   if (record.kind === "review" && record.task && (caps.includes("task.status") || caps.includes("task.accept") || caps.includes("task.send-back"))) {
     const phone = app.layout === "phone" || app.store.audience === "phone";
     const noteDraft = inputDrafts(app).notes.get(record.task.id);
+    const taskBusy = activityPending(app, `task:${record.task.id}`) || activityPending(app, `undo:${record.task.id}`);
     block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
-    }, phone ? canAccept(record.task) : canSendBack(record.task)));
+    }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy));
     return block;
   }
   if (record.kind === "message" && record.message) {
@@ -770,7 +797,10 @@ function renderWaitingRecord(app, t) {
         class: "btn",
         "data-action": "mark-read",
         text: t("markRead"),
-        onclick: () => markMailboxRead(app.api, "root:master", [record.message.id]).then(() => refreshWaiting(app)).catch((error) => noteAction(app, error)),
+        onclick: () => settle(app, `read:${record.message.id}`, text(app.language, "working"), async (action) => {
+          await markMailboxRead(app.api, "root:master", [record.message.id], action.operation);
+          await refreshWaiting(app);
+        }),
       }));
     }
     return block;
@@ -799,8 +829,18 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : t("listTotal", { count: list.total ?? 0 });
-  const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), text: status });
+  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? t("emptyList") : t("listTotal", { count: list.total ?? 0 });
+  const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
+  if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  if (list.status === "error") {
+    total.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "retry-list",
+      text: t("retry"),
+      onclick: () => reloadList(list),
+    }));
+  }
   const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
   const rows = collectionRows(app, t, list);
   const handlers = {
@@ -858,15 +898,16 @@ function queueCatalog(app, kind) {
   const editors = editorsOf(app);
   if (editors.loadedKind === kind || editors.catalogLoading) return;
   editors.catalogLoading = true;
-  loadCatalog(app.api, editors, kind, editors.query ?? "").then(() => {
-    editors.catalogLoading = false;
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => {
-    editors.catalogLoading = false;
-    editors.loadedKind = kind;
-    editors.error = error;
-    if (!app.disposed) renderShell(app);
-  });
+  settle(app, `catalog:${kind}`, text(app.language, "loadingList"), async () => {
+    try {
+      await loadCatalog(app.api, editors, kind, editors.query ?? "");
+    } catch (error) {
+      editors.loadedKind = kind;
+      throw error;
+    } finally {
+      editors.catalogLoading = false;
+    }
+  }, (error) => noteEditor(app, error));
 }
 
 function boardSurface(app, document, editor, t) {
@@ -917,11 +958,13 @@ function boardSurface(app, document, editor, t) {
     type: "button", class: "btn", "data-action": "patch-node",
     onclick: () => {
       const saved = name.value;
-      patchNode(app.api, editor, app.editors.selectedNodeId, { name: saved, value: saved }).then(() => {
+      const nodeId = app.editors.selectedNodeId;
+      if (!nodeId) return;
+      editorAct(app, `node:${editor.resourceId}:${nodeId}`, text(app.language, "working"), async (record) => {
+        await patchNode(app.api, editor, nodeId, { name: saved, value: saved }, record.operation);
         if (draftMap(app, "nodes").get(editor.resourceId) === saved) editor.nodeDraft = "";
         releaseFormDraft(app, "nodes", editor.resourceId, saved);
-        if (!app.disposed) renderShell(app);
-      }).catch((error) => noteEditor(app, error));
+      });
     },
   }, t("nodeName")));
   tools.append(element(document, "button", {
@@ -930,13 +973,22 @@ function boardSurface(app, document, editor, t) {
   }, t("addShape")));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "remove-node",
-    onclick: () => removeNode(app.api, editor, app.editors.selectedNodeId).then(() => renderShell(app)).catch((error) => noteEditor(app, error)),
+    onclick: () => {
+      const nodeId = app.editors.selectedNodeId;
+      if (!nodeId) return;
+      editorAct(app, `node-remove:${editor.resourceId}:${nodeId}`, text(app.language, "working"), async (record) => {
+        await removeNode(app.api, editor, nodeId, record.operation);
+      });
+    },
   }, t("removeShape")));
   const file = element(document, "input", { type: "file", accept: "image/png,image/jpeg,image/webp", "data-asset": "true" });
   file.addEventListener("change", () => {
     const selected = file.files?.[0];
     if (!selected) return;
-    uploadAsset(app.api, editor, selected).then((asset) => addImageNode(app, editor, nodes, asset)).catch((error) => noteEditor(app, error));
+    editorAct(app, `upload:${editor.resourceId}`, text(app.language, "uploading"), async (record) => {
+      const asset = await uploadAsset(app.api, editor, selected, record.operation);
+      await addImageNode(app, editor, nodes, asset);
+    });
   });
   tools.append(file);
   tools.append(element(document, "button", {
@@ -953,21 +1005,25 @@ function boardSurface(app, document, editor, t) {
 function addBoardShape(app, editor, screen) {
   const count = (app.editors.shapeCount ?? 0) + 1;
   app.editors.shapeCount = count;
-  addNode(app.api, editor, {
-    screenId: screen.id,
-    parentId: screen.root.id,
-    node: { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] },
-  }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  editorAct(app, `shape:${editor.resourceId}:${count}`, text(app.language, "working"), async (record) => {
+    await addNode(app.api, editor, {
+      screenId: screen.id,
+      parentId: screen.root.id,
+      node: { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] },
+    }, record.operation);
+  });
 }
 
 function addImageNode(app, editor, screen, asset) {
   const count = (app.editors.shapeCount ?? 0) + 1;
   app.editors.shapeCount = count;
-  addNode(app.api, editor, {
-    screenId: screen.id,
-    parentId: screen.root.id,
-    node: { id: `image-${count}`, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
-  }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  return editorAct(app, `image:${editor.resourceId}:${asset.src}`, text(app.language, "working"), async (record) => {
+    await addNode(app.api, editor, {
+      screenId: screen.id,
+      parentId: screen.root.id,
+      node: { id: `image-${count}`, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
+    }, record.operation);
+  });
 }
 
 function commentOnNode(app, editor) {
@@ -984,17 +1040,15 @@ function commentOnNode(app, editor) {
   }
   const supplied = typeof editor.commentText === "string" ? editor.commentText : "";
   if (!supplied.trim()) return;
-  createComment(app.api, app.editors, {
+  const anchor = {
     screen: screen.id,
     screenTitle: screen.title,
     element: node.id,
     label: node.name ?? node.id,
     path: [node.name ?? node.id],
     point: { x: Math.round(node.place?.x ?? 0), y: Math.round(node.place?.y ?? 0) },
-  }, supplied).then(() => {
-    syncViewerDirty(app);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  };
+  sendEditorComment(app, editor, anchor, supplied);
 }
 
 function findBoardNode(node, id) {
@@ -1091,14 +1145,16 @@ function saveVoid(app, editor, value) {
   const current = page?.[lang] ?? "";
   rememberTextDraft(editor, editor.resourceId, page.k, lang, value);
   const bounds = sourceReplacement(current, value);
-  saveRange(app.api, editor, page.k, lang, bounds.start, bounds.end, bounds.replacement).then(() => {
-    editor.textDrafts?.delete(textDraftKey(editor.resourceId, page.k, lang));
-    if (editor.draftKey?.k === page.k && editor.draftKey?.lang === lang) editor.draftText = "";
-    syncViewerDirty(app);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => {
-    editor.conflict = { ...(editor.conflict ?? {}), code: error.code, draftKey: { k: page.k, lang } };
-    noteEditor(app, error);
+  editorAct(app, `void-range:${editor.resourceId}:${page.k}:${lang}`, text(app.language, "savingDocument"), async (record) => {
+    try {
+      await saveRange(app.api, editor, page.k, lang, bounds.start, bounds.end, bounds.replacement, record.operation);
+      editor.textDrafts?.delete(textDraftKey(editor.resourceId, page.k, lang));
+      if (editor.draftKey?.k === page.k && editor.draftKey?.lang === lang) editor.draftText = "";
+      syncViewerDirty(app);
+    } catch (error) {
+      editor.conflict = { ...(editor.conflict ?? {}), code: error.code, draftKey: { k: page.k, lang } };
+      throw error;
+    }
   });
 }
 
@@ -1112,16 +1168,17 @@ function commentOnQuote(app, editor) {
   const range = selectedPlainRange(selection);
   if (!page || !range) return;
   const anchor = textAnchor(editor, page.k, lang, range.start, range.end);
-  createComment(app.api, app.editors, anchor, editor.commentText || anchor.quote).then(() => {
-    syncViewerDirty(app);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  sendEditorComment(app, editor, anchor, editor.commentText || anchor.quote);
 }
 
 function answerVoid(app, editor, proposal, decision) {
-  answerProposal(app.api, editor, proposal, decision).then(() => renderShell(app)).catch((error) => {
-    if (error.code === "proposal_stale") editor.conflict = { code: error.code };
-    noteEditor(app, error);
+  editorAct(app, `proposal:${proposal.id}`, text(app.language, "answering"), async (record) => {
+    try {
+      await answerProposal(app.api, editor, proposal, decision, record.operation);
+    } catch (error) {
+      if (error.code === "proposal_stale") editor.conflict = { code: error.code };
+      throw error;
+    }
   });
 }
 
@@ -1253,6 +1310,7 @@ function renderEditorSurfaces(app, t) {
     selectedId: current?.resourceId,
     onActivate: (row) => selectEditor(app, row.item),
   });
+  if (editors.catalogLoading) catalog.append(progressMark(document, t("loadingList"), { "data-catalog-progress": "true" }));
   catalog.append(list);
   const forms = resourceForms(app, document, t);
   if (forms) catalog.append(forms);
@@ -1294,7 +1352,9 @@ function renderEditorSurfaces(app, t) {
   const actions = element(document, "div", { class: "editor-actions" });
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app) }, t("attach")));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => stopWatch(app.api, editors).then(() => renderShell(app)).catch((error) => noteEditor(app, error)) }, t("stopWatch")));
+  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
+    await stopWatch(app.api, editors, record.operation);
+  }) }, t("stopWatch")));
   tools.append(picker, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
   const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
@@ -1356,21 +1416,33 @@ function selectEditor(app, summary) {
   app.store.selected.resourceId = summary.id;
   app.store.open.editors.set(summary.id, summary.kind);
   app.store.open.comments.add(summary.id);
-  openEditor(app.api, editors, summary).then(() => {
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  const name = summary.title || summary.id;
+  editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
+    const before = editors.error;
+    await openEditor(app.api, editors, summary);
+    if (editors.error && editors.error !== before) throw editors.error;
+  });
 }
 
 function saveAttachments(app) {
-  const choice = editorsOf(app).current?.attachmentChoice;
-  setAttachments(app.api, editorsOf(app), [...(choice ?? [])]).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  const editors = editorsOf(app);
+  const choice = editors.current?.attachmentChoice;
+  editorAct(app, `attach:${editors.current?.resourceId ?? "none"}`, text(app.language, "attaching"), async (record) => {
+    await setAttachments(app.api, editors, [...(choice ?? [])], record.operation);
+  });
 }
 
 function followEditor(app) {
   const editors = editorsOf(app);
   const unitId = [...(editors.current?.attachmentChoice ?? [])][0] ?? editors.current?.attached?.[0];
-  if (!unitId || !editors.current) return;
-  startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  if (!unitId || !editors.current) {
+    showOutcome(app, text(app.language, "attachFirst"), "attach_required");
+    if (!app.disposed) renderShell(app);
+    return;
+  }
+  editorAct(app, `watch:${editors.current.resourceId}`, text(app.language, "working"), async (record) => {
+    await startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }, record.operation);
+  });
 }
 
 function commentCanSubmit(app, value) {
@@ -1412,21 +1484,49 @@ function addEditorComment(app, compose) {
   current.commentText = value;
   const anchor = currentCommentAnchor(app);
   if (!anchor || !value.trim()) return;
-  createComment(app.api, editors, anchor, value).then(() => {
-    syncViewerDirty(app);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  sendEditorComment(app, current, anchor, value);
+}
+
+function sendEditorComment(app, editor, anchor, value) {
+  const editors = editorsOf(app);
+  const current = editors.current;
+  if (!current || !value.trim()) return;
+  const key = `comment:${current.resourceId}`;
+  if (activityPending(app, key)) return;
+  let row = (current.threads ?? []).find((thread) => thread.pending);
+  if (!row) {
+    row = { id: "pending-comment", status: "open", pending: true, failed: false, messages: [{ text: value }] };
+    current.threads = [...(current.threads ?? []), row];
+  }
+  row.failed = false;
+  row.messages = [{ text: value }];
+  editorAct(app, key, text(app.language, "sending"), async (record) => {
+    try {
+      await createComment(app.api, editors, anchor, value, record.operation);
+      current.threads = (current.threads ?? []).filter((thread) => !thread.pending);
+      syncViewerDirty(app);
+    } catch (error) {
+      const pending = (current.threads ?? []).find((thread) => thread.pending);
+      if (pending) pending.failed = true;
+      throw error;
+    }
+  });
 }
 
 function replyToThread(app, threadId) {
   const editors = editorsOf(app);
   const supplied = editors.current?.commentText;
   if (typeof supplied !== "string" || !supplied.trim()) return;
-  replyComment(app.api, editors, threadId, supplied).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  editorAct(app, `reply:${threadId}`, text(app.language, "sending"), async (record) => {
+    await replyComment(app.api, editors, threadId, supplied, record.operation);
+  });
 }
 
 function resolveThread(app, threadId) {
-  resolveComment(app.api, editorsOf(app), threadId).then(() => renderShell(app)).catch((error) => noteEditor(app, error));
+  const editors = editorsOf(app);
+  editorAct(app, `resolve:${threadId}`, text(app.language, "working"), async (record) => {
+    await resolveComment(app.api, editors, threadId, record.operation);
+  });
 }
 
 function noteEditor(app, error) {
@@ -1488,12 +1588,11 @@ function resourceForms(app, document, t) {
 function submitRegister(app, kind) {
   const draft = editorDraft(app);
   const savedPath = draft.path;
-  registerResource(app.api, { kind, project: draft.project.trim(), path: draft.path.trim() })
-    .then((result) => {
-      releaseFormDraft(app, "resources", "path", savedPath);
-      return openCreated(app, result.data, kind);
-    })
-    .catch((error) => noteEditor(app, error));
+  editorAct(app, `register:${kind}`, text(app.language, "working"), async (record) => {
+    const result = await registerResource(app.api, { kind, project: draft.project.trim(), path: draft.path.trim() }, record.operation);
+    releaseFormDraft(app, "resources", "path", savedPath);
+    await openCreated(app, result.data, kind);
+  });
 }
 
 function submitCreate(app, kind) {
@@ -1509,14 +1608,13 @@ function submitCreate(app, kind) {
   const savedId = draft.id;
   const savedTitle = draft.title;
   const savedCreatePath = draft.createPath;
-  createResource(app.api, kind, { project: draft.project.trim(), path, document })
-    .then((result) => {
-      releaseFormDraft(app, "resources", "id", savedId);
-      releaseFormDraft(app, "resources", "title", savedTitle);
-      releaseFormDraft(app, "resources", "createPath", savedCreatePath);
-      return openCreated(app, result.data, kind);
-    })
-    .catch((error) => noteEditor(app, error));
+  editorAct(app, `create:${kind}`, text(app.language, "working"), async (record) => {
+    const result = await createResource(app.api, kind, { project: draft.project.trim(), path, document }, record.operation);
+    releaseFormDraft(app, "resources", "id", savedId);
+    releaseFormDraft(app, "resources", "title", savedTitle);
+    releaseFormDraft(app, "resources", "createPath", savedCreatePath);
+    await openCreated(app, result.data, kind);
+  });
 }
 
 function submitJsonCopy(app, current) {
@@ -1526,9 +1624,10 @@ function submitJsonCopy(app, current) {
   const project = current.authoritative.project || editorDraft(app).project;
   const path = `docs/flows/boards/${id}.json`;
   if (path === legacy.path) return;
-  createResource(app.api, "blueprint", { project, path, document: starterBoard(id, legacy.id || id) })
-    .then((result) => openCreated(app, result.data, "blueprint"))
-    .catch((error) => noteEditor(app, error));
+  editorAct(app, `copy:${id}`, text(app.language, "working"), async (record) => {
+    const result = await createResource(app.api, "blueprint", { project, path, document: starterBoard(id, legacy.id || id) }, record.operation);
+    await openCreated(app, result.data, "blueprint");
+  });
 }
 
 function jsonCopyId(path) {
@@ -1660,10 +1759,10 @@ function addBoardLink(app, editor) {
 function saveBoardStructure(app, editor, edit, onSaved) {
   if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
   const next = editedBoard(editor.authoritative, edit);
-  replaceBoard(app.api, editor, next.document).then(() => {
+  editorAct(app, `structure:${editor.resourceId}`, text(app.language, "working"), async (record) => {
+    await replaceBoard(app.api, editor, next.document, record.operation);
     onSaved?.();
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  });
 }
 
 function replaceVoidDocument(app, editor) {
@@ -1673,10 +1772,10 @@ function replaceVoidDocument(app, editor) {
   const savedTitle = editorDraft(app).documentTitle;
   const next = structuredClone(editor.authoritative.document);
   next.title = title;
-  replaceDocument(app.api, editor, next).then(() => {
+  editorAct(app, `void-doc:${editor.resourceId}`, text(app.language, "savingDocument"), async (record) => {
+    await replaceDocument(app.api, editor, next, record.operation);
     releaseFormDraft(app, "resources", "documentTitle", savedTitle);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteEditor(app, error));
+  });
 }
 
 function ensureMap(app) {
@@ -1697,7 +1796,10 @@ function ensureMap(app) {
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
   app.mapState.onGroupConnect = (pending) => confirmConnection(app, pending.source, pending.targets ?? []);
   app.mapState.onGroupMessage = (ids) => {
-    openGroupChat(app.api, ids).then((result) => showChat(app, result.data)).catch((error) => noteAction(app, error));
+    settle(app, "group-chat", text(app.language, "loadingConversation"), async (record) => {
+      const result = await openGroupChat(app.api, ids, undefined, record.operation);
+      await showChat(app, result.data);
+    });
   };
   return app.mapState;
 }
@@ -1706,6 +1808,10 @@ function finishMap(app) {
   const host = app.root.querySelector?.(".map");
   if (!host || !app.mapState) return;
   const rect = host.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 760, height: 700 };
+  app.mapState.onPersist = () => {
+    if (!app.disposed) renderShell(app);
+  };
+  app.mapState.onRetryLayout = () => retrySavedLayout(app.mapState);
   if (app.pendingCenter) {
     centerUnit(app.mapState, app.pendingCenter, rect);
     app.pendingCenter = null;
@@ -1720,6 +1826,9 @@ function finishMap(app) {
     statusOut: text(app.language, "statusOut"),
     statusQuota: text(app.language, "statusQuota"),
     statusUnknown: text(app.language, "statusUnknown"),
+    savingLayout: text(app.language, "savingLayout"),
+    layoutError: text(app.language, "layoutError"),
+    retry: text(app.language, "retry"),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
   takePendingChat(app);
@@ -1901,6 +2010,13 @@ function chooseSetting(app, patch) {
   }).catch((error) => noteAction(app, error));
 }
 
+function settle(app, key, label, work, onError = null) {
+  return track(app, key, label, work).catch((error) => {
+    if (onError) onError(error);
+    else noteAction(app, error);
+  });
+}
+
 function track(app, key, label, work) {
   if (!app.activity) app.activity = new Map();
   return runAction(app.activity, key, {
@@ -1908,9 +2024,21 @@ function track(app, key, label, work) {
     work,
     render(record) {
       record.retry = () => track(app, key, label, work);
-      if (!app.disposed) renderShell(app);
+      const paint = () => {
+        if (!app.disposed && app.layout !== "unknown") renderShell(app);
+      };
+      if (app.rendering) queueMicrotask(paint);
+      else paint();
     },
   });
+}
+
+function editorAct(app, key, label, work) {
+  return settle(app, key, label, work, (error) => noteEditor(app, error));
+}
+
+function activityPending(app, key) {
+  return app.activity?.get(key)?.phase === "pending";
 }
 
 function paintActivity(app, shell) {
@@ -1953,33 +2081,33 @@ function beginHome(app, raw, replacing) {
   });
 }
 
-async function enableHome(app, raw) {
+function enableHome(app, raw) {
   const addresses = String(raw ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   const home = homeState(app);
   home.expectGrant = true;
-  try {
-    const result = await openHome(app.api, addresses);
-    takeGrant(home, result.data);
-    if (app.store.settings) app.store.settings.home = home.home;
-    if (!app.disposed) renderShell(app);
-  } catch (error) {
-    home.expectGrant = false;
-    if (error.code === "listener_unavailable") clearGrant(home);
-    noteAction(app, error);
-  }
+  return settle(app, "home-open", text(app.language, "openingHome"), async () => {
+    try {
+      const result = await openHome(app.api, addresses);
+      takeGrant(home, result.data);
+      if (app.store.settings) app.store.settings.home = home.home;
+      return result;
+    } catch (error) {
+      home.expectGrant = false;
+      if (error.code === "listener_unavailable") clearGrant(home);
+      throw error;
+    }
+  });
 }
 
-async function endHome(app) {
-  try {
+function endHome(app) {
+  return settle(app, "home-close", text(app.language, "closingHome"), async () => {
     const result = await closeHome(app.api);
     const home = homeState(app);
     clearGrant(home);
     home.home = result.data;
     if (app.store.settings) app.store.settings.home = result.data;
-    if (!app.disposed) renderShell(app);
-  } catch (error) {
-    noteAction(app, error);
-  }
+    return result;
+  });
 }
 
 function renderFooter(app, t) {
@@ -1996,6 +2124,22 @@ function renderFooter(app, t) {
   if (Number.isInteger(app.settingsSync?.pendingChanges)) {
     footer.append(element(document, "span", { "data-pending-changes": String(app.settingsSync.pendingChanges), text: t("pendingChanges", { count: app.settingsSync.pendingChanges }) }));
   }
+  const stream = app.store.stream;
+  if (stream?.state === "connecting" || stream?.state === "reconnecting") footer.append(progressMark(document, t("reconnecting"), { "data-stream": stream.state }));
+  if (stream?.state === "error") {
+    footer.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "retry-stream",
+      "data-stream": "error",
+      text: t("retry"),
+      onclick: () => synchronize(app.api, app.store, {
+        cursor: () => app.store.cursor,
+        onEvent: (event) => onStream(app, event),
+        onState: () => { if (!app.disposed && app.layout !== "unknown") renderShell(app); },
+      }),
+    }));
+  }
   return footer;
 }
 
@@ -2006,13 +2150,16 @@ function renderPhoneNav(app, t) {
 
 function renderSignedOut(app) {
   const document = app.root.ownerDocument;
-  const t = (key) => text(app.language, key);
+  const t = (key, variables) => text(app.language, key, variables);
   const gate = element(document, "section", { class: "gate" },
     element(document, "h2", { text: t("reopenTitle") }),
     element(document, "p", { text: app.phoneError ? t(app.phoneError) : t("reopenBody") }),
   );
-  if (app.phoneRetryAfter) gate.setAttribute("data-retry-after", String(app.phoneRetryAfter));
-  gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code)));
+  if (app.phoneRetryAfter != null && app.phoneRetryAfter !== "" && Number.isFinite(Number(app.phoneRetryAfter))) {
+    gate.append(element(document, "p", { "data-retry-after": String(app.phoneRetryAfter), text: t("retryWait", { seconds: app.phoneRetryAfter }) }));
+  }
+  if (app.phoneBusy) gate.append(progressMark(document, t("checkingCode")));
+  gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code), { value: app.phoneCode ?? "", busy: Boolean(app.phoneBusy) }));
   app.root.replaceChildren(gate);
 }
 
@@ -2027,11 +2174,18 @@ function renderPhoneError(app, error) {
 }
 
 async function submitCode(app, code) {
+  if (app.phoneBusy) return;
+  app.phoneCode = code;
+  app.phoneBusy = true;
+  renderSignedOut(app);
   try {
     const credential = await exchangeCode(app.api, code);
+    app.phoneBusy = false;
+    app.phoneCode = "";
     app.phoneError = null;
     await bootSession(app, credential);
   } catch (error) {
+    app.phoneBusy = false;
     renderPhoneError(app, error);
   }
 }
@@ -2062,7 +2216,8 @@ function renderFailure(app, error) {
 
 function renderStatus(app, key) {
   const document = app.root.ownerDocument;
-  app.root.replaceChildren(element(document, "p", { id: "status", role: "status", text: text(app.language, key) }));
+  const label = text(app.language, key);
+  app.root.replaceChildren(element(document, "p", { id: "status", role: "status" }, progressMark(document, label)));
 }
 
 function brand(document) {
@@ -2194,15 +2349,11 @@ const SCOPE_KINDS = [
   ["project", "scopeProject"],
 ];
 
-async function openUnitForm(app) {
-  let machines = [];
-  try {
-    machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
-  } catch (error) {
-    noteAction(app, error);
-    return;
-  }
-  const leads = leadChoices(app);
+function openUnitForm(app) {
+  settle(app, "unit-form", text(app.language, "loadingClients"), async () => {
+    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
+    if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='unit']")) return;
+    const leads = leadChoices(app);
   openChoiceForm(app, "unit", text(app.language, "newUnit"), (form, confirm) => {
     const document = form.ownerDocument;
     appendInput(document, form, "unit", text(app.language, "unitName"), "");
@@ -2240,7 +2391,7 @@ async function openUnitForm(app) {
     if (!machine?.answers) {
       showOutcome(app, text(app.language, "machineUnavailable", { machine: machineId }), "machine_unavailable");
       if (!app.disposed) renderShell(app);
-      return;
+      return false;
     }
     const kind = fieldValue(form, "scopeKind");
     const name = fieldValue(form, "scopeName").trim();
@@ -2255,28 +2406,30 @@ async function openUnitForm(app) {
         job: fieldValue(form, "job").trim() || null,
         model: fieldValue(form, "model").trim() || null,
         position: readPosition(form),
-      });
+      }, app.unitOperation ?? null);
+      app.unitOperation = null;
       const unit = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
       showOutcome(app, text(app.language, "unitCreated", { unit }));
       if (app.unitList) await reloadList(app.unitList);
+      if (!app.disposed) renderShell(app);
+      return true;
     } catch (error) {
+      app.unitOperation = error?.operation ?? app.unitOperation ?? null;
       showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? machineId })
         : actionText(app.language, error?.code), error?.code ?? null);
+      if (!app.disposed) renderShell(app);
+      throw error;
     }
-    if (!app.disposed) renderShell(app);
+  });
   });
 }
 
-async function openSessionForm(app, unit) {
-  let machines = [];
-  try {
-    machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
-  } catch (error) {
-    noteAction(app, error);
-    return;
-  }
-  const machine = machines.find((item) => item.id === unit.machine) ?? null;
+function openSessionForm(app, unit) {
+  settle(app, `session-form:${unit.id}`, text(app.language, "loadingClients"), async () => {
+    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
+    if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='session']")) return;
+    const machine = machines.find((item) => item.id === unit.machine) ?? null;
   const clients = (machine?.clients ?? []).filter((item) => item.enabled === true && item.installed === true);
   openChoiceForm(app, "session", text(app.language, "startSession"), (form, confirm) => {
     const document = form.ownerDocument;
@@ -2296,19 +2449,25 @@ async function openSessionForm(app, unit) {
     if (!clients.some((item) => item.id === client)) {
       showOutcome(app, text(app.language, "clientUnavailable"), "client_unavailable");
       if (!app.disposed) renderShell(app);
-      return;
+      return false;
     }
     try {
-      const started = await startSession(app.api, unit, client, fieldValue(form, "prompt").trim() || null);
+      const started = await startSession(app.api, unit, client, fieldValue(form, "prompt").trim() || null, app.sessionOperation ?? null);
+      app.sessionOperation = null;
       app.sessionRequestId = started.data.requestId;
       showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed"), started.data.state ?? null);
       if (started.data.state === "queued" || started.data.state === "starting") await recheckTracked(app);
+      if (!app.disposed) renderShell(app);
+      return true;
     } catch (error) {
+      app.sessionOperation = error?.operation ?? app.sessionOperation ?? null;
       showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? unit.machine })
         : actionText(app.language, error?.code), error?.code ?? null);
+      if (!app.disposed) renderShell(app);
+      throw error;
     }
-    if (!app.disposed) renderShell(app);
+  });
   });
 }
 
@@ -2321,12 +2480,16 @@ function confirmStop(app, sessionId) {
     retry: text(app.language, "retry"),
     onConfirm: async () => {
       try {
-        const stopped = await stopSession(app.api, sessionId);
+        const stopped = await stopSession(app.api, sessionId, app.stopOperation ?? null);
+        app.stopOperation = null;
         showOutcome(app, text(app.language, SESSION_COPY[stopped.data.state] ?? "sessionStopping"), stopped.data.state ?? null);
+        if (!app.disposed) renderShell(app);
       } catch (error) {
+        app.stopOperation = error?.operation ?? app.stopOperation ?? null;
         showOutcome(app, actionText(app.language, error?.code), error?.code ?? null);
+        if (!app.disposed) renderShell(app);
+        throw error;
       }
-      if (!app.disposed) renderShell(app);
     },
   });
 }
@@ -2347,11 +2510,31 @@ function openChoiceForm(app, kind, title, build, onConfirm) {
   confirm.addEventListener("click", async () => {
     if (sending || confirm.disabled) return;
     sending = true;
-    dialog.close();
+    confirm.setAttribute("aria-busy", "true");
+    const label = confirm.textContent;
+    confirm.replaceChildren(progressMark(document, label));
+    dialog.querySelector("[data-dialog-error]")?.remove();
     try {
-      await onConfirm(form);
-    } finally {
+      const accepted = await onConfirm(form);
+      if (accepted === false) {
+        sending = false;
+        confirm.removeAttribute("aria-busy");
+        confirm.replaceChildren(document.createTextNode(label));
+        return;
+      }
+      dialog.close();
+    } catch (error) {
       sending = false;
+      confirm.removeAttribute("aria-busy");
+      confirm.replaceChildren(document.createTextNode(text(app.language, "retry")));
+      const note = element(document, "p", {
+        class: "action-note",
+        "data-dialog-error": "true",
+        role: "alert",
+        text: error?.message || text(app.language, "actionFailed"),
+      });
+      if (typeof form.insertBefore === "function") form.insertBefore(note, actions);
+      else form.append(note);
     }
   });
   actions.append(cancel, confirm);
@@ -2448,8 +2631,8 @@ function chatPanel(app, t) {
       "data-message": message.id,
       "data-read": message.read ? "true" : "false",
       "data-pending": message.pending ? (message.failed ? "failed" : "true") : null,
+      text: message.body || message.subject || "",
     });
-    row.append(document.createTextNode(message.body || message.subject || ""));
     if (message.pending && !message.failed) row.append(progressMark(document, t("sending")));
     if (message.failed) {
       row.append(element(document, "button", {
@@ -2489,9 +2672,18 @@ function chatPanel(app, t) {
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
   if (caps.includes("chat.manage")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "pin", text: t("pin"), onclick: () => changeChat(app, { pinned: true }) }));
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "unlist", text: t("removeFromList"), onclick: () => changeChat(app, { listed: false }) }));
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "reopen", text: t("reopenChat"), onclick: () => changeChat(app, { listed: true }) }));
+    const managing = activityPending(app, `chat-manage:${thread.chat.id}`);
+    const manageButton = (action, label, change) => element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": action,
+      "aria-busy": managing ? "true" : "false",
+      disabled: managing ? "" : null,
+      onclick: () => changeChat(app, change),
+    }, managing ? progressMark(document, t("working")) : label);
+    if (thread.chat.pinned !== true) row.append(manageButton("pin", t("pin"), { pinned: true }));
+    if (thread.chat.listed !== false) row.append(manageButton("unlist", t("removeFromList"), { listed: false }));
+    if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
   row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
   if (caps.includes("mailbox.read") || caps.includes("master.read")) {
@@ -2566,8 +2758,27 @@ function renderMailbox(app, t) {
   if (box.unitId) {
     const history = element(document, "div", { class: "mailbox-history", "data-mailbox-history": box.unitId });
     history.append(element(document, "p", { text: t("mailboxHistory") }));
-    if (!box.items?.length) history.append(element(document, "p", { "data-empty": "true", text: t("mailboxEmpty") }));
-    for (const message of box.items ?? []) {
+    const visibleMail = [...(box.items ?? [])];
+    if (box.optimistic) visibleMail.unshift(box.optimistic);
+    if (!visibleMail.length && !box.pending) history.append(element(document, "p", { "data-empty": "true", text: t("mailboxEmpty") }));
+    for (const message of visibleMail) {
+      if (message.pending) {
+        const row = element(document, "p", {
+          "data-mailbox-message": message.id,
+          "data-pending": message.failed ? "failed" : "true",
+          text: message.body || "",
+        });
+        if (!message.failed) row.append(progressMark(document, t("sending")));
+        else row.append(element(document, "button", {
+          type: "button",
+          class: "btn",
+          "data-action": "retry-mailbox",
+          text: t("retry"),
+          onclick: () => sendMailbox(app, { value: message.body }),
+        }));
+        history.append(row);
+        continue;
+      }
       history.append(element(document, "button", {
         type: "button",
         class: "btn",
@@ -2610,13 +2821,15 @@ function renderMailbox(app, t) {
       box.composer = compose.value;
       rememberFormDraft(app, "mail", box.unitId, compose.value);
     });
+    const sending = Boolean(box.pending);
     section.append(compose, element(document, "button", {
       type: "button",
       class: "btn primary",
       "data-action": "send-mailbox",
-      text: t("send"),
+      "aria-busy": sending ? "true" : "false",
+      disabled: sending ? "" : null,
       onclick: () => sendMailbox(app, compose),
-    }));
+    }, sending ? progressMark(document, t("sending")) : t("send")));
   }
   if (box.note) section.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: box.note }));
   return section;
@@ -2626,26 +2839,30 @@ function takePendingChat(app) {
   const pending = app.pendingChat;
   if (!pending || app.chatOpening) return;
   app.pendingChat = null;
+  app.chatOpening = true;
+  const finish = () => { app.chatOpening = false; };
   if (!pending.create) {
-    openExistingDirect(app, pending.unitId);
+    openExistingDirect(app, pending.unitId).finally(finish);
     return;
   }
   app.phoneChatNote = false;
-  app.chatOpening = true;
-  openDirectChat(app.api, [pending.unitId]).then((result) => showChat(app, result.data)).catch((error) => noteAction(app, error)).finally(() => { app.chatOpening = false; });
+  settle(app, `open-chat:${pending.unitId}`, text(app.language, "loadingConversation"), async (record) => {
+    const result = await openDirectChat(app.api, [pending.unitId], record.operation);
+    await showChat(app, result.data);
+  }).finally(finish);
 }
 
 function openExistingDirect(app, unitId) {
-  findDirectChat(app.api, unitId).then((chat) => {
+  return settle(app, `direct:${unitId}`, text(app.language, "loadingConversation"), async () => {
+    const chat = await findDirectChat(app.api, unitId);
     app.tab = "chats";
     if (chat) {
       app.phoneChatNote = false;
-      showChat(app, chat);
+      await showChat(app, chat);
       return;
     }
     app.phoneChatNote = true;
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function showChat(app, chat) {
@@ -2653,18 +2870,18 @@ function showChat(app, chat) {
   app.thread = createThread(chat);
   const saved = inputDrafts(app).chats.get(chat.id);
   if (saved) app.thread.composer = saved.value;
-  return loadMessages(app.api, app.thread).then(() => {
-    if (!app.disposed) renderShell(app);
+  return settle(app, `chat:${chat.id}`, text(app.language, "loadingConversation"), async () => {
+    await loadMessages(app.api, app.thread);
   });
 }
 
 function changeChat(app, change) {
   const chat = app.thread?.chat;
   if (!chat) return;
-  manageChat(app.api, chat, change).then((result) => {
+  settle(app, `chat-manage:${chat.id}`, text(app.language, "working"), async (record) => {
+    const result = await manageChat(app.api, chat, change, record.operation);
     app.thread.chat = result.data;
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function loadOlder(app) {
@@ -2672,83 +2889,105 @@ function loadOlder(app) {
   const anchor = host?.querySelector?.("[data-message]");
   const measuredId = anchor?.getAttribute?.("data-message") ?? null;
   const measuredOffset = anchor?.offsetTop ?? 0;
+  if (!app.thread?.chat) return;
   if (app.thread) {
     app.thread.nearBottom = false;
     if (measuredId) app.thread.anchorId = measuredId;
     app.thread.anchorOffset = measuredOffset;
   }
   const older = Boolean(app.thread.nextCursor);
-  loadMessages(app.api, app.thread, older).then(() => {
-    if (app.disposed) return;
-    if (measuredId) app.thread.anchorId = measuredId;
+  track(app, `older:${app.thread.chat.id}`, text(app.language, "loadingConversation"), async () => {
+    await loadMessages(app.api, app.thread, older);
+  }).then(() => {
+    if (app.disposed || !measuredId) return;
+    app.thread.anchorId = measuredId;
     app.thread.anchorOffset = measuredOffset;
     app.thread.nearBottom = false;
-    renderShell(app);
     const next = app.root.querySelector?.(".transcript");
-    const node = next?.querySelector?.(`[data-message="${app.thread.anchorId}"]`);
-    if (next && node) next.scrollTop += (node.offsetTop ?? 0) - (app.thread.anchorOffset ?? 0);
+    const node = next?.querySelector?.(`[data-message="${measuredId}"]`);
+    if (next && node) next.scrollTop += (node.offsetTop ?? 0) - measuredOffset;
   }).catch((error) => noteAction(app, error));
 }
 
 function inspectMailbox(app) {
-  loadMailboxes(app.api).then((result) => {
+  settle(app, "mailboxes", text(app.language, "loadingList"), async () => {
+    const result = await loadMailboxes(app.api);
+    const composer = app.mailbox?.composer ?? "";
     app.mailbox = {
       list: result.data.items ?? [],
       unitId: null,
       items: [],
       nextCursor: null,
       detail: null,
-      composer: "",
+      composer,
       note: "",
     };
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function openMailboxUnit(app, unitId, cursor = null) {
-  openMailbox(app.api, unitId, "all", cursor).then((result) => {
+  settle(app, `mailbox:${unitId}`, text(app.language, "loadingList"), async () => {
+    const result = await openMailbox(app.api, unitId, "all", cursor);
     const incoming = result.data.items ?? [];
     app.mailbox.unitId = unitId;
     app.mailbox.items = cursor ? [...(app.mailbox.items ?? []), ...incoming] : incoming;
     app.mailbox.nextCursor = result.data.nextCursor ?? null;
     if (!cursor) app.mailbox.detail = null;
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function openMailboxDetail(app, messageId) {
   const unitId = app.mailbox?.unitId;
   if (!unitId) return;
-  loadMailboxMessage(app.api, unitId, messageId).then((result) => {
+  settle(app, `mailbox-message:${messageId}`, text(app.language, "loadingDetails", { name: messageId }), async () => {
+    const result = await loadMailboxMessage(app.api, unitId, messageId);
     app.mailbox.detail = result.data;
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function markOpenMailbox(app) {
   const box = app.mailbox;
   if (!box?.detail || !canMarkMailbox(app.store.audience, app.store.capabilities, box.unitId)) return;
-  markMailboxRead(app.api, box.unitId, [box.detail.id]).then((result) => {
+  const messageId = box.detail.id;
+  settle(app, `read:${messageId}`, text(app.language, "working"), async (record) => {
+    const result = await markMailboxRead(app.api, box.unitId, [messageId], record.operation);
     const read = new Set(result.data.readIds ?? []);
     for (const item of box.items ?? []) if (read.has(item.id)) item.read = true;
-    if (read.has(box.detail.id)) box.detail = { ...box.detail, read: true };
+    if (box.detail && read.has(box.detail.id)) box.detail = { ...box.detail, read: true };
     box.note = text(app.language, "markedRead");
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function sendMailbox(app, compose) {
   const box = app.mailbox;
-  if (!box?.unitId) return;
-  box.composer = compose.value;
-  const saved = compose.value;
-  postMailbox(app.api, box.unitId, { body: saved }).then((result) => {
-    box.composer = box.composer === saved ? "" : box.composer;
+  if (!box?.unitId || box.pending) return;
+  const saved = box.optimistic?.failed ? box.optimistic.body : compose.value;
+  box.composer = saved;
+  const task = postMailbox(app.api, box.unitId, { body: saved }, box.operation);
+  box.operation = task.operation;
+  box.pending = true;
+  if (!box.optimistic || box.optimistic.id !== `pending:${task.operation.id}`) {
+    box.optimistic = { id: `pending:${task.operation.id}`, body: saved, pending: true, failed: false };
+  } else {
+    box.optimistic.pending = true;
+    box.optimistic.failed = false;
+  }
+  if (!app.disposed) renderShell(app);
+  task.then((result) => {
+    box.pending = false;
+    box.operation = null;
+    box.optimistic = null;
+    if (box.composer === saved) box.composer = "";
     releaseFormDraft(app, "mail", box.unitId, saved);
     box.items = [result.data, ...(box.items ?? [])];
     box.detail = result.data;
     if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  }).catch((error) => {
+    box.pending = false;
+    if (box.optimistic) box.optimistic.failed = true;
+    box.operation = error?.operation ?? box.operation;
+    noteAction(app, error);
+  });
 }
 
 function submitComposer(app, composer) {
@@ -2777,12 +3016,22 @@ function renderInspector(app, t, selected) {
   const machines = data?.unitId && data.unitId === selected?.id ? data.machines ?? [] : [];
   const machine = machines.find((item) => item.id === selected?.machine);
   if (machine) panel.append(renderMachine(document, machine, t));
-  if (!data || data.unitId !== selected?.id) return panel;
+  if (!data || data.unitId !== selected?.id) {
+    if (selected && activityPending(app, `inspector:${selected.id}`)) {
+      panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));
+    }
+    return panel;
+  }
   for (const session of data.sessions ?? []) panel.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
-  if (caps.includes("grant.revoke")) panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant)));
+  if (caps.includes("grant.revoke")) {
+    const busyGrant = [...(app.activity?.entries() ?? [])].find(([key, record]) => key.startsWith("grant:") && record.phase === "pending")?.[0]?.slice(6) ?? null;
+    panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant), busyGrant));
+  }
   if (caps.includes("approval.answer")) {
-    for (const approval of data.approvals ?? []) panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision)));
+    for (const approval of data.approvals ?? []) {
+      panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
+    }
   }
   const tasks = data.tasks ?? [];
   const taskHost = element(document, "div", { class: "task-window list", "data-task-total": String(data.taskTotal ?? tasks.length) });
@@ -2803,10 +3052,11 @@ function renderInspector(app, t, selected) {
   for (const task of visibleTasks) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
     const phone = app.layout === "phone" || app.store.audience === "phone";
+    const taskBusy = activityPending(app, `task:${task.id}`) || activityPending(app, `undo:${task.id}`);
     panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
-    }, phone ? canAccept(task) : canSendBack(task)));
+    }, phone ? canAccept(task) : canSendBack(task), taskBusy));
     panel.append(openTaskDetail(document, task, t));
   }
   panel.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
@@ -2816,15 +3066,17 @@ function renderInspector(app, t, selected) {
 function loadInspector(app, unitId) {
   const ticket = (app.inspectorTicket ?? 0) + 1;
   app.inspectorTicket = ticket;
-  Promise.all([
-    collectPages(app.api, "/tasks", { query: { unitId, status: "open,review,done,closed" }, limit: 50 }),
-    collectPages(app.api, "/approvals", { query: { unitId, state: "pending" }, limit: 50 }),
-    collectPages(app.api, "/approvals", { query: { unitId, state: "expired" }, limit: 20 }),
-    request(app.api, "GET", `/units/${encodeURIComponent(unitId)}`),
-    collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }),
-    collectPages(app.api, "/machines", { limit: 50 }),
-    collectPages(app.api, "/sessions", { query: { unitId }, limit: 50 }),
-  ]).then(([tasks, approvals, expired, unit, waiting, machines, sessions]) => {
+  const name = unitById(app, unitId)?.unit || unitId;
+  return settle(app, `inspector:${unitId}`, text(app.language, "loadingDetails", { name }), async () => {
+    const [tasks, approvals, expired, unit, waiting, machines, sessions] = await Promise.all([
+      collectPages(app.api, "/tasks", { query: { unitId, status: "open,review,done,closed" }, limit: 50 }),
+      collectPages(app.api, "/approvals", { query: { unitId, state: "pending" }, limit: 50 }),
+      collectPages(app.api, "/approvals", { query: { unitId, state: "expired" }, limit: 20 }),
+      request(app.api, "GET", `/units/${encodeURIComponent(unitId)}`),
+      collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }),
+      collectPages(app.api, "/machines", { limit: 50 }),
+      collectPages(app.api, "/sessions", { query: { unitId }, limit: 50 }),
+    ]);
     if (app.disposed || ticket !== app.inspectorTicket) return;
     app.inspectorData = {
       unitId,
@@ -2845,11 +3097,13 @@ function loadInspector(app, unitId) {
     };
     if (!app.disposed) renderShell(app);
     if (app.sessionRequestId || (app.answerId && app.answerApprovalId) || app.revocationRequestId) recheckTracked(app);
-  }).catch((error) => noteAction(app, error));
+  });
 }
 
 function answerSelected(app, approval, decision) {
-  answerApproval(app.api, approval, decision).then((result) => {
+  settle(app, `approval:${approval.id}`, text(app.language, "answering"), async (record) => {
+    const result = await answerApproval(app.api, approval, decision, record.operation);
+    record.operation = result.operation;
     const next = result.data?.approval ?? null;
     app.answerId = result.data.answerId ?? null;
     app.answerApprovalId = next?.id ?? approval.id;
@@ -2858,11 +3112,14 @@ function answerSelected(app, approval, decision) {
     if (label) showOutcome(app, label, next?.state ?? "answering");
     if (finalApprovalState(next?.state)) refreshOwnerSurface(app, next.unitId ?? approval.unitId);
     else if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+    return result;
+  });
 }
 
 function revokeSelectedGrant(app, unit, grant) {
-  revokeGrant(app.api, unit, grant.id).then((result) => {
+  settle(app, `grant:${grant.id}`, text(app.language, "working"), async (record) => {
+    const result = await revokeGrant(app.api, unit, grant.id, record.operation);
+    record.operation = result.operation;
     app.revocationRequestId = result.data.requestId ?? null;
     app.revocationUnitId = result.data.unitId ?? unit.id;
     if (result.data.state === "revoked") {
@@ -2872,24 +3129,31 @@ function revokeSelectedGrant(app, unit, grant) {
     }
     showOutcome(app, text(app.language, "grantPending"), result.data.state ?? "pending");
     if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+    return result;
+  });
 }
 
 function setTaskStatus(app, task, status, note) {
-  changeTaskStatus(app.api, task, status, note).then((result) => {
+  settle(app, `task:${task.id}`, text(app.language, "working"), async (record) => {
+    const result = await changeTaskStatus(app.api, task, status, note, record.operation);
+    record.operation = result.operation ?? record.operation;
     if (status === "open") clearInputDraft(app, "note", task.id);
     showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
     app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
     refreshWaiting(app);
-  }).catch((error) => noteAction(app, error));
+    return result;
+  });
 }
 
 function undoSelected(app, task) {
-  undoTask(app.api, task).then((result) => {
+  settle(app, `undo:${task.id}`, text(app.language, "working"), async (record) => {
+    const result = await undoTask(app.api, task, record.operation);
+    record.operation = result.operation ?? record.operation;
     showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
     app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
     refreshWaiting(app);
-  }).catch((error) => noteAction(app, error));
+    return result;
+  });
 }
 
 function refreshWaiting(app) {

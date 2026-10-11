@@ -1,4 +1,4 @@
-import { createOperation, request } from "./api.mjs";
+import { perform, request } from "./api.mjs";
 import { boundaryInsideTag, createTextAnchor, plainOffsets, plainText, rangeRequest, renderMarkup, validUtf16Boundary } from "./markup.mjs";
 
 export function renderDocument(document, host, editor) {
@@ -75,15 +75,14 @@ export function selectedPlainRange(selection) {
   return range;
 }
 
-export async function saveRange(api, editor, k, lang, start, end, replacement) {
+export async function saveRange(api, editor, k, lang, start, end, replacement, retained = null) {
   const body = rangeRequest({ document: editor.authoritative?.document ?? editor.document, revision: editor.revision }, k, lang, start, end, replacement);
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "POST",
     path: "/void/texts/:resourceId/ranges",
     params: { resourceId: editor.resourceId },
     body,
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+  }, retained);
   const saved = result.data?.editor;
   acceptText(editor, saved);
   if (saved?.document || saved?.revision) {
@@ -93,17 +92,16 @@ export async function saveRange(api, editor, k, lang, start, end, replacement) {
   return result;
 }
 
-export async function replaceDocument(api, editor, document) {
+export async function replaceDocument(api, editor, document, retained = null) {
   const next = structuredClone(document);
   delete next.rev;
   delete next.history;
-  const operation = createOperation({
+  const result = await perform(api, {
     method: "PUT",
     path: "/void/texts/:resourceId",
     params: { resourceId: editor.resourceId },
     body: { document: next, expectedRevision: editor.revision },
-  });
-  const result = await request(api, "PUT", operation.path, { operation });
+  }, retained);
   acceptText(editor, result.data);
   editor.dirty = false;
   editor.conflict = null;
@@ -155,14 +153,13 @@ export function rememberProposal(editor, proposal, commentsRevision) {
   if (commentsRevision) editor.commentsRevision = commentsRevision;
 }
 
-export async function answerProposal(api, editor, proposal, decision) {
-  const operation = createOperation({
+export async function answerProposal(api, editor, proposal, decision, retained = null) {
+  const result = await perform(api, {
     method: "POST",
     path: "/void/texts/:resourceId/proposals/:proposalId/answer",
     params: { resourceId: editor.resourceId, proposalId: proposal.id },
     body: { decision, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision },
-  });
-  const result = await request(api, "POST", operation.path, { operation });
+  }, retained);
   acceptText(editor, result.data.editor ?? result.data);
   rememberProposal(editor, result.data.proposal, result.data.editor?.commentsRevision ?? result.data.commentsRevision);
   return result;

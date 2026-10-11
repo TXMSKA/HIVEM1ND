@@ -33,6 +33,8 @@ import {
 } from "../gui/app/actions.mjs";
 import { retryOperation } from "../gui/app/api.mjs";
 import { runAction } from "../gui/app/components.mjs";
+import { createPagedList, reloadList } from "../gui/app/lists.mjs";
+import { createStore } from "../gui/app/state.mjs";
 import { renderSession } from "../gui/app/inspector.mjs";
 import {
   applyRemoteLayout,
@@ -658,6 +660,41 @@ test("review, undo, and queued approval outcomes stay distinct", async (context)
   assert.equal(expiredApi.token !== null, true);
   const desktopReturn = await changeTaskStatus(api, gated, "open", "Desktop send back");
   assert.equal(desktopReturn.data.task.status, "open");
+});
+
+test("a reload keeps the previous rows and a failed action keeps its operation", async () => {
+  const store = createStore();
+  const list = createPagedList({ api: {}, store, name: "units", route: "/units" });
+  list.items = [{ id: "kept", unit: "kept" }];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  list.request = () => gate.then(() => ({ data: { items: [{ id: "next", unit: "next" }], total: 1 } }));
+  const pending = reloadList(list);
+  assert.equal(list.status, "loading");
+  assert.equal(list.items[0].id, "kept");
+  release();
+  await pending;
+  assert.equal(list.items[0].id, "next");
+  assert.equal(list.status, "ready");
+
+  const bucket = new Map();
+  const operation = { id: "op-1", method: "POST", path: "/units", body: { unit: "a" } };
+  const ids = [];
+  const run = () => runAction(bucket, "create", {
+    label: "Working.",
+    render() {},
+    work: async (record) => {
+      const current = record.operation ?? operation;
+      ids.push(current.id);
+      const error = new Error("down");
+      error.operation = current;
+      throw error;
+    },
+  });
+  await assert.rejects(run(), (error) => error.message === "down");
+  assert.equal(bucket.get("create").operation.id, "op-1");
+  await assert.rejects(run(), (error) => error.message === "down");
+  assert.deepEqual(ids, ["op-1", "op-1"]);
 });
 
 function fixtureApi(fixture) {

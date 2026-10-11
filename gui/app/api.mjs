@@ -54,6 +54,16 @@ export function createOperation({ method, path, params, body } = {}) {
   });
 }
 
+export async function perform(api, spec, retained = null) {
+  const operation = retained ?? createOperation(spec);
+  try {
+    return await request(api, operation.method, operation.path, { operation });
+  } catch (error) {
+    if (error && typeof error === "object" && error.operation == null) error.operation = operation;
+    throw error;
+  }
+}
+
 export async function request(api, method, path, options = {}) {
   if (api.closed) throw new ApiError(0, "closed", "The session is closed.");
   const operation = options.operation ?? null;
@@ -310,7 +320,11 @@ function readChunk(reader, signal) {
 }
 
 async function readText(response, signal) {
-  if (response.status === 204 || !response.body) return "";
+  if (response.status === 204) return "";
+  if (!response.body) {
+    if (signal?.aborted) throw abortError(signal);
+    return typeof response.text === "function" ? response.text() : "";
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = "";

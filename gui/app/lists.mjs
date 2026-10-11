@@ -54,10 +54,10 @@ export function setQuery(list, query) {
   list.timer = setTimeout(() => {
     list.timer = null;
     list.pendingResolve = null;
-    list.items = [];
     list.nextCursor = null;
     list.status = "loading";
     list.error = null;
+    list.replaceOnPage = true;
     resolve(loadAll(list, generation));
   }, list.delay);
   return done;
@@ -68,7 +68,7 @@ export async function loadNext(list, generation = list.generation) {
   list.controller?.abort();
   const controller = new AbortController();
   list.controller = controller;
-  list.status = list.items.length ? list.status : "loading";
+  list.status = "loading";
   const query = { ...list.filters, limit: list.pageSize };
   if (list.query) query.q = list.query;
   if (list.nextCursor) query.cursor = list.nextCursor;
@@ -78,8 +78,10 @@ export async function loadNext(list, generation = list.generation) {
     if (generation !== list.generation) return { stale: true };
     const page = response.data ?? {};
     const items = Array.isArray(page.items) ? page.items : [];
+    const base = list.replaceOnPage ? [] : list.items;
+    list.replaceOnPage = false;
     const committed = writeCollection(list.store, list.name, generation, {
-      items: list.items.concat(items),
+      items: base.concat(items),
       total: page.total ?? list.items.length + items.length,
       issues: page.issues ?? [],
       nextCursor: page.nextCursor ?? null,
@@ -87,7 +89,7 @@ export async function loadNext(list, generation = list.generation) {
       query: list.query,
     });
     if (!committed) return { stale: true };
-    list.items = list.items.concat(items);
+    list.items = base.concat(items);
     list.total = page.total ?? list.items.length;
     list.issues = page.issues ?? [];
     list.nextCursor = page.nextCursor ?? null;
@@ -113,10 +115,10 @@ export function reloadList(list) {
   list.timer = null;
   const generation = startCollection(list.store, list.name);
   list.generation = generation;
-  list.items = [];
   list.nextCursor = null;
   list.status = "loading";
   list.error = null;
+  list.replaceOnPage = true;
   return loadAll(list, generation);
 }
 
@@ -302,8 +304,9 @@ function rememberCatalog(list) {
 async function reloadFromStart(list, generation) {
   list.reloading = true;
   const focus = list.focusId;
-  list.items = [];
   list.nextCursor = null;
+  list.replaceOnPage = true;
+  list.status = "loading";
   const result = await loadNext(list, generation);
   list.reloading = false;
   if (focus && list.items.some((item) => item.id === focus)) list.focusId = focus;
