@@ -474,6 +474,286 @@ test('a failed native start can be retried and an unconsumed request expires ove
   assert.equal(expired.json.data.error.code, 'approval_expired');
 });
 
+const FIXTURE_EMAIL = 'person@example.com';
+
+function tick() {
+  return new Promise((resolve) => { setImmediate(resolve); });
+}
+
+function settleOr(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ settled: false }), ms);
+    promise.then((value) => {
+      clearTimeout(timer);
+      resolve({ settled: true, value });
+    }, () => {
+      clearTimeout(timer);
+      resolve({ settled: true, value: null });
+    });
+  });
+}
+
+function liveChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.written = [];
+  child.handlers = [];
+  child.stdin = {
+    write(text) {
+      const raw = String(text);
+      child.written.push(raw);
+      let message;
+      try {
+        message = JSON.parse(raw);
+      } catch {
+        return true;
+      }
+      queueMicrotask(() => {
+        for (const handler of child.handlers) handler(message);
+      });
+      return true;
+    },
+    end() {},
+  };
+  child.pid = 5252;
+  child.killed = false;
+  child.exitCode = null;
+  child.kill = () => {
+    if (child.killed) return;
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit('exit', 1);
+  };
+  child.onRequest = (handler) => { child.handlers.push(handler); };
+  child.respond = (message, body) => {
+    child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: message.id, ...body })}\n`);
+  };
+  return child;
+}
+
+function installHandshake(child, accountBody) {
+  child.onRequest((message) => {
+    if (message.method === 'initialize') child.respond(message, { result: { userAgent: 'codex' } });
+    else if (message.method === 'account/read') child.respond(message, accountBody);
+    else if (message.method === 'thread/start') child.respond(message, { result: { thread: { id: 'thread-1' } } });
+  });
+}
+
+async function ownedCodex(t, child, timeoutMs = 1000) {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const adapter = createNativeAdapter('codex', {
+    command: path.join(fixture.root, 'codex.exe'),
+    env: fixture.env,
+    timeoutMs,
+    spawn() { return child; },
+  });
+  t.after(() => adapter.close());
+  return { fixture, adapter, child };
+}
+
+function rpcMethods(child) {
+  return child.written.map((line) => JSON.parse(line));
+}
+
+test('codex account read accepts a signed-in account and an unauthenticated provider', async (t) => {
+  const cases = [
+    { result: { account: { type: 'chatgpt', email: FIXTURE_EMAIL, planType: 'plus' }, requiresOpenaiAuth: true }, ok: true },
+    { result: { account: { type: 'apiKey' }, requiresOpenaiAuth: true }, ok: true },
+    { result: { account: null, requiresOpenaiAuth: false }, ok: true },
+    { result: { account: null, requiresOpenaiAuth: true }, ok: false },
+    { result: { requiresOpenaiAuth: false }, ok: false },
+    { result: { account: { type: 'chatgpt' } }, ok: false },
+    { result: { account: null, requiresOpenaiAuth: 'true' }, ok: false },
+    { result: { account: { type: 'other' }, requiresOpenaiAuth: true }, ok: false },
+    { error: { code: -32000, message: 'not logged in', data: { email: FIXTURE_EMAIL } }, ok: false },
+    { error: { code: -32000, message: 'unavailable' }, ok: false },
+  ];
+  for (const entry of cases) {
+    const child = liveChild();
+    const { ok, ...accountBody } = entry;
+    installHandshake(child, accountBody);
+    const { fixture, adapter } = await ownedCodex(t, child);
+    const started = adapter.create({ cwd: fixture.root, unitId: UNIT });
+    if (ok) {
+      const created = await started;
+      assert.equal(created.nativeSessionId, 'thread-1');
+      assert.equal(JSON.stringify(created).includes(FIXTURE_EMAIL), false);
+      assert.equal(rpcMethods(child).some((line) => line.method === 'thread/start'), true);
+    } else {
+      await assert.rejects(started, (error) => {
+        assert.equal(error.code, 'client_unavailable');
+        assert.equal(String(error.message).includes(FIXTURE_EMAIL), false);
+        assert.equal(JSON.stringify(error.details ?? {}).includes(FIXTURE_EMAIL), false);
+        return true;
+      });
+      assert.equal(rpcMethods(child).some((line) => line.method === 'thread/start'), false);
+    }
+    assert.equal(child.written.join('').includes(FIXTURE_EMAIL), false);
+    assert.equal(rpcMethods(child).some((line) => line.method === 'account/read' && JSON.stringify(line.params) === '{}'), true);
+  }
+  const child = liveChild();
+  child.onRequest((message) => {
+    if (message.method === 'initialize') child.respond(message, { result: { userAgent: 'codex' } });
+    else if (message.method === 'account/read') {
+      child.stderr.emit('data', 'not logged in\n');
+      child.respond(message, { result: { account: { type: 'chatgpt', email: FIXTURE_EMAIL }, requiresOpenaiAuth: true } });
+    }
+  });
+  const { fixture, adapter } = await ownedCodex(t, child);
+  await assert.rejects(() => adapter.create({ cwd: fixture.root, unitId: UNIT }), (error) => {
+    assert.equal(error.code, 'client_unavailable');
+    assert.equal(String(error.message).includes(FIXTURE_EMAIL), false);
+    return true;
+  });
+});
+
+test('an active codex turn steers once and the next message starts after completion', async (t) => {
+  const child = liveChild();
+  installHandshake(child, { result: { account: { type: 'chatgpt' }, requiresOpenaiAuth: true } });
+  let starts = 0;
+  child.onRequest((message) => {
+    if (message.method === 'turn/start') {
+      starts += 1;
+      child.respond(message, { result: { turn: { id: `turn-${starts}`, items: [], status: 'inProgress' } } });
+    } else if (message.method === 'turn/steer') {
+      child.respond(message, { result: { turnId: message.params.expectedTurnId } });
+    }
+  });
+  const { fixture, adapter } = await ownedCodex(t, child);
+  const created = await adapter.create({ cwd: fixture.root, unitId: UNIT });
+  const first = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'alpha' });
+  const second = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'beta' });
+  const turnWrites = () => rpcMethods(child).filter((line) => line.method === 'turn/start' || line.method === 'turn/steer');
+  assert.equal(first.submitted, true);
+  assert.equal(second.submitted, true);
+  assert.equal(turnWrites()[0].method, 'turn/start');
+  assert.deepEqual(turnWrites()[0].params.input, [{ type: 'text', text: 'alpha' }]);
+  assert.equal(turnWrites()[1].method, 'turn/steer');
+  assert.equal(turnWrites()[1].params.expectedTurnId, 'turn-1');
+  assert.equal(turnWrites()[1].params.threadId, 'thread-1');
+  assert.deepEqual(turnWrites()[1].params.input, [{ type: 'text', text: 'beta' }]);
+  assert.equal(turnWrites()[1].params.turn, undefined);
+  const beforeNotice = child.written.length;
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })}\n`);
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: 90, method: 'item/commandExecution/requestApproval', params: { id: 'req-1' } })}\n`);
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'other-thread', turn: { id: 'turn-1', items: [], status: 'completed' } } })}\n`);
+  await tick();
+  assert.equal(child.written.length, beforeNotice);
+  const steered = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'gamma' });
+  assert.equal(steered.submitted, true);
+  assert.equal(turnWrites().at(-1).method, 'turn/steer');
+  assert.equal(turnWrites().at(-1).params.expectedTurnId, 'turn-1');
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-other', items: [], status: 'completed' } } })}\n`);
+  await tick();
+  const still = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'delta' });
+  assert.equal(still.submitted, true);
+  assert.equal(turnWrites().at(-1).method, 'turn/steer');
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', items: [], status: 'completed' } } })}\n`);
+  await tick();
+  const restarted = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'epsilon' });
+  assert.equal(restarted.submitted, true);
+  assert.equal(turnWrites().at(-1).method, 'turn/start');
+  assert.equal(turnWrites().at(-1).params.threadId, 'thread-1');
+  assert.deepEqual(turnWrites().at(-1).params.input, [{ type: 'text', text: 'epsilon' }]);
+  const joined = child.written.join('\n');
+  for (const text of ['alpha', 'beta', 'gamma', 'delta', 'epsilon']) assert.equal(joined.split(text).length - 1, 1);
+});
+
+test('a timed-out codex response does not consume the next rpc', async (t) => {
+  const child = liveChild();
+  installHandshake(child, { result: { account: { type: 'apiKey' }, requiresOpenaiAuth: true } });
+  const answered = [];
+  child.onRequest((message) => {
+    if (message.method !== 'turn/start') return;
+    answered.push(message.id);
+    if (answered.length === 1) return;
+    child.respond(message, { result: { turn: { id: 'turn-later', items: [], status: 'inProgress' } } });
+  });
+  const { fixture, adapter } = await ownedCodex(t, child, 1000);
+  const created = await adapter.create({ cwd: fixture.root, unitId: UNIT });
+  const first = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'late' });
+  assert.equal(first.submitted, false);
+  assert.equal(first.ambiguous, true);
+  assert.equal(answered.length, 1);
+  const second = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'next' });
+  assert.equal(second.submitted, true);
+  assert.equal(second.ambiguous, undefined);
+  assert.equal(answered.length, 2);
+  assert.notEqual(answered[0], answered[1]);
+  const starts = rpcMethods(child).filter((line) => line.method === 'turn/start');
+  assert.equal(starts.length, 2);
+  assert.equal(starts[0].id, answered[0]);
+  assert.equal(starts[1].id, answered[1]);
+  assert.equal(starts[1].params.input[0].text, 'next');
+});
+
+test('a rejected or malformed codex ack is ambiguous and is not replayed', async (t) => {
+  const outcomes = [
+    { method: 'turn/start', body: { result: { turnId: 'turn-1' } } },
+    { method: 'turn/steer', body: { result: { turn: { id: 'turn-1' } } } },
+    { method: 'turn/steer', body: { result: { turnId: 'turn-other' } } },
+    { method: 'turn/steer', body: { error: { code: 1, message: 'rejected' } } },
+  ];
+  for (const outcome of outcomes) {
+    const child = liveChild();
+    installHandshake(child, { result: { account: { type: 'chatgpt' }, requiresOpenaiAuth: true } });
+    child.onRequest((message) => {
+      if (message.method === 'turn/start' && outcome.method !== 'turn/start') {
+        child.respond(message, { result: { turn: { id: 'turn-1', items: [], status: 'inProgress' } } });
+      } else if (message.method === outcome.method) child.respond(message, outcome.body);
+    });
+    const { fixture, adapter } = await ownedCodex(t, child);
+    const created = await adapter.create({ cwd: fixture.root, unitId: UNIT });
+    if (outcome.method === 'turn/steer') {
+      const started = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'alpha' });
+      assert.equal(started.submitted, true);
+    }
+    const before = child.written.length;
+    const result = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'beta' });
+    assert.equal(result.submitted, false);
+    assert.equal(result.ambiguous, true);
+    assert.equal(child.written.length, before + 1);
+    assert.equal(child.written.join('').includes('beta'), true);
+    assert.equal(child.written.join('').split('beta').length - 1, 1);
+  }
+});
+
+test('closing the owned codex child settles a pending response', async (t) => {
+  const exited = liveChild();
+  installHandshake(exited, { result: { account: null, requiresOpenaiAuth: false } });
+  exited.onRequest((message) => {
+    if (message.method === 'turn/start') {
+      exited.exitCode = 1;
+      exited.emit('exit', 1);
+    }
+  });
+  const first = await ownedCodex(t, exited, 5000);
+  const created = await first.adapter.create({ cwd: first.fixture.root, unitId: UNIT });
+  const pending = first.adapter.send({ nativeSessionId: created.nativeSessionId, text: 'stop' });
+  const exitedResult = await settleOr(pending, 500);
+  assert.equal(exitedResult.settled, true);
+  assert.equal(exitedResult.value.submitted, false);
+  assert.equal(exitedResult.value.ambiguous, true);
+  assert.equal(rpcMethods(exited).filter((line) => line.method === 'turn/start').length, 1);
+
+  const closed = liveChild();
+  installHandshake(closed, { result: { account: null, requiresOpenaiAuth: false } });
+  const second = await ownedCodex(t, closed, 5000);
+  const session = await second.adapter.create({ cwd: second.fixture.root, unitId: UNIT });
+  const hanging = second.adapter.send({ nativeSessionId: session.nativeSessionId, text: 'close' });
+  await tick();
+  const closeResult = await settleOr((async () => {
+    await second.adapter.close();
+    return hanging;
+  })(), 500);
+  assert.equal(closeResult.settled, true);
+  assert.equal(closeResult.value.submitted, false);
+  assert.equal(closeResult.value.ambiguous, true);
+  assert.equal(rpcMethods(closed).filter((line) => line.method === 'turn/start').length, 1);
+});
+
 function jsonCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {

@@ -90,15 +90,15 @@ export function createNativeAdapter(client, options = {}) {
       try {
         opened = await openOwnedChannel(client, child, request, options.timeoutMs ?? 8000);
         this.nativeSupport = true;
-        sessions.set(opened.nativeSessionId, {
-          nativeSessionId: opened.nativeSessionId,
-          pid: child.pid,
-          child,
-          incoming: opened.incoming,
-          rpc: opened.rpc,
-          unitId: request.unitId ?? null,
-          turnId: null,
-        });
+        const record = opened.session ?? { turnId: null, closedTurns: [] };
+        record.nativeSessionId = opened.nativeSessionId;
+        record.pid = child.pid;
+        record.child = child;
+        record.incoming = opened.incoming;
+        record.rpc = opened.rpc;
+        record.unitId = request.unitId ?? null;
+        if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
+        sessions.set(opened.nativeSessionId, record);
         return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true };
       } catch (error) {
         opened?.incoming?.close();
@@ -717,19 +717,32 @@ function unavailable() {
 }
 
 function loginFailed(text) {
-  return /not logged in|requires\s+openai\s+auth|requiresopenaiauth"\s*:\s*true|uv_os_get_passwd|enomem/i.test(String(text));
+  return /not logged in|requires\s+openai\s+auth|uv_os_get_passwd|enomem/i.test(String(text));
+}
+
+// requiresOpenaiAuth describes the provider. A null account with that flag still needs sign-in.
+function accountReady(message) {
+  const result = message?.result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  if (!Object.hasOwn(result, 'account')) return false;
+  if (typeof result.requiresOpenaiAuth !== 'boolean') return false;
+  if (result.account === null) return result.requiresOpenaiAuth === false;
+  if (typeof result.account !== 'object' || Array.isArray(result.account)) return false;
+  return result.account.type === 'chatgpt' || result.account.type === 'apiKey';
 }
 
 async function openOwnedChannel(client, child, request, timeoutMs) {
   const incoming = readLines(child, timeoutMs);
+  const session = { nativeSessionId: null, turnId: null, closedTurns: [] };
   try {
     if (client === 'claude') {
       const nativeSessionId = await claudeHandshake(child, request, incoming);
-      return { nativeSessionId, incoming, rpc: null };
+      return { nativeSessionId, incoming, rpc: null, session: null };
     }
-    const rpc = openRpc(child, incoming);
+    const rpc = openRpc(child, incoming, session, timeoutMs);
     const nativeSessionId = client === 'codex' ? await codexHandshake(rpc, request) : await cursorHandshake(rpc, request);
-    return { nativeSessionId, incoming, rpc };
+    session.nativeSessionId = nativeSessionId;
+    return { nativeSessionId, incoming, rpc, session };
   } catch (error) {
     incoming.close();
     throw error;
@@ -746,12 +759,19 @@ function releaseSession(sessions, pid) {
 
 async function submitCodex(session, text) {
   const input = [{ type: 'text', text }];
-  const started = session.turnId
-    ? await session.rpc.call('turn/steer', { threadId: session.nativeSessionId, expectedTurnId: session.turnId, input })
+  // turn/steer echoes turnId. turn/start is the call that returns turn.id.
+  const expected = typeof session.turnId === 'string' && session.turnId ? session.turnId : null;
+  const started = expected
+    ? await session.rpc.call('turn/steer', { threadId: session.nativeSessionId, expectedTurnId: expected, input })
     : await session.rpc.call('turn/start', { threadId: session.nativeSessionId, input });
+  if (expected) {
+    const turnId = started?.result?.turnId;
+    if (typeof turnId !== 'string' || turnId !== expected) return { submitted: false, ambiguous: true };
+    return { submitted: true };
+  }
   const turnId = started?.result?.turn?.id;
   if (typeof turnId !== 'string' || !turnId) return { submitted: false, ambiguous: true };
-  session.turnId = turnId;
+  if (!session.closedTurns?.includes(turnId)) session.turnId = turnId;
   return { submitted: true };
 }
 
@@ -814,51 +834,124 @@ async function claudeHandshake(child, request, incoming) {
   throw unavailable();
 }
 
-function openRpc(child, incoming) {
+function noteTurn(session, message) {
+  if (!session || message?.method !== 'turn/completed') return;
+  const params = message.params;
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+  const turn = params.turn;
+  const turnId = turn && typeof turn === 'object' && !Array.isArray(turn) ? turn.id : null;
+  if (typeof params.threadId !== 'string' || typeof turnId !== 'string' || !turnId) return;
+  if (params.threadId !== session.nativeSessionId) return;
+  if (!Array.isArray(session.closedTurns)) session.closedTurns = [];
+  if (session.closedTurns.length >= 16) session.closedTurns.shift();
+  session.closedTurns.push(turnId);
+  if (session.turnId === turnId) session.turnId = null;
+}
+
+function openRpc(child, incoming, session, timeoutMs) {
   let nextId = 1;
-  let reading = false;
+  let stopped = false;
+  let started = false;
   const pending = new Map();
+  const early = new Map();
   const failAll = (error) => {
-    for (const waiter of pending.values()) waiter.reject(error);
-    pending.clear();
+    stopped = true;
+    for (const waiter of [...pending.values()]) waiter.reject(error);
+    early.clear();
   };
-  const ensureLoop = () => {
-    if (reading) return;
-    reading = true;
-    const run = (async () => {
+  const remember = (message) => {
+    if (!message || message.id == null || message.method != null) return;
+    if (message.result === undefined && message.error == null) return;
+    const waiter = pending.get(message.id);
+    if (!waiter) {
+      if (!early.has(message.id) && early.size >= 8) early.delete(early.keys().next().value);
+      early.set(message.id, message);
+      return;
+    }
+    if (message.error != null) waiter.reject(unavailable());
+    else waiter.resolve(message);
+  };
+  // A turn/completed notice arrives while no request is waiting, so the read loop stays up.
+  const pump = async () => {
+    while (!stopped) {
+      let line;
       try {
-        while (pending.size > 0) {
-          const line = await incoming.line();
-          if (loginFailed(line) || loginFailed(incoming.stderr())) throw unavailable();
-          let message;
-          try {
-            message = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          if (message.id == null || !pending.has(message.id)) continue;
-          const waiter = pending.get(message.id);
-          pending.delete(message.id);
-          if (message.error || loginFailed(JSON.stringify(message))) waiter.reject(unavailable());
-          else waiter.resolve(message);
-        }
+        line = await incoming.line();
       } catch (error) {
-        failAll(error instanceof CoreError ? error : unavailable());
-      } finally {
-        reading = false;
+        if (!stopped && error?.timeout === true) continue;
+        failAll(unavailable());
+        break;
       }
-    })();
-    run.catch(() => {});
+      if (stopped) break;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        if (loginFailed(line) || loginFailed(incoming.stderr())) failAll(unavailable());
+        continue;
+      }
+      if (loginFailed(incoming.stderr())) {
+        failAll(unavailable());
+        break;
+      }
+      if (message?.error != null && loginFailed(JSON.stringify(message.error))) {
+        remember(message);
+        failAll(unavailable());
+        break;
+      }
+      if (message?.method && message.id == null) {
+        noteTurn(session, message);
+        continue;
+      }
+      remember(message);
+    }
+  };
+  incoming.onEnd(() => failAll(unavailable()));
+  const ensure = () => {
+    if (started) return;
+    started = true;
+    pump().catch(() => {});
   };
   return {
     call(method, params) {
       const id = nextId;
       nextId += 1;
-      const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      let timer;
+      const promise = new Promise((resolve, reject) => {
+        const waiter = {
+          done: false,
+          resolve(message) {
+            if (waiter.done) return;
+            waiter.done = true;
+            clearTimeout(timer);
+            pending.delete(id);
+            resolve(message);
+          },
+          reject(error) {
+            if (waiter.done) return;
+            waiter.done = true;
+            clearTimeout(timer);
+            pending.delete(id);
+            reject(error);
+          },
+        };
+        timer = setTimeout(() => waiter.reject(unavailable()), timeoutMs);
+        pending.set(id, waiter);
+      });
       const message = { jsonrpc: '2.0', id, method };
       if (params !== undefined) message.params = params;
-      sendLine(child, message);
-      ensureLoop();
+      try {
+        sendLine(child, message);
+      } catch {
+        pending.get(id)?.reject(unavailable());
+        return promise;
+      }
+      const queued = early.get(id);
+      if (queued) {
+        early.delete(id);
+        remember(queued);
+      }
+      ensure();
       return promise;
     },
     notify(method, params) {
@@ -872,10 +965,10 @@ function openRpc(child, incoming) {
 async function codexHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
   const init = await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
-  if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
+  if (init?.error) throw unavailable();
   rpc.notify('initialized');
   const account = await rpc.call('account/read', {});
-  if (loginFailed(JSON.stringify(account)) || account.result?.account == null || account.result?.requiresOpenaiAuth === true) throw unavailable();
+  if (!accountReady(account)) throw unavailable();
   const params = { cwd: request.cwd };
   if (request.model) params.model = request.model;
   const thread = await rpc.call('thread/start', params);
@@ -889,11 +982,11 @@ async function cursorHandshake(rpc, request) {
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
   });
-  if (init.error || loginFailed(JSON.stringify(init))) throw unavailable();
+  if (init?.error) throw unavailable();
   const method = (init.result?.authMethods ?? []).find((item) => /existing|login/i.test(`${item.id ?? ''} ${item.name ?? item}`));
   if (!method) throw unavailable();
   const auth = await rpc.call('authenticate', { methodId: method.id ?? method });
-  if (auth.error || loginFailed(JSON.stringify(auth))) throw unavailable();
+  if (auth?.error) throw unavailable();
   const session = await rpc.call('session/new', { cwd: request.cwd, mcpServers: [] });
   if (!session.result?.sessionId) throw unavailable();
   return session.result.sessionId;
@@ -906,13 +999,20 @@ function sendLine(child, message) {
 function readLines(child, timeoutMs) {
   let buffer = '';
   let stderr = '';
+  let ended = false;
   const queue = [];
   const pending = [];
+  const listeners = new Set();
   const push = (line) => {
-    if (pending.length) pending.shift().resolve(line);
+    if (ended) return;
+    const waiter = pending[0];
+    if (waiter) waiter.resolve(line);
     else queue.push(line);
   };
-  child.stdout?.on?.('data', (chunk) => {
+  const failPending = (error) => {
+    for (const waiter of pending.splice(0)) waiter.reject(error);
+  };
+  const onStdout = (chunk) => {
     buffer += chunk.toString('utf8');
     if (buffer.length > 1000000) child.kill?.();
     let newline = buffer.indexOf('\n');
@@ -921,30 +1021,66 @@ function readLines(child, timeoutMs) {
       buffer = buffer.slice(newline + 1);
       newline = buffer.indexOf('\n');
     }
-  });
-  child.stderr?.on?.('data', (chunk) => {
+  };
+  const onStderr = (chunk) => {
     stderr += chunk.toString('utf8');
     if (stderr.length > 8000) stderr = stderr.slice(-8000);
-  });
-  child.once?.('exit', () => {
-    if (buffer.trim()) push(buffer.trim());
-    const error = unavailable();
-    while (pending.length) pending.shift().reject(error);
-  });
+  };
+  const onExit = () => {
+    if (!ended && buffer.trim()) push(buffer.trim());
+    end(unavailable());
+  };
+  const end = (error) => {
+    if (ended) return;
+    ended = true;
+    queue.length = 0;
+    child.stdout?.off?.('data', onStdout);
+    child.stderr?.off?.('data', onStderr);
+    child.off?.('exit', onExit);
+    failPending(error);
+    for (const listener of listeners) listener();
+  };
+  child.stdout?.on?.('data', onStdout);
+  child.stderr?.on?.('data', onStderr);
+  child.once?.('exit', onExit);
   return {
     stderr: () => stderr,
+    onEnd(listener) {
+      listeners.add(listener);
+      if (ended) listener();
+    },
     line() {
+      if (ended) return Promise.reject(unavailable());
       if (queue.length) return Promise.resolve(queue.shift());
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(unavailable()), timeoutMs);
-        pending.push({
-          resolve: (line) => { clearTimeout(timer); resolve(line); },
-          reject: (error) => { clearTimeout(timer); reject(error); },
-        });
+        const waiter = {
+          done: false,
+          timer: null,
+          resolve(line) {
+            if (waiter.done) return;
+            waiter.done = true;
+            clearTimeout(waiter.timer);
+            const index = pending.indexOf(waiter);
+            if (index >= 0) pending.splice(index, 1);
+            resolve(line);
+          },
+          reject(error) {
+            if (waiter.done) return;
+            waiter.done = true;
+            clearTimeout(waiter.timer);
+            const index = pending.indexOf(waiter);
+            if (index >= 0) pending.splice(index, 1);
+            reject(error);
+          },
+        };
+        const error = unavailable();
+        error.timeout = true;
+        waiter.timer = setTimeout(() => waiter.reject(error), timeoutMs);
+        pending.push(waiter);
       });
     },
     close() {
-      pending.splice(0);
+      end(unavailable());
     },
   };
 }
