@@ -54,9 +54,13 @@ export function validateOwner({ packMachine, target, record = null, headers = nu
     const reader = receiptMachine(target.path);
     if (!reader || reader !== packMachine || (record?.machine && record.machine !== packMachine)) ownerError();
   }
-  if (headers && messageHeaders(headers)) {
-    if (isDeterministicNotice(headers)) return { state: 'accept', packMachine, format };
-    if (headers.machine && headers.machine !== packMachine) ownerError();
+  if (headers && isDeterministicNotice(headers)) return { state: 'accept', packMachine, format };
+  if (headers?.machine && headers.machine !== packMachine) ownerError();
+  if (isChatMetadata(target, headers)) {
+    assertChat(target, headers);
+    return { state: 'accept', packMachine, format };
+  }
+  if (isMessage(target, headers)) {
     const fromId = headers['from-id'];
     if (fromId) {
       const actors = actorMachines(bindings, fromId);
@@ -605,8 +609,38 @@ function claimedMachine(record) {
   return typeof record?.machine === 'string' ? record.machine : null;
 }
 
-function messageHeaders(headers) {
-  return Boolean(headers.kind || headers['from-id'] || headers.machine);
+function normalizedPath(target) {
+  return String(target?.path ?? '').replaceAll('\\', '/');
+}
+
+function isChatMetadata(target, headers) {
+  if (headers?.kind !== 'direct' && headers?.kind !== 'group') return false;
+  return /^user\/relay\/chats\/[^/]+\/chat\.md$/.test(normalizedPath(target));
+}
+
+function assertChat(target, headers) {
+  const id = normalizedPath(target).split('/')[3];
+  if (!headers.id || headers.id !== id || !headers['created-by']) ownerError();
+  let members;
+  try {
+    members = JSON.parse(headers.members ?? '');
+  } catch {
+    ownerError();
+  }
+  if (!Array.isArray(members) || members.length < 1 || members.some((item) => typeof item !== 'string' || item.length === 0)) ownerError();
+  if (!members.includes(headers['created-by'])) ownerError();
+}
+
+function isMessage(target, headers) {
+  if (!headers) return false;
+  const file = normalizedPath(target);
+  if (!file || file.endsWith('/chat.md') || /\/tasks\/|\/state\/|\/editors\/|\/catalog\.json$/.test(file)) return false;
+  const messagePath = /^user\/relay\/chats\/[^/]+\/[^/]+\.md$/.test(file)
+    || file.startsWith('user/inbox/')
+    || file.startsWith('user/relay/mailboxes/');
+  if (!messagePath) return false;
+  if (headers.kind === 'message') return true;
+  return Boolean(headers['from-id']) && headers.kind !== 'direct' && headers.kind !== 'group';
 }
 
 function actorMachines(bindings, id) {

@@ -484,6 +484,63 @@ test('an out-of-order pack stays pending and a foreign sequence is not published
   await assert.rejects(() => publishPack(laptopOrigin, ahead), { code: 'revision_conflict' });
 });
 
+test('direct and group chats apply before their messages without a seeded owner', async (t) => {
+  const { fixture, desktop, laptopOrigin } = await world(t);
+  const directId = uuidV8(['direct-chat', 'root:builder']);
+  const groupId = uuidV8(['group-chat', 'crew']);
+  const direct = Buffer.from(`id: ${directId}\ntitle: Builder\nmembers: ["root:builder","root:master"]\npinned: false\nlisted: true\ncreated: ${AT}\ncreated-by: root:master\nkind: direct\n\n`);
+  const group = Buffer.from(`id: ${groupId}\ntitle: Crew\nmembers: ["root:builder","root:lead","root:master"]\npinned: false\nlisted: true\ncreated: ${AT}\ncreated-by: root:master\nkind: group\n\n`);
+  const first = pack([
+    put({ kind: 'mind', path: `user/relay/chats/${directId}/chat.md` }, direct),
+    put({ kind: 'mind', path: `user/relay/chats/${groupId}/chat.md` }, group, { id: uuidV8(['change', 'group']) }),
+  ], [
+    { hash: hashBytes(direct), raw: direct },
+    { hash: hashBytes(group), raw: group },
+  ]);
+  await publishPack(laptopOrigin, first);
+  const applied = await applyPack(desktop, first, { ledger: null });
+  assert.equal(applied.status, 'applied');
+  assert.match(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', directId, 'chat.md'), 'utf8'), /kind: direct/);
+  assert.match(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', groupId, 'chat.md'), 'utf8'), /kind: group/);
+  const messageId = uuidV8(['message', directId]);
+  const message = Buffer.from([
+    `id: ${messageId}`,
+    'from: builder',
+    'from-id: root:builder',
+    `to: chat:${directId}`,
+    `to-id: chat:${directId}`,
+    'machine: LAPTOP',
+    `timestamp: ${LATER}`,
+    'priority: normal',
+    'subject: Hello',
+    `thread-id: ${directId}`,
+    'reply-to:',
+    'reply-requested: false',
+    'attachments: []',
+    'kind: message',
+    '',
+    'Hello',
+  ].join('\n'));
+  const registration = Buffer.from(JSON.stringify({
+    kind: 'registration', sessionId: uuidV8(['session', 'builder']), unitId: 'root:builder', machine: 'LAPTOP',
+  }));
+  const note = Buffer.from('later note');
+  const second = pack([
+    put({ kind: 'mind', path: 'user/relay/registrations/builder.json' }, registration, { at: LATER, id: uuidV8(['change', 'registration']) }),
+    put({ kind: 'mind', path: `user/relay/chats/${directId}/${messageId}.md` }, message, { at: LATER, id: uuidV8(['change', 'message']) }),
+    put({ kind: 'mind', path: 'user/later-note.txt' }, note, { at: LATER, id: uuidV8(['change', 'note']) }),
+  ], [
+    { hash: hashBytes(registration), raw: registration },
+    { hash: hashBytes(message), raw: message },
+    { hash: hashBytes(note), raw: note },
+  ], { sequence: 2 });
+  await publishPack(laptopOrigin, second);
+  const followed = await applyPack(desktop, second);
+  assert.equal(followed.status, 'applied');
+  assert.match(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', directId, `${messageId}.md`), 'utf8'), /Hello/);
+  assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'later-note.txt'), 'utf8'), 'later note');
+});
+
 test('an origin watcher reports a real head change and does not poll while idle', async (t) => {
   const { laptopOrigin } = await world(t);
   const events = [];
