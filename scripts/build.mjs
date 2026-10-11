@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
-import { assertReleaseAssets, BROWSER_ASSETS } from './build-installer.mjs';
+import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
+import { assertReleaseAssets, missingPackagedBrowserAssets } from './build-installer.mjs';
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -62,10 +63,8 @@ try {
   const state = await lstat(appDir);
   if (!state.isDirectory() || state.isSymbolicLink()) throw new Error("browser assets unavailable");
   await assertReleaseAssets(appDir);
-  for (const name of BROWSER_ASSETS) {
-    const packaged = `gui/app/${name}`;
-    if (!included.has(packaged)) throw new Error(`Missing browser asset: ${packaged}`);
-  }
+  const missing = missingPackagedBrowserAssets(included, EMBEDDED_BROWSER_FILES);
+  if (missing.length > 0) throw new Error(`Missing browser asset: ${missing[0]}`);
   browserAssets = "browser assets packaged";
 } catch (error) {
   const message = String(error?.message ?? "");

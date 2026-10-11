@@ -11,7 +11,8 @@ import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
-import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -564,6 +565,12 @@ test('release packaging uses the served browser modules', async (t) => {
     await writeFile(path.join(app, name), body);
   }
   await assertReleaseAssets(app);
+  const archived = new Set(BROWSER_ASSETS.filter((name) => !Object.hasOwn(EMBEDDED_BROWSER_FILES, name)).map((name) => `gui/app/${name}`));
+  assert.equal(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES).length, 0);
+  assert.equal(BROWSER_ASSETS.includes('mark.svg'), true);
+  assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), []);
+  archived.delete('gui/app/main.mjs');
+  assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), ['gui/app/main.mjs']);
   await rm(path.join(app, 'mark.svg'));
   await writeFile(path.join(app, 'index.html'), '<link rel="icon" href="mark.svg">\n<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n');
   await assertReleaseAssets(app);

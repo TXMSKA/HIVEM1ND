@@ -14,6 +14,16 @@ export const NODE_ZIP_NAME = 'node-v22.23.3-win-x64.zip';
 export const NODE_ZIP_SHA256 = '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71';
 export const NODE_EXE_SHA256 = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e';
 export const BROWSER_ASSETS = BROWSER_STATIC_FILES;
+
+export function missingPackagedBrowserAssets(included, embedded = EMBEDDED_BROWSER_FILES) {
+  const missing = [];
+  for (const name of BROWSER_ASSETS) {
+    if (Object.hasOwn(embedded, name)) continue;
+    const packaged = `gui/app/${name}`;
+    if (!included.has(packaged)) missing.push(packaged);
+  }
+  return missing;
+}
 export const NODE_EXE_NAME = 'node-v22.23.3-win-x64/node.exe';
 export const NODE_LICENSE_NAME = 'node-v22.23.3-win-x64/LICENSE';
 export const NODE_ENTRY_LIMIT = 86973768;
