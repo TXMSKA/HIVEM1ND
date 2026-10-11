@@ -311,7 +311,7 @@ function paintShell(app) {
 
 function inputDrafts(app) {
   if (!app.inputDrafts) {
-    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), fields: new Map(), focus: null };
+    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), fields: new Map(), disclosures: new Map(), focus: null };
   }
   return app.inputDrafts;
 }
@@ -427,6 +427,11 @@ function captureInputs(app) {
     if (action && /^[a-z0-9-]+$/.test(action)) focused = { kind: "action", id: action };
   }
   drafts.focus = focused;
+  if (!drafts.disclosures) drafts.disclosures = new Map();
+  for (const node of app.root.querySelectorAll?.("[data-disclosure]") ?? []) {
+    const key = node.getAttribute?.("data-disclosure");
+    if (key) drafts.disclosures.set(key, node.getAttribute?.("open") != null || node.open === true);
+  }
 }
 
 function clearInputDraft(app, kind, id) {
@@ -454,8 +459,29 @@ function restoreInputFocus(app) {
   }
   const node = app.root.querySelector?.(`[data-keep="${focus.id}"]`);
   if (!node) return;
+  revealAncestors(node);
   node.focus?.();
   if (typeof node.setSelectionRange === "function") node.setSelectionRange(focus.start, focus.end);
+}
+
+function revealAncestors(node) {
+  let current = node?.parentNode ?? node?.parent ?? null;
+  while (current) {
+    if (String(current.tagName ?? current.tag ?? "").toLowerCase() === "details") {
+      current.open = true;
+      current.setAttribute?.("open", "");
+    }
+    current = current.parentNode ?? current.parent ?? null;
+  }
+}
+
+function trackDisclosure(app, node, key) {
+  node.setAttribute("data-disclosure", key);
+  if (inputDrafts(app).disclosures?.get(key) === true) {
+    node.open = true;
+    node.setAttribute("open", "");
+  }
+  return node;
 }
 
 export function dispose(app) {
@@ -786,7 +812,7 @@ function renderWorkspace(app, t, view, counts) {
     : app.mode === "waiting" ? t("waiting") : t("hierarchy");
   let side;
   if (app.layout === "phone") {
-    const issues = element(document, "details", { class: "phone-issues", "data-phone-issues": "true" });
+    const issues = trackDisclosure(app, element(document, "details", { class: "phone-issues", "data-phone-issues": "true" }), "phone-issues");
     issues.append(element(document, "summary", { text: cardinal(app.language, "issueCount", issueItems.length) }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
     if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
@@ -1378,7 +1404,7 @@ function voidSurface(app, document, editor, t) {
     rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
     syncViewerDirty(app);
   });
-  const sourceEdit = element(document, "details", { class: "source-edit", "data-source-edit": "true" });
+  const sourceEdit = trackDisclosure(app, element(document, "details", { class: "source-edit", "data-source-edit": "true" }), keepId("source-edit", editor.resourceId, editor.page, lang));
   sourceEdit.append(element(document, "summary", { text: t("editSource") }));
   sourceEdit.append(labeledField(document, t("sourceLabel"), t("sourceHint"), source));
   sourceEdit.append(element(document, "button", {
@@ -3778,14 +3804,19 @@ function renderInspector(app, t, selected) {
   const document = app.root.ownerDocument;
   const panel = element(document, "div", { class: "review-panel" });
   const data = app.inspectorData;
-  if (selected) panel.append(renderUnit(document, selected, t, app.language));
+  if (selected) {
+    const card = renderUnit(document, selected, t, app.language);
+    const folded = card.querySelector?.("details");
+    if (folded) trackDisclosure(app, folded, keepId("unit", selected.id));
+    panel.append(card);
+  }
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {
       panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));
     }
     return panel;
   }
-  const details = element(document, "details", { class: "inspector-details" });
+  const details = trackDisclosure(app, element(document, "details", { class: "inspector-details" }), keepId("inspector", selected?.id));
   details.append(element(document, "summary", { text: t("details") }));
   const machine = (data.machines ?? []).find((item) => item.id === selected?.machine);
   if (machine) details.append(renderMachine(document, machine, t));

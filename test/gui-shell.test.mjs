@@ -2142,17 +2142,26 @@ test("a shell refresh keeps the focused editor field and its caret", async (t) =
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not appear.");
-  const source = desktop.root.querySelector("[data-source]");
-  source.focus();
-  source.value = "A";
-  source.selectionStart = 1;
-  source.selectionEnd = 1;
-  for (const handler of source.listeners.get("input") ?? []) handler();
-  renderShell(desktop.app);
-  const again = desktop.root.querySelector("[data-source]");
-  assert.equal(again.value, "A");
-  assert.equal(desktop.document.activeElement, again);
-  assert.equal(again.selectionStart, 1);
+  const sourceEdit = desktop.root.querySelector("[data-source-edit]");
+  sourceEdit.setAttribute("open", "");
+  sourceEdit.open = true;
+  let typed = "";
+  for (const letter of ["A", "B", "C"]) {
+    const source = desktop.root.querySelector("[data-source]");
+    typed += letter;
+    source.focus();
+    source.value = typed;
+    source.selectionStart = typed.length;
+    source.selectionEnd = typed.length;
+    for (const handler of source.listeners.get("input") ?? []) handler();
+    renderShell(desktop.app);
+    const again = desktop.root.querySelector("[data-source]");
+    const edit = desktop.root.querySelector("[data-source-edit]");
+    assert.equal(edit.getAttribute("open") != null, true);
+    assert.equal(again.value, typed);
+    assert.equal(desktop.document.activeElement, again);
+    assert.equal(again.selectionStart, typed.length);
+  }
   click(desktop.root.querySelector("[data-action='open-create']"));
   const title = desktop.document.querySelector("[data-field='create-title']");
   title.focus();
