@@ -234,6 +234,42 @@ test('local login requires the protected bootstrap secret and binds only the vie
   assert.equal(closed.json.error.code, 'bootstrap_unavailable');
   assert.equal(closed.json.token, undefined);
 });
+
+test('forged bearers share the peer limit and idle buckets expire', async (t) => {
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: [],
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await requestJson(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  fixture.clock.now += 60_000;
+  for (let index = 0; index < 240; index += 1) {
+    const denied = await requestJson(core.http.port, 'GET', '/api/v1/units', { token: `forged-${index}` });
+    assert.equal(denied.status, 401);
+    assert.equal(denied.json.error.code, 'invalid_session');
+  }
+  const limited = await requestJson(core.http.port, 'GET', '/api/v1/units');
+  assert.equal(limited.status, 429);
+  assert.equal(limited.json.error.code, 'request_rate_limited');
+  assert.ok(Number(limited.headers['retry-after']) >= 1);
+  const valid = await requestJson(core.http.port, 'GET', '/api/v1/units', { token });
+  assert.equal(valid.status, 200);
+  fixture.clock.now += 60_000;
+  const again = await requestJson(core.http.port, 'GET', '/api/v1/units', { token: 'forged-after-idle' });
+  assert.equal(again.status, 401);
+  assert.equal(again.json.error.code, 'invalid_session');
+});
 });
 
 function requestJson(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

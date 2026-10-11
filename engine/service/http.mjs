@@ -341,8 +341,9 @@ export async function createHttpServer(options) {
     checkHost(headerOne(req, 'host'), listener);
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
-    const bucket = principalBucket(principals, req, requested.path);
-    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
+    const now = options.now?.() ?? Date.now();
+    const bucket = principalBucket(principals, req, requested.path, verifiedPrincipal(credentials, req), now);
+    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events' }, now);
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
@@ -526,18 +527,41 @@ async function readStream(req, limit) {
   return Buffer.concat(chunks);
 }
 
-function principalBucket(principals, req, pathname) {
-  const address = req.socket?.remoteAddress || 'anonymous';
-  const anonymous = pathname === '/' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
-    || pathname === '/api/v1/auth/local' || pathname === '/api/v1/auth/home' || pathname === '/api/v1/auth/logout';
+function verifiedPrincipal(credentials, req) {
   const header = headerOne(req, 'authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
-  const key = anonymous || !token ? `address:${address}` : `token:${token}`;
+  if (!token || typeof credentials?.verify !== 'function') return null;
+  try {
+    return credentials.verify(token);
+  } catch (error) {
+    if (error instanceof CoreError) return null;
+    throw error;
+  }
+}
+
+function peerAddress(req) {
+  const address = req.socket?.remoteAddress || 'anonymous';
+  return address === '::ffff:127.0.0.1' ? '127.0.0.1' : address;
+}
+
+function expireIdleBuckets(principals, now) {
+  for (const [key, bucket] of principals) {
+    if ((bucket.streams?.size ?? 0) > 0) continue;
+    if (now - (bucket.seen ?? 0) >= 60_000) principals.delete(key);
+  }
+}
+
+function principalBucket(principals, req, pathname, credential, now) {
+  expireIdleBuckets(principals, now);
+  const anonymous = pathname === '/' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
+    || pathname === '/api/v1/auth/local' || pathname === '/api/v1/auth/home' || pathname === '/api/v1/auth/logout';
+  const key = !anonymous && credential?.token ? `principal:${credential.token}` : `peer:${peerAddress(req)}`;
   let bucket = principals.get(key);
   if (!bucket) {
-    bucket = { requests: [], streams: new Set() };
+    bucket = { requests: [], streams: new Set(), seen: now };
     principals.set(key, bucket);
   }
+  bucket.seen = now;
   return bucket;
 }
 
