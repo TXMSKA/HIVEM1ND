@@ -4,6 +4,7 @@ import { request } from 'node:http';
 import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { crc32 } from 'node:zlib';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
@@ -23,6 +24,28 @@ import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
+function pngChunk(type, data) {
+  const body = Buffer.concat([Buffer.from(type), data]);
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  body.copy(chunk, 4);
+  chunk.writeUInt32BE(crc32(body) >>> 0, 8 + data.length);
+  return chunk;
+}
+
+function pngWithoutImage() {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', header),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 function sketch(id = 'cart') {
   const document = newSketch(id, 'Cart');
@@ -178,6 +201,11 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   broken[4] = 0x00;
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: broken.toString('base64') }), { status: 422, code: 'invalid_asset' });
   await writeFile(path.join(localPath, 'docs', 'flows', 'assets', asset.id), broken);
+  await assert.rejects(() => readAsset(context, created.id, asset.id), { status: 422, code: 'invalid_asset' });
+  const bare = pngWithoutImage();
+  assert.equal(bare.length, 45);
+  await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: bare.toString('base64') }), { status: 422, code: 'invalid_asset' });
+  await writeFile(path.join(localPath, 'docs', 'flows', 'assets', asset.id), bare);
   await assert.rejects(() => readAsset(context, created.id, asset.id), { status: 422, code: 'invalid_asset' });
   await writeFile(path.join(localPath, 'docs', 'flows', 'assets', asset.id), PNG);
   await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });

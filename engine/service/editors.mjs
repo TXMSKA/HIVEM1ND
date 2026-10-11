@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { crc32, inflateSync } from 'node:zlib';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { paginate } from './projection.mjs';
@@ -14,6 +15,7 @@ import { convertMedia } from '../sync/media.mjs';
 import { startResourceWatch } from './watch.mjs';
 
 const ASSET_LIMIT = 10000000;
+const PNG_RAW_LIMIT = 32_000_000;
 const TEXT_LIMIT = 16_000_000;
 const PAGE_LIMIT = 2000;
 
@@ -802,25 +804,94 @@ function pngSize(bytes) {
 
 function framedPng(bytes) {
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  if (!Buffer.isBuffer(bytes) || bytes.length < signature.length || !bytes.subarray(0, signature.length).equals(signature)) return null;
+  if (!Buffer.isBuffer(bytes) || bytes.length < signature.length + 12 || !bytes.subarray(0, signature.length).equals(signature)) return null;
   let offset = signature.length;
   let size = null;
   let ended = false;
+  const image = [];
   for (let chunks = 0; chunks < 64 && offset + 12 <= bytes.length; chunks += 1) {
     const length = bytes.readUInt32BE(offset);
     if (length > 16_000_000 || offset + 12 + length > bytes.length) return null;
-    const type = bytes.toString('ascii', offset + 4, offset + 8);
+    const typeStart = offset + 4;
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const type = bytes.toString('ascii', typeStart, dataStart);
     if (!/^[A-Za-z]{4}$/.test(type)) return null;
+    if ((crc32(bytes.subarray(typeStart, dataEnd)) >>> 0) !== bytes.readUInt32BE(dataEnd)) return null;
     if (chunks === 0 && (type !== 'IHDR' || length !== 13)) return null;
-    if (type === 'IHDR') size = { width: bytes.readUInt32BE(offset + 8), height: bytes.readUInt32BE(offset + 12) };
-    offset += 12 + length;
+    if (ended) return null;
+    if (type === 'IHDR') size = pngHeader(bytes.subarray(dataStart, dataEnd));
+    if (type === 'IHDR' && !size) return null;
+    if (type === 'IDAT') image.push(bytes.subarray(dataStart, dataEnd));
+    offset = dataEnd + 4;
     if (type === 'IEND') {
+      if (length !== 0) return null;
       ended = true;
       break;
     }
   }
-  if (!ended || offset !== bytes.length || !size) return null;
-  return size;
+  if (!ended || offset !== bytes.length || !size || image.length === 0) return null;
+  const rawLength = pngRawLength(size);
+  if (rawLength < 1 || rawLength > PNG_RAW_LIMIT) return null;
+  let raw;
+  try {
+    raw = inflateSync(Buffer.concat(image), { maxOutputLength: rawLength });
+  } catch {
+    return null;
+  }
+  if (raw.length !== rawLength || !pngFiltersValid(raw, size)) return null;
+  return { width: size.width, height: size.height };
+}
+
+function pngHeader(data) {
+  if (data.length !== 13) return null;
+  const width = data.readUInt32BE(0);
+  const height = data.readUInt32BE(4);
+  const depth = data[8];
+  const color = data[9];
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+  if (data[10] !== 0 || data[11] !== 0 || (data[12] !== 0 && data[12] !== 1)) return null;
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[color];
+  if (!channels) return null;
+  const depths = color === 3 ? [1, 2, 4, 8] : (color === 0 ? [1, 2, 4, 8, 16] : [8, 16]);
+  if (!depths.includes(depth)) return null;
+  return { width, height, depth, channels, interlace: data[12] };
+}
+
+function pngRawLength(size) {
+  if (size.interlace === 0) return size.height * pngRowBytes(size.width, size.depth, size.channels);
+  const passes = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+  let total = 0;
+  for (const [x0, y0, dx, dy] of passes) {
+    if (size.width <= x0 || size.height <= y0) continue;
+    const width = Math.ceil((size.width - x0) / dx);
+    const height = Math.ceil((size.height - y0) / dy);
+    total += height * pngRowBytes(width, size.depth, size.channels);
+  }
+  return total;
+}
+
+function pngRowBytes(width, depth, channels) {
+  return 1 + Math.ceil((width * depth * channels) / 8);
+}
+
+function pngFiltersValid(raw, size) {
+  const rows = size.interlace === 0
+    ? [[size.width, size.height]]
+    : [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]].map(([x0, y0, dx, dy]) => {
+      if (size.width <= x0 || size.height <= y0) return [0, 0];
+      return [Math.ceil((size.width - x0) / dx), Math.ceil((size.height - y0) / dy)];
+    });
+  let offset = 0;
+  for (const [width, height] of rows) {
+    if (width < 1 || height < 1) continue;
+    const row = pngRowBytes(width, size.depth, size.channels);
+    for (let line = 0; line < height; line += 1) {
+      if (raw[offset] > 4) return false;
+      offset += row;
+    }
+  }
+  return offset === raw.length;
 }
 
 function jpegSize(bytes) {
