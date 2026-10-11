@@ -3752,6 +3752,7 @@ function chatPanel(app, t) {
     updateNearBottom(thread, transcript);
     if (thread.nearBottom) thread.unseen = 0;
     measureVisible(thread, transcript);
+    dropPendingReads(thread);
     if (thread.nearBottom !== before) {
       renderShell(app);
       return;
@@ -3821,11 +3822,20 @@ function noteMailboxRead(app, data) {
   if (box.detail && ids.has(box.detail.id)) box.detail = { ...box.detail, read: true };
 }
 
+function dropPendingReads(thread) {
+  const visible = thread?.visibleIds;
+  if (!visible?.size) return;
+  for (const message of thread.messages ?? []) {
+    if (message.pending) visible.delete(message.id);
+  }
+}
+
 function syncChatReads(app) {
   const transcript = app.root.querySelector?.(".transcript");
   const thread = app.thread;
   if (!transcript || !thread?.chat || thread.readPause) return;
   measureVisible(thread, transcript);
+  dropPendingReads(thread);
   postVisibleReads(app.api, thread).then((result) => {
     if (result) clearMatchedError(app, `read:${thread.chat.id}`);
     if (result && !app.disposed) renderShell(app);
@@ -3969,7 +3979,7 @@ function showChat(app, chat) {
   app.thread = createThread(chat);
   const saved = inputDrafts(app).chats.get(chat.id);
   if (saved) app.thread.composer = saved.value;
-  return settle(app, `chat:${chat.id}`, text(app.language, "loadingConversation"), async () => {
+  return settle(app, `chat-load:${chat.id}`, text(app.language, "loadingConversation"), async () => {
     await loadMessages(app.api, app.thread);
   });
 }
