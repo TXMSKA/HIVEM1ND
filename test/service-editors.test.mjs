@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
@@ -694,6 +694,55 @@ test('editor create, edit, attach, comment and asset publish to another service'
   assert.deepEqual(binding.attached, ['root:master']);
   const remoteComments = JSON.parse(await readFile(path.join(laptopShop, 'docs', 'release.comments.json'), 'utf8'));
   assert.equal(remoteComments.threads[0].messages[0].text, 'Keep the welcome line.');
+});
+
+test('editor lists and detail project live sidecars and pages', async (t) => {
+  const { context } = await shop(t);
+  context.watch = createWatch({ now: () => context.now() });
+  const first = await createBoard(context, { project: 'shop', document: sketch('alpha') });
+  const second = await createBoard(context, { project: 'shop', document: sketch('beta') });
+  assert.equal(first.openThreads, 0);
+  assert.equal(first.attachmentRevision, null);
+  assert.equal(typeof first.commentsRevision, 'string');
+  assert.deepEqual(first.threads, []);
+  const attached = await writeAttachments(context, first.id, { attached: ['root:master'], expectedRevision: null });
+  const commented = await createComment(context, first.id, {
+    text: 'Check the bag.',
+    expectedRevision: first.revision,
+    expectedCommentsRevision: first.commentsRevision,
+    anchor: { screen: first.document.screens[0].id, label: 'Bag' },
+  });
+  recordActivity(context.watch, { unitId: 'root:master', resourceId: first.id, at: new Date(context.now()).toISOString() });
+  const detail = await readEditor(context, first.id);
+  assert.equal(detail.title, 'Cart');
+  assert.equal(detail.readOnly, false);
+  assert.equal(detail.attachmentRevision, attached.revision);
+  assert.equal(detail.commentsRevision, commented.commentsRevision);
+  assert.equal(detail.openThreads, 1);
+  assert.equal(detail.threads[0].messages[0].text, 'Check the bag.');
+  assert.deepEqual(detail.attached, ['root:master']);
+  assert.deepEqual(detail.activity, { unitId: 'root:master', at: new Date(context.now()).toISOString() });
+  const page = await list(context, { kind: 'blueprint', limit: 1 });
+  assert.equal(page.total, 2);
+  assert.equal(page.items.length, 1);
+  assert.equal(page.issues.length, 0);
+  assert.equal(typeof page.nextCursor, 'string');
+  const summary = page.items.find((item) => item.id === first.id) ?? (await list(context, { kind: 'blueprint', limit: 1, cursor: page.nextCursor })).items.find((item) => item.id === first.id);
+  assert.equal(summary.title, 'Cart');
+  assert.equal(summary.openThreads, 1);
+  assert.deepEqual(summary.attached, ['root:master']);
+  assert.equal(summary.activity.unitId, 'root:master');
+  assert.equal(summary.readOnly, false);
+  assert.equal(typeof summary.revision, 'string');
+  assert.equal(summary.document, undefined);
+  const rest = await list(context, { kind: 'blueprint', limit: 1, cursor: page.nextCursor });
+  assert.equal(rest.items.length, 1);
+  assert.equal(rest.nextCursor, null);
+  assert.notEqual(rest.items[0].id, page.items[0].id);
+  assert.ok([first.id, second.id].includes(rest.items[0].id));
+  const found = await list(context, { kind: 'blueprint', q: 'docs/flows/boards/alpha.json' });
+  assert.equal(found.total, 1);
+  assert.equal(found.items[0].id, first.id);
 });
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

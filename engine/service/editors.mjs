@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
-import { CoreError, canonicalJson, hashBytes, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, hashText, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
+import { paginate } from './projection.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
@@ -112,7 +113,36 @@ function entryOf(catalog, id) {
   return catalog.value.resources.find((item) => item.id === id) ?? null;
 }
 
-function view(entry, document, revision) {
+const ACTIVITY_WINDOW_MS = 15 * 60 * 1000;
+
+function currentActivity(context, resourceId) {
+  const records = context.watch?.activity ?? [];
+  const now = context.now?.() ?? Date.now();
+  const fresh = records.filter((item) => item.resourceId === resourceId && Number.isFinite(Date.parse(item.at)) && now - Date.parse(item.at) <= ACTIVITY_WINDOW_MS);
+  fresh.sort((left, right) => (left.at < right.at ? -1 : left.at > right.at ? 1 : left.unitId < right.unitId ? -1 : left.unitId > right.unitId ? 1 : 0));
+  const latest = fresh.at(-1);
+  return latest ? { unitId: latest.unitId, at: latest.at } : null;
+}
+
+function summaryOf(editor) {
+  return {
+    id: editor.id,
+    kind: editor.kind,
+    project: editor.project,
+    title: editor.title,
+    path: editor.path,
+    readOnly: editor.readOnly,
+    revision: editor.revision,
+    attached: editor.attached,
+    openThreads: editor.openThreads,
+    activity: editor.activity,
+  };
+}
+
+async function projectEditor(context, entry, document, revision) {
+  const binding = await readAttachments(context, entry.id);
+  const comments = await loadComments(await resourceOf(context, entry.id));
+  const threads = comments.bytes ? (projectComments(comments.value, entry.id).threads ?? []) : [];
   return {
     id: entry.id,
     kind: entry.kind,
@@ -122,14 +152,14 @@ function view(entry, document, revision) {
     legacyId: entry.legacyId,
     readOnly: entry.readOnly === true,
     revision,
-    attached: [...(entry.attached ?? [])],
-    openThreads: 0,
-    activity: null,
-    document,
-    legacy: null,
-    attachmentRevision: null,
-    commentsRevision: null,
-    threads: [],
+    attached: [...binding.attached],
+    openThreads: threads.filter((thread) => thread.status !== 'resolved').length,
+    activity: currentActivity(context, entry.id),
+    document: document ?? null,
+    legacy: entry.readOnly ? { id: entry.legacyId, path: entry.path, reason: 'conversion_required' } : null,
+    attachmentRevision: binding.revision,
+    commentsRevision: comments.revision,
+    threads,
   };
 }
 
@@ -337,21 +367,40 @@ export async function registerResource(context, input) {
 }
 
 export async function list(context, query = {}) {
+  if (query.q != null && String(query.q).length > 200) fail(422, 'invalid_query', 'The search is longer than 200 characters.');
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
-  const items = [];
+  const catalog = await readCatalog(context);
+  const editors = [];
   for (const name of names) {
     const project = projectOf(context, name);
-    const catalog = await readCatalog(context);
     for (const entry of catalog.value.resources) {
       if (entry.project !== project.name) continue;
       if (query.kind && entry.kind !== query.kind) continue;
       const file = inside(project.localPath, entry.path);
       const loaded = await loadBytes(file);
-      const binding = await readAttachments(context, entry.id);
-      items.push({ id: entry.id, kind: entry.kind, project: entry.project, path: entry.path, legacyId: entry.legacyId, readOnly: entry.readOnly === true, revision: loaded.revision, attached: binding.attached });
+      let document = null;
+      if (!entry.readOnly && loaded.bytes) {
+        try {
+          document = JSON.parse(loaded.bytes.toString('utf8'));
+        } catch {
+          document = null;
+        }
+      }
+      editors.push(await projectEditor(context, entry, document, loaded.revision));
     }
   }
-  return { items };
+  editors.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
+  const matched = needle
+    ? editors.filter((item) => `${item.title} ${item.path} ${item.id}`.toLowerCase().includes(needle))
+    : editors;
+  const snapshot = hashText(canonicalJson(matched.map((item) => [item.id, item.revision, item.attachmentRevision, item.commentsRevision, item.openThreads, item.attached, item.activity])));
+  return paginate(matched.map(summaryOf), {
+    limit: query.limit,
+    cursor: query.cursor || null,
+    filters: { project: query.project ?? null, kind: query.kind ?? null, q: query.q ?? null },
+    snapshot,
+  });
 }
 
 async function resourceOf(context, id) {
@@ -823,8 +872,7 @@ export async function requireAttachment(context, resourceId) {
 }
 
 async function shown(context, entry, document, revision) {
-  const binding = await readAttachments(context, entry.id);
-  return view({ ...entry, attached: binding.attached }, document, revision);
+  return projectEditor(context, entry, document, revision);
 }
 
 function stemOf(file) {
