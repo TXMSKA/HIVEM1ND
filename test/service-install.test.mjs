@@ -514,14 +514,24 @@ test('activation keeps the previous payload and refuses a junction stage', async
   const manifest = {
     files: [{ name: 'notes.txt', bytes: notes.length, sha256: createHash('sha256').update(notes).digest('hex') }],
   };
+  const identity = { mindPath: path.join(root, 'mind'), machine: 'DESKTOP', localDirectory: path.join(root, 'service-local') };
+  const active = { ...identity, pid: 4, startedAt: '2026-10-10T12:00:00.000Z' };
   await assert.rejects(() => installPayload({
     dryRun: false,
     root,
     destination: kit,
     files: [{ name: 'notes.txt', data: notes }],
     manifest,
-    identity: { mind: 'mind-a', service: 'service-a' },
-    active: { mind: 'mind-b', service: 'service-a' },
+    identity,
+    active: { ...active, mindPath: path.join(root, 'foreign-mind') },
+  }), { code: 'identity_mismatch' });
+  await assert.rejects(() => installPayload({
+    dryRun: false,
+    root,
+    destination: kit,
+    files: [{ name: 'notes.txt', data: notes }],
+    manifest,
+    active,
   }), { code: 'identity_mismatch' });
   assert.equal(await readFile(path.join(kit, 'previous.txt'), 'utf8'), 'keep');
   const activated = await installPayload({
@@ -530,8 +540,8 @@ test('activation keeps the previous payload and refuses a junction stage', async
     destination: kit,
     files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: notes }],
     manifest,
-    identity: { mind: 'mind-a', service: 'service-a' },
-    active: { mind: 'mind-a', service: 'service-a' },
+    identity,
+    active,
     smoke: true,
     spawn(file, args, options) {
       assert.equal(options.env.PATH, '');
@@ -595,7 +605,12 @@ test('the generated installer entry activates a temporary kit and a dry-run does
     { name: 'runtime/node.exe', data: Buffer.from('runtime') },
   ];
   const manifest = manifestDocument(files);
-  manifest.identity = { mind: 'mind-a', service: 'service-a' };
+  const identity = {
+    mindPath: path.join(local, 'Cosmic', 'mind'),
+    machine: 'DESKTOP',
+    localDirectory: path.join(local, 'Cosmic', 'hivem1nd-service', 'local'),
+  };
+  manifest.identity = identity;
   await writeFile(path.join(payload, 'manifest.json'), `${JSON.stringify(manifest)}\n`);
   await writeFile(path.join(payload, 'installer.mjs'), installerEntry());
   assert.match(installerScript(), /%\*/);
@@ -633,7 +648,13 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   await mkdir(mind, { recursive: true });
   await writeFile(path.join(mind, 'keep.txt'), 'mind');
   await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
-  await writeFile(path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json'), JSON.stringify({ mind: 'other', service: 'other' }));
+  await writeFile(path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json'), JSON.stringify({
+    pid: 9,
+    mindPath: path.join(local, 'Cosmic', 'foreign-mind'),
+    machine: 'DESKTOP',
+    localDirectory: identity.localDirectory,
+    startedAt: '2026-10-10T12:00:00.000Z',
+  }));
   const refused = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.notEqual(refused.status, 0);
   assert.match(`${refused.stderr}\n${refused.stdout}`, /does not match/);

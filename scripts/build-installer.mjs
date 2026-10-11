@@ -419,8 +419,24 @@ export function installerEntry() {
     '} catch (error) {',
     "  if (error?.code !== 'ENOENT') throw error;",
     '}',
-    'if (active && (active.mind !== manifest.identity?.mind || active.service !== manifest.identity?.service)) {',
+    'if (active && !sameInstallIdentity(active, manifest.identity)) {',
     "  throw new Error('The active mind or service does not match this payload.');",
+    '}',
+    'function sameInstallIdentity(active, identity) {',
+    '  const normalize = (value) => {',
+    "    if (typeof value !== 'string' || !value.trim() || value.includes('\\0')) return null;",
+    '    const resolved = path.resolve(value);',
+    "    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;",
+    '  };',
+    "  const machine = typeof active.machine === 'string' ? active.machine.trim() : '';",
+    "  const wantedMachine = typeof identity?.machine === 'string' ? identity.machine.trim() : '';",
+    '  const mindPath = normalize(active.mindPath);',
+    '  const localDirectory = normalize(active.localDirectory);',
+    '  const wantedMind = normalize(identity?.mindPath);',
+    '  const wantedLocal = normalize(identity?.localDirectory);',
+    "  const started = typeof active.startedAt === 'string' && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(active.startedAt);",
+    '  const pid = Number.isInteger(active.pid) && active.pid > 0;',
+    '  return Boolean(mindPath && localDirectory && machine && started && pid && wantedMind && wantedLocal && wantedMachine && mindPath === wantedMind && machine === wantedMachine && localDirectory === wantedLocal);',
     '}',
     "const command = [path.join(destination, 'cli', 'index.mjs'), 'init', '--gui'];",
     "const dryRun = process.argv.includes('--dry-run') || manifest.label === 'dry-run';",
@@ -791,6 +807,34 @@ function hashesMatch(files, manifest) {
   }
 }
 
+export function assertActiveIdentity(active, identity) {
+  if (!active) return;
+  const current = canonicalInstallIdentity(active, { requireProcess: true });
+  const intended = canonicalInstallIdentity(identity, { requireProcess: false });
+  if (!current || !intended || current.mindPath !== intended.mindPath || current.machine !== intended.machine || current.localDirectory !== intended.localDirectory) {
+    throw Object.assign(new Error('The active mind or service does not match this payload.'), { code: 'identity_mismatch' });
+  }
+}
+
+function canonicalInstallIdentity(value, { requireProcess }) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const mindPath = normalizeInstallPath(value.mindPath);
+  const localDirectory = normalizeInstallPath(value.localDirectory);
+  const machine = typeof value.machine === 'string' ? value.machine.trim() : '';
+  if (!mindPath || !localDirectory || !machine) return null;
+  if (requireProcess) {
+    const started = typeof value.startedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.startedAt);
+    if (!started || !Number.isInteger(value.pid) || value.pid <= 0) return null;
+  }
+  return { mindPath, machine, localDirectory };
+}
+
+function normalizeInstallPath(value) {
+  if (typeof value !== 'string' || !value.trim() || value.includes('\0')) return null;
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 export async function installPayload(options) {
   if (options.dryRun !== false) return { dryRun: true, activated: false };
   const rootDir = path.resolve(options.root ?? path.dirname(path.resolve(options.destination)));
@@ -798,11 +842,7 @@ export async function installPayload(options) {
   insideRoot(rootDir, destination);
   await assertRealChain(destination, rootDir);
   if (options.manifest) hashesMatch(options.files, options.manifest);
-  if (options.active || options.identity) {
-    if (options.active?.mind !== options.identity?.mind || options.active?.service !== options.identity?.service) {
-      throw Object.assign(new Error('The active mind or service does not match this payload.'), { code: 'identity_mismatch' });
-    }
-  }
+  assertActiveIdentity(options.active, options.identity);
   const nonce = randomBytes(4).toString('hex');
   const stage = path.join(rootDir, `${path.basename(destination)}.${options.version ?? '3.0.0'}.${nonce}.stage`);
   insideRoot(rootDir, stage);
