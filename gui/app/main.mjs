@@ -59,7 +59,7 @@ import {
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, formatClock, formatNumber, text } from "./i18n.mjs";
+import { cardinal, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
@@ -1632,7 +1632,7 @@ function renderEditorSurfaces(app, t) {
     for (const message of thread.messages ?? []) {
       const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
       line.append(element(document, "span", { class: "comment-author", text: message.author || t("unknown") }));
-      if (message.at) line.append(element(document, "time", { datetime: message.at, text: message.at }));
+      if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatWhen(app.language, message.at) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
       box.append(line);
     }
@@ -2303,7 +2303,7 @@ function collectionRows(app, t, list) {
       for (const chat of chats) {
         const last = chat.lastMessage;
         const snippet = last?.body || last?.subject || "";
-        const when = last?.timestamp || last?.date || "";
+        const when = formatWhen(app.language, last?.timestamp || last?.date || "");
         const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: formatNumber(app.language, chat.unread) }) : "";
         rows.push({
           id: chat.id,
@@ -3229,7 +3229,7 @@ function chatPanel(app, t) {
   if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
   for (const message of windowed.items) {
     const article = element(document, "article", { class: "bubble", "data-from": message.fromId ?? "" });
-    const when = message.timestamp || message.date || "";
+    const when = formatWhen(app.language, message.timestamp || message.date || "");
     article.append(element(document, "p", {
       class: "bubble-meta",
       text: `${messageSender(app, message)}${when ? ` ${when}` : ""}`,

@@ -2181,6 +2181,8 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   if (sample?.chat?.lastMessage) {
     const snippet = sample.chat.lastMessage.body || sample.chat.lastMessage.subject || "";
     if (snippet) assert.equal(sample.text.includes(snippet), true);
+    const stamp = sample.chat.lastMessage.timestamp || sample.chat.lastMessage.date || "";
+    if (stamp) assert.equal(sample.text.includes(stamp), false);
   }
   const chat = desktop.app.chatList.catalog[0];
   desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
