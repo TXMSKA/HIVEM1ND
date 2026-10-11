@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid } from './identity.mjs';
-import { assertNoLinks } from './paths.mjs';
+import { assertNoLinks, safeRelative } from './paths.mjs';
 
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -31,9 +31,51 @@ function isInside(parent, child) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+function refuseProject() {
+  throw new CoreError(422, 'unsafe_path', 'Refusing to write outside a registered project.');
+}
+
+function canonicalTarget(target) {
+  try {
+    if (!target || target.kind !== 'project' || typeof target.project !== 'string' || target.project === '') refuseProject();
+    return { kind: 'project', project: target.project, path: safeRelative(target.path) };
+  } catch (error) {
+    if (error instanceof CoreError && error.code === 'unsafe_path') throw error;
+    refuseProject();
+  }
+}
+
+export function bindProjects(store, projects = []) {
+  const next = [];
+  for (const project of projects ?? []) {
+    if (!project || typeof project.name !== 'string' || project.name === '' || typeof project.localPath !== 'string') continue;
+    if (project.eligible === false) continue;
+    next.push({ name: project.name, localPath: path.resolve(project.localPath), eligible: true });
+  }
+  store.projects = next;
+}
+
+function resolveRegistered(store, target) {
+  const canonical = canonicalTarget(target);
+  const project = (store.projects ?? []).find((item) => item.name === canonical.project && item.localPath);
+  if (!project) refuseProject();
+  const root = path.resolve(project.localPath);
+  const resolved = path.resolve(root, ...canonical.path.split('/'));
+  if (resolved === root || !isInside(root, resolved)) refuseProject();
+  if (store.confineRoot && !isInside(store.confineRoot, resolved)) {
+    throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
+  }
+  return { resolved, canonical };
+}
+
+export function resolveAuthorized(store, target) {
+  return assertAllowed(store, target);
+}
+
 function assertAllowed(store, target) {
+  if (target && typeof target === 'object' && target.kind === 'project') return resolveRegistered(store, target).resolved;
   const resolved = path.resolve(target);
-  if (![store.mindPath, store.localDirectory].some((root) => isInside(root, resolved))) {
+  if (![store.mindPath, store.localDirectory].some((root) => root && isInside(root, resolved))) {
     throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the mind or local service directory.');
   }
   if (store.confineRoot && !isInside(store.confineRoot, resolved)) {
@@ -42,9 +84,87 @@ function assertAllowed(store, target) {
   return resolved;
 }
 
-export function createStore({ root, mindPath, localDirectory, now = () => Date.now(), events = [], confineRoot = null, autoRecover = true } = {}) {
+function assertBeside(store, destination, temporary) {
+  const resolved = path.resolve(temporary);
+  if (destination && typeof destination === 'object' && destination.kind === 'project') {
+    const parent = path.dirname(assertAllowed(store, destination));
+    if (path.dirname(resolved) !== parent || !isInside(parent, resolved)) refuseProject();
+    if (store.confineRoot && !isInside(store.confineRoot, resolved)) {
+      throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the test root.');
+    }
+    return resolved;
+  }
+  return assertAllowed(store, temporary);
+}
+
+function sidecarsOf(resource, normalized) {
+  const out = [];
+  if (resource.kind === 'void' && normalized.endsWith('.json')) {
+    const stem = normalized.slice(0, -'.json'.length);
+    out.push(`${stem}.orig.json`, `${stem}.versions.jsonl`, `${stem}.comments.json`);
+  }
+  if (resource.kind === 'blueprint') {
+    out.push('docs/flows/boards/index.json');
+    const legacyId = resource.legacyId;
+    if (typeof legacyId === 'string' && legacyId !== '' && !legacyId.includes('/') && !legacyId.includes('\\') && legacyId !== '.' && legacyId !== '..') {
+      out.push(`docs/flows/comments/${legacyId}.json`);
+    }
+  }
+  return out;
+}
+
+function catalogAllows(catalog, projectName, relative) {
+  const resources = Array.isArray(catalog?.resources) ? catalog.resources : [];
+  const mine = resources.filter((item) => item?.project === projectName && typeof item.path === 'string');
+  if (mine.length === 0) return false;
+  const allowed = new Set();
+  let blueprint = false;
+  for (const resource of mine) {
+    let normalized;
+    try {
+      normalized = safeRelative(resource.path);
+    } catch {
+      continue;
+    }
+    allowed.add(normalized);
+    if (resource.kind === 'blueprint') blueprint = true;
+    for (const sidecar of sidecarsOf(resource, normalized)) allowed.add(sidecar);
+  }
+  if (allowed.has(relative)) return true;
+  return blueprint && /^docs\/flows\/assets\/[^/]+$/.test(relative);
+}
+
+async function catalogSnapshot(store, entries) {
+  const catalogPath = path.resolve(store.mindPath, 'user', 'gui', 'resources.json');
+  let parsed = null;
+  const current = await readBytesRaw(catalogPath);
+  if (current) {
+    try {
+      parsed = JSON.parse(current.toString('utf8'));
+    } catch {
+      parsed = null;
+    }
+  }
+  for (const entry of entries) {
+    if (!entry?.recordPath || path.resolve(entry.recordPath) !== catalogPath) continue;
+    const bytes = Buffer.isBuffer(entry.afterBytes) ? entry.afterBytes : Buffer.from(entry.afterBytesBase64 ?? '', 'base64');
+    try {
+      parsed = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      throw new CoreError(422, 'invalid_body', 'The resource catalog is not JSON.');
+    }
+  }
+  return parsed;
+}
+
+function materialize(store, entry) {
+  if (entry?.target?.kind === 'project') return resolveAuthorized(store, entry.target);
+  return assertAllowed(store, entry.recordPath);
+}
+
+export function createStore({ root, mindPath, localDirectory, now = () => Date.now(), events = [], confineRoot = null, autoRecover = true, projects = [] } = {}) {
   if (!root || !mindPath || !localDirectory) throw new CoreError(500, 'internal_error', 'A store needs a root, mind, and local directory.');
-  return {
+  const store = {
     root: path.resolve(root),
     mindPath: path.resolve(mindPath),
     localDirectory: path.resolve(localDirectory),
@@ -58,7 +178,10 @@ export function createStore({ root, mindPath, localDirectory, now = () => Date.n
     recovered: false,
     recovering: false,
     autoRecover,
+    projects: [],
   };
+  bindProjects(store, projects);
+  return store;
 }
 
 export function revisionOf(bytes) {
@@ -128,7 +251,7 @@ export async function atomicWrite(store, destination, bytes) {
   await assertNoLinks(target, { root: store.confineRoot });
   await mkdir(path.dirname(target), { recursive: true });
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(8).toString('hex')}.tmp`);
-  assertAllowed(store, temporary);
+  assertBeside(store, destination, temporary);
   const handle = await open(temporary, 'wx');
   try {
     await handle.writeFile(payload);
@@ -219,9 +342,13 @@ export async function commitTransaction(store, prepared) {
 
 async function commitLocked(store, prepared) {
   const checked = [];
+  const catalog = await catalogSnapshot(store, prepared.entries);
   for (const entry of prepared.entries) {
     if (typeof entry.resource !== 'string' || entry.resource === '') throw new CoreError(422, 'invalid_body', 'A transaction entry needs a resource key.');
-    const recordPath = assertAllowed(store, entry.recordPath);
+    const canonical = entry.target?.kind === 'project' ? canonicalTarget(entry.target) : null;
+    if (canonical && !catalogAllows(catalog, canonical.project, canonical.path)) refuseProject();
+    const destination = canonical ?? entry.recordPath;
+    const recordPath = assertAllowed(store, destination);
     await assertNoLinks(path.dirname(recordPath), { root: store.confineRoot });
     await assertNoLinks(recordPath, { root: store.confineRoot });
     const current = await readBytesRaw(recordPath);
@@ -231,15 +358,17 @@ async function commitLocked(store, prepared) {
     if (entry.afterRevision && entry.afterRevision !== afterRevision) {
       throw new CoreError(409, 'revision_conflict', 'The prepared bytes do not match the declared revision.', { currentRevision: revisionOf(current) });
     }
-    checked.push({
-      resource: entry.resource,
+    const saved = {
+      resource: canonical ? `project:${canonical.project}:${canonical.path}` : entry.resource,
       beforeRevision: entry.beforeRevision ?? null,
       afterRevision,
       afterBytesBase64: afterBytes.toString('base64'),
       recordPath,
       record: entry.record ?? null,
       current,
-    });
+    };
+    if (canonical) saved.target = canonical;
+    checked.push(saved);
   }
   const receipt = prepared.receipt ? {
     principalHash: prepared.receipt.principalHash,
@@ -277,7 +406,8 @@ async function commitLocked(store, prepared) {
   await atomicWrite(store, journalFile(store, prepared.id), journalBytes(journal));
   let renamed = 0;
   for (const entry of entries) {
-    await atomicWrite(store, entry.recordPath, Buffer.from(entry.afterBytesBase64, 'base64'));
+    const destination = entry.target?.kind === 'project' ? entry.target : entry.recordPath;
+    await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
     renamed += 1;
     if (store.fault?.afterRenames === renamed) {
       store.fault = null;
@@ -330,12 +460,12 @@ async function recoverOne(store, id) {
     const fresh = JSON.parse(freshBytes.toString('utf8'));
     if (fresh.phase === 'conflict') return fresh.id;
     if (fresh.phase === 'committed' && fresh.emitted) {
-      for (const entry of fresh.entries ?? []) store.hidden.delete(path.resolve(entry.recordPath));
+      for (const entry of fresh.entries ?? []) store.hidden.delete(materialize(store, entry));
       return null;
     }
     const classified = [];
     for (const entry of fresh.entries ?? []) {
-      const recordPath = path.resolve(entry.recordPath);
+      const recordPath = materialize(store, entry);
       const current = await readBytesRaw(recordPath);
       const revision = revisionOf(current);
       let state = 'conflict';
@@ -368,7 +498,10 @@ async function recoverOne(store, id) {
       return finished.id;
     }
     for (const item of classified) {
-      if (item.state === 'pending') await atomicWrite(store, item.recordPath, Buffer.from(item.entry.afterBytesBase64, 'base64'));
+      if (item.state === 'pending') {
+        const destination = item.entry.target?.kind === 'project' ? item.entry.target : item.recordPath;
+        await atomicWrite(store, destination, Buffer.from(item.entry.afterBytesBase64, 'base64'));
+      }
       store.hidden.delete(item.recordPath);
     }
     if (fresh.receipt) {

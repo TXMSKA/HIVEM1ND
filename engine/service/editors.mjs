@@ -7,7 +7,7 @@ import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { commitTransaction } from './store.mjs';
+import { bindProjects, commitTransaction } from './store.mjs';
 
 const ASSET_LIMIT = 10000000;
 
@@ -145,11 +145,42 @@ export function validateBoard(document) {
   }
 }
 
-async function commit(context, entries, events = []) {
-  for (const entry of entries) {
-    if (entry.recordPath) await assertNoLinks(entry.recordPath);
+function rooted(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+function rewriteEntry(context, entry) {
+  if (!entry?.recordPath || entry.target) return entry;
+  const resolved = path.resolve(entry.recordPath);
+  for (const project of context.projects ?? []) {
+    if (!project?.localPath || project.eligible === false) continue;
+    const root = path.resolve(project.localPath);
+    if (!rooted(root, resolved)) continue;
+    const relative = path.relative(root, resolved).split(path.sep).join('/');
+    return {
+      resource: `project:${project.name}:${relative}`,
+      target: { kind: 'project', project: project.name, path: relative },
+      beforeRevision: entry.beforeRevision,
+      afterBytes: entry.afterBytes,
+      afterBytesBase64: entry.afterBytesBase64,
+      afterRevision: entry.afterRevision,
+      record: entry.record ?? null,
+    };
   }
-  const result = await commitTransaction(context.store, { id: randomUUID(), entries, events });
+  return entry;
+}
+
+async function commit(context, entries, events = []) {
+  bindProjects(context.store, context.projects ?? []);
+  const prepared = entries.map((entry) => rewriteEntry(context, entry));
+  for (const entry of prepared) {
+    const file = entry.target
+      ? path.resolve((context.projects ?? []).find((item) => item.name === entry.target.project)?.localPath ?? '', ...entry.target.path.split('/'))
+      : entry.recordPath;
+    if (file) await assertNoLinks(file);
+  }
+  const result = await commitTransaction(context.store, { id: randomUUID(), entries: prepared, events });
   if (context.bus) {
     for (const event of events) context.bus.emit(event);
   }

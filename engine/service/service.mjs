@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CoreError, canonicalJson } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
-import { atomicWrite, createStore, recoverTransactions } from './store.mjs';
+import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
 import { applyPack } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
@@ -212,6 +212,7 @@ export async function writeBeat(options, state) {
 }
 
 export async function composeCore(options) {
+  if (options.store && options.projects) bindProjects(options.store, options.projects);
   const paths = servicePathsFor(options);
   const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine });
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
@@ -665,6 +666,7 @@ function createRuntimeStore(paths, options) {
     confineRoot: options.confineRoot ?? null,
   });
   if (options.aclRunner) store.aclRunner = options.aclRunner;
+  bindProjects(store, options.projects ?? []);
   return store;
 }
 

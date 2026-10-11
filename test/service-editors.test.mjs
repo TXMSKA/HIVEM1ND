@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, writeAttachments } from '../engine/service/editors.mjs';
-import { recoverTransactions } from '../engine/service/store.mjs';
+import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
 import { plain } from '../features/void/text.mjs';
@@ -347,6 +347,63 @@ test('Watch follows only its owner and expires after fifteen minutes', async (t)
   assert.equal(resolveActivity(watch, 'root:builder', now), null);
   assert.equal(disposeViewer(watch, 'owner-token'), true);
   t.after(() => {});
+});
+
+test('a registered repository outside the mind and local directory accepts board and void writes', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const localPath = path.join(fixture.root, 'external-project');
+  const sibling = path.join(fixture.root, 'sibling');
+  await mkdir(localPath, { recursive: true });
+  await mkdir(sibling, { recursive: true });
+  const ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, machine: fixture.paths.machine });
+  const context = {
+    store: fixture.store,
+    paths: fixture.paths,
+    projects: [{ name: 'shop', localPath, eligible: true }],
+    now: () => fixture.clock.now,
+    ledger,
+  };
+  const board = await createBoard(context, { project: 'shop', document: sketch('probe') });
+  const boardFile = path.join(localPath, 'docs', 'flows', 'boards', 'probe.json');
+  assert.equal(JSON.parse(await readFile(boardFile, 'utf8')).id, 'probe');
+  assert.equal(board.project, 'shop');
+  assert.equal(path.relative(fixture.paths.mind, boardFile).startsWith('..'), true);
+  assert.equal(path.relative(fixture.paths.localDirectory, boardFile).startsWith('..'), true);
+  const text = await createText(context, { project: 'shop', path: 'docs/probe.json', document: release() });
+  assert.equal(text.document.title, 'Release notes');
+  assert.equal(JSON.parse(await readFile(path.join(localPath, 'docs', 'probe.json'), 'utf8')).title, 'Release notes');
+  await assert.rejects(atomicWrite(fixture.store, path.join(sibling, 'probe.json'), Buffer.from('no')), { code: 'unsafe_path' });
+  await assert.rejects(commitTransaction(fixture.store, {
+    id: randomUUID(),
+    entries: [{
+      resource: 'project:shop:../sibling/probe.json',
+      target: { kind: 'project', project: 'shop', path: '../sibling/probe.json' },
+      beforeRevision: null,
+      afterBytes: Buffer.from('no'),
+    }],
+  }), { code: 'unsafe_path' });
+  await assert.rejects(commitTransaction(fixture.store, {
+    id: randomUUID(),
+    entries: [{
+      resource: 'project:shop:README.md',
+      target: { kind: 'project', project: 'shop', path: 'README.md' },
+      beforeRevision: null,
+      afterBytes: Buffer.from('no'),
+    }],
+  }), { code: 'unsafe_path' });
+  await symlink(sibling, path.join(localPath, 'docs', 'flows', 'assets'), 'junction');
+  await assert.rejects(commitTransaction(fixture.store, {
+    id: randomUUID(),
+    entries: [{
+      resource: 'project:shop:docs/flows/assets/link.png',
+      target: { kind: 'project', project: 'shop', path: 'docs/flows/assets/link.png' },
+      beforeRevision: null,
+      afterBytes: PNG,
+    }],
+  }), { code: 'unsafe_path' });
+  await assert.rejects(readFile(path.join(sibling, 'link.png')));
+  await assert.rejects(readFile(path.join(sibling, 'probe.json')));
 });
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

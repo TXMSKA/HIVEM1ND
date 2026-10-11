@@ -6,6 +6,7 @@ import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
+import { bindProjects, resolveAuthorized } from '../service/store.mjs';
 import { writeDurable } from './origin.mjs';
 
 const FUTURE_MS = 30000;
@@ -174,6 +175,7 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
   if (plans.some((plan) => plan.corrupt)) throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
   await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
   const groups = groupPlans(prepared, plans);
+  bindProjects(sync.store, resolvedProjects);
   let completed = 0;
   for (const group of groups) {
     const versionBytes = Buffer.from(`${canonicalJson(versions)}\n`, 'utf8');
@@ -212,7 +214,7 @@ function planChange(item, localBytes, localVersion, located, tombstones) {
     if (!wins) return { version: kept, ops: [], events: [] };
     const ops = [];
     if (localBytes) ops.push(conflictOp(located, localBytes, item.change));
-    ops.push({ kind: 'remove', file: located.absolute });
+    ops.push({ kind: 'remove', file: located.absolute, target: projectTarget(located) });
     return { version, ops, events: conflictEvents(item, ops) };
   }
   if (localVersion?.deleted && !wins) {
@@ -229,7 +231,7 @@ function planChange(item, localBytes, localVersion, located, tombstones) {
   const ops = [];
   const baseMismatch = item.change.baseHash === null || (localBytes && hashBytes(localBytes) !== item.change.baseHash);
   if (localBytes && baseMismatch) ops.push(conflictOp(located, localBytes, item.change));
-  ops.push({ kind: 'write', file: located.absolute, bytes: raw.toString('base64') });
+  ops.push({ kind: 'write', file: located.absolute, target: projectTarget(located), bytes: raw.toString('base64') });
   ops.push(markerOp(item, raw));
   return { version, ops, events: conflictEvents(item, ops) };
 }
@@ -240,7 +242,18 @@ function conflictOp(located, bytes, change) {
   const absolute = path.join(path.dirname(located.absolute), filename);
   const slash = located.relative.lastIndexOf('/');
   const relative = `${slash === -1 ? '' : located.relative.slice(0, slash + 1)}${filename}`;
-  return { kind: 'write', file: absolute, bytes: Buffer.from(bytes).toString('base64'), conflict: true, relative };
+  return { kind: 'write', file: absolute, target: projectTarget(located, relative), bytes: Buffer.from(bytes).toString('base64'), conflict: true, relative };
+}
+
+function projectTarget(located, relative = located?.relative) {
+  if (located?.kind !== 'project' || typeof relative !== 'string' || relative === '') return undefined;
+  return { kind: 'project', project: located.project, path: relative };
+}
+
+async function concreteFile(sync, op) {
+  if (op?.target?.kind !== 'project') return op.file;
+  if (!(sync.store.projects ?? []).some((item) => item.name === op.target.project)) bindProjects(sync.store, sync.projects);
+  return resolveAuthorized(sync.store, op.target);
 }
 
 function conflictEvents(item, ops) {
@@ -283,10 +296,11 @@ async function runGroup(sync, id, ops, events, roots) {
   if (!existing) {
     for (const op of ops) {
       if (op.kind !== 'write' || op.conflict) continue;
-      const current = await readRegular(op.file);
+      const file = await concreteFile(sync, op);
+      const current = await readRegular(file);
       op.priorHash = current ? hashBytes(current) : null;
       if (current) {
-        op.hidden = `${op.file}.import-hidden`;
+        op.hidden = `${file}.import-hidden`;
         await writeDurable(sync.store, op.hidden, current, roots);
       }
     }
@@ -315,22 +329,21 @@ async function runGroup(sync, id, ops, events, roots) {
 async function perform(sync, op, roots) {
   if (op.kind === 'write') {
     const bytes = Buffer.from(op.bytes, 'base64');
+    let file = await concreteFile(sync, op);
     if (!op.conflict && Object.hasOwn(op, 'priorHash')) {
-      const current = await readRegular(op.file);
+      const current = await readRegular(file);
       const currentHash = current ? hashBytes(current) : null;
       if (current && currentHash !== op.priorHash && !current.equals(bytes)) {
-        await writeDurable(sync.store, `${op.file}.conflict-replay-${currentHash.slice(0, 8)}`, current, roots);
+        await writeDurable(sync.store, `${file}.conflict-replay-${currentHash.slice(0, 8)}`, current, roots);
         return;
       }
     }
     if (op.conflict) {
-      const existing = await readRegular(op.file);
+      const existing = await readRegular(file);
       if (existing?.equals(bytes)) return;
-      if (existing) {
-        op.file = `${op.file}-${hashBytes(existing).slice(0, 8)}`;
-      }
+      if (existing) file = `${file}-${hashBytes(existing).slice(0, 8)}`;
     }
-    await writeDurable(sync.store, op.file, bytes, roots);
+    await writeDurable(sync.store, file, bytes, roots);
     return;
   }
   if (op.kind === 'marker') {
@@ -338,10 +351,11 @@ async function perform(sync, op, roots) {
     return;
   }
   if (op.kind === 'remove') {
-    const stats = await lstat(op.file).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+    const file = await concreteFile(sync, op);
+    const stats = await lstat(file).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
     if (!stats) return;
     if (stats.isSymbolicLink()) throw new CoreError(422, 'unsafe_path', 'Refusing to follow a link.');
-    await unlink(op.file);
+    await unlink(file);
   }
 }
 
