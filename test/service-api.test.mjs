@@ -1556,7 +1556,7 @@ test('an agent cannot read another unit chat or session request', async (t) => {
   assert.equal(stolen.raw.includes('foreign-session-secret'), false);
   const allowed = await call(port, 'GET', `/api/v1/session-requests/${ownRequestId}`, { token: agent.token });
   assert.equal(allowed.status, 200, allowed.raw);
-  assert.equal(allowed.json.data.request.unitId, 'root:one');
+  assert.equal(allowed.json.data.unitId, 'root:one');
   const missing = await call(port, 'GET', `/api/v1/session-requests/${randomUUID()}`, { token: agent.token });
   assert.equal(missing.status, 404);
   const desktop = await call(port, 'GET', '/api/v1/chats', { token });
