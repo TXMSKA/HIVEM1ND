@@ -12,7 +12,7 @@ import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
 import { openSync, stageBaselines } from '../sync/store.mjs';
-import { createNativeAdapter } from './adapters.mjs';
+import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
 import { closeBridge, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles } from './security.mjs';
@@ -204,6 +204,7 @@ export async function writeBeat(options, state) {
     version: '3.0.0',
     heartbeatAt: new Date(options.now()).toISOString(),
     startedAt: new Date(options.startedAt ?? options.now()).toISOString(),
+    clients: Array.isArray(options.clients) ? options.clients.map((item) => ({ id: item.id, enabled: item.enabled === true, installed: item.installed === true })) : [],
   };
   const directory = options.paths.origin ? path.join(options.paths.origin, 'machines', options.paths.machine) : options.paths.localDirectory;
   const file = path.join(directory, 'service.json');
@@ -337,6 +338,13 @@ async function openServiceSync(options, paths) {
 }
 
 async function publishServiceBeat(runtime, state) {
+  if (!runtime.clientRecords) {
+    try {
+      runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, platform: process.platform }));
+    } catch {
+      runtime.clientRecords = clientRecords({});
+    }
+  }
   const record = {
     format: 'hivem1nd-service-v1',
     machine: runtime.paths.machine,
@@ -344,6 +352,7 @@ async function publishServiceBeat(runtime, state) {
     version: '3.0.0',
     heartbeatAt: new Date(runtime.now()).toISOString(),
     startedAt: runtime.startedAt,
+    clients: runtime.clientRecords,
   };
   const result = await runtime.pulse.beat(record);
   if (result.published) runtime.beat = result.record ?? record;

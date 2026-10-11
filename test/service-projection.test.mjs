@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
-import { composeCore } from '../engine/service/service.mjs';
+import { clientRecords, probeClients } from '../engine/service/adapters.mjs';
+import { composeCore, writeBeat } from '../engine/service/service.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from '../engine/service/units.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -597,4 +598,28 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   assert.equal(view.editors[0].title, 'One');
   const again = await readProjection(context);
   assert.equal(again.chats.find((chat) => chat.id === 'direct').unread, view.chats.find((chat) => chat.id === 'direct').unread);
+});
+
+test('machine clients are the probed availability records without executable paths', async (t) => {
+  const fixture = await mind(t);
+  const bin = path.join(fixture.root, 'bin');
+  await mkdir(bin);
+  const executable = path.join(bin, 'codex.exe');
+  await writeFile(executable, '');
+  const reports = await probeClients({ env: { PATH: bin, PATHEXT: '.EXE' }, platform: 'win32' });
+  const clients = clientRecords(reports).map((item) => (
+    item.id === 'codex' ? { ...item, command: executable, version: 'secret-version' } : item
+  ));
+  await writeBeat({ store: fixture.store, paths: fixture.paths, now: () => NOW, clients }, 'running');
+  const raw = await readFile(path.join(fixture.paths.origin, 'machines', 'DESKTOP', 'service.json'), 'utf8');
+  assert.equal(raw.includes(executable), false);
+  assert.equal(raw.includes('secret-version'), false);
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW });
+  const machine = view.machines.find((item) => item.id === 'DESKTOP');
+  assert.deepEqual(machine.clients, [
+    { id: 'claude', enabled: false, installed: false },
+    { id: 'codex', enabled: true, installed: true },
+    { id: 'cursor', enabled: false, installed: false },
+  ]);
+  assert.equal(JSON.stringify(machine).includes(executable), false);
 });

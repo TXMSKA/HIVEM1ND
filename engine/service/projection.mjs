@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 
 const VIEW_LIMIT = 16000000;
@@ -523,7 +523,7 @@ async function readMachines(context, now, issues) {
         version: beat.version ?? null,
         heartbeatAt: beat.heartbeatAt ?? null,
         answers: answersFor(beat, now),
-        clients: [],
+        clients: sanitizeClients(beat.clients),
         issues: [],
       });
     } catch {
@@ -532,6 +532,18 @@ async function readMachines(context, now, issues) {
   }
   machines.sort((left, right) => left.id.localeCompare(right.id));
   return machines;
+}
+
+function sanitizeClients(value) {
+  if (!Array.isArray(value)) return [];
+  const records = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || !CLIENTS.includes(item.id)) continue;
+    if (typeof item.installed !== 'boolean') continue;
+    const installed = item.installed === true;
+    records.push({ id: item.id, enabled: installed && item.enabled === true, installed });
+  }
+  return records;
 }
 
 async function readJsonRecord(mind, relative, format, issues) {

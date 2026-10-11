@@ -45,6 +45,13 @@ export async function probeClients(options = {}) {
   return reports;
 }
 
+export function clientRecords(reports) {
+  return CLIENTS.map((id) => {
+    const installed = reports?.[id]?.installed === true;
+    return { id, enabled: installed, installed };
+  });
+}
+
 export function createNativeAdapter(client, options = {}) {
   if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const models = Array.isArray(options.models) ? options.models : [];
