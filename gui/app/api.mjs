@@ -116,7 +116,7 @@ export async function request(api, method, path, options = {}) {
     }
     if (response.status === 401 || json?.error?.code === "home_expired") clearCredentials(api);
     if (response.ok) {
-      if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !json.meta.sync) {
+      if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !["local", "pending", "published"].includes(json.meta?.sync)) {
         throw new ApiError(response.status, "invalid_response", "The response envelope is not valid.", {}, null, retryAfter);
       }
       return { status: response.status, data: json.data, meta: json.meta };

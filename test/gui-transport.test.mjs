@@ -82,6 +82,28 @@ function waitFor(predicate, timeout = 5000) {
   });
 }
 
+test("success envelopes accept only the sync enum", async () => {
+  const run = async (sync) => {
+    const body = envelope({ ok: true });
+    if (sync === undefined) delete body.meta.sync;
+    else body.meta.sync = sync;
+    const { api } = harness({ fetch: async () => jsonResponse(200, body) });
+    try {
+      return await request(api, "GET", "/view");
+    } finally {
+      dispose(api);
+    }
+  };
+  for (const sync of ["local", "pending", "published"]) {
+    const result = await run(sync);
+    assert.equal(result.meta.sync, sync);
+    assert.equal(result.data.ok, true);
+  }
+  for (const sync of [null, "", "remote", undefined]) {
+    await assert.rejects(run(sync), (error) => error instanceof ApiError && error.status === 200 && error.code === "invalid_response");
+  }
+});
+
 test("credentials are read once and API routes keep a single prefix", async () => {
   const calls = [];
   const { api, history } = harness({
