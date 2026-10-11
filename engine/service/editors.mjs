@@ -8,6 +8,7 @@ import { createAnchor, findAnchor, place } from '../../features/void/comments.mj
 import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { bindProjects, commitTransaction } from './store.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { convertMedia } from '../sync/media.mjs';
 import { startResourceWatch } from './watch.mjs';
 
@@ -201,11 +202,60 @@ async function commit(context, entries, events = []) {
       : entry.recordPath;
     if (file) await assertNoLinks(file);
   }
-  const result = await commitTransaction(context.store, { id: randomUUID(), entries: prepared, events });
+  const transactionId = randomUUID();
+  const result = await commitTransaction(context.store, { id: transactionId, entries: prepared, events });
+  const stage = [];
+  for (const entry of prepared) {
+    const target = syncTarget(context, entry);
+    if (!target) continue;
+    const bytes = entryBytes(entry);
+    if (!bytes) continue;
+    stage.push({
+      target,
+      bytes,
+      id: uuidV8(['editor-change', transactionId, target.kind, target.project ?? '', target.path, hashBytes(bytes)]),
+    });
+  }
+  if (stage.length > 0) {
+    const sync = context.sync ?? openSync({
+      store: context.store,
+      paths: context.paths,
+      now: () => context.now?.() ?? Date.now(),
+      projects: context.projects ?? [],
+    });
+    const changes = await stageTransaction(sync, stage, { transactionId });
+    noteSync(context, 'pending');
+    if (context.pulse) {
+      const published = await context.pulse.changed(changes.map((item) => item.id));
+      if (published?.published === true) noteSync(context, 'published');
+    }
+  } else {
+    noteSync(context, 'local');
+  }
   if (context.bus) {
     for (const event of events) context.bus.emit(event);
   }
   return result;
+}
+
+function syncTarget(context, entry) {
+  if (entry?.target?.kind === 'project' && entry.target.project && entry.target.path) return entry.target;
+  const file = entry?.recordPath;
+  const mind = context.paths?.mind;
+  if (!file || !mind) return null;
+  const relative = path.relative(path.resolve(mind), path.resolve(file));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  const slash = relative.split(path.sep).join('/');
+  if (!slash.startsWith('user/')) return null;
+  if (slash.startsWith('user/relay/leases/') || slash.startsWith('user/relay/credentials/') || slash.startsWith('user/relay/endpoints/')) return null;
+  return { kind: 'mind', path: slash };
+}
+
+function entryBytes(entry) {
+  if (Buffer.isBuffer(entry?.afterBytes)) return entry.afterBytes;
+  if (typeof entry?.afterBytes === 'string') return Buffer.from(entry.afterBytes);
+  if (typeof entry?.afterBytesBase64 === 'string') return Buffer.from(entry.afterBytesBase64, 'base64');
+  return null;
 }
 
 function record(file, before, bytes) {

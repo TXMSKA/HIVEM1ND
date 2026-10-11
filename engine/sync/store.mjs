@@ -344,7 +344,13 @@ export async function projectPathSet(project, options = {}) {
       return;
     }
   };
-  for (const resource of await readCatalog(options.mind, project.name)) {
+  const resources = await readCatalog(options.mind, project.name);
+  if (Array.isArray(options.resources)) {
+    for (const resource of options.resources) {
+      if (resource?.project === project.name) resources.push(resource);
+    }
+  }
+  for (const resource of resources) {
     if (resource?.project !== project.name || typeof resource.path !== 'string') continue;
     add(resource.path);
     for (const sidecar of sidecars(resource)) add(sidecar);
@@ -353,7 +359,45 @@ export async function projectPathSet(project, options = {}) {
       for (const asset of referencedAssets(await readFile(absolute))) add(asset);
     }
   }
+  await addRegisteredAssets(options.mind, resources, add);
+  if (Array.isArray(options.registries)) {
+    const ids = new Set(resources.map((item) => item?.id).filter((id) => typeof id === 'string'));
+    for (const parsed of options.registries) {
+      if (!ids.has(parsed?.resourceId) || !Array.isArray(parsed.assets)) continue;
+      for (const asset of parsed.assets) {
+        if (typeof asset !== 'string' || asset === '' || asset.includes('/') || asset.includes('\\') || asset.includes('..')) continue;
+        add(`docs/flows/assets/${asset}`);
+      }
+    }
+  }
   return allowed;
+}
+
+async function addRegisteredAssets(mind, resources, add) {
+  if (!mind) return;
+  const ids = new Set(resources.map((item) => item?.id).filter((id) => typeof id === 'string'));
+  const directory = path.join(mind, 'user', 'relay', 'editors');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.assets.json')) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse((await readFile(path.join(directory, name))).toString('utf8'));
+    } catch {
+      continue;
+    }
+    if (!ids.has(parsed?.resourceId) || !Array.isArray(parsed.assets)) continue;
+    for (const asset of parsed.assets) {
+      if (typeof asset !== 'string' || asset === '' || asset.includes('/') || asset.includes('\\') || asset.includes('..')) continue;
+      add(`docs/flows/assets/${asset}`);
+    }
+  }
 }
 
 function sidecars(resource) {

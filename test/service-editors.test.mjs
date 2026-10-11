@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
@@ -13,6 +13,12 @@ import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
 import { plain } from '../features/void/text.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
+import { applyPack } from '../engine/sync/apply.mjs';
+import { openOrigin, readHead, readOriginPack } from '../engine/sync/origin.mjs';
+import { createPulse } from '../engine/sync/pulse.mjs';
+import { openSync } from '../engine/sync/store.mjs';
+import { servicePaths } from '../engine/service/paths.mjs';
+import { createStore } from '../engine/service/store.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -556,6 +562,138 @@ test('a registered repository outside the mind and local directory accepts board
   }), { code: 'unsafe_path' });
   await assert.rejects(readFile(path.join(sibling, 'link.png')));
   await assert.rejects(readFile(path.join(sibling, 'probe.json')));
+});
+
+test('editor create, edit, attach, comment and asset publish to another service', async (t) => {
+  const { fixture, context } = await shop(t);
+  const originPath = path.join(fixture.root, 'origin');
+  await mkdir(originPath, { recursive: true });
+  fixture.paths.origin = originPath;
+  const sync = openSync({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: context.projects,
+  });
+  const origin = openOrigin({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    machine: fixture.machine,
+  });
+  const timers = new Set();
+  const pulse = createPulse({
+    sync,
+    origin,
+    ledger: context.ledger,
+    now: () => fixture.clock.now,
+    setTimeout(fn) {
+      const timer = { cleared: false, fn };
+      timers.add(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      if (timer) timer.cleared = true;
+    },
+  });
+  t.after(() => pulse.close());
+  const notified = [];
+  const notify = pulse.changed.bind(pulse);
+  pulse.changed = (ids) => {
+    notified.push(...ids);
+    return notify(ids);
+  };
+  context.sync = sync;
+  context.pulse = pulse;
+  const board = await createBoard(context, { project: 'shop', document: sketch('shop') });
+  fixture.clock.now += 1000;
+  const revised = structuredClone(board.document);
+  revised.title = 'Shop floor';
+  const edited = await replaceBoard(context, board.id, { document: revised, expectedRevision: board.revision });
+  assert.equal(edited.document.title, 'Shop floor');
+  fixture.clock.now += 1000;
+  const attachment = await readAttachments(context, board.id);
+  const attached = await writeAttachments(context, board.id, { expectedRevision: attachment.revision, attached: ['root:master'] });
+  assert.deepEqual(attached.attached, ['root:master']);
+  fixture.clock.now += 1000;
+  const asset = await createAsset(context, board.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
+  assert.equal(asset.src.startsWith('assets/'), true);
+  fixture.clock.now += 1000;
+  const text = await createText(context, { project: 'shop', path: 'docs/release.json', document: release() });
+  fixture.clock.now += 1000;
+  const comment = await createComment(context, text.id, {
+    text: 'Keep the welcome line.',
+    expectedRevision: text.revision,
+    expectedCommentsRevision: (await readComments(context, text.id)).commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 1, quote: plain(text.document.pages[0].en).slice(0, 1) },
+  });
+  assert.equal(comment.thread.messages[0].text, 'Keep the welcome line.');
+  const staged = await readdir(path.join(fixture.paths.localDirectory, 'staging', 'changes'));
+  const targets = [];
+  for (const name of staged) {
+    const record = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'staging', 'changes', name), 'utf8'));
+    targets.push(record.target.path);
+  }
+  assert.ok(targets.includes('user/gui/resources.json'));
+  assert.ok(targets.includes('docs/flows/boards/shop.json'));
+  assert.ok(targets.includes(`user/relay/editors/${board.id}.json`));
+  assert.ok(targets.includes('docs/release.comments.json'));
+  assert.ok(targets.some((item) => item.startsWith('docs/flows/assets/')));
+  assert.equal(targets.some((item) => item.includes('/receipts/') || item.includes('/leases/')), false);
+  assert.ok(notified.length >= 5);
+  const published = [];
+  for (let guard = 0; guard < 8; guard += 1) {
+    const result = await pulse.flush();
+    assert.equal(result.error, undefined);
+    published.push(...(result.ids ?? []));
+    if (!result.ids?.length) break;
+  }
+  assert.ok(published.length >= 5);
+  const head = await readHead(origin, fixture.machine);
+  assert.ok(head.sequence >= 1);
+  const laptopMind = path.join(fixture.root, 'localappdata', 'Cosmic', 'laptop-mind');
+  const laptopShop = path.join(fixture.root, 'laptop-shop');
+  await mkdir(path.join(laptopMind, 'user'), { recursive: true });
+  await mkdir(laptopShop, { recursive: true });
+  const laptopPaths = servicePaths({
+    platform: 'win32',
+    env: fixture.env,
+    home: fixture.home,
+    machine: 'LAPTOP',
+    mindPath: laptopMind,
+    originPath: originPath,
+  });
+  await mkdir(laptopPaths.localDirectory, { recursive: true });
+  const laptopStore = createStore({
+    root: fixture.root,
+    confineRoot: fixture.root,
+    mindPath: laptopMind,
+    localDirectory: laptopPaths.localDirectory,
+    now: () => fixture.clock.now,
+    events: [],
+  });
+  const laptop = openSync({
+    store: laptopStore,
+    paths: laptopPaths,
+    now: () => fixture.clock.now,
+    projects: [{ name: 'shop', localPath: laptopShop }],
+  });
+  for (let sequence = 1; sequence <= head.sequence; sequence += 1) {
+    const packed = await readOriginPack(origin, fixture.machine, sequence);
+    const result = await applyPack(laptop, packed, { projects: laptop.projects });
+    assert.equal(result.status, 'applied');
+  }
+  const remoteBoard = JSON.parse(await readFile(path.join(laptopShop, 'docs', 'flows', 'boards', 'shop.json'), 'utf8'));
+  assert.equal(remoteBoard.title, 'Shop floor');
+  const remoteAssets = await readdir(path.join(laptopShop, 'docs', 'flows', 'assets'));
+  assert.equal(remoteAssets.length, 1);
+  const remoteCatalog = JSON.parse(await readFile(path.join(laptopPaths.mind, 'user', 'gui', 'resources.json'), 'utf8'));
+  assert.ok(remoteCatalog.resources.some((item) => item.id === board.id));
+  assert.ok(remoteCatalog.resources.some((item) => item.id === text.id));
+  const binding = JSON.parse(await readFile(path.join(laptopPaths.mind, 'user', 'relay', 'editors', `${board.id}.json`), 'utf8'));
+  assert.deepEqual(binding.attached, ['root:master']);
+  const remoteComments = JSON.parse(await readFile(path.join(laptopShop, 'docs', 'release.comments.json'), 'utf8'));
+  assert.equal(remoteComments.threads[0].messages[0].text, 'Keep the welcome line.');
 });
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

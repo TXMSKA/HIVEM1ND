@@ -142,6 +142,8 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
     await writePending(sync, decoded, incoming.packHash, 'owner_unavailable');
     return { status: 'pending', code: 'owner_unavailable', missing: missingOwners, packHash: incoming.packHash };
   }
+  const packedResources = resourcesInPack(prepared);
+  const packedRegistries = registriesInPack(prepared);
   let missingProject = false;
   for (const item of prepared) {
     if (item.change.target.kind !== 'project') continue;
@@ -150,7 +152,7 @@ export async function applyPack(sync, packBytes, { provider = { async readHead()
       missingProject = true;
       continue;
     }
-    const allowed = await projectPathSet(project, { mind: sync.paths.mind });
+    const allowed = await projectPathSet(project, { mind: sync.paths.mind, resources: packedResources, registries: packedRegistries });
     if (!allowed.has(item.change.target.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
   }
   if (missingProject) {
@@ -485,6 +487,27 @@ function filterGrants(raw, record, tombstones) {
 function grantId(grant) {
   if (typeof grant === 'string') return grant;
   return grant?.id ?? '';
+}
+
+function resourcesInPack(prepared) {
+  const resources = [];
+  for (const item of prepared) {
+    if (item.change.target.kind !== 'mind' || item.change.target.path !== 'user/gui/resources.json' || !item.raw) continue;
+    const parsed = parseRecord(item.raw);
+    if (parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources)) resources.push(...parsed.resources);
+  }
+  return resources;
+}
+
+function registriesInPack(prepared) {
+  const registries = [];
+  for (const item of prepared) {
+    if (item.change.target.kind !== 'mind' || !item.raw) continue;
+    if (!/^user\/relay\/editors\/[^/]+\.assets\.json$/.test(item.change.target.path)) continue;
+    const parsed = parseRecord(item.raw);
+    if (parsed) registries.push(parsed);
+  }
+  return registries;
 }
 
 function isImmutable(item) {
