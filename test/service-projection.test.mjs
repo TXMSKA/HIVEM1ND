@@ -646,6 +646,10 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   assert.equal(view.sessions.find((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').state, 'stopped');
   assert.equal(view.sessions[0].registeredAt >= view.sessions[1].registeredAt, true);
   assert.equal(view.editors[0].title, 'One');
+  assert.equal(view.editors[0].readOnly, false);
+  assert.equal(view.editors[0].openThreads, 0);
+  assert.equal(view.editors[0].activity, null);
+  assert.equal(view.editors[0].revision, null);
   const again = await readProjection(context);
   assert.equal(again.chats.find((chat) => chat.id === 'direct').unread, view.chats.find((chat) => chat.id === 'direct').unread);
 });
@@ -669,7 +673,12 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   await writeFile(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder', 'note.md'), stateFile({
     id: 'note', 'from-id': 'person:Tom', to: 'nobody', timestamp: '2026-10-10T12:00:00.000Z',
   }, 'Hello\n'));
-  const view = await readProjection({ paths: fixture.paths, now: () => NOW, aliases: ['Tom'] });
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder', 'other.md'), stateFile({
+    id: 'other', 'from-id': 'person:Nobody', to: 'nobody', timestamp: '2026-10-10T12:01:00.000Z',
+  }, 'Unknown\n'));
+  await mkdir(path.join(root, 'user', 'machines'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'machines', 'DESKTOP.md'), 'machine: DESKTOP\nperson: Tom\n\n');
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } });
   const task = view.tasks.find((item) => item.id === 'project:shop:003');
   assert.equal(task.fromId, 'root:master');
   assert.equal(task.toId, 'project:shop:builder');
@@ -679,6 +688,7 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   const note = view.messages.find((item) => item.id === 'note');
   assert.equal(note.fromId, 'root:master');
   assert.equal(note.toId, null);
+  assert.equal(view.messages.find((item) => item.id === 'other').fromId, null);
   const question = view.waiting.find((item) => item.kind === 'question');
   assert.equal(question.id, `question:root:overseer:${hashText('the registry name')}`);
   assert.equal(question.title, 'the registry name');

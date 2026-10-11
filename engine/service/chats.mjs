@@ -25,20 +25,26 @@ export async function createChat(context, input) {
     const current = parseChat(existing, id);
     if (direct && current.listed === false) {
       const next = replaceLine(existing, 'listed', 'true');
-      await commitOne(context, `user/relay/chats/${id}/chat.md`, hashBytes(existing), next, [
-        { name: 'chat.changed', data: { chat: parseChat(next, id) } },
-      ]);
-      return { status: 200, chat: parseChat(next, id), created: false };
+      let chat;
+      await commitOne(context, `user/relay/chats/${id}/chat.md`, hashBytes(existing), next, async () => {
+        chat = await storedChat(context, id);
+        return [{ name: 'chat.changed', data: { chat } }];
+      });
+      return { status: 200, chat, created: false };
     }
-    return { status: 200, chat: current, created: false };
+    return { status: 200, chat: await storedChat(context, id), created: false };
   }
   const title = input.title ?? (direct ? parseUnitId(selected[0]).unit : members.filter((item) => item !== 'root:master').join(', ').slice(0, 240));
   const bytes = Buffer.from(`id: ${id}\ntitle: ${title}\nmembers: ${canonicalJson(members)}\npinned: false\nlisted: true\ncreated: ${stamp(context)}\ncreated-by: ${author(context)}\nkind: ${direct ? 'direct' : 'group'}\n\n`);
-  await commitOne(context, `user/relay/chats/${id}/chat.md`, null, bytes, [
-    { name: 'chat.changed', data: { chat: parseChat(bytes, id) } },
-    { name: 'view.changed', data: { revision: hashBytes(bytes), collections: ['chats'] } },
-  ]);
-  return { status: 201, chat: parseChat(bytes, id), created: true };
+  let chat;
+  await commitOne(context, `user/relay/chats/${id}/chat.md`, null, bytes, async () => {
+    chat = await storedChat(context, id);
+    return [
+      { name: 'chat.changed', data: { chat } },
+      { name: 'view.changed', data: { revision: hashBytes(bytes), collections: ['chats'] } },
+    ];
+  });
+  return { status: 201, chat, created: true };
 }
 
 export async function patchChat(context, chatId, input) {
@@ -53,10 +59,12 @@ export async function patchChat(context, chatId, input) {
   if (hasListed && typeof input.listed !== 'boolean') throw new CoreError(422, 'invalid_body', 'Listed must be a boolean.');
   if (hasPinned) next = replaceLine(next, 'pinned', input.pinned ? 'true' : 'false');
   if (hasListed) next = replaceLine(next, 'listed', input.listed ? 'true' : 'false');
-  await commitOne(context, relative, input.expectedRevision, next, [
-    { name: 'chat.changed', data: { chat: parseChat(next, chatId) } },
-  ]);
-  return { chat: parseChat(next, chatId) };
+  let chat;
+  await commitOne(context, relative, input.expectedRevision, next, async () => {
+    chat = await storedChat(context, chatId);
+    return [{ name: 'chat.changed', data: { chat } }];
+  });
+  return { chat };
 }
 
 export async function postChat(context, chatId, input) {
@@ -78,10 +86,10 @@ export async function postChat(context, chatId, input) {
   await commitMany(context, [
     { relative, before: null, bytes: message.bytes },
     { relative: fanout, before: null, bytes: fanoutBytes },
-  ], [
+  ], async () => [
     { name: 'message.created', data: { chatId, mailboxId: null, message: message.projected } },
     ...notices.map((notice) => ({ name: 'notification.changed', data: { noticeKey: notice.key, unitId: notice.unitId, resourceId: message.id, state: 'pending', error: null } })),
-    { name: 'chat.changed', data: { chat } },
+    { name: 'chat.changed', data: { chat: await storedChat(context, chatId) } },
   ]);
   const delivered = await deliverNotifications(context);
   const mine = delivered.filter((notice) => notice.key?.startsWith(`${message.id}:`));
@@ -422,7 +430,13 @@ async function commitMany(context, entries, events) {
     const result = await context.pulse.changed(changes.map((change) => change.id));
     if (result?.published === true) noteSync(context, 'published');
   }
-  publishDomainEvents(context, events);
+  const ready = typeof events === 'function' ? await events() : events;
+  publishDomainEvents(context, ready);
+}
+
+async function storedChat(context, id) {
+  const { projectChat } = await import('./projection.mjs');
+  return projectChat(context, id);
 }
 
 async function loadChat(context, chatId) {

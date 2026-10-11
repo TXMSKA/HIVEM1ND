@@ -35,6 +35,8 @@ async function world(t) {
 test('direct chats are reused, groups stay bounded, and history survives unlist', async (t) => {
   const { context, fixture } = await world(t);
   const first = await createChat(context, { members: ['project:shop:executor-shop'] });
+  assert.equal(first.chat.lastMessage, null);
+  assert.equal(first.chat.unread, 0);
   const second = await createChat(context, { members: ['project:shop:executor-shop'] });
   assert.equal(second.created, false);
   assert.equal(second.chat.id, first.chat.id);
@@ -45,6 +47,9 @@ test('direct chats are reused, groups stay bounded, and history survives unlist'
   await assert.rejects(() => createChat(context, { members: tooMany }), (error) => error.code === 'invalid_members');
   const posted = await postChat(context, first.chat.id, { body: 'Hello', subject: 'Ping' });
   assert.equal(posted.message.fromId, 'root:master');
+  const afterPost = await createChat(context, { members: ['project:shop:executor-shop'] });
+  assert.equal(afterPost.chat.lastMessage.id, posted.message.id);
+  assert.equal(afterPost.chat.unread, 1);
   await patchChat(context, first.chat.id, { listed: false, pinned: true, expectedRevision: (await createChat(context, { members: ['project:shop:executor-shop'] })).chat.revision });
   const messagePath = path.join(fixture.paths.mind, 'user', 'relay', 'chats', first.chat.id, `${posted.message.id}.md`);
   assert.equal((await readFile(messagePath, 'utf8')).includes('Hello'), true);

@@ -946,7 +946,7 @@ function domainContext(options, credential, bus) {
     projects: options.projects ?? [],
     watch: options.watch ?? null,
     ownedPids: options.ownedPids ?? new Set(),
-    aliases: options.aliases ?? [],
+    aliases: Array.isArray(options.aliases) ? options.aliases : null,
     adapters: options.adapters ?? null,
     models: options.models ?? [],
     ledger: options.ledger ?? null,

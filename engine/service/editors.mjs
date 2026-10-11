@@ -128,6 +128,50 @@ function currentActivity(context, resourceId) {
   return latest ? { unitId: latest.unitId, at: latest.at } : null;
 }
 
+export async function summarizeCatalog(context, resources) {
+  const editors = [];
+  for (const entry of resources) {
+    if (!entry || typeof entry.id !== 'string') continue;
+    const project = (context.projects ?? []).find((item) => item.name === entry.project && item.localPath);
+    if (!project) {
+      editors.push(catalogSummary(entry));
+      continue;
+    }
+    try {
+      const file = inside(project.localPath, entry.path);
+      const loaded = await loadBytes(file);
+      let document = null;
+      if (entry.readOnly !== true && loaded.bytes) {
+        try {
+          document = JSON.parse(loaded.bytes.toString('utf8'));
+        } catch {
+          document = null;
+        }
+      }
+      editors.push(summaryOf(await projectEditor(context, entry, document, loaded.revision)));
+    } catch (error) {
+      if (error?.code !== 'invalid_path' && error?.code !== 'project_unavailable' && error?.code !== 'not_found') throw error;
+      editors.push(catalogSummary(entry));
+    }
+  }
+  return editors;
+}
+
+function catalogSummary(entry) {
+  return {
+    id: entry.id,
+    kind: entry.kind ?? null,
+    project: entry.project ?? null,
+    title: entry.title ?? entry.legacyId ?? entry.path ?? '',
+    path: entry.path ?? null,
+    readOnly: entry.readOnly === true,
+    revision: null,
+    attached: [],
+    openThreads: 0,
+    activity: null,
+  };
+}
+
 function summaryOf(editor) {
   return {
     id: editor.id,

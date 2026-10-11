@@ -120,7 +120,62 @@ export async function readCollection(context, name, query = {}) {
 }
 
 async function projectRecords(context, query) {
-  return assemble(await loadMind(context), query, context.aliases ?? [], context.paths?.machine ?? null);
+  const aliases = await resolveAliases(context);
+  const scoped = { ...context, aliases };
+  const loaded = await loadMind(scoped);
+  const editors = await completeEditorSummaries(scoped, loaded.catalog);
+  return assemble(loaded, query, aliases, scoped.paths?.machine ?? null, editors);
+}
+
+export async function projectChat(context, id) {
+  const aliases = await resolveAliases(context);
+  const loaded = await loadMind({ ...context, aliases });
+  const chat = loaded.chats.find((item) => item.id === id);
+  if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
+  return chat;
+}
+
+export async function loadPersonAliases(mind) {
+  if (!mind) return [];
+  const directory = path.join(mind, 'user', 'machines');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const aliases = [];
+  for (const name of names) {
+    if (!name.endsWith('.md') || name.endsWith('.report.md') || name.startsWith('.')) continue;
+    let text = null;
+    try {
+      text = await readFile(path.join(directory, name), 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    const header = text.split(/\r?\n\r?\n/, 1)[0];
+    for (const line of header.split(/\r?\n/)) {
+      const match = /^person:\s*(.*)$/.exec(line);
+      if (!match) continue;
+      for (const alias of match[1].split(',').map((item) => item.trim()).filter(Boolean)) aliases.push(alias);
+    }
+  }
+  return [...new Set(aliases)];
+}
+
+async function resolveAliases(context) {
+  if (Array.isArray(context?.aliases)) return context.aliases;
+  return loadPersonAliases(context?.paths?.mind);
+}
+
+async function completeEditorSummaries(context, catalog) {
+  const resources = catalog?.value?.resources;
+  if (!Array.isArray(resources) || resources.length === 0) return [];
+  const { summarizeCatalog } = await import('./editors.mjs');
+  const editors = await summarizeCatalog(context, resources);
+  return editors.sort((left, right) => String(left.project ?? '').localeCompare(String(right.project ?? '')) || String(left.title).localeCompare(String(right.title)) || String(left.id).localeCompare(String(right.id)));
 }
 
 export async function readDetail(context, name, id, scope = {}) {
@@ -247,7 +302,7 @@ async function loadMind(context) {
   return { units, sessions, messages, tasks, chats, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
 }
 
-function assemble(loaded, query, aliases = [], machine = null) {
+function assemble(loaded, query, aliases = [], machine = null, editors = []) {
   const waiting = waitingFor([
     ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
       id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
@@ -303,7 +358,7 @@ function assemble(loaded, query, aliases = [], machine = null) {
     settings: loaded.settings?.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' },
     settingsRevision: loaded.settings?.revision ?? null,
     messages: loaded.messages,
-    editors: editorSummaries(loaded.catalog),
+    editors,
   };
   return view;
 }
@@ -757,18 +812,6 @@ function personQuestions(units, aliases = []) {
     }
   }
   return items;
-}
-
-function editorSummaries(catalog) {
-  const resources = catalog?.value?.resources;
-  if (!Array.isArray(resources)) return [];
-  return resources.map((resource) => ({
-    id: resource.id,
-    kind: resource.kind ?? null,
-    project: resource.project ?? null,
-    path: resource.path ?? null,
-    title: resource.title ?? resource.legacyId ?? resource.path ?? '',
-  })).sort((left, right) => String(left.project ?? '').localeCompare(String(right.project ?? '')) || String(left.title).localeCompare(String(right.title)) || String(left.id).localeCompare(String(right.id)));
 }
 
 function messageInScope(message, scope) {

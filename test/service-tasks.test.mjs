@@ -91,8 +91,12 @@ test('only authorized edges commit and lead gating stays intact', async (t) => {
   await assert.rejects(() => changeStatus(agent, TASK, { status: 'open', expectedRevision: task.revision }), (error) => error.code === 'status_unchanged');
   await assert.rejects(() => changeStatus(agent, TASK, { status: 'closed', expectedRevision: task.revision }), (error) => error.code === 'invalid_transition');
   const original = await readFile(file);
-  const delivered = await changeStatus(agent, TASK, { status: 'review', expectedRevision: task.revision, note: 'Listo: café' });
+  const seen = [];
+  const delivered = await changeStatus({ ...agent, bus: { emit(event) { seen.push(event); } } }, TASK, { status: 'review', expectedRevision: task.revision, note: 'Listo: café' });
   assert.equal(delivered.task.status, 'review');
+  const changed = seen.find((event) => event.name === 'task.changed');
+  assert.equal(changed.data.task, delivered.task);
+  assert.equal(changed.data.task.request.includes('Keep this request.'), true);
   const deliveredText = await readFile(file, 'utf8');
   assert.equal(deliveredText.includes('from: user'), true);
   assert.equal(deliveredText.includes('Keep this request.'), true);

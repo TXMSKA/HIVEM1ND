@@ -10,6 +10,12 @@ import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const EDGES = new Set(['open>review', 'review>done', 'review>open', 'done>closed', 'closed>open']);
 
+async function aliasesFor(context) {
+  if (Array.isArray(context?.aliases)) return context.aliases;
+  const { loadPersonAliases } = await import('./projection.mjs');
+  return loadPersonAliases(context?.paths?.mind);
+}
+
 export async function loadTask(context, taskId) {
   const parsed = parseTaskId(taskId);
   const directories = [taskDirectory(parsed.scope)];
@@ -27,7 +33,7 @@ export async function loadTask(context, taskId) {
       const relative = `${relativeDir}/${name}`;
       const bytes = await readBytes(context.store, absolute(context, relative));
       if (!bytes) continue;
-      const task = describe(bytes, relative, parsed.id, context.aliases ?? []);
+      const task = describe(bytes, relative, parsed.id, await aliasesFor(context));
       if (task?.id === parsed.id) return { ...task, ...(await assigneeLead(context, task.toId)) };
     }
   }
@@ -82,7 +88,6 @@ export async function undoStatus(context, taskId, input) {
       note: 'Undone.',
       undoOf: latest.id,
       bytes: next,
-      events: [{ name: 'task.changed', data: { task: { id: task.id, status: latest.previousStatus }, changeId: null, undoOf: latest.id } }],
     });
   });
 }
@@ -124,7 +129,6 @@ async function writeChange(context, taskId, input, receipt) {
     bytes: next,
     delivery,
     receipt,
-    events: [{ name: 'task.changed', data: { task: { id: task.id, status: nextStatus, reviewable: reviewAuthority({ ...task, status: nextStatus, bytes: next, body: next.toString('utf8') }).reviewable }, changeId: null, undoOf: null } }],
   });
 }
 
@@ -179,7 +183,6 @@ async function commitChange(context, task, change) {
       stage.push({ target: { kind: 'mind', path: notice }, bytes: body });
     }
   }
-  const events = change.events.map((event) => ({ ...event, data: { ...event.data, changeId: id, undoOf: change.undoOf } }));
   const transaction = {
     id: randomUUID(),
     entries,
@@ -203,10 +206,10 @@ async function commitChange(context, task, change) {
     const published = await context.pulse.changed(changes.map((item) => item.id));
     if (published?.published === true) noteSync(context, 'published');
   }
-  publishDomainEvents(context, events);
   const { readDetail } = await import('./projection.mjs');
   const projected = await readDetail(context, 'tasks', task.id);
   const documented = { task: projected, changeId: id };
+  publishDomainEvents(context, [{ name: 'task.changed', data: { task: projected, changeId: id, undoOf: change.undoOf } }]);
   if (change.kind === 'undo') documented.undoOf = change.undoOf;
   if (change.receipt?.principalHash && change.receipt.key) {
     change.receipt.status = 200;
