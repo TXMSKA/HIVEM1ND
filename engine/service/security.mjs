@@ -12,12 +12,13 @@ const SYSTEM_SID = 'S-1-5-18';
 const ADMINISTRATORS_SID = 'S-1-5-32-544';
 const ACL_TIMEOUT_MS = 8000;
 
-export function createAclRunner({ spawnSync: run = spawnSync } = {}) {
+export function createAclRunner({ spawnSync: run = spawnSync, env = process.env, platform = process.platform } = {}) {
   let userSid = null;
+  const tool = (name) => systemTool(name, env, platform);
   return {
     userSid() {
       if (userSid) return userSid;
-      const result = runTool(run, 'whoami.exe', ['/user', '/fo', 'csv', '/nh']);
+      const result = runTool(run, tool('whoami.exe'), ['/user', '/fo', 'csv', '/nh']);
       const sid = String(result.stdout ?? '').match(/S-\d+-\d+(?:-\d+)+/)?.[0] ?? '';
       if (!/^S-\d+-\d+(?:-\d+)+$/.test(sid)) throw new CoreError(503, 'bootstrap_unavailable', 'The current user could not be identified.');
       userSid = sid;
@@ -27,7 +28,7 @@ export function createAclRunner({ spawnSync: run = spawnSync } = {}) {
       const sid = this.userSid();
       const rights = statSync(target).isDirectory() ? '(OI)(CI)F' : 'F';
       const grant = (value) => `*${value}:${rights}`;
-      runTool(run, 'icacls.exe', [
+      runTool(run, tool('icacls.exe'), [
         target,
         '/inheritance:r',
         '/grant:r', grant(SYSTEM_SID),
@@ -40,7 +41,7 @@ export function createAclRunner({ spawnSync: run = spawnSync } = {}) {
       const sid = this.userSid();
       const saved = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(6).toString('hex')}.txt`);
       try {
-        runTool(run, 'icacls.exe', [target, '/save', saved, '/Q']);
+        runTool(run, tool('icacls.exe'), [target, '/save', saved, '/Q']);
         assertLimitedAcl(readAclText(saved), sid);
       } finally {
         try { unlinkSync(saved); } catch { /* The save file is already gone. */ }
@@ -283,6 +284,13 @@ function safeDetails(source) {
     else if (typeof value === 'string' && value.length <= 200 && !leaks(value)) details[key] = value;
   }
   return details;
+}
+
+function systemTool(name, env, platform) {
+  if (platform !== 'win32') return name;
+  const root = typeof env?.SystemRoot === 'string' && env.SystemRoot ? env.SystemRoot : env?.SYSTEMROOT;
+  if (typeof root !== 'string' || !root) throw new CoreError(503, 'bootstrap_unavailable', 'The current user could not be identified.');
+  return path.join(root, 'System32', name);
 }
 
 function runTool(run, command, args) {

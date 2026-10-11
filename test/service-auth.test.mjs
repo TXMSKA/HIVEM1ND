@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { connect, createServer } from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -233,6 +234,30 @@ test('local login requires the protected bootstrap secret and binds only the vie
   assert.equal(closed.status, 503);
   assert.equal(closed.json.error.code, 'bootstrap_unavailable');
   assert.equal(closed.json.token, undefined);
+});
+
+test('windows acl tools come from System32', async () => {
+  const calls = [];
+  const runner = createAclRunner({
+    platform: 'win32',
+    env: { SystemRoot: 'C:\\Windows' },
+    spawnSync: (command, args, options) => {
+      calls.push({ command, args, shell: options.shell, windowsHide: options.windowsHide });
+      if (String(command).endsWith(`${path.sep}whoami.exe`)) return { status: 0, stdout: '"machine\\user","S-1-5-21-1-2-3-1001"\r\n' };
+      return { status: 0, stdout: '' };
+    },
+  });
+  assert.equal(runner.userSid(), 'S-1-5-21-1-2-3-1001');
+  assert.equal(calls[0].command, path.join('C:\\Windows', 'System32', 'whoami.exe'));
+  const target = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(4).toString('hex')}`);
+  await writeFile(target, 'acl');
+  runner.protect(target);
+  await unlink(target);
+  assert.equal(calls[1].command, path.join('C:\\Windows', 'System32', 'icacls.exe'));
+  assert.equal(calls.every((call) => call.shell === false && call.windowsHide === true), true);
+  if (process.platform === 'win32') {
+    assert.match(createAclRunner().userSid(), /^S-\d+-\d+(?:-\d+)+$/);
+  }
 });
 
 test('forged bearers share the peer limit and idle buckets expire', async (t) => {
