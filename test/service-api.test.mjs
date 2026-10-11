@@ -851,7 +851,7 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(answered, 200, 'approval answer');
-  assert.equal(typeof answered.json.data.grantId, 'string');
+  assert.equal(typeof answered.json.data.approval.grantId, 'string');
   hit('POST', '/approvals/:approvalId/answer');
   const answer = await call(port, 'GET', `/api/v1/approvals/${approvalId}/answers/${answered.json.data.answerId}`, { token });
   expectStatus(answer, 200, 'answer detail');
@@ -859,10 +859,10 @@ test('every contract route has a success result and an authority or boundary fai
   hit('GET', '/approvals/:approvalId/answers/:answerId');
   const grants = await call(port, 'GET', '/api/v1/units/root:executor/approval-grants', { token });
   expectStatus(grants, 200, 'grants');
-  assert.equal(grants.json.data.items.some((item) => item.id === answered.json.data.grantId), true);
+  assert.equal(grants.json.data.items.some((item) => item.id === answered.json.data.approval.grantId), true);
   hit('GET', '/units/:unitId/approval-grants');
   const grantedUnit = await call(port, 'GET', '/api/v1/units/root:executor', { token });
-  const revoked = await call(port, 'DELETE', `/api/v1/units/root:executor/approval-grants/${answered.json.data.grantId}`, {
+  const revoked = await call(port, 'DELETE', `/api/v1/units/root:executor/approval-grants/${answered.json.data.approval.grantId}`, {
     token,
     body: { expectedRevision: grantedUnit.json.data.revision },
     headers: { 'idempotency-key': randomUUID() },

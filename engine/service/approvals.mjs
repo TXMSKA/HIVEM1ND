@@ -81,12 +81,15 @@ export async function requestApproval(context, input) {
   } else {
     entries.push(entry(context, noticePath(chat.id, id), null, noticeBytes(context, parsed, id, input.display)));
   }
-  await commitFiles(context, entries, existing ? [
-    { name: 'approval.requested', data: { approval: projectApproval(request, 'approved') } },
-    { name: 'approval.answered', data: { approval: projectApproval(request, 'approved') } },
-  ] : [
-    { name: 'approval.requested', data: { approval: projectApproval(request, 'pending') } },
-  ]);
+  const approval = projectApproval({
+    request,
+    requestBytes,
+    binding: { machine: context.paths.machine },
+    result,
+    resultBytes: result ? jsonBytes(result) : null,
+  }, existing ? 'approved' : 'pending');
+  const owned = (name) => ownedEvent(context, { request, binding: { machine: context.paths.machine } }, name, approval);
+  await commitFiles(context, entries, existing ? [owned('approval.requested'), owned('approval.answered')] : [owned('approval.requested')]);
   if (!existing) arm(context, request);
   if (!existing && context.notify) {
     try {
@@ -98,7 +101,7 @@ export async function requestApproval(context, input) {
   const live = existing ? await resumeNative(context, request) : false;
   return {
     status: existing ? 200 : 202,
-    approval: projectApproval(request, existing ? 'approved' : 'pending', result),
+    approval,
     prompted: !existing,
     allow: Boolean(existing && live),
     resumed: Boolean(existing && live),
@@ -127,10 +130,12 @@ export async function answerApproval(context, approvalId, input) {
       throw new CoreError(422, 'always_unavailable', 'This action cannot be granted forever.');
     }
     if (!isOwner(context, loaded.binding)) {
+      const queued = withAnswer(loaded, answer);
+      const approval = projectApproval(queued, 'answering');
       await commitFiles(context, [entry(context, answerPath(approvalId, answer.id), null, jsonBytes(answer))], [
-        { name: 'approval.answered', data: { approval: projectApproval(loaded.request, 'answering') } },
+        ownedEvent(context, queued, 'approval.answered', approval),
       ]);
-      return { status: 202, state: 'queued', answerId: answer.id, approval: projectApproval(loaded.request, 'answering'), allow: false };
+      return { status: 202, state: 'queued', answerId: answer.id, approval, allow: false };
     }
     const decision = answer.decision === 'deny' ? 'denied' : 'approved';
     return settle(context, withAnswer(loaded, answer), answer, decision, answer);
@@ -142,10 +147,10 @@ export async function listApprovals(context, query = {}) {
   const items = [];
   for (const id of await approvalIds(context)) {
     const loaded = await loadApproval(context, id);
-    const state = loaded.result?.state ?? 'pending';
-    if (query.unitId && loaded.request.unitId !== query.unitId) continue;
-    if (wanted !== state) continue;
-    items.push(projectApproval(loaded.request, state, loaded.result));
+    const approval = projectApproval(loaded);
+    if (query.unitId && approval.unitId !== query.unitId) continue;
+    if (wanted !== approval.state) continue;
+    items.push(approval);
   }
   items.sort((left, right) => left.id.localeCompare(right.id));
   return paginate(items, query);
@@ -153,7 +158,7 @@ export async function listApprovals(context, query = {}) {
 
 export async function readApproval(context, approvalId) {
   const loaded = await loadApproval(context, approvalId);
-  return projectApproval(loaded.request, loaded.result?.state ?? 'pending', loaded.result);
+  return projectApproval(loaded);
 }
 
 export async function readAnswerResult(context, approvalId, answerId) {
@@ -269,18 +274,27 @@ async function settle(context, loaded, answer, state, pending = null) {
   };
   const entries = [entry(context, `user/relay/approvals/${request.id}/result.json`, null, jsonBytes(result))];
   if (pending) entries.push(entry(context, answerPath(request.id, pending.id), null, jsonBytes(pending)));
-  const events = [{ name: 'approval.answered', data: { approval: projectApproval(request, state, result) } }];
+  const outcomes = [];
   for (const item of loaded.answers) {
     const outcome = !answer || item.id !== answer.id ? (state === 'expired' ? 'expired' : 'rejected') : 'applied';
-    entries.push(entry(context, `user/relay/approvals/${request.id}/answer-results/${item.id}.json`, null, jsonBytes({
+    const record = {
       format: 'hivem1nd-approval-answer-result-v1',
       answerId: item.id,
       approvalId: request.id,
       state: outcome,
       resultAnswerId: answer?.id ?? null,
       at,
-    })));
+    };
+    outcomes.push(record);
+    entries.push(entry(context, `user/relay/approvals/${request.id}/answer-results/${item.id}.json`, null, jsonBytes(record)));
   }
+  const approval = projectApproval({
+    ...loaded,
+    result,
+    resultBytes: jsonBytes(result),
+    outcomes,
+  }, state);
+  const events = [ownedEvent(context, loaded, 'approval.answered', approval)];
   if (grantId) {
     const unit = parseUnitId(request.unitId);
     const current = await readState(context, unit);
@@ -293,7 +307,7 @@ async function settle(context, loaded, answer, state, pending = null) {
   }
   await commitFiles(context, entries, events);
   const resumed = state === 'approved' && await resumeNative(context, request);
-  return { status: 200, approvalId: request.id, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, replayed: false };
+  return { status: 200, approval, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, replayed: false };
 }
 
 async function recordLateAnswer(context, loaded, decision) {
@@ -414,6 +428,8 @@ async function loadApproval(context, approvalId) {
     answers: answers.map((item) => JSON.parse(item.toString('utf8'))),
     answerBytes: answers,
     result: resultBytes ? JSON.parse(resultBytes.toString('utf8')) : null,
+    resultBytes,
+    outcomes: await readOutcomes(context, approvalId),
   };
 }
 
@@ -429,6 +445,23 @@ async function readAnswers(context, approvalId) {
   const records = [];
   for (const name of names) records.push(await readBytes(context.store, path.join(directory, name)));
   return records.filter(Boolean);
+}
+
+async function readOutcomes(context, approvalId) {
+  const directory = absolute(context, `user/relay/approvals/${approvalId}/answer-results`);
+  let names = [];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith('.json')).sort();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = [];
+  for (const name of names) {
+    const bytes = await readBytes(context.store, path.join(directory, name));
+    if (bytes) records.push(JSON.parse(bytes.toString('utf8')));
+  }
+  return records;
 }
 
 async function sessionLive(context, sessionId, request) {
@@ -592,8 +625,45 @@ function normalizeRelative(value) {
   return normalized;
 }
 
-function projectApproval(request, state, result = null) {
-  return { ...request, state, answerId: result?.answerId ?? null, grantId: result?.grantId ?? null };
+function projectApproval(source, state = null) {
+  const request = source?.request ?? source;
+  const answers = source?.answers ?? [];
+  const answerBytes = source?.answerBytes ?? [];
+  const requestBytes = source?.requestBytes ?? jsonBytes(request);
+  const result = source?.result ?? null;
+  const resultBytes = source?.resultBytes ?? (result ? jsonBytes(result) : null);
+  const resolvedState = state ?? result?.state ?? (answers.length > 0 ? 'answering' : 'pending');
+  const selected = result?.answerId
+    ? answers.find((item) => item.id === result.answerId) ?? null
+    : (resolvedState === 'answering' ? [...answers].sort(byArrival).at(-1) ?? null : null);
+  return {
+    format: request.format,
+    id: request.id,
+    unitId: request.unitId,
+    sessionId: request.sessionId,
+    chatId: request.chatId,
+    action: request.action,
+    pattern: request.pattern,
+    display: request.display,
+    alwaysAllowed: request.alwaysAllowed,
+    requestedAt: request.requestedAt,
+    expiresAt: request.expiresAt,
+    state: resolvedState,
+    revision: approvalRevision({ request: requestBytes, answers: answerBytes, result: resultBytes }),
+    answer: selected,
+    grantId: result?.grantId ?? null,
+    answerOutcomes: source?.outcomes ?? [],
+  };
+}
+
+function ownedEvent(context, loaded, name, approval) {
+  const unitId = loaded?.request?.unitId ?? approval.unitId;
+  return {
+    name,
+    unitId,
+    source: { kind: 'service', id: loaded?.binding?.machine ?? context.paths.machine, unitId },
+    data: { approval },
+  };
 }
 
 function noticeBytes(context, parsed, approvalId, display) {

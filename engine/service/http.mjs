@@ -974,8 +974,15 @@ async function invoke(route, scope) {
     const result = await requestApproval(domain, body);
     return { status: result.status ?? 202, body: result };
   }
-  if (route.handler === 'answerApproval') return { status: 200, body: await answerApproval(domain, params.approvalId, body) };
-  if (route.handler === 'revokeGrant') return { status: 200, body: await revokeGrant(domain, params.unitId, params.grantId, body ?? {}) };
+  if (route.handler === 'answerApproval') {
+    const answered = await answerApproval(domain, params.approvalId, body);
+    return { status: answered.status === 202 ? 202 : 200, body: { approval: answered.approval, answerId: answered.answerId ?? null } };
+  }
+  if (route.handler === 'revokeGrant') {
+    const revoked = await revokeGrant(domain, params.unitId, params.grantId, body ?? {});
+    const { status, ...payload } = revoked;
+    return { status: status === 202 ? 202 : 200, body: payload };
+  }
   if (route.handler === 'changeStatus') {
     const operation = credential.audience === 'phone' ? (body.status === 'done' ? 'task.accept' : 'task.send-back') : 'task.status';
     void operation;
