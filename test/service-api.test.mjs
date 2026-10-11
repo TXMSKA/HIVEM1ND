@@ -862,8 +862,8 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(posted, 201, 'chat message');
-  assert.equal(posted.json.data.body, 'Ship the notes.');
-  assert.equal(posted.json.data.notifications, undefined);
+  assert.equal(posted.json.data.message.body, 'Ship the notes.');
+  assert.deepEqual(posted.json.data.notifications, [{ unitId: 'root:builder', state: 'pending' }]);
   const forgedSender = await call(port, 'POST', `/api/v1/chats/${chatId}/messages`, {
     token,
     body: { body: 'Stolen', fromId: 'root:two', role: 'master' },
@@ -877,7 +877,7 @@ test('every contract route has a success result and an authority or boundary fai
   hit('GET', '/chats/:chatId/messages');
   const read = await call(port, 'POST', `/api/v1/chats/${chatId}/read`, {
     token,
-    body: { messageIds: [posted.json.data.id] },
+    body: { messageIds: [posted.json.data.message.id] },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(read, 200, 'chat read');

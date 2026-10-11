@@ -1116,7 +1116,7 @@ async function invoke(route, scope) {
   }
   if (route.handler === 'postChat') {
     const sent = await postChat(domain, params.chatId, body);
-    return { status: 201, body: sent.message };
+    return { status: 201, body: { message: sent.message, notifications: sent.notifications.map(({ unitId, state }) => ({ unitId, state })) } };
   }
   if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
   if (route.handler === 'patchChat') {

@@ -117,7 +117,8 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
     headers: key(),
   });
   assert.equal(posted.status, 201);
-  assert.equal(posted.json.data.body, 'Ship the notes.');
+  assert.equal(posted.json.data.message.body, 'Ship the notes.');
+  assert.deepEqual(posted.json.data.notifications, [{ unitId: builder.id, state: 'pending' }]);
 
   const taskId = 'project:shop:029';
   const taskPath = path.join(fixture.paths.mind, 'user', 'tasks', '029.md');
