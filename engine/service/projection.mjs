@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLIENTS, CoreError, canonicalJson, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 
 const VIEW_LIMIT = 16000000;
@@ -225,8 +225,9 @@ async function loadMind(context) {
     }
   }
   const undone = await readUndo(mind, issues);
+  const actor = context.principal?.unitId ?? null;
   for (const task of tasks) {
-    if (undone.get(task.id) === task.revision) task.undoAvailable = true;
+    task.undoAvailable = taskUndoAvailable(task, undone.get(task.id), actor);
   }
   await readApprovals(mind, issues);
   const approvals = await readPendingApprovals(mind, issues);
@@ -455,7 +456,6 @@ function readTask(bytes, relative, units, issues) {
       revision: hashBytes(bytes),
       request: sections.request,
       report: sections.report,
-      undoAvailable: false,
     };
   } catch {
     issues.push({ path: relative, code: 'corrupt_resource', message: 'The task could not be projected.' });
@@ -913,20 +913,41 @@ async function readPendingApprovals(mind, issues) {
 }
 
 async function readUndo(mind, issues) {
-  const latest = new Map();
+  const grouped = new Map();
   for (const relative of await filesUnder(mind, 'user/relay/task-undo')) {
     if (!relative.endsWith('.json')) continue;
     const bytes = await readSafe(mind, relative);
     if (!bytes) continue;
     try {
       const record = JSON.parse(bytes.toString('utf8'));
-      if (record.kind === 'undo' || !record.taskId || !record.afterRevision) continue;
-      latest.set(record.taskId, record.afterRevision);
+      if (!record?.taskId) continue;
+      const list = grouped.get(record.taskId) ?? [];
+      list.push(record);
+      grouped.set(record.taskId, list);
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The undo record could not be projected.' });
     }
   }
+  const latest = new Map();
+  for (const [taskId, records] of grouped) {
+    const reversed = new Set(records.filter((record) => record.kind === 'undo' && record.undoOf).map((record) => record.undoOf));
+    const chosen = records
+      .filter((record) => record.kind === 'status' && record.afterRevision && !reversed.has(record.id))
+      .sort((left, right) => {
+        const delta = Date.parse(left.at ?? '') - Date.parse(right.at ?? '');
+        if (Number.isFinite(delta) && delta !== 0) return delta;
+        return String(left.id).localeCompare(String(right.id));
+      })
+      .at(-1);
+    if (chosen) latest.set(taskId, chosen);
+  }
   return latest;
+}
+
+function taskUndoAvailable(task, record, actor) {
+  if (!task || !record || !actor) return false;
+  if (record.afterRevision !== task.revision) return false;
+  return actor === record.actor || actor === task.fromId;
 }
 
 async function readApprovals(mind, issues) {
@@ -940,17 +961,6 @@ async function readApprovals(mind, issues) {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The approval could not be projected.' });
     }
   }
-}
-
-function canonicalTaskId(value, relative) {
-  const digits = /^\d{1,12}$/.test(value) ? value.padStart(3, '0') : '';
-  const fromName = path.basename(relative, '.md').match(/^(\d+)/);
-  const number = digits || (fromName ? fromName[1].padStart(3, '0') : '');
-  if (!number || value.includes(':')) return value;
-  const parts = relative.split('/');
-  if (parts[1] === 'projects' && parts[3] === 'tasks') return `project:${parts[2]}:${number}`;
-  if (parts[1] === 'environments' && parts[3] === 'tasks') return `env:${parts[2]}:${number}`;
-  return `root:${number}`;
 }
 
 function taskSections(body) {

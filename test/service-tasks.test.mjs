@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readDetail } from '../engine/service/projection.mjs';
 import { changeStatus, loadTask, recoverTaskChanges, reviewAuthority, undoStatus } from '../engine/service/tasks.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -217,4 +218,48 @@ test('a repeated receipt and a crashed record recover without doubling', async (
   await writeFile(other.file, 'third-party bytes\r\n');
   await recoverTaskChanges(other.context);
   assert.equal(await readFile(other.file, 'utf8'), 'third-party bytes\r\n');
+});
+
+test('a legacy numeric task keeps its id and offers undo to the actor or requester', async (t) => {
+  const { fixture, context } = await world(t);
+  const dir = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'tasks');
+  await mkdir(dir, { recursive: true });
+  const file = path.join(dir, '001.md');
+  await writeFile(file, taskText().replaceAll(`id: ${TASK}`, 'id: 001'));
+  const loaded = await loadTask(context, 'project:shop:001');
+  assert.equal(loaded.id, 'project:shop:001');
+  assert.equal(loaded.relative.endsWith('user/projects/shop/tasks/001.md'), true);
+  const notified = [];
+  context.pulse = {
+    async changed(ids) {
+      notified.push(...ids);
+      return { scheduled: true };
+    },
+  };
+  const agent = as(context, AGENT);
+  const changed = await changeStatus(agent, 'project:shop:001', { status: 'review', expectedRevision: loaded.revision, note: 'Ready' });
+  assert.equal(changed.body.status, 'review');
+  const stored = await readFile(file, 'utf8');
+  assert.equal(stored.includes('id: 001'), true);
+  assert.equal(stored.includes('status: review'), true);
+  const names = await readdir(path.join(fixture.paths.localDirectory, 'staging', 'changes'));
+  const staged = [];
+  for (const name of names) {
+    staged.push(JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'staging', 'changes', name), 'utf8')));
+  }
+  const taskChange = staged.find((record) => record.target.path === 'user/projects/shop/tasks/001.md');
+  const undoChange = staged.find((record) => record.target.path.startsWith('user/relay/task-undo/') && record.target.path.endsWith('.json'));
+  assert.ok(taskChange);
+  assert.ok(undoChange);
+  assert.equal(taskChange.transactionId, undoChange.transactionId);
+  assert.match(taskChange.transactionId, /^[0-9a-f-]{36}$/);
+  assert.ok(notified.length >= 2);
+  assert.equal((await readDetail(agent, 'tasks', 'project:shop:001')).undoAvailable, true);
+  assert.equal((await readDetail(context, 'tasks', 'project:shop:001')).undoAvailable, true);
+  assert.equal((await readDetail(as(context, OTHER), 'tasks', 'project:shop:001')).undoAvailable, false);
+  const current = await loadTask(agent, 'project:shop:001');
+  const undone = await undoStatus(agent, 'project:shop:001', { expectedRevision: current.revision });
+  assert.equal(undone.body.status, 'open');
+  assert.equal((await readFile(file, 'utf8')).includes('id: 001'), true);
+  assert.equal((await readDetail(agent, 'tasks', 'project:shop:001')).undoAvailable, false);
 });

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 
 const MAX_DEPTH = 40;
 const MAX_ARRAY = 10000;
@@ -155,6 +156,18 @@ export function parseUnitId(value) {
     return { kind: 'project', environment: null, project, unit, id: `project:${project}:${unit}`, scope: { kind: 'project', name: project, id: `project:${project}` } };
   }
   throw new CoreError(422, 'invalid_unit', 'The unit id is not canonical.');
+}
+
+export function canonicalTaskId(value, relative) {
+  const text = typeof value === 'string' ? value : '';
+  const digits = /^\d{1,12}$/.test(text) ? text.padStart(3, '0') : '';
+  const fromName = path.basename(String(relative ?? ''), '.md').match(/^(\d+)/);
+  const number = digits || (fromName ? fromName[1].padStart(3, '0') : '');
+  if (!number || text.includes(':')) return text;
+  const parts = String(relative ?? '').split('/');
+  if (parts[1] === 'projects' && parts[3] === 'tasks') return `project:${parts[2]}:${number}`;
+  if (parts[1] === 'environments' && parts[3] === 'tasks') return `env:${parts[2]}:${number}`;
+  return `root:${number}`;
 }
 
 export function parseTaskId(value) {

@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, hashBytes, isPersonAlias, parseTaskId, parseUnitId, replaceHeader, taskDirectory } from './identity.mjs';
+import { CoreError, canonicalTaskId, hashBytes, isPersonAlias, parseTaskId, parseUnitId, replaceHeader, taskDirectory, uuidV8 } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
@@ -188,20 +188,31 @@ async function commitChange(context, task, change) {
     response: { status: 200, body: { taskId: task.id, status: change.status, changeId: id, revision: record.afterRevision, undoOf: change.undoOf } },
   };
   const result = await commitTransaction(context.store, transaction);
-  const sync = openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  const changes = await stageTransaction(sync, stage);
+  const sync = context.sync ?? openSync({
+    store: context.store,
+    paths: context.paths,
+    now: () => context.now?.() ?? Date.now(),
+    projects: context.projects ?? [],
+  });
+  const changes = await stageTransaction(sync, stage.map((entry) => ({
+    ...entry,
+    id: uuidV8(['task-change', transaction.id, entry.target.kind, entry.target.path, hashBytes(entry.bytes)]),
+  })), { transactionId: transaction.id });
   noteSync(context, changes.length ? 'pending' : 'local');
+  if (context.pulse) {
+    const published = await context.pulse.changed(changes.map((item) => item.id));
+    if (published?.published === true) noteSync(context, 'published');
+  }
   publishDomainEvents(context, events);
   return { ...result, replayed: false, body: transaction.response.body };
 }
 
 function describe(bytes, relative, expectedId, aliases) {
   const headers = headerMap(bytes);
-  const rawId = headers.get('id') || headers.get('task-id');
-  if (!rawId) return null;
+  const rawId = headers.get('id') || headers.get('task-id') || '';
   let parsed;
   try {
-    parsed = parseTaskId(rawId);
+    parsed = parseTaskId(canonicalTaskId(rawId, relative));
   } catch {
     return null;
   }
