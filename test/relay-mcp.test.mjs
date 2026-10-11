@@ -223,7 +223,7 @@ test('task status obtains a master viewer and logs it out', async (context) => {
   ], dependencies);
   assert.equal(changed, 0, Buffer.concat(stderr).toString('utf8'));
   const payload = JSON.parse(Buffer.concat(stdout).toString('utf8'));
-  assert.equal(payload.body.status, 'done');
+  assert.equal(payload.task.status, 'done');
   stdout.length = 0;
   const conflict = await runCli([
     'task', 'status', 'shop', '002', 'done',
