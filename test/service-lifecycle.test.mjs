@@ -1,3 +1,4 @@
+import './relay-local-state.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
@@ -11,6 +12,8 @@ import { request as httpRequest } from 'node:http';
 import { createChat, postChat } from '../engine/service/chats.mjs';
 import { canonicalJson, uuidV8 } from '../engine/service/identity.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
+import { createRelay } from '../engine/relay/store.mjs';
+import { createRelayWakeController } from '../engine/relay/wake.mjs';
 import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -188,6 +191,92 @@ async function writeActiveWake(fixture, binding, key, deadlineAt) {
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, `${key}.json`), JSON.stringify({ key, enabled: true, deadlineAt, binding }));
 }
+
+test('an eligible wake policy starts one worker and delivery needs a verified native session', async (t) => {
+  const { fixture, options } = await optionsFor(t, await freePort());
+  const relay = await createRelay({ mindPath: fixture.paths.mind, hostname: fixture.machine });
+  const registration = await relay.register({ unit: 'master', nativeSessionId: 'native-live', client: 'codex' });
+  const preparer = await createRelayWakeController({
+    mindPath: fixture.paths.mind,
+    hostname: fixture.machine,
+    clock: { now: () => fixture.clock.now, sleep: () => Promise.resolve() },
+    sink: async () => ({ status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' }),
+  });
+  await preparer.enable({
+    unit: 'master',
+    nativeSessionId: 'native-live',
+    client: 'codex',
+    machine: fixture.machine,
+    windowHours: 4,
+  });
+  const policies = path.join(fixture.paths.mind, 'user', 'relay', 'wake', 'policies');
+  await writeFile(path.join(policies, 'ineligible.json'), JSON.stringify({
+    kind: 'relay-wake-policy',
+    version: 1,
+    generation: randomUUID(),
+    enabled: false,
+    deadlineAt: '2026-10-10T11:00:00.000Z',
+    binding: { unit: 'other', nativeSessionId: 'native-old', client: 'codex', machine: fixture.machine },
+  }));
+  const adopted = await adoptWake(options, { nonce: 'owner' });
+  assert.equal(adopted.policies.length, 2);
+  assert.equal(adopted.workersSpawned, 1);
+  await adopted.controller.close();
+  const pid = 4242;
+  options.ownedPids = new Set([pid]);
+  options.adapters = {
+    codex: {
+      async confirm(proof) {
+        return proof.nativeSessionId === 'native-live' && proof.client === 'codex' && proof.machine === fixture.machine;
+      },
+    },
+  };
+  await mkdir(path.join(fixture.paths.localDirectory, 'session-starts'), { recursive: true });
+  await writeFile(path.join(fixture.paths.localDirectory, 'session-starts', 'start.json'), JSON.stringify({
+    sessionId: registration.sessionId,
+    pid,
+    requestId: 'wake-start',
+  }));
+  const started = await startService(options);
+  try {
+    assert.equal(started.adopted.workersSpawned, 1);
+    const binding = {
+      unit: 'master',
+      unitId: registration.unitId,
+      nativeSessionId: 'native-live',
+      client: 'codex',
+      machine: fixture.machine,
+      sessionId: registration.sessionId,
+    };
+    const submitted = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'idle', deliveryId: 'wake-live' });
+    assert.equal(submitted.delivered, true);
+    assert.equal(submitted.state, 'submitted');
+    const urgent = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'busy', urgent: true, deliveryId: 'wake-urgent' });
+    assert.equal(urgent.state, 'submitted');
+    const busy = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'busy', deliveryId: 'wake-busy' });
+    assert.equal(busy.delivered, false);
+    assert.equal(busy.state, 'not_submitted');
+    assert.equal(busy.deferred, true);
+    const unknown = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'unknown', deliveryId: 'wake-unknown' });
+    assert.equal(unknown.state, 'not_submitted');
+    assert.equal(unknown.deferred, undefined);
+    const exhausted = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'idle', quota: { exhausted: true }, deliveryId: 'wake-quota' });
+    assert.equal(exhausted.state, 'not_submitted');
+    const watched = await dispatchLocal(started.bridge, 'wake', { ...binding, activity: 'idle', watch: true, deliveryId: 'wake-watch' });
+    assert.equal(watched.state, 'not_submitted');
+    const foreign = await dispatchLocal(started.bridge, 'wake', { ...binding, nativeSessionId: 'native-other', activity: 'idle', deliveryId: 'wake-foreign' });
+    assert.equal(foreign.state, 'not_submitted');
+    assert.equal(foreign.reason, 'SINK_NOT_SUBMITTED');
+    const activity = await dispatchLocal(started.bridge, 'activity', { ...binding, activity: 'idle' });
+    assert.equal(activity.verified, true);
+    assert.equal(activity.activity, 'idle');
+    const missing = await dispatchLocal(started.bridge, 'activity', { ...binding, nativeSessionId: 'native-other' });
+    assert.equal(missing.verified, false);
+    assert.equal(missing.activity, 'unknown');
+  } finally {
+    await stopService(started);
+  }
+});
 
 test('a comment delivery is submitted once and a failure is not acceptance', async (t) => {
   let calls = 0;

@@ -4,7 +4,7 @@ import { mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { CoreError, canonicalJson } from './identity.mjs';
+import { CoreError, canonicalJson, uuidV8 } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
 import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
 import { applyPack } from '../sync/apply.mjs';
@@ -22,6 +22,7 @@ import { createEventBus } from './events.mjs';
 import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
+import { resolveActivity } from './watch.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -74,8 +75,20 @@ export async function startService(options) {
     handle.listener = options.listener ? await options.listener() : null;
     handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
     handle.credentials.revokeAudience('agent');
-    handle.bridge = await openBridge({ credentials: handle.credentials, now: options.now, relay: handle.relay, paths });
+    const bridgeRuntime = { adapters: options.adapters ?? null, ownedPids: options.ownedPids ?? new Set() };
+    handle.bridge = await openBridge({
+      credentials: handle.credentials,
+      now: options.now,
+      relay: handle.relay,
+      paths,
+      operations: bridgeOperations(handle.relay, options, bridgeRuntime),
+    });
     handle.adapters = openNativeAdapters(options.env ?? process.env);
+    if (options.adapters) Object.assign(handle.adapters.adapters, options.adapters);
+    bridgeRuntime.adapters = handle.adapters.adapters;
+    bridgeRuntime.ownedPids = options.ownedPids ?? bridgeRuntime.ownedPids;
+    options.adapters = bridgeRuntime.adapters;
+    options.ownedPids = bridgeRuntime.ownedPids;
     handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
       ...options,
@@ -202,13 +215,132 @@ export async function adoptWake(options, { nonce } = {}) {
 }
 
 async function finishWake(policies, options, nonce) {
+  const controller = await startWakeController(options, nonce);
+  const now = options.now?.() ?? Date.now();
+  let workersSpawned = 0;
+  for (const policy of policies) {
+    if (!eligibleWake(policy, options, now)) continue;
+    try {
+      controller.wake.start(policy.binding);
+      workersSpawned += 1;
+    } catch {
+      // A binding that cannot be normalized does not become a worker.
+    }
+  }
+  return { policies, workersSpawned, signaled: [], nonce, controller };
+}
+
+function eligibleWake(policy, options, now) {
+  const binding = policy?.binding;
+  if (policy?.kind !== 'relay-wake-policy' || policy.version !== 1) return false;
+  if (!binding?.unit || !binding.nativeSessionId || !binding.client || !binding.machine) return false;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(policy.generation ?? '')) return false;
+  if (binding.machine !== options.paths?.machine) return false;
+  if (policy.enabled !== true || policy.pausedReason) return false;
+  if (policy.activity?.value === 'unknown') return false;
+  if (policy.quota?.exhausted === true) return false;
+  if (policy.unlimited === true) return true;
+  const deadline = Date.parse(policy.deadlineAt);
+  return Number.isFinite(deadline) && deadline > now;
+}
+
+function bridgeOperations(relay, options, runtime) {
   return {
-    policies,
-    workersSpawned: 0,
-    signaled: [],
-    nonce,
-    controller: await startWakeController(options, nonce),
+    register: (binding) => relay.register(binding),
+    send: (binding) => relay.send(binding),
+    read: (binding) => relay.read(binding),
+    history: (binding) => relay.history(binding),
+    reminder: (binding) => relay.reminder(binding),
+    activity: (binding) => activityOperation(options, runtime, binding),
+    wake: (binding) => wakeOperation(options, runtime, binding),
   };
+}
+
+async function wakeOperation(options, runtime, binding) {
+  const delivery = await verifiedDelivery(options, runtime, binding, binding);
+  return bridgeDelivery(delivery, binding);
+}
+
+async function activityOperation(options, runtime, binding) {
+  const live = await nativeSessionLive(options, runtime, binding);
+  if (!live) return { activity: 'unknown', verified: false };
+  if (binding?.activity === 'busy' || binding?.activity === 'idle') return { activity: binding.activity, verified: true };
+  return { activity: 'unknown', verified: true };
+}
+
+async function verifiedDelivery(options, runtime, binding, input = {}) {
+  const gated = deliveryGate(options, binding, input);
+  if (gated) return gated;
+  const live = await nativeSessionLive(options, runtime, binding);
+  if (!live) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  return { status: 'submitted' };
+}
+
+function deliveryGate(options, binding, input) {
+  const activity = input?.activity ?? binding?.activity ?? 'unknown';
+  const urgent = input?.urgent === true || binding?.urgent === true;
+  if (activity === 'busy' && !urgent) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED', deferred: true };
+  if (activity !== 'idle' && !(activity === 'busy' && urgent)) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  const quota = input?.quota ?? binding?.quota;
+  if (quota?.exhausted === true) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  if (binding?.watch === true || input?.watch === true) {
+    const now = options.now?.() ?? Date.now();
+    const watched = options.watch ? resolveActivity(options.watch, binding?.unitId ?? binding?.unit, now) : null;
+    if (!watched) return { status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' };
+  }
+  return null;
+}
+
+function bridgeDelivery(delivery, binding) {
+  const deliveryId = typeof binding?.deliveryId === 'string' ? binding.deliveryId : null;
+  if (delivery?.status === 'submitted') return { delivered: true, state: 'submitted', deliveryId };
+  const result = {
+    delivered: false,
+    state: delivery?.status === 'ambiguous' ? 'ambiguous' : 'not_submitted',
+    reason: delivery?.reason ?? 'SINK_NOT_SUBMITTED',
+    deliveryId,
+  };
+  if (delivery?.deferred === true) result.deferred = true;
+  return result;
+}
+
+async function nativeSessionLive(options, runtime, binding) {
+  if (!binding?.nativeSessionId || !binding?.client || !binding?.unit) return false;
+  const machine = binding.machine || options.paths?.machine;
+  if (!machine || binding.machine && binding.machine !== options.paths?.machine) return false;
+  const adapter = (runtime?.adapters ?? options.adapters)?.[binding.client];
+  if (typeof adapter?.confirm !== 'function') return false;
+  const confirmed = await adapter.confirm({
+    unitId: binding.unitId ?? null,
+    nativeSessionId: binding.nativeSessionId,
+    client: binding.client,
+    machine,
+  });
+  if (confirmed !== true) return false;
+  const sessionId = binding.sessionId
+    ?? (binding.unitId ? uuidV8(['session', machine, binding.client, binding.nativeSessionId, binding.unitId]) : null);
+  if (!sessionId) return false;
+  const directory = path.join(options.paths.localDirectory, 'session-starts');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  const owned = runtime?.ownedPids ?? options.ownedPids;
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    let journal;
+    try {
+      journal = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (journal?.sessionId !== sessionId || !Number.isInteger(journal.pid) || journal.pid <= 0) continue;
+    if (owned?.has(journal.pid)) return true;
+  }
+  return false;
 }
 
 export async function writeBeat(options, state) {
@@ -714,7 +846,7 @@ async function startWakeController(options, nonce) {
         });
       },
     },
-    sink: options.wakeSink ?? (async () => ({ status: 'not_submitted', reason: 'SINK_NOT_SUBMITTED' })),
+    sink: options.wakeSink ?? ((input) => verifiedDelivery(options, { adapters: options.adapters, ownedPids: options.ownedPids }, input?.binding, input)),
   });
   let closed = false;
   return {
@@ -771,7 +903,7 @@ function watchProjects(directory) {
 }
 
 async function closeOwned(handle, { beat = true } = {}) {
-  handle.adopted?.controller?.close?.();
+  await handle.adopted?.controller?.close?.();
   if (handle.adapters?.close) await handle.adapters.close().catch(() => {});
   if (handle.http?.close) await handle.http.close().catch(() => {});
   else if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat }).catch(() => {});
