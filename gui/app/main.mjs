@@ -1197,7 +1197,7 @@ function voidSurface(app, document, editor, t) {
   }
   editor.page = app.voidState.page;
   editor.language = lang;
-  const host = element(document, "div", { class: "void-page", "data-void": "true" });
+  const host = element(document, "div", { class: "void-page reading-card", "data-void": "true" });
   renderDocument(document, host, editor);
   const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
   const page = pages.find((item) => item.k === editor.page);
@@ -1208,11 +1208,15 @@ function voidSurface(app, document, editor, t) {
     rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
     syncViewerDirty(app);
   });
-  tools.append(labeledField(document, t("sourceLabel"), t("sourceHint"), source));
-  tools.append(element(document, "button", {
+  const sourceEdit = element(document, "details", { class: "source-edit", "data-source-edit": "true" });
+  sourceEdit.append(element(document, "summary", { text: t("editSource") }));
+  sourceEdit.append(labeledField(document, t("sourceLabel"), t("sourceHint"), source));
+  sourceEdit.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "save-range",
+    text: t("send"),
     onclick: () => saveVoid(app, editor, source.value),
-  }, t("send")));
+  }));
+  tools.append(sourceEdit);
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "enter-focus",
     onclick: () => {
@@ -1233,18 +1237,19 @@ function voidSurface(app, document, editor, t) {
       onclick: () => replaceVoidDocument(app, editor),
     }, t("replaceDocument")));
   }
-  const proposals = editor.proposals ?? [];
-  const list = element(document, "div", { class: "editor-comments" });
-  for (const proposal of proposals) {
+  if (app.mode === "focus") return element(document, "div", { class: "focus-document" }, host, tools);
+  return element(document, "div", {}, host, tools);
+}
+
+function appendProposals(app, document, host, editor, t) {
+  for (const proposal of editor.proposals ?? []) {
     const block = renderProposal(document, proposal);
     if (proposal.state === "pending" && app.store.capabilities.includes("proposal.answer")) {
       block.append(element(document, "button", { type: "button", class: "btn", "data-action": "accept-change", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "accept") }, t("acceptChange")));
       block.append(element(document, "button", { type: "button", class: "btn", "data-action": "discard", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "discard") }, t("discard")));
     }
-    list.append(block);
+    host.append(block);
   }
-  if (app.mode === "focus") return element(document, "div", { class: "focus-document" }, host, tools);
-  return element(document, "div", {}, host, tools, list);
 }
 
 function saveVoid(app, editor, value) {
@@ -1430,40 +1435,40 @@ function renderEditorSurfaces(app, t) {
   }
   const choice = current.attachmentChoice;
   const units = app.unitList?.catalog ?? [];
-  const picker = element(document, "div", { class: "attach-list list", "data-attached": [...choice].join(" "), "data-attach-total": String(units.length) });
-  const attachWindow = editors.attachWindow ?? { scrollTop: 0, rowHeight: 36, height: 0, focusId: null };
-  editors.attachWindow = attachWindow;
-  renderWindow(document, picker, attachWindow, units.map((unit, index) => ({
-    id: unit.id,
-    kind: "unit",
-    text: `${choice.has(unit.id) ? "* " : ""}${unit.unit}`,
-    pos: index + 1,
-    setsize: units.length,
-    unit,
-  })), {
-    onActivate: (row) => {
-      if (choice.has(row.id)) choice.delete(row.id);
-      else if (choice.size >= 256) editors.error = { code: "invalid_body" };
-      else choice.add(row.id);
-      renderShell(app);
-    },
-  });
+  const chips = element(document, "div", { class: "attach-chips", "data-attached": [...choice].join(" ") });
+  for (const id of choice) {
+    const unit = units.find((item) => item.id === id);
+    chips.append(element(document, "span", { class: "chip", "data-chip": id, text: unit?.unit || id }));
+  }
   const actions = element(document, "div", { class: "editor-actions" });
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "attach", onclick: () => saveAttachments(app) }, t("attach")));
+  actions.append(element(document, "button", {
+    type: "button",
+    class: "btn",
+    "data-action": "attach",
+    text: t("attach"),
+    onclick: () => openAttachChooser(app),
+  }));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
     await stopWatch(app.api, editors, record.operation);
   }) }, t("stopWatch")));
-  tools.append(picker, actions);
+  tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
   const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
   for (const thread of (current.threads ?? []).slice(0, commentBound)) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
-    box.append(element(document, "p", { text: (thread.messages ?? []).map((message) => message.text).join(" ") }));
+    for (const message of thread.messages ?? []) {
+      const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
+      line.append(element(document, "span", { class: "comment-author", text: message.author || t("unknown") }));
+      if (message.at) line.append(element(document, "time", { datetime: message.at, text: message.at }));
+      line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
+      box.append(line);
+    }
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
     comments.append(box);
   }
+  if (current.kind === "void") appendProposals(app, document, comments, current, t);
   if ((current.threads?.length ?? 0) > commentBound) {
     comments.append(element(document, "button", {
       type: "button",
@@ -1680,21 +1685,135 @@ function resourceForms(app, document, t) {
   const kind = app.mode === "blueprint" ? "blueprint" : "void";
   const box = element(document, "div", { class: "editor-actions", "data-editor-forms": kind });
   box.append(
-    editorField(document, app, t, "project", "registerProject", "register-project"),
-    editorField(document, app, t, "path", "registerPath", "register-path"),
     element(document, "button", {
-      type: "button", class: "btn", "data-action": "register-resource", "data-kind": kind,
-      onclick: () => submitRegister(app, kind),
-    }, t("registerResource")),
-    editorField(document, app, t, "id", "resourceId", "create-id"),
-    editorField(document, app, t, "title", "resourceTitle", "create-title"),
-    editorField(document, app, t, "createPath", "registerPath", "create-path"),
+      type: "button",
+      class: "btn",
+      "data-action": "open-register",
+      "data-kind": kind,
+      text: t("registerResource"),
+      onclick: () => openResourceForm(app, kind, "register"),
+    }),
     element(document, "button", {
-      type: "button", class: "btn", "data-action": "create-resource", "data-kind": kind,
-      onclick: () => submitCreate(app, kind),
-    }, t("createResource")),
+      type: "button",
+      class: "btn",
+      "data-action": "open-create",
+      "data-kind": kind,
+      text: t("createResource"),
+      onclick: () => openResourceForm(app, kind, "create"),
+    }),
   );
   return box;
+}
+
+function openResourceForm(app, kind, mode) {
+  const document = app.root.ownerDocument;
+  if (document.querySelector?.(`[data-form="${mode}"]`)) return;
+  const t = (key) => text(app.language, key);
+  const dialog = element(document, "dialog", { class: "dialog", "data-form": mode });
+  const form = element(document, "form", { method: "dialog" });
+  const heading = element(document, "h2", { text: t(mode === "register" ? "registerForm" : "createForm") });
+  labelDialog(dialog, heading);
+  form.append(heading);
+  if (mode === "register") {
+    form.append(
+      editorField(document, app, t, "project", "registerProject", "register-project"),
+      editorField(document, app, t, "path", "registerPath", "register-path"),
+    );
+  } else {
+    form.append(
+      editorField(document, app, t, "id", "resourceId", "create-id"),
+      editorField(document, app, t, "title", "resourceTitle", "create-title"),
+      editorField(document, app, t, "createPath", "registerPath", "create-path"),
+    );
+  }
+  form.append(element(document, "button", {
+    type: "button",
+    class: "btn primary",
+    "data-action": mode === "register" ? "register-resource" : "create-resource",
+    "data-kind": kind,
+    text: t(mode === "register" ? "registerResource" : "createResource"),
+    onclick: () => {
+      dialog.close();
+      if (mode === "register") submitRegister(app, kind);
+      else submitCreate(app, kind);
+    },
+  }), element(document, "button", {
+    type: "button",
+    class: "btn",
+    "data-action": "cancel-form",
+    text: t("cancel"),
+    onclick: () => dialog.close(),
+  }));
+  dialog.append(form);
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    restoreInvoker(app, mode === "register" ? "open-register" : "open-create");
+  });
+  document.body.append(dialog);
+  if (typeof dialog.showModal === "function") dialog.showModal();
+}
+
+function openAttachChooser(app) {
+  const document = app.root.ownerDocument;
+  const editors = editorsOf(app);
+  const current = editors.current;
+  if (!current || document.querySelector?.("[data-form='attach']")) return;
+  const choice = current.attachmentChoice ?? new Set();
+  current.attachmentChoice = choice;
+  const dialog = element(document, "dialog", { class: "dialog", "data-form": "attach" });
+  const form = element(document, "form", { method: "dialog" });
+  const heading = element(document, "h2", { text: text(app.language, "chooseUnits") });
+  labelDialog(dialog, heading);
+  const search = element(document, "input", {
+    type: "search",
+    "data-attach-search": "true",
+    "aria-label": text(app.language, "search"),
+  });
+  const list = element(document, "div", { class: "attach-choices", role: "listbox" });
+  const paint = () => {
+    const query = search.value.trim().toLowerCase();
+    const units = (app.unitList?.catalog ?? [])
+      .filter((unit) => !query || String(unit.unit ?? "").toLowerCase().includes(query))
+      .slice(0, 40);
+    list.replaceChildren(...units.map((unit) => element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-attach-unit": unit.id,
+      "aria-pressed": choice.has(unit.id) ? "true" : "false",
+      text: `${choice.has(unit.id) ? "* " : ""}${unit.unit}`,
+      onclick: () => {
+        if (choice.has(unit.id)) choice.delete(unit.id);
+        else if (choice.size >= 256) editors.error = { code: "invalid_body" };
+        else choice.add(unit.id);
+        paint();
+      },
+    })));
+  };
+  search.addEventListener("input", paint);
+  form.append(heading, search, list, element(document, "button", {
+    type: "button",
+    class: "btn primary",
+    "data-action": "save-attachments",
+    text: text(app.language, "attach"),
+    onclick: () => {
+      dialog.close();
+      saveAttachments(app);
+    },
+  }), element(document, "button", {
+    type: "button",
+    class: "btn",
+    "data-action": "cancel-form",
+    text: text(app.language, "cancel"),
+    onclick: () => dialog.close(),
+  }));
+  dialog.append(form);
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    restoreInvoker(app, "attach");
+  });
+  document.body.append(dialog);
+  paint();
+  if (typeof dialog.showModal === "function") dialog.showModal();
 }
 
 function submitRegister(app, kind) {
@@ -1970,15 +2089,38 @@ function finishList(app) {
 
 function collectionRows(app, t, list) {
   if (app.tab === "chats") {
-    return list.items.map((chat, index) => ({
-      id: chat.id,
-      kind: "chat",
-      chat,
-      depth: 0,
-      text: chat.title || chat.id,
-      pos: index + 1,
-      setsize: list.items.length,
-    }));
+    const pinned = list.items.filter((chat) => chat.pinned === true);
+    const recent = list.items.filter((chat) => chat.pinned !== true);
+    const rows = [];
+    const pushGroup = (labelKey, chats) => {
+      if (!chats.length) return;
+      rows.push({
+        id: `heading:${labelKey}`,
+        kind: "heading",
+        depth: 0,
+        text: t(labelKey),
+        pos: rows.length + 1,
+        setsize: list.items.length,
+      });
+      for (const chat of chats) {
+        const last = chat.lastMessage;
+        const snippet = last?.body || last?.subject || "";
+        const when = last?.timestamp || last?.date || "";
+        const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: chat.unread }) : "";
+        rows.push({
+          id: chat.id,
+          kind: "chat",
+          chat,
+          depth: 0,
+          text: [chat.title || chat.id, snippet, when, unread].filter(Boolean).join(" · "),
+          pos: rows.length + 1,
+          setsize: list.items.length,
+        });
+      }
+    };
+    pushGroup("pinnedChats", pinned);
+    pushGroup("recentChats", recent);
+    return rows;
   }
   const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
   const tree = buildHierarchy(source, list.issues);
@@ -2818,11 +2960,19 @@ function noteSessionRequest(app, data) {
   showOutcome(app, text(app.language, SESSION_COPY[state]), state);
 }
 
+function messageSender(app, message) {
+  if (!message?.fromId) return text(app.language, "unknown");
+  return unitById(app, message.fromId)?.unit || message.fromId;
+}
+
 function chatPanel(app, t) {
   const document = app.root.ownerDocument;
   const thread = app.thread;
   const panel = element(document, "section", { class: "chat-panel" });
   if (!thread?.chat) return panel;
+  panel.append(element(document, "header", { class: "chat-heading" },
+    element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
+  ));
   const transcript = element(document, "div", {
     class: "transcript",
     "data-chat": thread.chat.id,
@@ -2839,15 +2989,22 @@ function chatPanel(app, t) {
   thread.windowStart = windowed.start;
   if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
   for (const message of windowed.items) {
+    const article = element(document, "article", { class: "bubble", "data-from": message.fromId ?? "" });
+    const when = message.timestamp || message.date || "";
+    article.append(element(document, "p", {
+      class: "bubble-meta",
+      text: `${messageSender(app, message)}${when ? ` ${when}` : ""}`,
+    }));
     const row = element(document, "p", {
       "data-message": message.id,
       "data-read": message.read ? "true" : "false",
       "data-pending": message.pending ? (message.failed ? "failed" : "true") : null,
       text: message.body || message.subject || "",
     });
-    if (message.pending && !message.failed) row.append(progressMark(document, t("sending")));
+    article.append(row);
+    if (message.pending && !message.failed) article.append(progressMark(document, t("sending")));
     if (message.failed) {
-      row.append(element(document, "button", {
+      article.append(element(document, "button", {
         type: "button",
         class: "btn",
         "data-action": "retry-message",
@@ -2861,7 +3018,7 @@ function chatPanel(app, t) {
         },
       }));
     }
-    transcript.append(row);
+    transcript.append(article);
   }
   if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
   transcript.addEventListener("scroll", () => {
@@ -3225,24 +3382,25 @@ function renderInspector(app, t, selected) {
   const panel = element(document, "div", { class: "review-panel" });
   const data = app.inspectorData;
   if (selected) panel.append(renderUnit(document, selected, t));
-  const machines = data?.unitId && data.unitId === selected?.id ? data.machines ?? [] : [];
-  const machine = machines.find((item) => item.id === selected?.machine);
-  if (machine) panel.append(renderMachine(document, machine, t));
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {
       panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));
     }
     return panel;
   }
-  for (const session of data.sessions ?? []) panel.append(renderSession(document, session, t));
+  const details = element(document, "details", { class: "inspector-details" });
+  details.append(element(document, "summary", { text: t("details") }));
+  const machine = (data.machines ?? []).find((item) => item.id === selected?.machine);
+  if (machine) details.append(renderMachine(document, machine, t));
+  for (const session of data.sessions ?? []) details.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
   if (caps.includes("grant.revoke")) {
     const busyGrant = [...(app.activity?.entries() ?? [])].find(([key, record]) => key.startsWith("grant:") && record.phase === "pending")?.[0]?.slice(6) ?? null;
-    panel.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant), busyGrant));
+    details.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant), busyGrant));
   }
   if (caps.includes("approval.answer")) {
     for (const approval of data.approvals ?? []) {
-      panel.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
+      details.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
     }
   }
   const tasks = data.tasks ?? [];
@@ -3258,20 +3416,21 @@ function renderInspector(app, t, selected) {
       setsize: data.taskTotal ?? tasks.length,
       task,
     })), { onActivate: (row) => { app.openTaskId = row.id; renderShell(app); } });
-    panel.append(taskHost);
+    details.append(taskHost);
   }
   const visibleTasks = tasks.length >= 100 ? tasks.filter((task) => task.id === app.openTaskId).slice(0, 1) : tasks;
   for (const task of visibleTasks) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
     const phone = app.layout === "phone" || app.store.audience === "phone";
     const taskBusy = activityPending(app, `task:${task.id}`) || activityPending(app, `undo:${task.id}`);
-    panel.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    details.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(task) : canSendBack(task), taskBusy));
-    panel.append(openTaskDetail(document, task, t));
+    details.append(openTaskDetail(document, task, t));
   }
-  panel.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
+  details.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
+  panel.append(details);
   return panel;
 }
 

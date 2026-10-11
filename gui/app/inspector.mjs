@@ -2,22 +2,28 @@ import { canAccept, canSendBack } from "./actions.mjs";
 import { element, labeledField, progressMark } from "./components.mjs";
 
 export function renderUnit(document, unit, t) {
+  const card = element(document, "section", { class: "unit-card" });
+  card.append(element(document, "h3", { text: unit?.unit ?? t("unknown") }));
+  card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ?? t("unknown")}` }));
+  card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [
-    ["role", unit?.role],
     ["scope", unit?.scope?.name ?? unit?.scope?.kind],
     ["lead", unit?.leadId],
-    ["job", unit?.job],
     ["model", unit?.model],
     ["machine", unit?.machine],
     ["branch", unit?.branch],
     ["date", unit?.date],
   ];
-  const block = element(document, "section", { class: "unit-facts" });
+  const details = element(document, "details", { class: "unit-details" });
+  details.append(element(document, "summary", { text: t("details") }));
+  const facts = element(document, "div", { class: "unit-facts" });
   for (const [label, value] of lines) {
-    block.append(element(document, "p", { text: `${t(label)}: ${value ?? t("unknown")}` }));
+    facts.append(element(document, "p", { text: `${t(label)}: ${value ?? t("unknown")}` }));
   }
-  if (unit?.context) block.append(element(document, "p", { text: unit.context }));
-  return block;
+  if (unit?.context) facts.append(element(document, "p", { text: unit.context }));
+  details.append(facts);
+  card.append(details);
+  return card;
 }
 
 export function renderMachine(document, machine, t) {

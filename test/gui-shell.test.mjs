@@ -1091,9 +1091,10 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   t.after(() => dispose(desktop.app));
   await waitFor(() => desktop.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "The desktop shell did not appear.");
   navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.root.querySelector("[data-action='register-resource']")?.getAttribute("data-kind") === "blueprint", "The registration form was not shown.");
-  typeInput(desktop.root.querySelector("[data-field='register-path']"), "docs/flows/boards/legacy-cart.mjs", 0, 0);
-  click(desktop.root.querySelector("[data-action='register-resource']"));
+  await waitFor(() => desktop.root.querySelector("[data-action='open-register']")?.getAttribute("data-kind") === "blueprint", "The registration form was not shown.");
+  click(desktop.root.querySelector("[data-action='open-register']"));
+  typeInput(desktop.document.querySelector("[data-field='register-path']"), "docs/flows/boards/legacy-cart.mjs", 0, 0);
+  click(desktop.document.querySelector("[data-action='register-resource']"));
   await waitFor(() => desktop.root.querySelector("[data-legacy]")?.textContent === "docs/flows/boards/legacy-cart.mjs", "The original module path was not shown.");
   assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
   click(desktop.root.querySelector("[data-action='copy-json']"));
@@ -1129,9 +1130,10 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   assert.equal(resized.body.document.links[0].sentinel, "link-sentinel");
   assert.equal(resized.body.document.pages[0].sentinel, "page-sentinel");
 
-  typeInput(desktop.root.querySelector("[data-field='create-id']"), "sample-board", 0, 12);
-  typeInput(desktop.root.querySelector("[data-field='create-title']"), "Sample", 0, 6);
-  click(desktop.root.querySelector("[data-action='create-resource']"));
+  click(desktop.root.querySelector("[data-action='open-create']"));
+  typeInput(desktop.document.querySelector("[data-field='create-id']"), "sample-board", 0, 12);
+  typeInput(desktop.document.querySelector("[data-field='create-title']"), "Sample", 0, 6);
+  click(desktop.document.querySelector("[data-action='create-resource']"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board", "The new board did not open.");
   const createdRevision = desktop.app.editors.current.revision;
   click(desktop.root.querySelector("[data-action='move-page']"));
@@ -1177,7 +1179,9 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   phone.app.mode = "blueprint";
   renderShell(phone.app);
   assert.equal(phone.root.querySelector("[data-action='register-resource']"), null);
+  assert.equal(phone.root.querySelector("[data-action='open-register']"), null);
   assert.equal(phone.root.querySelector("[data-action='create-resource']"), null);
+  assert.equal(phone.root.querySelector("[data-action='open-create']"), null);
   assert.equal(phone.root.querySelector("[data-action='copy-json']"), null);
   assert.equal(phone.root.querySelector("[data-action='resize-screen']"), null);
   phone.app.mode = "document";
@@ -1267,9 +1271,10 @@ test("void drafts stay with their page and comments use the rendered selection",
   typeInput(desktop.root.querySelector("[data-source]"), "LOCAL DRAFT", 0, 5);
   desktop.app.voidState.page = "Notes.Next";
   renderShell(desktop.app);
-  typeInput(desktop.root.querySelector("[data-field='create-id']"), "fresh-note", 0, 10);
-  typeInput(desktop.root.querySelector("[data-field='create-title']"), "Fresh", 0, 5);
-  click(desktop.root.querySelector("[data-action='create-resource']"));
+  click(desktop.root.querySelector("[data-action='open-create']"));
+  typeInput(desktop.document.querySelector("[data-field='create-id']"), "fresh-note", 0, 10);
+  typeInput(desktop.document.querySelector("[data-field='create-title']"), "Fresh", 0, 5);
+  click(desktop.document.querySelector("[data-action='create-resource']"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "fresh-note" && desktop.app.voidState?.page === "Intro.Welcome", "The new text did not open on its first page.");
   assert.equal(desktop.app.voidState.page, "Intro.Welcome");
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "LOCAL DRAFT");
@@ -1668,7 +1673,7 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.equal(desktop.root.querySelector("[role='tab']"), null);
   assert.equal(desktop.root.querySelector(".side"), null);
   assert.equal(desktop.root.querySelector(".inspector"), null);
-  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("[data-action='register-resource']")?.getAttribute("data-kind"), "blueprint");
+  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("[data-action='open-register']")?.getAttribute("data-kind"), "blueprint");
   desktop.app.language = "es";
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Tableros");
@@ -1804,7 +1809,9 @@ test("board nodes and named controls are available from the keyboard", async (t)
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not open.");
   assert.equal(desktop.root.querySelector("[data-source]").closest("label").querySelector(".field-label").textContent, "Source");
-  assert.equal(desktop.root.querySelector("[data-field='create-title']").closest("label").querySelector(".field-hint").textContent, "The title people see.");
+  assert.equal(desktop.root.querySelector("[data-source]").closest("[data-source-edit]") != null, true);
+  click(desktop.root.querySelector("[data-action='open-create']"));
+  assert.equal(desktop.document.querySelector("[data-field='create-title']").closest("label").querySelector(".field-hint").textContent, "The title people see.");
 
   navigate(desktop.app, "map");
   await waitFor(() => desktop.root.querySelector("[data-action='new-unit']"), "The unit control did not return.");
@@ -2133,17 +2140,84 @@ test("a shell refresh keeps the focused editor field and its caret", async (t) =
   assert.equal(again.value, "A");
   assert.equal(desktop.document.activeElement, again);
   assert.equal(again.selectionStart, 1);
-  const title = desktop.root.querySelector("[data-field='create-title']");
+  click(desktop.root.querySelector("[data-action='open-create']"));
+  const title = desktop.document.querySelector("[data-field='create-title']");
   title.focus();
   title.value = "Kept";
   title.selectionStart = 4;
   title.selectionEnd = 4;
   for (const handler of title.listeners.get("input") ?? []) handler();
   renderShell(desktop.app);
-  const titleAgain = desktop.root.querySelector("[data-field='create-title']");
+  const titleAgain = desktop.document.querySelector("[data-field='create-title']");
   assert.equal(titleAgain.value, "Kept");
-  assert.equal(desktop.document.activeElement, titleAgain);
+  assert.equal(desktop.document.activeElement === titleAgain, true);
   assert.equal(titleAgain.selectionStart, 4);
+});
+
+test("editor forms, chats, and the inspector stay compact", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length > 0, "The chat list did not load.");
+  navigate(desktop.app, "chats");
+  desktop.app.chatList.height = 4000;
+  renderShell(desktop.app);
+  const rows = desktop.app.activeRows ?? [];
+  assert.equal(rows.some((row) => row.kind === "heading"), true);
+  const sample = rows.find((row) => row.kind === "chat");
+  assert.equal(String(sample?.text ?? "").includes(sample?.chat?.title || sample?.chat?.id || ""), true);
+  if (sample?.chat?.lastMessage) {
+    const snippet = sample.chat.lastMessage.body || sample.chat.lastMessage.subject || "";
+    if (snippet) assert.equal(sample.text.includes(snippet), true);
+  }
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-chat-title]")?.textContent === (chat.title || chat.id), "The conversation title was not shown.");
+  await waitFor(() => desktop.root.querySelector(".bubble-meta"), "The message sender was not shown.");
+  assert.equal(desktop.root.querySelector(".bubble-meta").textContent.includes("master"), true);
+  assert.equal(desktop.root.querySelector("[data-message]")?.closest(".bubble") != null, true);
+
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not appear.");
+  assert.equal(desktop.root.querySelector(".attach-list"), null);
+  assert.equal(desktop.root.querySelector(".attach-chips") != null, true);
+  click(desktop.root.querySelector("[data-action='attach']"));
+  const chooser = desktop.document.querySelector("[data-form='attach']");
+  assert.equal(chooser != null, true);
+  assert.equal(chooser.querySelector("[data-attach-search]") != null, true);
+  const offered = chooser.querySelectorAll("[data-attach-unit]").length;
+  assert.equal(offered > 0 && offered <= 40, true);
+  typeInput(chooser.querySelector("[data-attach-search]"), "zzzz", 0, 4);
+  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
+  chooser.close();
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector(".comment-author")?.textContent === "master", "The comment author was not shown.");
+  const source = desktop.root.querySelector("[data-source]");
+  assert.equal(source?.closest("[data-source-edit]") != null, true);
+  assert.equal(desktop.root.querySelector(".reading-card") != null, true);
+  const comments = desktop.root.querySelector("[data-editor-column='comments']");
+  assert.equal(comments.querySelector("[data-action='accept-change']") != null, true);
+  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action='accept-change']"), null);
+
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  navigate(desktop.app, "hierarchy");
+  navigate(desktop.app, "map");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector(".inspector-details")?.querySelector("summary")?.textContent === "Details", "The inspector details did not appear.");
+  assert.equal(desktop.root.querySelector(".unit-card") != null, true);
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {
