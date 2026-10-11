@@ -1,8 +1,8 @@
 # HIVEM1ND service
 
-The core service is one process per user. `node cli/index.mjs service run` is the process entry. This build does not start that process unless a caller injects a runtime. It does not search for an unrelated mind.
+The core service is one process per user. `node cli/index.mjs service run` starts that process from the configured mind and holds it until the process is stopped. It does not search for an unrelated mind.
 
-`service install --dry-run` prints the login plan and does not register a task, LaunchAgent, or user unit. `service install` without a dry run still refuses to call the operating system unless a test injects a recording runner. `service status` reports that no operating-system query was made. `service uninstall` describes the owned delete command. A registration whose stored body no longer matches its digest is kept.
+`service install --dry-run` prints the login plan and does not register a task, LaunchAgent, or user unit. `service install` without a dry run writes the registration and runs the platform command, `schtasks.exe` on Windows, only when that registration is absent or already owned by this install. A registration that is present and not owned is left in place. `service status` does not query the operating system. `service uninstall` describes the owned delete command and does not run it unless a runner is injected. A registration whose stored body no longer matches its digest is kept.
 
 The mind lives under a Cosmic folder. The default is local Cosmic `hivem1nd`. A custom Cosmic parent appends `hivem1nd`. Staging stays under local Cosmic, in `hivem1nd-service/<mindKey>/<machine>/staging`. A new folder origin defaults to `hivem1nd-origin/<mindKey>` beside the mind, not inside it. OneDrive may hold a mind or an origin. Staging is rejected inside the mind, the origin, or a synced root. An existing config keeps its origin on a later attach or evolve.
 
@@ -29,10 +29,10 @@ These checks did not register a login task, write the OneDrive mind, or signal a
 Limits that are not passes:
 
 - Native login was not verified. With an empty PATH, the supported native clients all report `nativeSupport` false. Creating a session without a verified login throws `client_unavailable`. A fixture transcript only proves the protocol parser.
-- Windows protection of the local bootstrap file uses the .NET file access-control API. The PowerShell Security module would not load, so the Security-module cmdlets were not used.
+- Windows protection of the local bootstrap file discovers the current user with `whoami.exe /user`, caches that SID, and applies it with `icacls.exe` together with SYSTEM. Administrators are not granted. The parent directory and the file are both checked, and a reparse point or an unexpected owner or access list fails closed. PowerShell is not used.
 - The media step did convert a real PNG to WebP with the local ffmpeg.
 - `node-v22.23.3-win-x64.zip` was not on disk. Its pinned SHA-256 is `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`, and `node.exe` inside it is `9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`. ZIP, CRC, and dry-run checks passed without that archive. `node --version` was not run from it.
-- `service install` prints a dry plan. It does not call schtasks, launchctl, or systemctl.
+- `service install --dry-run` prints a dry plan and does not call schtasks, launchctl, or systemctl. A non-dry install can run the owned registration command. A real login registration was not verified.
 - HTTP MCP serves the eight editor tools. The stdio relay still talks to the relay directly, and the 120-second approval wait is not wrapped around every legacy tool on that path.
 - The static wizard still submits the mind path. Origin fields default when the caller omits them.
 

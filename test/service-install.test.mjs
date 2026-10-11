@@ -648,4 +648,9 @@ test('CI pins action commits and the install policy ignores scripts', async () =
   }
   assert.match(policy, /^ignore-scripts=true$/m);
   assert.match(policy, /^min-release-age=7$/m);
+  const readme = await readFile(path.join(root, 'engine', 'service', 'README.md'), 'utf8');
+  assert.match(readme, /whoami\.exe \/user/);
+  assert.match(readme, /icacls\.exe/);
+  assert.equal(readme.includes('.NET'), false);
+  assert.match(readme, /A real login registration was not verified/);
 });
