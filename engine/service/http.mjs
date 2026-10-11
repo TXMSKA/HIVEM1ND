@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, safeError } from './security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
@@ -312,6 +312,8 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
 export async function createHttpServer(options) {
   const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP', mind: options.paths?.mind ?? null });
   const credentials = options.credentials;
+  const security = options.security ?? createSecuritySink({ now: options.now ?? (() => Date.now()), directory: options.paths?.localDirectory ?? null });
+  credentials?.bindSecurity?.(security);
   const viewers = new Map();
   const watch = createWatch({ bus, now: options.now ?? (() => Date.now()) });
   options.watch = watch;
@@ -346,6 +348,8 @@ export async function createHttpServer(options) {
       try {
         if (!res.headersSent && !res.writableEnded) {
           const status = error instanceof CoreError ? error.status : 500;
+          const type = securityType(status);
+          if (type) security.record({ type, peer: peerAddress(req), outcome: 'failure' });
           const headers = {};
           if (error?.retryAt) headers['retry-after'] = retryAfter(error.retryAt, options.now?.() ?? Date.now());
           if (error?.allow) headers.allow = error.allow;
@@ -462,6 +466,15 @@ export async function createHttpServer(options) {
     }
     if (route.handler === 'authLocal' || route.handler === 'authHome') {
       const outcome = applySync(await runAuth(route, { credentials, credential, listener, viewers, bus, body, options, homeState, peer: req.socket.remoteAddress, watch }), domain);
+      if ((outcome.status ?? 200) < 400) {
+        security.record({
+          type: 'auth.success',
+          actor: outcome.body?.audience ?? 'desktop',
+          session: outcome.body?.token ?? null,
+          peer: peerAddress(req),
+          outcome: 'success',
+        });
+      }
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
     }
@@ -503,6 +516,7 @@ export async function createHttpServer(options) {
     bus,
     credentials,
     port: server.address().port,
+    security,
     viewers,
     async close() {
       disposeWatch(watch);
@@ -585,6 +599,14 @@ function verifiedPrincipal(credentials, req) {
     if (error instanceof CoreError) return null;
     throw error;
   }
+}
+
+function securityType(status) {
+  if (status === 401) return 'auth.failure';
+  if (status === 403) return 'permission.denied';
+  if (status === 400 || status === 422) return 'validation.failure';
+  if (status === 429) return 'rate.limited';
+  return null;
 }
 
 function peerAddress(req) {

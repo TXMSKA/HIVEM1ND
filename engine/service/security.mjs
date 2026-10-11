@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { lstatSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { appendFileSync, lstatSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,9 +137,96 @@ export async function verifyBootstrapFiles(directory, file, options = {}) {
   return { ok: true };
 }
 
+export const SECURITY_RETENTION = 200;
+export const SECURITY_ALERT_THRESHOLD = 8;
+const SECURITY_TYPES = new Set(['auth.failure', 'auth.success', 'permission.denied', 'validation.failure', 'rate.limited', 'credential.revoked', 'security.alert']);
+
+export function createSecuritySink({ now = () => Date.now(), directory = null } = {}) {
+  const events = [];
+  const failures = new Map();
+  const file = directory ? path.join(directory, 'security-events.jsonl') : null;
+  return {
+    events,
+    retention: SECURITY_RETENTION,
+    alertThreshold: SECURITY_ALERT_THRESHOLD,
+    record(input = {}) {
+      try {
+        const type = SECURITY_TYPES.has(input.type) ? input.type : null;
+        if (!type) return null;
+        const event = {
+          at: new Date(now()).toISOString(),
+          type,
+          actorHash: pseudonym(input.actor),
+          sessionHash: pseudonym(input.session),
+          peer: publicPeer(input.peer),
+          outcome: input.outcome === 'success' ? 'success' : 'failure',
+        };
+        remember(events, event, file);
+        if (event.outcome === 'success') {
+          failures.delete(`${event.type}:${event.peer}`);
+          return event;
+        }
+        const key = `${event.type}:${event.peer}`;
+        const count = (failures.get(key) ?? 0) + 1;
+        failures.set(key, count);
+        if (count === SECURITY_ALERT_THRESHOLD) {
+          remember(events, {
+            at: event.at,
+            type: 'security.alert',
+            actorHash: null,
+            sessionHash: null,
+            peer: event.peer,
+            outcome: 'alert',
+            threshold: SECURITY_ALERT_THRESHOLD,
+          }, file);
+        }
+        return event;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+function pseudonym(value) {
+  if (value == null || value === '') return null;
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+}
+
+function publicPeer(value) {
+  if (typeof value !== 'string') return null;
+  if (value === '127.0.0.1' || value === '::1' || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return value;
+  return null;
+}
+
+function remember(events, event, file) {
+  events.push(event);
+  while (events.length > SECURITY_RETENTION) events.shift();
+  if (!file) return;
+  try {
+    if (lstatSync(file).isSymbolicLink()) return;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return;
+  }
+  appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+  const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  if (lines.length > SECURITY_RETENTION) writeFileSync(file, `${lines.slice(-SECURITY_RETENTION).join('\n')}\n`, { mode: 0o600 });
+}
+
 export function createCredentialStore({ now = () => Date.now() } = {}) {
   const records = new Map();
+  let sink = null;
+  const noteRevoked = (record) => sink?.record({
+    type: 'credential.revoked',
+    actor: record?.unitId ?? record?.audience ?? null,
+    session: record?.sessionId ?? null,
+    peer: null,
+    outcome: 'success',
+  });
   return {
+    bindSecurity(next) {
+      sink = next;
+    },
     issue(input) {
       const secret = randomBytes(32);
       const token = secret.toString('base64url');
@@ -174,16 +261,22 @@ export function createCredentialStore({ now = () => Date.now() } = {}) {
       return { ...record, secret: undefined, token };
     },
     revoke(token) {
+      const record = records.get(token);
       records.delete(token);
+      if (record) noteRevoked(record);
     },
     revokeSession(sessionId) {
       for (const [token, record] of records) {
-        if (record.sessionId === sessionId) records.delete(token);
+        if (record.sessionId !== sessionId) continue;
+        records.delete(token);
+        noteRevoked(record);
       }
     },
     revokeAudience(audience) {
       for (const [token, record] of records) {
-        if (record.audience === audience) records.delete(token);
+        if (record.audience !== audience) continue;
+        records.delete(token);
+        noteRevoked(record);
       }
     },
   };

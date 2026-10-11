@@ -296,6 +296,44 @@ test('windows acl tools come from System32', async () => {
   }
 });
 
+test('security events keep a bounded trail without secrets', async (t) => {
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: [],
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await requestJson(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  const success = core.http.security.events.find((event) => event.type === 'auth.success');
+  assert.equal(success.outcome, 'success');
+  assert.equal(success.peer, '127.0.0.1');
+  assert.equal(success.sessionHash.length, 16);
+  assert.equal(JSON.stringify(core.http.security.events).includes(token), false);
+  for (let index = 0; index < core.http.security.alertThreshold; index += 1) {
+    const denied = await requestJson(core.http.port, 'GET', '/api/v1/units', { token: `forged-${index}` });
+    assert.equal(denied.status, 401);
+  }
+  const alert = core.http.security.events.find((event) => event.type === 'security.alert');
+  assert.equal(alert.outcome, 'alert');
+  assert.equal(alert.threshold, core.http.security.alertThreshold);
+  core.credentials.revoke(token);
+  assert.equal(core.http.security.events.some((event) => event.type === 'credential.revoked'), true);
+  const trail = await readFile(path.join(fixture.paths.localDirectory, 'security-events.jsonl'), 'utf8');
+  assert.equal(trail.includes(token), false);
+  assert.match(trail, /auth\.success/);
+  assert.equal(core.http.security.retention, 200);
+});
+
 test('forged bearers share the peer limit and idle buckets expire', async (t) => {
   const fixture = await makeCoreFixture();
   const core = await composeCore({
