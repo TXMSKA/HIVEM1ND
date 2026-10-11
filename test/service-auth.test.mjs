@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore, startService, stopService } from '../engine/service/service.mjs';
 import { CoreError } from '../engine/service/identity.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, protectLocalFile, safeError, stubAclRunner } from '../engine/service/security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, createSecuritySink, protectLocalFile, safeError, SECURITY_ALERT_THRESHOLD, SECURITY_FAILURE_LIMIT, SECURITY_FAILURE_WINDOW_MS, stubAclRunner } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const PHONE_FORBIDDEN = ['unit.create', 'chat.manage', 'layout.write', 'settings.write', 'home.manage', 'grant.revoke', 'session.start', 'session.stop', 'task.undo', 'editor.write', 'comment.write', 'asset.write', 'proposal.answer', 'watch', 'viewer.write'];
@@ -106,6 +106,17 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   assert.equal(limited.error.details.limits.messages.max, 60);
   assert.equal(limited.error.details.limits.syncBytes.max, 50000000);
   assert.equal(limited.error.details.limits.state, 'paused');
+  const hidden = safeError(new CoreError(422, 'invalid_asset', 'see /etc/qa040-private.ini and /opt/qa040-config.ini', {
+    path: '/etc/qa040-private.ini',
+    config: '/opt/qa040-config.ini',
+    limits: { messages: { max: 60 } },
+  }), 'request-4');
+  assert.equal(JSON.stringify(hidden).includes('/etc/'), false);
+  assert.equal(JSON.stringify(hidden).includes('/opt/'), false);
+  assert.equal(hidden.error.message, 'The request failed.');
+  assert.equal(hidden.error.details.path, undefined);
+  assert.equal(hidden.error.details.config, undefined);
+  assert.equal(hidden.error.details.limits.messages.max, 60);
   const file = path.join(fixture.root, 'secret', 'bootstrap.json');
   await writeFile(file, '{}\n').catch(async () => {
     const { mkdir } = await import('node:fs/promises');
@@ -319,6 +330,19 @@ test('security events keep a bounded trail without secrets', async (t) => {
   assert.equal(success.peer, '127.0.0.1');
   assert.equal(success.sessionHash.length, 16);
   assert.equal(JSON.stringify(core.http.security.events).includes(token), false);
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const phone = core.credentials.issue({ audience: 'phone', sessionId, expiresAt: new Date(fixture.clock.now + 60_000).toISOString() });
+  const deniedWrite = await requestJson(core.http.port, 'PATCH', '/api/v1/settings', {
+    token: phone.token,
+    body: { language: 'es' },
+    headers: { 'idempotency-key': '6f1d7c2e-1b4a-4e3a-9c55-0a0b0c0d0e0f' },
+  });
+  assert.equal(deniedWrite.status, 403);
+  const deniedEvent = core.http.security.events.find((event) => event.type === 'permission.denied');
+  assert.equal(deniedEvent.actorHash.length, 16);
+  assert.equal(deniedEvent.sessionHash.length, 16);
+  assert.equal(JSON.stringify(deniedEvent).includes(phone.token), false);
+  assert.equal(JSON.stringify(deniedEvent).includes(sessionId), false);
   for (let index = 0; index < core.http.security.alertThreshold; index += 1) {
     const denied = await requestJson(core.http.port, 'GET', '/api/v1/units', { token: `forged-${index}` });
     assert.equal(denied.status, 401);
@@ -332,6 +356,23 @@ test('security events keep a bounded trail without secrets', async (t) => {
   assert.equal(trail.includes(token), false);
   assert.match(trail, /auth\.success/);
   assert.equal(core.http.security.retention, 200);
+  const clock = { now: 0 };
+  const sink = createSecuritySink({ now: () => clock.now });
+  for (let index = 0; index < SECURITY_ALERT_THRESHOLD; index += 1) {
+    sink.record({ type: 'auth.failure', peer: '10.0.0.9', outcome: 'failure' });
+  }
+  assert.equal(sink.events.filter((event) => event.type === 'security.alert').length, 1);
+  clock.now += SECURITY_FAILURE_WINDOW_MS;
+  for (let index = 0; index < SECURITY_ALERT_THRESHOLD - 1; index += 1) {
+    sink.record({ type: 'auth.failure', peer: '10.0.0.9', outcome: 'failure' });
+  }
+  assert.equal(sink.events.filter((event) => event.type === 'security.alert').length, 1);
+  sink.record({ type: 'auth.failure', peer: '10.0.0.9', outcome: 'failure' });
+  assert.equal(sink.events.filter((event) => event.type === 'security.alert').length, 2);
+  for (let index = 0; index < SECURITY_FAILURE_LIMIT + 10; index += 1) {
+    sink.record({ type: 'auth.failure', peer: `10.1.0.${index}`, outcome: 'failure' });
+  }
+  assert.equal(sink.events.length <= sink.retention, true);
 });
 
 test('forged bearers share the peer limit and idle buckets expire', async (t) => {

@@ -48,7 +48,8 @@
     "dev": "node cli/index.mjs init --gui",
     "pack:win": "electron-builder --win --x64 --dir --publish never",
     "installer:win": "node scripts/build-installer.mjs",
-    "dist:win": "node scripts/build-installer.mjs"
+    "dist:win": "node scripts/build-installer.mjs",
+    "prepare": "node scripts/install-local.mjs"
   },
   "dependencies": {
     "@clack/prompts": "1.8.1",

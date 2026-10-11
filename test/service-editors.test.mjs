@@ -303,6 +303,31 @@ test('a present converter stores WebP and a missing converter keeps the original
   }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 422, code: 'invalid_asset' });
 });
 
+test('a project asset quota is reserved before conversion and released on failure', async (t) => {
+  const { context } = await shop(t);
+  const created = await createBoard(context, { project: 'shop', document: sketch('quota') });
+  await assert.rejects(() => createAsset({ ...context, converter: null, assetByteLimit: PNG.length - 1 }, created.id, {
+    contentType: 'image/png',
+    bytesBase64: PNG.toString('base64'),
+  }), { status: 413, code: 'asset_quota' });
+  const failing = {
+    ...context,
+    converter: 'ffmpeg',
+    assetCountLimit: 1,
+    spawn() {
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    },
+  };
+  await assert.rejects(() => createAsset(failing, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 422, code: 'invalid_asset' });
+  const released = await createAsset({ ...context, converter: null, assetCountLimit: 1 }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
+  assert.equal(released.bytes, PNG.length);
+  await assert.rejects(() => createAsset({ ...context, converter: null, assetCountLimit: 1 }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 413, code: 'asset_quota' });
+});
+
 test('the board routes keep an unknown field through HTTP', async (t) => {
   const fixture = await makeCoreFixture();
   const localPath = path.join(fixture.paths.localDirectory, 'shop');

@@ -364,7 +364,16 @@ export async function createHttpServer(options) {
             });
           }
           const type = securityType(status);
-          if (type) security.record({ type, peer: peerAddress(req), outcome: 'failure' });
+          if (type) {
+            const principal = verifiedPrincipal(credentials, req);
+            security.record({
+              type,
+              actor: principal?.unitId ?? principal?.audience ?? null,
+              session: principal?.sessionId ?? null,
+              peer: peerAddress(req),
+              outcome: 'failure',
+            });
+          }
           const headers = {};
           if (error?.retryAt) headers['retry-after'] = retryAfter(error.retryAt, options.now?.() ?? Date.now());
           if (error?.allow) headers.allow = error.allow;

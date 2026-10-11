@@ -139,6 +139,8 @@ export async function verifyBootstrapFiles(directory, file, options = {}) {
 
 export const SECURITY_RETENTION = 200;
 export const SECURITY_ALERT_THRESHOLD = 8;
+export const SECURITY_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+export const SECURITY_FAILURE_LIMIT = 256;
 const SECURITY_TYPES = new Set(['auth.failure', 'auth.success', 'permission.denied', 'validation.failure', 'rate.limited', 'credential.revoked', 'security.alert']);
 
 export function createSecuritySink({ now = () => Date.now(), directory = null } = {}) {
@@ -190,9 +192,7 @@ export function createSecuritySink({ now = () => Date.now(), directory = null } 
           failures.delete(`${event.type}:${event.peer}`);
           return event;
         }
-        const key = `${event.type}:${event.peer}`;
-        const count = (failures.get(key) ?? 0) + 1;
-        failures.set(key, count);
+        const count = noteFailure(failures, event, now());
         if (count === SECURITY_ALERT_THRESHOLD) {
           remember(events, {
             at: event.at,
@@ -210,6 +210,20 @@ export function createSecuritySink({ now = () => Date.now(), directory = null } 
       }
     },
   };
+}
+
+function noteFailure(failures, event, at) {
+  for (const [key, value] of failures) {
+    if (at - value.at >= SECURITY_FAILURE_WINDOW_MS) failures.delete(key);
+  }
+  const key = `${event.type}:${event.peer}`;
+  while (failures.size >= SECURITY_FAILURE_LIMIT && !failures.has(key)) {
+    failures.delete(failures.keys().next().value);
+  }
+  const current = failures.get(key);
+  const count = current && at - current.at < SECURITY_FAILURE_WINDOW_MS ? current.count + 1 : 1;
+  failures.set(key, { count, at });
+  return count;
 }
 
 function pseudonym(value) {
@@ -464,15 +478,17 @@ export function safeError(error, requestId) {
   };
 }
 
+const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code']);
+
 function leaks(value) {
-  return typeof value === 'string' && /[A-Za-z]:[\\/]|\\\\|\/(?:home|users|root|tmp|var|private)\b|token|secret|bearer |authorization|password/i.test(value);
+  return typeof value === 'string' && /[A-Za-z]:[\\/]|\\\\|token|secret|bearer |authorization|password|(?:^|[^A-Za-z0-9])\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/i.test(value);
 }
 
 function safeDetails(source, depth = 0) {
   if (depth > 6 || !source || typeof source !== 'object' || Array.isArray(source)) return {};
   const details = {};
   for (const key of Object.keys(source).slice(0, 32)) {
-    if (leaks(key)) continue;
+    if (!PUBLIC_DETAIL_KEYS.has(key) || leaks(key)) continue;
     const projected = safeValue(source[key], depth + 1);
     if (projected !== undefined) details[key] = projected;
   }

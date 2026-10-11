@@ -16,6 +16,8 @@ import { startResourceWatch } from './watch.mjs';
 
 const ASSET_LIMIT = 10000000;
 const PNG_RAW_LIMIT = 32_000_000;
+const ASSET_COUNT_LIMIT = 200;
+const ASSET_BYTE_LIMIT = 50_000_000;
 const TEXT_LIMIT = 16_000_000;
 const PAGE_LIMIT = 2000;
 
@@ -726,21 +728,30 @@ export async function createAsset(context, id, input) {
   if (!size || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) {
     fail(422, 'invalid_asset', 'The asset dimensions are not supported.');
   }
-  const stored = input.historical === true || input.immutable === true ? { bytes, kind } : await convertedAsset(context, bytes, kind);
-  const name = `${randomUUID()}.${stored.kind.ext}`;
-  const relative = `docs/flows/assets/${name}`;
-  const file = inside(found.project.localPath, relative);
-  const revision = hashBytes(stored.bytes);
-  const asset = {
-    id: name,
-    src: `assets/${name}`,
-    contentType: stored.kind.type,
-    bytes: stored.bytes.length,
-    revision,
-    url: `/api/v1/editors/${id}/assets/${name}`,
-  };
-  await commit(context, [record(file, null, stored.bytes), await rememberAsset(context, id, name)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
-  return asset;
+  const held = await reserveAssetQuota(context, found.project.name, bytes.length);
+  try {
+    const stored = input.historical === true || input.immutable === true ? { bytes, kind } : await convertedAsset(context, bytes, kind);
+    const name = `${randomUUID()}.${stored.kind.ext}`;
+    const relative = `docs/flows/assets/${name}`;
+    const file = inside(found.project.localPath, relative);
+    const revision = hashBytes(stored.bytes);
+    const asset = {
+      id: name,
+      src: `assets/${name}`,
+      contentType: stored.kind.type,
+      bytes: stored.bytes.length,
+      revision,
+      url: `/api/v1/editors/${id}/assets/${name}`,
+    };
+    const quota = await settledQuota(context, found.project.name, held, stored.bytes.length);
+    await commit(context, [record(file, null, stored.bytes), await rememberAsset(context, id, name), quota], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
+    return asset;
+  } catch (error) {
+    try {
+      await releaseAssetQuota(context, found.project.name, held);
+    } catch { /* a failed reservation stays counted until a later settle */ }
+    throw error;
+  }
 }
 
 function assetRegistryFile(context, id) {
@@ -754,6 +765,88 @@ async function rememberAsset(context, id, name) {
   if (!Array.isArray(value.assets)) value.assets = [];
   if (!value.assets.includes(name)) value.assets.push(name);
   return record(file, loaded.revision, jsonBytes(value));
+}
+
+function assetLimits(context) {
+  return {
+    count: positiveLimit(context?.assetCountLimit, ASSET_COUNT_LIMIT),
+    bytes: positiveLimit(context?.assetByteLimit, ASSET_BYTE_LIMIT),
+  };
+}
+
+function positiveLimit(value, fallback) {
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function quotaFile(context, project) {
+  if (typeof project !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(project)) fail(422, 'invalid_project', 'The project name is not valid.');
+  return path.join(context.paths.mind, 'user', 'relay', 'editors', 'quotas', `${project}.json`);
+}
+
+function freshQuota(project) {
+  return { format: 'hivem1nd-asset-quota-v1', project, count: 0, bytes: 0, reservations: [] };
+}
+
+function readQuota(loaded, project) {
+  const quota = loaded.bytes ? parseJson(loaded.bytes) : freshQuota(project);
+  if (!Array.isArray(quota.reservations)) quota.reservations = [];
+  if (!Number.isInteger(quota.count) || quota.count < 0) quota.count = 0;
+  if (!Number.isInteger(quota.bytes) || quota.bytes < 0) quota.bytes = 0;
+  return quota;
+}
+
+async function withQuota(context, project, change) {
+  const file = quotaFile(context, project);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const loaded = await loadBytes(file);
+    const quota = readQuota(loaded, project);
+    if (change(quota) !== true) return;
+    try {
+      await commit(context, [record(file, loaded.revision, jsonBytes(quota))]);
+      return;
+    } catch (error) {
+      if (error?.code !== 'revision_conflict' || attempt === 4) throw error;
+    }
+  }
+}
+
+async function reserveAssetQuota(context, project, bytes) {
+  const limits = assetLimits(context);
+  if (bytes > limits.bytes) fail(413, 'asset_quota', 'The project asset quota is full.');
+  const id = randomUUID();
+  await withQuota(context, project, (quota) => {
+    if (quota.count + 1 > limits.count || quota.bytes + bytes > limits.bytes) fail(413, 'asset_quota', 'The project asset quota is full.');
+    quota.count += 1;
+    quota.bytes += bytes;
+    quota.reservations.push({ id, bytes });
+    return true;
+  });
+  return { id, bytes };
+}
+
+async function settledQuota(context, project, held, storedBytes) {
+  const limits = assetLimits(context);
+  const file = quotaFile(context, project);
+  const loaded = await loadBytes(file);
+  const quota = readQuota(loaded, project);
+  const reservation = quota.reservations.find((item) => item.id === held.id);
+  if (!reservation) fail(409, 'revision_conflict', 'The asset reservation is no longer current.');
+  const nextBytes = quota.bytes - reservation.bytes + storedBytes;
+  if (nextBytes < 0 || nextBytes > limits.bytes) fail(413, 'asset_quota', 'The project asset quota is full.');
+  quota.bytes = nextBytes;
+  quota.reservations = quota.reservations.filter((item) => item.id !== held.id);
+  return record(file, loaded.revision, jsonBytes(quota));
+}
+
+async function releaseAssetQuota(context, project, held) {
+  await withQuota(context, project, (quota) => {
+    const reservation = quota.reservations.find((item) => item.id === held.id);
+    if (!reservation) return false;
+    quota.count = Math.max(0, quota.count - 1);
+    quota.bytes = Math.max(0, quota.bytes - reservation.bytes);
+    quota.reservations = quota.reservations.filter((item) => item.id !== held.id);
+    return true;
+  });
 }
 
 async function convertedAsset(context, bytes, kind) {

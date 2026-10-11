@@ -2,92 +2,68 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(process.argv[2] ?? process.cwd());
-const PRIVATE_KEY = 'BEGIN [A-Z ]*PRIVATE KEY';
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
-const result = gitleaksAvailable() ? scanWithGitleaks(root) : scanWithoutGitleaks(root);
-if (result.note) process.stdout.write(`${result.note}\n`);
-for (const location of result.locations) process.stdout.write(`${location}\n`);
-process.exit(result.locations.length > 0 ? 1 : 0);
+if (!gitRepository(root)) fail('secret scan failed: not a git repository');
+if (!gitleaksAvailable()) fail('secret scan failed: gitleaks is not installed');
+const working = gitleaksReport(root, ['dir', root]);
+if (working.error) fail(`secret scan failed: ${working.error}`);
+const history = gitleaksReport(root, ['git', root, '--log-opts=--all']);
+if (history.error) fail(`secret scan failed: ${history.error}`);
+const locations = [...new Set([...working.locations, ...history.locations])];
+for (const location of locations) process.stdout.write(`${location}\n`);
+process.exit(locations.length > 0 ? 1 : 0);
 
-function gitleaksAvailable() {
-  const found = spawnSync('gitleaks', ['version'], { encoding: 'utf8', shell: false, windowsHide: true });
-  return found.status === 0;
+function fail(note) {
+  process.stdout.write(`${note}\n`);
+  process.exit(1);
 }
 
-function scanWithGitleaks(directory) {
-  const locations = [
-    ...gitleaksReport(directory, ['dir', directory]),
-    ...gitleaksReport(directory, ['git', directory, '--log-opts=--all']),
-  ];
-  return { locations: [...new Set(locations)], note: null };
+function gitleaksLaunch(args, cwd = root) {
+  const override = process.env.HIVEM1ND_GITLEAKS;
+  if (override) return spawnSync(process.execPath, [override, ...args], { cwd, encoding: 'utf8', shell: false, windowsHide: true });
+  const name = process.platform === 'win32' ? 'gitleaks.exe' : 'gitleaks';
+  return spawnSync(path.join(scriptDir, '..', '.tools', name), args, { cwd, encoding: 'utf8', shell: false, windowsHide: true });
+}
+
+function gitleaksAvailable() {
+  const found = gitleaksLaunch(['version']);
+  return !found.error && found.status === 0;
 }
 
 function gitleaksReport(directory, args) {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'hivem1nd-gitleaks-'));
   const report = path.join(folder, 'report.json');
   try {
-    spawnSync('gitleaks', [...args, '--redact', '--no-banner', '--report-format', 'json', '--report-path', report, '--exit-code', '1'], {
-      cwd: directory,
-      encoding: 'utf8',
-      shell: false,
-      windowsHide: true,
-    });
-    const findings = JSON.parse(readFileSync(report, 'utf8'));
-    if (!Array.isArray(findings)) return [];
-    return findings.map((finding) => {
-      const file = finding.File ?? finding.file ?? 'unknown';
-      const line = finding.StartLine ?? finding.startLine ?? 0;
-      const rule = finding.RuleID ?? finding.rule ?? 'secret';
-      return `${file}:${line}:${rule}`;
-    });
-  } catch {
-    return [];
+    const found = gitleaksLaunch([...args, '--redact', '--no-banner', '--report-format', 'json', '--report-path', report, '--exit-code', '1'], directory);
+    if (found.error || (found.status !== 0 && found.status !== 1)) return { error: 'gitleaks failed' };
+    let findings;
+    try {
+      findings = JSON.parse(readFileSync(report, 'utf8'));
+    } catch {
+      return { error: 'gitleaks report failed' };
+    }
+    if (!Array.isArray(findings)) return { error: 'gitleaks report failed' };
+    if ((found.status === 0 && findings.length > 0) || (found.status === 1 && findings.length === 0)) return { error: 'gitleaks report failed' };
+    return {
+      locations: findings.map((finding) => {
+        const file = finding.File ?? finding.file ?? 'unknown';
+        const line = finding.StartLine ?? finding.startLine ?? 0;
+        const rule = finding.RuleID ?? finding.rule ?? 'secret';
+        return `${file}:${line}:${rule}`;
+      }),
+    };
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
 }
 
-function scanWithoutGitleaks(directory) {
-  const locations = [
-    ...grepLocations(directory, PRIVATE_KEY),
-    ...historyLocations(directory, PRIVATE_KEY),
-    ...envFiles(directory),
-  ];
-  return {
-    locations,
-    note: 'gitleaks is not installed; private-key and environment-file checks ran; generic token lines were not verified.',
-  };
-}
-
-function grepLocations(directory, pattern) {
-  const found = git(directory, ['grep', '-n', '-I', '-E', pattern]);
-  if (found.status !== 0) return [];
-  return found.stdout.split(/\r?\n/).filter(Boolean).map(locationOnly).filter(Boolean);
-}
-
-function historyLocations(directory, pattern) {
-  const found = git(directory, ['log', '--all', '-G', pattern, '--pretty=format:%H', '--name-only']);
-  if (found.status !== 0 || !found.stdout.trim()) return [];
-  const locations = [];
-  let commit = null;
-  for (const line of found.stdout.split(/\r?\n/)) {
-    if (/^[0-9a-f]{40}$/.test(line)) commit = line;
-    else if (line && commit) locations.push(`${commit}:${line}`);
-  }
-  return locations;
-}
-
-function envFiles(directory) {
-  const found = git(directory, ['ls-files', ':(glob)**/.env*']);
-  if (found.status !== 0) return [];
-  return found.stdout.split(/\r?\n/).filter(Boolean).map((file) => `${file}:tracked-env`);
-}
-
-function locationOnly(line) {
-  const match = /^(.*?):(\d+):/.exec(line);
-  return match ? `${match[1]}:${match[2]}` : null;
+function gitRepository(directory) {
+  const found = git(directory, ['rev-parse', '--is-inside-work-tree']);
+  return !found.error && found.status === 0 && found.stdout.trim() === 'true';
 }
 
 function git(directory, args) {
