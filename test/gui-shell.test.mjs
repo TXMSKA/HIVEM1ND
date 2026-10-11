@@ -2459,6 +2459,61 @@ test("the shell has one heading, a skip link, and stable live regions", async (t
   assert.equal(desktop.document.title, "Mapa · HIVEM1ND");
 });
 
+test("same-cursor reset and ready open the desktop shell and read the viewer", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  let shared = null;
+  let releaseEvents = () => {};
+  const eventsReady = new Promise((resolve) => {
+    releaseEvents = resolve;
+  });
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    const target = String(input);
+    urls.push(target);
+    const pathname = new URL(target).pathname;
+    if (pathname === "/api/v1/events") return sameCursorStream(eventsReady, () => shared);
+    const response = await fetch(input, init);
+    if (pathname !== "/api/v1/view") return response;
+    const json = await response.json();
+    if (!shared) {
+      shared = json.meta.eventCursor;
+      releaseEvents();
+    }
+    return new Response(JSON.stringify(json), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  t.after(() => dispose(booted.app));
+  await waitFor(() => booted.root.querySelector(".shell"), "The desktop shell did not appear.");
+  assert.equal(booted.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
+  assert.equal(booted.app.store.capabilities.includes("viewer.write"), true);
+  assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/viewer"), true);
+});
+
+test("startup shows Retry when stream.ready never arrives", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    const target = String(input);
+    urls.push(target);
+    if (new URL(target).pathname === "/api/v1/events") {
+      return new Response(new ReadableStream({ start() {} }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    return fetch(input, init);
+  }, { readyBudgetMs: 200 });
+  t.after(() => dispose(booted.app));
+  await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "Startup did not fail closed.");
+  assert.equal(booted.root.querySelector("button")?.textContent, "Retry");
+  assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/settings"), true);
+  assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/viewer"), false);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -2565,6 +2620,50 @@ async function until(check) {
     await delay(20);
   }
   throw new Error("The phone shell did not reach the expected state.");
+}
+
+function sseFrame(name, id, data) {
+  const envelope = {
+    contract: "hivem1nd-events-v3",
+    at: "2026-10-11T12:00:00.000Z",
+    machine: "QA",
+    source: { kind: "service", id: "fixture", unitId: "root:master" },
+    data,
+  };
+  return `id: ${id}\nevent: ${name}\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function sameCursorStream(eventsReady, cursor) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      await eventsReady;
+      const id = cursor();
+      const reset = sseFrame("stream.reset", id, { reason: "service_restarted", cursor: id });
+      const ready = sseFrame("stream.ready", id, {
+        cursor: id,
+        readAt: "2026-10-11T12:00:00.000Z",
+        capabilities: DESKTOP,
+      });
+      controller.enqueue(encoder.encode(reset + ready));
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+async function bootWithFetch(url, width, fetchImpl, extras = {}) {
+  const { document, root, view } = createTestDocument(width);
+  const parsed = new URL(url);
+  const app = await mount(root, {
+    location: { origin: parsed.origin, pathname: parsed.pathname, search: parsed.search, hash: parsed.hash },
+    history: { replaceState() {} },
+    fetch: fetchImpl,
+    ...extras,
+  });
+  return { app, root, view, document };
 }
 
 async function bootApp(url, width, urls, onFetch) {

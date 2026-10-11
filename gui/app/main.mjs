@@ -33,7 +33,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -125,7 +125,7 @@ export async function mount(root, env = globalThis) {
   if (!api.token && api.homeKey) {
     try {
       const credential = await exchangeHomeFragment(api);
-      return bootSession(app, credential);
+      return bootSession(app, credential, env);
     } catch (error) {
       renderPhoneError(app, error);
       return app;
@@ -135,10 +135,10 @@ export async function mount(root, env = globalThis) {
     renderSignedOut(app);
     return app;
   }
-  return bootSession(app, null);
+  return bootSession(app, null, env);
 }
 
-async function bootSession(app, credential) {
+async function bootSession(app, credential, env = {}) {
   if (credential) {
     app.api.token = credential.token;
     app.store.capabilities = credential.capabilities ?? [];
@@ -158,13 +158,30 @@ async function bootSession(app, credential) {
   });
   try {
     await loadSnapshot(app.store, app.api);
+    if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, env.readyBudgetMs);
     await loadPresentation(app);
     await loadLists(app);
     startOwnEmbed(app);
   } catch (error) {
-    renderFailure(app, error);
+    if (!app.disposed) {
+      app.bootFailed = true;
+      clearTimeout(app.readyTimer);
+      renderFailure(app, error);
+    }
   }
   return app;
+}
+
+function armBootDeadline(app, budgetMs) {
+  clearTimeout(app.readyTimer);
+  const budget = Number.isFinite(budgetMs) ? budgetMs : REQUEST_DEADLINE_MS;
+  const timer = setTimeout(() => {
+    if (app.disposed || app.bootSettled || app.bootFailed || app.layout !== "unknown" || app.store.capabilities?.length) return;
+    app.bootFailed = true;
+    renderFailure(app, new ApiError(0, "timeout", "The event stream timed out."));
+  }, budget);
+  timer.unref?.();
+  app.readyTimer = timer;
 }
 
 function startOwnEmbed(app) {
@@ -427,6 +444,7 @@ function restoreInputFocus(app) {
 export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
+  clearTimeout(app.readyTimer);
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.api.live && (app.api.live.stopped = true);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
@@ -446,7 +464,7 @@ export function dispose(app) {
 }
 
 async function onStream(app, event) {
-  if (app.disposed) return;
+  if (app.disposed || app.bootFailed) return;
   const result = await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed || result?.dropped) return;
   if (event?.name === "home.changed") noteHome(app, dataOf(event));
@@ -626,6 +644,12 @@ async function loadPresentation(app, options = {}) {
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
   app.store.settings.home = home.home;
+  if (app.layout !== "unknown") {
+    app.bootSettled = true;
+    clearTimeout(app.readyTimer);
+    app.readyTimer = null;
+  }
+  if (app.disposed || app.bootFailed) return;
   startOwnEmbed(app);
   const samePresentation = app.look === previousLook && app.language === previousLanguage && app.layout === previousLayout;
   if (options.keepShell && samePresentation && app.layout !== "unknown") return;
@@ -633,7 +657,8 @@ async function loadPresentation(app, options = {}) {
 }
 
 function publish(app) {
-  if (app.disposed || app.layout === "unknown") {
+  if (app.disposed || app.bootFailed) return;
+  if (app.layout === "unknown") {
     renderStatus(app, "loadingView");
     return;
   }

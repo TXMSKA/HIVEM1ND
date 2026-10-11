@@ -145,7 +145,7 @@ export async function acceptStreamEvent(store, api, event) {
     return null;
   }
   if (!store.snapshotReady || store.paused) {
-    if (event.id != null && store.buffer.some((item) => item?.id === event.id)) return { dropped: true };
+    if (alreadyBuffered(store, event)) return { dropped: true };
     store.buffer.push(event);
     return { buffered: true };
   }
@@ -203,16 +203,19 @@ async function drainBuffer(store, api) {
   }
 }
 
-function staleReplay(store, event) {
-  if (event.name === "stream.ready" || event.name === "stream.reset") return alreadyConsumed(store, event);
-  return !isAfterCursor(event.id, store.cursor);
+function alreadyBuffered(store, event) {
+  if (event.id == null) return false;
+  return store.buffer.some((item) => item?.id === event.id && item?.name === event.name);
 }
 
-function alreadyConsumed(store, event) {
-  const left = CURSOR.exec(String(event?.id ?? ""));
-  const right = CURSOR.exec(String(store.cursor ?? ""));
-  if (!left || !right || left[1] !== right[1]) return false;
-  return Number(left[2]) <= Number(right[2]);
+function connectionControl(event) {
+  return event?.name === "stream.ready" || event?.name === "stream.reset";
+}
+
+function staleReplay(store, event) {
+  // Reset and ready share the snapshot cursor, so the mutation cursor must not discard them.
+  if (connectionControl(event)) return false;
+  return !isAfterCursor(event.id, store.cursor);
 }
 
 function noteConsumed(store, event) {

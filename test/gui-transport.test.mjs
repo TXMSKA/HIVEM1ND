@@ -44,6 +44,20 @@ function harness({ hash = "#session=desktop-token", fetch, origin = "http://127.
   return { api, location, history };
 }
 
+function controlEvent(name, id, data) {
+  return {
+    id,
+    name,
+    envelope: {
+      contract: "hivem1nd-events-v3",
+      at: "2026-10-10T12:00:00.000Z",
+      machine: "DESKTOP",
+      source: { kind: "service", id: "fixture", unitId: "root:master" },
+      data,
+    },
+  };
+}
+
 function unitEvent(id, unit) {
   return {
     id,
@@ -443,6 +457,52 @@ test("replay advances the consumed cursor and keeps the snapshot cursor during r
   assert.equal(resetting.snapshotCursor, `${SERVICE}:3`);
   assert.equal(resetting.cursor, `${SERVICE}:4`);
   assert.equal(resetting.indexes.units.get("root:master").context, "after");
+});
+
+test("reset and ready that share a cursor still publish desktop capabilities", async () => {
+  const cursor = `${SERVICE}:4`;
+  const reset = controlEvent("stream.reset", cursor, { reason: "service_restarted", cursor });
+  const ready = controlEvent("stream.ready", cursor, {
+    cursor,
+    readAt: "2026-10-10T12:00:00.000Z",
+    capabilities: ["read", "viewer.write", "layout.write"],
+  });
+  const early = createStore();
+  const earlyApi = harness({
+    fetch: async () => jsonResponse(200, envelope({ units: [], chats: [], tasks: [] }, cursor)),
+  }).api;
+  assert.equal((await acceptStreamEvent(early, earlyApi, reset)).buffered, true);
+  assert.equal((await acceptStreamEvent(early, earlyApi, ready)).buffered, true);
+  assert.equal((await acceptStreamEvent(early, earlyApi, ready)).dropped, true);
+  await loadSnapshot(early, earlyApi);
+  assert.deepEqual(early.capabilities, ["read", "viewer.write", "layout.write"]);
+
+  const late = createStore();
+  late.snapshotReady = true;
+  late.cursor = cursor;
+  late.snapshotCursor = cursor;
+  const lateApi = harness({
+    fetch: async () => jsonResponse(200, envelope({ units: [], chats: [], tasks: [] }, cursor)),
+  }).api;
+  const applied = await acceptStreamEvent(late, lateApi, ready);
+  assert.equal(applied.dropped, undefined);
+  assert.equal(applied.ready, true);
+  assert.deepEqual(late.capabilities, ["read", "viewer.write", "layout.write"]);
+
+  const resetting = createStore();
+  resetting.snapshotReady = true;
+  resetting.cursor = cursor;
+  resetting.snapshotCursor = cursor;
+  let reads = 0;
+  const resetApi = harness({
+    fetch: async () => {
+      reads += 1;
+      return jsonResponse(200, envelope({ units: [], chats: [], tasks: [], settings: { look: "modern" }, revision: "1" }, cursor));
+    },
+  }).api;
+  const outcome = await acceptStreamEvent(resetting, resetApi, reset);
+  assert.notEqual(outcome?.dropped, true);
+  assert.equal(reads > 0, true);
 });
 
 test("reset keeps the latest snapshot and drops a stale 400-item page", async () => {
