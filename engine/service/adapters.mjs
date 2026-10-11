@@ -576,15 +576,15 @@ export async function resolveLaunch(client, env = process.env, platform = proces
 }
 
 function registeredProjectCwd(context, unitId) {
+  const projects = (context.projects ?? []).filter((item) => item?.name && typeof item.localPath === 'string' && item.eligible !== false);
   let projectName = null;
   try {
     projectName = parseUnitId(unitId).project;
   } catch {
     projectName = null;
   }
-  if (!projectName) return null;
-  const project = (context.projects ?? []).find((item) => item?.name === projectName && typeof item.localPath === 'string' && item.eligible !== false);
-  return project?.localPath ?? null;
+  if (projectName) return projects.find((item) => item.name === projectName)?.localPath ?? null;
+  return projects.length === 1 ? projects[0].localPath : null;
 }
 
 async function unwrapLaunch(file, client, request = {}) {
