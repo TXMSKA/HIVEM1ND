@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { statSync, readFileSync, unlinkSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { chmod, mkdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +9,6 @@ import { CoreError } from './identity.mjs';
 export const DESKTOP = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailbox.read', 'approval.answer', 'grant.revoke', 'task.status', 'task.undo', 'unit.create', 'unit.connect', 'session.start', 'session.stop', 'layout.write', 'settings.write', 'home.manage', 'editor.read', 'editor.write', 'comment.write', 'proposal.answer', 'asset.write', 'watch', 'viewer.write']);
 const PHONE = new Set(['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back']);
 const SYSTEM_SID = 'S-1-5-18';
-const ADMINISTRATORS_SID = 'S-1-5-32-544';
 const ACL_TIMEOUT_MS = 8000;
 
 export function createAclRunner({ spawnSync: run = spawnSync, env = process.env, platform = process.platform } = {}) {
@@ -25,6 +24,7 @@ export function createAclRunner({ spawnSync: run = spawnSync, env = process.env,
       return sid;
     },
     protect(target) {
+      assertLocalTarget(target);
       const sid = this.userSid();
       const rights = statSync(target).isDirectory() ? '(OI)(CI)F' : 'F';
       const grant = (value) => `*${value}:${rights}`;
@@ -32,12 +32,12 @@ export function createAclRunner({ spawnSync: run = spawnSync, env = process.env,
         target,
         '/inheritance:r',
         '/grant:r', grant(SYSTEM_SID),
-        '/grant:r', grant(ADMINISTRATORS_SID),
         '/grant:r', grant(sid),
       ]);
       return { protected: true, sid };
     },
     check(target) {
+      assertLocalTarget(target);
       const sid = this.userSid();
       const saved = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(6).toString('hex')}.txt`);
       try {
@@ -120,6 +120,7 @@ export async function protectBootstrapFiles(directory, file, options = {}) {
   const runner = aclRunnerFrom(options);
   runner.protect(directory);
   runner.protect(file);
+  runner.check(directory);
   runner.check(file);
   return { protected: true, sid: runner.userSid() };
 }
@@ -130,7 +131,9 @@ export async function verifyBootstrapFiles(directory, file, options = {}) {
     await verifyLocalPermissions(file);
     return { ok: true };
   }
-  aclRunnerFrom(options).check(file);
+  const runner = aclRunnerFrom(options);
+  runner.check(directory);
+  runner.check(file);
   return { ok: true };
 }
 
@@ -323,18 +326,34 @@ function readAclText(file) {
   return bytes.toString('utf8');
 }
 
+function assertLocalTarget(target) {
+  let info;
+  try {
+    info = lstatSync(target);
+  } catch {
+    throw new CoreError(503, 'bootstrap_unavailable', 'The private folder could not be protected.');
+  }
+  if (info.isSymbolicLink()) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder could not be protected.');
+}
+
 function assertLimitedAcl(text, userSid) {
+  const owner = String(text).match(/O:([^:\r\nG]+)/);
+  if (owner) {
+    const sid = owner[1].toUpperCase();
+    if (sid !== userSid.toUpperCase() && sid !== SYSTEM_SID && sid !== 'SY') {
+      throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
+    }
+  }
   const marker = text.indexOf('D:');
   if (marker < 0) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
   const dacl = text.slice(marker).split(/\r?\n/, 1)[0].trim();
   const flags = dacl.slice(2).split('(', 1)[0];
   if (!flags.includes('P')) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder still inherits permissions.');
-  const allowed = new Set([SYSTEM_SID, ADMINISTRATORS_SID, 'SY', 'BA', userSid.toUpperCase()]);
+  const allowed = new Set([SYSTEM_SID, 'SY', userSid.toUpperCase()]);
   const aces = [...dacl.matchAll(/\(([^()]*)\)/g)].map((match) => match[1]);
   if (aces.length < 1) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
   let sawUser = false;
   let sawSystem = false;
-  let sawAdmin = false;
   for (const ace of aces) {
     const fields = ace.split(';');
     if (fields.length < 6) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL could not be read.');
@@ -343,9 +362,8 @@ function assertLimitedAcl(text, userSid) {
     if (!allowed.has(trustee)) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
     if (trustee === userSid.toUpperCase()) sawUser = true;
     if (trustee === 'SY' || trustee === SYSTEM_SID) sawSystem = true;
-    if (trustee === 'BA' || trustee === ADMINISTRATORS_SID) sawAdmin = true;
   }
-  if (!sawUser || !sawSystem || !sawAdmin) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
+  if (!sawUser || !sawSystem) throw new CoreError(503, 'bootstrap_unavailable', 'The private folder ACL is not limited to the owner.');
 }
 
 function normalizeAddress(address) {

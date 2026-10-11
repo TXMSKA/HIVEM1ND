@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { connect, createServer } from 'node:net';
 import os from 'node:os';
@@ -244,6 +245,8 @@ test('windows acl tools come from System32', async () => {
     spawnSync: (command, args, options) => {
       calls.push({ command, args, shell: options.shell, windowsHide: options.windowsHide });
       if (String(command).endsWith(`${path.sep}whoami.exe`)) return { status: 0, stdout: '"machine\\user","S-1-5-21-1-2-3-1001"\r\n' };
+      const saved = args[args.indexOf('/save') + 1];
+      if (args.includes('/save') && saved) writeFileSync(saved, aclText);
       return { status: 0, stdout: '' };
     },
   });
@@ -251,7 +254,22 @@ test('windows acl tools come from System32', async () => {
   assert.equal(calls[0].command, path.join('C:\\Windows', 'System32', 'whoami.exe'));
   const target = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(4).toString('hex')}`);
   await writeFile(target, 'acl');
+  const user = 'S-1-5-21-1-2-3-1001';
+  let aclText = `O:${user}G:DU\r\nD:P(A;;FA;;;SY)(A;;FA;;;${user})\r\n`;
   runner.protect(target);
+  assert.equal(calls[1].args.some((part) => String(part).includes('S-1-5-32-544')), false);
+  assert.equal(calls[1].args.some((part) => String(part).includes('S-1-5-18')), true);
+  assert.equal(calls[1].args.some((part) => String(part).includes(user)), true);
+  runner.check(target);
+  aclText = `O:BAG:DU\r\nD:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;${user})\r\n`;
+  assert.throws(() => runner.check(target), (error) => error.code === 'bootstrap_unavailable');
+  const directory = path.join(os.tmpdir(), `hivem1nd-acl-dir-${randomBytes(4).toString('hex')}`);
+  const link = path.join(os.tmpdir(), `hivem1nd-acl-link-${randomBytes(4).toString('hex')}`);
+  await mkdir(directory);
+  await symlink(directory, link, 'junction');
+  assert.throws(() => runner.check(link), (error) => error.code === 'bootstrap_unavailable');
+  await unlink(link);
+  await rm(directory, { recursive: true });
   await unlink(target);
   assert.equal(calls[1].command, path.join('C:\\Windows', 'System32', 'icacls.exe'));
   assert.equal(calls.every((call) => call.shell === false && call.windowsHide === true), true);
