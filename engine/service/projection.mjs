@@ -1,6 +1,7 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
+import { leadApproved } from './tasks.mjs';
 
 const VIEW_LIMIT = 16000000;
 const OBSERVATION_MS = 15 * 60 * 1000;
@@ -415,7 +416,7 @@ function readTask(bytes, relative, units, issues) {
     const lead = units.find((unit) => unit.id === assignee?.leadId);
     const leadLabel = lead?.unit ?? null;
     const dated = headers.get('date') || '';
-    const reviewable = status === 'review' && isMaster(fromId) && (!assignee?.leadId || Boolean(leadLabel && body.includes(`Approved for review by ${leadLabel} on ${dated}`)));
+    const reviewable = status === 'review' && isMaster(fromId) && (!assignee?.leadId || leadApproved(body, leadLabel, dated));
     return {
       id: id.id,
       number: id.number,

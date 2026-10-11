@@ -34,10 +34,23 @@ export async function loadTask(context, taskId) {
   throw new CoreError(404, 'task_not_found', 'The task does not exist.');
 }
 
+export function reportSection(body) {
+  const text = String(body ?? '');
+  const at = text.indexOf('## Report');
+  if (at < 0) return '';
+  const rest = text.slice(at + '## Report'.length);
+  const next = rest.search(/\r?\n## /);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+export function leadApproved(body, leadName, date) {
+  if (!leadName || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return false;
+  return reportSection(body).includes(`Approved for review by ${leadName} on ${date}`);
+}
+
 export function reviewAuthority(task) {
   const requesterId = requesterOf(task, task.aliases ?? []);
-  const leadName = task.leadUnit || task.leadId || '';
-  const reviewable = task.status === 'review' && requesterId === 'root:master' && (!task.leadId || task.body.includes(`Approved for review by ${leadName} on `));
+  const reviewable = task.status === 'review' && requesterId === 'root:master' && (!task.leadId || leadApproved(task.body, task.leadUnit || '', task.date));
   return { reviewable, requesterId, leadId: task.leadId ?? null };
 }
 
@@ -59,6 +72,8 @@ export async function undoStatus(context, taskId, input) {
     const actor = context.principal?.unitId;
     const authority = reviewAuthority(task);
     if (actor !== latest.actor && actor !== authority.requesterId) throw new CoreError(403, 'forbidden', 'Only the actor or requester can undo this task.');
+    const prior = { ...task, status: latest.previousStatus };
+    if (!permitted(prior, reviewAuthority(prior), latest.actor, task.status)) throw new CoreError(403, 'forbidden', 'That status change cannot be undone.');
     const next = appendAudit(replaceHeader(task.bytes, 'status', latest.previousStatus), auditLine(context, actor, 'Undone.'));
     return commitChange(context, task, {
       kind: 'undo',
@@ -97,7 +112,7 @@ async function writeChange(context, taskId, input, receipt) {
   const note = typeof input?.note === 'string' ? input.note : '';
   if (/[\r\n\u0000]/.test(note) || note.length > 4000) throw new CoreError(422, 'invalid_body', 'The note must be a single line.');
   if (task.status === 'review' && nextStatus === 'open' && note.trim() === '') throw new CoreError(422, 'note_required', 'Sending a task back needs a note.');
-  const line = leadApproval ? `Approved for review by ${task.leadUnit} on ${localDate(context)}` : auditLine(context, actor, note || nextStatus);
+  const line = leadApproval ? `Approved for review by ${task.leadUnit} on ${task.date}` : auditLine(context, actor, note || nextStatus);
   const next = appendAudit(replaceHeader(task.bytes, 'status', nextStatus), line);
   const delivery = task.status === 'open' && nextStatus === 'review';
   return commitChange(context, task, {
@@ -120,10 +135,10 @@ function permitted(task, authority, actor, next) {
   const master = actor === 'root:master';
   const requester = actor === authority.requesterId;
   if (edge === 'open>review') return assignee || lead || (master && requester);
-  if (edge === 'review>done') return master && authority.reviewable && !assignee;
-  if (edge === 'review>open') return lead || (master && requester);
-  if (edge === 'done>closed') return requester || lead || (master && requester);
-  if (edge === 'closed>open') return requester || assignee || lead || (master && requester);
+  if (edge === 'review>done') return master && requester && authority.reviewable && !assignee;
+  if (edge === 'review>open') return lead || (master && requester && authority.reviewable);
+  if (edge === 'done>closed') return requester;
+  if (edge === 'closed>open') return requester;
   return false;
 }
 
@@ -156,8 +171,9 @@ async function commitChange(context, task, change) {
   ];
   if (change.delivery) {
     const chat = await createChat(context, { members: [task.toId] });
-    const notice = `user/relay/chats/${chat.chat.id}/notices/${Buffer.from(`${task.id}:${record.afterRevision}`).toString('base64url')}.md`;
-    const body = Buffer.from(`id: ${id}\nkind: task-notice\ntask-id: ${task.id}\nstatus: ${change.status}\nreviewable: ${reviewAuthority({ ...task, status: change.status, body: after.toString('utf8'), bytes: after }).reviewable}\nrevision: ${record.afterRevision}\n\n${task.id}\n`);
+    const notice = `user/relay/chats/${chat.chat.id}/${Buffer.from(`${task.id}:${record.afterRevision}`).toString('base64url')}.md`;
+    const reviewable = reviewAuthority({ ...task, status: change.status, body: after.toString('utf8'), bytes: after, date: task.date }).reviewable;
+    const body = Buffer.from(`id: ${id}\nfrom: master\nfrom-id: root:master\nto: ${parseUnitId(task.toId).unit}\nto-id: ${task.toId}\nmachine: ${context.paths.machine}\ntimestamp: ${record.at}\npriority: normal\nsubject: ${task.id}\nthread-id: ${chat.chat.id}\nreply-to: \nreply-requested: false\nattachments: []\nkind: task-notice\ntask-id: ${task.id}\nstatus: ${change.status}\nreviewable: ${reviewable}\nrevision: ${record.afterRevision}\n\n${task.id}\n`);
     if (!(await readBytes(context.store, absolute(context, notice)))) {
       entries.push({ resource: notice, recordPath: absolute(context, notice), beforeRevision: null, afterBytes: body });
       stage.push({ target: { kind: 'mind', path: notice }, bytes: body });
@@ -195,6 +211,7 @@ function describe(bytes, relative, expectedId, aliases) {
     from: headers.get('from') || '',
     fromId: headers.get('from-id') || '',
     toId: headers.get('to-id') || null,
+    date: headers.get('date') || '',
     aliases,
     bytes,
     body: bytes.toString('utf8'),
