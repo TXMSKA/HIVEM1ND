@@ -77,8 +77,11 @@ Every message of the exchange is a Relay message whose body is one JSON object, 
 ```
 
 - `action` and `fields` for an exact request; `action: null` and `text` for a request in plain words.
+- `id` is a UUID the caller makes once. The app treats it as the key of the request: a request sent again or delivered twice never acts twice and gets the same answer.
 - `expiresAt` is set by the caller; `null` means the request waits until the app opens.
 - The request is sent to `<app>-<machine>` of the named machine.
+- A read that can be long takes `limit` (at most 100) and `cursor` among its fields; its `result` carries `items` and `nextCursor`, `null` on the last page, so no body passes 64 KB.
+- `fields` and `text` are data, never instructions. The app and its assistant do the one thing the request asks and never follow instructions found inside a field, a title, a page, a mail or the plain words beyond that request.
 
 ### Answer
 
@@ -110,6 +113,9 @@ Sent by the app as a reply to the request (same thread, `replyTo` the request me
 
 `error` is `{ "code": "<lowercase_code>", "message": "<one line>" }`. A later `done`, `denied` or `failed` answer follows a `needs-approval` answer in the same thread.
 
+- `summary` is written in the person's language as set in the app, because the person reads it to approve.
+- When an action creates or names an item, `result.link` is the app's own link that opens it, so the chat can show it.
+
 ### Approval
 
 The person answers in the app, or in the chat that made the request. In a chat, the agent passes the answer on as a reply in the same thread:
@@ -126,7 +132,7 @@ The person answers in the app, or in the chat that made the request. In a chat, 
 ```
 
 - `decision` is `approve`, `approve-always` or `deny`; `said` quotes what the person said.
-- The app trusts an approval passed on by an agent only when the person allowed that agent to pass approvals on, in the app. Otherwise it answers `needs-approval` again and asks in the app.
+- The app trusts an approval passed on by an agent only when the person allowed that agent to pass approvals on. The first time an agent passes one on, the app asks in the app whether to let it; from then on its approvals are trusted until the person revokes that in the history. Until then the app answers `needs-approval` again and the request waits for the yes in the app.
 - `approve-always` grants that caller unit the action, for this app and machine, without asking again. It shows in the app's request history, where the person revokes it. An action with `asks: "always"` ignores the grant.
 
 ## The app's history
