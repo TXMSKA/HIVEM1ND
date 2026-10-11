@@ -4,7 +4,7 @@ import { appendFileSync, lstatSync, readFileSync, statSync, unlinkSync, writeFil
 import { chmod, mkdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CoreError } from './identity.mjs';
+import { CoreError, isUuid } from './identity.mjs';
 
 export const DESKTOP = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailbox.read', 'approval.answer', 'grant.revoke', 'task.status', 'task.undo', 'unit.create', 'unit.connect', 'session.start', 'session.stop', 'layout.write', 'settings.write', 'home.manage', 'editor.read', 'editor.write', 'comment.write', 'proposal.answer', 'asset.write', 'watch', 'viewer.write']);
 const PHONE = new Set(['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back']);
@@ -143,12 +143,36 @@ const SECURITY_TYPES = new Set(['auth.failure', 'auth.success', 'permission.deni
 
 export function createSecuritySink({ now = () => Date.now(), directory = null } = {}) {
   const events = [];
+  const diagnostics = [];
   const failures = new Map();
   const file = directory ? path.join(directory, 'security-events.jsonl') : null;
+  const diagnosticFile = directory ? path.join(directory, 'developer-diagnostics.jsonl') : null;
   return {
     events,
+    diagnostics,
     retention: SECURITY_RETENTION,
     alertThreshold: SECURITY_ALERT_THRESHOLD,
+    diagnose(input = {}) {
+      try {
+        const message = typeof input.message === 'string' ? input.message : '';
+        const code = typeof input.code === 'string' && input.code.length > 0 ? input.code : 'internal_error';
+        const name = typeof input.name === 'string' && input.name.length > 0 ? input.name : 'Error';
+        const syscall = typeof input.syscall === 'string' && /^[a-zA-Z][a-zA-Z0-9]{0,31}$/.test(input.syscall) ? input.syscall : null;
+        const record = {
+          at: new Date(now()).toISOString(),
+          requestId: isUuid(input.requestId) ? input.requestId : null,
+          status: Number.isInteger(input.status) && input.status >= 400 && input.status <= 599 ? input.status : 500,
+          code: leaks(code) ? 'internal_error' : code.slice(0, 80),
+          name: leaks(name) ? 'Error' : name.slice(0, 40),
+          syscall,
+          message: message.length > 0 && !leaks(message) ? message.slice(0, 200) : 'redacted',
+        };
+        remember(diagnostics, record, diagnosticFile);
+        return record;
+      } catch {
+        return null;
+      }
+    },
     record(input = {}) {
       try {
         const type = SECURITY_TYPES.has(input.type) ? input.type : null;

@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
+import { request } from 'node:http';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, queueNotice, readChat, readMailbox, recoverMailboxReads, recoverNotifications } from '../engine/service/chats.mjs';
+import { composeCore } from '../engine/service/service.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { recoverTransactions } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -139,6 +142,132 @@ test('mailbox reads are atomic, collide on different bytes, and resume after a c
   const archived = await readdir(path.dirname(archive));
   assert.equal(archived.length, 2);
 });
+
+test('concurrent mailbox posts return only created or limited results and replay the same key', async (t) => {
+  const fixture = await makeCoreFixture();
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const core = await composeCore({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await httpCall(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  const keys = Array.from({ length: 30 }, () => randomUUID());
+  const responses = await Promise.all(keys.map((key, index) => httpCall(core.http.port, 'POST', '/api/v1/mailboxes/root:master/messages', {
+    token,
+    body: { body: `burst ${index}`, subject: 'Burst' },
+    headers: { 'idempotency-key': key, 'x-request-id': key },
+  })));
+  const bad = responses.filter((item) => item.status !== 201 && item.status !== 429);
+  assert.deepEqual(bad.map((item) => ({ status: item.status, body: item.json, diagnostics: core.http.security.diagnostics })), []);
+  for (const item of responses) {
+    if (item.status === 429) {
+      assert.equal(item.json.error.code, 'message_rate_limited');
+      assert.equal(typeof item.headers['retry-after'], 'string');
+      assert.equal(item.json.error.details.phase, 'admission');
+      assert.equal(item.json.error.details.limits.messages.max, 60);
+      assert.equal(typeof item.json.error.details.limits.messages.used, 'number');
+      assert.equal(item.json.error.details.limits.messageBytes.max, 1000000);
+      assert.equal(item.json.error.details.limits.syncBytes.max, 50000000);
+    } else {
+      assert.equal(item.json.data.subject, 'Burst');
+      assert.equal(item.json.meta.replayed, false);
+    }
+  }
+  const created = responses.find((item) => item.status === 201);
+  const replay = await httpCall(core.http.port, 'POST', '/api/v1/mailboxes/root:master/messages', {
+    token,
+    body: { body: created.json.data.body, subject: 'Burst' },
+    headers: { 'idempotency-key': created.json.meta.requestId, 'x-request-id': randomUUID() },
+  });
+  assert.equal(replay.status, 201);
+  assert.equal(replay.json.meta.replayed, true);
+  assert.equal(replay.json.data.id, created.json.data.id);
+});
+
+test('a partial mailbox commit replays the same message for the same key', async (t) => {
+  const fixture = await makeCoreFixture();
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const core = await composeCore({
+    store: fixture.store,
+    paths: { ...fixture.paths, origin },
+    now: () => fixture.clock.now,
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const local = await httpCall(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  const key = randomUUID();
+  const body = { body: 'partial', subject: 'Once' };
+  fixture.store.fault = { afterRenames: 1 };
+  const failed = await httpCall(core.http.port, 'POST', '/api/v1/mailboxes/root:master/messages', {
+    token,
+    body,
+    headers: { 'idempotency-key': key, 'x-request-id': randomUUID() },
+  });
+  assert.equal(failed.status, 500);
+  assert.equal(failed.json.error.code, 'injected_crash');
+  const replay = await httpCall(core.http.port, 'POST', '/api/v1/mailboxes/root:master/messages', {
+    token,
+    body,
+    headers: { 'idempotency-key': key, 'x-request-id': randomUUID() },
+  });
+  assert.equal(replay.status, 201);
+  assert.equal(replay.json.meta.replayed, true);
+  assert.equal(replay.json.data.subject, 'Once');
+  const inbox = path.join(fixture.paths.mind, 'user', 'inbox', 'master');
+  const names = (await readdir(inbox)).filter((name) => name.endsWith('.md'));
+  assert.equal(names.length, 1);
+  assert.equal(names[0].includes(replay.json.data.id), true);
+});
+
+function httpCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      method,
+      path: target,
+      headers: {
+        host: `127.0.0.1:${port}`,
+        origin: `http://127.0.0.1:${port}`,
+        ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        if (raw.length > 0 && String(res.headers['content-type'] ?? '').includes('json')) json = JSON.parse(raw);
+        resolve({ status: res.statusCode, headers: res.headers, json });
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.end(payload);
+    else req.end();
+  });
+}
 
 async function unlinkSafe(file) {
   const { unlink } = await import('node:fs/promises');

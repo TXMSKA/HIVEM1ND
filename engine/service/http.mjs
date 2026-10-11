@@ -353,6 +353,16 @@ export async function createHttpServer(options) {
       try {
         if (!res.headersSent && !res.writableEnded) {
           const status = error instanceof CoreError ? error.status : 500;
+          if (status >= 500) {
+            security.diagnose({
+              requestId: headerOne(req, 'x-request-id'),
+              status,
+              code: error?.code,
+              name: error?.name,
+              syscall: error?.syscall,
+              message: error instanceof Error ? error.message : '',
+            });
+          }
           const type = securityType(status);
           if (type) security.record({ type, peer: peerAddress(req), outcome: 'failure' });
           const headers = {};
@@ -491,7 +501,7 @@ export async function createHttpServer(options) {
     }
     const outcome = applySync(route.method === 'GET'
       ? await run()
-      : await mutate(options, credential, req, relative, body, requestId, eventCursor, run), domain);
+      : await mutate(options, credential, req, relative, body, requestId, eventCursor, run, domain), domain);
     if (credential?.audience === 'agent') await agentScope(route, domain, credential, params, body);
     if (outcome.status === 204) {
       respond(res, 204);
@@ -1195,7 +1205,7 @@ async function rememberHome(memory, credential, req, relative, body, requestId, 
   return outcome;
 }
 
-async function mutate(options, credential, req, relative, body, requestId, eventCursor, run) {
+async function mutate(options, credential, req, relative, body, requestId, eventCursor, run, domain) {
   const key = headerOne(req, 'idempotency-key');
   if (!isUuid(key)) throw new CoreError(400, 'idempotency_required', 'Idempotency-Key must be a UUID.');
   return withReceipt(options.store, {
@@ -1207,14 +1217,19 @@ async function mutate(options, credential, req, relative, body, requestId, event
     requestId,
     eventCursor,
   }, async (receipt) => {
-    const outcome = await run();
-    await atomicWrite(options.store, path.join(options.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
-      ...receipt,
-      status: outcome.status ?? 200,
-      sync: outcome.sync ?? 'local',
-      response: outcome.body ?? null,
-    })}\n`));
-    return outcome;
+    if (domain) domain.receipt = receipt;
+    try {
+      const outcome = await run();
+      await atomicWrite(options.store, path.join(options.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
+        ...receipt,
+        status: outcome.status ?? 200,
+        sync: outcome.sync ?? 'local',
+        response: outcome.body ?? null,
+      })}\n`));
+      return outcome;
+    } finally {
+      if (domain) domain.receipt = null;
+    }
   });
 }
 

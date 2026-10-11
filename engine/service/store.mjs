@@ -262,14 +262,32 @@ export async function atomicWrite(store, destination, bytes) {
     throw error;
   }
   await handle.close();
-  try {
-    await rename(temporary, target);
-  } catch (error) {
-    await unlink(temporary).catch(() => {});
-    throw error;
-  }
+  await renameReplacing(temporary, target, payload);
   store.writes.push(target);
   return target;
+}
+
+async function renameReplacing(temporary, target, payload) {
+  let last;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      await rename(temporary, target);
+      return;
+    } catch (error) {
+      last = error;
+      if (error?.code === 'ENOENT') {
+        const existing = await readBytesRaw(target);
+        if (existing && existing.equals(payload)) return;
+      }
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(error?.code) || attempt === 5) break;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 5 * (attempt + 1));
+        timer.unref?.();
+      });
+    }
+  }
+  await unlink(temporary).catch(() => {});
+  throw last;
 }
 
 export async function exclusiveRecord(store, destination, bytes) {
@@ -404,28 +422,31 @@ async function commitLocked(store, prepared) {
   }
   for (const entry of checked) store.hidden.set(entry.recordPath, entry.current);
   await atomicWrite(store, journalFile(store, prepared.id), journalBytes(journal));
-  let renamed = 0;
-  for (const entry of entries) {
-    const destination = entry.target?.kind === 'project' ? entry.target : entry.recordPath;
-    await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
-    renamed += 1;
-    if (store.fault?.afterRenames === renamed) {
-      store.fault = null;
-      store.recovered = false;
-      throw new CoreError(500, 'injected_crash', 'Injected crash after a partial transaction.');
+  try {
+    let renamed = 0;
+    for (const entry of entries) {
+      const destination = entry.target?.kind === 'project' ? entry.target : entry.recordPath;
+      await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
+      renamed += 1;
+      if (store.fault?.afterRenames === renamed) {
+        store.fault = null;
+        throw new CoreError(500, 'injected_crash', 'Injected crash after a partial transaction.');
+      }
     }
-  }
-  if (store.fault?.beforeReceipt) {
-    store.fault = null;
+    if (store.fault?.beforeReceipt) {
+      store.fault = null;
+      throw new CoreError(500, 'injected_crash', 'Injected crash before the receipt was published.');
+    }
+    if (receipt) await writeReceipt(store, receipt);
+    const committed = { ...journal, phase: 'committed', emitted: true, staged: true };
+    await atomicWrite(store, journalFile(store, prepared.id), journalBytes(committed));
+    for (const entry of entries) store.hidden.delete(entry.recordPath);
+    emit(store, journal.events);
+    return { status: receipt?.status ?? prepared.response?.status ?? 200, body: receipt?.response ?? prepared.response?.body ?? null, id: prepared.id };
+  } catch (error) {
     store.recovered = false;
-    throw new CoreError(500, 'injected_crash', 'Injected crash before the receipt was published.');
+    throw error;
   }
-  if (receipt) await writeReceipt(store, receipt);
-  const committed = { ...journal, phase: 'committed', emitted: true, staged: true };
-  await atomicWrite(store, journalFile(store, prepared.id), journalBytes(committed));
-  for (const entry of entries) store.hidden.delete(entry.recordPath);
-  emit(store, journal.events);
-  return { status: receipt?.status ?? prepared.response?.status ?? 200, body: receipt?.response ?? prepared.response?.body ?? null, id: prepared.id };
 }
 
 export async function recoverTransactions(store) {

@@ -98,6 +98,10 @@ export async function postMailbox(context, unitId, input) {
   const message = await buildMessage(context, input, { toId: unitId, threadId: input?.replyTo ?? null, destination: 'mailbox', legacyTo: parseUnitId(unitId).unit });
   const file = `${inboxDirectory(parseUnitId(unitId))}/${fileStamp(context)}-${context.paths.machine}-${message.id}.md`;
   await charge(context, message.id, message.bytes);
+  if (context.receipt) {
+    context.receiptStatus = 201;
+    context.receiptBody = message.projected;
+  }
   await commitOne(context, file, null, message.bytes, [
     { name: 'message.created', data: { chatId: null, mailboxId: unitId, message: message.projected } },
   ]);
@@ -397,6 +401,7 @@ async function commitOne(context, relative, before, bytes, events) {
 }
 
 async function commitMany(context, entries, events) {
+  const receipt = context.receipt && context.receiptBody !== undefined ? context.receipt : null;
   await commitTransaction(context.store, {
     id: randomUUID(),
     entries: entries.map((entry) => ({
@@ -406,7 +411,10 @@ async function commitMany(context, entries, events) {
       afterBytes: entry.bytes,
     })),
     events: [],
+    ...(receipt ? { receipt, response: { status: context.receiptStatus ?? 201, body: context.receiptBody } } : {}),
   });
+  context.receiptBody = undefined;
+  context.receiptStatus = undefined;
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   const changes = await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
   noteSync(context, changes.length ? 'pending' : 'local');
