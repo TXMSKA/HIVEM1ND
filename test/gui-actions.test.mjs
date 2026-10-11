@@ -32,6 +32,8 @@ import {
   undoTask,
 } from "../gui/app/actions.mjs";
 import { retryOperation } from "../gui/app/api.mjs";
+import { runAction } from "../gui/app/components.mjs";
+import { renderSession } from "../gui/app/inspector.mjs";
 import {
   applyRemoteLayout,
   createMap,
@@ -481,6 +483,88 @@ test("a lost chat post retries the same operation and a rate limit keeps the com
   const mailbox = await openMailbox(api, "project:blog:executor-shop", "all");
   assert.equal(mailbox.status, 200);
 });
+
+test("a chat send keeps an optimistic row until the same operation settles", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const api = apiWith(async () => {
+    await gate;
+    return { data: { message: { id: "m1", body: "hello", timestamp: "2026-10-10T12:00:00.000Z" }, notifications: [] } };
+  });
+  const thread = createThread({ id: "chat-1" });
+  const pending = postMessage(api, thread, { body: "hello" });
+  assert.equal(thread.pending, pending);
+  assert.equal(thread.messages.length, 1);
+  assert.equal(thread.messages[0].pending, true);
+  assert.equal(thread.messages[0].body, "hello");
+  assert.equal(thread.messages[0].operationId, thread.operation.id);
+  const again = postMessage(api, thread, { body: "hello" });
+  assert.equal(again, pending);
+  assert.equal(thread.messages.length, 1);
+  release();
+  await pending;
+  assert.equal(thread.messages.length, 1);
+  assert.equal(thread.messages[0].id, "m1");
+  assert.equal(thread.operation, null);
+});
+
+test("a busy session and a tracked action show progress before settlement", async () => {
+  const document = miniDocument();
+  const block = renderSession(document, { id: "session-1", state: "running", activity: "busy" }, (key) => key);
+  const marks = walk(block).filter((node) => node.attrs?.["aria-busy"] === "true");
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].attrs["data-session-activity"], "busy");
+
+  const bucket = new Map();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const seen = [];
+  const task = runAction(bucket, "settings", {
+    label: "Saving the setting.",
+    render(record) { seen.push(record.phase); },
+    work: () => gate,
+  });
+  assert.deepEqual(seen, ["pending"]);
+  assert.equal(runAction(bucket, "settings", { label: "Saving the setting.", work: () => "other" }), task);
+  assert.equal(seen.length, 1);
+  release("saved");
+  assert.equal(await task, "saved");
+  assert.equal(bucket.get("settings").phase, "success");
+
+  const failing = new Map();
+  await assert.rejects(runAction(failing, "send", {
+    label: "Sending.",
+    work: () => { throw Object.assign(new Error("offline"), { code: "offline" }); },
+  }), (error) => error.code === "offline");
+  assert.equal(failing.get("send").phase, "error");
+  assert.equal(failing.get("send").operation, null);
+});
+
+function miniDocument() {
+  function make(tag) {
+    return {
+      tag,
+      children: [],
+      attrs: {},
+      className: "",
+      textContent: "",
+      setAttribute(key, value) { this.attrs[key] = String(value); },
+      getAttribute(key) { return this.attrs[key] ?? null; },
+      append(...items) {
+        for (const item of items) if (item != null && item !== false) this.children.push(item);
+      },
+      addEventListener() {},
+      removeAttribute(key) { delete this.attrs[key]; },
+    };
+  }
+  return { createElement: make, createElementNS: make, createTextNode(text) { return { text }; } };
+}
+
+function walk(node, found = []) {
+  found.push(node);
+  for (const child of node.children ?? []) walk(child, found);
+  return found;
+}
 
 test("a second submit joins the in-flight post", async () => {
   let release;

@@ -28,12 +28,13 @@ import {
   openMailbox,
   postMailbox,
   postMessage,
+  retryMessage,
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
-import { announce, element, icon, showDialog, showError } from "./components.mjs";
+import { announce, element, icon, progressMark, runAction, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -240,6 +241,7 @@ export function renderShell(app) {
   shell.append(renderBar(app, t, counts), renderWorkspace(app, t, view, counts), renderFooter(app, t));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
+  paintActivity(app, shell);
   restoreInputFocus(app);
   finishList(app);
   finishMap(app);
@@ -1172,6 +1174,9 @@ function renderEditorSurfaces(app, t) {
   const title = current?.authoritative?.title ?? current?.authoritative?.legacy?.id ?? t(app.mode);
   const watch = editors.watch;
   const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
+  const watchStatus = watch?.state === "waiting"
+    ? progressMark(document, watchText, { "data-watch": "waiting" })
+    : element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText });
   const catalog = element(document, "aside", { class: "panel editor-catalog", "data-editor-column": "catalog" },
     element(document, "h2", { text: t(kind === "blueprint" ? "boards" : "texts") }),
   );
@@ -1182,7 +1187,7 @@ function renderEditorSurfaces(app, t) {
     element(document, "h2", { text: t("comments") }),
   );
   const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
-    element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText }),
+    watchStatus,
   );
   resource.append(tools);
   if (current?.conflict) {
@@ -1871,27 +1876,64 @@ function dataOf(event) {
   return event?.envelope?.data ?? {};
 }
 
-async function chooseSetting(app, patch) {
-  try {
-    const result = await saveSettings(app.api, app.store.settings?.revision ?? null, patch);
-    app.store.settings.settings = result.data.settings;
-    app.store.settings.revision = result.data.revision;
-    const choice = presentation(app.store.viewer, result.data.settings);
-    app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
-    app.language = choice.language === "es" ? "es" : "en";
-    if (!app.disposed) renderShell(app);
-  } catch (error) {
-    if (error.code === "revision_conflict") {
-      try {
-        const latest = await request(app.api, "GET", "/settings");
-        applySettingsRead(homeState(app), latest.data);
-        app.store.settings = latest.data;
-      } catch {
-        // The visible error remains the conflict.
+function chooseSetting(app, patch) {
+  return track(app, "settings", text(app.language, "savingSetting"), async () => {
+    try {
+      const result = await saveSettings(app.api, app.store.settings?.revision ?? null, patch);
+      app.store.settings.settings = result.data.settings;
+      app.store.settings.revision = result.data.revision;
+      const choice = presentation(app.store.viewer, result.data.settings);
+      app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+      app.language = choice.language === "es" ? "es" : "en";
+      return result;
+    } catch (error) {
+      if (error.code === "revision_conflict") {
+        try {
+          const latest = await request(app.api, "GET", "/settings");
+          applySettingsRead(homeState(app), latest.data);
+          app.store.settings = latest.data;
+        } catch {
+          // The visible error remains the conflict.
+        }
       }
+      throw error;
     }
-    noteAction(app, error);
+  }).catch((error) => noteAction(app, error));
+}
+
+function track(app, key, label, work) {
+  if (!app.activity) app.activity = new Map();
+  return runAction(app.activity, key, {
+    label,
+    work,
+    render(record) {
+      record.retry = () => track(app, key, label, work);
+      if (!app.disposed) renderShell(app);
+    },
+  });
+}
+
+function paintActivity(app, shell) {
+  const records = [...(app.activity?.values() ?? [])];
+  const pending = records.filter((record) => record.phase === "pending");
+  const failed = records.filter((record) => record.phase === "error");
+  if (!pending.length && !failed.length) return;
+  const document = app.root.ownerDocument;
+  const region = element(document, "div", { class: "activity", "aria-live": "polite", "data-activity-region": "true" });
+  if (pending.length) shell.setAttribute("aria-busy", "true");
+  for (const record of pending) region.append(progressMark(document, record.label, { "data-activity": record.key }));
+  for (const record of failed) {
+    region.append(element(document, "p", { "data-activity": record.key, text: record.label }));
+    region.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "retry-activity",
+      "data-activity": record.key,
+      text: text(app.language, "retry"),
+      onclick: () => record.retry?.(),
+    }));
   }
+  shell.append(region);
 }
 
 function beginHome(app, raw, replacing) {
@@ -1906,6 +1948,7 @@ function beginHome(app, raw, replacing) {
     body: t("homeReplaceBody"),
     confirm: t("homeReplace"),
     cancel: t("cancel"),
+    retry: t("retry"),
     onConfirm: run,
   });
 }
@@ -2129,6 +2172,7 @@ function confirmConnection(app, sourceId, targetIds) {
     body,
     confirm: text(app.language, "connect"),
     cancel: text(app.language, "cancel"),
+    retry: text(app.language, "retry"),
     onConfirm: async () => {
       const results = await connectUnits(app.api, source, targets);
       showOutcome(app, results.map((result) => {
@@ -2274,6 +2318,7 @@ function confirmStop(app, sessionId) {
     body: text(app.language, "sessionStopping"),
     confirm: text(app.language, "stopSession"),
     cancel: text(app.language, "cancel"),
+    retry: text(app.language, "retry"),
     onConfirm: async () => {
       try {
         const stopped = await stopSession(app.api, sessionId);
@@ -2399,11 +2444,29 @@ function chatPanel(app, t) {
   thread.windowStart = windowed.start;
   if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
   for (const message of windowed.items) {
-    transcript.append(element(document, "p", {
+    const row = element(document, "p", {
       "data-message": message.id,
       "data-read": message.read ? "true" : "false",
-      text: message.body || message.subject || "",
-    }));
+      "data-pending": message.pending ? (message.failed ? "failed" : "true") : null,
+    });
+    row.append(document.createTextNode(message.body || message.subject || ""));
+    if (message.pending && !message.failed) row.append(progressMark(document, t("sending")));
+    if (message.failed) {
+      row.append(element(document, "button", {
+        type: "button",
+        class: "btn",
+        "data-action": "retry-message",
+        text: t("retry"),
+        onclick: () => {
+          const task = retryMessage(app.api, thread);
+          if (!app.disposed) renderShell(app);
+          task?.then(() => {
+            if (!app.disposed) renderShell(app);
+          }).catch((error) => noteAction(app, error));
+        },
+      }));
+    }
+    transcript.append(row);
   }
   if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
   transcript.addEventListener("scroll", () => {
@@ -2445,7 +2508,16 @@ function chatPanel(app, t) {
       thread.composer = draft.value;
       syncViewerDirty(app);
     });
-    const send = element(document, "button", { type: "button", class: "btn primary", "data-action": "send", text: t("send"), onclick: () => submitComposer(app, composer) });
+    const sending = Boolean(thread.pending);
+    const send = element(document, "button", {
+      type: "button",
+      class: "btn primary",
+      "data-action": "send",
+      "aria-busy": sending ? "true" : "false",
+      disabled: sending ? "" : null,
+      onclick: () => submitComposer(app, composer),
+    }, sending ? progressMark(document, t("sending")) : t("send"));
+    if (sending) send.disabled = true;
     panel.append(composer, send);
   }
   if (app.mailbox) panel.append(renderMailbox(app, t));
@@ -2681,9 +2753,12 @@ function sendMailbox(app, compose) {
 
 function submitComposer(app, composer) {
   const chatId = app.thread?.chat?.id;
-  app.thread.composer = composer.value;
+  const draft = composer.value;
+  app.thread.composer = draft;
   if (chatId) inputDrafts(app).chats.set(chatId, fieldDraft(composer));
-  postMessage(app.api, app.thread, { body: composer.value }).then(() => {
+  const task = postMessage(app.api, app.thread, { body: draft });
+  if (!app.disposed) renderShell(app);
+  task.then(() => {
     if (chatId) clearInputDraft(app, "chat", chatId);
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error));

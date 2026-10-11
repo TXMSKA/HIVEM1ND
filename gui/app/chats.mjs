@@ -166,17 +166,12 @@ export function postMessage(api, thread, draft) {
     },
   });
   thread.operation = operation;
+  markOptimistic(thread, operation);
   const task = request(api, "POST", operation.path, { operation }).then((result) => {
-    thread.composer = "";
-    thread.operation = null;
-    thread.pending = null;
-    thread.error = null;
-    thread.notifications = result.data.notifications ?? [];
-    incomingMessage(thread, result.data.message);
+    settleMessage(thread, operation, result);
     return result;
   }).catch((error) => {
-    thread.pending = null;
-    thread.error = error;
+    failMessage(thread, operation, error);
     throw error;
   });
   thread.pending = task;
@@ -185,19 +180,46 @@ export function postMessage(api, thread, draft) {
 
 export async function retryMessage(api, thread) {
   if (!thread.operation) return null;
-  thread.pending = retryOperation(api, thread.operation).then((result) => {
-    thread.composer = "";
-    thread.operation = null;
-    thread.pending = null;
-    thread.error = null;
-    incomingMessage(thread, result.data.message);
+  const operation = thread.operation;
+  markOptimistic(thread, operation);
+  const task = retryOperation(api, operation).then((result) => {
+    settleMessage(thread, operation, result);
     return result;
   }).catch((error) => {
-    thread.pending = null;
-    thread.error = error;
+    failMessage(thread, operation, error);
     throw error;
   });
-  return thread.pending;
+  thread.pending = task;
+  return task;
+}
+
+function markOptimistic(thread, operation) {
+  const body = operation.body?.body ?? "";
+  let row = thread.messages.find((message) => message.operationId === operation.id);
+  if (!row) {
+    row = { id: `pending:${operation.id}`, body, pending: true, failed: false, operationId: operation.id };
+    thread.messages = [...thread.messages, row];
+  }
+  row.body = body;
+  row.pending = true;
+  row.failed = false;
+}
+
+function settleMessage(thread, operation, result) {
+  thread.composer = "";
+  thread.operation = null;
+  thread.pending = null;
+  thread.error = null;
+  thread.notifications = result.data.notifications ?? [];
+  thread.messages = thread.messages.filter((message) => message.operationId !== operation.id);
+  incomingMessage(thread, result.data.message);
+}
+
+function failMessage(thread, operation, error) {
+  thread.pending = null;
+  thread.error = error;
+  const row = thread.messages.find((message) => message.operationId === operation.id);
+  if (row) row.failed = true;
 }
 
 export async function manageChat(api, chat, change) {

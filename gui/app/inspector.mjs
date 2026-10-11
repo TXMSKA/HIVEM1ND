@@ -1,5 +1,5 @@
 import { canAccept, canSendBack } from "./actions.mjs";
-import { element } from "./components.mjs";
+import { element, progressMark } from "./components.mjs";
 
 export function renderUnit(document, unit, t) {
   const lines = [
@@ -36,7 +36,12 @@ export function renderMachine(document, machine, t) {
 export function renderSession(document, session, t) {
   if (!session) return element(document, "p", { text: t("unknown") });
   const block = element(document, "section", { "data-session": session.id, "data-session-state": session.state ?? "" });
-  block.append(element(document, "p", { "data-session-activity": session.activity ?? "unknown", text: `${t("sessionActivity")}: ${session.activity ?? t("unknown")}` }));
+  const activity = session.activity ?? "unknown";
+  if (activity === "busy" || activity === "working") {
+    block.append(progressMark(document, t("sessionWorking"), { "data-session-activity": activity }));
+  } else {
+    block.append(element(document, "p", { "data-session-activity": activity, text: `${t("sessionActivity")}: ${activity === "unknown" ? t("unknown") : activity}` }));
+  }
   const quota = session.quota;
   const quotaText = quota == null ? t("unknown") : `${quota.remaining ?? t("unknown")}${quota.exhausted ? ` ${t("statusQuota")}` : ""}`;
   block.append(element(document, "p", { "data-session-quota": quota == null ? "unknown" : "known", text: `${t("sessionQuota")}: ${quotaText}` }));

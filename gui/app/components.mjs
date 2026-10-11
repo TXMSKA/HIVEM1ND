@@ -48,7 +48,49 @@ export function icon(document, name) {
   return svg;
 }
 
-export function showDialog(document, { title, body, confirm, cancel, onConfirm }) {
+export function progressMark(document, label, attributes = {}) {
+  return element(document, "span", {
+    class: "progress",
+    role: "status",
+    "aria-busy": "true",
+    "aria-label": label,
+    ...attributes,
+  }, element(document, "span", { class: "spinner", "aria-hidden": "true" }), label);
+}
+
+export function runAction(bucket, key, { label, work, render, operation = null }) {
+  const current = bucket.get(key);
+  if (current?.phase === "pending") return current.promise;
+  const record = {
+    key,
+    phase: "pending",
+    label,
+    operation: operation ?? current?.operation ?? null,
+    error: null,
+    result: null,
+    promise: null,
+  };
+  const promise = Promise.resolve().then(() => work(record)).then((result) => {
+    record.phase = "success";
+    record.result = result;
+    record.error = null;
+    bucket.set(key, record);
+    render?.(record);
+    return result;
+  }).catch((error) => {
+    record.phase = "error";
+    record.error = error;
+    bucket.set(key, record);
+    render?.(record);
+    throw error;
+  });
+  record.promise = promise;
+  bucket.set(key, record);
+  render?.(record);
+  return promise;
+}
+
+export function showDialog(document, { title, body, confirm, cancel, retry, onConfirm }) {
   const invoker = document.activeElement;
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
@@ -59,13 +101,29 @@ export function showDialog(document, { title, body, confirm, cancel, onConfirm }
   actions.append(cancelButton);
   if (confirm) {
     const confirmButton = element(document, "button", { type: "button", class: "btn primary", text: confirm });
+    const showConfirm = (label) => {
+      confirmButton.replaceChildren();
+      confirmButton.append(document.createTextNode(label));
+    };
     confirmButton.addEventListener("click", async () => {
+      if (confirmButton.getAttribute("aria-busy") === "true") return;
       setBusy(confirmButton, true);
+      confirmButton.replaceChildren(progressMark(document, confirm));
+      const errorNode = dialog.querySelector("[data-dialog-error]");
+      if (errorNode) errorNode.remove();
       try {
         await onConfirm?.();
         dialog.close();
-      } finally {
+      } catch (error) {
         setBusy(confirmButton, false);
+        showConfirm(retry || "Retry");
+        const note = element(document, "p", { class: "action-note", "data-dialog-error": "true", role: "alert", text: error?.message || "The action failed." });
+        if (typeof dialog.insertBefore === "function") dialog.insertBefore(note, actions);
+        else {
+          const index = dialog.children.indexOf(actions);
+          note.parent = dialog;
+          dialog.children.splice(index < 0 ? dialog.children.length : index, 0, note);
+        }
       }
     });
     actions.append(confirmButton);

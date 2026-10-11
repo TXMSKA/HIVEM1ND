@@ -266,6 +266,19 @@ button, input { font: inherit; color: inherit; }
 .dialog input { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--ring); border-radius: 999px; padding: 8px 12px; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .action-note { color: var(--body); }
+.progress { display: inline-flex; align-items: center; gap: 8px; }
+.spinner {
+  width: 1em;
+  height: 1em;
+  border: 2px solid var(--ring);
+  border-right-color: transparent;
+  border-radius: var(--radius-circle);
+  display: inline-block;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .spinner { animation: spin 0.8s linear infinite; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .transcript { max-height: 240px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
 .transcript p { margin: 0; }
 
