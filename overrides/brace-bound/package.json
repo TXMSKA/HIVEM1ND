@@ -1,7 +1,0 @@
-{
-  "name": "hivem1nd-brace-bound",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Bounded brace expansion used in place of the affected braces package.",
-  "main": "index.js"
-}
