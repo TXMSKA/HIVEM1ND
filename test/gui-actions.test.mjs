@@ -286,7 +286,7 @@ function apiWith(handler) {
         : {
           contract: "hivem1nd-gui-v3",
           data: outcome.data ?? null,
-          meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: { mode: "snapshot" } },
+          meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
         };
       return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
     },

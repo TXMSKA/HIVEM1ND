@@ -497,7 +497,7 @@ function jsonResponse(data) {
   return new Response(JSON.stringify({
     contract: "hivem1nd-gui-v3",
     data,
-    meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: { mode: "snapshot" } },
+    meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
