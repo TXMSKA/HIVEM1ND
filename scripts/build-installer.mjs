@@ -6,13 +6,14 @@ import { tmpdir } from 'node:os';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BROWSER_STATIC_FILES } from '../engine/service/http.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
 export const NODE_ZIP_NAME = 'node-v22.23.3-win-x64.zip';
 export const NODE_ZIP_SHA256 = '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71';
 export const NODE_EXE_SHA256 = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e';
-export const BROWSER_ASSETS = Object.freeze(['index.html', 'styles.css', 'app.js']);
+export const BROWSER_ASSETS = BROWSER_STATIC_FILES;
 export const NODE_EXE_NAME = 'node-v22.23.3-win-x64/node.exe';
 export const NODE_LICENSE_NAME = 'node-v22.23.3-win-x64/LICENSE';
 export const NODE_ENTRY_LIMIT = 86973768;
@@ -414,8 +415,48 @@ export function manifestDocument(files, runtime = 'unverified', label = 'release
   };
 }
 
+export function browserReferences(text) {
+  const names = [];
+  const add = (raw) => {
+    if (typeof raw !== 'string') return;
+    const clean = raw.split('#')[0].split('?')[0].trim();
+    if (!clean || clean.startsWith('#') || clean.startsWith('data:') || clean.startsWith('http:') || clean.startsWith('https:') || clean.startsWith('mailto:') || clean.startsWith('/')) return;
+    const name = clean.replace(/^\.\//, '');
+    if (!name || name.includes('..') || name.includes('\\') || name.includes('/')) return;
+    names.push(name);
+  };
+  for (const match of text.matchAll(/(?:from\s+|import\s+)['"](\.[^'"]+)['"]/g)) add(match[1]);
+  for (const match of text.matchAll(/\b(?:src|href)\s*=\s*['"]([^'"]+)['"]/g)) add(match[1]);
+  for (const match of text.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g)) add(match[1]);
+  return names;
+}
+
+export async function referencedBrowserFiles(assetDir) {
+  const pending = ['index.html', 'styles.css', 'main.mjs'];
+  const seen = new Set();
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    let text;
+    try {
+      text = await readFile(path.join(assetDir, name), 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw new Error(`Release packaging needs browser asset ${name}.`);
+      throw error;
+    }
+    for (const ref of browserReferences(text)) {
+      if (!seen.has(ref)) pending.push(ref);
+    }
+  }
+  return [...seen];
+}
+
 export async function assertReleaseAssets(assetDir) {
-  for (const name of BROWSER_ASSETS) {
+  const referenced = await referencedBrowserFiles(assetDir);
+  const required = new Set([...BROWSER_ASSETS, ...referenced]);
+  for (const name of required) {
+    if (!BROWSER_ASSETS.includes(name)) throw new Error(`Release packaging needs browser asset ${name}.`);
     try {
       await access(path.join(assetDir, name));
     } catch {

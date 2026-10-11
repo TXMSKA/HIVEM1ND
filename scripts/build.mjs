@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
+import { assertReleaseAssets, BROWSER_ASSETS } from './build-installer.mjs';
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -60,13 +61,15 @@ try {
   const appDir = path.join(root, "gui", "app");
   const state = await lstat(appDir);
   if (!state.isDirectory() || state.isSymbolicLink()) throw new Error("browser assets unavailable");
-  for (const name of ["index.html", "styles.css", "app.js"]) {
+  await assertReleaseAssets(appDir);
+  for (const name of BROWSER_ASSETS) {
     const packaged = `gui/app/${name}`;
     if (!included.has(packaged)) throw new Error(`Missing browser asset: ${packaged}`);
   }
   browserAssets = "browser assets packaged";
 } catch (error) {
-  if (String(error?.message ?? "").startsWith("Missing browser asset")) throw error;
+  const message = String(error?.message ?? "");
+  if (message.startsWith("Missing browser asset") || message.startsWith("Release packaging needs")) throw error;
   browserAssets = "browser assets unavailable for standalone packaging";
 }
 for (const name of included) {

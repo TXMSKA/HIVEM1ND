@@ -10,7 +10,7 @@ import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
-import { assertReleaseAssets, assertZipBounds, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installPayload, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installPayload, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -545,4 +545,26 @@ test('activation keeps the previous payload and refuses a junction stage', async
   assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'safe');
   const names = await readdir(root);
   assert.deepEqual(names.filter((name) => name.endsWith('.stage')), ['kit.stage']);
+});
+
+test('release packaging uses the served browser modules', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = path.join(root, 'app');
+  await mkdir(app);
+  assert.equal(BROWSER_ASSETS.includes('app.js'), false);
+  assert.equal(BROWSER_ASSETS.includes('main.mjs'), true);
+  for (const name of BROWSER_ASSETS) {
+    const body = name === 'index.html'
+      ? '<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n'
+      : name === 'main.mjs'
+        ? "import './api.mjs';\n"
+        : 'kept';
+    await writeFile(path.join(app, name), body);
+  }
+  await assertReleaseAssets(app);
+  await writeFile(path.join(app, 'main.mjs'), "import './extra.mjs';\n");
+  await assert.rejects(() => assertReleaseAssets(app), /browser asset extra\.mjs/);
+  await rm(path.join(app, 'main.mjs'));
+  await assert.rejects(() => assertReleaseAssets(app), /browser asset main\.mjs/);
 });

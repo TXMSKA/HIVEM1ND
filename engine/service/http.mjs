@@ -19,11 +19,12 @@ import { addNode, answerProposal, createAsset, createBoard, createComment, creat
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
-const STATIC_FILES = new Set([
+export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs',
 ]);
+const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
 const ROUTES = [
   ['GET', '/view', 'read', 'DPA', 'view'],
