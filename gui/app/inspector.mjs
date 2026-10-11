@@ -1,5 +1,5 @@
 import { canAccept, canSendBack } from "./actions.mjs";
-import { element, progressMark } from "./components.mjs";
+import { element, labeledField, progressMark } from "./components.mjs";
 
 export function renderUnit(document, unit, t) {
   const lines = [
@@ -109,7 +109,7 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     onclick: () => onStatus?.(task, "done"),
   });
   if (!canAccept(task) || busy) accept.disabled = true;
-  const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}`, "aria-label": t("sendBack") });
+  const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}` });
   note.value = draft;
   note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
   const back = element(document, "button", {
@@ -121,7 +121,7 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   });
   if (!allowSendBack || busy) back.disabled = true;
   if (busy) back.setAttribute("aria-busy", "true");
-  block.append(accept, note, back);
+  block.append(accept, labeledField(document, t("sendBack"), t("sendBackHint"), note), back);
   if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", {
       type: "button",

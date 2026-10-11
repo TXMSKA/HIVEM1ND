@@ -1605,7 +1605,6 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
   const source = desktop.root.querySelector("[data-source]");
   typeInput(source, `${source.value}!`, 0, 1);
-  typeInput(desktop.root.querySelector("[data-draft]"), "Auxiliary", 0, 9);
   assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
   assert.equal(dirtyMessages().filter((item) => item.value === true).length, 1);
   assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
@@ -1632,8 +1631,6 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.endsWith("!"), "The source draft was discarded with the other forms.");
   click(desktop.root.querySelector("[data-action='save-range']"));
   await waitFor(() => !(desktop.app.editors.current?.textDrafts?.size), "The source draft was not saved.");
-  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
-  typeInput(desktop.root.querySelector("[data-draft]"), "", 0, 0);
   await waitFor(() => dirtyPatches().some((item) => item.body.dirty === false) && dirtyMessages().some((item) => item.value === false), "Saving the last draft did not clear the dirty flag.");
   assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
   assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "");
@@ -1711,7 +1708,7 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.equal(columnIndex(textResource, textTools) < columnIndex(textResource, textResource.querySelector("[data-source]")), true);
   assert.equal(textTools.querySelector("[data-action='watch']") != null, true);
   assert.equal(textResource.querySelector("[data-source]") != null, true);
-  assert.equal(textResource.querySelector("[data-draft]") != null, true);
+  assert.equal(textResource.querySelector("[data-draft]"), null);
   assert.equal(textResource.querySelector("[data-action='save-range']") != null, true);
   assert.equal(textComments.querySelector("[data-comment]") != null, true);
   assert.equal(textComments.querySelector("[data-source]"), null);
@@ -1763,6 +1760,85 @@ test("a narrow desktop keeps the main column and dismisses the side panels", asy
   assert.match(css, /overflow-x:\s*clip/);
   assert.match(css, /\.shell \* \{\s*min-width:\s*0;\s*\}/);
   assert.match(css, /\.modes\s*\{[^}]*flex-wrap:\s*wrap/);
+});
+
+test("board nodes and named controls are available from the keyboard", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-node][tabindex='0']"), "The board node was not keyboard focusable.");
+  const node = desktop.root.querySelector("[data-node][tabindex='0']");
+  assert.equal(node.getAttribute("role"), "treeitem");
+  assert.equal(node.getAttribute("aria-label").length > 0, true);
+  const host = node.closest(".board-host");
+  for (const handler of host.listeners.get("keydown") ?? []) handler({ key: "Enter", target: node, preventDefault() {} });
+  assert.equal(desktop.app.editors.commentTarget.kind, "node");
+  assert.equal(desktop.app.editors.commentTarget.nodeId, node.getAttribute("data-node"));
+  const outline = desktop.root.querySelector(".board-outline");
+  assert.equal(outline.getAttribute("aria-label"), "Screens and nodes");
+  const item = outline.querySelector("[data-outline]");
+  click(item);
+  assert.equal(desktop.app.editors.selectedNodeId ?? desktop.app.editors.commentTarget.screenId, item.getAttribute("data-outline"));
+  const asset = desktop.root.querySelector("[data-asset]");
+  assert.equal(asset.closest("label").querySelector(".field-label").textContent, "Upload");
+  assert.equal(asset.getAttribute("aria-describedby"), asset.closest("label").querySelector(".field-hint").getAttribute("id"));
+  assert.equal(desktop.root.querySelector("[data-node-name]").closest("label").querySelector(".field-label").textContent, "Node name");
+  assert.equal(desktop.root.querySelector("[data-draft]"), null);
+  const comment = desktop.root.querySelector("[data-comment]");
+  assert.equal(comment.closest("label").querySelector(".field-label").textContent, "Comment");
+  assert.equal(comment.closest("label").querySelector(".field-hint").textContent, "Choose a screen or node, then write the comment.");
+
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not open.");
+  assert.equal(desktop.root.querySelector("[data-source]").closest("label").querySelector(".field-label").textContent, "Source");
+  assert.equal(desktop.root.querySelector("[data-field='create-title']").closest("label").querySelector(".field-hint").textContent, "The title people see.");
+
+  navigate(desktop.app, "map");
+  await waitFor(() => desktop.root.querySelector("[data-action='new-unit']"), "The unit control did not return.");
+  click(desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit dialog did not open.");
+  const dialog = desktop.document.querySelector("[data-form='unit']");
+  const heading = dialog.querySelector("h2");
+  assert.equal(dialog.getAttribute("aria-labelledby"), heading.getAttribute("id"));
+  assert.match(heading.getAttribute("id"), /^dialog-title-\d+$/);
+  const firstId = heading.getAttribute("id");
+  click([...dialog.querySelectorAll("button")].find((button) => button.getAttribute("data-action") !== "confirm-form"));
+  click(desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']")?.querySelector("h2")?.getAttribute("id") !== firstId, "The second dialog reused the heading id.");
+
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-addresses]"), "The address field did not open.");
+  assert.equal(desktop.root.querySelector("[data-addresses]").closest("label").querySelector(".field-label").textContent, "Addresses");
+
+  navigate(desktop.app, "chats");
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-composer]"), "The composer did not open.");
+  assert.equal(desktop.root.querySelector("[data-composer]").closest("label").querySelector(".field-label").textContent, "Message");
+
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "single");
+  await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']"), "The return note did not appear.");
+  const note = desktop.root.querySelector("[data-note='project:shop:030']");
+  assert.equal(note.closest("label").querySelector(".field-label").textContent, "Send back");
+  assert.equal(note.getAttribute("aria-describedby"), note.closest("label").querySelector(".field-hint").getAttribute("id"));
+
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").closest("label").querySelector(".field-label").textContent, "Devolver");
 });
 
 test("Focus keeps only the readable document until the pointer reveals its tools", async (t) => {
@@ -1969,10 +2045,16 @@ test("request expiry stays separate from reopening guidance and comments require
   });
   t.after(() => dispose(desktop.app));
   await waitFor(() => desktop.root.querySelector("[data-handle='connect']"), "The connect handle did not appear.");
-  assert.equal(desktop.root.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Connect");
+  const connectLabel = () => {
+    const handle = desktop.root.querySelector("[data-handle='connect']");
+    const unitId = handle.getAttribute("data-unit-id");
+    const named = [...desktop.root.querySelectorAll("[data-map-label]")].find((item) => item.closest("[data-unit-id]")?.getAttribute("data-unit-id") === unitId);
+    return { handle, name: named.getAttribute("data-map-label") };
+  };
+  assert.equal(connectLabel().handle.getAttribute("aria-label"), `Connect ${connectLabel().name}`);
   desktop.app.language = "es";
   renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Conectar");
+  assert.equal(connectLabel().handle.getAttribute("aria-label"), `Conectar ${connectLabel().name}`);
   desktop.app.language = "en";
   renderShell(desktop.app);
 

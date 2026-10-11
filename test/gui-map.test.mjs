@@ -238,7 +238,10 @@ test("collapsed scope groups hide their members and rendered nodes keep paint or
   map.selection = new Set(["lead", "child"]);
   renderMap(host.ownerDocument, host, map);
   assert.equal(host.querySelector("[data-action='connect']").textContent, "Connect");
-  assert.equal(host.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Connect");
+  const leadHandle = host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === "lead");
+  assert.equal(leadHandle.getAttribute("aria-label"), "Connect lead");
+  const leadNode = host.querySelectorAll("[data-unit-id='lead']").find((item) => item.getAttribute("data-role"));
+  assert.equal(leadNode.querySelector("[data-handle='connect']"), null);
   const centered = centerUnit(map, "lead", { width: 200, height: 100, left: 0, top: 0 });
   assert.equal(centered, true);
   assert.equal(map.centered, "lead");
@@ -288,8 +291,12 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.equal(host.querySelector("[data-unit-id='lead']").getAttribute("data-selected"), "true");
   assert.equal(host.querySelector("[data-unit-id='lead']").className.includes("is-selected"), true);
   assert.equal(host.querySelector("[data-action='pan']") != null, true);
-  assert.equal(host.querySelector("[data-handle='connect']").getAttribute("aria-label"), "Conectar");
+  const overseerHandle = host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === "overseer");
+  assert.equal(overseerHandle.getAttribute("aria-label"), "Conectar overseer");
+  assert.equal(boss.querySelector("[data-handle='connect']"), null);
   const css = await readFile("gui/app/styles.css", "utf8");
+  assert.match(css, /\.map-handle\s*\{[^}]*width:\s*44px/);
+  assert.match(css, /\.map-handle\s*\{[^}]*height:\s*44px/);
   const modern = css.split('[data-look="high-contrast"]')[0];
   const contrast = css.split('[data-look="high-contrast"]')[1];
   assert.match(modern, /--radius-circle:\s*50%/);

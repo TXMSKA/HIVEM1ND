@@ -1,5 +1,5 @@
 import { createOperation, request } from "./api.mjs";
-import { element } from "./components.mjs";
+import { element, labeledField } from "./components.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 
@@ -232,10 +232,10 @@ function renderHome(document, model, t, actions) {
   if (grant?.qrPayloads?.length) block.append(renderHomeGrant(document, grant, model.selected ?? 0, t("qrTitle")));
   else if (home?.enabled && !expiry.expired) block.append(element(document, "p", { text: t("noGrantSecret") }));
   if (model.canManage && (!home?.enabled || expiry.expired)) {
-    block.append(addressField(document));
+    block.append(addressField(document, t));
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "open-home", text: t("homeOpen") }));
   } else if (model.canManage && home?.enabled) {
-    block.append(addressField(document));
+    block.append(addressField(document, t));
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "replace-home", text: t("homeReplace") }));
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "close-home", text: t("homeClose") }));
   }
@@ -249,10 +249,10 @@ function renderHome(document, model, t, actions) {
   return block;
 }
 
-function addressField(document) {
+function addressField(document, t) {
   const input = element(document, "input", { "data-addresses": "true", "data-keep": "home|addresses" });
   input.value = "";
-  return input;
+  return labeledField(document, t("addressLabel"), t("addressHint"), input);
 }
 
 function choice(document, kind, value, label, onChoose) {

@@ -34,7 +34,7 @@ import {
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
-import { announce, element, icon, progressMark, runAction, showDialog, showError } from "./components.mjs";
+import { announce, element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -296,7 +296,7 @@ function editorFormsDirty(editor) {
 
 function aggregateDirty(app) {
   const drafts = inputDrafts(app);
-  for (const name of ["chats", "notes", "nodes", "resources", "mail", "auxiliary"]) {
+  for (const name of ["chats", "notes", "nodes", "resources", "mail"]) {
     for (const value of drafts[name]?.values() ?? []) {
       const text = typeof value === "string" ? value : value?.value;
       if (text) return true;
@@ -965,44 +965,52 @@ function boardSurface(app, document, editor, t) {
   editor.viewport = app.editors.viewport;
   editor.panned = app.editors.panned === true;
   renderBoard(document, host, editor);
+  const choose = (target) => chooseBoardTarget(app, editor, target);
   host.addEventListener("click", (event) => {
     const marked = event.target?.closest?.("[data-node]");
     const screenMarked = event.target?.closest?.("[data-screen]");
     const svg = host.querySelector("svg");
     const point = boardPoint(svg, event);
-    const located = { resourceId: editor.resourceId, x: point.x, y: point.y };
     if (marked?.getAttribute?.("data-node")) {
-      const nodeId = marked.getAttribute("data-node");
-      const screenId = marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null;
-      app.editors.selectedNodeId = nodeId;
-      app.editors.focus = { ...(app.editors.focus ?? {}), screenId, resourceId: editor.resourceId };
-      app.editors.commentTarget = { ...located, kind: "node", nodeId, screenId };
+      choose({
+        kind: "node",
+        nodeId: marked.getAttribute("data-node"),
+        screenId: marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null,
+        x: point.x,
+        y: point.y,
+      });
     } else if (screenMarked?.getAttribute?.("data-screen")) {
-      const screenId = screenMarked.getAttribute("data-screen");
-      app.editors.selectedNodeId = null;
-      app.editors.focus = { ...(app.editors.focus ?? {}), screenId, resourceId: editor.resourceId };
-      app.editors.commentTarget = { ...located, kind: "screen", screenId };
+      choose({ kind: "screen", screenId: screenMarked.getAttribute("data-screen"), x: point.x, y: point.y });
     } else {
       const hit = hitBoardNode(editor.authoritative.document, point);
-      if (hit?.nodeId) {
-        app.editors.selectedNodeId = hit.nodeId;
-        app.editors.focus = { ...(app.editors.focus ?? {}), screenId: hit.screenId, resourceId: editor.resourceId };
-        app.editors.commentTarget = { ...located, kind: "node", nodeId: hit.nodeId, screenId: hit.screenId };
-      } else {
-        app.editors.commentTarget = { ...located, kind: "canvas" };
-      }
+      if (hit?.nodeId) choose({ kind: "node", nodeId: hit.nodeId, screenId: hit.screenId, x: point.x, y: point.y });
+      else choose({ kind: "canvas", x: point.x, y: point.y });
     }
-    renderShell(app);
+  });
+  host.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const marked = event.target?.closest?.("[data-node]");
+    const nodeId = marked?.getAttribute?.("data-node");
+    if (!nodeId) return;
+    event.preventDefault?.();
+    choose({
+      kind: "node",
+      nodeId,
+      screenId: marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null,
+      x: 0,
+      y: 0,
+    });
   });
   const nodes = editor.authoritative.document.screens?.[0];
   const tools = element(document, "div", { class: "editor-actions" });
-  const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId), "aria-label": t("nodeName") });
+  const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
   name.addEventListener("input", () => {
     editor.nodeDraft = name.value;
     rememberFormDraft(app, "nodes", editor.resourceId, name.value);
   });
-  tools.append(name);
+  tools.append(labeledField(document, t("nodeName"), t("nodeNameHint"), name));
+  tools.append(boardOutline(app, document, editor, t));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "patch-node",
     onclick: () => {
@@ -1039,7 +1047,7 @@ function boardSurface(app, document, editor, t) {
       await addImageNode(app, editor, nodes, asset);
     });
   });
-  tools.append(file);
+  tools.append(labeledField(document, t("upload"), t("assetHint"), file));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "comment-node",
     onclick: () => commentOnNode(app, editor),
@@ -1110,6 +1118,57 @@ function findBoardNode(node, id) {
   return null;
 }
 
+function chooseBoardTarget(app, editor, target) {
+  const located = { resourceId: editor.resourceId, x: target.x ?? 0, y: target.y ?? 0 };
+  if (target.kind === "node") {
+    app.editors.selectedNodeId = target.nodeId;
+    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: target.screenId, resourceId: editor.resourceId };
+    app.editors.commentTarget = { ...located, kind: "node", nodeId: target.nodeId, screenId: target.screenId };
+  } else if (target.kind === "screen") {
+    app.editors.selectedNodeId = null;
+    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: target.screenId, resourceId: editor.resourceId };
+    app.editors.commentTarget = { ...located, kind: "screen", screenId: target.screenId };
+  } else {
+    app.editors.commentTarget = { ...located, kind: "canvas" };
+  }
+  renderShell(app);
+}
+
+function boardOutline(app, document, editor, t) {
+  const board = editor.authoritative?.document;
+  const tree = element(document, "div", { class: "board-outline", role: "tree", "aria-label": t("boardOutline") });
+  for (const screen of board?.screens ?? []) {
+    const title = typeof screen.title === "string" && screen.title ? screen.title : screen.id;
+    tree.append(outlineButton(app, document, editor, { kind: "screen", screenId: screen.id, x: Number(screen.x) || 0, y: Number(screen.y) || 0, label: title }));
+    appendOutlineNodes(app, document, editor, tree, screen.root, screen);
+  }
+  return tree;
+}
+
+function appendOutlineNodes(app, document, editor, tree, node, screen) {
+  if (!node?.id) return;
+  tree.append(outlineButton(app, document, editor, {
+    kind: "node",
+    nodeId: node.id,
+    screenId: screen.id,
+    x: Number(node.place?.x) || 0,
+    y: Number(node.place?.y) || 0,
+    label: node.name || node.id,
+  }));
+  for (const child of node.kids ?? []) appendOutlineNodes(app, document, editor, tree, child, screen);
+}
+
+function outlineButton(app, document, editor, target) {
+  return element(document, "button", {
+    type: "button",
+    class: "btn",
+    role: "treeitem",
+    "data-outline": target.kind === "node" ? target.nodeId : target.screenId,
+    text: target.label,
+    onclick: () => chooseBoardTarget(app, editor, target),
+  });
+}
+
 function boardPoint(svg, event) {
   if (!svg?.createSVGPoint || !svg.getScreenCTM) return { x: event.offsetX ?? 0, y: event.offsetY ?? 0 };
   const point = svg.createSVGPoint();
@@ -1149,7 +1208,7 @@ function voidSurface(app, document, editor, t) {
     rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
     syncViewerDirty(app);
   });
-  tools.append(source);
+  tools.append(labeledField(document, t("sourceLabel"), t("sourceHint"), source));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "save-range",
     onclick: () => saveVoid(app, editor, source.value),
@@ -1365,16 +1424,6 @@ function renderEditorSurfaces(app, t) {
   if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
   if (!current) return surfaces;
-  const draft = element(document, "textarea", {
-    class: "editor-compose",
-    "data-draft": current.resourceId,
-    "data-keep": keepId("auxiliary", current.resourceId),
-    oninput: () => {
-      rememberFormDraft(app, "auxiliary", current.resourceId, draft.value);
-    },
-  });
-  draft.value = draftMap(app, "auxiliary").get(current.resourceId) ?? "";
-  resource.append(draft);
   if (current.attachmentResource !== current.resourceId) {
     current.attachmentChoice = new Set(current.attached ?? []);
     current.attachmentResource = current.resourceId;
@@ -1451,7 +1500,9 @@ function renderEditorSurfaces(app, t) {
     setCommentEnabled(button, commentCanSubmit(app, field.value));
   };
   owner.addEventListener?.("selectionchange", app.onCommentSelection);
-  commentsColumn.append(comments, compose, commentButton);
+  const commentField = labeledField(document, t("comment"), t("commentHint"), compose);
+  commentButton.setAttribute("aria-describedby", compose.getAttribute("aria-describedby"));
+  commentsColumn.append(comments, commentField, commentButton);
   const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
   for (const notice of current.notices ?? []) {
     const key = noticeCopy[notice.state];
@@ -1593,14 +1644,25 @@ function editorDraft(app) {
   return app.editorDraft;
 }
 
+const FIELD_HINTS = {
+  "register-project": "projectHint",
+  "register-path": "pathHint",
+  "create-id": "idHint",
+  "create-title": "titleHint",
+  "create-path": "pathHint",
+  "screen-width": "sizeHint",
+  "screen-height": "sizeHint",
+  "document-title": "titleHint",
+};
+
 function editorField(document, app, t, key, labelKey, field) {
-  const input = element(document, "input", { "data-field": field, "data-keep": keepId("resource", key), "aria-label": t(labelKey) });
+  const input = element(document, "input", { "data-field": field, "data-keep": keepId("resource", key) });
   input.value = editorDraft(app)[key] ?? "";
   input.addEventListener("input", () => {
     editorDraft(app)[key] = input.value;
     rememberFormDraft(app, "resources", key, input.value);
   });
-  return input;
+  return labeledField(document, t(labelKey), t(FIELD_HINTS[field] ?? "fieldHint"), input);
 }
 
 function syncStructureDraft(app, current) {
@@ -2631,7 +2693,9 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   dialog.className = "dialog";
   dialog.setAttribute("data-form", kind);
   const form = element(document, "form", { method: "dialog" });
-  form.append(element(document, "h2", { text: title }));
+  const heading = element(document, "h2", { text: title });
+  labelDialog(dialog, heading);
+  form.append(heading);
   const confirm = element(document, "button", { type: "button", class: "btn primary", "data-action": "confirm-form", text: title });
   build(form, confirm);
   const actions = element(document, "div", { class: "dialog-actions" });
@@ -2858,7 +2922,7 @@ function chatPanel(app, t) {
       onclick: () => submitComposer(app, composer),
     }, sending ? progressMark(document, t("sending")) : t("send"));
     if (sending) send.disabled = true;
-    panel.append(composer, send);
+    panel.append(labeledField(document, t("composerLabel"), t("composerHint"), composer), send);
   }
   if (app.mailbox) panel.append(renderMailbox(app, t));
   else if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));

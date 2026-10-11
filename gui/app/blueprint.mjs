@@ -75,6 +75,8 @@ export function renderBoard(document, host, editor) {
   if (!board) return;
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("class", "board-svg");
+  svg.setAttribute("role", "tree");
+  svg.setAttribute("aria-label", typeof board.title === "string" && board.title ? board.title : "Board");
   const bounds = boardBounds(board);
   svg.setAttribute("viewBox", `${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`);
   const focus = editor.focus?.screenId ?? "";
@@ -97,6 +99,9 @@ export function renderNode(document, node, editor) {
   const group = document.createElementNS(SVG, "g");
   if (!node) return group;
   group.setAttribute("data-node", node.id);
+  group.setAttribute("role", "treeitem");
+  group.setAttribute("tabindex", "0");
+  group.setAttribute("aria-label", String(node.name || node.id));
   if (editor.focus?.nodeId && node.id === editor.focus.nodeId) group.setAttribute("data-highlight", "true");
   if (node.name) group.setAttribute("data-name", String(node.name));
   group.setAttribute("transform", `translate(${number(node.place?.x)} ${number(node.place?.y)})`);

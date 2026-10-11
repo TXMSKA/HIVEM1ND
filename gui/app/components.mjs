@@ -91,11 +91,33 @@ export function runAction(bucket, key, { label, work, render, operation = null }
   return promise;
 }
 
+let dialogSerial = 0;
+let fieldHintSerial = 0;
+
+export function labelDialog(dialog, heading) {
+  dialogSerial += 1;
+  const id = `dialog-title-${dialogSerial}`;
+  heading.setAttribute("id", id);
+  dialog.setAttribute("aria-labelledby", id);
+}
+
+export function labeledField(document, label, hint, control) {
+  fieldHintSerial += 1;
+  const id = `field-hint-${fieldHintSerial}`;
+  control.setAttribute("aria-describedby", id);
+  return element(document, "label", { class: "field" },
+    element(document, "span", { class: "field-label", text: label }),
+    control,
+    element(document, "p", { class: "field-hint", id, text: hint }),
+  );
+}
+
 export function showDialog(document, { title, body, confirm, cancel, retry, onConfirm }) {
   const invoker = document.activeElement;
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
-  const heading = element(document, "h2", { id: "dialog-title", text: title });
+  const heading = element(document, "h2", { text: title });
+  labelDialog(dialog, heading);
   const copy = element(document, "p", { text: body ?? "" });
   const actions = element(document, "div", { class: "dialog-actions" });
   const cancelButton = element(document, "button", { type: "button", class: "btn", text: cancel });

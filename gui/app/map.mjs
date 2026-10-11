@@ -129,6 +129,8 @@ export function renderMap(document, host, map, labels = {}) {
     name.className = "map-label";
     name.setAttribute("data-map-label", node.label);
     name.textContent = node.label;
+    button.append(mark, marker, name);
+    layer.append(button);
     const handle = document.createElement("button");
     handle.type = "button";
     handle.className = "map-handle";
@@ -136,9 +138,10 @@ export function renderMap(document, host, map, labels = {}) {
     handle.dataset.handle = "connect";
     handle.setAttribute("data-unit-id", node.id);
     handle.setAttribute("data-handle", "connect");
-    handle.setAttribute("aria-label", labels.connect ?? "Connect");
-    button.append(mark, marker, name, handle);
-    layer.append(button);
+    handle.setAttribute("aria-label", `${labels.connect ?? "Connect"} ${node.label}`);
+    handle.style.left = `${screen.x - rect.left + 28}px`;
+    handle.style.top = `${screen.y - rect.top}px`;
+    layer.append(handle);
   }
   const actions = document.createElement("div");
   actions.className = "map-actions";

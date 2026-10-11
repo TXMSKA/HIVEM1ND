@@ -273,6 +273,9 @@ button, input { font: inherit; color: inherit; }
 .dialog-actions { justify-content: flex-end; margin-top: var(--gap); }
 .dialog label { display: grid; gap: 4px; margin-top: 8px; color: var(--body); font-size: 13px; }
 .field-error { margin: 0; color: var(--waiting); font-size: 13px; }
+.field { display: grid; gap: 4px; }
+.field-label { color: var(--text); font-size: 13px; font-weight: 600; }
+.field-hint { margin: 0; color: var(--mute); font-size: 12px; }
 .dialog input { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--ring); border-radius: 999px; padding: 8px 12px; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .action-note { color: var(--body); }
@@ -436,14 +439,26 @@ button, input { font: inherit; color: inherit; }
 .map-node.is-selected { border: 2px solid var(--accent); box-shadow: 0 0 0 6px var(--card), var(--node-shadow); }
 .map-handle {
   position: absolute;
-  right: -4px;
-  top: 20px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-top: -22px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.map-handle::before {
+  content: "";
   width: 16px;
   height: 16px;
-  border: 0;
   border-radius: var(--radius-pill);
   background: var(--ring);
 }
+.board-outline { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; gap: 8px; }
 .editor-catalog,
 .editor-resource,
