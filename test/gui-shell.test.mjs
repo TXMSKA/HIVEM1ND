@@ -2037,7 +2037,7 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   click(desktop.root.querySelector("[data-action='start-session']"));
   await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
   click(desktop.document.querySelector("[data-form='session']").querySelector("[data-action='confirm-form']"));
-  await waitFor(() => noteText(desktop) === "The action failed.", "An unknown code was shown to the reader.");
+  await waitFor(() => noteText(desktop) === "The action failed. Try again.", "An unknown code was shown to the reader.");
   assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "totally_unknown");
 });
 
@@ -2342,6 +2342,31 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   assert.equal(desktop.root.querySelector("[data-focus-hint]") != null, true);
   click(desktop.root.querySelector("[data-action='leave-focus']"));
   assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
+});
+
+test("disabled controls explain how to continue", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-task='project:shop:030']")?.querySelector("[data-disabled-reason='accept']")?.textContent === "Accept is available when the task is in review.", "The accept reason was not shown.");
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-look='modern']")?.getAttribute("aria-pressed") === "true", "The current look was not marked.");
+  assert.equal(desktop.root.querySelector("[data-look='high-contrast']")?.getAttribute("aria-pressed"), "false");
+  assert.equal(desktop.root.querySelector("[data-language='en']")?.getAttribute("aria-pressed"), "true");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='resize-screen']"), "The resize control did not appear.");
+  typeInput(desktop.root.querySelector("[data-field='screen-width']"), "no", 0, 2);
+  click(desktop.root.querySelector("[data-action='resize-screen']"));
+  await waitFor(() => noteText(desktop) === "Enter a whole width and height before resizing.", "The resize reason was not shown.");
 });
 
 test("the GUI import graph stays inside its ownership table", async () => {

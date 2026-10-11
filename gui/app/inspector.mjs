@@ -115,6 +115,11 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     onclick: () => onStatus?.(task, "done"),
   });
   if (!canAccept(task) || busy) accept.disabled = true;
+  if (!canAccept(task) && !busy) {
+    const hint = element(document, "p", { id: `reason-accept-${task.id}`, class: "field-hint", "data-disabled-reason": "accept", text: t("acceptNeedsReview") });
+    accept.setAttribute("aria-describedby", hint.id ?? `reason-accept-${task.id}`);
+    block.append(hint);
+  }
   const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}` });
   note.value = draft;
   note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
@@ -127,6 +132,11 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   });
   if (!allowSendBack || busy) back.disabled = true;
   if (busy) back.setAttribute("aria-busy", "true");
+  if (!allowSendBack && !busy) {
+    const hint = element(document, "p", { id: `reason-back-${task.id}`, class: "field-hint", "data-disabled-reason": "send-back", text: t("sendBackNeedsReview") });
+    back.setAttribute("aria-describedby", `reason-back-${task.id}`);
+    block.append(hint);
+  }
   block.append(accept, labeledField(document, t("sendBack"), t("sendBackHint"), note), back);
   if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", {

@@ -207,10 +207,10 @@ export function renderSettings(document, model, t, actions) {
   panel.append(issues);
   if (model.canWrite) {
     const looks = element(document, "div", { class: "editor-actions" });
-    looks.append(choice(document, "look", "modern", t("modern"), actions.onLook));
-    looks.append(choice(document, "look", "high-contrast", t("highContrast"), actions.onLook));
-    looks.append(choice(document, "language", "en", t("english"), actions.onLanguage));
-    looks.append(choice(document, "language", "es", t("spanish"), actions.onLanguage));
+    looks.append(choice(document, "look", "modern", t("modern"), model.look === "modern", actions.onLook));
+    looks.append(choice(document, "look", "high-contrast", t("highContrast"), model.look === "high-contrast", actions.onLook));
+    looks.append(choice(document, "language", "en", t("english"), model.language === "en", actions.onLanguage));
+    looks.append(choice(document, "language", "es", t("spanish"), model.language === "es", actions.onLanguage));
     panel.append(looks);
   }
   panel.append(renderHome(document, model, t, actions));
@@ -255,13 +255,15 @@ function addressField(document, t) {
   return labeledField(document, t("addressLabel"), t("addressHint"), input);
 }
 
-function choice(document, kind, value, label, onChoose) {
+function choice(document, kind, value, label, selected, onChoose) {
   return element(document, "button", {
     type: "button",
-    class: "btn",
+    class: selected ? "btn is-selected" : "btn",
     [`data-${kind}`]: value,
+    "aria-pressed": selected ? "true" : "false",
+    text: label,
     onclick: () => onChoose?.(value),
-  }, label);
+  });
 }
 
 function homeFields(home) {

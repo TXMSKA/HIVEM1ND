@@ -985,7 +985,7 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? t("emptyList") : t("listTotal", { count: list.total ?? 0 });
+  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : t("emptyList")) : t("listTotal", { count: list.total ?? 0 });
   const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
   if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
@@ -1203,7 +1203,10 @@ function commentOnNode(app, editor) {
     }
   }
   const supplied = typeof editor.commentText === "string" ? editor.commentText : "";
-  if (!supplied.trim()) return;
+  if (!supplied.trim()) {
+    explain(app, "commentNeedsText");
+    return;
+  }
   const anchor = {
     screen: screen.id,
     screenTitle: screen.title,
@@ -1402,7 +1405,10 @@ function commentOnQuote(app, editor) {
   const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
   if (host && selection?.anchorNode && !host.contains(selection.anchorNode)) return;
   const range = selectedPlainRange(selection);
-  if (!page || !range) return;
+  if (!page || !range) {
+    explain(app, "quoteNeedsSelection");
+    return;
+  }
   const anchor = textAnchor(editor, page.k, lang, range.start, range.end);
   sendEditorComment(app, editor, anchor, editor.commentText || anchor.quote);
 }
@@ -1481,6 +1487,14 @@ function renderEditorSurfaces(app, t) {
       class: "action-note",
       "data-sync-conflict": "true",
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
+    }));
+  }
+  if (app.actionNote) {
+    resource.append(element(document, "p", {
+      class: "action-note",
+      "data-action-note": "true",
+      "data-code": app.actionCode ?? "",
+      text: app.actionNote,
     }));
   }
   const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
@@ -1651,7 +1665,16 @@ function renderEditorSurfaces(app, t) {
   owner.addEventListener?.("selectionchange", app.onCommentSelection);
   const commentField = labeledField(document, t("comment"), t("commentHint"), compose);
   commentButton.setAttribute("aria-describedby", compose.getAttribute("aria-describedby"));
-  commentsColumn.append(comments, commentField, commentButton);
+  if (!commentCanSubmit(app, compose.value)) {
+    const reason = element(document, "p", {
+      id: "reason-comment",
+      class: "field-hint",
+      "data-disabled-reason": "comment",
+      text: currentCommentAnchor(app) ? t("commentNeedsText") : t("commentNeedsTarget"),
+    });
+    commentButton.setAttribute("aria-describedby", "reason-comment");
+    commentsColumn.append(comments, commentField, commentButton, reason);
+  } else commentsColumn.append(comments, commentField, commentButton);
   const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
   for (const notice of current.notices ?? []) {
     const key = noticeCopy[notice.state];
@@ -1733,7 +1756,10 @@ function addEditorComment(app, compose) {
   const value = compose.value;
   current.commentText = value;
   const anchor = currentCommentAnchor(app);
-  if (!anchor || !value.trim()) return;
+  if (!anchor || !value.trim()) {
+    explain(app, anchor ? "commentNeedsText" : "commentNeedsTarget");
+    return;
+  }
   sendEditorComment(app, current, anchor, value);
 }
 
@@ -1766,7 +1792,10 @@ function sendEditorComment(app, editor, anchor, value) {
 function replyToThread(app, threadId) {
   const editors = editorsOf(app);
   const supplied = editors.current?.commentText;
-  if (typeof supplied !== "string" || !supplied.trim()) return;
+  if (typeof supplied !== "string" || !supplied.trim()) {
+    explain(app, "commentNeedsText");
+    return;
+  }
   editorAct(app, `reply:${threadId}`, text(app.language, "sending"), async (record) => {
     await replyComment(app.api, editors, threadId, supplied, record.operation);
   });
@@ -2072,8 +2101,10 @@ function structureTools(app, document, editor, t) {
     editorField(document, app, t, "width", "screenWidth", "screen-width"),
     editorField(document, app, t, "height", "screenHeight", "screen-height"),
     element(document, "button", { type: "button", class: "btn", "data-action": "resize-screen", onclick: () => resizeBoard(app, editor) }, t("resizeScreen")),
-    element(document, "button", { type: "button", class: "btn", "data-action": "move-page", disabled: canMovePage ? null : "", onclick: () => moveBoardPage(app, editor) }, t("movePage")),
-    element(document, "button", { type: "button", class: "btn", "data-action": "move-screen", disabled: canMoveScreen ? null : "", onclick: () => moveBoardScreen(app, editor) }, t("moveScreen")),
+    element(document, "button", { type: "button", class: "btn", "data-action": "move-page", disabled: canMovePage ? null : "", "aria-describedby": canMovePage ? null : "reason-move-page", onclick: () => moveBoardPage(app, editor) }, t("movePage")),
+    canMovePage ? null : element(document, "p", { id: "reason-move-page", class: "field-hint", "data-disabled-reason": "move-page", text: t("needTwoPages") }),
+    element(document, "button", { type: "button", class: "btn", "data-action": "move-screen", disabled: canMoveScreen ? null : "", "aria-describedby": canMoveScreen ? null : "reason-move-screen", onclick: () => moveBoardScreen(app, editor) }, t("moveScreen")),
+    canMoveScreen ? null : element(document, "p", { id: "reason-move-screen", class: "field-hint", "data-disabled-reason": "move-screen", text: t("needTwoScreens") }),
     element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", onclick: () => addBoardLink(app, editor) }, t("addLink")),
   );
   return tools;
@@ -2083,7 +2114,10 @@ function resizeBoard(app, editor) {
   const draft = editorDraft(app);
   const width = Number(draft.width);
   const height = Number(draft.height);
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 16000 || height > 16000) return;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 16000 || height > 16000) {
+    explain(app, "resizeNeedsSize");
+    return;
+  }
   const selected = app.editors?.focus?.screenId;
   const savedWidth = draft.width;
   const savedHeight = draft.height;
@@ -2125,7 +2159,10 @@ function addBoardLink(app, editor) {
   const from = screens[0].id;
   const to = screens[1].id;
   const id = `link-${from}-${to}`;
-  if ((editor.authoritative.document.links ?? []).some((link) => link.id === id)) return;
+  if ((editor.authoritative.document.links ?? []).some((link) => link.id === id)) {
+    explain(app, "linkExists");
+    return;
+  }
   saveBoardStructure(app, editor, (document) => {
     document.links = [...(document.links ?? []), { id, from, to, transition: "cut" }];
   });
@@ -2143,7 +2180,10 @@ function saveBoardStructure(app, editor, edit, onSaved) {
 function replaceVoidDocument(app, editor) {
   if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
   const title = editorDraft(app).documentTitle.trim();
-  if (!title) return;
+  if (!title) {
+    explain(app, "titleRequired");
+    return;
+  }
   const savedTitle = editorDraft(app).documentTitle;
   const next = structuredClone(editor.authoritative.document);
   next.title = title;
@@ -2321,6 +2361,8 @@ function settingsSurface(app, document, t) {
     syncState: app.settingsSync?.state ?? info.service?.syncState ?? app.sync ?? "",
     pendingChanges: app.settingsSync?.pendingChanges,
     syncLabel: t(syncCopy(app.settingsSync?.state ?? (info.service?.syncState === "error" ? "error" : app.sync))),
+    look: app.look,
+    language: app.language,
     canWrite: app.store.capabilities.includes("settings.write"),
     canManage: app.store.capabilities.includes("home.manage"),
     now: Date.now(),
@@ -2691,6 +2733,11 @@ const TASK_COPY = {
 function showOutcome(app, note, code = null) {
   app.actionNote = note;
   app.actionCode = code;
+}
+
+function explain(app, key) {
+  showOutcome(app, text(app.language, key), key);
+  if (!app.disposed && app.layout !== "unknown") renderShell(app);
 }
 
 function actionText(language, code, values) {

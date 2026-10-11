@@ -361,7 +361,8 @@ button, input { font: inherit; color: inherit; }
   background: transparent;
   color: var(--mute);
 }
-.shell[data-layout="phone"] .phone-nav button[aria-pressed="true"] {
+.shell[data-layout="phone"] .phone-nav button[aria-pressed="true"],
+.btn.is-selected {
   background: var(--accent);
   color: var(--bg);
 }
