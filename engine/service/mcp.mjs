@@ -1,10 +1,14 @@
+import { randomUUID } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { admitMessage } from '../sync/limits.mjs';
+import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { CoreError, canonicalJson, isUuid } from './identity.mjs';
 import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { recordActivity } from './watch.mjs';
-import { atomicWrite, withReceipt } from './store.mjs';
+import { atomicWrite, commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
 
 const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
@@ -173,18 +177,215 @@ const LEGACY_METHODS = {
   register: 'register', send_message: 'send', list_inbox: 'inbox', read_inbox: 'read', history: 'history',
   threads: 'threads', status: 'status', events: 'events', reminder: 'reminder', delivery_status: 'delivery',
 };
+const LEGACY_MUTATIONS = new Set(['register', 'send', 'read']);
 
 async function legacyCall(context, name, args) {
   const method = LEGACY_METHODS[name];
   if (!method) return undefined;
+  const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  const registration = await canonicalRegistration(context);
+  assertCallerBinding(input, registration);
+  const forwarded = forwardedArgs(method, input, registration);
   const { openRelayOperations } = await import('./client.mjs');
   const relay = await openRelayOperations({
-    mindPath: context.paths?.mind,
-    hostname: context.paths?.machine,
-    sessionId: context.credential?.sessionId,
-    client: 'cursor',
+    mindPath: context.paths.mind,
+    hostname: registration.machine,
+    sessionId: registration.sessionId,
+    client: registration.client,
+    scopeLock: true,
+    pinnedRegistration: registration,
+    proveBinding: () => proveBinding(context, registration),
+    commitFile: (destination, bytes) => commitMindFile(context, destination, bytes),
   });
-  return relay[method](args);
+  const run = async () => {
+    try {
+      return await relay[method](forwarded);
+    } catch (error) {
+      if (error?.code === 'FORBIDDEN_SCOPE' || error?.code === 'UNPROVED_SESSION') {
+        throw new CoreError(403, 'forbidden', 'The tool cannot use another unit or session.');
+      }
+      throw error;
+    }
+  };
+  if (!LEGACY_MUTATIONS.has(method)) return run();
+  return transactLegacy(context, name, input, registration, method, run);
+}
+
+async function canonicalRegistration(context) {
+  const credential = context.credential;
+  if (credential?.audience !== 'agent' || !credential.unitId || !credential.sessionId || !context.paths?.mind || !context.paths?.machine) {
+    throw new CoreError(403, 'forbidden', 'The tool needs a bound agent session.');
+  }
+  const directory = path.join(context.paths.mind, 'user', 'relay', 'sessions');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  let match = null;
+  for (const name of names) {
+    if (!/^[A-Za-z0-9._-]+\.json$/.test(name)) continue;
+    let record;
+    try {
+      record = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (record?.kind !== 'registration' || record.sessionId !== credential.sessionId) continue;
+    if (record.unitId !== credential.unitId || record.machine !== context.paths.machine) continue;
+    if (!record.client || !record.nativeSessionId || !record.unit) continue;
+    if (!match || String(record.registeredAt ?? '') >= String(match.registeredAt ?? '')) match = record;
+  }
+  if (!match) throw new CoreError(403, 'forbidden', 'The session has no canonical registration.');
+  if (await sessionStopped(context, credential.sessionId)) throw new CoreError(403, 'forbidden', 'The session is stopped.');
+  return match;
+}
+
+function assertCallerBinding(args, registration) {
+  if (args.unit !== undefined && !unitMatches(args.unit, registration)) {
+    throw new CoreError(403, 'forbidden', 'The tool cannot use another unit.');
+  }
+  if (args.client !== undefined && args.client !== registration.client) {
+    throw new CoreError(403, 'forbidden', 'The tool cannot use another client.');
+  }
+  if (args.nativeSessionId !== undefined && args.nativeSessionId !== registration.nativeSessionId) {
+    throw new CoreError(403, 'forbidden', 'The tool cannot use another native session.');
+  }
+}
+
+function unitMatches(unit, registration) {
+  return typeof unit === 'string' && (unit.toLowerCase() === registration.unit.toLowerCase() || unit === registration.unitId);
+}
+
+function forwardedArgs(method, args, registration) {
+  if (method === 'register') {
+    return {
+      unit: registration.unit,
+      nativeSessionId: registration.nativeSessionId,
+      client: registration.client,
+      ...(args.activity !== undefined ? { activity: args.activity } : {}),
+      ...(args.quota !== undefined ? { quota: args.quota } : {}),
+    };
+  }
+  const copy = { ...args };
+  delete copy.requestId;
+  delete copy.unit;
+  delete copy.client;
+  delete copy.nativeSessionId;
+  delete copy.machine;
+  return copy;
+}
+
+async function proveBinding(context, registration) {
+  const adapter = context.adapters?.[registration.client];
+  if (typeof adapter?.confirm !== 'function') return false;
+  const confirmed = await adapter.confirm({
+    unitId: registration.unitId,
+    nativeSessionId: registration.nativeSessionId,
+    client: registration.client,
+    machine: registration.machine,
+  });
+  if (confirmed !== true) return false;
+  const directory = path.join(context.paths.localDirectory, 'session-starts');
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    let journal;
+    try {
+      journal = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (journal?.sessionId !== registration.sessionId || !Number.isInteger(journal.pid) || journal.pid <= 0) continue;
+    if (context.ownedPids?.has(journal.pid)) return true;
+  }
+  return false;
+}
+
+async function sessionStopped(context, sessionId) {
+  const directory = path.join(context.paths.mind, 'user', 'relay', 'session-status', sessionId);
+  let names = [];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const record = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
+      if (record?.state === 'stopped') return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+async function transactLegacy(context, name, args, registration, method, run) {
+  const requestId = isUuid(args.requestId) ? args.requestId : randomUUID();
+  if (method === 'send') {
+    if (!context.ledger) throw new CoreError(503, 'service_unavailable', 'Message admission is not composed.');
+    await admitMessage(context.ledger, { id: requestId, record: Buffer.from(String(args.body ?? ''), 'utf8') });
+  }
+  const saved = await withReceipt(context.store, {
+    principal: context.credential?.token ?? registration.sessionId,
+    key: requestId,
+    method: 'POST',
+    path: `/mcp/${name}`,
+    body: args,
+    requestId,
+  }, async (receipt) => {
+    const value = await run();
+    await atomicWrite(context.store, path.join(context.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
+      ...receipt,
+      status: 200,
+      response: value,
+    })}\n`));
+    context.security?.record({
+      type: 'auth.success',
+      actor: registration.unitId,
+      session: registration.sessionId,
+      outcome: 'success',
+    });
+    return value;
+  });
+  return saved?.replayed ? saved.body : saved;
+}
+
+async function commitMindFile(context, destination, bytes) {
+  const relative = path.relative(context.paths.mind, destination);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new CoreError(403, 'forbidden', 'The tool cannot write outside the mind.');
+  }
+  const normalized = relative.split(path.sep).join('/');
+  const current = await readBytes(context.store, destination);
+  const id = randomUUID();
+  await commitTransaction(context.store, {
+    id,
+    entries: [{
+      resource: normalized,
+      recordPath: destination,
+      beforeRevision: current ? revisionOf(current) : null,
+      afterBytes: bytes,
+    }],
+    events: [],
+  });
+  const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now?.() ?? Date.now() });
+  const changes = await stageTransaction(sync, [{ target: { kind: 'mind', path: normalized }, bytes }], { transactionId: id });
+  noteSync(context, changes.length ? 'pending' : 'local');
+  if (typeof context.pulse?.changed === 'function') {
+    const result = await context.pulse.changed(changes.map((change) => change.id));
+    if (result?.published === true) noteSync(context, 'published');
+  }
 }
 
 async function runMutation(context, name, args) {

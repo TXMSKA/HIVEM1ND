@@ -429,7 +429,27 @@ async function publishExclusive(root, destination, bytes) {
   }
 }
 
-async function archiveOriginal(root, source, destination, bytes, parsed) {
+async function archiveThroughCommit(root, source, destination, bytes, parsed, commitFile) {
+  await safePath(root, destination);
+  const existing = await lstatOrNull(destination);
+  if (existing) {
+    if (existing.isSymbolicLink() || !existing.isFile()) throw relayError('UNSAFE_PATH', 'The archive destination is not a regular file.');
+    const archivedBytes = await readRegularFileSafe(root, destination);
+    if (!archivedBytes || !archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
+  } else {
+    const sourceState = await lstatOrNull(source);
+    if (sourceState?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
+    await commitFile(destination, bytes);
+  }
+  if (await lstatOrNull(source)) await unlink(source).catch((error) => { if (error?.code !== 'ENOENT') throw error; });
+  const retained = await readRegularFileSafe(root, destination);
+  if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
+  parsed.archived = true;
+  parsed.sourcePath = destination;
+}
+
+async function archiveOriginal(root, source, destination, bytes, parsed, commitFile = null) {
+  if (typeof commitFile === 'function') return archiveThroughCommit(root, source, destination, bytes, parsed, commitFile);
   await safePath(root, destination);
   const existing = await lstatOrNull(destination);
   if (existing) {
@@ -554,11 +574,12 @@ function toPublicRegistration(record) {
 }
 
 export async function createRelay(options = {}) {
-  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client']);
+  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile']);
   if (options.mindPath !== undefined && typeof options.mindPath !== 'string') throw relayError('INVALID_ROOT', 'mindPath must be a filesystem path string.');
   const mindPath = path.resolve(options.mindPath ?? process.cwd());
   const hostname = safeMachine(options.hostname ?? os.hostname());
   const defaultClient = options.client === undefined ? null : scalar(options.client, 'client', 80);
+  const scopeLock = options.scopeLock === true;
   const instanceId = options.sessionId === undefined ? randomUUID() : scalar(options.sessionId, 'sessionId', 180);
   await assertRoot(mindPath);
   const canonicalMind = await realpath(mindPath);
@@ -927,6 +948,63 @@ export async function createRelay(options = {}) {
     return newest;
   }
 
+  async function publish(destination, bytes) {
+    if (scopeLock && typeof options.commitFile === 'function') {
+      await options.commitFile(destination, bytes);
+      return;
+    }
+    await publishExclusive(mindPath, destination, bytes);
+  }
+
+  async function scopedUnit(args) {
+    if (!scopeLock) return args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
+    const registration = await requireRegistration();
+    if (args.unit !== undefined && validUnit(args.unit).toLowerCase() !== registration.unit.toLowerCase()) {
+      throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another unit.');
+    }
+    return registration.unit;
+  }
+
+  function sameBinding(value, expected, label) {
+    if (value === undefined) return;
+    const actual = scalar(value, label, 180);
+    if (actual !== expected) throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another native client.');
+  }
+
+  async function registerLocked(args) {
+    const pinned = await requireRegistration();
+    const unit = validUnit(args.unit);
+    if (unit.toLowerCase() !== pinned.unit.toLowerCase()) throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another unit.');
+    sameBinding(args.nativeSessionId, pinned.nativeSessionId, 'nativeSessionId');
+    sameBinding(args.client, pinned.client, 'client');
+    if (typeof options.proveBinding !== 'function' || await options.proveBinding(pinned) !== true) {
+      throw relayError('UNPROVED_SESSION', 'Registration needs a verified native process.');
+    }
+    const activity = safeActivity(args.activity);
+    const quota = safeQuota(args.quota);
+    const observedAt = isoNow();
+    const record = {
+      kind: 'registration',
+      registrationId: randomUUID(),
+      instanceId: pinned.instanceId,
+      unit: pinned.unit,
+      unitId: pinned.unitId,
+      sessionId: pinned.sessionId,
+      scopeId: pinned.scopeId,
+      nativeSessionId: pinned.nativeSessionId,
+      client: pinned.client,
+      machine: pinned.machine,
+      registeredAt: observedAt,
+      activity,
+      activityObservedAt: activity === null ? null : observedAt,
+      quota,
+      quotaObservedAt: quota === null ? null : observedAt,
+    };
+    await publish(path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
+    currentRegistration = record;
+    return toPublicRegistration(record);
+  }
+
   async function resolveUnit(unit, { allowUser = true } = {}) {
     validUnit(unit);
     const person = allowUser ? unit.toLowerCase() : '';
@@ -1104,6 +1182,7 @@ export async function createRelay(options = {}) {
     wakePersistence,
     async register(args = {}) {
       validateArgs(args, 'register', ['unit', 'nativeSessionId', 'client', 'activity', 'quota']);
+      if (scopeLock) return registerLocked(args);
       const unit = validUnit(args.unit);
       const identity = await resolveUnit(unit);
       const nativeSessionId = args.nativeSessionId === undefined ? instanceId : scalar(args.nativeSessionId, 'nativeSessionId', 180);
@@ -1129,7 +1208,7 @@ export async function createRelay(options = {}) {
         registeredAt: observedAt, activity, activityObservedAt: activity === null ? null : observedAt,
         quota, quotaObservedAt: quota === null ? null : observedAt,
       };
-      await publishExclusive(mindPath, path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
+      await publish(path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
       currentRegistration = record;
       return toPublicRegistration(record);
     },
@@ -1181,23 +1260,23 @@ export async function createRelay(options = {}) {
       const secondStamp = `${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}`;
       const filename = `${secondStamp}-${hostname}-${id}.md`;
       const destination = path.join(recipient.scope.path, 'inbox', to, filename);
-      await publishExclusive(mindPath, destination, serializeMessage(message));
+      await publish(destination, serializeMessage(message));
       message.sourcePath = destination;
       const event = { kind: 'message', ...metadata(message) };
-      await publishExclusive(mindPath, path.join(eventsPath, `${id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
+      await publish(path.join(eventsPath, `${id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
       return { id, threadId, from: sender.unit, to, timestamp: message.timestamp, priority, replyRequested };
     },
 
     async inbox(args = {}) {
       validateArgs(args, 'inbox', ['unit', 'limit']);
-      const unit = args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
+      const unit = await scopedUnit(args);
       const target = await resolveUnit(unit);
       return unreadInbox(unit, target.scope, parseLimit(args.limit));
     },
 
     async read(args = {}) {
       validateArgs(args, 'read', ['unit', 'ids', 'limit']);
-      const unit = args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
+      const unit = await scopedUnit(args);
       const target = await resolveUnit(unit);
       const limit = parseLimit(args.limit);
       if (args.ids !== undefined && (!Array.isArray(args.ids) || args.ids.length > MAX_LIST_LIMIT || args.ids.some((id) => typeof id !== 'string'))) {
@@ -1240,7 +1319,7 @@ export async function createRelay(options = {}) {
         if (selected && !selected.has(parsed.id)) continue;
         if (parsed.to.toLowerCase() !== unit.toLowerCase()) continue;
         await ensureDirectory(mindPath, archiveDirectory);
-        await archiveOriginal(mindPath, file, archivedPath, raw, parsed);
+        await archiveOriginal(mindPath, file, archivedPath, raw, parsed, scopeLock ? options.commitFile : null);
         parsed.archived = true;
         parsed.sourcePath = archivedPath;
         messages.push({ ...metadata(parsed), body: parsed.body, archive: { path: path.relative(userPath, parsed.sourcePath).replaceAll('\\', '/'), archived: true } });
@@ -1259,7 +1338,7 @@ export async function createRelay(options = {}) {
 
     async history(args = {}) {
       validateArgs(args, 'history', ['unit', 'threadId', 'ids', 'limit']);
-      const unit = args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
+      const unit = await scopedUnit(args);
       const limit = parseLimit(args.limit);
       let messages = (await allMessages({ includeArchived: true })).filter((message) =>
         message.from.toLowerCase() === unit.toLowerCase() || message.to.toLowerCase() === unit.toLowerCase());
@@ -1278,7 +1357,7 @@ export async function createRelay(options = {}) {
 
     async threads(args = {}) {
       validateArgs(args, 'threads', ['unit']);
-      const unit = args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
+      const unit = await scopedUnit(args);
       const messages = await allMessages({ includeArchived: true });
       const relevant = messages.filter((message) => message.from.toLowerCase() === unit.toLowerCase() || message.to.toLowerCase() === unit.toLowerCase());
       const grouped = new Map();
@@ -1353,9 +1432,13 @@ export async function createRelay(options = {}) {
 
     async status(args = {}) {
       validateArgs(args, 'status', ['unit']);
+      const registration = scopeLock ? await requireRegistration() : null;
+      if (scopeLock && args.unit !== undefined && validUnit(args.unit).toLowerCase() !== registration.unit.toLowerCase()) {
+        throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another unit.');
+      }
       const { scopes } = await routesAndScopes();
       const registered = await registrations();
-      const selected = args.unit === undefined ? null : validUnit(args.unit);
+      const selected = scopeLock ? registration.unit : (args.unit === undefined ? null : validUnit(args.unit));
       const units = [];
       for (const scope of scopes) {
         const stateDirectory = path.join(scope.path, 'state');
@@ -1388,8 +1471,10 @@ export async function createRelay(options = {}) {
 
     async events(args = {}) {
       validateArgs(args, 'events', ['limit']);
+      const registration = scopeLock ? await requireRegistration() : null;
       const limit = parseLimit(args.limit, 200);
-      const messages = await allMessages({ includeArchived: true });
+      const bound = registration?.unit.toLowerCase() ?? null;
+      const messages = (await allMessages({ includeArchived: true })).filter((message) => !bound || message.from.toLowerCase() === bound || message.to.toLowerCase() === bound);
       const existing = await listRegularFiles(mindPath, eventsPath, (name) => /^[a-f0-9-]{36}\.json$/i.test(name));
       const byId = new Map();
       for (const file of existing) {
@@ -1401,7 +1486,7 @@ export async function createRelay(options = {}) {
           const event = { kind: 'message', ...metadata(message) };
           byId.set(message.id, event);
           try {
-            await publishExclusive(mindPath, path.join(eventsPath, `${message.id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
+            await publish(path.join(eventsPath, `${message.id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
           } catch (error) {
             if (error?.code !== 'COLLISION') throw error;
             const eventPath = path.join(eventsPath, `${message.id}.json`);
@@ -1411,12 +1496,22 @@ export async function createRelay(options = {}) {
           }
         }
       }
-      const events = [...byId.values()].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
+      const events = [...byId.values()].filter((event) => !bound || String(event.from ?? '').toLowerCase() === bound || String(event.to ?? '').toLowerCase() === bound)
+        .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
       return { events: events.slice(-limit) };
     },
 
     async reminder(args = {}) {
       validateArgs(args, 'reminder', ['unit', 'nativeSessionId', 'client']);
+      if (scopeLock) {
+        const registration = await requireRegistration();
+        if (args.unit !== undefined && validUnit(args.unit).toLowerCase() !== registration.unit.toLowerCase()) {
+          throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another unit.');
+        }
+        sameBinding(args.nativeSessionId, registration.nativeSessionId, 'nativeSessionId');
+        sameBinding(args.client, registration.client, 'client');
+        args = { unit: registration.unit, nativeSessionId: registration.nativeSessionId, client: registration.client };
+      }
       const nativeSessionId = args.nativeSessionId === undefined ? null : scalar(args.nativeSessionId, 'nativeSessionId', 180);
       const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
       let unit = args.unit === undefined ? null : validUnit(args.unit);
@@ -1451,7 +1546,7 @@ export async function createRelay(options = {}) {
     },
   };
 
-  let currentRegistration = null;
+  let currentRegistration = scopeLock && options.pinnedRegistration ? options.pinnedRegistration : null;
 
   async function requireRegistration() {
     const registration = await currentIdentity();

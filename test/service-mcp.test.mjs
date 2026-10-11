@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -8,6 +8,7 @@ import { addScreen, newSketch } from '../features/blueprint/review/sketch-format
 import { createBoard } from '../engine/service/editors.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { composeCore } from '../engine/service/service.mjs';
+import { uuidV8 } from '../engine/service/identity.mjs';
 import { dispatch, toolSchemas } from '../engine/service/mcp.mjs';
 import { bindNative, close, connectService, request as serviceRequest } from '../engine/service/client.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
@@ -190,6 +191,161 @@ test('an agent attached to one editor cannot open another, and delivery follows 
   assert.equal(replay.events.length, 0);
   assert.equal(JSON.stringify(replay).includes('Foreign board secret'), false);
   bus.release(subscriber);
+});
+
+test('legacy MCP tools cannot cross the credential unit', async (t) => {
+  const fixture = await makeCoreFixture();
+  const sessionId = uuidV8(['session', fixture.machine, 'cursor', 'native-one', 'root:one']);
+  const registrationId = randomUUID();
+  const ownedPids = new Set([4242]);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'), 'unit: one\nunit-id: root:one\nstate: in\nmachine: DESKTOP\n\nReady.\n');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'two.md'), 'unit: two\nunit-id: root:two\nstate: in\nmachine: DESKTOP\n\nReady.\n');
+  await mkdir(path.join(fixture.paths.mind, 'user', 'inbox', 'one'), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'inbox', 'two'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'inbox', 'one', '20261011-120000-DESKTOP-abcdef0123456789.md'), 'id: msg-one\nfrom: master\nto: one\nmachine: DESKTOP\ntimestamp: 2026-10-11T12:00:00.000Z\nsubject: Visible one\nthread-id: thread-one\n\nvisible to one\n');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'inbox', 'two', '20261011-120001-DESKTOP-abcdef0123456780.md'), 'id: msg-two\nfrom: master\nto: two\nmachine: DESKTOP\ntimestamp: 2026-10-11T12:00:01.000Z\nsubject: Private two\nthread-id: thread-two\n\nsecret body of two\n');
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'sessions'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'sessions', `${registrationId}.json`), `${JSON.stringify({
+    kind: 'registration',
+    registrationId,
+    instanceId: `service-${fixture.machine}`,
+    sessionId,
+    unit: 'one',
+    unitId: 'root:one',
+    scopeId: 'root',
+    nativeSessionId: 'native-one',
+    client: 'cursor',
+    machine: fixture.machine,
+    registeredAt: '2026-10-11T12:00:00.000Z',
+    activity: 'idle',
+    activityObservedAt: '2026-10-11T12:00:00.000Z',
+    quota: null,
+    quotaObservedAt: null,
+  })}\n`);
+  await mkdir(path.join(fixture.paths.localDirectory, 'session-starts'), { recursive: true });
+  await writeFile(path.join(fixture.paths.localDirectory, 'session-starts', `${randomUUID()}.json`), `${JSON.stringify({ sessionId, pid: 4242 })}\n`);
+  const core = await composeCore({
+    store: fixture.store,
+    paths: fixture.paths,
+    now: () => fixture.clock.now,
+    projects: [],
+    ownedPids,
+    adapters: {
+      cursor: {
+        confirm(proof) {
+          return proof.unitId === 'root:one' && proof.nativeSessionId === 'native-one' && proof.client === 'cursor' && proof.machine === fixture.machine;
+        },
+      },
+    },
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const token = core.credentials.issue({
+    audience: 'agent',
+    unitId: 'root:one',
+    sessionId,
+    attached: true,
+    capabilities: ['own'],
+  }).token;
+  const unbound = core.credentials.issue({
+    audience: 'agent',
+    unitId: 'root:one',
+    sessionId: randomUUID(),
+    attached: true,
+    capabilities: ['own'],
+  }).token;
+  const headers = { accept: 'application/json, text/event-stream' };
+  const foreign = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'history', arguments: { unit: 'two' } } },
+  });
+  assert.equal(foreign.json.result.isError, true);
+  assert.equal(JSON.stringify(foreign.json).includes('secret body of two'), false);
+  assert.equal(JSON.stringify(foreign.json).includes('Private two'), false);
+  const inbox = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_inbox', arguments: { unit: 'two' } } },
+  });
+  assert.equal(inbox.json.result.isError, true);
+  assert.equal(JSON.stringify(inbox.json).includes('Private two'), false);
+  const threads = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'threads', arguments: { unit: 'two' } } },
+  });
+  assert.equal(threads.json.result.isError, true);
+  assert.equal(JSON.stringify(threads.json).includes('thread-two'), false);
+  const forged = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'register', arguments: { unit: 'two', nativeSessionId: 'qa040-forged-native', client: 'cursor' } } },
+  });
+  assert.equal(forged.json.result.isError, true);
+  const retarget = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'register', arguments: { unit: 'one', nativeSessionId: 'qa040-forged-native', client: 'cursor' } } },
+  });
+  assert.equal(retarget.json.result.isError, true);
+  const stray = await call(core.http.port, 'POST', '/mcp', {
+    token: unbound,
+    headers,
+    body: { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'history', arguments: {} } },
+  });
+  assert.equal(stray.json.result.isError, true);
+  assert.equal(JSON.stringify(stray.json).includes('secret body of two'), false);
+  const own = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'history', arguments: {} } },
+  });
+  assert.equal(own.json.result.isError, false);
+  const ownHistory = JSON.parse(own.json.result.content[0].text).data;
+  assert.equal(ownHistory.messages.some((message) => message.body === 'visible to one\n' || message.body === 'visible to one'), true);
+  assert.equal(JSON.stringify(ownHistory).includes('secret body of two'), false);
+  const registered = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'register', arguments: { unit: 'one', nativeSessionId: 'native-one', client: 'cursor' } } },
+  });
+  assert.equal(registered.json.result.isError, false);
+  const registeredBody = JSON.parse(registered.json.result.content[0].text).data;
+  assert.equal(registeredBody.unitId, 'root:one');
+  assert.equal(registeredBody.nativeSessionId, 'native-one');
+  const requestId = randomUUID();
+  const sent = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'send_message', arguments: { to: 'two', subject: 'Note', body: 'hello from one', requestId } } },
+  });
+  assert.equal(sent.json.result.isError, false);
+  const replay = await call(core.http.port, 'POST', '/mcp', {
+    token,
+    headers,
+    body: { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'send_message', arguments: { to: 'two', subject: 'Note', body: 'hello from one', requestId } } },
+  });
+  assert.equal(replay.json.result.isError, false);
+  assert.equal(JSON.parse(replay.json.result.content[0].text).data.id, JSON.parse(sent.json.result.content[0].text).data.id);
+  const sessions = await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'sessions'));
+  const sessionText = [];
+  for (const name of sessions) sessionText.push(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'sessions', name), 'utf8'));
+  assert.equal(sessionText.some((text) => text.includes('qa040-forged-native')), false);
+  assert.equal(sessionText.some((text) => text.includes('"unitId":"root:two"') || text.includes('"unit":"two"')), false);
+  const inboxNames = await readdir(path.join(fixture.paths.mind, 'user', 'inbox', 'two'));
+  assert.equal(inboxNames.length, 2);
+  const receipts = await readdir(path.join(fixture.paths.localDirectory, 'receipts'), { recursive: true });
+  assert.equal(receipts.some((name) => String(name).endsWith('.json')), true);
+  const changes = await readdir(path.join(fixture.paths.localDirectory, 'staging', 'changes'));
+  assert.equal(changes.length > 0, true);
+  const audit = await readFile(path.join(fixture.paths.localDirectory, 'security-events.jsonl'), 'utf8');
+  assert.equal(audit.includes('auth.success'), true);
+  assert.equal(audit.includes('secret body of two'), false);
+  assert.equal(audit.includes(token), false);
 });
 
 async function bindUnit(fixture, resourceId, unitId) {

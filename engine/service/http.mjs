@@ -313,6 +313,7 @@ export async function createHttpServer(options) {
   const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP', mind: options.paths?.mind ?? null });
   const credentials = options.credentials;
   const security = options.security ?? createSecuritySink({ now: options.now ?? (() => Date.now()), directory: options.paths?.localDirectory ?? null });
+  options.security = security;
   credentials?.bindSecurity?.(security);
   const viewers = new Map();
   const watch = createWatch({ bus, now: options.now ?? (() => Date.now()) });
@@ -933,6 +934,7 @@ function domainContext(options, credential, bus) {
     sync: options.sync ?? null,
     pulse: options.pulse ?? null,
     credentials: options.credentials ?? null,
+    security: options.security ?? null,
     principal: {
       unitId: audience === 'agent' ? credential.unitId : 'root:master',
       audience,
