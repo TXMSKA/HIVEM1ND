@@ -149,16 +149,25 @@ async function bootSession(app, credential, env = {}) {
     app.mode = "hierarchy";
     app.tab = "hierarchy";
   }
+  if (Number.isFinite(env.readyBudgetMs)) app.readyBudgetMs = env.readyBudgetMs;
+  return runBoot(app);
+}
+
+async function runBoot(app) {
+  if (app.disposed || app.bootRetrying) return app;
+  app.bootRetrying = true;
+  app.bootFailed = false;
+  app.bootSettled = false;
   synchronize(app.api, app.store, {
     cursor: () => app.store.cursor,
     onEvent: (event) => onStream(app, event),
     onState: () => {
-      if (!app.disposed && app.layout !== "unknown") renderShell(app);
+      if (!app.disposed && !app.bootFailed && app.layout !== "unknown") renderShell(app);
     },
   });
   try {
     await loadSnapshot(app.store, app.api);
-    if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, env.readyBudgetMs);
+    if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, app.readyBudgetMs);
     await loadPresentation(app);
     await loadLists(app);
     startOwnEmbed(app);
@@ -168,8 +177,16 @@ async function bootSession(app, credential, env = {}) {
       clearTimeout(app.readyTimer);
       renderFailure(app, error);
     }
+  } finally {
+    app.bootRetrying = false;
   }
   return app;
+}
+
+function resumeBoot(app) {
+  if (app.disposed || app.bootRetrying || !app.api?.token || app.api.closed) return;
+  renderStatus(app, "loading");
+  return runBoot(app);
 }
 
 function armBootDeadline(app, budgetMs) {
@@ -2686,8 +2703,11 @@ function renderFailure(app, error) {
         class: "btn",
         text: text(app.language, "retry"),
         onclick: () => {
-          dispose(app);
-          mount(app.root);
+          if (app.api?.token && !app.api.closed) resumeBoot(app);
+          else {
+            dispose(app);
+            mount(app.root);
+          }
         },
     }),
   ));

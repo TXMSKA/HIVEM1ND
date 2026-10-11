@@ -2514,6 +2514,42 @@ test("startup shows Retry when stream.ready never arrives", async (t) => {
   assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/viewer"), false);
 });
 
+test("startup Retry repeats the failed read with the same authorized API", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const token = new URL(fixture.desktopUrl).hash.replace(/^#/, "").split("&").find((part) => part.startsWith("session=")).slice("session=".length);
+  const history = { state: null, urls: [], replaceState(_state, _title, url) { this.urls.push(String(url)); } };
+  const authorizations = [];
+  let views = 0;
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    const target = String(input);
+    if (new URL(target).pathname === "/api/v1/view") {
+      views += 1;
+      authorizations.push(init?.headers?.Authorization ?? null);
+      if (views === 1) {
+        return new Response(JSON.stringify({
+          error: { code: "unavailable", message: "The service is unavailable.", requestId: "req-boot", details: {}, retryAt: null },
+        }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+    }
+    return fetch(input, init);
+  }, { history });
+  t.after(() => dispose(booted.app));
+  const api = booted.app.api;
+  await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "The failed startup did not stay recoverable.");
+  assert.equal(api.token, token);
+  assert.equal(history.urls.length, 1);
+  assert.equal(history.urls[0].includes(token), false);
+  assert.equal(history.urls[0].includes("session="), false);
+  click(booted.root.querySelector("button"));
+  await waitFor(() => booted.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "Retry did not open the desktop shell.");
+  assert.equal(booted.app.api, api);
+  assert.equal(booted.app.api.token, token);
+  assert.equal(authorizations.length >= 2, true);
+  assert.equal(authorizations.every((value) => value === `Bearer ${token}`), true);
+  assert.equal(history.urls.length, 1);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
