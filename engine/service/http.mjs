@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { lstat, readFile, realpath } from 'node:fs/promises';
+import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
@@ -120,7 +121,7 @@ const JSON_LIMIT = 2_000_000;
 const REPLACEMENT_LIMIT = 16_000_000;
 
 function bodyLimitFor(route, pathname) {
-  if (pathname === '/mcp' || route?.template?.endsWith('/assets')) return REPLACEMENT_LIMIT;
+  if (pathname === '/mcp') return REPLACEMENT_LIMIT;
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
   return JSON_LIMIT;
@@ -310,18 +311,22 @@ export async function createHttpServer(options) {
   });
 
   async function dispatch(req, res) {
+    const headerBytes = rawHeaderBytes(req);
+    const url = req.url ?? '/';
+    if (Buffer.byteLength(url, 'utf8') > 2048) throw new CoreError(414, 'uri_too_long', 'The request target is too long.');
+    if (headerBytes > 8192) throw new CoreError(431, 'request_too_large', 'The request headers are too large.');
+    assertSingleAuthority(req);
     const requestId = headerOne(req, 'x-request-id') ?? randomUUID();
     if (headerOne(req, 'x-request-id') && !isUuid(requestId)) throw new CoreError(422, 'invalid_body', 'The request id must be a UUID.');
     const eventCursor = headerOne(req, 'last-event-id') ?? null;
-    const requested = splitTarget(req.url ?? '/');
-    const listener = listenerOf(options, server);
+    const requested = splitTarget(url);
+    const listener = listenerOf(server, req.socket);
     checkPeer(req.socket.remoteAddress, listener);
     checkHost(headerOne(req, 'host'), listener);
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
-    const headerBytes = Object.entries(req.headers).reduce((sum, [key, value]) => sum + key.length + String(value).length, 0);
-    const bucket = principalBucket(principals, req);
-    checkLimits(bucket, { url: req.url ?? '', headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
+    const bucket = principalBucket(principals, req, requested.path);
+    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events' }, options.now?.() ?? Date.now());
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
@@ -489,13 +494,16 @@ async function readStream(req, limit) {
   return Buffer.concat(chunks);
 }
 
-function principalBucket(principals, req) {
+function principalBucket(principals, req, pathname) {
+  const address = req.socket?.remoteAddress || 'anonymous';
+  const anonymous = pathname === '/' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
+    || pathname === '/api/v1/auth/local' || pathname === '/api/v1/auth/home' || pathname === '/api/v1/auth/logout';
   const header = headerOne(req, 'authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
-  const key = token || req.socket?.remoteAddress || 'anonymous';
+  const key = anonymous || !token ? `address:${address}` : `token:${token}`;
   let bucket = principals.get(key);
   if (!bucket) {
-    bucket = { requests: [], streams: new Set(), peers: new Map(), grantFailures: [] };
+    bucket = { requests: [], streams: new Set() };
     principals.set(key, bucket);
   }
   return bucket;
@@ -1072,14 +1080,53 @@ async function requireBootstrap(req, options, listener) {
   if (!token || !sameSecret(presented, state.secretBytes)) throw new CoreError(401, 'invalid_bootstrap', 'The bootstrap secret is not valid.');
 }
 
-function listenerOf(options, server) {
-  const address = server.address();
+function listenerOf(server, socket) {
+  const bound = typeof server.address === 'function' ? server.address() : null;
+  let address = socket?.localAddress || bound?.address || '127.0.0.1';
+  if (address.startsWith('::ffff:')) address = address.slice(7);
+  if (address === '::1') address = '127.0.0.1';
+  const port = socket?.localPort || bound?.port;
+  const loopback = address === '127.0.0.1';
   return {
-    kind: options.listenerKind ?? 'loopback',
-    address: options.bindAddress ?? '127.0.0.1',
-    port: address?.port,
-    netmask: options.netmask ?? '255.255.255.255',
+    kind: loopback ? 'loopback' : 'lan',
+    address,
+    port,
+    netmask: loopback ? '255.255.255.255' : interfaceNetmask(address),
   };
+}
+
+function interfaceNetmask(address) {
+  for (const rows of Object.values(networkInterfaces())) {
+    for (const row of rows ?? []) {
+      if (row.address === address && row.netmask) return row.netmask;
+    }
+  }
+  return '255.255.255.255';
+}
+
+function rawHeaderBytes(req) {
+  const raw = req.rawHeaders ?? [];
+  let size = 2;
+  for (let index = 0; index < raw.length; index += 2) {
+    size += Buffer.byteLength(String(raw[index]), 'latin1');
+    size += Buffer.byteLength(String(raw[index + 1] ?? ''), 'latin1');
+    size += 4;
+  }
+  return size;
+}
+
+function assertSingleAuthority(req) {
+  const seen = new Set();
+  const raw = req.rawHeaders ?? [];
+  for (let index = 0; index < raw.length; index += 2) {
+    const name = String(raw[index]).toLowerCase();
+    if (name !== 'host' && name !== 'origin' && name !== 'authorization') continue;
+    if (seen.has(name)) {
+      if (name === 'origin') throw new CoreError(403, 'invalid_origin', 'The request repeats Origin.');
+      throw new CoreError(400, 'invalid_host', 'The request repeats an authority header.');
+    }
+    seen.add(name);
+  }
 }
 
 function headerOne(req, name) {

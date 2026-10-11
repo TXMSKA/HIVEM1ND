@@ -206,17 +206,17 @@ export function authorize(credential, operation, object = {}) {
 export function checkPeer(remoteAddress, listener) {
   const address = normalizeAddress(remoteAddress);
   if (listener.kind === 'loopback') {
-    if (address !== '127.0.0.1') throw new CoreError(403, 'forbidden', 'The peer is not loopback.');
+    if (address !== '127.0.0.1') throw new CoreError(403, 'loopback_only', 'The peer is not loopback.');
     return { ok: true };
   }
-  if (!inSubnet(address, listener.address, listener.netmask)) throw new CoreError(403, 'forbidden', 'The peer is not on the home network.');
+  if (!inSubnet(address, listener.address, listener.netmask)) throw new CoreError(403, 'peer_not_allowed', 'The peer is not on the home network.');
   return { ok: true };
 }
 
 export function checkHost(host, listener) {
   const expected = `${listener.address}:${listener.port}`;
   if (typeof host !== 'string' || host.includes(',') || host.toLowerCase() !== expected.toLowerCase()) {
-    throw new CoreError(403, 'forbidden', 'The Host header does not match the listener.');
+    throw new CoreError(400, 'invalid_host', 'The Host header does not match the listener.');
   }
   return { ok: true };
 }
@@ -224,7 +224,7 @@ export function checkHost(host, listener) {
 export function checkOrigin(origin, listener, { write = false } = {}) {
   const expected = `http://${listener.address}:${listener.port}`;
   if (!origin && !write) return { ok: true };
-  if (origin !== expected) throw new CoreError(403, 'forbidden', 'The Origin header does not match the listener.');
+  if (origin !== expected) throw new CoreError(403, 'invalid_origin', 'The Origin header does not match the listener.');
   return { ok: true };
 }
 
@@ -234,11 +234,13 @@ export function checkLimits(bucket, input, now = Date.now()) {
   bucket.streams ??= new Set();
   bucket.peers ??= new Map();
   bucket.grantFailures ??= [];
-  if (typeof input.url === 'string' && input.url.length > 2048) throw new CoreError(414, 'request_too_large', 'The request target is too long.');
+  if (typeof input.url === 'string' && Buffer.byteLength(input.url, 'utf8') > 2048) throw new CoreError(414, 'uri_too_long', 'The request target is too long.');
   if ((input.headerBytes ?? 0) > 8192) throw new CoreError(431, 'request_too_large', 'The request headers are too large.');
   bucket.requests = bucket.requests.filter((at) => now - at < window);
-  if (bucket.requests.length >= 240) throw new CoreError(429, 'rate_limited', 'Too many requests.', {}, new Date(bucket.requests[0] + window).toISOString());
-  if (input.stream === true && bucket.streams.size >= 4) throw new CoreError(429, 'rate_limited', 'Too many streams.', {}, new Date(now + 1000).toISOString());
+  if (input.stream !== true && bucket.requests.length >= 240) {
+    throw new CoreError(429, 'request_rate_limited', 'Too many requests.', {}, new Date(bucket.requests[0] + window).toISOString());
+  }
+  if (input.stream === true && bucket.streams.size >= 4) throw new CoreError(429, 'request_rate_limited', 'Too many streams.', {}, new Date(now + 1000).toISOString());
   if (input.homeFailure === true) {
     const peer = bucket.peers.get(input.peer) ?? [];
     const recentPeer = peer.filter((at) => now - at < window);
@@ -250,7 +252,7 @@ export function checkLimits(bucket, input, now = Date.now()) {
     recentGrant.push(now);
     bucket.peers.set(input.peer, recentPeer);
     bucket.grantFailures = recentGrant;
-  } else {
+  } else if (input.stream !== true) {
     bucket.requests.push(now);
   }
   return { ok: true };

@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import path from 'node:path';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore, startService, stopService } from '../engine/service/service.mjs';
@@ -13,6 +13,7 @@ import { dispose, makeCoreFixture } from './core-fixture.mjs';
 const PHONE_FORBIDDEN = ['unit.create', 'chat.manage', 'layout.write', 'settings.write', 'home.manage', 'grant.revoke', 'session.start', 'session.stop', 'task.undo', 'editor.write', 'comment.write', 'asset.write', 'proposal.answer', 'watch', 'viewer.write'];
 const LOOPBACK = { kind: 'loopback', address: '127.0.0.1', port: 8765 };
 
+describe('service auth', { concurrency: false }, () => {
 test('audiences, peers and limits fail closed without leaking secrets', async (t) => {
   const fixture = await makeCoreFixture();
   t.after(() => dispose(fixture));
@@ -38,23 +39,31 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   await assert.rejects(async () => authorize(desktop, 'task.undo', { listener: 'lan' }), (error) => error.status === 403);
   assert.equal(checkPeer('127.0.0.1', LOOPBACK).ok, true);
   assert.equal(checkPeer('::ffff:127.0.0.1', LOOPBACK).ok, true);
-  await assert.rejects(async () => checkPeer('127.0.0.2', LOOPBACK), (error) => error.status === 403);
-  await assert.rejects(async () => checkPeer('::1', LOOPBACK), (error) => error.status === 403);
+  await assert.rejects(async () => checkPeer('127.0.0.2', LOOPBACK), (error) => error.status === 403 && error.code === 'loopback_only');
+  await assert.rejects(async () => checkPeer('::1', LOOPBACK), (error) => error.status === 403 && error.code === 'loopback_only');
   assert.equal(checkHost('127.0.0.1:8765', LOOPBACK).ok, true);
-  await assert.rejects(async () => checkHost('localhost:8765', LOOPBACK), (error) => error.status === 403);
-  await assert.rejects(async () => checkHost('127.0.0.1:8765, evil', LOOPBACK), (error) => error.status === 403);
+  await assert.rejects(async () => checkHost('localhost:8765', LOOPBACK), (error) => error.status === 400 && error.code === 'invalid_host');
+  await assert.rejects(async () => checkHost('127.0.0.1:8765, evil', LOOPBACK), (error) => error.status === 400 && error.code === 'invalid_host');
   assert.equal(checkOrigin(undefined, LOOPBACK, { write: false }).ok, true);
-  await assert.rejects(async () => checkOrigin(undefined, LOOPBACK, { write: true }), (error) => error.status === 403);
-  await assert.rejects(async () => checkOrigin('http://evil.example', LOOPBACK, { write: true }), (error) => error.status === 403);
+  await assert.rejects(async () => checkOrigin(undefined, LOOPBACK, { write: true }), (error) => error.status === 403 && error.code === 'invalid_origin');
+  await assert.rejects(async () => checkOrigin('http://evil.example', LOOPBACK, { write: true }), (error) => error.status === 403 && error.code === 'invalid_origin');
   const lan = { kind: 'lan', address: '192.168.1.20', port: 80, netmask: '255.255.255.0' };
   assert.equal(checkPeer('192.168.1.40', lan).ok, true);
-  await assert.rejects(async () => checkPeer('192.168.2.40', lan), (error) => error.status === 403);
+  await assert.rejects(async () => checkPeer('192.168.2.40', lan), (error) => error.status === 403 && error.code === 'peer_not_allowed');
   assert.equal(checkHost('192.168.1.20:80', lan).ok, true);
-  await assert.rejects(async () => checkHost('1.2.3.4:80', lan), (error) => error.status === 403);
+  await assert.rejects(async () => checkHost('1.2.3.4:80', lan), (error) => error.status === 400 && error.code === 'invalid_host');
   const bucket = {};
   for (let index = 0; index < 240; index += 1) checkLimits(bucket, { url: '/api/v1/units' }, 1_000);
-  await assert.rejects(async () => checkLimits(bucket, { url: '/api/v1/units' }, 1_000), (error) => error.status === 429);
-  await assert.rejects(async () => checkLimits({}, { url: `/${'a'.repeat(3000)}` }), (error) => error.status === 414);
+  await assert.rejects(async () => checkLimits(bucket, { url: '/api/v1/units' }, 1_000), (error) => error.status === 429 && error.code === 'request_rate_limited' && typeof error.retryAt === 'string');
+  checkLimits({}, { url: '/api/v1/units' }, 1_000);
+  const streams = { streams: new Set(['a', 'b', 'c', 'd']) };
+  await assert.rejects(async () => checkLimits(streams, { url: '/api/v1/events', stream: true }, 1_000), (error) => error.code === 'request_rate_limited');
+  streams.streams.delete('d');
+  assert.equal(checkLimits(streams, { url: '/api/v1/events', stream: true }, 1_000).ok, true);
+  assert.equal(streams.requests?.length ?? 0, 0);
+  await assert.rejects(async () => checkLimits({}, { url: `/${'a'.repeat(3000)}` }), (error) => error.status === 414 && error.code === 'uri_too_long');
+  await assert.rejects(async () => checkLimits({}, { url: `/${'é'.repeat(1024)}` }), (error) => error.status === 414 && error.code === 'uri_too_long');
+  assert.equal(checkLimits({}, { url: `/${'a'.repeat(2047)}` }).ok, true);
   const home = {};
   for (let index = 0; index < 5; index += 1) checkLimits(home, { homeFailure: true, peer: '192.168.1.40' }, 2_000);
   await assert.rejects(async () => checkLimits(home, { homeFailure: true, peer: '192.168.1.40' }, 2_000), (error) => error.code === 'auth_rate_limited');
@@ -182,14 +191,37 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const host = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: { embedded: true, hostOrigin: 'file://local' } });
   assert.equal(host.status, 422);
   assert.equal(host.json.error.code, 'invalid_host_origin');
+  const doubled = await rawHttp(httpPort, `GET /api/v1/units HTTP/1.1\r\nHost: 127.0.0.1:${httpPort}\r\nHost: evil.example\r\nConnection: close\r\n\r\n`);
+  assert.match(doubled, /^HTTP\/1\.1 400\b/);
+  assert.match(doubled, /invalid_host/);
+  const forwarded = await requestJson(httpPort, 'GET', '/api/v1/viewer', {
+    token: opened.json.token,
+    headers: { 'x-forwarded-host': 'evil.example', 'x-forwarded-for': '1.2.3.4' },
+  });
+  assert.equal(forwarded.status, 200);
+  const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
+  const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
+  for (let index = 0; index < 240; index += 1) {
+    const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.token });
+    assert.equal(once.status, 200);
+  }
+  const limited = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.token });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.json.error.code, 'request_rate_limited');
+  assert.ok(Number(limited.headers['retry-after']) >= 1);
+  const still = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: spared.json.token });
+  assert.equal(still.status, 200);
+  const page = await requestJson(httpPort, 'GET', '/');
+  assert.notEqual(page.status, 429);
   await writeFile(bootFile, '{}\n');
   const closed = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: {} });
   assert.equal(closed.status, 503);
   assert.equal(closed.json.error.code, 'bootstrap_unavailable');
   assert.equal(closed.json.token, undefined);
 });
+});
 
-function requestJson(port, method, target, { token = null, body = undefined } = {}) {
+function requestJson(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
     const req = httpRequest({
@@ -202,6 +234,7 @@ function requestJson(port, method, target, { token = null, body = undefined } = 
         origin: `http://127.0.0.1:${port}`,
         ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...headers,
       },
     }, (res) => {
       const chunks = [];
@@ -209,12 +242,22 @@ function requestJson(port, method, target, { token = null, body = undefined } = 
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
         const json = raw && String(res.headers['content-type'] ?? '').includes('json') ? JSON.parse(raw) : null;
-        resolve({ status: res.statusCode, json });
+        resolve({ status: res.statusCode, headers: res.headers, json });
       });
     });
     req.on('error', reject);
     if (payload) req.end(payload);
     else req.end();
+  });
+}
+
+function rawHttp(port, payload) {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => socket.end(payload));
+    const chunks = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    socket.on('error', reject);
   });
 }
 
