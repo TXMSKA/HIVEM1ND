@@ -117,7 +117,7 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
     headers: key(),
   });
   assert.equal(posted.status, 201);
-  assert.equal(posted.json.data.message.body, 'Ship the notes.');
+  assert.equal(posted.json.data.body, 'Ship the notes.');
 
   const taskId = 'project:shop:029';
   const taskPath = path.join(fixture.paths.mind, 'user', 'tasks', '029.md');
@@ -133,18 +133,18 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
   assert.equal(reviewed.status, 200);
   const accepted = await call(port, 'POST', `/api/v1/tasks/${taskId}/status`, {
     token,
-    body: { status: 'done', expectedRevision: reviewed.json.data.body.revision },
+    body: { status: 'done', expectedRevision: reviewed.json.data.task.revision },
     headers: key(),
   });
   assert.equal(accepted.status, 200);
-  assert.equal(accepted.json.data.body.status, 'done');
+  assert.equal(accepted.json.data.task.status, 'done');
   const undone = await call(port, 'POST', `/api/v1/tasks/${taskId}/undo`, {
     token,
-    body: { expectedRevision: accepted.json.data.body.revision },
+    body: { expectedRevision: accepted.json.data.task.revision },
     headers: key(),
   });
   assert.equal(undone.status, 200);
-  assert.equal(undone.json.data.body.status, 'review');
+  assert.equal(undone.json.data.task.status, 'review');
   assert.match(await readFile(taskPath, 'utf8'), /## Report/);
 
   const document = newSketch('cart', 'Cart');
