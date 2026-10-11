@@ -125,6 +125,13 @@ test('message pages are chronological and cursors fail on filter or snapshot cha
     () => readCollection({ paths: fixture.paths, now: () => NOW }, 'units', { limit: 1, q: 'missing', cursor: first.nextCursor }),
     (error) => error.code === 'invalid_cursor',
   );
+  const secondFile = path.join(fixture.paths.mind, 'user', 'state', 'two.md');
+  await writeFile(secondFile, (await readFile(secondFile, 'utf8')).replace('machine: DESKTOP', 'machine: LAPTOP'));
+  await assert.rejects(
+    () => readCollection({ paths: fixture.paths, now: () => NOW }, 'units', { limit: 1, q: 'shop', cursor: first.nextCursor }),
+    (error) => error.code === 'cursor_expired',
+  );
+  assert.throws(() => paginate(messages, { cursor: 'not a cursor', snapshot: 'snap' }), (error) => error.code === 'invalid_cursor');
 });
 
 test('a view larger than 16 MB asks for the lists', async (t) => {
@@ -136,6 +143,8 @@ test('a view larger than 16 MB asks for the lists', async (t) => {
     () => readProjection({ paths: fixture.paths, now: () => NOW }),
     (error) => error.status === 413 && error.code === 'view_too_large',
   );
+  const listed = await readCollection({ paths: fixture.paths, now: () => NOW }, 'units', { limit: 1 });
+  assert.equal(listed.items.length, 1);
 });
 
 test('a service beat projects answers and an inaccessible mind is unavailable', async (t) => {

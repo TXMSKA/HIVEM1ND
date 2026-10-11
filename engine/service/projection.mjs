@@ -91,28 +91,34 @@ export function paginateMessages(messages, { limit = 50, cursor = null, before =
 }
 
 export async function readProjection(context, query = {}) {
-  const loaded = await loadMind(context);
-  const view = assemble(loaded, query);
-  const bytes = Buffer.byteLength(canonicalJson(view));
-  if (bytes > VIEW_LIMIT) {
+  const view = await projectRecords(context, query);
+  const envelope = {
+    contract: 'hivem1nd-gui-v3',
+    data: view,
+    meta: { requestId: null, readAt: null, eventCursor: null, sync: null, replayed: false },
+  };
+  if (Buffer.byteLength(JSON.stringify(envelope)) > VIEW_LIMIT) {
     throw new CoreError(413, 'view_too_large', 'The view exceeds 16 MB. Request the individual lists.');
   }
   return view;
 }
 
 export async function readCollection(context, name, query = {}) {
-  const view = await readProjection(context, query);
+  const view = await projectRecords(context, query);
   const items = collectionItems(view, name, query);
   const filtered = items.filter((item) => matchesQuery(item, name, query));
+  const snapshot = hashText(canonicalJson(filtered));
   if (name === 'messages') {
-    const snapshot = hashText(canonicalJson(filtered.map(messageIdentity)));
     return {
       ...paginateMessages(filtered, { ...query, snapshot, filters: normalizeFilters(query) }),
       issues: view.issues,
     };
   }
-  const snapshot = hashText(canonicalJson(filtered.map(identityOf)));
   return { ...paginate(filtered, { ...query, snapshot, filters: normalizeFilters(query) }), issues: view.issues };
+}
+
+async function projectRecords(context, query) {
+  return assemble(await loadMind(context), query);
 }
 
 export async function readDetail(context, name, id, scope = {}) {
@@ -566,14 +572,6 @@ function normalizeFilters(query) {
   return filters;
 }
 
-function identityOf(item) {
-  return item.id ?? item.path ?? '';
-}
-
-function messageIdentity(item) {
-  return { id: item.id, revision: item.revision ?? null, read: item.read === true, archived: item.archived === true };
-}
-
 function personId(value) {
   if (!value) return null;
   if (value === 'user' || value === 'master') return 'root:master';
@@ -991,7 +989,9 @@ function encodeCursor(payload) {
 }
 
 function decodeCursor(cursor) {
-  if (typeof cursor !== 'string' || cursor.length > 1024) throw new CoreError(400, 'invalid_cursor', 'The page cursor is not valid.');
+  if (typeof cursor !== 'string' || cursor.length === 0 || cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    throw new CoreError(400, 'invalid_cursor', 'The page cursor is not valid.');
+  }
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
     if (parsed.contract !== 'hivem1nd-gui-v3' || typeof parsed.filters !== 'string' || typeof parsed.snapshot !== 'string') {
