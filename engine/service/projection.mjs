@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, parseTaskId, parseUnitId, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, parseTaskId, parseUnitId, resolvePerson, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 
 const VIEW_LIMIT = 16000000;
@@ -119,7 +119,7 @@ export async function readCollection(context, name, query = {}) {
 }
 
 async function projectRecords(context, query) {
-  return assemble(await loadMind(context), query);
+  return assemble(await loadMind(context), query, context.aliases ?? []);
 }
 
 export async function readDetail(context, name, id, scope = {}) {
@@ -206,21 +206,21 @@ async function loadMind(context) {
     for (const bucket of [scope.inbox, scope.archive]) {
       for (const relative of await filesUnder(mind, bucket)) {
         if (!relative.endsWith('.md') || relative.includes('/read/') || relative.includes('.conflict-')) continue;
-        const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts);
+        const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts, units, context.aliases ?? []);
         if (message) messages.push(message);
       }
     }
   }
   for (const relative of await filesUnder(mind, 'user/relay/chats')) {
     if (!relative.endsWith('.md') || relative.endsWith('/chat.md') || relative.includes('/read/') || relative.includes('.conflict-')) continue;
-    const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts);
+    const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts, units, context.aliases ?? []);
     if (message) messages.push(message);
   }
   const tasks = [];
   for (const scope of scopes) {
     for (const relative of await filesUnder(mind, scope.tasks)) {
       if (!relative.endsWith('.md') || relative.includes('.conflict-')) continue;
-      const task = readTask(await readSafe(mind, relative), relative, units, issues);
+      const task = readTask(await readSafe(mind, relative), relative, units, issues, context.aliases ?? []);
       if (task) tasks.push(task);
     }
   }
@@ -245,7 +245,7 @@ async function loadMind(context) {
   return { units, sessions, messages, tasks, chats, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
 }
 
-function assemble(loaded, query) {
+function assemble(loaded, query, aliases = []) {
   const waiting = waitingFor([
     ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
       id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
@@ -253,7 +253,7 @@ function assemble(loaded, query) {
     ...loaded.messages.filter((message) => message.replyRequested && isMaster(message.toId)).map((message) => ({
       id: `message:${message.id}`, kind: 'message', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
     })),
-    ...personQuestions(loaded.units),
+    ...personQuestions(loaded.units, aliases),
     ...(loaded.approvals ?? []),
   ]);
   const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
@@ -391,7 +391,7 @@ function readSession(bytes, relative, now, issues) {
   }
 }
 
-function readMessageFile(bytes, relative, issues, receipts = new Set()) {
+function readMessageFile(bytes, relative, issues, receipts = new Set(), units = [], aliases = []) {
   if (!bytes) return null;
   try {
     const headers = headerMap(bytes);
@@ -400,8 +400,8 @@ function readMessageFile(bytes, relative, issues, receipts = new Set()) {
     if (!id) throw new Error('missing id');
     return {
       id,
-      fromId: personId(headers.get('from-id') || headers.get('from')),
-      toId: personId(headers.get('to-id') || headers.get('to')),
+      fromId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
+      toId: personId(headers.get('to-id') || headers.get('to'), units, aliases),
       machine: headers.get('machine') || null,
       timestamp: headers.get('timestamp') || null,
       date: headers.get('date') || null,
@@ -425,7 +425,7 @@ function readMessageFile(bytes, relative, issues, receipts = new Set()) {
   }
 }
 
-function readTask(bytes, relative, units, issues) {
+function readTask(bytes, relative, units, issues, aliases = []) {
   if (!bytes) return null;
   try {
     const headers = headerMap(bytes);
@@ -434,13 +434,14 @@ function readTask(bytes, relative, units, issues) {
     if (!['open', 'review', 'done', 'closed'].includes(status)) throw new Error('status');
     const body = bodyText(bytes);
     const sections = taskSections(body);
-    const toId = personId(headers.get('to-id') || headers.get('to'));
-    const fromId = personId(headers.get('from-id') || headers.get('from'));
+    const toId = personId(headers.get('to-id') || headers.get('to'), units, aliases);
+    const fromId = personId(headers.get('from-id') || headers.get('from'), units, aliases);
     const assignee = units.find((unit) => unit.id === toId);
     const lead = units.find((unit) => unit.id === assignee?.leadId);
     const leadLabel = lead?.unit ?? null;
     const dated = headers.get('date') || '';
-    const reviewable = status === 'review' && isMaster(fromId) && (!assignee?.leadId || leadApproved(body, leadLabel, dated));
+    const approved = Boolean(assignee?.leadId) && leadApproved(body, leadLabel, dated);
+    const reviewable = status === 'review' && isMaster(fromId) && (!assignee?.leadId || approved);
     return {
       id: id.id,
       number: id.number,
@@ -450,8 +451,8 @@ function readTask(bytes, relative, units, issues) {
       fromId,
       toId,
       date: headers.get('date') || null,
-      requirements: [],
-      approvedBy: reviewable && leadLabel ? leadLabel : null,
+      requirements: String(headers.get('requirements') || '').split(',').map((item) => item.trim()).filter(Boolean),
+      approvedBy: approved ? assignee.leadId : null,
       reviewable,
       revision: hashBytes(bytes),
       request: sections.request,
@@ -608,22 +609,32 @@ function normalizeFilters(query) {
   return filters;
 }
 
-function personId(value) {
-  if (!value) return null;
-  if (value === 'user' || value === 'master') return 'root:master';
-  return value;
+function personId(value, units = [], aliases = []) {
+  if (value == null || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (resolvePerson(text, { aliases }) || text === 'root:master') return 'root:master';
+  try {
+    const parsed = parseUnitId(text);
+    if (parsed.id === 'root:master') return 'root:master';
+    return units.some((unit) => unit.id === parsed.id) ? parsed.id : null;
+  } catch {
+    const matches = units.filter((unit) => !unit.malformed && unit.unit?.toLowerCase() === text.toLowerCase());
+    return matches.length === 1 ? matches[0].id : null;
+  }
 }
 
-function personQuestions(units) {
+function personQuestions(units, aliases = []) {
+  const labels = new Set(['user', 'master', ...aliases.map((alias) => String(alias).trim().toLowerCase()).filter(Boolean)]);
   const items = [];
   for (const unit of units) {
     if (unit.malformed || unit.scope?.kind === 'project') continue;
     for (const line of String(unit.context ?? '').split(/\r?\n/)) {
-      const match = line.match(/^Waiting on (?:the )?(user|master): (.+)$/i);
-      if (!match) continue;
+      const match = line.match(/^Waiting on (?:the )?([^:]+): (.+)$/i);
+      if (!match || !labels.has(match[1].trim().toLowerCase().replace(/^person:/, ''))) continue;
       for (const title of match[2].split(';').map((part) => part.trim()).filter(Boolean)) {
         items.push({
-          id: `question:${unit.id}:${title}`,
+          id: `question:${unit.id}:${hashText(title)}`,
           kind: 'question',
           unitId: unit.id,
           title,

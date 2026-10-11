@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEventBus, publishDomainEvents, revisionRelation } from '../engine/service/events.mjs';
 import { randomUUID } from 'node:crypto';
+import { hashText } from '../engine/service/identity.mjs';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
@@ -508,9 +509,13 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   await mkdir(path.join(root, 'user', 'relay', 'sessions'), { recursive: true });
   await mkdir(path.join(root, 'user', 'relay', 'session-status', '20c58b80-4d93-88cd-83b3-39d78f1d9d5d'), { recursive: true });
   await mkdir(path.join(root, 'user', 'gui'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'state'), { recursive: true });
   await writeFile(path.join(root, 'user', 'state', 'overseer.md'), stateFile({
     unit: 'overseer', 'unit-id': 'root:overseer', role: 'overseer', state: 'in', machine: 'DESKTOP', date: '2026-10-10',
   }, 'Waiting on user: which name; which date\nWaiting on the master: ship it\n'));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'state', 'builder.md'), stateFile({
+    unit: 'builder', role: 'executor', state: 'in', machine: 'DESKTOP',
+  }));
   await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'chat.md'), stateFile({
     id: 'direct', title: 'Direct', kind: 'direct', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
   }));
@@ -590,7 +595,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   const view = await readProjection(context);
   assert.equal(view.chats.find((chat) => chat.id === 'direct').unread, 2);
   assert.equal(view.waiting.some((item) => item.id === 'approval:approve-1'), true);
-  assert.equal(view.waiting.some((item) => item.id === 'question:root:overseer:which name'), true);
+  assert.equal(view.waiting.some((item) => item.id === `question:root:overseer:${hashText('which name')}`), true);
   assert.equal(view.waiting.some((item) => item.kind === 'message' && item.messageId === 'secret'), false);
   assert.equal(view.sessions.filter((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').length, 1);
   assert.equal(view.sessions.find((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').state, 'stopped');
@@ -598,6 +603,40 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   assert.equal(view.editors[0].title, 'One');
   const again = await readProjection(context);
   assert.equal(again.chats.find((chat) => chat.id === 'direct').unread, view.chats.find((chat) => chat.id === 'direct').unread);
+});
+
+test('person aliases, waiting ids, lead approval and task requirements stay canonical', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'state'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'tasks'), { recursive: true });
+  await mkdir(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'state', 'overseer.md'), stateFile({
+    unit: 'overseer', 'unit-id': 'root:overseer', role: 'overseer', state: 'in', machine: 'DESKTOP', date: '2026-10-10',
+  }, 'Waiting on Tom: the registry name\n'));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'state', 'builder.md'), stateFile({
+    unit: 'builder', role: 'executor', state: 'in', machine: 'DESKTOP', 'lead-id': 'root:overseer',
+  }));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'tasks', '003.md'), stateFile({
+    id: '003', title: 'Alias', status: 'review', from: 'user@DESKTOP', to: 'builder', date: '2026-10-10',
+    requirements: 'APP-A-01, APP-B-04',
+  }, '## Request\nShip it.\n## Report\nApproved for review by overseer on 2026-10-10\n'));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'inbox', 'builder', 'note.md'), stateFile({
+    id: 'note', 'from-id': 'person:Tom', to: 'nobody', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Hello\n'));
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW, aliases: ['Tom'] });
+  const task = view.tasks.find((item) => item.id === 'project:shop:003');
+  assert.equal(task.fromId, 'root:master');
+  assert.equal(task.toId, 'project:shop:builder');
+  assert.deepEqual(task.requirements, ['APP-A-01', 'APP-B-04']);
+  assert.equal(task.approvedBy, 'root:overseer');
+  assert.equal(task.reviewable, true);
+  const note = view.messages.find((item) => item.id === 'note');
+  assert.equal(note.fromId, 'root:master');
+  assert.equal(note.toId, null);
+  const question = view.waiting.find((item) => item.kind === 'question');
+  assert.equal(question.id, `question:root:overseer:${hashText('the registry name')}`);
+  assert.equal(question.title, 'the registry name');
 });
 
 test('machine clients are the probed availability records without executable paths', async (t) => {
