@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, parseTaskId, parseUnitId, resolvePerson, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 
@@ -614,6 +614,10 @@ function readSession(bytes, relative, now, issues) {
   }
 }
 
+export function projectMessageBytes(bytes, relative, { units = [], aliases = [], receipts = new Set() } = {}) {
+  return readMessageFile(bytes, relative, [], receipts, units, aliases);
+}
+
 function readMessageFile(bytes, relative, issues, receipts = new Set(), units = [], aliases = []) {
   if (!bytes) return null;
   try {
@@ -624,7 +628,7 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
     return {
       id,
       fromId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
-      toId: personId(headers.get('to-id') || headers.get('to'), units, aliases),
+      toId: messageToId(headers, relative, units, aliases),
       machine: headers.get('machine') || null,
       timestamp: headers.get('timestamp') || null,
       date: headers.get('date') || null,
@@ -857,6 +861,27 @@ function normalizeFilters(query) {
     if (query[key] !== undefined) filters[key] = query[key];
   }
   return filters;
+}
+
+function messageToId(headers, relative, units, aliases) {
+  const explicit = String(headers.get('to-id') ?? '').trim();
+  const legacy = String(headers.get('to') ?? '').trim();
+  const pathChat = chatMessageId(relative);
+  const named = [chatDestination(explicit), chatDestination(legacy)].filter(Boolean);
+  if (named.length > 0) return pathChat && named.every((id) => id === pathChat) ? `chat:${pathChat}` : null;
+  if (pathChat && (explicit === 'chat' || legacy === 'chat')) return `chat:${pathChat}`;
+  return personId(explicit || legacy, units, aliases);
+}
+
+function chatDestination(value) {
+  const match = /^chat:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(String(value ?? '').trim());
+  return match ? match[1].toLowerCase() : null;
+}
+
+function chatMessageId(relative) {
+  const match = /^user\/relay\/chats\/([^/]+)\/([^/]+)\.md$/.exec(String(relative ?? '').replaceAll('\\', '/'));
+  if (!match || match[2] === 'chat' || !isUuid(match[1])) return null;
+  return match[1];
 }
 
 function personId(value, units = [], aliases = []) {
@@ -1231,7 +1256,7 @@ function parseList(value, relative, issues) {
     try {
       const parsed = JSON.parse(trimmed);
       if (!Array.isArray(parsed)) throw new Error('list');
-      return parsed.map((item) => (typeof item === 'string' ? item : canonicalJson(item)));
+      return parsed.map((item) => (typeof item === 'string' || (item && typeof item === 'object') ? item : canonicalJson(item)));
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The list could not be projected.' });
       return [];

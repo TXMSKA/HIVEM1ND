@@ -73,7 +73,13 @@ export async function postChat(context, chatId, input) {
   if (!chat.members.includes(fromId) && context.principal?.audience !== 'desktop') {
     throw new CoreError(403, 'not_chat_member', 'The author is not a member of this chat.');
   }
-  const message = await buildMessage(context, input, { toId: `chat:${chatId}`, threadId: chatId, destination: 'chat', legacyTo: 'chat' });
+  const message = await buildMessage(context, input, {
+    toId: `chat:${chatId}`,
+    threadId: chatId,
+    destination: 'chat',
+    legacyTo: 'chat',
+    place: (id) => `user/relay/chats/${chatId}/${id}.md`,
+  });
   if (input?.replyTo) {
     const reply = await readBytes(context.store, absolute(context, `user/relay/chats/${chatId}/${input.replyTo}.md`));
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this chat.');
@@ -97,14 +103,21 @@ export async function postChat(context, chatId, input) {
 }
 
 export async function postMailbox(context, unitId, input) {
-  parseUnitId(unitId);
+  const recipient = parseUnitId(unitId);
   if (!(await unitExists(context, unitId))) throw new CoreError(422, 'unknown_unit', 'The recipient does not exist.');
   if (input?.replyTo) {
-    const reply = await findInbox(context, parseUnitId(unitId), input.replyTo);
+    const reply = await findInbox(context, recipient, input.replyTo);
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this mailbox.');
   }
-  const message = await buildMessage(context, input, { toId: unitId, threadId: input?.replyTo ?? null, destination: 'mailbox', legacyTo: parseUnitId(unitId).unit });
-  const file = `${inboxDirectory(parseUnitId(unitId))}/${fileStamp(context)}-${context.paths.machine}-${message.id}.md`;
+  const message = await buildMessage(context, input, {
+    toId: unitId,
+    threadId: input?.replyTo ?? null,
+    destination: 'mailbox',
+    legacyTo: recipient.unit,
+    units: [{ id: unitId, unit: recipient.unit, malformed: false }],
+    place: (id) => `${inboxDirectory(recipient)}/${fileStamp(context)}-${context.paths.machine}-${id}.md`,
+  });
+  const file = message.relative;
   await charge(context, message.id, message.bytes);
   if (context.receipt) {
     context.receiptStatus = 201;
@@ -328,7 +341,7 @@ async function buildMessage(context, input, target) {
     `id: ${id}`,
     `from: ${parseUnitId(fromId).unit}`,
     `from-id: ${fromId}`,
-    `to: ${target.legacyTo ?? target.toId}`,
+    `to: ${target.destination === 'chat' ? target.toId : (target.legacyTo ?? target.toId)}`,
     `to-id: ${target.toId}`,
     `machine: ${context.paths.machine}`,
     `timestamp: ${stamp(context)}`,
@@ -342,15 +355,11 @@ async function buildMessage(context, input, target) {
   ];
   const bytes = Buffer.from(`${lines.join('\n')}\n\n${body}`);
   if (bytes.length > RECORD_MAX) throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');
-  return {
-    id,
-    bytes,
-    projected: {
-      id, fromId, toId: target.toId, machine: context.paths.machine, timestamp: stamp(context), date: null,
-      priority, subject, body, threadId: target.threadId ?? id,
-      replyTo: input?.replyTo ?? null, replyRequested, attachments, kind: 'message', read: false, notice: null,
-    },
-  };
+  const relative = target.place(id);
+  const { projectMessageBytes } = await import('./projection.mjs');
+  const projected = projectMessageBytes(bytes, relative, { units: target.units ?? [] });
+  if (!projected) throw new CoreError(500, 'corrupt_resource', 'The message could not be projected.');
+  return { id, bytes, relative, projected };
 }
 
 function textField(input, name) {

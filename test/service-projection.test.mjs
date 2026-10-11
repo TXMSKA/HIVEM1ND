@@ -696,6 +696,37 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   assert.equal(question.title, 'the registry name');
 });
 
+test('chat destinations stay on the message and the last message', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const chatId = '0efb1be7-b006-476d-b0f6-4629d217ab82';
+  const dir = path.join(root, 'user', 'relay', 'chats', chatId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'chat.md'), stateFile({
+    id: chatId, kind: 'direct', members: '["root:master"]', listed: 'true',
+  }));
+  await writeFile(path.join(dir, 'legacy.md'), stateFile({
+    id: 'legacy', to: 'chat', kind: 'message', 'from-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+  }, 'Old\n'));
+  await writeFile(path.join(dir, 'paired.md'), stateFile({
+    id: 'paired', to: 'chat', 'to-id': `chat:${chatId}`, kind: 'message', 'from-id': 'root:master', timestamp: '2026-10-10T12:01:00.000Z',
+  }, 'Paired\n'));
+  await writeFile(path.join(dir, 'canonical.md'), stateFile({
+    id: 'canonical', to: `chat:${chatId}`, kind: 'message', 'from-id': 'root:master', timestamp: '2026-10-10T12:02:00.000Z',
+  }, 'New\n'));
+  await writeFile(path.join(dir, 'foreign.md'), stateFile({
+    id: 'foreign', to: 'chat:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', kind: 'message', timestamp: '2026-10-10T11:00:00.000Z',
+  }, 'Wrong\n'));
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } });
+  assert.equal(view.messages.find((item) => item.id === 'legacy').toId, `chat:${chatId}`);
+  assert.equal(view.messages.find((item) => item.id === 'paired').toId, `chat:${chatId}`);
+  assert.equal(view.messages.find((item) => item.id === 'canonical').toId, `chat:${chatId}`);
+  assert.equal(view.messages.find((item) => item.id === 'foreign').toId, null);
+  assert.equal(view.chats.find((item) => item.id === chatId).lastMessage.toId, `chat:${chatId}`);
+  const again = await readDetail({ paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } }, 'messages', 'canonical', { chatId });
+  assert.equal(again.toId, `chat:${chatId}`);
+});
+
 test('pending sync work stays pending and a failure stays visible', async (t) => {
   const fixture = await mind(t);
   const sync = openSync({ store: fixture.store, paths: fixture.paths, now: () => NOW, projects: [] });
