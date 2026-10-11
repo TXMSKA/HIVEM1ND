@@ -248,6 +248,35 @@ async function answeringMachine(fixture) {
   }));
 }
 
+test('replay keeps the emitted snapshot and expires it without a newer event', () => {
+  const clock = { now: NOW };
+  const bus = createEventBus({ now: () => clock.now, machine: 'DESKTOP' });
+  const desktop = { stableId: 'desktop', audience: 'desktop', viewerId: 'viewer-a' };
+  const subscription = bus.subscribe(desktop);
+  const cursor = bus.captureCursor();
+  const data = { unit: { id: 'root:master', name: 'before' } };
+  const source = { kind: 'unit', id: 'root:master', unitId: 'root:master' };
+  bus.emit({ name: 'unit.changed', resourceId: 'root:master', revision: 'a'.repeat(64), data, source });
+  data.unit.name = 'after';
+  source.kind = 'local';
+  const replayed = bus.replay(subscription, cursor);
+  const frame = replayed.frames.find((item) => item.name === 'unit.changed');
+  assert.equal(frame.data.data.unit.name, 'before');
+  assert.deepEqual(frame.data.source, { kind: 'unit', id: 'root:master', unitId: 'root:master' });
+  clock.now += 600001;
+  assert.equal(bus.replay(subscription, cursor).reset, true);
+  const operation = 'op-1';
+  assert.equal(bus.emit({
+    name: 'unit.changed', operationId: operation, resourceId: 'root:master', revision: 'b'.repeat(64), data: { unit: { id: 'root:master' } },
+  }).emitted, true);
+  assert.equal(bus.emit({
+    name: 'view.changed', operationId: operation, data: { revision: 'c'.repeat(64), collections: ['units'] },
+  }).emitted, true);
+  const agent = bus.subscribe({ stableId: 'agent', audience: 'agent', unitId: 'root:executor', capabilities: ['read', 'chat.post'] });
+  const ready = bus.replay(agent, null);
+  assert.deepEqual(ready.frames.at(-1).data.data.capabilities, ['read', 'chat.post']);
+});
+
 test('a domain event is emitted once with a unit source', () => {
   const bus = createEventBus({ now: () => NOW, machine: 'DESKTOP' });
   const seen = [];
@@ -347,7 +376,7 @@ test('a loopback projection read returns the same list shape', async (t) => {
   const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
   t.after(() => core.http.close());
   const token = await new Promise((resolve, reject) => {
-    const payload = Buffer.from('{}');
+    const payload = Buffer.from(JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }));
     const req = httpRequest({
       host: '127.0.0.1',
       port: core.http.port,

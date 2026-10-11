@@ -36,9 +36,10 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
 
   function emit(event) {
     if (!event || !EVENT_NAMES.includes(event.name)) throw new CoreError(422, 'invalid_body', 'The event name is not part of the contract.');
-    if (event.operationId) {
-      if (operations.has(event.operationId)) return { emitted: false, duplicate: true, id: null };
-      operations.add(event.operationId);
+    const marker = event.operationId ? `${event.operationId}\n${event.name}` : null;
+    if (marker) {
+      if (operations.has(marker)) return { emitted: false, duplicate: true, id: null };
+      operations.add(marker);
     }
     const resourceId = event.resourceId ?? event.data?.resourceId ?? event.data?.unit?.id ?? null;
     const revision = event.revision ?? event.data?.revision ?? null;
@@ -52,8 +53,8 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
       at: new Date(now()).toISOString(),
       atMs: now(),
       machine,
-      source: event.source ?? sourceFor(event, machine),
-      data: event.data ?? {},
+      source: structuredClone(event.source ?? sourceFor(event, machine)),
+      data: structuredClone(event.data ?? {}),
       resourceId,
       unitId: event.unitId ?? event.data?.unitId ?? event.data?.unit?.id ?? null,
       chatId: event.chatId ?? event.data?.chatId ?? event.data?.chat?.id ?? null,
@@ -67,15 +68,16 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     return { emitted: true, duplicate: false, id: record.id };
   }
 
-  function subscribe(principal, filters = {}, listener = () => {}) {
+  function subscribe(principal, filters = {}, listener = undefined) {
     if (!principal?.stableId) throw new CoreError(401, 'unauthorized', 'The event stream needs a principal.');
     if (revoked.has(principal.stableId)) throw new CoreError(401, 'unauthorized', 'The credential is revoked.');
-    const subscriber = { principal, filters, listener, closed: false, buffer: [] };
+    const subscriber = { principal, filters, listener: listener ?? (() => {}), closed: false, buffer: [], retain: listener === undefined };
     subscribers.add(subscriber);
     return subscriber;
   }
 
   function replay(subscriber, cursor) {
+    prune();
     if (subscriber.closed || revoked.has(subscriber.principal.stableId)) {
       throw new CoreError(401, 'unauthorized', 'The credential is revoked.');
     }
@@ -155,7 +157,14 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
   function deliver(subscriber, record) {
     if (!allowed(subscriber, record)) return;
     const frame = { id: record.id, name: record.name, data: present(subscriber.principal, record) };
-    subscriber.buffer.push(frame);
+    if (subscriber.retain) {
+      if (subscriber.buffer.length >= 64) {
+        subscriber.closed = true;
+        subscribers.delete(subscriber);
+        return;
+      }
+      subscriber.buffer.push(frame);
+    }
     subscriber.listener(frame);
   }
 
@@ -179,15 +188,15 @@ export function matches(filters, record) {
 }
 
 function present(principal, record) {
-  const data = principal.audience === 'phone' ? stripSecrets(record.data) : record.data;
+  const data = structuredClone(record.data);
   return {
     contract: 'hivem1nd-events-v3',
     id: record.id ?? null,
     cursor: record.id ?? null,
     at: record.at,
     machine: record.machine,
-    source: record.source,
-    data,
+    source: structuredClone(record.source),
+    data: principal.audience === 'phone' ? stripSecrets(data) : data,
   };
 }
 
@@ -218,7 +227,7 @@ function stripSecrets(value) {
 
 function capabilitiesFor(principal) {
   if (principal.audience === 'phone') return ['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back'];
-  if (principal.audience === 'agent') return ['own'];
+  if (principal.audience === 'agent') return [];
   return [...DESKTOP];
 }
 
