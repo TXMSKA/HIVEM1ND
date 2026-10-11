@@ -2220,6 +2220,73 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   assert.equal(desktop.root.querySelector(".unit-card") != null, true);
 });
 
+test("editor events refresh attachments, assets, delivery and conflicts", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-comment]"), "The board did not open.");
+  desktop.app.editors.selectedNodeId = "kept-node";
+  typeInput(desktop.root.querySelector("[data-comment]"), "Keep this draft", 0, 4);
+
+  await fixture.control.emit("editor.attachments.changed", {
+    resourceId: cart.id,
+    attached: ["env:web:overlord-web"],
+    revision: "a".repeat(64),
+  });
+  await waitFor(() => desktop.root.querySelector("[data-chip='env:web:overlord-web']"), "The attachment chip did not refresh.");
+
+  desktop.app.editors.current.attachmentChoice = new Set(["project:shop:executor-shop"]);
+  await fixture.control.emit("editor.attachments.changed", {
+    resourceId: cart.id,
+    attached: ["root:master"],
+    revision: "b".repeat(64),
+  });
+  await waitFor(() => desktop.root.querySelector("[data-attachment-conflict]"), "The attachment draft was not kept.");
+  assert.equal(desktop.app.editors.current.attachmentChoice.has("project:shop:executor-shop"), true);
+  assert.equal(desktop.app.editors.current.attachmentChoice.has("root:master"), false);
+
+  await fixture.control.emit("editor.asset.created", {
+    resourceId: cart.id,
+    asset: {
+      id: "mark",
+      src: "assets/mark.png",
+      contentType: "image/png",
+      bytes: 8,
+      revision: "c".repeat(64),
+      url: "/api/v1/missing-asset",
+    },
+  });
+  await waitFor(() => desktop.app.editors.current.assetRecords?.some((item) => item.id === "mark"), "The asset was not recorded.");
+  assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
+
+  await fixture.control.emit("notification.changed", {
+    noticeKey: "watch",
+    unitId: "env:web:overlord-web",
+    resourceId: cart.id,
+    state: "failed",
+    error: { code: "not_attached", message: "The unit is not attached." },
+  });
+  await waitFor(() => desktop.root.querySelector("[data-notice='failed']"), "The delivery failure was not shown.");
+
+  await fixture.control.emit("sync.conflict", {
+    target: { kind: "mind", path: "units/shop.md" },
+    winnerMachine: "OTHER",
+    copyPath: "conflicts/shop.md",
+    at: "2026-10-10T12:00:00.000Z",
+  });
+  await waitFor(() => desktop.root.querySelector("[data-sync-conflict]")?.textContent.includes("conflicts/shop.md"), "The sync conflict was not shown.");
+  assert.equal(desktop.root.querySelector("[data-comment]").value, "Keep this draft");
+  assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

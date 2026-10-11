@@ -33,7 +33,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { createApi, createOperation, dispose as disposeApi, request } from "./api.mjs";
+import { createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
 import { announce, element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -486,6 +486,10 @@ async function onStream(app, event) {
       }
     }
   }
+  if (editors && event?.name === "editor.attachments.changed") noteAttachmentEvent(editors, data);
+  if (editors && event?.name === "editor.asset.created") await noteAssetEvent(app, data);
+  if (editors && event?.name === "notification.changed") noteDelivery(editors, data);
+  if (event?.name === "sync.conflict") noteSyncConflict(app, data);
   if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
     noteRemote(editors, data);
     if (data.resourceId) {
@@ -513,6 +517,68 @@ async function onStream(app, event) {
   }
   if (app.layout !== "unknown") renderShell(app);
   result?.consume?.();
+}
+
+function sameIds(choice, ids) {
+  if (!(choice instanceof Set) || choice.size !== ids.length) return false;
+  return ids.every((id) => choice.has(id));
+}
+
+function noteAttachmentEvent(editors, data) {
+  const current = editors.current;
+  if (!current || data?.resourceId !== current.resourceId || !Array.isArray(data.attached)) return;
+  const previous = current.attached ?? [];
+  const dirty = current.attachmentChoice instanceof Set && !sameIds(current.attachmentChoice, previous);
+  current.attached = data.attached;
+  if (data.revision) current.attachmentRevision = data.revision;
+  if (!dirty) {
+    current.attachmentChoice = new Set(data.attached);
+    current.attachmentConflict = null;
+  } else {
+    current.attachmentConflict = { revision: data.revision ?? null, attached: data.attached };
+  }
+}
+
+async function noteAssetEvent(app, data) {
+  const editors = app.editors;
+  const current = editors?.current;
+  if (!current || data?.resourceId !== current.resourceId || !data.asset?.id) return;
+  const selected = editors.selectedNodeId ?? null;
+  const records = current.assetRecords ?? [];
+  const index = records.findIndex((item) => item.id === data.asset.id);
+  current.assetRecords = index >= 0 ? records.map((item) => item.id === data.asset.id ? data.asset : item) : [...records, data.asset];
+  if (data.asset.src && current.assets instanceof Map) {
+    try {
+      const image = await fetchAsset(app.api, {
+        url: data.asset.url || `/api/v1/editors/${encodeURIComponent(current.resourceId)}/assets/${encodeURIComponent(data.asset.id)}`,
+      });
+      const previous = current.assets.get(data.asset.src);
+      if (previous && previous !== image) previous.revoke?.();
+      current.assets.set(data.asset.src, image);
+    } catch (error) {
+      current.assetIssues = [...(current.assetIssues ?? []).filter((item) => item.src !== data.asset.src), { src: data.asset.src, code: error.code || "invalid_asset" }];
+    }
+  }
+  editors.selectedNodeId = selected;
+}
+
+function noteDelivery(editors, data) {
+  const current = editors.current;
+  if (!current || data?.resourceId !== current.resourceId || !data.state) return;
+  const notices = [...(current.notices ?? [])];
+  const index = notices.findIndex((item) => item.noticeKey === data.noticeKey && item.unitId === data.unitId);
+  const next = { noticeKey: data.noticeKey ?? null, unitId: data.unitId ?? null, state: data.state, error: data.error ?? null };
+  if (index >= 0) notices[index] = { ...notices[index], ...next };
+  else notices.push(next);
+  current.notices = notices;
+}
+
+function noteSyncConflict(app, data) {
+  app.syncConflict = {
+    copyPath: String(data?.copyPath ?? ""),
+    winnerMachine: String(data?.winnerMachine ?? ""),
+  };
+  showOutcome(app, text(app.language, "syncConflict", { path: app.syncConflict.copyPath || text(app.language, "unknown") }), "sync_conflict");
 }
 
 async function loadPresentation(app, options = {}) {
@@ -690,6 +756,13 @@ function renderWorkspace(app, t, view, counts) {
       "data-request": app.sessionRequestId ?? "",
       "data-answer": app.answerId ?? "",
       text: app.actionNote,
+    }));
+  }
+  if (app.syncConflict) {
+    inspectorBody.append(element(document, "p", {
+      class: "action-note",
+      "data-sync-conflict": "true",
+      text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
   inspectorBody.append(actionControls(app, t, selected));
@@ -1353,6 +1426,13 @@ function renderEditorSurfaces(app, t) {
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
     element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
   );
+  if (app.syncConflict) {
+    resource.append(element(document, "p", {
+      class: "action-note",
+      "data-sync-conflict": "true",
+      text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
+    }));
+  }
   const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
     element(document, "h2", { text: t("comments") }),
   );
@@ -1452,6 +1532,20 @@ function renderEditorSurfaces(app, t) {
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
     await stopWatch(app.api, editors, record.operation);
   }) }, t("stopWatch")));
+  if (current.attachmentConflict) {
+    actions.append(element(document, "p", { "data-attachment-conflict": "true", text: t("attachmentChanged") }));
+    actions.append(element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "use-attachments",
+      text: t("useSavedAttachments"),
+      onclick: () => {
+        current.attachmentChoice = new Set(current.attached ?? []);
+        current.attachmentConflict = null;
+        renderShell(app);
+      },
+    }));
+  }
   tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
   const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
