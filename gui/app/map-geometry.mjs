@@ -1,4 +1,5 @@
 const LIMIT = 100000;
+const CLEARANCE = 64;
 const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 export function groupKeyForUnit(unit, byIdMap = new Map()) {
@@ -24,6 +25,10 @@ export function groupOriginsFor(units, saved) {
     if (key) keys.add(key);
   }
   const origins = {};
+  const reserved = [];
+  for (const group of Object.values(groups)) {
+    if (Number.isFinite(group?.x) && Number.isFinite(group?.y)) reserved.push({ x: group.x, y: group.y });
+  }
   const fallback = [];
   for (const key of [...keys].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
     const persisted = groups[key];
@@ -35,14 +40,23 @@ export function groupOriginsFor(units, saved) {
       const lead = nodes[key.slice(5)];
       if (lead && Number.isFinite(lead.x) && Number.isFinite(lead.y)) {
         origins[key] = { x: lead.x, y: lead.y };
+        reserved.push(origins[key]);
         continue;
       }
     }
     fallback.push(key);
   }
-  fallback.forEach((key, index) => {
-    origins[key] = { x: 220 + (index % 3) * 360, y: 360 + Math.floor(index / 3) * 360 };
-  });
+  let slot = 0;
+  for (const key of fallback) {
+    let point = gridOrigin(slot);
+    while (tooClose(point, reserved, CLEARANCE) && slot < 300) {
+      slot += 1;
+      point = gridOrigin(slot);
+    }
+    origins[key] = point;
+    reserved.push(point);
+    slot += 1;
+  }
   return origins;
 }
 
@@ -58,16 +72,19 @@ export function initialPositions(units, saved, groupOrigins) {
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(unit);
   }
+  const reserved = Object.values(positions).filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
   for (const [key, members] of [...buckets].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const origin = groupOrigins[key];
-    members.forEach((unit, index) => {
-      const ring = Math.floor(index / 8) + 1;
-      const angle = (index % 8) * Math.PI / 4 - Math.PI / 2;
-      positions[unit.id] = clampPoint({
-        x: origin.x + Math.cos(angle) * ring * 96,
-        y: origin.y + Math.sin(angle) * ring * 96,
-      });
-    });
+    for (const unit of members) {
+      let index = 0;
+      let point = ringPoint(origin, index);
+      while (tooClose(point, reserved, CLEARANCE) && index < 64) {
+        index += 1;
+        point = ringPoint(origin, index);
+      }
+      positions[unit.id] = point;
+      reserved.push(point);
+    }
   }
   return positions;
 }
@@ -198,6 +215,23 @@ function overlordAncestor(unit, byIdMap) {
     current = lead;
   }
   return null;
+}
+
+function gridOrigin(slot) {
+  return { x: 220 + (slot % 3) * 360, y: 360 + Math.floor(slot / 3) * 360 };
+}
+
+function ringPoint(origin, index) {
+  const ring = Math.floor(index / 8) + 1;
+  const angle = (index % 8) * Math.PI / 4 - Math.PI / 2;
+  return clampPoint({
+    x: origin.x + Math.cos(angle) * ring * 96,
+    y: origin.y + Math.sin(angle) * ring * 96,
+  });
+}
+
+function tooClose(point, reserved, gap) {
+  return reserved.some((item) => Math.hypot(item.x - point.x, item.y - point.y) < gap);
 }
 
 function scopeKey(key) {

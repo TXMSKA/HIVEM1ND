@@ -75,6 +75,23 @@ test("saved coordinates stay put and missing units fall into repeatable rings", 
   assert.deepEqual(origins["project:d"], { x: 220, y: 720 });
 });
 
+test("a persisted project origin and an unsaved lead group stay apart", () => {
+  const units = [
+    unit("env:web:overlord-web", "overlord-web", "overlord", "environment", "web"),
+    unit("project:shop:partial", "partial", "executor", "project", "shop"),
+  ];
+  const saved = { nodes: {}, groups: { "project:shop": { x: 220, y: 360 } } };
+  const placed = placeUnits(units, saved);
+  assert.deepEqual(placed.origins["project:shop"], { x: 220, y: 360 });
+  assert.equal(placed.origins["lead:env:web:overlord-web"].x === 220 && placed.origins["lead:env:web:overlord-web"].y === 360, false);
+  const lead = placed.positions["env:web:overlord-web"];
+  const partial = placed.positions["project:shop:partial"];
+  assert.equal(Math.hypot(lead.x - partial.x, lead.y - partial.y) >= 56, true);
+  const kept = placeUnits(units, { nodes: { "project:shop:partial": { x: 10, y: 12 } }, groups: saved.groups });
+  assert.deepEqual(kept.positions["project:shop:partial"], { x: 10, y: 12 });
+  assert.deepEqual(kept.positions["env:web:overlord-web"], lead);
+});
+
 test("hit testing uses paint order, marquees include centers, and edges stop at the radius", () => {
   const nodes = [
     { id: "a", x: 0, y: 0, radius: 10 },
