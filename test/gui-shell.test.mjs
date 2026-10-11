@@ -1726,6 +1726,45 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.match(css, /\.workspace-editor\s*\{[^}]*grid-template-columns:\s*var\(--editor-side\)\s+minmax\(0,\s*1fr\)\s+var\(--editor-comments\)/);
 });
 
+test("a narrow desktop keeps the main column and dismisses the side panels", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 320, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  assert.equal(desktop.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
+  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), false);
+  assert.equal(desktop.root.querySelector("[data-editor-column='resource']"), null);
+  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
+  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), true);
+  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
+  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), false);
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.root.querySelector("[data-editor-column='resource']"), "The board column did not stay available.");
+  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").className.includes("is-open"), false);
+  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").className.includes("is-open"), false);
+  click(desktop.root.querySelector("[data-action='toggle-comments']"));
+  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").className.includes("is-open"), true);
+  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
+  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").className.includes("is-open"), true);
+  desktop.app.language = "es";
+  desktop.app.look = "high-contrast";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
+  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").textContent, text("es", "hideCatalog"));
+  assert.equal(desktop.root.querySelector("[data-action='toggle-comments']").textContent, text("es", "hideComments"));
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const start = css.indexOf("@media (max-width: 987px)");
+  const narrow = css.slice(start, css.indexOf("@media", start + 10));
+  assert.match(narrow, /\.workspace\.workspace-editor\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.equal(narrow.includes("var(--editor-side)"), false);
+  assert.equal(narrow.includes("var(--editor-comments)"), false);
+  assert.equal(narrow.includes("minmax(180px"), false);
+  assert.match(css, /overflow-x:\s*clip/);
+  assert.match(css, /\.shell \* \{\s*min-width:\s*0;\s*\}/);
+  assert.match(css, /\.modes\s*\{[^}]*flex-wrap:\s*wrap/);
+});
+
 test("Focus keeps only the readable document until the pointer reveals its tools", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());

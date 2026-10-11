@@ -597,8 +597,34 @@ function renderBar(app, t, counts) {
       renderShell(app);
     },
   }, icon(document, "waiting"));
+  const catalogToggle = element(document, "button", {
+    type: "button",
+    class: "btn panel-toggle",
+    "data-action": "toggle-catalog",
+    "aria-pressed": String(app.catalogOpen === true),
+    text: t(app.catalogOpen ? "hideCatalog" : "showCatalog"),
+    onclick: () => {
+      app.catalogOpen = app.catalogOpen !== true;
+      renderShell(app);
+    },
+  });
+  const commentsToggle = element(document, "button", {
+    type: "button",
+    class: "btn panel-toggle",
+    "data-action": "toggle-comments",
+    "aria-pressed": String(app.commentsOpen === true),
+    text: t(app.commentsOpen ? "hideComments" : "showComments"),
+    onclick: () => {
+      app.commentsOpen = app.commentsOpen !== true;
+      renderShell(app);
+    },
+  });
   const bar = element(document, "header", { class: "bar" }, brand(document), modes, waiting);
-  if (app.layout !== "phone") bar.append(inspector, settings);
+  if (app.layout !== "phone") {
+    bar.append(catalogToggle);
+    if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
+    bar.append(inspector, settings);
+  }
   return bar;
 }
 
@@ -629,7 +655,7 @@ function renderWorkspace(app, t, view, counts) {
   for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
   if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
   const collection = renderCollection(app, t);
-  const side = element(document, "aside", { class: "panel side" }, tabs, summary, issues, collection);
+  const side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
     ?? null;
@@ -1257,13 +1283,13 @@ function renderEditorSurfaces(app, t) {
   const watchStatus = watch?.state === "waiting"
     ? progressMark(document, watchText, { "data-watch": "waiting" })
     : element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText });
-  const catalog = element(document, "aside", { class: "panel editor-catalog", "data-editor-column": "catalog" },
+  const catalog = element(document, "aside", { class: `panel editor-catalog${app.catalogOpen ? " is-open" : ""}`, "data-editor-column": "catalog" },
     element(document, "h2", { text: t(kind === "blueprint" ? "boards" : "texts") }),
   );
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
     element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
   );
-  const commentsColumn = element(document, "aside", { class: "panel editor-comments-column", "data-editor-column": "comments" },
+  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
     element(document, "h2", { text: t("comments") }),
   );
   const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },

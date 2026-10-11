@@ -75,6 +75,8 @@
 html, body, #app {
   margin: 0;
   height: 100%;
+  max-width: 100%;
+  overflow-x: clip;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -99,11 +101,14 @@ button, input { font: inherit; color: inherit; }
 .shell {
   height: 100%;
   min-height: 0;
+  max-width: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--bg);
   color: var(--text);
 }
+
+.shell * { min-width: 0; }
 
 .gate {
   min-height: 100dvh;
@@ -157,6 +162,8 @@ button, input { font: inherit; color: inherit; }
 .modes {
   margin: 0 auto;
   padding: 4px;
+  max-width: 100%;
+  flex-wrap: wrap;
   border-radius: var(--radius-control);
   background: var(--panel);
   border: var(--panel-border);
@@ -257,7 +264,9 @@ button, input { font: inherit; color: inherit; }
   border-radius: var(--radius-panel);
   box-shadow: var(--panel-shadow);
   padding: var(--space);
-  max-width: 28rem;
+  max-width: min(28rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
 }
 .dialog::backdrop { background: var(--bg); opacity: 0.72; }
 .dialog h2 { margin: 0 0 8px; font-size: 18px; }
@@ -289,23 +298,44 @@ button, input { font: inherit; color: inherit; }
   background: var(--panel);
 }
 
-@media (min-width: 1100px) {
-  .shell[data-layout="desktop"] .inspector { display: flex; }
-}
+.panel-toggle { display: none; }
 
-@media (max-width: 1099px) {
-  .shell[data-layout="desktop"] .workspace { grid-template-columns: minmax(180px, var(--side)) minmax(0, 1fr); }
-  .shell[data-layout="desktop"] .inspector {
-    position: fixed;
-    z-index: 2;
-    top: var(--bar);
-    right: var(--gap);
-    bottom: calc(var(--footer) + var(--gap));
-    width: min(var(--inspector), calc(100% - (var(--gap) * 2)));
-  }
-  .shell[data-layout="desktop"] .inspector:not(.is-open) { display: none; }
+/* 240px and 380px rails, 48px of gaps and padding, and a 320px main column. */
+@media (max-width: 987px) {
+  .shell[data-layout="desktop"] .panel-toggle { display: inline-flex; }
+  .shell[data-layout="desktop"] .workspace,
   .shell[data-layout="desktop"] .workspace.workspace-editor {
-    grid-template-columns: var(--editor-side) minmax(0, 1fr) var(--editor-comments);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .shell[data-layout="desktop"] .side:not(.is-open),
+  .shell[data-layout="desktop"] .inspector:not(.is-open),
+  .shell[data-layout="desktop"] .editor-catalog:not(.is-open),
+  .shell[data-layout="desktop"] .editor-comments-column:not(.is-open) {
+    display: none;
+  }
+  .shell[data-layout="desktop"] .stage,
+  .shell[data-layout="desktop"] .editor-resource {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+  .shell[data-layout="desktop"] .side.is-open,
+  .shell[data-layout="desktop"] .editor-catalog.is-open,
+  .shell[data-layout="desktop"] .inspector.is-open,
+  .shell[data-layout="desktop"] .editor-comments-column.is-open {
+    grid-column: 1;
+    grid-row: 1;
+    z-index: 2;
+    width: min(100%, 24rem);
+    max-width: 100%;
+    max-height: 100%;
+    overflow: auto;
+  }
+  .shell[data-layout="desktop"] .inspector.is-open,
+  .shell[data-layout="desktop"] .editor-comments-column.is-open {
+    justify-self: end;
   }
 }
 
@@ -464,7 +494,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .void-page { white-space: pre-wrap; color: var(--text); }
 .settings-panel { display: grid; gap: 8px; }
 .settings-panel input { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--ring); border-radius: var(--radius-pill); padding: 8px 12px; }
-.qr { width: 225px; height: 225px; shape-rendering: crispEdges; background: var(--qr-light); }
+.qr { width: 225px; height: 225px; max-width: 100%; shape-rendering: crispEdges; background: var(--qr-light); }
 .home-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .void-tools { display: flex; flex-wrap: wrap; gap: 8px; }
 .map-action { background: var(--panel); color: var(--text); border: var(--panel-border); border-radius: var(--radius-pill); padding: 8px 12px; }
