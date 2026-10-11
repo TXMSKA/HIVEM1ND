@@ -25,6 +25,22 @@ function crc32(bytes) {
   return crc ^ 0xffffffff;
 }
 
+function framedWebp(width = 1, height = 1) {
+  const frame = Buffer.alloc(11);
+  frame[0] = 0x10;
+  frame[3] = 0x9d;
+  frame[4] = 0x01;
+  frame[5] = 0x2a;
+  frame.writeUInt16LE(width, 6);
+  frame.writeUInt16LE(height, 8);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(frame.length);
+  const chunk = Buffer.concat([Buffer.from('VP8 '), size, frame, Buffer.from([0])]);
+  const declared = Buffer.alloc(4);
+  declared.writeUInt32LE(4 + chunk.length);
+  return Buffer.concat([Buffer.from('RIFF'), declared, Buffer.from('WEBP'), chunk]);
+}
+
 function tinyPng() {
   const raw = Buffer.from([0, 255, 0, 0, 255]);
   const ihdr = Buffer.alloc(13);
@@ -112,7 +128,12 @@ test('failed verification and failed conversion keep the original bytes', async 
   assert.equal(failed.contentType, 'image/png');
   assert.equal(failed.name, 'photo.png');
   assert.equal(issues.some((item) => item.code === 'conversion_failed'), true);
-  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.from('rest')]);
+  const webp = Buffer.alloc(30);
+  webp.write('RIFF', 0);
+  webp.writeUInt32LE(22, 4);
+  webp.write('WEBP', 8);
+  webp.write('VP8X', 12);
+  webp.writeUInt32LE(10, 16);
   const calls = [];
   const existing = await convertMedia({
     bytes: webp,
@@ -127,7 +148,33 @@ test('failed verification and failed conversion keep the original bytes', async 
     },
   });
   assert.equal(calls.length, 0);
-  assert.ok(existing.bytes.equals(webp));
+  assert.equal(existing.converted, false);
+  assert.equal(existing.issues.at(-1).code, 'invalid_asset');
+  const framed = framedWebp();
+  const keptWebp = await convertMedia({
+    bytes: framed,
+    contentType: 'image/webp',
+    name: 'still.webp',
+    immutable: true,
+  }, {
+    converter: process.execPath,
+    directory,
+    spawn(command, args, options) {
+      calls.push({ command, args, shell: options.shell });
+      return spawn(command, args, options);
+    },
+  });
+  assert.equal(calls.length, 0);
+  assert.equal(keptWebp.issue, null);
+  assert.ok(keptWebp.bytes.equals(framed));
+  const truncated = Buffer.concat([framed.subarray(0, framed.length - 4), Buffer.alloc(4)]);
+  const cut = await convertMedia({
+    bytes: truncated,
+    contentType: 'image/webp',
+    name: 'cut.webp',
+    historical: true,
+  }, { converter: null, directory });
+  assert.equal(cut.issue.code, 'invalid_asset');
   const historical = await convertMedia({
     bytes: image,
     contentType: 'image/png',

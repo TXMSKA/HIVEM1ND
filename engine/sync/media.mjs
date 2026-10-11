@@ -77,6 +77,7 @@ async function convertOne(input, options, issues, handles) {
     issue: null,
   };
   if (input.immutable === true || input.historical === true || input.contentType === 'image/webp' || input.contentType === 'video/webm') {
+    if (!(await payloadComplete(input.bytes, input.contentType))) rejectIncomplete(preserved, issues, originalName);
     return preserved;
   }
   const target = targetType(input.contentType);
@@ -87,7 +88,10 @@ async function convertOne(input, options, issues, handles) {
     return preserved;
   }
   const converter = options.converter === undefined ? await findConverter(options) : options.converter;
-  if (!converter) return preserved;
+  if (!converter) {
+    if (!(await payloadComplete(input.bytes, input.contentType))) rejectIncomplete(preserved, issues, originalName);
+    return preserved;
+  }
   const directory = options.directory ?? path.join(path.dirname(converter), '.hivem1nd-media');
   await mkdir(directory, { recursive: true });
   const stamp = `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
@@ -188,7 +192,7 @@ function extensionFor(contentType) {
 function signatureMatches(bytes, contentType) {
   if (contentType === 'image/png') return bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (contentType === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (contentType === 'image/webp') return bytes.length > 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+  if (contentType === 'image/webp') return Boolean(webpPayload(bytes));
   if (contentType === 'video/webm') return bytes.length > 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
   if (contentType === 'video/mp4' || contentType === 'video/quicktime') return bytes.length > 12 && bytes.subarray(4, 8).toString('ascii') === 'ftyp';
   return false;
@@ -218,6 +222,85 @@ function rewrite(value, from, to) {
     return next;
   }
   return value;
+}
+
+function rejectIncomplete(preserved, issues, name) {
+  preserved.issue = issue(name, 'invalid_asset', 'The media payload is incomplete.');
+  issues.push(preserved.issue);
+}
+
+async function payloadComplete(bytes, contentType) {
+  if (contentType === 'image/webp') return Boolean(webpPayload(bytes));
+  if (contentType !== 'image/png' && contentType !== 'image/jpeg') return true;
+  const { imageComplete } = await import('../service/editors.mjs');
+  return imageComplete(bytes, contentType);
+}
+
+export function webpPayload(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 12 || bytes.length > 16_000_000) return null;
+  if (bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') return null;
+  if (bytes.readUInt32LE(4) !== bytes.length - 8) return null;
+  let offset = 12;
+  let canvas = null;
+  let image = null;
+  let chunks = 0;
+  while (offset < bytes.length && chunks < 64) {
+    if (offset + 8 > bytes.length) return null;
+    const tag = bytes.toString('ascii', offset, offset + 4);
+    if (!/^[A-Za-z0-9 ]{4}$/.test(tag)) return null;
+    const size = bytes.readUInt32LE(offset + 4);
+    if (size > 16_000_000) return null;
+    const start = offset + 8;
+    const end = start + size;
+    if (end > bytes.length) return null;
+    const data = bytes.subarray(start, end);
+    if (tag === 'VP8X') {
+      if (canvas || size !== 10) return null;
+      canvas = vp8xSize(data);
+      if (!canvas) return null;
+    } else if (tag === 'VP8 ') {
+      if (image) return null;
+      image = vp8Size(data);
+      if (!image) return null;
+    } else if (tag === 'VP8L') {
+      if (image) return null;
+      image = vp8lSize(data);
+      if (!image) return null;
+    }
+    offset = start + size + (size & 1);
+    if (offset > bytes.length) return null;
+    chunks += 1;
+  }
+  if (offset !== bytes.length || !image) return null;
+  if (canvas && (canvas.width !== image.width || canvas.height !== image.height)) return null;
+  if (image.width < 1 || image.height < 1 || image.width > 16384 || image.height > 16384) return null;
+  return image;
+}
+
+function vp8xSize(data) {
+  const width = 1 + data.readUIntLE(4, 3);
+  const height = 1 + data.readUIntLE(7, 3);
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+  return { width, height };
+}
+
+function vp8Size(data) {
+  if (data.length < 11 || (data[0] & 1) !== 0) return null;
+  if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) return null;
+  const width = data.readUInt16LE(6) & 0x3fff;
+  const height = data.readUInt16LE(8) & 0x3fff;
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+  return { width, height };
+}
+
+function vp8lSize(data) {
+  if (data.length < 6 || data[0] !== 0x2f) return null;
+  const bits = data.readUInt32LE(1);
+  if ((bits >>> 29) !== 0) return null;
+  const width = (bits & 0x3fff) + 1;
+  const height = ((bits >>> 14) & 0x3fff) + 1;
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+  return { width, height };
 }
 
 function issue(resource, code, message) {

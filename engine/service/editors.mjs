@@ -11,7 +11,7 @@ import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { bindProjects, commitTransaction } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
-import { convertMedia } from '../sync/media.mjs';
+import { convertMedia, webpPayload } from '../sync/media.mjs';
 import { startResourceWatch } from './watch.mjs';
 
 const ASSET_LIMIT = 10000000;
@@ -744,9 +744,16 @@ async function unitOnMind(context, parsed) {
 
 function sniff(bytes) {
   if (framedPng(bytes)) return { type: 'image/png', ext: 'png' };
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { type: 'image/jpeg', ext: 'jpg' };
-  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return { type: 'image/webp', ext: 'webp' };
+  if (jpegSize(bytes)) return { type: 'image/jpeg', ext: 'jpg' };
+  if (webpPayload(bytes)) return { type: 'image/webp', ext: 'webp' };
   return null;
+}
+
+export function imageComplete(bytes, contentType) {
+  if (contentType === 'image/png') return Boolean(framedPng(bytes));
+  if (contentType === 'image/jpeg') return Boolean(jpegSize(bytes));
+  if (contentType === 'image/webp') return Boolean(webpPayload(bytes));
+  return false;
 }
 
 export async function createAsset(context, id, input) {
@@ -1033,31 +1040,58 @@ function pngFiltersValid(raw, size) {
 }
 
 function jpegSize(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
   let offset = 2;
-  while (offset + 9 < bytes.length) {
+  let size = null;
+  let sawScan = false;
+  while (offset + 1 < bytes.length) {
     if (bytes[offset] !== 0xff) return null;
-    const marker = bytes[offset + 1];
-    if (marker === 0xd9 || marker === 0xda) return null;
-    const length = bytes.readUInt16BE(offset + 2);
-    if (length < 2 || offset + 2 + length > bytes.length) return null;
-    if (marker >= 0xc0 && marker <= 0xc2) return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
-    offset += 2 + length;
+    offset += 1;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) return null;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9) return size && sawScan && offset === bytes.length ? size : null;
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 1 >= bytes.length) return null;
+    const length = bytes.readUInt16BE(offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    if (marker >= 0xc0 && marker <= 0xc2) {
+      if (length < 8) return null;
+      const height = bytes.readUInt16BE(offset + 3);
+      const width = bytes.readUInt16BE(offset + 5);
+      if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+      size = { width, height };
+    }
+    if (marker === 0xda) {
+      if (!size) return null;
+      sawScan = true;
+      offset += length;
+      while (offset + 1 < bytes.length) {
+        if (bytes[offset] !== 0xff) {
+          offset += 1;
+          continue;
+        }
+        let mark = offset + 1;
+        while (mark < bytes.length && bytes[mark] === 0xff) mark += 1;
+        if (mark >= bytes.length) return null;
+        const next = bytes[mark];
+        if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) {
+          offset = mark + 1;
+          continue;
+        }
+        offset = mark - 1;
+        break;
+      }
+      continue;
+    }
+    offset += length;
   }
   return null;
 }
 
 function webpSize(bytes) {
-  if (bytes.length < 30) return null;
-  const chunk = bytes.toString('ascii', 12, 16);
-  if (chunk === 'VP8X') return { width: 1 + bytes.readUIntLE(24, 3), height: 1 + bytes.readUIntLE(27, 3) };
-  if (chunk === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
-    return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
-  }
-  if (chunk === 'VP8L' && bytes[20] === 0x2f) {
-    const bits = bytes.readUInt32LE(21);
-    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
-  }
-  return null;
+  return webpPayload(bytes);
 }
 
 export async function readAsset(context, id, assetId) {

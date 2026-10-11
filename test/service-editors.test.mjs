@@ -34,6 +34,32 @@ function pngChunk(type, data) {
   return chunk;
 }
 
+function framedWebp(width = 1, height = 1) {
+  const frame = Buffer.alloc(11);
+  frame[0] = 0x10;
+  frame[3] = 0x9d;
+  frame[4] = 0x01;
+  frame[5] = 0x2a;
+  frame.writeUInt16LE(width, 6);
+  frame.writeUInt16LE(height, 8);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(frame.length);
+  const chunk = Buffer.concat([Buffer.from('VP8 '), size, frame, Buffer.from([0])]);
+  const declared = Buffer.alloc(4);
+  declared.writeUInt32LE(4 + chunk.length);
+  return Buffer.concat([Buffer.from('RIFF'), declared, Buffer.from('WEBP'), chunk]);
+}
+
+function headerOnlyWebp() {
+  const webp = Buffer.alloc(30);
+  webp.write('RIFF', 0);
+  webp.writeUInt32LE(22, 4);
+  webp.write('WEBP', 8);
+  webp.write('VP8X', 12);
+  webp.writeUInt32LE(10, 16);
+  return webp;
+}
+
 function pngWithoutImage() {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(1, 0);
@@ -256,12 +282,7 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
 test('a present converter stores WebP and a missing converter keeps the original', async (t) => {
   const { context } = await shop(t);
   const created = await createBoard(context, { project: 'shop', document: sketch('bag') });
-  const webp = Buffer.alloc(30);
-  webp.write('RIFF', 0);
-  webp.writeUInt32LE(22, 4);
-  webp.write('WEBP', 8);
-  webp.write('VP8X', 12);
-  webp.writeUInt32LE(10, 16);
+  const webp = framedWebp();
   let calls = 0;
   const converted = await createAsset({
     ...context,
@@ -301,6 +322,60 @@ test('a present converter stores WebP and a missing converter keeps the original
       return child;
     },
   }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 422, code: 'invalid_asset' });
+  await assert.rejects(() => createAsset({
+    ...context,
+    converter: 'ffmpeg',
+    spawn(command, args) {
+      writeFileSync(args.at(-1), headerOnlyWebp());
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 422, code: 'invalid_asset' });
+});
+
+test('a header-only WebP is rejected on upload, immutable skip, and authenticated read', async (t) => {
+  const { context, localPath } = await shop(t);
+  const created = await createBoard(context, { project: 'shop', document: sketch('webp') });
+  const header = headerOnlyWebp();
+  await assert.rejects(() => createAsset({ ...context, converter: null }, created.id, {
+    contentType: 'image/webp',
+    bytesBase64: header.toString('base64'),
+  }), { status: 422, code: 'invalid_asset' });
+  await assert.rejects(() => createAsset({ ...context, converter: 'ffmpeg', spawn() { throw new Error('converter'); } }, created.id, {
+    contentType: 'image/webp',
+    bytesBase64: header.toString('base64'),
+    immutable: true,
+  }), { status: 422, code: 'invalid_asset' });
+  await assert.rejects(() => createAsset({ ...context, converter: null }, created.id, {
+    contentType: 'image/webp',
+    bytesBase64: header.toString('base64'),
+    historical: true,
+  }), { status: 422, code: 'invalid_asset' });
+  const stored = await createAsset({ ...context, converter: null }, created.id, {
+    contentType: 'image/webp',
+    bytesBase64: framedWebp().toString('base64'),
+  });
+  assert.match(stored.src, /\.webp$/);
+  assert.equal(stored.contentType, 'image/webp');
+  const read = await readAsset(context, created.id, stored.id);
+  assert.equal(read.type, 'image/webp');
+  await writeFile(path.join(localPath, 'docs', 'flows', 'assets', stored.id), header);
+  await assert.rejects(() => readAsset(context, created.id, stored.id), { status: 422, code: 'invalid_asset' });
+  const jpeg = Buffer.from('/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAE0AAQEAAAAAAAAAAAAAAAAAAAAGAQEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAABAAEDARIAAhIAAxIA/9oADAMBAAIRAxEAPwCLEmN/H//Z', 'base64');
+  const photo = await createAsset({ ...context, converter: null }, created.id, {
+    contentType: 'image/jpeg',
+    bytesBase64: jpeg.toString('base64'),
+    immutable: true,
+  });
+  assert.match(photo.src, /\.jpg$/);
+  await assert.rejects(() => createAsset({ ...context, converter: null }, created.id, {
+    contentType: 'image/jpeg',
+    bytesBase64: jpeg.subarray(0, jpeg.length - 2).toString('base64'),
+    immutable: true,
+  }), { status: 422, code: 'invalid_asset' });
 });
 
 test('a project asset quota is reserved before conversion and released on failure', async (t) => {
