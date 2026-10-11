@@ -278,6 +278,10 @@ test('phone writes are rejected and static absence leaves the API usable', async
   const appIcon = await call(core.http.port, 'GET', '/app/mark.svg');
   assert.equal(appIcon.status, 200);
   assert.match(appIcon.raw, /<svg/);
+  const favicon = await call(core.http.port, 'GET', '/app/favicon.svg');
+  assert.equal(favicon.status, 200);
+  assert.match(favicon.headers['content-type'], /image\/svg\+xml/);
+  assert.match(favicon.raw, /<svg/);
   const still = await call(core.http.port, 'GET', '/api/v1/tasks', { token });
   assert.equal(still.status, 200);
   const traversal = await call(core.http.port, 'GET', '/app/../package.json');
@@ -299,6 +303,12 @@ test('phone writes are rejected and static absence leaves the API usable', async
   assert.equal(page.headers['x-frame-options'], 'DENY');
   const style = await call(hosted.http.port, 'GET', '/app/styles.css');
   assert.equal(style.status, 503);
+  const owned = '<svg xmlns="http://www.w3.org/2000/svg" id="owned-favicon"></svg>\n';
+  await writeFile(path.join(assetDir, 'favicon.svg'), owned);
+  const served = await call(hosted.http.port, 'GET', '/app/favicon.svg');
+  assert.equal(served.status, 200);
+  assert.match(served.headers['content-type'], /image\/svg\+xml/);
+  assert.equal(served.raw, owned);
 });
 
 test('event streams replay from a cursor without leaking credentials', async (t) => {

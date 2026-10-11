@@ -19,15 +19,18 @@ import { addNode, answerProposal, createAsset, createBoard, createComment, creat
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
+const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n';
+
 export const EMBEDDED_BROWSER_FILES = Object.freeze({
-  'mark.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n',
+  'mark.svg': MARK_SVG,
+  'favicon.svg': MARK_SVG,
 });
 
 export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs',
-  'mark.svg',
+  'mark.svg', 'favicon.svg',
 ]);
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
@@ -201,8 +204,19 @@ export function respond(res, status, body, headers = {}) {
 
 export async function serveStatic(assetDir, name) {
   if (!STATIC_FILES.has(name)) throw new CoreError(404, 'not_found', 'The asset is not available.');
+  if (assetDir) {
+    try {
+      return await readStaticFile(assetDir, name);
+    } catch (error) {
+      if (!Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) throw error;
+      if (!(error instanceof CoreError) || error.status !== 503) throw error;
+    }
+  }
   if (Object.hasOwn(EMBEDDED_BROWSER_FILES, name)) return Buffer.from(EMBEDDED_BROWSER_FILES[name]);
-  if (!assetDir) throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
+  throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.');
+}
+
+async function readStaticFile(assetDir, name) {
   const root = await realpath(assetDir).catch(() => { throw new CoreError(503, 'service_unavailable', 'The browser shell is not packaged.'); });
   await assertNoLinks(root);
   const target = path.resolve(root, name);
