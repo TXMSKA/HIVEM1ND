@@ -1740,6 +1740,30 @@ test("settings and the footer follow sync, service, and issue changes", async (t
   await waitFor(() => ![...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The resolved issue remained.");
 });
 
+test("a replayed unit event is applied once and the cursor advances", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const urls = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, urls);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "root:master"), "The unit list did not load.");
+  const unitReads = () => urls.filter((url) => url.includes("/api/v1/units")).length;
+  const before = unitReads();
+  const current = desktop.app.store.indexes.units.get("root:master");
+  const id = await fixture.control.emit("unit.changed", { unit: current });
+  await waitFor(() => {
+    const list = desktop.app.unitList;
+    return unitReads() > before && (list?.status === "ready" || list?.status === "empty") && !list?.nextCursor && desktop.app.store.cursor === id;
+  }, "The unit change was not consumed.");
+  const after = unitReads();
+  await fixture.control.replay(id);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    assert.equal(unitReads(), after);
+    assert.equal(desktop.app.store.cursor, id);
+    await delay(25);
+  }
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

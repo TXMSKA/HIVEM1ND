@@ -405,8 +405,8 @@ export function dispose(app) {
 
 async function onStream(app, event) {
   if (app.disposed) return;
-  await acceptStreamEvent(app.store, app.api, event);
-  if (app.disposed) return;
+  const result = await acceptStreamEvent(app.store, app.api, event);
+  if (app.disposed || result?.dropped) return;
   if (event?.name === "home.changed") noteHome(app, dataOf(event));
   if (event?.name === "sync.changed") noteSync(app, dataOf(event));
   if (event?.name === "service.changed") noteService(app, dataOf(event));
@@ -414,6 +414,7 @@ async function onStream(app, event) {
   if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
     await loadPresentation(app);
     if (event?.name === "stream.ready") await recheckTracked(app);
+    result?.consume?.();
     return;
   }
   if (event?.name === "stream.reset") await recheckTracked(app);
@@ -478,6 +479,7 @@ async function onStream(app, event) {
     }
   }
   if (app.layout !== "unknown") renderShell(app);
+  result?.consume?.();
 }
 
 async function loadPresentation(app) {

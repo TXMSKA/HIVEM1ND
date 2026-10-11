@@ -3941,6 +3941,14 @@ export async function createGuiFixture(options = {}) {
       emit(name, data, source) {
         return enqueue(fx, async () => publish(fx, [{ name, data, source: source ?? serviceSource(), global: true }], fx.primary));
       },
+      replay(id) {
+        return enqueue(fx, async () => {
+          const record = fx.ring.find((item) => item.id === id);
+          if (!record) throw new Error("Unknown event.");
+          for (const stream of fx.streams) writeStream(stream, record);
+          return id;
+        });
+      },
       advance(ms) {
         return enqueue(fx, async () => {
           fx.nowMs += ms;

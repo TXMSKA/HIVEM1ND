@@ -366,6 +366,63 @@ test("snapshots, duplicate revisions, and late reads stay ordered", async () => 
   assert.equal(paged.indexes.units.size, 0);
 });
 
+test("replay advances the consumed cursor and keeps the snapshot cursor during reset", async () => {
+  const api = harness({
+    fetch: async () => jsonResponse(200, envelope({
+      units: [{ id: "root:master", revision: "aa", context: "SNAP" }],
+      chats: [],
+      tasks: [],
+    }, `${SERVICE}:1`)),
+  }).api;
+  const store = createStore();
+  const live = unitEvent(`${SERVICE}:2`, { id: "root:master", revision: null, context: "from-event" });
+  assert.equal((await acceptStreamEvent(store, api, live)).buffered, true);
+  assert.equal((await acceptStreamEvent(store, api, live)).dropped, true);
+  assert.equal(store.cursor, null);
+  assert.equal(store.snapshotCursor, null);
+  const loaded = await loadSnapshot(store, api);
+  assert.equal(loaded.cursor, `${SERVICE}:1`);
+  assert.equal(store.snapshotCursor, `${SERVICE}:1`);
+  assert.equal(store.cursor, `${SERVICE}:2`);
+  assert.equal(store.indexes.units.get("root:master").context, "from-event");
+  const repeated = await acceptStreamEvent(store, api, live);
+  assert.equal(repeated.dropped, true);
+  assert.equal(store.indexes.units.get("root:master").context, "from-event");
+  assert.equal(store.cursor, `${SERVICE}:2`);
+  const older = await acceptStreamEvent(store, api, unitEvent(`${SERVICE}:1`, { id: "root:master", revision: null, context: "old" }));
+  assert.equal(older.dropped, true);
+  assert.equal(store.indexes.units.get("root:master").context, "from-event");
+
+  const gate = deferred();
+  const resetting = createStore();
+  resetting.snapshotCursor = `${SERVICE}:1`;
+  resetting.cursor = `${SERVICE}:1`;
+  resetting.snapshotReady = true;
+  const resetApi = harness({
+    fetch: async (url) => {
+      const target = String(url);
+      if (target.endsWith("/view")) return gate.promise;
+      if (target.endsWith("/settings")) return jsonResponse(200, envelope({ settings: { look: "modern" }, revision: "11" }, `${SERVICE}:3`));
+      return jsonResponse(200, envelope({ revision: "11" }, `${SERVICE}:3`));
+    },
+  }).api;
+  const pending = applyReset(resetting, resetApi);
+  await waitFor(() => resetting.paused === true && resetting.cursor === null);
+  assert.equal((await acceptStreamEvent(resetting, resetApi, unitEvent(`${SERVICE}:4`, { id: "root:master", revision: null, context: "after" }))).buffered, true);
+  assert.equal((await acceptStreamEvent(resetting, resetApi, unitEvent(`${SERVICE}:4`, { id: "root:master", revision: null, context: "after" }))).dropped, true);
+  assert.equal((await acceptStreamEvent(resetting, resetApi, unitEvent(`${SERVICE}:2`, { id: "root:master", revision: null, context: "ANCIENT" }))).buffered, true);
+  assert.equal(resetting.snapshotCursor, `${SERVICE}:1`);
+  gate.resolve(jsonResponse(200, envelope({
+    units: [{ id: "root:master", revision: "aa", context: "SNAP" }],
+    chats: [],
+    tasks: [],
+  }, `${SERVICE}:3`)));
+  await pending;
+  assert.equal(resetting.snapshotCursor, `${SERVICE}:3`);
+  assert.equal(resetting.cursor, `${SERVICE}:4`);
+  assert.equal(resetting.indexes.units.get("root:master").context, "after");
+});
+
 test("reset keeps the latest snapshot and drops a stale 400-item page", async () => {
   const calls = [];
   const resourceGate = deferred();
@@ -466,13 +523,15 @@ test("the fixture retries one lost layout write and reset sees the latest record
   const stream = subscribe(api, {
     signal: stop.signal,
     lastEventId: "00000000-0000-4000-8000-000000000099:1",
-    onEvent(event) {
+    async onEvent(event) {
       events.push(event.name);
       if (event.name === "stream.reset") {
         store.buffer.push(unitEvent(OTHER + ":9", { id: "root:master", revision: "f".repeat(64), context: "ANCIENT" }));
         return applyReset(store, api);
       }
-      return acceptStreamEvent(store, api, event);
+      const result = await acceptStreamEvent(store, api, event);
+      if (!result?.dropped && !result?.buffered) result?.consume?.();
+      return result;
     },
   });
   await waitFor(() => events.includes("stream.reset") && store.indexes.units.get("root:master").context.includes("Latest note"));

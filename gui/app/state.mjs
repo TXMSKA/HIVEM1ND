@@ -16,6 +16,7 @@ export function createStore() {
     buffer: [],
     ticket: 0,
     cursor: null,
+    snapshotCursor: null,
     liveCursor: null,
     capabilities: [],
     view: null,
@@ -90,12 +91,13 @@ export async function loadSnapshot(store, api) {
   store.mode = "snapshot";
   store.view = response.data;
   indexView(store, response.data);
+  store.snapshotCursor = response.meta.eventCursor;
   store.cursor = response.meta.eventCursor;
   store.snapshotReady = true;
-  if (store.paused) return { paged: false, cursor: store.cursor };
+  if (store.paused) return { paged: false, cursor: store.snapshotCursor };
   store.paused = false;
   await drainBuffer(store, api);
-  return { paged: false, cursor: store.cursor };
+  return { paged: false, cursor: store.snapshotCursor };
 }
 
 export async function loadResource(store, api, path, key) {
@@ -137,17 +139,20 @@ export async function applyEvent(store, api, event) {
   return { applied: true };
 }
 
-export function acceptStreamEvent(store, api, event) {
+export async function acceptStreamEvent(store, api, event) {
   if (!event || event.error) {
     if (event?.error) store.failure = event.error;
     return null;
   }
   if (!store.snapshotReady || store.paused) {
+    if (event.id != null && store.buffer.some((item) => item?.id === event.id)) return { dropped: true };
     store.buffer.push(event);
-    return null;
+    return { buffered: true };
   }
-  if (event.name !== "stream.ready" && event.name !== "stream.reset" && !isAfterCursor(event.id, store.cursor)) return { dropped: true };
-  return applyEvent(store, api, event);
+  if (staleReplay(store, event)) return { dropped: true };
+  const result = await applyEvent(store, api, event) ?? {};
+  result.consume = () => noteConsumed(store, event);
+  return result;
 }
 
 export async function applyReset(store, api) {
@@ -189,11 +194,34 @@ function openPaths(store) {
 
 async function drainBuffer(store, api) {
   const events = store.buffer.splice(0);
+  const watermark = store.snapshotCursor;
   for (const event of events) {
     if (!event || event.name === "stream.reset") continue;
-    if (event.name !== "stream.ready" && !isAfterCursor(event.id, store.cursor)) continue;
+    if (event.name !== "stream.ready" && !isAfterCursor(event.id, watermark)) continue;
     await applyEvent(store, api, event);
+    noteConsumed(store, event);
   }
+}
+
+function staleReplay(store, event) {
+  if (event.name === "stream.ready" || event.name === "stream.reset") return alreadyConsumed(store, event);
+  return !isAfterCursor(event.id, store.cursor);
+}
+
+function alreadyConsumed(store, event) {
+  const left = CURSOR.exec(String(event?.id ?? ""));
+  const right = CURSOR.exec(String(store.cursor ?? ""));
+  if (!left || !right || left[1] !== right[1]) return false;
+  return Number(left[2]) <= Number(right[2]);
+}
+
+function noteConsumed(store, event) {
+  if (!store.snapshotReady || store.paused || !event?.id) return;
+  const next = CURSOR.exec(String(event.id));
+  if (!next) return;
+  const current = CURSOR.exec(String(store.cursor ?? ""));
+  if (current && current[1] !== next[1]) return;
+  if (!current || Number(next[2]) > Number(current[2])) store.cursor = String(event.id);
 }
 
 function indexView(store, data) {
