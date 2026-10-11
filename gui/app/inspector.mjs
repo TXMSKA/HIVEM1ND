@@ -109,7 +109,7 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     onclick: () => onStatus?.(task, "done"),
   });
   if (!canAccept(task) || busy) accept.disabled = true;
-  const note = element(document, "input", { "data-note": task.id, "aria-label": t("sendBack") });
+  const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}`, "aria-label": t("sendBack") });
   note.value = draft;
   note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
   const back = element(document, "button", {

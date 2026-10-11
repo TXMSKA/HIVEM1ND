@@ -263,7 +263,7 @@ function paintShell(app) {
 
 function inputDrafts(app) {
   if (!app.inputDrafts) {
-    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), focus: null, cleared: new Set() };
+    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), fields: new Map(), focus: null };
   }
   return app.inputDrafts;
 }
@@ -354,47 +354,52 @@ function fieldDraft(node) {
   return { value, start, end };
 }
 
+function keepId(...parts) {
+  return parts.map((part) => encodeURIComponent(String(part))).join("|");
+}
+
+function keepParts(key) {
+  return String(key).split("|").map((part) => decodeURIComponent(part));
+}
+
 function captureInputs(app) {
   const drafts = inputDrafts(app);
-  const composer = app.root.querySelector?.("[data-composer]");
-  const chatId = composer?.getAttribute?.("data-chat") ?? app.thread?.chat?.id;
-  if (composer && chatId && !drafts.cleared.has(`chat:${chatId}`)) {
-    const draft = fieldDraft(composer);
-    drafts.chats.set(chatId, draft);
-    if (app.thread?.chat?.id === chatId) app.thread.composer = draft.value;
-  }
-  if (chatId) drafts.cleared.delete(`chat:${chatId}`);
-  for (const note of app.root.querySelectorAll?.("[data-note]") ?? []) {
-    const taskId = note.getAttribute?.("data-note");
-    if (!taskId || drafts.cleared.has(`note:${taskId}`)) continue;
-    drafts.notes.set(taskId, fieldDraft(note));
-  }
-  for (const taskId of [...drafts.notes.keys()]) drafts.cleared.delete(`note:${taskId}`);
+  if (!drafts.fields) drafts.fields = new Map();
   const active = app.root.ownerDocument?.activeElement;
-  if (active?.getAttribute?.("data-composer") && chatId) drafts.focus = { kind: "chat", id: chatId };
-  else if (active?.getAttribute?.("data-note")) drafts.focus = { kind: "note", id: active.getAttribute("data-note") };
-  else if (active && app.root.contains?.(active)) drafts.focus = null;
+  let focused = null;
+  for (const node of app.root.querySelectorAll?.("[data-keep]") ?? []) {
+    const key = node.getAttribute?.("data-keep");
+    if (!key) continue;
+    const draft = fieldDraft(node);
+    if (keepParts(key)[0] === "home") drafts.fields.set(key, draft);
+    if (node === active) focused = { kind: "field", id: key, start: draft.start, end: draft.end };
+  }
+  drafts.focus = focused;
 }
 
 function clearInputDraft(app, kind, id) {
   const drafts = inputDrafts(app);
+  const key = keepId(kind, id);
   const bucket = kind === "chat" ? drafts.chats : kind === "note" ? drafts.notes : draftMap(app, kind);
   bucket.delete(id);
-  drafts.cleared.add(`${kind}:${id}`);
-  if (drafts.focus?.kind === kind && drafts.focus.id === id) drafts.focus = null;
+  drafts.fields?.delete(key);
+  if (drafts.focus?.id === key) drafts.focus = null;
   syncViewerDirty(app);
 }
 
 function restoreInputFocus(app) {
-  const focus = inputDrafts(app).focus;
-  if (!focus) return;
-  const node = focus.kind === "chat"
-    ? app.root.querySelector?.("[data-composer]")
-    : app.root.querySelector?.(`[data-note="${focus.id}"]`);
+  const drafts = inputDrafts(app);
+  for (const [key, draft] of drafts.fields ?? []) {
+    const node = app.root.querySelector?.(`[data-keep="${key}"]`);
+    if (!node || !("value" in node)) continue;
+    if (node.value !== draft.value) node.value = draft.value;
+  }
+  const focus = drafts.focus;
+  if (!focus?.id) return;
+  const node = app.root.querySelector?.(`[data-keep="${focus.id}"]`);
   if (!node) return;
-  const draft = focus.kind === "chat" ? inputDrafts(app).chats.get(focus.id) : inputDrafts(app).notes.get(focus.id);
   node.focus?.();
-  if (typeof node.setSelectionRange === "function" && draft) node.setSelectionRange(draft.start, draft.end);
+  if (typeof node.setSelectionRange === "function") node.setSelectionRange(focus.start, focus.end);
 }
 
 export function dispose(app) {
@@ -426,7 +431,12 @@ async function onStream(app, event) {
   if (event?.name === "sync.changed") noteSync(app, dataOf(event));
   if (event?.name === "service.changed") noteService(app, dataOf(event));
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
-  if (event?.name === "stream.ready" || event?.name === "settings.changed" || event?.name === "viewer.changed") {
+  if (event?.name === "viewer.changed") {
+    await loadPresentation(app, { keepShell: true });
+    result?.consume?.();
+    return;
+  }
+  if (event?.name === "stream.ready" || event?.name === "settings.changed") {
     await loadPresentation(app);
     if (event?.name === "stream.ready") await recheckTracked(app);
     result?.consume?.();
@@ -497,9 +507,12 @@ async function onStream(app, event) {
   result?.consume?.();
 }
 
-async function loadPresentation(app) {
+async function loadPresentation(app, options = {}) {
   const ticket = (app.presentationTicket ?? 0) + 1;
   app.presentationTicket = ticket;
+  const previousLook = app.look;
+  const previousLanguage = app.language;
+  const previousLayout = app.layout;
   const settings = await request(app.api, "GET", "/settings");
   if (app.disposed || ticket !== app.presentationTicket) return;
   app.store.settings = settings.data;
@@ -521,6 +534,8 @@ async function loadPresentation(app) {
   applySettingsRead(home, app.store.settings);
   app.store.settings.home = home.home;
   startOwnEmbed(app);
+  const samePresentation = app.look === previousLook && app.language === previousLanguage && app.layout === previousLayout;
+  if (options.keepShell && samePresentation && app.layout !== "unknown") return;
   publish(app);
 }
 
@@ -947,7 +962,7 @@ function boardSurface(app, document, editor, t) {
   });
   const nodes = editor.authoritative.document.screens?.[0];
   const tools = element(document, "div", { class: "editor-actions" });
-  const name = element(document, "input", { "data-node-name": "true", "aria-label": t("nodeName") });
+  const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId), "aria-label": t("nodeName") });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
   name.addEventListener("input", () => {
     editor.nodeDraft = name.value;
@@ -1094,7 +1109,7 @@ function voidSurface(app, document, editor, t) {
   const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
   const page = pages.find((item) => item.k === editor.page);
   const stored = textDraft(editor, editor.resourceId, editor.page, lang);
-  const source = element(document, "textarea", { "data-source": "true", "data-draft-key": `${editor.resourceId}:${editor.page}:${lang}` });
+  const source = element(document, "textarea", { "data-source": "true", "data-draft-key": `${editor.resourceId}:${editor.page}:${lang}`, "data-keep": keepId("source", editor.resourceId, editor.page, lang) });
   source.value = stored === undefined ? (page?.[lang] ?? "") : stored;
   source.addEventListener("input", () => {
     rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
@@ -1319,6 +1334,7 @@ function renderEditorSurfaces(app, t) {
   const draft = element(document, "textarea", {
     class: "editor-compose",
     "data-draft": current.resourceId,
+    "data-keep": keepId("auxiliary", current.resourceId),
     oninput: () => {
       rememberFormDraft(app, "auxiliary", current.resourceId, draft.value);
     },
@@ -1377,7 +1393,7 @@ function renderEditorSurfaces(app, t) {
       },
     }));
   }
-  const compose = element(document, "textarea", { "data-comment": "true" });
+  const compose = element(document, "textarea", { "data-comment": "true", "data-keep": keepId("comment", current.resourceId) });
   compose.value = current.commentText ?? "";
   const commentButton = element(document, "button", {
     type: "button",
@@ -1544,7 +1560,7 @@ function editorDraft(app) {
 }
 
 function editorField(document, app, t, key, labelKey, field) {
-  const input = element(document, "input", { "data-field": field, "aria-label": t(labelKey) });
+  const input = element(document, "input", { "data-field": field, "data-keep": keepId("resource", key), "aria-label": t(labelKey) });
   input.value = editorDraft(app)[key] ?? "";
   input.addEventListener("input", () => {
     editorDraft(app)[key] = input.value;
@@ -2691,7 +2707,7 @@ function chatPanel(app, t) {
   }
   panel.append(transcript, row);
   if (caps.includes("chat.post")) {
-    const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-chat": thread.chat.id, "aria-label": t("send") });
+    const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-chat": thread.chat.id, "data-keep": keepId("chat", thread.chat.id), "aria-label": t("send") });
     const savedChat = inputDrafts(app).chats.get(thread.chat.id);
     composer.value = savedChat?.value ?? thread.composer ?? "";
     composer.addEventListener("input", () => {
@@ -2815,7 +2831,7 @@ function renderMailbox(app, t) {
     }
   }
   if (box.unitId && (app.store.capabilities ?? []).includes("chat.post")) {
-    const compose = element(document, "input", { class: "composer", "data-mailbox-compose": "true", "aria-label": t("mailboxCompose") });
+    const compose = element(document, "input", { class: "composer", "data-mailbox-compose": "true", "data-keep": keepId("mail", box.unitId), "aria-label": t("mailboxCompose") });
     compose.value = box.composer ?? "";
     compose.addEventListener("input", () => {
       box.composer = compose.value;

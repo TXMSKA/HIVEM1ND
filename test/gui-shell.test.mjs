@@ -1907,6 +1907,43 @@ test("request expiry stays separate from reopening guidance and comments require
   await waitFor(() => replies().includes("A reply"), "The supplied reply was not sent.");
 });
 
+test("a shell refresh keeps the focused editor field and its caret", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not appear.");
+  const source = desktop.root.querySelector("[data-source]");
+  source.focus();
+  source.value = "A";
+  source.selectionStart = 1;
+  source.selectionEnd = 1;
+  for (const handler of source.listeners.get("input") ?? []) handler();
+  renderShell(desktop.app);
+  const again = desktop.root.querySelector("[data-source]");
+  assert.equal(again.value, "A");
+  assert.equal(desktop.document.activeElement, again);
+  assert.equal(again.selectionStart, 1);
+  const title = desktop.root.querySelector("[data-field='create-title']");
+  title.focus();
+  title.value = "Kept";
+  title.selectionStart = 4;
+  title.selectionEnd = 4;
+  for (const handler of title.listeners.get("input") ?? []) handler();
+  renderShell(desktop.app);
+  const titleAgain = desktop.root.querySelector("[data-field='create-title']");
+  assert.equal(titleAgain.value, "Kept");
+  assert.equal(desktop.document.activeElement, titleAgain);
+  assert.equal(titleAgain.selectionStart, 4);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];

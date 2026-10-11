@@ -250,7 +250,7 @@ function renderHome(document, model, t, actions) {
 }
 
 function addressField(document) {
-  const input = element(document, "input", { "data-addresses": "true" });
+  const input = element(document, "input", { "data-addresses": "true", "data-keep": "home|addresses" });
   input.value = "";
   return input;
 }
