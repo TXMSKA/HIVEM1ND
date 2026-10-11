@@ -1,6 +1,8 @@
-import { ApiError, apiUrl, clearCredentials } from "./api.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, apiUrl, clearCredentials } from "./api.mjs";
 
 export const FRAME_LIMIT = 16 * 1024 * 1024;
+export const STREAM_HANDSHAKE_MS = REQUEST_DEADLINE_MS;
+export const STREAM_INACTIVITY_MS = 45_000;
 const DELAYS = [1000, 2000, 4000, 8000, 15000];
 
 export function reconnectDelay(attempt, random = Math.random) {
@@ -109,14 +111,23 @@ export function decodeEvent(frame) {
   return { id: frame.id, name: frame.event || "message", envelope };
 }
 
-export async function subscribe(api, { onEvent, lastEventId, signal, query } = {}) {
+export async function subscribe(api, { onEvent, onLifecycle, lastEventId, signal, query, handshakeMs, inactivityMs } = {}) {
   if (!api.token) throw new ApiError(401, "sign_in_required", "Open the app again to continue.");
   const suffix = query ? `/events?${new URLSearchParams(Object.entries(query).filter(([, value]) => value != null))}` : "/events";
   const controller = new AbortController();
   api.controllers.add(controller);
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort);
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener("abort", onAbort);
   const parser = createSseParser();
+  const handshake = handshakeMs ?? api.deadlineMs ?? STREAM_HANDSHAKE_MS;
+  const inactive = inactivityMs ?? api.inactivityMs ?? STREAM_INACTIVITY_MS;
+  let timer = null;
+  const arm = (delay, reason) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(reason), delay);
+  };
+  arm(handshake, "handshake");
   try {
     const response = await api.fetch(apiUrl(api.location.origin, suffix), {
       headers: {
@@ -129,11 +140,15 @@ export async function subscribe(api, { onEvent, lastEventId, signal, query } = {
       redirect: "error",
       signal: controller.signal,
     });
+    if (controller.signal.aborted) throw streamAbort(controller.signal);
     if (!response.ok) throw await responseError(response, api);
+    onLifecycle?.("open");
+    arm(inactive, "inactivity");
     const reader = response.body.getReader();
     try {
       while (true) {
-        const chunk = await reader.read();
+        const chunk = await readStreamChunk(reader, controller.signal);
+        arm(inactive, "inactivity");
         if (chunk.done) {
           for (const frame of parser.finish()) await onEvent?.(decodeEvent(frame));
           break;
@@ -143,9 +158,16 @@ export async function subscribe(api, { onEvent, lastEventId, signal, query } = {
         }
       }
     } finally {
-      reader.releaseLock();
+      reader.cancel().catch(() => {});
+      try { reader.releaseLock(); } catch { /* The reader was already cancelled. */ }
     }
+  } catch (error) {
+    if (controller.signal.reason === "handshake" || controller.signal.reason === "inactivity") {
+      throw new ApiError(0, "timeout", "The event stream timed out.");
+    }
+    throw error;
   } finally {
+    clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
     api.controllers.delete(controller);
   }
@@ -153,10 +175,11 @@ export async function subscribe(api, { onEvent, lastEventId, signal, query } = {
 
 export function synchronize(api, store, options = {}) {
   close(api.live);
-  const live = { stopped: false, attempt: 0, timer: null };
+  const live = { stopped: false, attempt: 0, timer: null, state: "connecting", error: null, retryIn: null };
   api.live = live;
   const schedule = options.schedule ?? ((delay, run) => setTimeout(run, delay));
   const random = options.random ?? Math.random;
+  noteStream(live, store, options, { state: "connecting" });
   const connect = async () => {
     if (live.stopped || api.closed) return;
     const controller = new AbortController();
@@ -167,23 +190,31 @@ export function synchronize(api, store, options = {}) {
         query: options.query,
         lastEventId: options.cursor?.() ?? null,
         onEvent: options.onEvent,
+        handshakeMs: options.handshakeMs,
+        inactivityMs: options.inactivityMs,
+        onLifecycle: (phase) => noteStream(live, store, options, { state: phase }),
       });
       if (live.stopped || api.closed) return;
       live.attempt = 0;
-      queue(reconnectDelay(0, random));
+      const delay = reconnectDelay(0, random);
+      noteStream(live, store, options, { state: "reconnecting", retryIn: delay });
+      queue(delay);
     } catch (error) {
       if (live.stopped || api.closed || error?.name === "AbortError") return;
       if (error.status === 401 || error.status === 410) {
         clearCredentials(api);
         if (store) store.signedOut = error.status;
+        noteStream(live, store, options, { state: "error", error: error.code ?? "signed_out" });
         return;
       }
       if (error.code === "frame_too_large") {
         if (store) store.failure = error.code;
+        noteStream(live, store, options, { state: "error", error: error.code });
         return;
       }
       const delay = error.status === 429 ? (error.retryAfter ?? 1000) : reconnectDelay(live.attempt, random);
       if (error.status !== 429) live.attempt = Math.min(live.attempt + 1, DELAYS.length - 1);
+      noteStream(live, store, options, { state: "reconnecting", error: error.code ?? "request_failed", retryIn: delay });
       queue(delay);
     }
   };
@@ -229,4 +260,39 @@ function retryHeader(response, now) {
   if (/^\d+$/.test(value)) return Number(value) * 1000;
   const when = Date.parse(value);
   return Number.isFinite(when) ? Math.max(0, when - now()) : null;
+}
+
+function noteStream(live, store, options, patch) {
+  live.state = patch.state;
+  live.error = patch.error ?? null;
+  live.retryIn = patch.retryIn ?? null;
+  const snapshot = { state: live.state, error: live.error, retryIn: live.retryIn };
+  if (store) store.stream = snapshot;
+  options.onState?.(snapshot);
+}
+
+function streamAbort(signal) {
+  const error = new Error("This operation was aborted");
+  error.name = "AbortError";
+  error.reason = signal?.reason;
+  return error;
+}
+
+function readStreamChunk(reader, signal) {
+  if (signal.aborted) return Promise.reject(streamAbort(signal));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reader.cancel().catch(() => {});
+      reject(streamAbort(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then((chunk) => {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) reject(streamAbort(signal));
+      else resolve(chunk);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
 }

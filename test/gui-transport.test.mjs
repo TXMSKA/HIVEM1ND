@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { ApiError, createApi, createOperation, dispose, fetchAsset, operationId, request, retryOperation } from "../gui/app/api.mjs";
-import { FRAME_LIMIT, close, createSseParser, decodeEvent, reconnectDelay, subscribe, synchronize } from "../gui/app/stream.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose, fetchAsset, operationId, request, retryOperation } from "../gui/app/api.mjs";
+import { FRAME_LIMIT, STREAM_HANDSHAKE_MS, STREAM_INACTIVITY_MS, close, createSseParser, decodeEvent, reconnectDelay, subscribe, synchronize } from "../gui/app/stream.mjs";
 import { acceptStreamEvent, applyEvent, applyReset, createStore, isAfterCursor, loadResource, loadSnapshot, setDraft } from "../gui/app/state.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 
@@ -561,4 +561,117 @@ test("the fixture retries one lost layout write and reset sees the latest record
   await fixture.control.revokeViewer(viewerId);
   await assert.rejects(() => request(api, "GET", "/viewer"), (error) => error.status === 401 && error.code === "invalid_session");
   assert.equal(api.token, null);
+});
+
+test("stalled reads time out and a mutation retry keeps the same operation", async () => {
+  assert.equal(REQUEST_DEADLINE_MS, 15_000);
+  assert.equal(STREAM_HANDSHAKE_MS, REQUEST_DEADLINE_MS);
+  assert.ok(STREAM_INACTIVITY_MS > STREAM_HANDSHAKE_MS);
+  let held = 0;
+  const { api } = harness({
+    fetch: (_url, init) => new Promise((resolve, reject) => {
+      held = api.controllers.size;
+      const fail = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (init.signal.aborted) fail();
+      init.signal.addEventListener("abort", fail, { once: true });
+    }),
+  });
+  const operation = createOperation({ method: "POST", path: "/units", body: { unit: "shop" } });
+  await assert.rejects(request(api, "POST", "/units", { operation, deadlineMs: 40 }), (error) => error instanceof ApiError && error.code === "timeout");
+  assert.equal(held, 1);
+  assert.equal(api.controllers.size, 0);
+  assert.equal(api.uncertain.get(operation.id).operation, operation);
+
+  const keys = [];
+  api.fetch = async (_url, init) => {
+    keys.push(init.headers["Idempotency-Key"]);
+    return jsonResponse(200, envelope({ id: "project:shop:shop" }));
+  };
+  const saved = await retryOperation(api, operation);
+  assert.equal(keys[0], operation.id);
+  assert.equal(saved.data.id, "project:shop:shop");
+  assert.equal(api.uncertain.has(operation.id), false);
+
+  const bodyHeld = harness({
+    fetch: async (_url, init) => new Response(new ReadableStream({
+      start(controller) {
+        const fail = () => controller.error(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        if (init.signal.aborted) fail();
+        init.signal.addEventListener("abort", fail, { once: true });
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  }).api;
+  let openDuringRead = 0;
+  const stalled = request(bodyHeld, "GET", "/view", { deadlineMs: 5_000 });
+  await waitFor(() => bodyHeld.controllers.size === 1);
+  openDuringRead = bodyHeld.controllers.size;
+  dispose(bodyHeld);
+  await assert.rejects(stalled, (error) => error.name === "AbortError");
+  assert.equal(openDuringRead, 1);
+  assert.equal(bodyHeld.controllers.size, 0);
+
+  const signal = AbortSignal.abort("caller");
+  let relayed = false;
+  const relayedApi = harness({
+    fetch: async (_url, init) => {
+      relayed = init.signal.aborted === true;
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    },
+  }).api;
+  const callerOperation = createOperation({ method: "PATCH", path: "/layout", body: { nodes: {} } });
+  await assert.rejects(
+    request(relayedApi, "PATCH", "/layout", { operation: callerOperation, signal, deadlineMs: 500 }),
+    (error) => error.name === "AbortError",
+  );
+  assert.equal(relayed, true);
+  assert.equal(relayedApi.uncertain.has(callerOperation.id), false);
+
+  const assets = harness({
+    fetch: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    }),
+  }).api;
+  await assert.rejects(
+    fetchAsset(assets, { url: "http://127.0.0.1:9/api/v1/assets/picture" }, { deadlineMs: 30 }),
+    (error) => error.code === "timeout",
+  );
+  assert.equal(assets.controllers.size, 0);
+});
+
+test("a stalled event stream reports reconnect instead of staying pending", async () => {
+  const states = [];
+  const { api } = harness({
+    fetch: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    }),
+  });
+  const store = createStore();
+  const live = synchronize(api, store, {
+    handshakeMs: 30,
+    schedule() { return 0; },
+    onState(state) { states.push(state.state); },
+    onEvent() {},
+  });
+  await waitFor(() => states.includes("reconnecting"));
+  assert.equal(states[0], "connecting");
+  assert.equal(store.stream.state, "reconnecting");
+  assert.equal(store.stream.error, "timeout");
+  assert.ok(store.stream.retryIn > 0);
+  close(live);
+
+  const encoder = new TextEncoder();
+  const quiet = harness({
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(": keepalive\n\n"));
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  }).api;
+  const started = Date.now();
+  await assert.rejects(
+    subscribe(quiet, { handshakeMs: 1_000, inactivityMs: 40, onEvent() {} }),
+    (error) => error.code === "timeout",
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 30 && elapsed < 500);
 });
