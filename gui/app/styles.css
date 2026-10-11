@@ -569,8 +569,15 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .chip { border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 2px 8px; font-size: 12px; }
 .chat-heading { margin: 0 0 8px; }
 .chat-title { margin: 0; font-size: 16px; }
+.chat-members { margin: 4px 0 0; color: var(--mute); font-size: 13px; }
 .bubble { display: grid; gap: 2px; max-width: 40rem; padding: 8px 10px; border-radius: var(--radius-control); background: var(--card); }
+.bubble[data-own="true"] { margin-left: auto; background: var(--accent); color: var(--accent-ink); }
+.bubble[data-own="true"] .bubble-meta { color: inherit; }
 .bubble-meta { margin: 0; color: var(--mute); font-size: 12px; }
+.unit-facts { display: grid; gap: 4px 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: var(--card); border-radius: var(--radius-control); }
+.action-cards { display: grid; gap: 8px; }
+.card { background: var(--card); border-radius: var(--radius-control); padding: 8px; }
 .comment-line { margin: 0 0 6px; }
 .comment-author { font-weight: 600; margin-right: 8px; }
 .unit-card, .inspector-details { display: grid; gap: 6px; }

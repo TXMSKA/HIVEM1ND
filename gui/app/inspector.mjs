@@ -15,15 +15,12 @@ export function renderUnit(document, unit, t, language = "en") {
     ["branch", unit?.branch],
     ["date", shownDate(language, unit?.date)],
   ];
-  const details = element(document, "details", { class: "unit-details" });
-  details.append(element(document, "summary", { text: t("details") }));
-  const facts = element(document, "div", { class: "unit-facts" });
+  const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
   for (const [label, value] of lines) {
     facts.append(element(document, "p", { text: `${t(label)}: ${value ?? t("unknown")}` }));
   }
   if (unit?.context) facts.append(element(document, "p", { text: unit.context }));
-  details.append(facts);
-  card.append(details);
+  card.append(facts);
   return card;
 }
 
@@ -110,7 +107,7 @@ export function renderGrants(document, grants, t, onRevoke, busyId = null) {
 }
 
 export function renderApproval(document, approval, t, onAnswer, busy = false) {
-  const block = element(document, "section", { "data-approval": approval.id, "data-approval-state": approval.state });
+  const block = element(document, "section", { class: "card", "data-approval": approval.id, "data-approval-state": approval.state });
   block.append(element(document, "p", { text: approval.display ?? approval.action ?? approval.id }));
   if (busy) block.append(progressMark(document, t("answering"), { "data-approval-progress": approval.id }));
   if (approval.state === "pending") {
@@ -131,7 +128,7 @@ export function renderApproval(document, approval, t, onAnswer, busy = false) {
 }
 
 export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task), busy = false) {
-  const block = element(document, "section", { "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
+  const block = element(document, "section", { class: "card", "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
   block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
   if (busy) block.append(progressMark(document, t("working"), { "data-task-progress": task.id }));
   const accept = element(document, "button", {

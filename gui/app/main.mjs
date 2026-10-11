@@ -868,7 +868,7 @@ function renderWorkspace(app, t, view, counts) {
   const inspectorBody = element(document, "div", { class: "inspector-body" },
     element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
   );
-  if (app.actionNote) {
+  if (app.actionNote && app.actionScope !== "editor") {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -1228,7 +1228,7 @@ function boardSurface(app, document, editor, t) {
     });
   });
   const nodes = editor.authoritative.document.screens?.[0];
-  const tools = element(document, "div", { class: "editor-actions" });
+  const tools = element(document, "div", { class: "editor-tools toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
   const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
   name.addEventListener("input", () => {
@@ -1617,7 +1617,7 @@ function renderEditorSurfaces(app, t) {
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
-  if (app.actionNote) {
+  if (app.actionNote && app.actionScope === "editor") {
     resource.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -2243,7 +2243,7 @@ function starterText(id, title) {
 function structureTools(app, document, editor, t) {
   syncStructureDraft(app, editor);
   const board = editor.authoritative?.document;
-  const tools = element(document, "div", { class: "editor-actions", "data-structure": "true" });
+  const tools = element(document, "div", { class: "editor-tools toolbar", role: "toolbar", "aria-label": t("blueprint"), "data-structure": "true", "data-toolbar": "structure" });
   if (!board || editor.authoritative.readOnly) return tools;
   const canMovePage = (board.pages?.length ?? 0) >= 2;
   const canMoveScreen = (board.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2);
@@ -3017,10 +3017,17 @@ const TASK_COPY = {
   closed: "taskClosed",
 };
 
-function showOutcome(app, note, code = null, tone = "status") {
+function showOutcome(app, note, code = null, tone = "status", scope = null) {
   app.actionNote = note;
   app.actionCode = code;
   app.actionTone = tone;
+  app.actionScope = scope ?? noteScope(app);
+}
+
+function noteScope(app) {
+  if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") return "editor";
+  if (app.mode === "settings") return "settings";
+  return "unit";
 }
 
 function explain(app, key) {
@@ -3532,9 +3539,15 @@ function chatPanel(app, t) {
   const thread = app.thread;
   const panel = element(document, "section", { class: "chat-panel" });
   if (!thread?.chat) return panel;
-  panel.append(element(document, "header", { class: "chat-heading" },
+  const members = thread.chat.members ?? [];
+  const heading = element(document, "header", { class: "chat-heading" },
     element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
-  ));
+  );
+  if (members.length > 2) {
+    const names = members.map((id) => unitById(app, id)?.unit || id).join(", ");
+    heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
+  }
+  panel.append(heading);
   const transcript = element(document, "div", {
     class: "transcript",
     "data-chat": thread.chat.id,
@@ -3551,7 +3564,8 @@ function chatPanel(app, t) {
   thread.windowStart = windowed.start;
   if (!windowed.items.length) transcript.append(element(document, "p", { "data-empty": "true", text: t("emptyChat") }));
   for (const message of windowed.items) {
-    const article = element(document, "article", { class: "bubble", "data-from": message.fromId ?? "" });
+    const own = unitById(app, message.fromId)?.role === "master";
+    const article = element(document, "article", { class: own ? "bubble own" : "bubble", "data-from": message.fromId ?? "", "data-own": own ? "true" : "false" });
     const when = formatWhen(app.language, message.timestamp || message.date || "");
     article.append(element(document, "p", {
       class: "bubble-meta",
@@ -3965,9 +3979,10 @@ function renderInspector(app, t, selected) {
     const busyGrant = [...(app.activity?.entries() ?? [])].find(([key, record]) => key.startsWith("grant:") && record.phase === "pending")?.[0]?.slice(6) ?? null;
     details.append(renderGrants(document, data.grants, t, (grant) => revokeSelectedGrant(app, selected, grant), busyGrant));
   }
+  const cards = element(document, "div", { class: "action-cards", "data-action-cards": "true" });
   if (caps.includes("approval.answer")) {
     for (const approval of data.approvals ?? []) {
-      details.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
+      cards.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
     }
   }
   const tasks = data.tasks ?? [];
@@ -3983,19 +3998,20 @@ function renderInspector(app, t, selected) {
       setsize: data.taskTotal ?? tasks.length,
       task,
     })), { onActivate: (row) => { app.openTaskId = row.id; renderShell(app); } });
-    details.append(taskHost);
+    cards.append(taskHost);
   }
   const visibleTasks = tasks.length >= 100 ? tasks.filter((task) => task.id === app.openTaskId).slice(0, 1) : tasks;
   for (const task of visibleTasks) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
     const phone = app.layout === "phone" || app.store.audience === "phone";
     const taskBusy = activityPending(app, `task:${task.id}`) || activityPending(app, `undo:${task.id}`);
-    details.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    cards.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(task) : canSendBack(task), taskBusy));
-    details.append(openTaskDetail(document, task, t));
+    cards.append(openTaskDetail(document, task, t));
   }
+  if (cards.children?.length) panel.append(cards);
   details.append(renderWaiting(document, data.waiting, t, (item) => openWaitingItem(app, item)));
   panel.append(details);
   return panel;

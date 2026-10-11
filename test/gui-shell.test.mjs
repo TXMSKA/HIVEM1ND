@@ -2210,6 +2210,10 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   await waitFor(() => desktop.root.querySelector(".bubble-meta"), "The message sender was not shown.");
   assert.equal(desktop.root.querySelector(".bubble-meta").textContent.includes("master"), true);
   assert.equal(desktop.root.querySelector("[data-message]")?.closest(".bubble") != null, true);
+  const group = desktop.app.chatList.catalog.find((item) => (item.members?.length ?? 0) > 2);
+  desktop.app.activeHandlers.onActivate({ id: group.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-chat-members]")?.textContent.includes("executor-shop"), "The group members were not shown.");
+  await waitFor(() => desktop.root.querySelector("[data-own='true']"), "An own message was not marked.");
 
   navigate(desktop.app, "blueprint");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
@@ -2218,6 +2222,8 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not appear.");
+  const toolbar = desktop.root.querySelector("[data-toolbar='board']");
+  assert.equal(toolbar?.getAttribute("role"), "toolbar");
   assert.equal(desktop.root.querySelector(".attach-list"), null);
   assert.equal(desktop.root.querySelector(".attach-chips") != null, true);
   click(desktop.root.querySelector("[data-action='attach']"));
@@ -2251,6 +2257,19 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
   await waitFor(() => desktop.root.querySelector(".inspector-details")?.querySelector("summary")?.textContent === "Details", "The inspector details did not appear.");
   assert.equal(desktop.root.querySelector(".unit-card") != null, true);
+  assert.equal(desktop.root.querySelector("[data-unit-facts]") != null, true);
+  assert.equal(desktop.root.querySelector("[data-action-cards]")?.querySelector("[data-task]") != null, true);
+  desktop.app.actionNote = "The task is done.";
+  desktop.app.actionCode = "done";
+  desktop.app.actionScope = "unit";
+  navigate(desktop.app, "blueprint");
+  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action-note]"), null);
+  assert.equal(desktop.app.actionNote, "The task is done.");
+  navigate(desktop.app, "map");
+  assert.equal(desktop.root.querySelector(".inspector-body")?.querySelector("[data-action-note]")?.textContent, "The task is done.");
+  desktop.app.actionScope = "editor";
+  navigate(desktop.app, "blueprint");
+  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action-note]")?.textContent, "The task is done.");
 });
 
 test("editor events refresh attachments, assets, delivery and conflicts", async (t) => {
