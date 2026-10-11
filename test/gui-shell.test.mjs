@@ -100,6 +100,10 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   const html = sources[0][1];
   assert.match(html, /lang="en"/);
   assert.match(html, /href="\/app\/styles\.css"/);
+  assert.equal(html.includes("mark.svg"), false);
+  assert.match(html, /rel="icon" href="data:image\/svg\+xml/);
+  assert.equal(html.includes("%23bdcd79"), true);
+  await assert.rejects(readFile("gui/app/mark.svg"), (error) => error.code === "ENOENT");
   assert.match(html, /src="\/app\/main\.mjs"/);
   assert.equal(/<script(?![^>]*\ssrc=)/.test(html), false);
   assert.equal(html.includes("<style"), false);
