@@ -366,7 +366,7 @@ button, input { font: inherit; color: inherit; }
 }
 
 .shell[data-layout="phone"] {
-  grid-template-rows: var(--bar) minmax(0, 1fr) auto var(--footer);
+  grid-template-rows: var(--bar) minmax(0, 1fr) auto auto;
 }
 .shell[data-layout="phone"] .workspace { grid-template-columns: minmax(0, 1fr); }
 .shell[data-layout="phone"] .modes,
