@@ -144,6 +144,11 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   context.converter = null;
   const asset = await createAsset(context, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
   assert.match(asset.src, /^assets\/[0-9a-f-]{36}\.png$/);
+  assert.equal(asset.contentType, 'image/png');
+  assert.equal(asset.bytes, PNG.length);
+  const registered = await readAsset(context, created.id, asset.id);
+  assert.equal(registered.revision, asset.revision);
+  assert.equal(registered.type, 'image/png');
   const referenced = structuredClone(renamed.document);
   referenced.note = asset.src;
   const stored = await replaceBoard(context, created.id, { document: referenced, expectedRevision: renamed.revision });
@@ -278,6 +283,25 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
   const read = await call(core.http.port, 'GET', `/api/v1/blueprint/boards/${created.json.data.id}`, { token });
   assert.equal(read.status, 200);
   assert.equal(read.json.data.document.script, 'from http');
+  const uploaded = await call(core.http.port, 'POST', `/api/v1/editors/${created.json.data.id}/assets`, {
+    token,
+    body: { contentType: 'image/png', bytesBase64: PNG.toString('base64') },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(uploaded.status, 201);
+  assert.equal(uploaded.json.data.contentType === 'image/png' || uploaded.json.data.contentType === 'image/webp', true);
+  const fetched = await call(core.http.port, 'GET', uploaded.json.data.url, { token });
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.headers.etag, `"${uploaded.json.data.revision}"`);
+  assert.equal(fetched.headers['cache-control'], 'no-store');
+  assert.equal(fetched.headers['content-type'], uploaded.json.data.contentType);
+  const bulky = await call(core.http.port, 'POST', `/api/v1/editors/${created.json.data.id}/assets`, {
+    token,
+    body: { contentType: 'image/png', bytesBase64: 'A'.repeat(3_000_000) },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(bulky.status, 422);
+  assert.equal(bulky.json.error.code, 'invalid_asset');
   const agent = core.credentials.issue({ audience: 'agent', unitId: 'root:builder', capabilities: ['editor.write'], attached: false, expiresAt: '2027-01-01T00:00:00.000Z' });
   const denied = await call(core.http.port, 'PUT', `/api/v1/blueprint/boards/${created.json.data.id}`, {
     token: agent.token,
@@ -555,7 +579,7 @@ function call(port, method, target, { token = null, body = undefined, headers = 
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
         const json = raw.length > 0 && String(res.headers['content-type'] ?? '').includes('json') ? JSON.parse(raw) : null;
-        resolve({ status: res.statusCode, raw, json });
+        resolve({ status: res.statusCode, raw, json, headers: res.headers });
       });
     });
     req.on('error', reject);

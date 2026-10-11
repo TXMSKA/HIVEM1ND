@@ -123,6 +123,7 @@ function bodyLimitFor(route, pathname) {
   if (pathname === '/mcp') return REPLACEMENT_LIMIT;
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
+  if (route?.method === 'POST' && route.template === '/editors/:resourceId/assets') return REPLACEMENT_LIMIT;
   return JSON_LIMIT;
 }
 
@@ -400,11 +401,13 @@ export async function createHttpServer(options) {
       return;
     }
     if (outcome.raw) {
-      res.writeHead(outcome.status ?? 200, {
+      const headers = {
         'content-type': outcome.type,
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
-      });
+      };
+      if (outcome.etag) headers.etag = `"${outcome.etag}"`;
+      res.writeHead(outcome.status ?? 200, headers);
       res.end(outcome.raw);
       return;
     }
@@ -841,7 +844,7 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/editors/:resourceId/assets') return { status: 201, body: await createAsset(domain, id, body) };
   if (route.template === '/editors/:resourceId/assets/:assetId') {
     const asset = await readAsset(domain, id, params.assetId);
-    return { status: 200, raw: asset.bytes, type: asset.type };
+    return { status: 200, raw: asset.bytes, type: asset.type, etag: asset.revision };
   }
   throw new CoreError(404, 'not_found', 'The route does not exist.');
 }

@@ -630,8 +630,21 @@ export async function createAsset(context, id, input) {
     revision,
     url: `/api/v1/editors/${id}/assets/${name}`,
   };
-  await commit(context, [record(file, null, stored.bytes)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
+  await commit(context, [record(file, null, stored.bytes), await rememberAsset(context, id, name)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
   return asset;
+}
+
+function assetRegistryFile(context, id) {
+  return path.join(context.paths.mind, 'user', 'relay', 'editors', `${id}.assets.json`);
+}
+
+async function rememberAsset(context, id, name) {
+  const file = assetRegistryFile(context, id);
+  const loaded = await loadBytes(file);
+  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-asset-registry-v1', resourceId: id, assets: [] };
+  if (!Array.isArray(value.assets)) value.assets = [];
+  if (!value.assets.includes(name)) value.assets.push(name);
+  return record(file, loaded.revision, jsonBytes(value));
 }
 
 async function convertedAsset(context, bytes, kind) {
@@ -715,13 +728,18 @@ export async function readAsset(context, id, assetId) {
   const file = inside(found.project.localPath, `docs/flows/assets/${assetId}`);
   const document = await loadBytes(inside(found.project.localPath, found.entry.path));
   const text = document.bytes ? document.bytes.toString('utf8') : '';
-  if (!text.includes(`docs/flows/assets/${assetId}`) && !text.includes(`assets/${assetId}`)) fail(404, 'not_found', 'The asset is not referenced.');
+  const registry = await loadBytes(assetRegistryFile(context, id));
+  const listed = registry.bytes ? (parseJson(registry.bytes).assets ?? []) : [];
+  const referenced = text.includes(`docs/flows/assets/${assetId}`) || text.includes(`assets/${assetId}`);
+  if (!listed.includes(assetId) && !referenced) fail(404, 'not_found', 'The asset is not referenced.');
   await contained(found.project.localPath, file);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(404, 'not_found', 'The asset does not exist.');
+  const head = loaded.bytes.subarray(0, 64).toString('utf8').trimStart().toLowerCase();
+  if (head.startsWith('<svg') || head.startsWith('<html') || head.startsWith('<!doctype')) fail(422, 'invalid_asset', 'The asset is not a verified image.');
   const kind = sniff(loaded.bytes);
-  if (!kind) fail(422, 'invalid_asset', 'The asset is not a verified image.');
-  return { bytes: loaded.bytes, type: kind.type };
+  if (!kind || !assetId.endsWith(`.${kind.ext}`)) fail(422, 'invalid_asset', 'The asset is not a verified image.');
+  return { bytes: loaded.bytes, type: kind.type, revision: hashBytes(loaded.bytes) };
 }
 
 function clock(context) {
