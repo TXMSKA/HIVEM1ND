@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, writeAttachments } from '../engine/service/editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
@@ -315,6 +315,23 @@ test('a Void document keeps orig, one history step and unknown fields', async (t
   assert.equal(history.length, 1);
   assert.equal(JSON.parse(history[0]).lang, 'es');
   assert.equal(JSON.parse(history[0]).by, undefined);
+  const titled = structuredClone(saved.document);
+  titled.title = 'Release notes revised';
+  titled.pages[0].margin = { keep: true };
+  const renamed = await replaceText(context, created.id, { document: titled, expectedRevision: saved.revision });
+  assert.equal(renamed.document.title, 'Release notes revised');
+  assert.equal(renamed.document.rev, 1);
+  assert.equal(renamed.document.pages[0].margin.keep, true);
+  assert.equal((await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n').length, 1);
+  const droppedPage = structuredClone(renamed.document);
+  delete droppedPage.pages[0].margin;
+  await assert.rejects(() => replaceText(context, created.id, { document: droppedPage, expectedRevision: renamed.revision }), { status: 409, code: 'unsupported_fields_lost' });
+  const numeric = structuredClone(renamed.document);
+  numeric.pages[0].en = 1;
+  await assert.rejects(() => replaceText(context, created.id, { document: numeric, expectedRevision: renamed.revision }), { status: 422, code: 'invalid_document' });
+  const many = structuredClone(renamed.document);
+  many.pages = Array.from({ length: 2001 }, (_, index) => ({ k: `p-${index}`, en: 'x' }));
+  await assert.rejects(async () => validateText(many), { status: 422, code: 'invalid_document' });
   const quiet = await observeExternal(context, created.id);
   assert.equal(quiet.changed, false);
   assert.equal((await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n').length, 1);
@@ -342,6 +359,7 @@ test('ranges reject split characters and tags, and a proposal accepts once', asy
     expectedRevision: removed.editor.revision, mode: 'propose', threadId: commented.thread.id, expectedCommentsRevision: commented.commentsRevision,
   });
   assert.equal(proposed.proposal.state, 'pending');
+  await assert.rejects(() => answerProposal(context, created.id, proposed.proposal.id, { decision: 'approve', expectedRevision: removed.editor.revision, expectedCommentsRevision: proposed.proposal.commentsRevision }), { status: 422, code: 'invalid_body' });
   assert.equal((await readEditor(context, created.id)).document.pages[0].en, removed.editor.document.pages[0].en);
   const accepted = await answerProposal(context, created.id, proposed.proposal.id, { decision: 'accept', expectedRevision: removed.editor.revision, expectedCommentsRevision: proposed.proposal.commentsRevision });
   assert.equal(accepted.proposal.state, 'accepted');
@@ -360,7 +378,7 @@ test('ranges reject split characters and tags, and a proposal accepts once', asy
   const moved = structuredClone(accepted.editor.document);
   moved.pages[0].en = `${moved.pages[0].en} more`;
   const edited = await replaceText(context, created.id, { document: moved, expectedRevision: accepted.editor.revision });
-  await assert.rejects(() => answerProposal(context, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: edited.revision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 409, code: 'proposal_stale' });
+  await assert.rejects(() => answerProposal(context, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: stale.proposal.baseRevision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 409, code: 'proposal_stale' });
   await assert.rejects(() => answerProposal({ ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } }, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: edited.revision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 403, code: 'forbidden' });
 });
 
@@ -439,6 +457,8 @@ test('Watch follows only its owner and expires after fifteen minutes', async (t)
   assert.equal(owner.buffer.some((frame) => frame.name === 'watch.changed'), true);
   assert.equal(other.buffer.some((frame) => frame.name === 'watch.changed'), false);
   stopWatch(watch, opened.watchId);
+  assert.equal(owner.buffer.at(-1).data.data.state, 'stopped');
+  assert.equal(owner.buffer.at(-1).data.data.watchId, opened.watchId);
   const before = owner.buffer.length;
   recordActivity(watch, { unitId: 'root:builder', resourceId: 'c', at: '2026-10-10T12:00:00.000Z' });
   assert.equal(owner.buffer.length, before);
@@ -448,7 +468,12 @@ test('Watch follows only its owner and expires after fifteen minutes', async (t)
   assert.equal(resolveActivity(watch, 'root:builder', now), null);
   recordActivity(watch, { unitId: 'root:builder', resourceId: 'old', at: '2026-10-10T11:40:00.000Z' });
   assert.equal(resolveActivity(watch, 'root:builder', now), null);
+  const firstWatch = await startWatch(watch, { viewerId: 'viewer-owner', token: 'owner-token', unitId: 'root:builder' });
+  const secondWatch = await startWatch(watch, { viewerId: 'viewer-owner', token: 'owner-token', unitId: 'root:other' });
+  assert.throws(() => stopWatch(watch, firstWatch.watchId, 'viewer-other'), { code: 'forbidden' });
   assert.equal(disposeViewer(watch, 'owner-token'), true);
+  assert.equal(watch.viewers.has(firstWatch.watchId), false);
+  assert.equal(watch.viewers.has(secondWatch.watchId), false);
   t.after(() => {});
 });
 

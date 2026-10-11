@@ -45,7 +45,11 @@ export async function start(watch, input) {
     resourceId: input.resourceId ?? null, chatId: input.chatId ?? null, enabled: true, follow: null,
   };
   watch.viewers.set(watchId, record);
-  if (record.token) watch.byToken.set(record.token, watchId);
+  if (record.token) {
+    const owned = watch.byToken.get(record.token) ?? new Set();
+    owned.add(watchId);
+    watch.byToken.set(record.token, owned);
+  }
   const latest = resolveActivity(watch, input.unitId, watch.now());
   const matched = latest && (!record.resourceId || latest.resourceId === record.resourceId);
   if (matched) record.follow = { at: latest.at, resourceId: latest.resourceId };
@@ -53,12 +57,13 @@ export async function start(watch, input) {
   return { watchId, state: matched ? 'watching' : 'waiting', unitId: input.unitId, resourceId: matched ? latest.resourceId : (input.resourceId ?? null) };
 }
 
-export function stop(watch, watchId) {
+export function stop(watch, watchId, viewerId = null) {
   const record = watch.viewers.get(watchId);
   if (!record) return false;
+  if (viewerId && record.viewerId !== viewerId) fail(403, 'forbidden', 'The watch belongs to another viewer.');
   record.enabled = false;
   record.follow = null;
-  emitWatch(watch, record, 'waiting');
+  emitWatch(watch, record, 'stopped');
   return true;
 }
 
@@ -81,11 +86,12 @@ export function clearResource(watch, resourceId) {
 }
 
 export function disposeViewer(watch, token) {
-  const watchId = watch.byToken.get(token);
-  if (!watchId) return false;
-  watch.viewers.delete(watchId);
+  const owned = watch.byToken.get(token);
+  if (!owned) return false;
+  const ids = owned instanceof Set ? [...owned] : [owned];
+  for (const watchId of ids) watch.viewers.delete(watchId);
   watch.byToken.delete(token);
-  return true;
+  return ids.length > 0;
 }
 
 export function startResourceWatch(watch, id, file) {
@@ -111,6 +117,7 @@ function emitWatch(watch, record, state) {
     viewerId: record.viewerId,
     resourceId: record.follow?.resourceId ?? record.resourceId ?? null,
     data: {
+      watchId: record.watchId,
       viewerId: record.viewerId,
       state,
       unitId: record.unitId,

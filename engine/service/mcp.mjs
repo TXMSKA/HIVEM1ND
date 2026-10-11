@@ -2,6 +2,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, isUuid } from './identity.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
+import { recordActivity } from './watch.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
 
 const PROTOCOL = '2025-03-26';
@@ -76,7 +77,7 @@ export async function callTool(context, name, args) {
   }
   if (name === 'blueprint_open' || name === 'void_open') {
     const value = await readEditor(context, args.resourceId);
-    noteActivity(context, args.resourceId, null);
+    noteActivity(context, args.resourceId, null, name === 'void_open' ? 'void' : 'blueprint');
     return value;
   }
   if (MUTATIONS.has(name)) return mutateTool(context, name, args);
@@ -95,7 +96,7 @@ async function mutateTool(context, name, args) {
     requestId: args.requestId,
   }, async (receipt) => {
     const value = await runMutation(context, name, args);
-    noteActivity(context, args.resourceId, args.nodeId ?? args.threadId ?? null);
+    noteActivity(context, args.resourceId, focusFor(name, args), name.startsWith('void_') ? 'void' : 'blueprint');
     await atomicWrite(context.store, path.join(context.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
       ...receipt,
       status: 200,
@@ -195,9 +196,16 @@ async function runMutation(context, name, args) {
   throw new CoreError(404, 'not_found', 'The tool does not exist.');
 }
 
-function noteActivity(context, resourceId, focus) {
-  publishDomainEvents(context, [{
-    name: 'editor.activity',
-    data: { resourceId, focus, unitId: context.credential?.unitId ?? context.principal?.unitId ?? null },
-  }]);
+function focusFor(name, args) {
+  if (name.startsWith('void_') && args.k) return { k: args.k, lang: args.lang ?? null, start: args.start ?? null, end: args.end ?? null };
+  if (args.nodeId) return { screenId: args.screenId ?? null, nodeId: args.nodeId };
+  return null;
+}
+
+function noteActivity(context, resourceId, focus, kind) {
+  const unitId = context.credential?.unitId ?? context.principal?.unitId ?? null;
+  const at = new Date(context.now?.() ?? Date.now()).toISOString();
+  const data = { resourceId, kind, unitId, at, focus };
+  publishDomainEvents(context, [{ name: 'editor.activity', resourceId, unitId, data }]);
+  if (context.watch && unitId) recordActivity(context.watch, { unitId, resourceId, at, focus });
 }

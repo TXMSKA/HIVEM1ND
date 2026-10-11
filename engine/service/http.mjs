@@ -785,9 +785,13 @@ function domainContext(options, credential, bus) {
   };
 }
 
-function noteActivity(domain, resourceId) {
-  if (!domain.watch || !resourceId) return;
-  recordActivity(domain.watch, { unitId: domain.principal?.unitId, resourceId, at: new Date(domain.now()).toISOString() });
+function noteActivity(domain, resourceId, kind = 'blueprint', focus = null) {
+  if (!resourceId) return;
+  const at = new Date(domain.now()).toISOString();
+  const unitId = domain.principal?.unitId ?? 'root:master';
+  const data = { resourceId, kind, unitId, at, focus };
+  domain.bus?.emit({ name: 'editor.activity', resourceId, unitId, data });
+  if (domain.watch) recordActivity(domain.watch, { unitId, resourceId, at, focus });
 }
 
 async function editorRoute(route, domain, params, query, body) {
@@ -807,12 +811,12 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/blueprint/boards/:resourceId' && route.method === 'PUT') return { status: 200, body: await replaceBoard(domain, id, body) };
   if (route.template === '/void/texts/:resourceId' && route.method === 'PUT') {
     const saved = await replaceText(domain, id, body);
-    noteActivity(domain, id);
+    noteActivity(domain, id, 'void');
     return { status: 200, body: saved };
   }
   if (route.template === '/void/texts/:resourceId/ranges') {
     const saved = await replaceRange(domain, id, body);
-    noteActivity(domain, id);
+    noteActivity(domain, id, 'void', { k: body?.k ?? null, lang: body?.lang ?? null, start: body?.start ?? null, end: body?.end ?? null });
     return { status: 200, body: saved };
   }
   if (route.template === '/void/texts/:resourceId/proposals') return { status: 200, body: await listProposals(domain, id, query) };
@@ -825,12 +829,12 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/editors/:resourceId/comments' && route.method === 'GET') return { status: 200, body: await listComments(domain, id, query) };
   if (route.template === '/editors/:resourceId/comments' && route.method === 'POST') {
     const saved = await createComment(domain, id, body);
-    noteActivity(domain, id);
+    noteActivity(domain, id, route.template.startsWith('/void/') ? 'void' : 'blueprint');
     return { status: 201, body: saved };
   }
   if (route.template === '/editors/:resourceId/comments/:threadId/replies') {
     const saved = await replyComment(domain, id, params.threadId, body);
-    noteActivity(domain, id);
+    noteActivity(domain, id, 'blueprint');
     return { status: 200, body: saved };
   }
   if (route.template === '/editors/:resourceId/comments/:threadId') return { status: 200, body: await setCommentStatus(domain, id, params.threadId, body) };
@@ -845,7 +849,8 @@ async function editorRoute(route, domain, params, query, body) {
 async function watchRoute(route, domain, params, body, credential) {
   if (!domain.watch) throw new CoreError(503, 'service_unavailable', 'That capability is not available yet.');
   if (route.method === 'DELETE') {
-    stopWatch(domain.watch, params.watchId);
+    const stopped = stopWatch(domain.watch, params.watchId, credential.viewerId);
+    if (!stopped) throw new CoreError(404, 'not_found', 'The watch does not exist.');
     return { status: 204, body: null };
   }
   let attached = true;
