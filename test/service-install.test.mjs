@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -10,7 +11,7 @@ import { createWizardServer } from '../gui/server.mjs';
 import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
-import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installPayload, main, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -567,4 +568,65 @@ test('release packaging uses the served browser modules', async (t) => {
   await assert.rejects(() => assertReleaseAssets(app), /browser asset extra\.mjs/);
   await rm(path.join(app, 'main.mjs'));
   await assert.rejects(() => assertReleaseAssets(app), /browser asset main\.mjs/);
+});
+
+test('the generated installer entry activates a temporary kit and a dry-run does not', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const local = path.join(root, 'local');
+  const payload = path.join(root, 'payload');
+  await mkdir(path.join(payload, 'cli'), { recursive: true });
+  await mkdir(path.join(payload, 'runtime'), { recursive: true });
+  const cli = "process.stdout.write('setup');\n";
+  await writeFile(path.join(payload, 'cli', 'index.mjs'), cli);
+  await writeFile(path.join(payload, 'runtime', 'node.exe'), Buffer.from('runtime'));
+  const files = [
+    { name: 'cli/index.mjs', data: Buffer.from(cli) },
+    { name: 'runtime/node.exe', data: Buffer.from('runtime') },
+  ];
+  const manifest = manifestDocument(files);
+  manifest.identity = { mind: 'mind-a', service: 'service-a' };
+  await writeFile(path.join(payload, 'manifest.json'), `${JSON.stringify(manifest)}\n`);
+  await writeFile(path.join(payload, 'installer.mjs'), installerEntry());
+  assert.match(installerScript(), /%\*/);
+  const recorder = path.join(root, 'record.mjs');
+  const recordFile = path.join(root, 'recorded.txt');
+  await writeFile(recorder, "import { writeFile } from 'node:fs/promises';\nawait writeFile(process.env.RECORD_PATH, process.argv.slice(2).join('\\n'));\n");
+  const env = { ...process.env, LOCALAPPDATA: local, RECORD_PATH: recordFile, HIVEM1ND_REGISTRATION_RUNNER: recorder };
+  const dry = spawnSync(process.execPath, [path.join(payload, 'installer.mjs'), '--dry-run'], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /dry-run/);
+  assert.match(dry.stdout, /action: plan/);
+  assert.match(dry.stdout, /hivem1nd-kit/);
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd-kit')), { code: 'ENOENT' });
+  const installed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const recorded = await readFile(recordFile, 'utf8');
+  assert.match(recorded, /init/);
+  assert.match(recorded, /--gui/);
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd')), { code: 'ENOENT' });
+  const target = path.join(root, 'junction-target');
+  const linked = path.join(root, 'linked-local');
+  await mkdir(target, { recursive: true });
+  await mkdir(linked, { recursive: true });
+  await symlink(target, path.join(linked, 'Cosmic'), 'junction');
+  const blocked = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
+    env: { ...env, LOCALAPPDATA: linked },
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  assert.notEqual(blocked.status, 0);
+  await assert.rejects(() => access(path.join(target, 'hivem1nd-kit')), { code: 'ENOENT' });
+  const mind = path.join(local, 'Cosmic', 'hivem1nd');
+  await mkdir(mind, { recursive: true });
+  await writeFile(path.join(mind, 'keep.txt'), 'mind');
+  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  await writeFile(path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json'), JSON.stringify({ mind: 'other', service: 'other' }));
+  const refused = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.notEqual(refused.status, 0);
+  assert.match(`${refused.stderr}\n${refused.stdout}`, /does not match/);
+  assert.equal(await readFile(path.join(mind, 'keep.txt'), 'utf8'), 'mind');
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
 });

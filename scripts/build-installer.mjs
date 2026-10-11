@@ -371,34 +371,136 @@ export async function verifyInstalled(packageRoot, packages) {
 }
 
 export function installerScript() {
-  return '@echo off\r\n"%~dp0runtime\\node.exe" "%~dp0installer.mjs"\r\n';
+  return '@echo off\r\n"%~dp0runtime\\node.exe" "%~dp0installer.mjs" %*\r\n';
 }
 
 export function installerEntry() {
-  return `import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const manifest = JSON.parse(await readFile(path.join(here, 'manifest.json'), 'utf8'));
-if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {
-  throw new Error('The installer manifest is not valid.');
-}
-for (const file of manifest.files) {
-  if (file.name === 'manifest.json') continue;
-  const bytes = await readFile(path.join(here, file.name));
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  if (digest !== file.sha256 || bytes.length !== file.bytes) {
-    throw new Error('A payload file does not match the manifest.');
-  }
-}
-if (process.argv.includes('--dry-run') || manifest.label === 'dry-run') {
-  console.log('dry-run');
-} else {
-  console.log('installer ready');
-}
-`;
+  return [
+    "import { createHash, randomBytes } from 'node:crypto';",
+    "import { spawn } from 'node:child_process';",
+    "import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    '',
+    'const here = path.dirname(fileURLToPath(import.meta.url));',
+    "const manifest = JSON.parse(await readFile(path.join(here, 'manifest.json'), 'utf8'));",
+    "if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {",
+    "  throw new Error('The installer manifest is not valid.');",
+    '}',
+    'for (const file of manifest.files) {',
+    "  if (file.name === 'manifest.json') continue;",
+    '  const bytes = await readFile(path.join(here, file.name));',
+    "  const digest = createHash('sha256').update(bytes).digest('hex');",
+    '  if (digest !== file.sha256 || bytes.length !== file.bytes) {',
+    "    throw new Error('A payload file does not match the manifest.');",
+    '  }',
+    '}',
+    'const localAppData = process.env.LOCALAPPDATA;',
+    "if (!localAppData || !path.win32.isAbsolute(localAppData)) throw new Error('LOCALAPPDATA must be an absolute path.');",
+    "const cosmic = path.resolve(localAppData, 'Cosmic');",
+    "const destination = path.join(cosmic, 'hivem1nd-kit');",
+    "const activeFile = path.join(cosmic, 'hivem1nd-service', 'active.json');",
+    'await assertNoAncestorLink(destination, localAppData);',
+    'let active = null;',
+    'try {',
+    "  const state = await lstat(activeFile);",
+    "  if (state.isSymbolicLink()) throw new Error('Refusing to follow a link.');",
+    "  active = JSON.parse(await readFile(activeFile, 'utf8'));",
+    '} catch (error) {',
+    "  if (error?.code !== 'ENOENT') throw error;",
+    '}',
+    'if (active && (active.mind !== manifest.identity?.mind || active.service !== manifest.identity?.service)) {',
+    "  throw new Error('The active mind or service does not match this payload.');",
+    '}',
+    "const command = [path.join(destination, 'cli', 'index.mjs'), 'init', '--gui'];",
+    "const dryRun = process.argv.includes('--dry-run') || manifest.label === 'dry-run';",
+    'if (dryRun) {',
+    "  console.log('dry-run');",
+    "  console.log('destination: ' + destination);",
+    "  console.log('action: plan');",
+    "  console.log('command: ' + command.join(' '));",
+    '  process.exit(0);',
+    '}',
+    "if (!manifest.files.some((file) => file.name === 'cli/index.mjs')) throw new Error('The payload has no setup command.');",
+    'const nonce = randomBytes(4).toString(\'hex\');',
+    "const stage = path.join(cosmic, 'hivem1nd-kit.3.0.0.' + nonce + '.stage');",
+    'let backup = null;',
+    'let moved = false;',
+    'let created = false;',
+    'try {',
+    '  await mkdir(cosmic, { recursive: true });',
+    '  await assertNoAncestorLink(stage, localAppData);',
+    '  await mkdir(stage);',
+    '  created = true;',
+    '  const stageReal = await realpath(stage);',
+    '  for (const file of manifest.files) {',
+    "    if (file.name === 'manifest.json' || file.name === 'installer.mjs' || file.name === 'install.cmd') continue;",
+    '    const target = path.resolve(stageReal, file.name);',
+    '    const relative = path.relative(stageReal, target);',
+    "    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Refusing a path outside the install root.');",
+    '    await mkdir(path.dirname(target), { recursive: true });',
+    '    await writeFile(target, await readFile(path.join(here, file.name)));',
+    '  }',
+    '  let existing = null;',
+    '  try {',
+    '    existing = await lstat(destination);',
+    '  } catch (error) {',
+    "    if (error?.code !== 'ENOENT') throw error;",
+    '  }',
+    "  if (existing?.isSymbolicLink()) throw new Error('Refusing to activate over a link.');",
+    '  if (existing) {',
+    "    backup = path.join(cosmic, 'hivem1nd-kit.' + nonce + '.backup');",
+    '    await rename(destination, backup);',
+    '    moved = true;',
+    '  }',
+    '  await rename(stage, destination);',
+    '  created = false;',
+    '  try {',
+    '    const runner = process.env.HIVEM1ND_REGISTRATION_RUNNER;',
+    "    const executable = runner ? process.execPath : path.join(destination, 'runtime', 'node.exe');",
+    '    const args = runner ? [runner, ...command] : command;',
+    "    const child = spawn(executable, args, { shell: false, windowsHide: true, cwd: destination, stdio: 'inherit' });",
+    '    const status = await new Promise((resolve, reject) => {',
+    "      child.once('error', reject);",
+    "      child.once('exit', (code) => resolve(code ?? 1));",
+    '    });',
+    "    if (status !== 0) throw new Error('Setup did not finish.');",
+    '  } catch (error) {',
+    "    const failed = path.join(cosmic, 'hivem1nd-kit.' + nonce + '.failed');",
+    '    await rename(destination, failed).catch(() => {});',
+    '    if (moved && backup) await rename(backup, destination).catch(() => {});',
+    '    await rm(failed, { recursive: true, force: true }).catch(() => {});',
+    '    throw error;',
+    '  }',
+    "  console.log('installed: ' + destination);",
+    '} catch (error) {',
+    '  if (moved && backup) {',
+    '    const occupying = await lstat(destination).catch(() => null);',
+    '    if (!occupying) await rename(backup, destination).catch(() => {});',
+    '  }',
+    '  throw error;',
+    '} finally {',
+    '  if (created) await rm(stage, { recursive: true, force: true }).catch(() => {});',
+    '}',
+    '',
+    'async function assertNoAncestorLink(target, stop) {',
+    '  let current = path.resolve(target);',
+    '  const base = path.resolve(stop);',
+    '  while (true) {',
+    '    try {',
+    '      const state = await lstat(current);',
+    "      if (state.isSymbolicLink()) throw new Error('Refusing to follow a link.');",
+    '    } catch (error) {',
+    "      if (error?.code !== 'ENOENT') throw error;",
+    '    }',
+    '    if (current === base) return;',
+    '    const parent = path.dirname(current);',
+    "    if (parent === current) throw new Error('Refusing to leave the install root.');",
+    '    current = parent;',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
 }
 
 export function manifestDocument(files, runtime = 'unverified', label = 'release') {
