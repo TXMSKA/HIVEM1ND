@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { CoreError, canonicalJson, isUuid } from './identity.mjs';
 import { safeError } from './security.mjs';
-import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment } from './editors.mjs';
+import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
@@ -82,8 +82,8 @@ function valueMatches(rule, value) {
 }
 
 export async function callTool(context, name, args) {
-  if (context.credential?.audience === 'agent' && context.credential.attached !== true) {
-    throw new CoreError(403, 'not_attached', 'The agent is not attached to that resource.');
+  if (typeof args?.resourceId === 'string' && (name.startsWith('blueprint_') || name.startsWith('void_'))) {
+    await requireAttachment(context, args.resourceId);
   }
   if (name === 'blueprint_open' || name === 'void_open') {
     const value = await readEditor(context, args.resourceId);

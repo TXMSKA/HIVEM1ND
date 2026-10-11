@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -126,6 +126,7 @@ test('an identical MCP request id replays the original editor success', async (t
     bus: createEventBus({ now: () => fixture.clock.now, machine: fixture.paths.machine }),
   };
   const created = await createBoard(context, { project: 'shop', document });
+  await bindUnit(fixture, created.id, 'project:shop:executor');
   const args = {
     resourceId: created.id,
     nodeId: document.screens[0].root.id,
@@ -143,6 +144,63 @@ test('an identical MCP request id replays the original editor success', async (t
   assert.deepEqual(JSON.parse(second.result.content[0].text).data, JSON.parse(first.result.content[0].text).data);
   assert.equal(context.store.events.filter((event) => event.name === 'editor.activity').length, activity);
 });
+
+test('an agent attached to one editor cannot open another, and delivery follows the sidecar', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const localPath = path.join(fixture.paths.localDirectory, 'shop');
+  await mkdir(localPath, { recursive: true });
+  const context = {
+    store: fixture.store,
+    paths: fixture.paths,
+    projects: [{ name: 'shop', localPath }],
+    now: () => fixture.clock.now,
+    credential: { audience: 'agent', unitId: 'project:shop:executor', attached: true, token: 'agent-token' },
+    principal: { unitId: 'project:shop:executor', audience: 'agent', stableId: 'agent-1' },
+  };
+  const first = newSketch('one', 'Owned board');
+  addScreen(first, { title: 'Owned', x: 0, y: 0 });
+  const second = newSketch('two', 'Foreign board secret');
+  addScreen(second, { title: 'Foreign', x: 0, y: 0 });
+  const owned = await createBoard({ ...context, principal: { unitId: 'root:master', audience: 'desktop' } }, { project: 'shop', document: first });
+  const foreign = await createBoard({ ...context, principal: { unitId: 'root:master', audience: 'desktop' } }, { project: 'shop', document: second });
+  await bindUnit(fixture, owned.id, 'project:shop:executor');
+  const opened = await dispatch(context, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: owned.id } } });
+  assert.equal(opened.result.isError, false);
+  assert.equal(JSON.parse(opened.result.content[0].text).data.attached.includes('project:shop:executor'), true);
+  const stolen = await dispatch(context, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: foreign.id } } });
+  assert.equal(stolen.result.isError, true);
+  assert.equal(JSON.stringify(stolen).includes('Foreign board secret'), false);
+  const desktop = await dispatch({ ...context, principal: { unitId: 'root:master', audience: 'desktop' }, credential: { audience: 'desktop', token: 'desktop' } }, {
+    jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: foreign.id } },
+  });
+  assert.equal(desktop.result.isError, false);
+  const bus = createEventBus({ now: () => fixture.clock.now, machine: fixture.paths.machine, mind: fixture.paths.mind });
+  const seen = [];
+  const agent = { stableId: 'agent-1', audience: 'agent', unitId: 'project:shop:executor', resourceIds: [foreign.id, owned.id] };
+  const subscriber = bus.subscribe(agent, {}, (frame) => seen.push(frame));
+  bus.emit({ name: 'blueprint.changed', resourceId: foreign.id, data: { resourceId: foreign.id, revision: 'a'.repeat(64), title: 'Foreign board secret' } });
+  bus.emit({ name: 'blueprint.changed', resourceId: owned.id, data: { resourceId: owned.id, revision: 'b'.repeat(64) } });
+  assert.deepEqual(seen.map((frame) => frame.data.data.resourceId), [owned.id]);
+  await bindUnit(fixture, owned.id, 'project:shop:other');
+  bus.emit({ name: 'blueprint.changed', resourceId: owned.id, data: { resourceId: owned.id, revision: 'c'.repeat(64) } });
+  assert.equal(seen.length, 1);
+  const cursor = `${seen[0].id.slice(0, seen[0].id.lastIndexOf(':'))}:0`;
+  const replay = bus.replay(subscriber, cursor);
+  assert.equal(replay.events.length, 0);
+  assert.equal(JSON.stringify(replay).includes('Foreign board secret'), false);
+  bus.release(subscriber);
+});
+
+async function bindUnit(fixture, resourceId, unitId) {
+  const directory = path.join(fixture.paths.mind, 'user', 'relay', 'editors');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${resourceId}.json`), `${JSON.stringify({
+    format: 'hivem1nd-editor-binding-v1',
+    resourceId,
+    attached: [unitId],
+  })}\n`);
+}
 
 function call(port, method, target, { token = null, body = undefined, raw = null, headers = {} } = {}) {
   const payload = raw !== null ? Buffer.from(raw) : body === undefined ? null : Buffer.from(JSON.stringify(body));

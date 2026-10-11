@@ -214,7 +214,7 @@ export async function writeBeat(options, state) {
 export async function composeCore(options) {
   if (options.store && options.projects) bindProjects(options.store, options.projects);
   const paths = servicePathsFor(options);
-  const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine });
+  const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine, mind: paths.mind });
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
   const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
   const runtime = await openServiceSync({ ...options, paths }, paths);

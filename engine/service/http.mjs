@@ -15,7 +15,7 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { enqueueStart, readStartRequest, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
@@ -253,7 +253,7 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
 }
 
 export async function createHttpServer(options) {
-  const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP' });
+  const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: options.paths?.machine ?? 'DESKTOP', mind: options.paths?.mind ?? null });
   const credentials = options.credentials;
   const viewers = new Map();
   const watch = createWatch({ bus, now: options.now ?? (() => Date.now()) });
@@ -702,7 +702,7 @@ async function agentScope(route, domain, credential, params, body) {
     return { scope: 'own', unitId };
   }
   if (params.resourceId && (route.operation === 'editor.read' || route.operation === 'editor.write' || route.operation === 'comment.write')) {
-    if (!(await resourceAttached(domain, params.resourceId, unitId))) throw new CoreError(403, 'forbidden', 'The agent is not attached to that resource.');
+    await requireAttachment(domain, params.resourceId);
     return { scope: 'own', unitId, attached: true };
   }
   if (route.operation === 'read') return { scope: 'own', unitId };
@@ -715,24 +715,6 @@ async function approvalOwner(domain, approvalId) {
     return JSON.parse(bytes).unitId ?? null;
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-async function resourceAttached(domain, resourceId, unitId) {
-  const binding = path.join(domain.paths.mind, 'user', 'relay', 'editors', `${resourceId}.json`);
-  try {
-    const parsed = JSON.parse(await readFile(binding, 'utf8'));
-    return (parsed.attached ?? []).includes(unitId);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  try {
-    const catalog = JSON.parse(await readFile(path.join(domain.paths.mind, 'user', 'gui', 'resources.json'), 'utf8'));
-    const entry = (catalog.resources ?? []).find((item) => item.id === resourceId);
-    return (entry?.attached ?? []).includes(unitId);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
     throw error;
   }
 }

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { CoreError } from './identity.mjs';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { CoreError, isUuid } from './identity.mjs';
 import { DESKTOP } from './security.mjs';
 
 export const EVENT_NAMES = [
@@ -13,6 +15,7 @@ export const EVENT_NAMES = [
 ];
 
 const GLOBAL_EVENTS = new Set(['service.changed', 'settings.changed', 'sync.changed', 'sync.conflict', 'stream.reset', 'stream.ready']);
+const EDITOR_EVENTS = new Set(['blueprint.changed', 'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed', 'editor.asset.created', 'editor.activity']);
 const VIEWER_EVENTS = new Set(['viewer.changed', 'watch.changed']);
 const SECRET_KEYS = new Set(['endpoint', 'token', 'key', 'code', 'nativeSessionId', 'authorization', 'secret', 'pipe']);
 const RETAIN_MS = 600000;
@@ -23,7 +26,7 @@ export function revisionRelation(left, right) {
   return left === right ? 'equal' : 'different';
 }
 
-export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', startupId = randomUUID() } = {}) {
+export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', startupId = randomUUID(), mind = null } = {}) {
   let sequence = 0;
   const ring = [];
   const operations = new Set();
@@ -170,7 +173,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
 
   function allowed(subscriber, record) {
     if (subscriber.closed) return false;
-    if (!visible(subscriber.principal, record)) return false;
+    if (!visible(subscriber.principal, record, mind)) return false;
     if (VIEWER_EVENTS.has(record.name)) return Boolean(subscriber.principal.viewerId) && subscriber.principal.viewerId === record.viewerId;
     if (!matches(subscriber.filters ?? {}, record)) return false;
     return true;
@@ -200,14 +203,32 @@ function present(principal, record) {
   };
 }
 
-function visible(principal, record) {
+function visible(principal, record, mind) {
   if (principal.audience !== 'agent') return true;
   if (record.name === 'settings.changed' || record.name === 'sync.changed' || record.name === 'sync.conflict' || record.name === 'service.changed') return false;
+  if (EDITOR_EVENTS.has(record.name)) return liveAttached(mind, record.resourceId).includes(principal.unitId);
   if (record.name.startsWith('session') || record.name.startsWith('approval')) return record.unitId === principal.unitId;
   if (record.unitId && record.unitId !== principal.unitId) return false;
   if (record.chatId && !(principal.chatIds ?? []).includes(record.chatId)) return false;
   if (record.resourceId && !(principal.resourceIds ?? []).includes(record.resourceId)) return false;
   return true;
+}
+
+function liveAttached(root, resourceId) {
+  if (!root || !isUuid(resourceId)) return [];
+  const sidecar = readJsonFile(path.join(root, 'user', 'relay', 'editors', `${resourceId}.json`));
+  if (Array.isArray(sidecar?.attached)) return sidecar.attached;
+  const catalog = readJsonFile(path.join(root, 'user', 'gui', 'resources.json'));
+  const entry = (catalog?.resources ?? []).find((item) => item.id === resourceId);
+  return Array.isArray(entry?.attached) ? entry.attached : [];
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function issuedCapabilities(principal) {

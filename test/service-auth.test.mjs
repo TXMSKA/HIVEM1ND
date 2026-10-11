@@ -35,8 +35,8 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   await assert.rejects(async () => authorize(agent, 'mailbox.read', { unitId: 'root:master' }), (error) => error.status === 403);
   assert.equal(authorize(agent, 'task.status', { unitId: 'project:shop:executor-shop' }).allowed, true);
   await assert.rejects(async () => authorize(agent, 'editor.write'), (error) => error.status === 403);
-  const attached = { ...agent, attached: true };
-  assert.equal(authorize(attached, 'editor.write').allowed, true);
+  await assert.rejects(async () => authorize({ ...agent, attached: true }, 'editor.write'), (error) => error.status === 403);
+  assert.equal(authorize(agent, 'editor.write', { attached: true }).allowed, true);
   await assert.rejects(async () => authorize(desktop, 'task.undo', { listener: 'lan' }), (error) => error.status === 403);
   assert.equal(checkPeer('127.0.0.1', LOOPBACK).ok, true);
   assert.equal(checkPeer('::ffff:127.0.0.1', LOOPBACK).ok, true);

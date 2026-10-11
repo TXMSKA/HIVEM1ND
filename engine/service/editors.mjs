@@ -266,7 +266,7 @@ export async function registerResource(context, input) {
   const id = editorId(kind, project.name, relative);
   const existing = catalog.value.resources.find((item) => item.id === id || (item.project === project.name && item.path === relative));
   if (existing) {
-    const current = view(existing, document, loaded.revision);
+    const current = await shown(context, existing, document, loaded.revision);
     current.httpStatus = 200;
     return current;
   }
@@ -281,7 +281,7 @@ export async function registerResource(context, input) {
   };
   const next = { ...catalog.value, resources: [...catalog.value.resources, entry] };
   await commit(context, [record(catalogFile(context), catalog.revision, jsonBytes(next))]);
-  const created = view(entry, document, loaded.revision);
+  const created = await shown(context, entry, document, loaded.revision);
   created.httpStatus = 201;
   return created;
 }
@@ -297,7 +297,8 @@ export async function list(context, query = {}) {
       if (query.kind && entry.kind !== query.kind) continue;
       const file = inside(project.localPath, entry.path);
       const loaded = await loadBytes(file);
-      items.push({ id: entry.id, kind: entry.kind, project: entry.project, path: entry.path, legacyId: entry.legacyId, readOnly: entry.readOnly === true, revision: loaded.revision });
+      const binding = await readAttachments(context, entry.id);
+      items.push({ id: entry.id, kind: entry.kind, project: entry.project, path: entry.path, legacyId: entry.legacyId, readOnly: entry.readOnly === true, revision: loaded.revision, attached: binding.attached });
     }
   }
   return { items };
@@ -314,6 +315,7 @@ async function resourceOf(context, id) {
 }
 
 export async function readEditor(context, id) {
+  await requireAttachment(context, id);
   const { project, entry } = await resourceOf(context, id);
   const file = inside(project.localPath, entry.path);
   await contained(project.localPath, file);
@@ -321,10 +323,10 @@ export async function readEditor(context, id) {
   if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
   if (entry.kind === 'void') {
     connectExternal(context, id, file);
-    return view(entry, validateText(parseJson(loaded.bytes)), loaded.revision);
+    return shown(context, entry, validateText(parseJson(loaded.bytes)), loaded.revision);
   }
-  if (entry.readOnly) return view(entry, null, loaded.revision);
-  return view(entry, validateBoard(parseJson(loaded.bytes)), loaded.revision);
+  if (entry.readOnly) return shown(context, entry, null, loaded.revision);
+  return shown(context, entry, validateBoard(parseJson(loaded.bytes)), loaded.revision);
 }
 
 function indexEntry(document) {
@@ -384,7 +386,7 @@ async function stageBoard(context, found, document, operation, nodeId, screenId)
     record(indexFile(found.project), index.revision, jsonBytes(nextIndex)),
     record(comments.file, comments.revision, jsonBytes(comments.value)),
   ], boardEvents(context, found.entry.id, revision, operation, nodeId, screenId));
-  return view(found.entry, document, revision);
+  return shown(context, found.entry, document, revision);
 }
 
 function deepMerge(target, changes, root = true) {
@@ -433,7 +435,7 @@ export async function createBoard(context, input) {
     record(indexFile(project), index.revision, jsonBytes(nextIndex)),
     record(commentsFile(project, document.id), null, jsonBytes(sidecar)),
   ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null));
-  return view(entry, document, hashBytes(bytes));
+  return shown(context, entry, document, hashBytes(bytes));
 }
 
 async function boardFile(context, id) {
@@ -446,6 +448,7 @@ async function boardFile(context, id) {
 }
 
 export async function replaceBoard(context, id, input) {
+  await requireAttachment(context, id);
   const found = await boardFile(context, id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const document = validateBoard(input.document);
@@ -475,6 +478,7 @@ function findNode(document, nodeId) {
 }
 
 export async function addNode(context, id, input) {
+  await requireAttachment(context, id);
   const found = await boardFile(context, id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const located = findNode(found.document, input.parentId);
@@ -490,6 +494,7 @@ export async function addNode(context, id, input) {
 }
 
 export async function updateNode(context, id, nodeId, input) {
+  await requireAttachment(context, id);
   const found = await boardFile(context, id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const located = findNode(found.document, nodeId);
@@ -501,6 +506,7 @@ export async function updateNode(context, id, nodeId, input) {
 }
 
 export async function removeNode(context, id, nodeId, input) {
+  await requireAttachment(context, id);
   const found = await boardFile(context, id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const located = findNode(found.document, nodeId);
@@ -520,6 +526,7 @@ export async function removeNode(context, id, nodeId, input) {
 }
 
 export async function readComments(context, id) {
+  await requireAttachment(context, id);
   const found = await resourceOf(context, id);
   const loaded = await loadComments(found);
   return { ...projectComments(loaded.value, found.entry.id), commentsRevision: loaded.revision };
@@ -596,6 +603,7 @@ function sniff(bytes) {
 }
 
 export async function createAsset(context, id, input) {
+  await requireAttachment(context, id);
   const found = await resourceOf(context, id);
   const contentType = input?.contentType;
   if (contentType !== 'image/png' && contentType !== 'image/jpeg' && contentType !== 'image/webp') {
@@ -723,6 +731,7 @@ function webpSize(bytes) {
 }
 
 export async function readAsset(context, id, assetId) {
+  await requireAttachment(context, id);
   const found = await resourceOf(context, id);
   if (typeof assetId !== 'string' || !/^[0-9a-f-]{36}\.(png|jpg|webp)$/.test(assetId)) fail(404, 'not_found', 'The asset does not exist.');
   const file = inside(found.project.localPath, `docs/flows/assets/${assetId}`);
@@ -752,11 +761,20 @@ function actor(context) {
   return { author: 'master', authorId: principal.unitId ?? 'root:master' };
 }
 
-function assertCanEdit(context, entry) {
-  const principal = context.principal;
-  if (principal?.audience === 'agent' && !(entry.attached ?? []).includes(principal.unitId)) {
+export async function requireAttachment(context, resourceId) {
+  const principal = context.principal ?? {};
+  const audience = principal.audience ?? context.credential?.audience ?? 'desktop';
+  const unitId = principal.unitId ?? context.credential?.unitId ?? null;
+  const binding = await readAttachments(context, resourceId);
+  if (audience === 'agent' && !binding.attached.includes(unitId)) {
     fail(403, 'forbidden', 'The agent is not attached to that resource.');
   }
+  return binding;
+}
+
+async function shown(context, entry, document, revision) {
+  const binding = await readAttachments(context, entry.id);
+  return view({ ...entry, attached: binding.attached }, document, revision);
 }
 
 function stemOf(file) {
@@ -890,7 +908,7 @@ export async function createText(context, input) {
   ], [voidEvent(id, hashBytes(bytes), document.rev, 'create')]);
   rememberExternal(context, id, hashBytes(bytes), document);
   connectExternal(context, id, full);
-  return view(entry, document, hashBytes(bytes));
+  return shown(context, entry, document, hashBytes(bytes));
 }
 
 function voidEvent(id, revision, rev, operation, k = null, lang = null) {
@@ -907,14 +925,14 @@ function connectExternal(context, id, file) {
 
 export async function replaceText(context, id, input) {
   const found = await textBundle(context, id);
-  assertCanEdit(context, found.entry);
+  await requireAttachment(context, found.entry.id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The text changed since it was read.');
   const incoming = validateText(input.document);
   preserveUnknown(found.document, incoming);
   const changes = textChanges(found.document, incoming);
   incoming.rev = (found.document.rev || 0) + (changes.length > 0 ? 1 : 0);
   if (changes.length === 0 && canonicalJson(found.document) === canonicalJson(incoming)) {
-    return view(found.entry, found.document, found.loaded.revision);
+    return shown(context, found.entry, found.document, found.loaded.revision);
   }
   const bytes = jsonBytes(incoming);
   const entries = [record(found.file, found.loaded.revision, bytes)];
@@ -934,7 +952,7 @@ export async function replaceText(context, id, input) {
   const revision = hashBytes(bytes);
   await commit(context, entries, [voidEvent(id, revision, incoming.rev, 'replace')]);
   rememberExternal(context, id, revision, incoming);
-  return view(found.entry, incoming, revision);
+  return shown(context, found.entry, incoming, revision);
 }
 
 function assertRange(source, start, end) {
@@ -968,7 +986,7 @@ async function historyEntry(file, beforeRevision, lines) {
 
 export async function replaceRange(context, id, input) {
   const found = await textBundle(context, id);
-  assertCanEdit(context, found.entry);
+  await requireAttachment(context, found.entry.id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The text changed since it was read.');
   const page = found.document.pages.find((item) => item.k === input.k);
   if (!page || typeof page[input.lang] !== 'string') fail(422, 'invalid_range', 'The page language does not exist.');
@@ -992,7 +1010,7 @@ export async function replaceRange(context, id, input) {
   const revision = hashBytes(bytes);
   await commit(context, entries, [voidEvent(id, revision, document.rev, 'replace-range', input.k, input.lang)]);
   rememberExternal(context, id, revision, document);
-  return { editor: view(found.entry, document, revision), proposal: null };
+  return { editor: await shown(context, found.entry, document, revision), proposal: null };
 }
 
 async function proposeRange(context, found, input) {
@@ -1016,17 +1034,18 @@ async function proposeRange(context, found, input) {
   thread.status = 'open';
   const bytes = jsonBytes(comments.value);
   const revision = hashBytes(bytes);
-  const notices = await noticePlan(context, message.id, found.entry.id, recipientsFor(context, found.entry.attached, authorId));
+  const notices = await noticePlan(context, message.id, found.entry.id, recipientsFor(context, (await readAttachments(context, found.entry.id)).attached, authorId));
   await admitComment(context, message.id);
   await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
     { name: 'comment.changed', resourceId: found.entry.id, data: { resourceId: found.entry.id, thread, commentsRevision: revision, operation: 'reply' } },
     { name: 'void.proposal.changed', resourceId: found.entry.id, data: { resourceId: found.entry.id, proposal: { ...message.proposal, resourceId: found.entry.id, threadId: thread.id, commentsRevision: revision }, commentsRevision: revision } },
     ...notices.events,
   ]);
-  return { editor: view(found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: found.entry.id, threadId: thread.id, commentsRevision: revision } };
+  return { editor: await shown(context, found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: found.entry.id, threadId: thread.id, commentsRevision: revision } };
 }
 
 export async function listProposals(context, id, query = {}) {
+  await requireAttachment(context, id);
   const found = await textBundle(context, id);
   const comments = await loadComments(found);
   const state = query.state ?? 'pending';
@@ -1069,7 +1088,7 @@ export async function answerProposal(context, id, proposalId, input) {
     await commit(context, [record(comments.file, comments.revision, bytes)], [
       { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision }, commentsRevision: revision } },
     ]);
-    return { editor: view(found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision } };
+    return { editor: await shown(context, found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision } };
   }
   const page = found.document.pages.find((item) => item.k === message.proposal.k);
   const source = page?.[message.proposal.lang];
@@ -1098,7 +1117,7 @@ export async function answerProposal(context, id, proposalId, input) {
     { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision }, commentsRevision } },
   ]);
   rememberExternal(context, id, revision, document);
-  return { editor: view(found.entry, document, revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision } };
+  return { editor: await shown(context, found.entry, document, revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision } };
 }
 
 function commentText(value) {
@@ -1142,6 +1161,7 @@ export async function notifyAttached(context, input) {
 }
 
 export async function listComments(context, id, query = {}) {
+  await requireAttachment(context, id);
   const found = await resourceOf(context, id);
   const loaded = await loadComments(found);
   const projected = projectComments(loaded.value, found.entry.id);
@@ -1184,7 +1204,7 @@ function validateAnchor(found, document, anchor) {
 
 export async function createComment(context, id, input) {
   const found = await resourceOf(context, id);
-  assertCanEdit(context, found.entry);
+  await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
   const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : (await boardFile(context, id)).document;
   const fileRevision = found.entry.kind === 'void'
@@ -1205,7 +1225,7 @@ export async function createComment(context, id, input) {
   const bytes = jsonBytes(comments.value);
   const revision = hashBytes(bytes);
   const messageId = thread.messages[0].id;
-  const notices = await noticePlan(context, messageId, id, recipientsFor(context, found.entry.attached, authorId));
+  const notices = await noticePlan(context, messageId, id, recipientsFor(context, (await readAttachments(context, found.entry.id)).attached, authorId));
   await admitComment(context, messageId);
   await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
     { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision, operation: 'create' } },
@@ -1217,7 +1237,7 @@ export async function createComment(context, id, input) {
 
 export async function replyComment(context, id, threadId, input) {
   const found = await resourceOf(context, id);
-  assertCanEdit(context, found.entry);
+  await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
   const comments = await loadComments(found);
   if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
@@ -1230,7 +1250,7 @@ export async function replyComment(context, id, threadId, input) {
   thread.status = 'open';
   const bytes = jsonBytes(comments.value);
   const revision = hashBytes(bytes);
-  const notices = await noticePlan(context, message.id, id, recipientsFor(context, found.entry.attached, authorId));
+  const notices = await noticePlan(context, message.id, id, recipientsFor(context, (await readAttachments(context, found.entry.id)).attached, authorId));
   await admitComment(context, message.id);
   await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
     { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: 'reply' } },
@@ -1281,7 +1301,7 @@ function blueprintPlace(document, thread) {
 
 export async function setCommentStatus(context, id, threadId, input) {
   const found = await resourceOf(context, id);
-  assertCanEdit(context, found.entry);
+  await requireAttachment(context, found.entry.id);
   if (input.status !== 'open' && input.status !== 'resolved') fail(422, 'invalid_body', 'The status must be open or resolved.');
   const comments = await loadComments(found);
   if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
