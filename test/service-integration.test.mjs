@@ -20,7 +20,7 @@ import { applyPack } from '../engine/sync/apply.mjs';
 import { limitsFor, openLedger, reservePublication } from '../engine/sync/limits.mjs';
 import { openOrigin, publishPack } from '../engine/sync/origin.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
-import { openSync } from '../engine/sync/store.mjs';
+import { clearSyncFailure, openSync, recordSyncFailure } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
@@ -482,6 +482,52 @@ test('an open stream receives imported chat, unit, and editor events once', asyn
   assert.equal(outsider.length, 0);
 });
 
+test('an invalid owner pack stays rejected and visible until reconcile succeeds', async (t) => {
+  const { fixture, core, token, port } = await boot(t);
+  const chatId = '55555555-5555-4555-8555-555555555555';
+  const messageId = '66666666-6666-4666-8666-666666666666';
+  const sessionId = '99999999-9999-4999-8999-999999999999';
+  const unitId = 'root:builder';
+  const messagePath = path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId, `${messageId}.md`);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'registrations'), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'registrations', 'desktop.json'), `${JSON.stringify({
+    kind: 'registration', sessionId, unitId, machine: 'DESKTOP',
+  })}\n`);
+  const messageBytes = Buffer.from(`id: ${messageId}\nfrom: builder\nfrom-id: ${unitId}\nto: chat:${chatId}\nmachine: LAPTOP\ntimestamp: ${LATER}\nkind: message\n\nRejected owner\n`);
+  const changeId = '12121212-1212-4121-8121-121212121212';
+  const laptop = await laptopOriginFor(fixture);
+  await publishPack(laptop, encodePack({
+    machine: 'LAPTOP',
+    sequence: 1,
+    changes: [importedChange(changeId, { kind: 'mind', path: `user/relay/chats/${chatId}/${messageId}.md` }, messageBytes, null)],
+    objects: [{ hash: hashBytes(messageBytes), raw: messageBytes }],
+    dependencies: [],
+    transactions: [],
+  }));
+  const failed = await waitForSync(port, token, (data) => data?.error?.code === 'invalid_record_owner');
+  assert.equal(failed.state, 'error');
+  assert.equal(failed.pendingChanges, 0);
+  assert.deepEqual(failed.incoming, []);
+  assert.equal(failed.retryAt, null);
+  assert.equal(failed.error.message, 'The record is not owned by the publishing machine.');
+  const settings = await call(port, 'GET', '/api/v1/settings', { token });
+  assert.equal(settings.status, 200);
+  assert.equal(settings.json.data.service.syncState, 'error');
+  await assert.rejects(() => readFile(messagePath), (error) => error.code === 'ENOENT');
+  await recordSyncFailure(core.runtime.sync, { code: 'sync_rate_limited', retryAt: '2026-10-10T12:05:00.000Z' });
+  await clearSyncFailure(core.runtime.sync);
+  const kept = await call(port, 'GET', '/api/v1/sync', { token });
+  assert.equal(kept.json.data.error.code, 'invalid_record_owner');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'registrations', 'laptop.json'), `${JSON.stringify({
+    kind: 'registration', sessionId: 'abababab-abab-4bab-8bab-abababababab', unitId, machine: 'LAPTOP',
+  })}\n`);
+  await writeFile(path.join(fixture.paths.origin, 'machines', 'LAPTOP', 'again.txt'), 'again\n');
+  const cleared = await waitForSync(port, token, (data) => data?.error == null);
+  assert.equal(cleared.state === 'error', false);
+  assert.equal(await readFile(messagePath, 'utf8'), messageBytes.toString('utf8'));
+});
+
 test('home access expires, native login stays unverified, and stdio rejects an unknown protocol', async (t) => {
   const clock = { now: Date.parse(AT) };
   const listeners = [];
@@ -667,6 +713,18 @@ function waitForFrames(opened, ready, runtime, timeout = 5000) {
     };
     tick();
   });
+}
+
+async function waitForSync(port, token, ready, timeout = 5000) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start <= timeout) {
+    const response = await call(port, 'GET', '/api/v1/sync', { token });
+    last = response.json?.data ?? null;
+    if (ready(last)) return last;
+    await delay(25);
+  }
+  return last;
 }
 
 async function waitForFile(file, runtime, timeout = 5000) {

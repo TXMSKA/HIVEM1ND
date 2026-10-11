@@ -437,21 +437,25 @@ export async function readSync(context) {
     limits = await limitsFor(context.ledger);
   }
   const incoming = await incomingStatus(context, sync);
-  const failure = sync ? await (await import('../sync/store.mjs')).readSyncFailure(sync) : null;
+  const storeApi = sync ? await import('../sync/store.mjs') : null;
+  const publication = storeApi ? await storeApi.readSyncFailure(sync) : null;
+  const inbound = storeApi ? await storeApi.readInboundFailure(sync) : null;
   const prepared = sync ? await publicationPrepared(sync) : false;
   const queued = sync ? await pendingPacks(sync) : 0;
   let state = 'idle';
-  if (limits.state === 'paused') state = 'paused';
+  if (inbound) state = 'error';
+  else if (limits.state === 'paused') state = 'paused';
   else if (prepared) state = 'publishing';
-  else if (failure) state = 'error';
+  else if (publication) state = 'error';
   else if (pendingChanges > 0 || queued > 0) state = 'pending';
+  const failure = state === 'error' ? (inbound ?? publication) : null;
   return {
     state,
     pendingChanges,
     limits,
     incoming,
-    retryAt: state === 'error' ? failure?.retryAt ?? limits.retryAt ?? null : limits.retryAt ?? null,
-    error: state === 'error' ? { code: failure.code, message: failure.message } : null,
+    retryAt: failure ? (failure.retryAt ?? limits.retryAt ?? null) : (limits.retryAt ?? null),
+    error: failure ? { code: failure.code, message: failure.message } : null,
   };
 }
 

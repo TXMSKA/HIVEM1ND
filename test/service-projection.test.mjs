@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { hashText } from '../engine/service/identity.mjs';
 import { answersFor, observationFresh, paginate, paginateMessages, readCollection, readDetail, readProjection, readSync, serviceRecord, statusFor, waitingFor } from '../engine/service/projection.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
-import { openSync, recordSyncFailure, stageTransaction } from '../engine/sync/store.mjs';
+import { clearInboundFailure, clearSyncFailure, openSync, recordInboundFailure, recordSyncFailure, stageTransaction } from '../engine/sync/store.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
 import { clientRecords, probeClients } from '../engine/service/adapters.mjs';
@@ -755,6 +755,30 @@ test('pending sync work stays pending and a failure stays visible', async (t) =>
   assert.equal(failed.error.message, 'Sync failed.');
   assert.equal(failed.retryAt, '2026-10-10T12:05:00.000Z');
   assert.equal((await serviceRecord({ ...context, syncOutcome: 'idle' })).syncState, 'error');
+});
+
+test('an inbound receipt failure stays after publication succeeds', async (t) => {
+  const fixture = await mind(t);
+  const sync = openSync({ store: fixture.store, paths: fixture.paths, now: () => NOW, projects: [] });
+  const context = { store: fixture.store, paths: fixture.paths, now: () => NOW, sync };
+  await recordInboundFailure(sync, { code: 'invalid_record_owner', message: 'The record is not owned by the publishing machine.' });
+  const failed = await readSync(context);
+  assert.equal(failed.state, 'error');
+  assert.equal(failed.error.code, 'invalid_record_owner');
+  assert.equal(failed.error.message, 'The record is not owned by the publishing machine.');
+  assert.equal(failed.retryAt, null);
+  assert.equal(failed.pendingChanges, 0);
+  assert.deepEqual(failed.incoming, []);
+  assert.equal((await serviceRecord(context)).syncState, 'error');
+  await recordSyncFailure(sync, { code: 'sync_rate_limited', retryAt: '2026-10-10T12:05:00.000Z' });
+  await clearSyncFailure(sync);
+  const kept = await readSync(context);
+  assert.equal(kept.state, 'error');
+  assert.equal(kept.error.code, 'invalid_record_owner');
+  await clearInboundFailure(sync);
+  const cleared = await readSync(context);
+  assert.equal(cleared.state, 'idle');
+  assert.equal(cleared.error, null);
 });
 
 test('collection filters accept typed queries and hide closed tasks by default', async (t) => {

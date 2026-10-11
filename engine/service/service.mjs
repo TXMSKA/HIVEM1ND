@@ -11,7 +11,7 @@ import { applyPack } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
-import { openSync, stageBaselines } from '../sync/store.mjs';
+import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure, stageBaselines } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
 import { createRelay } from '../relay/store.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
@@ -19,7 +19,7 @@ import { closeBridge, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, wakeBindingLive } from './security.mjs';
 import { createEventBus, publishDomainEvents } from './events.mjs';
-import { projectChat, readDetail } from './projection.mjs';
+import { projectChat, readDetail, readSync } from './projection.mjs';
 import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
@@ -566,6 +566,46 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
 }
 
 async function reconcileOrigin(runtime) {
+  try {
+    await receiveOrigin(runtime);
+    const previous = await readInboundFailure(runtime.sync);
+    await clearInboundFailure(runtime.sync);
+    if (previous) await publishSyncState(runtime);
+  } catch (error) {
+    runtime.lastError = error;
+    await recordInboundFailure(runtime.sync, error);
+    await publishSyncState(runtime);
+    throw error;
+  }
+}
+
+async function publishSyncState(runtime) {
+  if (!runtime?.bus) return;
+  const snapshot = await readSync({
+    sync: runtime.sync,
+    ledger: runtime.ledger,
+    paths: runtime.paths,
+    now: runtime.now,
+  });
+  publishDomainEvents({
+    bus: runtime.bus,
+    paths: runtime.paths,
+    store: runtime.sync.store,
+  }, [{
+    name: 'sync.changed',
+    operationId: `sync-state:${snapshot.state}:${snapshot.error?.code ?? 'clear'}:${snapshot.retryAt ?? ''}`,
+    source: { kind: 'service', id: runtime.paths.machine, unitId: null },
+    data: {
+      state: snapshot.state,
+      pendingChanges: snapshot.pendingChanges,
+      limits: snapshot.limits,
+      retryAt: snapshot.retryAt,
+      error: snapshot.error,
+    },
+  }]);
+}
+
+async function receiveOrigin(runtime) {
   const names = await listMachineNames(runtime.origin);
   const bindings = await ownerBindings(runtime.sync);
   const provider = {

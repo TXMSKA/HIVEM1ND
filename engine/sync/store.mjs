@@ -50,6 +50,7 @@ export async function recordSyncFailure(sync, error) {
   const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'sync_failed';
   const record = {
     format: 'hivem1nd-sync-failure-v1',
+    phase: 'publication',
     code,
     message: 'Sync failed.',
     retryAt: typeof error?.retryAt === 'string' && TIME.test(error.retryAt) ? error.retryAt : null,
@@ -79,6 +80,52 @@ export async function readSyncFailure(sync) {
 
 function failurePath(sync) {
   return path.join(sync.paths.localDirectory, 'outgoing', 'failure.json');
+}
+
+export async function recordInboundFailure(sync, error) {
+  const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'sync_failed';
+  const record = {
+    format: 'hivem1nd-sync-failure-v1',
+    phase: 'receipt',
+    code,
+    message: safeFailureMessage(error?.message),
+    retryAt: typeof error?.retryAt === 'string' && TIME.test(error.retryAt) ? error.retryAt : null,
+    at: timestamp(sync.now()),
+  };
+  await atomicWrite(sync.store, inboundFailurePath(sync), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'));
+  return record;
+}
+
+export async function clearInboundFailure(sync) {
+  await unlink(inboundFailurePath(sync)).catch((error) => {
+    if (error?.code !== 'ENOENT') throw error;
+  });
+}
+
+export async function readInboundFailure(sync) {
+  const bytes = await readBytes(sync.store, inboundFailurePath(sync));
+  if (!bytes) return null;
+  try {
+    const parsed = JSON.parse(bytes.toString('utf8'));
+    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || parsed.phase !== 'receipt' || typeof parsed.code !== 'string') return null;
+    return {
+      code: parsed.code,
+      message: safeFailureMessage(parsed.message),
+      retryAt: typeof parsed.retryAt === 'string' && TIME.test(parsed.retryAt) ? parsed.retryAt : null,
+      phase: 'receipt',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function inboundFailurePath(sync) {
+  return path.join(sync.paths.localDirectory, 'received', 'failure.json');
+}
+
+function safeFailureMessage(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 200 || /[\\/\r\n]/.test(value)) return 'Sync failed.';
+  return value;
 }
 
 export async function stageBaselines(sync, at = timestamp(sync.now())) {
