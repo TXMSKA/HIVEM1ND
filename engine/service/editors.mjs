@@ -8,6 +8,7 @@ import { createAnchor, findAnchor, place } from '../../features/void/comments.mj
 import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { bindProjects, commitTransaction } from './store.mjs';
+import { convertMedia } from '../sync/media.mjs';
 
 const ASSET_LIMIT = 10000000;
 
@@ -444,7 +445,8 @@ export async function createAsset(context, id, input) {
     fail(422, 'invalid_asset', 'The asset type is not supported.');
   }
   const encoded = input?.bytesBase64;
-  if (typeof encoded !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+  if (typeof encoded !== 'string' || encoded.length > 16_000_000 || !strictBase64(encoded)) {
+    if (typeof encoded === 'string' && encoded.length > 16_000_000) fail(413, 'asset_too_large', 'The asset is too large.');
     fail(422, 'invalid_asset', 'The asset is not strict base64.');
   }
   const bytes = Buffer.from(encoded, 'base64');
@@ -458,20 +460,57 @@ export async function createAsset(context, id, input) {
   if (!size || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) {
     fail(422, 'invalid_asset', 'The asset dimensions are not supported.');
   }
-  const name = `${randomUUID()}.${kind.ext}`;
+  const stored = input.historical === true || input.immutable === true ? { bytes, kind } : await convertedAsset(context, bytes, kind);
+  const name = `${randomUUID()}.${stored.kind.ext}`;
   const relative = `docs/flows/assets/${name}`;
   const file = inside(found.project.localPath, relative);
-  const revision = hashBytes(bytes);
+  const revision = hashBytes(stored.bytes);
   const asset = {
     id: name,
     src: `assets/${name}`,
-    contentType: kind.type,
-    bytes: bytes.length,
+    contentType: stored.kind.type,
+    bytes: stored.bytes.length,
     revision,
     url: `/api/v1/editors/${id}/assets/${name}`,
   };
-  await commit(context, [record(file, null, bytes)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
+  await commit(context, [record(file, null, stored.bytes)], [{ name: 'editor.asset.created', resourceId: id, data: { resourceId: id, asset } }]);
   return asset;
+}
+
+async function convertedAsset(context, bytes, kind) {
+  const directory = path.join(context.paths.localDirectory, 'media');
+  const converted = await convertMedia({
+    bytes,
+    contentType: kind.type,
+    name: `upload.${kind.ext}`,
+  }, {
+    directory,
+    converter: context.converter,
+    spawn: context.spawn,
+    env: context.env,
+    handles: [],
+  });
+  if (converted?.converted !== true || !Buffer.isBuffer(converted.bytes)) return { bytes, kind };
+  const nextKind = sniff(converted.bytes);
+  const nextSize = nextKind ? imageSize(converted.bytes, nextKind.type) : null;
+  if (!nextKind || nextKind.type !== converted.contentType || !nextSize || nextSize.width < 1 || nextSize.height < 1 || nextSize.width > 16384 || nextSize.height > 16384) {
+    return { bytes, kind };
+  }
+  return { bytes: converted.bytes, kind: nextKind };
+}
+
+function strictBase64(value) {
+  if (value.length === 0 || value.length % 4 !== 0) return false;
+  let padding = 0;
+  for (let index = value.length - 1; index >= 0 && value[index] === '='; index -= 1) padding += 1;
+  if (padding > 2) return false;
+  const body = value.length - padding;
+  for (let index = 0; index < body; index += 1) {
+    const code = value.charCodeAt(index);
+    const ok = (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 43 || code === 47;
+    if (!ok) return false;
+  }
+  return true;
 }
 
 function imageSize(bytes, type) {

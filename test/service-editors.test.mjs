@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -122,7 +124,8 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   const renamed = await updateNode(context, created.id, added.nodeId, { changes: { name: 'Tile' }, expectedRevision: added.editor.revision });
   assert.equal(renamed.document.screens[0].root.kids[0].name, 'Tile');
   await assert.rejects(() => updateNode(context, created.id, added.nodeId, { changes: { t: 'vector' }, expectedRevision: renamed.revision }), { status: 422, code: 'invalid_node' });
-  const asset = await createAsset(context, created.id, { data: PNG.toString('base64') });
+  context.converter = null;
+  const asset = await createAsset(context, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
   assert.match(asset.src, /^assets\/[0-9a-f-]{36}\.png$/);
   const referenced = structuredClone(renamed.document);
   referenced.note = asset.src;
@@ -143,8 +146,47 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   assert.equal(linkedBoard.revision.length > 0, true);
   await assert.rejects(() => readAsset(context, created.id, linked), (error) => error.code === 'unsafe_path');
   await assert.rejects(() => readAsset(context, created.id, '../secret.png'), { status: 404, code: 'not_found' });
-  await assert.rejects(() => createAsset(context, created.id, { data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });
-  await assert.rejects(() => createAsset(context, created.id, { data: Buffer.alloc(10000001, 1).toString('base64') }), { status: 413, code: 'request_too_large' });
+  await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64') }), { status: 422, code: 'invalid_asset' });
+  await assert.rejects(() => createAsset(context, created.id, { contentType: 'image/png', bytesBase64: Buffer.alloc(10000001, 1).toString('base64') }), { status: 413, code: 'asset_too_large' });
+});
+
+test('a present converter stores WebP and a missing converter keeps the original', async (t) => {
+  const { context } = await shop(t);
+  const created = await createBoard(context, { project: 'shop', document: sketch('bag') });
+  const webp = Buffer.alloc(30);
+  webp.write('RIFF', 0);
+  webp.writeUInt32LE(22, 4);
+  webp.write('WEBP', 8);
+  webp.write('VP8X', 12);
+  webp.writeUInt32LE(10, 16);
+  let calls = 0;
+  const converted = await createAsset({
+    ...context,
+    converter: 'ffmpeg',
+    spawn(command, args) {
+      calls += 1;
+      writeFileSync(args.at(-1), webp);
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
+  assert.equal(calls, 1);
+  assert.match(converted.src, /\.webp$/);
+  assert.equal(converted.contentType, 'image/webp');
+  const kept = await createAsset({ ...context, converter: null, spawn() { throw new Error('converter'); } }, created.id, {
+    contentType: 'image/png',
+    bytesBase64: PNG.toString('base64'),
+  });
+  assert.match(kept.src, /\.png$/);
+  const historical = await createAsset({
+    ...context,
+    converter: 'ffmpeg',
+    spawn() { throw new Error('converter'); },
+  }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64'), immutable: true });
+  assert.match(historical.src, /\.png$/);
 });
 
 test('the board routes keep an unknown field through HTTP', async (t) => {
@@ -161,7 +203,10 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
     await core.http.close();
     await dispose(fixture);
   });
-  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: {} });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
   const token = local.json.token;
   const document = sketch();
   document.script = 'from http';
