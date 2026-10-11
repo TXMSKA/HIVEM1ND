@@ -477,6 +477,10 @@ export function dispose(app) {
   }
   disposeEmbed(app.embed);
   releaseAssets(app.editors?.current);
+  app.liveStatus?.remove?.();
+  app.liveError?.remove?.();
+  app.liveStatus = null;
+  app.liveError = null;
   disposeApi(app.api);
 }
 
@@ -2809,17 +2813,36 @@ function viewTitle(app, t) {
   return t(app.mode);
 }
 
+function attached(node) {
+  return Boolean(node) && node.isConnected !== false && node.parentNode != null;
+}
+
+function placeLive(document, body, current, attributes) {
+  if (attached(current)) return current;
+  const found = body.querySelector?.(`[data-live='${attributes["data-live"]}']`);
+  if (attached(found)) return found;
+  const node = element(document, "div", attributes);
+  body.append(node);
+  return node;
+}
+
 function ensureLive(app) {
   const document = app.root.ownerDocument;
   const body = document.body;
-  if (!app.liveStatus?.parent) {
-    app.liveStatus = element(document, "div", { id: "live-status", class: "live", role: "status", "aria-live": "polite", "data-live": "status" });
-    body.append(app.liveStatus);
-  }
-  if (!app.liveError?.parent) {
-    app.liveError = element(document, "div", { id: "live-error", class: "live", role: "alert", "aria-live": "assertive", "data-live": "error" });
-    body.append(app.liveError);
-  }
+  app.liveStatus = placeLive(document, body, app.liveStatus, {
+    id: "live-status",
+    class: "live",
+    role: "status",
+    "aria-live": "polite",
+    "data-live": "status",
+  });
+  app.liveError = placeLive(document, body, app.liveError, {
+    id: "live-error",
+    class: "live",
+    role: "alert",
+    "aria-live": "assertive",
+    "data-live": "error",
+  });
 }
 
 function syncLiveRegions(app) {

@@ -2446,19 +2446,28 @@ test("the shell has one heading, a skip link, and stable live regions", async (t
   assert.equal(desktop.root.querySelector("[role='tablist']"), null);
   const status = desktop.document.querySelector("[data-live='status']");
   const error = desktop.document.querySelector("[data-live='error']");
-  assert.equal(status?.parent === desktop.document.body, true);
-  assert.equal(error?.parent === desktop.document.body, true);
+  assert.equal(status?.parentNode === desktop.document.body, true);
+  assert.equal(error?.parentNode === desktop.document.body, true);
   assert.equal(status.getAttribute("aria-live"), "polite");
   assert.equal(error.getAttribute("role"), "alert");
   assert.equal(status.textContent, "");
   assert.equal(status.textContent.includes("Reading the mind."), false);
-  renderShell(desktop.app);
+  status.parent = null;
+  error.parent = null;
+  for (let pass = 0; pass < 12; pass += 1) renderShell(desktop.app);
   assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
+  assert.equal(desktop.document.querySelector("[data-live='status']").parentNode === desktop.document.body, true);
   assert.equal(desktop.document.querySelector("[data-live='status']").textContent, "");
+  assert.equal(desktop.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
   desktop.app.language = "es";
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("h1").textContent, "Mapa");
   assert.equal(desktop.document.title, "Mapa · HIVEM1ND");
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  dispose(desktop.app);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 0);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 0);
 });
 
 test("same-cursor reset and ready open the desktop shell and read the viewer", async (t) => {
@@ -2934,6 +2943,7 @@ function createTestDocument(width = 390) {
       appendChild(kid) {
         if (kid == null) return;
         kid.parent = this;
+        kid.parentNode = this;
         this.children.push(kid);
       },
       replaceChildren(...kids) {
@@ -2967,10 +2977,11 @@ function createTestDocument(width = 390) {
         for (const handler of this.listeners.get("close") ?? []) handler();
       },
       remove() {
-        const parent = this.parent;
+        const parent = this.parentNode ?? this.parent;
         if (!parent?.children) return;
         parent.children = parent.children.filter((child) => child !== this);
         this.parent = null;
+        this.parentNode = null;
       },
       removeAttribute(name) {
         this.attributes.delete(name);
