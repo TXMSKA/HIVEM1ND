@@ -144,6 +144,15 @@ test('local Cosmic paths reject synced staging and Windows device junctions', as
   await mkdir(realDirectory, { recursive: true });
   await symlink(realDirectory, linked, 'junction');
   await assert.rejects(assertNoLinks(path.join(linked, 'note.txt')), { code: 'unsafe_path' });
+  const actual = path.join(fixture.root, 'actual');
+  const linkedRoot = path.join(fixture.root, 'linked-root');
+  await mkdir(path.join(actual, 'mind', 'user', 'gui'), { recursive: true });
+  await writeFile(path.join(actual, 'mind', 'user', 'gui', 'settings.json'), '{}\n');
+  await symlink(actual, linkedRoot, 'junction');
+  await assert.rejects(resolveTarget(
+    { ...fixture.paths, mind: path.join(linkedRoot, 'mind') },
+    { kind: 'mind', path: 'user/gui/settings.json' },
+  ), { code: 'unsafe_path' });
   await assert.rejects(atomicWrite(fixture.store, path.join(linked, 'note.txt'), Buffer.from('x')), { code: 'unsafe_path' });
   await assert.rejects(resolveTarget(fixture.paths, { kind: 'project', project: 'shop', path: 'C:/repo/file.txt' }, {
     projects: [{ name: 'shop', localPath: fixture.root, eligible: true }],

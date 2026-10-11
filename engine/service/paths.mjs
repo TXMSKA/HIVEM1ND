@@ -126,7 +126,10 @@ export async function resolveExisting(target, lib = path) {
 
 export async function assertNoLinks(target, { root = null, lib = path } = {}) {
   const resolved = lib.resolve(target);
-  const stop = root ? lib.resolve(root) : lib.parse(resolved).root;
+  if (root && !inside(lib.resolve(root), resolved, lib)) {
+    throw new CoreError(422, 'invalid_path', 'The path must stay inside its root.');
+  }
+  const stop = lib.parse(resolved).root;
   const chain = [];
   let current = resolved;
   while (true) {
