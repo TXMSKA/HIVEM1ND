@@ -374,6 +374,10 @@ function captureInputs(app) {
     if (keepParts(key)[0] === "home") drafts.fields.set(key, draft);
     if (node === active) focused = { kind: "field", id: key, start: draft.start, end: draft.end };
   }
+  if (!focused) {
+    const action = active?.getAttribute?.("data-action");
+    if (action && /^[a-z0-9-]+$/.test(action)) focused = { kind: "action", id: action };
+  }
   drafts.focus = focused;
 }
 
@@ -396,6 +400,10 @@ function restoreInputFocus(app) {
   }
   const focus = drafts.focus;
   if (!focus?.id) return;
+  if (focus.kind === "action") {
+    app.root.querySelector?.(`[data-action="${focus.id}"]`)?.focus?.();
+    return;
+  }
   const node = app.root.querySelector?.(`[data-keep="${focus.id}"]`);
   if (!node) return;
   node.focus?.();
@@ -2365,6 +2373,55 @@ const SCOPE_KINDS = [
   ["project", "scopeProject"],
 ];
 
+const RESERVED_BASENAMES = new Set([
+  "con", "prn", "aux", "nul",
+  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+]);
+
+function validResourceName(value, max = 80) {
+  const name = String(value ?? "").trim();
+  if (!name || name.length > max || name !== name.toLowerCase()) return false;
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name) || name.endsWith(".")) return false;
+  return !RESERVED_BASENAMES.has(name.split(".")[0]);
+}
+
+function retainedOperation(operation, method, path, body) {
+  if (!operation || operation.method !== method || operation.path !== path) return null;
+  return JSON.stringify(operation.body) === JSON.stringify(body) ? operation : null;
+}
+
+function clearChoiceErrors(form) {
+  for (const note of [...(form.querySelectorAll?.("[data-field-error]") ?? [])]) note.remove?.();
+  for (const field of [...(form.querySelectorAll?.("[aria-invalid='true']") ?? [])]) {
+    field.removeAttribute?.("aria-invalid");
+    field.removeAttribute?.("aria-describedby");
+  }
+}
+
+function markChoiceError(form, name, message) {
+  const field = form.querySelector?.(`[name="${name}"]`);
+  if (!field) return null;
+  const id = `field-error-${name}`;
+  field.setAttribute("aria-invalid", "true");
+  field.setAttribute("aria-describedby", id);
+  const note = element(form.ownerDocument, "p", {
+    id,
+    class: "field-error",
+    role: "alert",
+    "data-field-error": name,
+    text: message,
+  });
+  (field.parent ?? form).append(note);
+  return field;
+}
+
+function restoreInvoker(app, opener) {
+  if (!opener || app.disposed) return;
+  const live = app.root.querySelector?.(`[data-action="${opener}"]`);
+  live?.focus?.();
+}
+
 function openUnitForm(app) {
   settle(app, "unit-form", text(app.language, "loadingClients"), async () => {
     const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
@@ -2401,6 +2458,7 @@ function openUnitForm(app) {
     appendInput(document, form, "positionX", text(app.language, "positionX"), "");
     appendInput(document, form, "positionY", text(app.language, "positionY"), "");
     if (!machines.some((machine) => machine.answers)) confirm.disabled = true;
+    form.problems = () => unitProblems(app, form);
   }, async (form) => {
     const machineId = fieldValue(form, "machine");
     const machine = machines.find((item) => item.id === machineId);
@@ -2412,17 +2470,28 @@ function openUnitForm(app) {
     const kind = fieldValue(form, "scopeKind");
     const name = fieldValue(form, "scopeName").trim();
     const leadId = fieldValue(form, "leadId");
+    const input = {
+      unit: fieldValue(form, "unit").trim(),
+      role: fieldValue(form, "role"),
+      scope: { kind, name: kind === "root" ? null : name },
+      machine: machineId,
+      leadId: leadId || null,
+      job: fieldValue(form, "job").trim() || null,
+      model: fieldValue(form, "model").trim() || null,
+      position: readPosition(form),
+    };
+    const body = {
+      unit: input.unit,
+      role: input.role,
+      scope: input.scope,
+      machine: input.machine,
+      leadId: input.leadId,
+      job: input.job,
+      model: input.model,
+      ...(input.position ? { position: input.position } : {}),
+    };
     try {
-      const created = await createUnit(app.api, {
-        unit: fieldValue(form, "unit").trim(),
-        role: fieldValue(form, "role"),
-        scope: { kind, name: kind === "root" ? null : name },
-        machine: machineId,
-        leadId: leadId || null,
-        job: fieldValue(form, "job").trim() || null,
-        model: fieldValue(form, "model").trim() || null,
-        position: readPosition(form),
-      }, app.unitOperation ?? null);
+      const created = await createUnit(app.api, input, retainedOperation(app.unitOperation, "POST", "/units", body));
       app.unitOperation = null;
       const unit = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
       showOutcome(app, text(app.language, "unitCreated", { unit }));
@@ -2437,7 +2506,7 @@ function openUnitForm(app) {
       if (!app.disposed) renderShell(app);
       throw error;
     }
-  });
+  }, "new-unit");
   });
 }
 
@@ -2460,6 +2529,10 @@ function openSessionForm(app, unit) {
       label: item.id,
     })), clients[0].id);
     appendInput(document, form, "prompt", text(app.language, "prompt"), "");
+    form.problems = () => {
+      const client = fieldValue(form, "client");
+      return clients.some((item) => item.id === client) ? [] : [{ name: "client", message: text(app.language, "clientInvalid") }];
+    };
   }, async (form) => {
     const client = fieldValue(form, "client");
     if (!clients.some((item) => item.id === client)) {
@@ -2467,8 +2540,10 @@ function openSessionForm(app, unit) {
       if (!app.disposed) renderShell(app);
       return false;
     }
+    const prompt = fieldValue(form, "prompt").trim() || null;
+    const body = { client, prompt, expectedRevision: unit.revision };
     try {
-      const started = await startSession(app.api, unit, client, fieldValue(form, "prompt").trim() || null, app.sessionOperation ?? null);
+      const started = await startSession(app.api, unit, client, prompt, retainedOperation(app.sessionOperation, "POST", "/units/:unitId/session", body));
       app.sessionOperation = null;
       app.sessionRequestId = started.data.requestId;
       showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed"), started.data.state ?? null);
@@ -2483,7 +2558,7 @@ function openSessionForm(app, unit) {
       if (!app.disposed) renderShell(app);
       throw error;
     }
-  });
+  }, "start-session");
   });
 }
 
@@ -2510,7 +2585,21 @@ function confirmStop(app, sessionId) {
   });
 }
 
-function openChoiceForm(app, kind, title, build, onConfirm) {
+function unitProblems(app, form) {
+  const problems = [];
+  if (!validResourceName(fieldValue(form, "unit"))) problems.push({ name: "unit", message: text(app.language, "nameInvalid") });
+  if (fieldValue(form, "scopeKind") !== "root" && !validResourceName(fieldValue(form, "scopeName"))) {
+    problems.push({ name: "scopeName", message: text(app.language, "nameInvalid") });
+  }
+  const x = fieldValue(form, "positionX").trim();
+  const y = fieldValue(form, "positionY").trim();
+  if ((x !== "" || y !== "") && (!/^-?\d+$/.test(x) || !/^-?\d+$/.test(y))) {
+    problems.push({ name: /^-?\d+$/.test(x) ? "positionY" : "positionX", message: text(app.language, "positionInvalid") });
+  }
+  return problems;
+}
+
+function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const document = app.root.ownerDocument;
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
@@ -2525,16 +2614,28 @@ function openChoiceForm(app, kind, title, build, onConfirm) {
   cancel.addEventListener("click", () => dialog.close());
   confirm.addEventListener("click", async () => {
     if (sending || confirm.disabled) return;
+    clearChoiceErrors(form);
+    dialog.querySelector("[data-dialog-error]")?.remove();
+    const problems = typeof form.problems === "function" ? form.problems() : [];
+    if (problems.length) {
+      let first = null;
+      for (const problem of problems) {
+        const field = markChoiceError(form, problem.name, problem.message);
+        if (!first && field) first = field;
+      }
+      first?.focus?.();
+      return;
+    }
     sending = true;
     confirm.setAttribute("aria-busy", "true");
     const label = confirm.textContent;
     confirm.replaceChildren(progressMark(document, label));
-    dialog.querySelector("[data-dialog-error]")?.remove();
     try {
       const accepted = await onConfirm(form);
-      if (accepted === false) {
+      if (accepted !== true) {
         sending = false;
         confirm.removeAttribute("aria-busy");
+        confirm.textContent = label;
         confirm.replaceChildren(document.createTextNode(label));
         return;
       }
@@ -2542,12 +2643,14 @@ function openChoiceForm(app, kind, title, build, onConfirm) {
     } catch (error) {
       sending = false;
       confirm.removeAttribute("aria-busy");
-      confirm.replaceChildren(document.createTextNode(text(app.language, "retry")));
+      const retry = text(app.language, "retry");
+      confirm.textContent = retry;
+      confirm.replaceChildren(document.createTextNode(retry));
       const note = element(document, "p", {
         class: "action-note",
         "data-dialog-error": "true",
         role: "alert",
-        text: error?.message || text(app.language, "actionFailed"),
+        text: actionText(app.language, error?.code),
       });
       if (typeof form.insertBefore === "function") form.insertBefore(note, actions);
       else form.append(note);
@@ -2556,7 +2659,10 @@ function openChoiceForm(app, kind, title, build, onConfirm) {
   actions.append(cancel, confirm);
   form.append(actions);
   dialog.append(form);
-  dialog.addEventListener("close", () => dialog.remove());
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    restoreInvoker(app, opener);
+  });
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") dialog.showModal();
 }

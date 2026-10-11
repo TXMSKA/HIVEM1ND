@@ -1478,6 +1478,87 @@ test("unit and session forms use machines and clients, and the inspector shows t
   assert.equal(silentForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
 });
 
+test("an invalid unit form stays open and a rejected unit keeps its draft", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method === "POST" || init?.method === "PUT") writes.push({ method: init.method, url: String(input), body: init.body ? JSON.parse(init.body) : null });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const unitPosts = () => writes.filter((item) => item.method === "POST" && item.url.endsWith("/units"));
+  click(desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit form did not open.");
+  const form = () => desktop.document.querySelector("[data-form='unit']");
+  typeInput(form().querySelector("[name='unit']"), "Retain this draft", 0, 17);
+  typeInput(form().querySelector("[name='job']"), "Retain this draft", 0, 17);
+  click(form().querySelector("[data-action='confirm-form']"));
+  const unitField = form().querySelector("[name='unit']");
+  const nameError = form().querySelector("[data-field-error='unit']");
+  assert.equal(unitPosts().length, 0);
+  assert.equal(unitField.getAttribute("aria-invalid"), "true");
+  assert.equal(unitField.getAttribute("aria-describedby"), nameError.getAttribute("id"));
+  assert.equal(nameError.textContent, "Use a lowercase name made of letters, digits, dots, underscores, or hyphens.");
+  assert.equal(desktop.document.activeElement, unitField);
+  assert.equal(unitField.value, "Retain this draft");
+  assert.equal(form().querySelector("[name='job']").value, "Retain this draft");
+
+  typeInput(unitField, "executor-kept", 0, 13);
+  const openDialog = form();
+  const pick = (attribute, value = null) => {
+    const seen = new Set();
+    const visit = (node) => {
+      if (!node || seen.has(node)) return null;
+      seen.add(node);
+      const actual = node.getAttribute?.(attribute);
+      if (value == null ? actual != null : actual === value) return node;
+      for (const child of node.children ?? []) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return visit(openDialog);
+  };
+  pick("name", "leadId").value = "not-a-real-lead";
+  click(pick("data-action", "confirm-form"));
+  await waitFor(() => pick("data-dialog-error")?.textContent === "That connection is not valid.", "The rejected unit did not stay in the form.");
+  assert.equal(pick("name", "unit").value, "executor-kept");
+  assert.equal(pick("name", "job").value, "Retain this draft");
+  assert.equal(pick("data-action", "confirm-form").textContent, "Retry");
+  assert.equal(openDialog.parent == null, false);
+
+  pick("name", "leadId").value = "";
+  click(pick("data-action", "confirm-form"));
+  assert.equal(pick("data-action", "confirm-form").getAttribute("aria-busy"), "true");
+  assert.equal(pick("name", "unit").value, "executor-kept");
+  assert.equal(pick("name", "job").value, "Retain this draft");
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-kept"), "The corrected unit was not created.");
+  await waitFor(() => openDialog.parent == null, "The unit dialog stayed open after it was created.");
+  assert.equal(desktop.document.activeElement === desktop.root.querySelector("[data-action='new-unit']"), true);
+  const created = unitPosts().find((item) => item.body?.unit === "executor-kept");
+  assert.equal(created.body.job, "Retain this draft");
+
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-action='start-session']"), "The session control did not appear.");
+  click(desktop.root.querySelector("[data-action='start-session']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
+  const sessionForm = desktop.document.querySelector("[data-form='session']");
+  sessionForm.querySelector("[name='client']").value = "";
+  const beforeSession = writes.length;
+  click(sessionForm.querySelector("[data-action='confirm-form']"));
+  const client = sessionForm.querySelector("[name='client']");
+  assert.equal(client.getAttribute("aria-describedby"), sessionForm.querySelector("[data-field-error='client']").getAttribute("id"));
+  assert.equal(desktop.document.activeElement, client);
+  assert.equal(writes.slice(beforeSession).some((item) => item.url.includes("/session")), false);
+  const cancel = [...sessionForm.querySelectorAll("button")].find((button) => button.getAttribute("data-action") !== "confirm-form");
+  click(cancel);
+  assert.equal(desktop.document.querySelector("[data-form='session']"), null);
+  assert.equal(desktop.document.activeElement === desktop.root.querySelector("[data-action='start-session']"), true);
+});
+
 test("unsaved forms share one dirty flag and only a saved draft clears it", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
