@@ -282,17 +282,35 @@ export function safeError(error, requestId) {
 }
 
 function leaks(value) {
-  return typeof value === 'string' && /[A-Za-z]:\\|\/Users\/|token|secret|Bearer /i.test(value);
+  return typeof value === 'string' && /[A-Za-z]:[\\/]|\\\\|\/(?:home|users|root|tmp|var|private)\b|token|secret|bearer |authorization|password/i.test(value);
 }
 
-function safeDetails(source) {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+function safeDetails(source, depth = 0) {
+  if (depth > 6 || !source || typeof source !== 'object' || Array.isArray(source)) return {};
   const details = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) details[key] = value;
-    else if (typeof value === 'string' && value.length <= 200 && !leaks(value)) details[key] = value;
+  for (const key of Object.keys(source).slice(0, 32)) {
+    if (leaks(key)) continue;
+    const projected = safeValue(source[key], depth + 1);
+    if (projected !== undefined) details[key] = projected;
   }
   return details;
+}
+
+function safeValue(value, depth) {
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string') return value.length <= 200 && !leaks(value) ? value : undefined;
+  if (depth > 6) return undefined;
+  if (Array.isArray(value)) {
+    const items = [];
+    for (const item of value.slice(0, 20)) {
+      const projected = safeValue(item, depth + 1);
+      if (projected !== undefined) items.push(projected);
+    }
+    return items;
+  }
+  if (typeof value === 'object') return safeDetails(value, depth);
+  return undefined;
 }
 
 function systemTool(name, env, platform) {

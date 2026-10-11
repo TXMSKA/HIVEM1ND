@@ -88,6 +88,24 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
   assert.equal(typed.error.code, 'request_rate_limited');
   assert.equal(typed.error.details.remaining, 0);
   assert.equal(typed.error.retryAt, '2026-10-10T12:01:00.000Z');
+  const limited = safeError(new CoreError(429, 'sync_limited', 'Sync is paused.', {
+    machine: 'DESKTOP',
+    path: '/home/test/private.txt',
+    windows: 'C:\\Users\\test\\private.txt',
+    limits: {
+      messages: { used: 60, max: 60, windowSeconds: 60 },
+      messageBytes: { max: 1000000 },
+      syncBytes: { used: 1, max: 50000000, windowSeconds: 3600 },
+      state: 'paused',
+      retryAt: '2026-10-10T13:00:00.000Z',
+    },
+  }), 'request-3');
+  assert.equal(JSON.stringify(limited).includes('/home/'), false);
+  assert.equal(JSON.stringify(limited).includes('C:\\Users'), false);
+  assert.equal(limited.error.details.path, undefined);
+  assert.equal(limited.error.details.limits.messages.max, 60);
+  assert.equal(limited.error.details.limits.syncBytes.max, 50000000);
+  assert.equal(limited.error.details.limits.state, 'paused');
   const file = path.join(fixture.root, 'secret', 'bootstrap.json');
   await writeFile(file, '{}\n').catch(async () => {
     const { mkdir } = await import('node:fs/promises');
