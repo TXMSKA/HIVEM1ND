@@ -685,6 +685,11 @@ async function agentScope(route, domain, credential, params, body) {
     if (!(await chatContains(domain, params.chatId, unitId))) throw new CoreError(403, 'forbidden', 'The agent is not a member of that chat.');
     return { scope: 'own', unitId };
   }
+  if (route.template === '/session-requests/:requestId') {
+    const loaded = await readStartRequest(domain, params.requestId);
+    if (loaded.request?.unitId !== unitId) throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
+    return { scope: 'own', unitId };
+  }
   if (route.template === '/chats') return { scope: 'member', unitId };
   if (params.taskId && (route.handler === 'changeStatus' || route.handler === 'detail')) {
     const task = await loadTask(domain, params.taskId);

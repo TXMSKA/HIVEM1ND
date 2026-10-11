@@ -106,7 +106,7 @@ export async function readProjection(context, query = {}) {
 
 export async function readCollection(context, name, query = {}) {
   const view = await projectRecords(context, query);
-  const items = collectionItems(view, name, query);
+  const items = visibleToPrincipal(collectionItems(view, name, query), name, view, context.principal);
   const filtered = items.filter((item) => matchesQuery(item, name, query));
   const snapshot = hashText(canonicalJson(filtered));
   if (name === 'messages') {
@@ -127,13 +127,36 @@ export async function readDetail(context, name, id, scope = {}) {
   if (name === 'layout') return { layout: view.layout, revision: view.layoutRevision };
   if (name === 'settings') return { settings: view.settings, revision: view.settingsRevision };
   if (name === 'messages') {
-    const foundMessage = view.messages.find((item) => item.id === id && messageInScope(item, scope));
+    const foundMessage = visibleToPrincipal(view.messages, 'messages', view, context.principal).find((item) => item.id === id && messageInScope(item, scope));
     if (!foundMessage) throw new CoreError(404, 'message_not_found', 'The record does not exist.');
     return foundMessage;
   }
-  const found = collectionItems(view, name, {}).find((item) => item.id === id);
+  const found = visibleToPrincipal(collectionItems(view, name, {}), name, view, context.principal).find((item) => item.id === id);
   if (!found) throw new CoreError(404, `${name.replace(/s$/, '')}_not_found`, 'The record does not exist.');
   return found;
+}
+
+function visibleToPrincipal(items, name, view, principal) {
+  if (principal?.audience !== 'agent') return items;
+  const unitId = principal.unitId;
+  if (name === 'chats') return items.filter((chat) => chatMember(chat, unitId));
+  if (name === 'messages') {
+    const allowed = new Set(view.chats.filter((chat) => chatMember(chat, unitId)).map((chat) => chat.id));
+    return items.filter((message) => {
+      const chatId = chatIdFromPath(message.path);
+      return chatId ? allowed.has(chatId) : true;
+    });
+  }
+  return items;
+}
+
+function chatMember(chat, unitId) {
+  return typeof unitId === 'string' && Array.isArray(chat?.members) && chat.members.includes(unitId);
+}
+
+function chatIdFromPath(messagePath) {
+  const match = String(messagePath ?? '').match(/\/chats\/([^/]+)\//);
+  return match ? match[1] : null;
 }
 
 export function collectIssues(issues) {

@@ -1098,4 +1098,91 @@ test('an oversized body returns body_too_large and the service keeps answering',
   assert.equal(alive.status, 200);
   assert.deepEqual(alive.json.data.items, []);
 });
+
+test('an agent cannot read another unit chat or session request', async (t) => {
+  const { fixture, core, paths, token } = await boot(t);
+  const port = core.http.port;
+  await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
+  for (const unit of ['one', 'two']) {
+    const created = await call(port, 'POST', '/api/v1/units', {
+      token,
+      body: { unit, role: 'executor', scope: 'root', machine: fixture.machine },
+      headers: { 'idempotency-key': randomUUID() },
+    });
+    assert.equal(created.status, 201, created.raw);
+  }
+  const foreign = await call(port, 'POST', '/api/v1/chats', {
+    token,
+    body: { members: ['root:two'], title: 'private notes for root:one' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(foreign.status, 201, foreign.raw);
+  const foreignId = foreign.json.data.chat.id;
+  const posted = await call(port, 'POST', `/api/v1/chats/${foreignId}/messages`, {
+    token,
+    body: { body: 'foreign-chat-secret' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(posted.status, 201, posted.raw);
+  const own = await call(port, 'POST', '/api/v1/chats', {
+    token,
+    body: { members: ['root:one'], title: 'one-room' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(own.status, 201, own.raw);
+  const ownId = own.json.data.chat.id;
+  const requestId = randomUUID();
+  const ownRequestId = randomUUID();
+  const requestDir = path.join(fixture.paths.mind, 'user', 'relay', 'requests', fixture.machine);
+  await mkdir(requestDir, { recursive: true });
+  await writeFile(path.join(requestDir, `${requestId}.json`), `${JSON.stringify({
+    format: 'hivem1nd-session-request-v1',
+    id: requestId,
+    unitId: 'root:two',
+    owner: 'root:one',
+    prompt: 'foreign-session-secret',
+  })}\n`);
+  await writeFile(path.join(requestDir, `${ownRequestId}.json`), `${JSON.stringify({
+    format: 'hivem1nd-session-request-v1',
+    id: ownRequestId,
+    unitId: 'root:one',
+    prompt: 'own-session',
+  })}\n`);
+  const agent = core.credentials.issue({
+    audience: 'agent',
+    unitId: 'root:one',
+    capabilities: ['read'],
+    expiresAt: '2027-01-01T00:00:00.000Z',
+  });
+  const searched = await call(port, 'GET', '/api/v1/chats?q=private', { token: agent.token });
+  assert.equal(searched.status, 200, searched.raw);
+  assert.equal(searched.json.data.items.length, 0);
+  assert.equal(searched.raw.includes('foreign-chat-secret'), false);
+  const widened = await call(port, 'GET', '/api/v1/chats?unitId=root:two', { token: agent.token });
+  assert.equal(widened.status, 200, widened.raw);
+  assert.equal(widened.json.data.items.some((item) => item.id === foreignId), false);
+  assert.equal(widened.raw.includes('foreign-chat-secret'), false);
+  const member = await call(port, 'GET', '/api/v1/chats', { token: agent.token });
+  assert.equal(member.status, 200, member.raw);
+  assert.deepEqual(member.json.data.items.map((item) => item.id), [ownId]);
+  assert.equal(member.raw.includes('foreign-chat-secret'), false);
+  const detail = await call(port, 'GET', `/api/v1/chats/${foreignId}`, { token: agent.token });
+  assert.equal(detail.status, 403);
+  assert.equal(detail.raw.includes('foreign-chat-secret'), false);
+  const messages = await call(port, 'GET', `/api/v1/chats/${foreignId}/messages`, { token: agent.token });
+  assert.equal(messages.status, 403);
+  assert.equal(messages.raw.includes('foreign-chat-secret'), false);
+  const ownDetail = await call(port, 'GET', `/api/v1/chats/${ownId}`, { token: agent.token });
+  assert.equal(ownDetail.status, 200, ownDetail.raw);
+  const stolen = await call(port, 'GET', `/api/v1/session-requests/${requestId}?unitId=root:one`, { token: agent.token });
+  assert.equal(stolen.status, 403);
+  assert.equal(stolen.raw.includes('foreign-session-secret'), false);
+  const allowed = await call(port, 'GET', `/api/v1/session-requests/${ownRequestId}`, { token: agent.token });
+  assert.equal(allowed.status, 200, allowed.raw);
+  assert.equal(allowed.json.data.request.unitId, 'root:one');
+  const missing = await call(port, 'GET', `/api/v1/session-requests/${randomUUID()}`, { token: agent.token });
+  assert.equal(missing.status, 404);
+  const desktop = await call(port, 'GET', '/api/v1/chats', { token });
+  assert.equal(desktop.json.data.items.some((item) => item.id === foreignId), true);
+});
 });

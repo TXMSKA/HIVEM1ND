@@ -128,8 +128,15 @@ function emitWatch(watch, record, state) {
 }
 
 export async function chatContains(context, chatId, unitId) {
-  if (!context.paths?.mind) return false;
+  if (!context.paths?.mind || typeof unitId !== 'string' || unitId.length === 0) return false;
   const bytes = await readBytes(context.store, path.join(context.paths.mind, 'user', 'relay', 'chats', chatId, 'chat.md'));
   if (!bytes) return false;
-  return bytes.toString('utf8').includes(unitId);
+  const line = bytes.toString('utf8').split(/\r?\n/).find((item) => item.startsWith('members: '));
+  if (!line) return false;
+  try {
+    const members = JSON.parse(line.slice('members: '.length));
+    return Array.isArray(members) && members.includes(unitId);
+  } catch {
+    return false;
+  }
 }
