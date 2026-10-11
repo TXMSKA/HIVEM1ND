@@ -145,7 +145,7 @@ export function parseClaudeLine(line) {
     throw new CoreError(422, 'protocol_error', 'The stream line is not JSON.');
   }
   if (message?.type === 'system' && message.subtype === 'init' && typeof message.session_id !== 'string') {
-    throw new CoreError(422, 'protocol_error', 'The Claude init event has no session id.');
+    throw new CoreError(422, 'protocol_error', 'The native initialization event has no session id.');
   }
   if (message?.permissionDecision === 'allow' && message.hookSpecificOutput == null) {
     throw new CoreError(422, 'protocol_error', 'The permission decision is not a hook result.');
@@ -428,7 +428,7 @@ function adapterFor(context, client) {
 function acceptFixture(client, transcript, request) {
   if (client === 'codex') {
     const start = transcript.map(parseCodexLine).find((line) => line.result?.thread?.id);
-    if (!start) throw new CoreError(422, 'protocol_error', 'The Codex transcript has no thread id.');
+    if (!start) throw new CoreError(422, 'protocol_error', 'The native transcript/thread has no thread id.');
     return { nativeSessionId: start.result.thread.id, pid: 4101, fixture: true };
   }
   if (client === 'cursor') {
@@ -438,7 +438,7 @@ function acceptFixture(client, transcript, request) {
   }
   const init = transcript.map(parseClaudeLine).find((line) => line.type === 'system' && line.subtype === 'init');
   if (!init?.session_id || (request.nativeSessionId && init.session_id !== request.nativeSessionId)) {
-    throw new CoreError(422, 'protocol_error', 'The Claude init session does not match.');
+    throw new CoreError(422, 'protocol_error', 'The native initialization session does not match.');
   }
   return { nativeSessionId: init.session_id, pid: 4103, fixture: true };
 }

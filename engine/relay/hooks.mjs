@@ -1,7 +1,11 @@
 import { openRelayOperations } from '../service/client.mjs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { claudeWakeCapability, sendClaudeWake } from './claude-wake.mjs';
 import { cursorWakeCapability } from './cursor-wake.mjs';
+import { spawnLocalWakeWorker } from './local-wake.mjs';
+
+const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -82,6 +86,12 @@ async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process
   if (!capability.available) {
     stderr.write(`Relay Cursor wake unavailable: ${capability.reason}.\n`);
     return null;
+  }
+  try {
+    const child = (wakeWorkerSpawner ?? spawnLocalWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
+    child.ready.catch(() => stderr.write('Relay Cursor wake worker could not start.\n'));
+  } catch {
+    stderr.write('Relay Cursor wake worker could not start.\n');
   }
   return binding;
 }

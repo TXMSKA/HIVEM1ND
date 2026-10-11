@@ -99,6 +99,7 @@ test("a screen of a sketch that follows v1 is refused when it does not, naming t
   kept((s) => s.components.push({ id: "c-1" }), (doc) => doc.components[0].id === "c-1");
   kept((s) => s.fonts.push({ family: "Kept" }), (doc) => doc.fonts[0].family === "Kept");
   refused((s) => (s.title = ""), /^title must be 1 to 240/);
+  refused((s) => (s.title = "x".repeat(241)), /^title must be 1 to 240/);
   refused((s) => (s.pages = []), /^pages must be a list of 1 to 100/);
   kept((s) => s.pages[0].objects.push({ id: "o-1" }), (doc) => doc.pages[0].objects[0].id === "o-1");
   refused((s) => s.pages[0].order.push("nowhere"), /^pages\[0\]\.order names a screen/);

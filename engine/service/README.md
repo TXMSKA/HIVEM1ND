@@ -28,7 +28,7 @@ These checks did not register a login task, write the OneDrive mind, or signal a
 
 Limits that are not passes:
 
-- Native login was not verified. With an empty PATH, Claude, Codex, and Cursor all report `nativeSupport` false. Creating a session without a verified login throws `client_unavailable`. A fixture transcript only proves the protocol parser.
+- Native login was not verified. With an empty PATH, the supported native clients all report `nativeSupport` false. Creating a session without a verified login throws `client_unavailable`. A fixture transcript only proves the protocol parser.
 - Windows protection of the local bootstrap file uses the .NET file access-control API. The PowerShell Security module would not load, so the Security-module cmdlets were not used.
 - The media step did convert a real PNG to WebP with the local ffmpeg.
 - `node-v22.23.3-win-x64.zip` was not on disk. Its pinned SHA-256 is `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`, and `node.exe` inside it is `9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`. ZIP, CRC, and dry-run checks passed without that archive. `node --version` was not run from it.
