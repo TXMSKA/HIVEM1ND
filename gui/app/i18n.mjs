@@ -168,6 +168,7 @@ const COPY = {
   unitName: ["Name", "Nombre"],
   nameInvalid: ["Use a lowercase name made of letters, digits, dots, underscores, or hyphens.", "Usar un nombre en minúsculas, con letras, dígitos, puntos, guiones bajos o guiones."],
   positionInvalid: ["Enter both coordinates as whole numbers.", "Indicar ambas coordenadas con números enteros."],
+  positionHint: ["Whole numbers. A leading minus is allowed.", "Números enteros. Se permite un menos al inicio."],
   clientInvalid: ["Choose an installed client.", "Elegir un cliente instalado."],
   role: ["Role", "Rol"],
   scope: ["Scope", "Ámbito"],

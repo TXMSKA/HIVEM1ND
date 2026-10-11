@@ -3126,7 +3126,10 @@ function clearChoiceErrors(form) {
   for (const note of [...(form.querySelectorAll?.("[data-field-error]") ?? [])]) note.remove?.();
   for (const field of [...(form.querySelectorAll?.("[aria-invalid='true']") ?? [])]) {
     field.removeAttribute?.("aria-invalid");
-    field.removeAttribute?.("aria-describedby");
+    const described = String(field.getAttribute?.("aria-describedby") ?? "");
+    const kept = described.split(/\s+/).filter((item) => item && !item.startsWith("field-error-")).join(" ");
+    if (kept) field.setAttribute("aria-describedby", kept);
+    else field.removeAttribute?.("aria-describedby");
   }
 }
 
@@ -3135,7 +3138,10 @@ function markChoiceError(form, name, message) {
   if (!field) return null;
   const id = `field-error-${name}`;
   field.setAttribute("aria-invalid", "true");
-  field.setAttribute("aria-describedby", id);
+  const described = String(field.getAttribute?.("aria-describedby") ?? "");
+  const ids = described.split(/\s+/).filter((item) => item && item !== id);
+  ids.push(id);
+  field.setAttribute("aria-describedby", ids.join(" "));
   const note = element(form.ownerDocument, "p", {
     id,
     class: "field-error",
@@ -3143,7 +3149,8 @@ function markChoiceError(form, name, message) {
     "data-field-error": name,
     text: message,
   });
-  (field.parent ?? form).append(note);
+  const label = field.closest?.("label") ?? field.parentElement ?? null;
+  (label ?? form).append(note);
   return field;
 }
 
@@ -3162,10 +3169,7 @@ function openUnitForm(app) {
     const document = form.ownerDocument;
     appendInput(document, form, "unit", text(app.language, "unitName"), "");
     appendSelect(document, form, "role", text(app.language, "role"), UNIT_ROLES.map((role) => ({ value: role, label: role })), "executor");
-    appendSelect(document, form, "scopeKind", text(app.language, "scopeKind"), SCOPE_KINDS.map(([value, label]) => ({
-      value,
-      label: text(app.language, label),
-    })), "project");
+    appendScope(document, form, text(app.language, "scopeKind"), "project");
     appendInput(document, form, "scopeName", text(app.language, "scopeName"), "shop");
     appendSelect(document, form, "machine", text(app.language, "machine"), machines.map((machine) => ({
       value: machine.id,
@@ -3180,14 +3184,12 @@ function openUnitForm(app) {
         }));
       }
     }
-    appendSelect(document, form, "leadId", text(app.language, "lead"), [
-      { value: "", label: text(app.language, "unknown") },
-      ...leads.map((unit) => ({ value: unit.id, label: unit.unit })),
-    ], "");
+    appendLeadSearch(document, form, text(app.language, "lead"), leads);
     appendInput(document, form, "job", text(app.language, "job"), "");
     appendInput(document, form, "model", text(app.language, "model"), "");
-    appendInput(document, form, "positionX", text(app.language, "positionX"), "");
-    appendInput(document, form, "positionY", text(app.language, "positionY"), "");
+    appendInput(document, form, "positionX", text(app.language, "positionX"), "", { inputMode: "numeric", describedBy: "position-hint" });
+    appendInput(document, form, "positionY", text(app.language, "positionY"), "", { inputMode: "numeric", describedBy: "position-hint" });
+    form.append(element(document, "p", { id: "position-hint", class: "field-hint", text: text(app.language, "positionHint") }));
     if (!machines.some((machine) => machine.answers)) confirm.disabled = true;
     form.problems = () => unitProblems(app, form);
   }, async (form) => {
@@ -3342,7 +3344,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const confirm = element(document, "button", { type: "button", class: "btn primary", "data-action": "confirm-form", text: title });
   build(form, confirm);
   const actions = element(document, "div", { class: "dialog-actions" });
-  const cancel = element(document, "button", { type: "button", class: "btn", text: text(app.language, "cancel") });
+  const cancel = element(document, "button", { type: "button", class: "btn", "data-action": "cancel-form", text: text(app.language, "cancel") });
   let sending = false;
   cancel.addEventListener("click", () => dialog.close());
   confirm.addEventListener("click", async () => {
@@ -3400,12 +3402,69 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   if (typeof dialog.showModal === "function") dialog.showModal();
 }
 
-function appendInput(document, form, name, label, value) {
+function appendInput(document, form, name, label, value, options = {}) {
   const input = document.createElement("input");
   input.setAttribute("name", name);
   input.setAttribute("aria-label", label);
+  if (options.inputMode) input.setAttribute("inputmode", options.inputMode);
+  if (options.describedBy) input.setAttribute("aria-describedby", options.describedBy);
   input.value = value;
-  form.append(element(document, "label", { text: label }, input));
+  form.append(element(document, "label", { class: "field", text: label }, input));
+  return input;
+}
+
+function appendScope(document, form, label, selected) {
+  const group = element(document, "fieldset", { class: "segmented", "data-scope": "true" });
+  group.append(element(document, "legend", { text: label }));
+  for (const [value, key] of SCOPE_KINDS) {
+    const input = document.createElement("input");
+    input.setAttribute("type", "radio");
+    input.setAttribute("name", "scopeKind");
+    input.setAttribute("value", value);
+    input.value = value;
+    input.checked = value === selected;
+    const choice = element(document, "label", { class: "segment" });
+    choice.append(input, document.createTextNode(textFrom(document, key)));
+    group.append(choice);
+  }
+  form.append(group);
+  return group;
+}
+
+function textFrom(document, key) {
+  const language = document.documentElement?.lang === "es" ? "es" : "en";
+  return text(language, key);
+}
+
+function appendLeadSearch(document, form, label, leads) {
+  const input = document.createElement("input");
+  input.setAttribute("type", "search");
+  input.setAttribute("name", "leadId");
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-label", label);
+  input.setAttribute("aria-expanded", "false");
+  const list = element(document, "div", { class: "lead-choices", role: "listbox", "data-lead-list": "true" });
+  const paint = () => {
+    const query = input.value.trim().toLowerCase();
+    const matches = leads.filter((unit) => {
+      const name = String(unit.unit ?? "").toLowerCase();
+      return !query || name.includes(query) || String(unit.id).toLowerCase().includes(query);
+    }).slice(0, 40);
+    input.setAttribute("aria-expanded", matches.length ? "true" : "false");
+    list.replaceChildren(...matches.map((unit) => element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-lead-choice": unit.id,
+      text: `${unit.unit} · ${unit.id}`,
+      onclick: () => {
+        input.value = unit.id;
+        input.setAttribute("aria-expanded", "false");
+      },
+    })));
+  };
+  input.addEventListener("input", paint);
+  paint();
+  form.append(element(document, "label", { class: "field", text: label }, input), list);
   return input;
 }
 
@@ -3429,7 +3488,9 @@ function appendSelect(document, form, name, label, choices, value) {
 }
 
 function fieldValue(form, name) {
-  return form.querySelector(`[name="${name}"]`)?.value ?? "";
+  const nodes = [...(form.querySelectorAll?.(`[name="${name}"]`) ?? [])];
+  const picked = nodes.find((node) => node.checked);
+  return (picked ?? nodes[0])?.value ?? "";
 }
 
 function readPosition(form) {

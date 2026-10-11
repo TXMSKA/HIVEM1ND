@@ -299,7 +299,19 @@ button, input { font: inherit; color: inherit; }
 .field { display: grid; gap: 4px; }
 .field-label { color: var(--text); font-size: 13px; font-weight: 600; }
 .field-hint { margin: 0; color: var(--mute); font-size: 12px; }
-.dialog input { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--ring); border-radius: 999px; padding: 8px 12px; }
+.dialog input, .dialog select, .dialog textarea,
+.field input, .field select, .field textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--card2);
+  border: 1px solid var(--ring);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+.segmented { border: 0; display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; padding: 0; }
+.segmented legend { color: var(--text); font-size: 13px; font-weight: 600; padding: 0; }
+.segmented .segment { align-items: center; display: inline-flex; gap: 6px; margin: 0; }
+.lead-choices { display: grid; gap: 4px; margin-top: 4px; max-height: 9rem; overflow: auto; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .action-note { color: var(--body); }
 .progress { display: inline-flex; align-items: center; gap: 8px; }
@@ -328,6 +340,10 @@ button, input { font: inherit; color: inherit; }
 
 /* 240px and 380px rails, 48px of gaps and padding, and a 320px main column. */
 @media (max-width: 987px) {
+  input, select, textarea,
+  .dialog input, .dialog select, .dialog textarea {
+    font-size: 16px;
+  }
   .shell[data-layout="desktop"] .panel-toggle { display: inline-flex; }
   .shell[data-layout="desktop"] .workspace,
   .shell[data-layout="desktop"] .workspace.workspace-editor {

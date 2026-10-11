@@ -1443,6 +1443,14 @@ test("unit and session forms use machines and clients, and the inspector shows t
   assert.equal(machineOptions.find((option) => option.getAttribute("value") === "DESKTOP").getAttribute("disabled"), null);
   assert.equal(unitForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
   typeInput(unitForm.querySelector("[name='unit']"), "executor-made", 0, 13);
+  assert.equal(unitForm.querySelectorAll("[name='scopeKind']").length, 3);
+  assert.equal([...unitForm.querySelectorAll("[name='scopeKind']")].find((node) => node.checked)?.value, "project");
+  assert.equal(unitForm.querySelector("[name='positionX']").getAttribute("inputmode"), "numeric");
+  assert.equal(unitForm.querySelector("[id='position-hint']")?.textContent.includes("minus"), true);
+  const leadChoices = unitForm.querySelectorAll("[data-lead-choice]").length;
+  typeInput(unitForm.querySelector("[name='leadId']"), "overlord-web", 0, 12);
+  assert.equal(unitForm.querySelectorAll("[data-lead-choice]").length < leadChoices, true);
+  assert.equal(unitForm.querySelector("[data-lead-choice='env:web:overlord-web']") != null, true);
   unitForm.querySelector("[name='leadId']").value = "env:web:overlord-web";
   typeInput(unitForm.querySelector("[name='job']"), "builder", 0, 7);
   typeInput(unitForm.querySelector("[name='model']"), "strong", 0, 6);
@@ -1509,6 +1517,7 @@ test("an invalid unit form stays open and a rejected unit keeps its draft", asyn
   assert.equal(unitPosts().length, 0);
   assert.equal(unitField.getAttribute("aria-invalid"), "true");
   assert.equal(unitField.getAttribute("aria-describedby"), nameError.getAttribute("id"));
+  assert.equal(nameError.closest("label"), unitField.closest("label"));
   assert.equal(nameError.textContent, "Use a lowercase name made of letters, digits, dots, underscores, or hyphens.");
   assert.equal(desktop.document.activeElement, unitField);
   assert.equal(unitField.value, "Retain this draft");
@@ -1827,7 +1836,7 @@ test("board nodes and named controls are available from the keyboard", async (t)
   assert.equal(dialog.getAttribute("aria-labelledby"), heading.getAttribute("id"));
   assert.match(heading.getAttribute("id"), /^dialog-title-\d+$/);
   const firstId = heading.getAttribute("id");
-  click([...dialog.querySelectorAll("button")].find((button) => button.getAttribute("data-action") !== "confirm-form"));
+  click(dialog.querySelector("[data-action='cancel-form']"));
   click(desktop.root.querySelector("[data-action='new-unit']"));
   await waitFor(() => desktop.document.querySelector("[data-form='unit']")?.querySelector("h2")?.getAttribute("id") !== firstId, "The second dialog reused the heading id.");
 
