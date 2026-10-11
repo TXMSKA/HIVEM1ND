@@ -870,7 +870,7 @@ function renderWorkspace(app, t, view, counts) {
   const inspectorBody = element(document, "div", { class: "inspector-body" },
     element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
   );
-  if (app.actionNote && app.actionScope !== "editor") {
+  if (outcomeVisible(app) && app.actionScope !== "editor") {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -1619,7 +1619,7 @@ function renderEditorSurfaces(app, t) {
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
-  if (app.actionNote && app.actionScope === "editor") {
+  if (outcomeVisible(app) && app.actionScope === "editor") {
     resource.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -1938,9 +1938,9 @@ function resolveThread(app, threadId) {
   });
 }
 
-function noteEditor(app, error) {
+function noteEditor(app, error, key = null) {
   if (app.editors) app.editors.error = error;
-  noteAction(app, error);
+  noteAction(app, error, key);
 }
 
 function canEditResources(app) {
@@ -2601,7 +2601,7 @@ function chooseSetting(app, patch) {
       }
       throw error;
     }
-  }).catch((error) => noteAction(app, error));
+  }).catch((error) => noteAction(app, error, "settings"));
 }
 
 function sameSettingsChoice(operation, patch) {
@@ -2677,7 +2677,7 @@ function applyMutationResult(app, operation, result) {
 function settle(app, key, label, work, onError = null) {
   return track(app, key, label, work, onError).catch((error) => {
     if (onError) onError(error);
-    else noteAction(app, error);
+    else noteAction(app, error, key);
   });
 }
 
@@ -2688,9 +2688,11 @@ function track(app, key, label, work, onError = null) {
     work,
     render(record) {
       record.action = label;
+      if (!record.scope) record.scope = noteScope(app);
+      if (record.phase === "success") clearMatchedError(app, key);
       record.retry = () => track(app, key, label, work, onError).catch((error) => {
         if (onError) onError(error);
-        else noteAction(app, error);
+        else noteAction(app, error, key);
       });
       const paint = () => {
         if (!app.disposed && app.layout !== "unknown") renderShell(app);
@@ -2710,7 +2712,7 @@ function activityMessage(app, record) {
 }
 
 function editorAct(app, key, label, work) {
-  return settle(app, key, label, work, (error) => noteEditor(app, error));
+  return settle(app, key, label, work, (error) => noteEditor(app, error, key));
 }
 
 function activityPending(app, key) {
@@ -2718,7 +2720,8 @@ function activityPending(app, key) {
 }
 
 function paintActivity(app, shell) {
-  const records = [...(app.activity?.values() ?? [])];
+  const here = noteScope(app);
+  const records = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
   const pending = records.filter((record) => record.phase === "pending");
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
@@ -2850,6 +2853,7 @@ function renderSignedOut(app) {
   if (app.phoneBusy) gate.append(progressMark(document, t("checkingCode")));
   gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code), { value: app.phoneCode ?? "", busy: Boolean(app.phoneBusy) }));
   app.root.replaceChildren(gate);
+  releaseBootstrapAnnouncement(app);
 }
 
 function renderPhoneError(app, error) {
@@ -2882,8 +2886,9 @@ async function submitCode(app, code) {
 function renderFailure(app, error) {
   const document = app.root.ownerDocument;
   const key = error?.status === 401 || error?.status === 410 ? "sessionExpired" : "unavailable";
+  const message = text(app.language, key);
   app.root.replaceChildren(element(document, "section", { class: "gate" },
-    element(document, "h2", { text: text(app.language, key) }),
+    element(document, "h2", { text: message }),
     element(document, "button", {
         type: "button",
         class: "btn",
@@ -2904,15 +2909,29 @@ function renderFailure(app, error) {
       // The status region already reports the failure when a dialog cannot open.
     }
   }
+  releaseBootstrapAnnouncement(app, message);
 }
+
+const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the mind.", "Leyendo la mente."]);
 
 function renderStatus(app, key) {
   const document = app.root.ownerDocument;
   const label = text(app.language, key);
+  app.bootstrapAnnouncement = label;
   app.root.replaceChildren(element(document, "p", { id: "status", role: "status" }, progressMark(document, label)));
   ensureLive(app);
   app.liveStatus.textContent = label;
   app.liveError.textContent = "";
+}
+
+function releaseBootstrapAnnouncement(app, failureText = null) {
+  ensureLive(app);
+  const status = app.liveStatus?.textContent ?? "";
+  if (BOOTSTRAP_ANNOUNCEMENTS.has(status) || (app.bootstrapAnnouncement && status === app.bootstrapAnnouncement)) {
+    app.liveStatus.textContent = "";
+  }
+  app.bootstrapAnnouncement = null;
+  if (failureText != null && app.liveError) app.liveError.textContent = failureText;
 }
 
 function viewTitle(app, t) {
@@ -2953,11 +2972,29 @@ function ensureLive(app) {
   });
 }
 
+function outcomeVisible(app) {
+  if (!app.actionNote) return false;
+  return (app.actionScope ?? noteScope(app)) === noteScope(app);
+}
+
+function releaseSettledAction(app) {
+  const chatId = app.thread?.chat?.id;
+  const chatFailed = (app.thread?.messages ?? []).some((message) => message.failed);
+  if (chatId && app.thread.error == null && !chatFailed && app.actionKey === `chat:${chatId}`) {
+    clearMatchedError(app, `chat:${chatId}`);
+  }
+  const mailboxId = app.mailbox?.unitId;
+  if (mailboxId && !app.mailbox.pending && app.mailbox.optimistic?.failed !== true && app.actionKey === `mailbox:${mailboxId}`) {
+    clearMatchedError(app, `mailbox:${mailboxId}`);
+  }
+}
+
 function syncLiveRegions(app) {
+  releaseSettledAction(app);
   ensureLive(app);
   app.liveStatus.textContent = "";
   app.liveError.textContent = "";
-  if (!app.actionNote) return;
+  if (!outcomeVisible(app)) return;
   const region = app.actionTone === "error" ? app.liveError : app.liveStatus;
   region.textContent = app.actionNote;
 }
@@ -3021,11 +3058,21 @@ const TASK_COPY = {
   closed: "taskClosed",
 };
 
-function showOutcome(app, note, code = null, tone = "status", scope = null) {
+function showOutcome(app, note, code = null, tone = "status", scope = null, key = null) {
   app.actionNote = note;
   app.actionCode = code;
   app.actionTone = tone;
   app.actionScope = scope ?? noteScope(app);
+  app.actionKey = key;
+}
+
+function clearMatchedError(app, key) {
+  if (!key || app.actionTone !== "error" || app.actionKey !== key) return;
+  app.actionNote = null;
+  app.actionCode = null;
+  app.actionTone = null;
+  app.actionScope = null;
+  app.actionKey = null;
 }
 
 function noteScope(app) {
@@ -3591,10 +3638,12 @@ function chatPanel(app, t) {
         text: t("retry"),
         onclick: () => {
           const task = retryMessage(app.api, thread);
+          const chatKey = `chat:${thread.chat.id}`;
           if (!app.disposed) renderShell(app);
           task?.then(() => {
+            clearMatchedError(app, chatKey);
             if (!app.disposed) renderShell(app);
-          }).catch((error) => noteAction(app, error));
+          }).catch((error) => noteAction(app, error, chatKey));
         },
       }));
     }
@@ -3612,10 +3661,11 @@ function chatPanel(app, t) {
       return;
     }
     postVisibleReads(app.api, thread).then((result) => {
+      if (result) clearMatchedError(app, `read:${thread.chat.id}`);
       if (result && !app.disposed) renderShell(app);
     }).catch((error) => {
       thread.readPause = true;
-      noteAction(app, error);
+      noteAction(app, error, `read:${thread.chat.id}`);
     });
   });
   const row = element(document, "div", { class: "action-row" });
@@ -3681,11 +3731,12 @@ function syncChatReads(app) {
   if (!transcript || !thread?.chat || thread.readPause) return;
   measureVisible(thread, transcript);
   postVisibleReads(app.api, thread).then((result) => {
+    if (result) clearMatchedError(app, `read:${thread.chat.id}`);
     if (result && !app.disposed) renderShell(app);
   }).catch((error) => {
     if (app.disposed) return;
     thread.readPause = true;
-    noteAction(app, error);
+    noteAction(app, error, `read:${thread.chat.id}`);
   });
 }
 
@@ -3930,12 +3981,13 @@ function sendMailbox(app, compose) {
     releaseFormDraft(app, "mail", box.unitId, saved);
     box.items = [result.data, ...(box.items ?? [])];
     box.detail = result.data;
+    clearMatchedError(app, `mailbox:${box.unitId}`);
     if (!app.disposed) renderShell(app);
   }).catch((error) => {
     box.pending = false;
     if (box.optimistic) box.optimistic.failed = true;
     box.operation = error?.operation ?? box.operation;
-    noteAction(app, error);
+    noteAction(app, error, `mailbox:${box.unitId}`);
   });
 }
 
@@ -3948,12 +4000,13 @@ function submitComposer(app, composer) {
   if (!app.disposed) renderShell(app);
   task.then(() => {
     if (chatId) clearInputDraft(app, "chat", chatId);
+    clearMatchedError(app, chatId ? `chat:${chatId}` : null);
     if (!app.disposed) renderShell(app);
-  }).catch((error) => noteAction(app, error));
+  }).catch((error) => noteAction(app, error, chatId ? `chat:${chatId}` : null));
 }
 
-function noteAction(app, error) {
-  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null, "error");
+function noteAction(app, error, key = null) {
+  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null, "error", null, key);
   if (!app.disposed) renderShell(app);
 }
 

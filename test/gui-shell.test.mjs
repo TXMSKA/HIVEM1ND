@@ -2259,8 +2259,7 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   const source = desktop.root.querySelector("[data-source]");
   assert.equal(source?.closest("[data-source-edit]") != null, true);
   assert.equal(desktop.root.querySelector(".reading-card") != null, true);
-  const comments = desktop.root.querySelector("[data-editor-column='comments']");
-  assert.equal(comments.querySelector("[data-action='accept-change']") != null, true);
+  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector("[data-action='accept-change']"), "The proposal action was not shown.");
   assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action='accept-change']"), null);
 
   await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
@@ -2278,6 +2277,10 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   navigate(desktop.app, "blueprint");
   assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action-note]"), null);
   assert.equal(desktop.app.actionNote, "The task is done.");
+  assert.equal(desktop.document.querySelector("[data-live='status']").textContent.includes("The task is done."), false);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The task is done."), false);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
   navigate(desktop.app, "map");
   assert.equal(desktop.root.querySelector(".inspector-body")?.querySelector("[data-action-note]")?.textContent, "The task is done.");
   desktop.app.actionScope = "editor";
@@ -2665,6 +2668,11 @@ test("startup shows Retry when stream.ready never arrives", async (t) => {
   t.after(() => dispose(booted.app));
   await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "Startup did not fail closed.");
   assert.equal(booted.root.querySelector("button")?.textContent, "Retry");
+  assert.equal(booted.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(booted.document.querySelectorAll("[data-live='error']").length, 1);
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
+  assert.equal(booted.document.querySelector("[data-live='error']").textContent, "The service is unavailable.");
   assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/settings"), true);
   assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/viewer"), false);
 });
@@ -2692,12 +2700,19 @@ test("startup Retry repeats the failed read with the same authorized API", async
   t.after(() => dispose(booted.app));
   const api = booted.app.api;
   await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "The failed startup did not stay recoverable.");
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
   assert.equal(api.token, token);
   assert.equal(history.urls.length, 1);
   assert.equal(history.urls[0].includes(token), false);
   assert.equal(history.urls[0].includes("session="), false);
   click(booted.root.querySelector("button"));
   await waitFor(() => booted.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "Retry did not open the desktop shell.");
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
+  assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
+  assert.equal(booted.document.querySelector("[data-live='error']").textContent.includes("The service is unavailable."), false);
+  assert.equal(booted.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(booted.document.querySelectorAll("[data-live='error']").length, 1);
   assert.equal(booted.app.api, api);
   assert.equal(booted.app.api.token, token);
   assert.equal(authorizations.length >= 2, true);
@@ -2730,6 +2745,8 @@ test("a lost settings or home response retries the same mutation", async (t) => 
   await waitFor(() => desktop.root.querySelector("[data-action='retry-activity']"), "The lost settings response did not offer Retry.");
   click(desktop.root.querySelector("[data-language='es']"));
   await waitFor(() => desktop.root.querySelector("[data-language='es']")?.getAttribute("aria-pressed") === "true", "The later language choice did not settle.");
+  assert.equal(desktop.app.actionKey === "settings" && desktop.app.actionTone === "error", false);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
   const settingsWrites = writes.filter((item) => item.path === "/api/v1/settings");
   assert.equal(settingsWrites.length, 3);
   assert.equal(settingsWrites[0].key, settingsWrites[1].key);
@@ -2745,12 +2762,77 @@ test("a lost settings or home response retries the same mutation", async (t) => 
   await waitFor(() => desktop.root.querySelector("[data-action='retry-activity']"), "The lost home response did not offer Retry.");
   click(desktop.root.querySelector("[data-action='retry-activity']"));
   await waitFor(() => desktop.app.activity.get("home-open")?.phase === "success", "Home retry did not resolve.");
+  assert.equal(desktop.app.actionKey === "home-open" && desktop.app.actionTone === "error", false);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
   const homeWrites = writes.filter((item) => item.path === "/api/v1/settings/home-network");
   assert.equal(homeWrites.length, 2);
   assert.equal(homeWrites[0].key, homeWrites[1].key);
   assert.deepEqual(homeWrites[0].body, homeWrites[1].body);
   const home = await request(desktop.app.api, "GET", "/settings");
   assert.equal(home.data.home.enabled, true);
+});
+
+test("a resolved action clears only its own error and navigation drops stale announcements", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-task='project:shop:029']"), "The task list did not load.");
+  fixture.control.setFault({ method: "POST", path: "/api/v1/tasks/project:shop:029/status", status: 503, code: "service_unavailable" });
+  click(desktop.root.querySelector("[data-task='project:shop:029']").querySelector("[data-action='accept']"));
+  await waitFor(() => desktop.app.activity.get("task:project:shop:029")?.phase === "error", "The task failure was not kept.");
+  const taskFailure = desktop.app.activity.get("task:project:shop:029");
+
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-look='high-contrast']"), "Settings did not open.");
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", status: 503, code: "service_unavailable" });
+  click(desktop.root.querySelector("[data-look='high-contrast']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.phase === "error", "The settings failure was not shown.");
+  assert.equal(taskFailure.phase, "error");
+  navigate(desktop.app, "focus");
+  assert.equal(desktop.root.querySelector("[data-activity='task:project:shop:029']"), null);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
+  navigate(desktop.app, "settings");
+  click(desktop.root.querySelector("[data-action='retry-activity'][data-activity='settings']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.phase === "success", "The settings retry did not finish.");
+  assert.equal(desktop.app.actionKey === "settings" && desktop.app.actionTone === "error", false);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
+  assert.equal(desktop.app.activity.get("task:project:shop:029").phase, "error");
+
+  navigate(desktop.app, "blueprint");
+  assert.equal(desktop.root.querySelector("[data-activity='task:project:shop:029']"), null);
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
+  assert.equal(desktop.app.activity.get("task:project:shop:029").phase, "error");
+  navigate(desktop.app, "map");
+  assert.equal(desktop.root.querySelector("[data-activity='task:project:shop:029']") != null, true);
+
+  navigate(desktop.app, "chats");
+  await waitFor(() => desktop.app.chatList?.catalog?.length, "The chat list did not load.");
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === chat.id && desktop.root.querySelector("[data-composer]"), "The chat did not open.");
+  fixture.control.setFault({ method: "POST", path: `/api/v1/chats/${chat.id}/messages`, status: 503, code: "timeout" });
+  typeInput(desktop.root.querySelector("[data-composer]"), "Retry me", 0, 8);
+  click(desktop.root.querySelector("[data-action='send']"));
+  await waitFor(() => desktop.root.querySelector("[data-action-note]")?.getAttribute("data-code") === "timeout", "The chat failure was not announced.");
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.length > 0, true);
+  click(desktop.root.querySelector("[data-action='retry-message']"));
+  await waitFor(() => [...desktop.root.querySelectorAll("[data-message]")].some((node) => node.textContent === "Retry me" && node.getAttribute("data-pending") == null), "The retried chat was not delivered.");
+  assert.notEqual(desktop.app.actionKey, `chat:${chat.id}`);
+  assert.notEqual(desktop.root.querySelector("[data-action-note]")?.getAttribute("data-code"), "timeout");
+  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("timed out"), false);
+  assert.equal(desktop.app.activity.get("task:project:shop:029").phase, "error");
+  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
+  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
 });
 
 test("a failed connection stays open and retries the same targets", async (t) => {
