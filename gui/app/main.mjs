@@ -2482,16 +2482,16 @@ function dataOf(event) {
 }
 
 function chooseSetting(app, patch) {
-  return track(app, "settings", text(app.language, "savingSetting"), async () => {
+  return track(app, "settings", text(app.language, "savingSetting"), async (record) => {
     try {
-      const result = await saveSettings(app.api, app.store.settings?.revision ?? null, patch);
-      app.store.settings.settings = result.data.settings;
-      app.store.settings.revision = result.data.revision;
-      const choice = presentation(app.store.viewer, result.data.settings);
-      app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
-      app.language = choice.language === "es" ? "es" : "en";
+      const retained = await reuseOrReconcile(app, record, "PATCH", "/settings", (operation) => sameSettingsChoice(operation, patch));
+      const revision = app.store.settings?.revision ?? null;
+      const result = await saveSettings(app.api, revision, patch, retained);
+      record.operation = result.operation;
+      applySettingsResult(app, result);
       return result;
     } catch (error) {
+      if (error?.operation) record.operation = error.operation;
       if (error.code === "revision_conflict") {
         try {
           const latest = await request(app.api, "GET", "/settings");
@@ -2504,6 +2504,76 @@ function chooseSetting(app, patch) {
       throw error;
     }
   }).catch((error) => noteAction(app, error));
+}
+
+function sameSettingsChoice(operation, patch) {
+  const body = operation?.body ?? {};
+  return ["look", "language"].every((key) => (key in patch) === (key in body) && (!(key in patch) || patch[key] === body[key]));
+}
+
+function homeRequestBody(enabled, addresses) {
+  const body = { enabled };
+  if (addresses?.length) body.addresses = addresses;
+  return body;
+}
+
+async function reuseOrReconcile(app, record, method, path, sameAttempt) {
+  const pending = app.api.uncertain.has(record.operation?.id) ? record.operation : findUncertain(app.api, method, path);
+  if (!pending || pending.method !== method || pending.path !== path || !app.api.uncertain.has(pending.id)) return null;
+  if (sameAttempt(pending)) return pending;
+  try {
+    const result = await request(app.api, pending.method, pending.path, { operation: pending });
+    result.operation = pending;
+    applyMutationResult(app, pending, result);
+  } catch (error) {
+    if (error && typeof error === "object" && error.operation == null) error.operation = pending;
+    throw error;
+  }
+  if (record.operation === pending) record.operation = null;
+  return null;
+}
+
+function findUncertain(api, method, path) {
+  for (const entry of api.uncertain?.values?.() ?? []) {
+    const operation = entry?.operation;
+    if (operation?.method === method && operation.path === path) return operation;
+  }
+  return null;
+}
+
+function samePayload(left, right) {
+  return JSON.stringify(canonicalPayload(left ?? null)) === JSON.stringify(canonicalPayload(right ?? null));
+}
+
+function canonicalPayload(value) {
+  if (Array.isArray(value)) return value.map(canonicalPayload);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalPayload(value[key])]));
+  }
+  return value;
+}
+
+function applySettingsResult(app, result) {
+  app.store.settings.settings = result.data.settings;
+  app.store.settings.revision = result.data.revision;
+  const choice = presentation(app.store.viewer, result.data.settings);
+  app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+  app.language = choice.language === "es" ? "es" : "en";
+}
+
+function applyMutationResult(app, operation, result) {
+  if (operation.path === "/settings") {
+    applySettingsResult(app, result);
+    return;
+  }
+  if (operation.path !== "/settings/home-network") return;
+  const home = homeState(app);
+  if (result.data?.key) takeGrant(home, result.data);
+  else {
+    clearGrant(home);
+    home.home = result.data;
+  }
+  if (app.store.settings) app.store.settings.home = home.home;
 }
 
 function settle(app, key, label, work, onError = null) {
@@ -2581,14 +2651,17 @@ function enableHome(app, raw) {
   const addresses = String(raw ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   const home = homeState(app);
   home.expectGrant = true;
-  return settle(app, "home-open", text(app.language, "openingHome"), async () => {
+  return settle(app, "home-open", text(app.language, "openingHome"), async (record) => {
     try {
-      const result = await openHome(app.api, addresses);
+      const retained = await reuseOrReconcile(app, record, "POST", "/settings/home-network", (operation) => samePayload(operation.body, homeRequestBody(true, addresses)));
+      const result = await openHome(app.api, addresses, retained);
+      record.operation = result.operation;
       takeGrant(home, result.data);
       if (app.store.settings) app.store.settings.home = home.home;
       return result;
     } catch (error) {
       home.expectGrant = false;
+      if (error?.operation) record.operation = error.operation;
       if (error.code === "listener_unavailable") clearGrant(home);
       throw error;
     }
@@ -2596,8 +2669,10 @@ function enableHome(app, raw) {
 }
 
 function endHome(app) {
-  return settle(app, "home-close", text(app.language, "closingHome"), async () => {
-    const result = await closeHome(app.api);
+  return settle(app, "home-close", text(app.language, "closingHome"), async (record) => {
+    const retained = await reuseOrReconcile(app, record, "POST", "/settings/home-network", (operation) => samePayload(operation.body, homeRequestBody(false)));
+    const result = await closeHome(app.api, retained);
+    record.operation = result.operation;
     const home = homeState(app);
     clearGrant(home);
     home.home = result.data;

@@ -2550,6 +2550,54 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(history.urls.length, 1);
 });
 
+test("a lost settings or home response retries the same mutation", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    const target = String(input);
+    if (!init?.body || (init.method !== "PATCH" && init.method !== "POST")) return;
+    if (!target.includes("/settings")) return;
+    writes.push({
+      method: init.method,
+      path: new URL(target).pathname,
+      key: headerValue(init.headers, "Idempotency-Key"),
+      body: JSON.parse(init.body),
+    });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-look='high-contrast']"), "Settings did not open.");
+  const settingsBefore = await countNamedEvents(fixture.root, "settings.changed");
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", dropAfterCommit: true });
+  click(desktop.root.querySelector("[data-look='high-contrast']"));
+  await waitFor(() => desktop.root.querySelector("[data-action='retry-activity']"), "The lost settings response did not offer Retry.");
+  click(desktop.root.querySelector("[data-language='es']"));
+  await waitFor(() => desktop.root.querySelector("[data-language='es']")?.getAttribute("aria-pressed") === "true", "The later language choice did not settle.");
+  const settingsWrites = writes.filter((item) => item.path === "/api/v1/settings");
+  assert.equal(settingsWrites.length, 3);
+  assert.equal(settingsWrites[0].key, settingsWrites[1].key);
+  assert.equal(settingsWrites[0].body.look, "high-contrast");
+  assert.equal(settingsWrites[0].body.expectedRevision, settingsWrites[1].body.expectedRevision);
+  assert.equal(settingsWrites[2].key === settingsWrites[0].key, false);
+  assert.equal(settingsWrites[2].body.language, "es");
+  assert.equal(settingsWrites[2].body.expectedRevision === settingsWrites[0].body.expectedRevision, false);
+  assert.equal(await countNamedEvents(fixture.root, "settings.changed"), settingsBefore + 2);
+
+  fixture.control.setFault({ method: "POST", path: "/api/v1/settings/home-network", dropAfterCommit: true });
+  clickAction(desktop.root, "open-home");
+  await waitFor(() => desktop.root.querySelector("[data-action='retry-activity']"), "The lost home response did not offer Retry.");
+  click(desktop.root.querySelector("[data-action='retry-activity']"));
+  await waitFor(() => desktop.app.activity.get("home-open")?.phase === "success", "Home retry did not resolve.");
+  const homeWrites = writes.filter((item) => item.path === "/api/v1/settings/home-network");
+  assert.equal(homeWrites.length, 2);
+  assert.equal(homeWrites[0].key, homeWrites[1].key);
+  assert.deepEqual(homeWrites[0].body, homeWrites[1].body);
+  const home = await request(desktop.app.api, "GET", "/settings");
+  assert.equal(home.data.home.enabled, true);
+});
+
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
@@ -2634,6 +2682,30 @@ function typeInput(node, value, start, end) {
 
 function click(node) {
   for (const handler of node?.listeners?.get("click") ?? []) handler({ preventDefault() {}, target: node });
+}
+
+function clickAction(root, action) {
+  const node = root.querySelector(`[data-action='${action}']`);
+  const event = { target: node, preventDefault() {} };
+  let current = node;
+  while (current) {
+    for (const handler of current.listeners?.get("click") ?? []) handler(event);
+    current = current.parent;
+  }
+}
+
+function headerValue(headers, name) {
+  if (!headers) return null;
+  if (typeof headers.get === "function") return headers.get(name) ?? headers.get(name.toLowerCase());
+  return headers[name] ?? headers[name.toLowerCase()] ?? null;
+}
+
+async function countNamedEvents(root, name) {
+  const entries = await readdir(root, { recursive: true });
+  const hit = entries.find((entry) => String(entry).endsWith("event-ledger.json"));
+  if (!hit) return 0;
+  const ledger = JSON.parse(await readFile(join(root, String(hit)), "utf8"));
+  return ledger.records.filter((record) => record.name === name).length;
 }
 
 function columnIndex(column, node) {

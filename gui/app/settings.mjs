@@ -127,25 +127,40 @@ export function applySettingsRead(state, data) {
   return state;
 }
 
-export async function saveSettings(api, revision, patch) {
-  const operation = createOperation({
+export async function saveSettings(api, revision, patch, retained = null) {
+  const operation = retained ?? createOperation({
     method: "PATCH",
     path: "/settings",
     body: { ...patch, expectedRevision: revision ?? null },
   });
-  return request(api, "PATCH", "/settings", { operation });
+  return finishOperation(api, operation);
 }
 
-export async function openHome(api, addresses) {
+export async function openHome(api, addresses, retained = null) {
   const body = { enabled: true };
   if (addresses?.length) body.addresses = addresses;
-  const operation = createOperation({ method: "POST", path: "/settings/home-network", body });
-  return request(api, "POST", "/settings/home-network", { operation });
+  const operation = retained ?? createOperation({ method: "POST", path: "/settings/home-network", body });
+  return finishOperation(api, operation);
 }
 
-export async function closeHome(api) {
-  const operation = createOperation({ method: "POST", path: "/settings/home-network", body: { enabled: false } });
-  return request(api, "POST", "/settings/home-network", { operation });
+export async function closeHome(api, retained = null) {
+  const operation = retained ?? createOperation({
+    method: "POST",
+    path: "/settings/home-network",
+    body: { enabled: false },
+  });
+  return finishOperation(api, operation);
+}
+
+async function finishOperation(api, operation) {
+  try {
+    const result = await request(api, operation.method, operation.path, { operation });
+    result.operation = operation;
+    return result;
+  } catch (error) {
+    if (error && typeof error === "object" && error.operation == null) error.operation = operation;
+    throw error;
+  }
 }
 
 export function renderHomeGrant(document, grant, index, label) {
