@@ -94,9 +94,8 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
     body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
     headers: { accept: 'application/json, text/event-stream' },
   });
-  assert.equal(future.status, 200);
-  assert.equal(future.json.result.protocolVersion, '2025-03-26');
-  assert.equal(future.json.result.serverInfo.version, '3.0.0');
+  assert.equal(future.status, 403);
+  assert.equal(future.json.error.code, 'forbidden');
   const asset = await call(core.http.port, 'GET', '/api/v1/editors/board/assets/missing', { token });
   assert.equal(asset.status, 404);
   assert.equal(asset.json.error.code, 'not_found');
@@ -842,7 +841,7 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(patchedViewer, 200, 'patch viewer');
   hit('PATCH', '/viewer');
   const mcp = await call(port, 'POST', '/mcp', {
-    token,
+    token: agent.token,
     body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
     headers: { accept: 'application/json, text/event-stream' },
   });

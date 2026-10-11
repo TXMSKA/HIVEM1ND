@@ -426,6 +426,7 @@ async function serveMcp(req, res, options, credentials) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   const credential = token ? credentials.verify(token) : null;
   if (!credential) throw new CoreError(401, 'unauthorized', 'The credential is not valid.');
+  if (credential.audience !== 'agent') throw new CoreError(403, 'forbidden', 'MCP accepts only a local agent credential.');
   let message;
   try {
     message = JSON.parse((await readRaw(req)).toString('utf8') || 'null');
