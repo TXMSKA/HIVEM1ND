@@ -34,7 +34,7 @@ import {
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
 import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose as disposeApi, fetchAsset, request } from "./api.mjs";
-import { element, icon, labelDialog, labeledField, progressMark, runAction, showDialog, showError } from "./components.mjs";
+import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -815,7 +815,7 @@ function renderWorkspace(app, t, view, counts) {
     const issues = trackDisclosure(app, element(document, "details", { class: "phone-issues", "data-phone-issues": "true" }), "phone-issues");
     issues.append(element(document, "summary", { text: cardinal(app.language, "issueCount", issueItems.length) }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
+    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyIssues") }));
     side = element(document, "aside", { class: "panel side" },
       element(document, "h2", { "data-phone-title": "true", text: phoneTitle }),
       issues,
@@ -824,7 +824,7 @@ function renderWorkspace(app, t, view, counts) {
   } else {
     const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
-    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyList") }));
+    if (!issueItems.length) issues.append(element(document, "p", { text: t("emptyIssues") }));
     side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
   }
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
@@ -1071,7 +1071,7 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : t("emptyList")) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
+  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
   const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
   if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
@@ -1115,7 +1115,40 @@ function renderCollection(app, t) {
   app.activeRows = rows;
   app.activeHandlers = handlers;
   block.append(search, total, host);
+  if (list.status === "empty" && !list.query) {
+    const next = emptyCollectionAction(app, document, t, list);
+    if (next) block.append(next);
+  }
   return block;
+}
+
+function emptyCollectionText(t, name) {
+  if (name === "chats") return t("emptyChats");
+  if (name === "waiting") return t("emptyWaiting");
+  if (name === "units") return t("emptyUnits");
+  return t("emptyList");
+}
+
+function emptyCollectionAction(app, document, t, list) {
+  if (list.name === "units") {
+    return element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "refresh-list",
+      text: t("refreshList"),
+      onclick: () => reloadList(list),
+    });
+  }
+  if (list.name === "chats" || list.name === "waiting") {
+    return element(document, "button", {
+      type: "button",
+      class: "btn",
+      "data-action": "show-map",
+      text: t("showMap"),
+      onclick: () => navigate(app, "hierarchy"),
+    });
+  }
+  return null;
 }
 
 function editorsOf(app) {
@@ -1202,15 +1235,18 @@ function boardSurface(app, document, editor, t) {
     editor.nodeDraft = name.value;
     rememberFormDraft(app, "nodes", editor.resourceId, name.value);
   });
+  const selectedNode = app.editors.selectedNodeId;
   tools.append(labeledField(document, t("nodeName"), t("nodeNameHint"), name));
   tools.append(boardOutline(app, document, editor, t));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "patch-node",
+    disabled: selectedNode ? null : "",
+    "aria-describedby": selectedNode ? null : "reason-node",
     onclick: () => {
       const saved = name.value;
       const nodeId = app.editors.selectedNodeId;
       if (!nodeId) return;
-      editorAct(app, `node:${editor.resourceId}:${nodeId}`, text(app.language, "working"), async (record) => {
+      editorAct(app, `node:${editor.resourceId}:${nodeId}`, text(app.language, "nodeName"), async (record) => {
         await patchNode(app.api, editor, nodeId, { name: saved, value: saved }, record.operation);
         if (draftMap(app, "nodes").get(editor.resourceId) === saved) editor.nodeDraft = "";
         releaseFormDraft(app, "nodes", editor.resourceId, saved);
@@ -1223,14 +1259,17 @@ function boardSurface(app, document, editor, t) {
   }, t("addShape")));
   tools.append(element(document, "button", {
     type: "button", class: "btn", "data-action": "remove-node",
+    disabled: selectedNode ? null : "",
+    "aria-describedby": selectedNode ? null : "reason-node",
     onclick: () => {
       const nodeId = app.editors.selectedNodeId;
       if (!nodeId) return;
-      editorAct(app, `node-remove:${editor.resourceId}:${nodeId}`, text(app.language, "working"), async (record) => {
+      editorAct(app, `node-remove:${editor.resourceId}:${nodeId}`, text(app.language, "removeShape"), async (record) => {
         await removeNode(app.api, editor, nodeId, record.operation);
       });
     },
   }, t("removeShape")));
+  if (!selectedNode) tools.append(element(document, "p", { id: "reason-node", class: "field-hint", "data-disabled-reason": "node", text: t("selectNode") }));
   const file = element(document, "input", { type: "file", accept: "image/png,image/jpeg,image/webp", "data-asset": "true" });
   file.addEventListener("change", () => {
     const selected = file.files?.[0];
@@ -1253,13 +1292,16 @@ function boardSurface(app, document, editor, t) {
 }
 
 function addBoardShape(app, editor, screen) {
+  const key = `shape:${editor.resourceId}`;
+  if (activityPending(app, key)) return app.activity.get(key).promise;
   const count = (app.editors.shapeCount ?? 0) + 1;
   app.editors.shapeCount = count;
-  editorAct(app, `shape:${editor.resourceId}:${count}`, text(app.language, "working"), async (record) => {
+  const node = { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] };
+  return editorAct(app, key, text(app.language, "addShape"), async (record) => {
     await addNode(app.api, editor, {
       screenId: screen.id,
       parentId: screen.root.id,
-      node: { id: `added-${count}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] },
+      node,
     }, record.operation);
   });
 }
@@ -1786,7 +1828,7 @@ function selectEditor(app, summary) {
 function saveAttachments(app) {
   const editors = editorsOf(app);
   const choice = editors.current?.attachmentChoice;
-  editorAct(app, `attach:${editors.current?.resourceId ?? "none"}`, text(app.language, "attaching"), async (record) => {
+  return editorAct(app, `attach:${editors.current?.resourceId ?? "none"}`, text(app.language, "attach"), async (record) => {
     await setAttachments(app.api, editors, [...(choice ?? [])], record.operation);
   });
 }
@@ -2049,16 +2091,39 @@ function openAttachChooser(app) {
     })));
   };
   search.addEventListener("input", paint);
-  form.append(heading, search, list, element(document, "button", {
+  const confirm = element(document, "button", {
     type: "button",
     class: "btn primary",
     "data-action": "save-attachments",
     text: text(app.language, "attach"),
-    onclick: () => {
-      dialog.close();
-      saveAttachments(app);
-    },
-  }), element(document, "button", {
+  });
+  confirm.addEventListener("click", async () => {
+    if (confirm.getAttribute("aria-busy") === "true") return;
+    setBusy(confirm, true);
+    form.querySelector("[data-dialog-error]")?.remove();
+    form.querySelector("[data-attach-progress]")?.remove();
+    form.append(progressMark(document, text(app.language, "attaching"), { "data-attach-progress": "true" }));
+    const resourceId = current.resourceId;
+    await saveAttachments(app);
+    form.querySelector("[data-attach-progress]")?.remove();
+    const record = app.activity?.get(`attach:${resourceId}`);
+    if (record?.phase === "error") {
+      setBusy(confirm, false);
+      confirm.replaceChildren();
+      confirm.append(document.createTextNode(text(app.language, "retry")));
+      const note = element(document, "p", {
+        class: "action-note",
+        "data-dialog-error": "true",
+        role: "alert",
+        text: activityMessage(app, record),
+      });
+      if (record.error?.code) note.setAttribute("data-code", record.error.code);
+      form.append(note);
+      return;
+    }
+    dialog.close();
+  });
+  form.append(heading, search, list, confirm, element(document, "button", {
     type: "button",
     class: "btn",
     "data-action": "cancel-form",
@@ -2191,7 +2256,8 @@ function structureTools(app, document, editor, t) {
     canMovePage ? null : element(document, "p", { id: "reason-move-page", class: "field-hint", "data-disabled-reason": "move-page", text: t("needTwoPages") }),
     element(document, "button", { type: "button", class: "btn", "data-action": "move-screen", disabled: canMoveScreen ? null : "", "aria-describedby": canMoveScreen ? null : "reason-move-screen", onclick: () => moveBoardScreen(app, editor) }, t("moveScreen")),
     canMoveScreen ? null : element(document, "p", { id: "reason-move-screen", class: "field-hint", "data-disabled-reason": "move-screen", text: t("needTwoScreens") }),
-    element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", onclick: () => addBoardLink(app, editor) }, t("addLink")),
+    element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", "aria-describedby": canLink ? null : "reason-add-link", onclick: () => addBoardLink(app, editor) }, t("addLink")),
+    canLink ? null : element(document, "p", { id: "reason-add-link", class: "field-hint", "data-disabled-reason": "add-link", text: t("needLinkScreens") }),
   );
   return tools;
 }
@@ -2607,19 +2673,23 @@ function applyMutationResult(app, operation, result) {
 }
 
 function settle(app, key, label, work, onError = null) {
-  return track(app, key, label, work).catch((error) => {
+  return track(app, key, label, work, onError).catch((error) => {
     if (onError) onError(error);
     else noteAction(app, error);
   });
 }
 
-function track(app, key, label, work) {
+function track(app, key, label, work, onError = null) {
   if (!app.activity) app.activity = new Map();
   return runAction(app.activity, key, {
     label,
     work,
     render(record) {
-      record.retry = () => track(app, key, label, work);
+      record.action = label;
+      record.retry = () => track(app, key, label, work, onError).catch((error) => {
+        if (onError) onError(error);
+        else noteAction(app, error);
+      });
       const paint = () => {
         if (!app.disposed && app.layout !== "unknown") renderShell(app);
       };
@@ -2627,6 +2697,14 @@ function track(app, key, label, work) {
       else paint();
     },
   });
+}
+
+function activityMessage(app, record) {
+  const action = record?.action || record?.label || text(app.language, "actionFailed");
+  const code = record?.error?.code;
+  const known = Boolean(code && Object.hasOwn(ACTION_COPY, code));
+  const cause = known ? `${actionText(app.language, code, { machine: record.error?.details?.machine ?? "" })} ` : "";
+  return text(app.language, "activityFailed", { action, cause });
 }
 
 function editorAct(app, key, label, work) {
@@ -2647,7 +2725,7 @@ function paintActivity(app, shell) {
   if (pending.length) shell.setAttribute("aria-busy", "true");
   for (const record of pending) region.append(progressMark(document, record.label, { "data-activity": record.key }));
   for (const record of failed) {
-    region.append(element(document, "p", { "data-activity": record.key, text: record.label }));
+    region.append(element(document, "p", { "data-activity": record.key, text: activityMessage(app, record) }));
     region.append(element(document, "button", {
       type: "button",
       class: "btn",

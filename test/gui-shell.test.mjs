@@ -2386,9 +2386,83 @@ test("disabled controls explain how to continue", async (t) => {
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-action='resize-screen']"), "The resize control did not appear.");
+  assert.equal(desktop.root.querySelector("[data-action='patch-node']")?.getAttribute("disabled"), "");
+  assert.equal(desktop.root.querySelector("[data-action='remove-node']")?.getAttribute("disabled"), "");
+  assert.equal(desktop.root.querySelector("[data-disabled-reason='node']")?.textContent, "Select a shape on the board first.");
+  assert.equal(desktop.root.querySelector("[data-disabled-reason='add-link']")?.textContent, "A link needs two screens.");
   typeInput(desktop.root.querySelector("[data-field='screen-width']"), "no", 0, 2);
   click(desktop.root.querySelector("[data-action='resize-screen']"));
   await waitFor(() => noteText(desktop) === "Enter a whole width and height before resizing.", "The resize reason was not shown.");
+});
+
+test("an editor action names its failure and waits inside its dialog", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  let nodePosts = 0;
+  let releaseNodes = () => {};
+  const nodeHold = new Promise((resolve) => { releaseNodes = resolve; });
+  let attachPosts = 0;
+  let releaseAttach = () => {};
+  const attachHold = new Promise((resolve) => { releaseAttach = resolve; });
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    const target = String(input);
+    if (init?.method === "POST" && target.includes("/nodes")) {
+      nodePosts += 1;
+      if (nodePosts === 1) await nodeHold;
+    }
+    if (init?.method === "PUT" && target.includes("/attachments")) {
+      attachPosts += 1;
+      if (attachPosts === 1) await attachHold;
+    }
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
+  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  desktop.app.editors.catalogWindow.height = 4000;
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The shape control did not appear.");
+  click(desktop.root.querySelector("[data-action='add-node']"));
+  await waitFor(() => nodePosts === 1, "The shape write did not start.");
+  click(desktop.root.querySelector("[data-action='add-node']"));
+  assert.equal(nodePosts, 1);
+  releaseNodes();
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.screens?.some((screen) => JSON.stringify(screen).includes("added-1")), "The shape was not saved.");
+
+  desktop.app.mode = "map";
+  desktop.app.chatList.status = "empty";
+  desktop.app.chatList.query = "";
+  desktop.app.tab = "chats";
+  renderShell(desktop.app);
+  const listed = desktop.root.querySelector(".list-total");
+  assert.equal(listed?.getAttribute("data-list-status"), "empty");
+  assert.equal(listed?.textContent, "No conversations yet.");
+  assert.equal(desktop.root.querySelector("[data-action='show-map']")?.textContent, "Show the map");
+
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not return.");
+  click(desktop.root.querySelector("[data-action='attach']"));
+  const chooser = desktop.document.querySelector("[data-form='attach']");
+  click(chooser.querySelector("[data-attach-unit]"));
+  click(chooser.querySelector("[data-action='save-attachments']"));
+  await waitFor(() => chooser.querySelector("[data-attach-progress]") && chooser.getAttribute("open") != null, "The attach dialog closed before the save finished.");
+  releaseAttach();
+  await waitFor(() => desktop.document.querySelector("[data-form='attach']") == null, "The saved attach dialog stayed open.");
+  assert.equal(attachPosts, 1);
+
+  const resourceId = desktop.app.editors.current.resourceId;
+  fixture.control.setFault({ method: "PUT", path: `/api/v1/editors/${resourceId}/attachments`, status: 422, code: "invalid_body" });
+  click(desktop.root.querySelector("[data-action='attach']"));
+  const failedChooser = desktop.document.querySelector("[data-form='attach']");
+  click(failedChooser.querySelector("[data-action='save-attachments']"));
+  await waitFor(() => failedChooser.querySelector("[data-dialog-error]")?.textContent.includes("Attach failed."), "The failed attach did not stay in the dialog.");
+  assert.equal(failedChooser.getAttribute("open") != null, true);
+  const retry = failedChooser.querySelector("[data-action='save-attachments']");
+  assert.equal(retry.children.some((child) => child.textContent === "Retry"), true);
+  click(retry);
+  await waitFor(() => desktop.document.querySelector("[data-form='attach']") == null, "Retry did not finish the attach save.");
 });
 
 test("counts, clocks, and session facts follow the active language", () => {
