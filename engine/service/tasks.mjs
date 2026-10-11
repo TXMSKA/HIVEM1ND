@@ -5,7 +5,7 @@ import { CoreError, canonicalTaskId, hashBytes, isPersonAlias, parseTaskId, pars
 import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
-import { commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
+import { atomicWrite, commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const EDGES = new Set(['open>review', 'review>done', 'review>open', 'done>closed', 'closed>open']);
@@ -179,15 +179,15 @@ async function commitChange(context, task, change) {
       stage.push({ target: { kind: 'mind', path: notice }, bytes: body });
     }
   }
-  const events = change.events.map((event) => ({ ...event, data: { ...event.data, changeId: event.data.undoOf ? id : id, undoOf: change.undoOf } }));
+  const events = change.events.map((event) => ({ ...event, data: { ...event.data, changeId: id, undoOf: change.undoOf } }));
   const transaction = {
     id: randomUUID(),
     entries,
     events: [],
     receipt: change.receipt ?? null,
-    response: { status: 200, body: { taskId: task.id, status: change.status, changeId: id, revision: record.afterRevision, undoOf: change.undoOf } },
+    response: { status: 200, body: null },
   };
-  const result = await commitTransaction(context.store, transaction);
+  await commitTransaction(context.store, transaction);
   const sync = context.sync ?? openSync({
     store: context.store,
     paths: context.paths,
@@ -204,7 +204,16 @@ async function commitChange(context, task, change) {
     if (published?.published === true) noteSync(context, 'published');
   }
   publishDomainEvents(context, events);
-  return { ...result, replayed: false, body: transaction.response.body };
+  const { readDetail } = await import('./projection.mjs');
+  const projected = await readDetail(context, 'tasks', task.id);
+  const documented = { task: projected, changeId: id };
+  if (change.kind === 'undo') documented.undoOf = change.undoOf;
+  if (change.receipt?.principalHash && change.receipt.key) {
+    change.receipt.status = 200;
+    change.receipt.response = documented;
+    await atomicWrite(context.store, path.join(context.store.localDirectory, 'receipts', change.receipt.principalHash, `${change.receipt.key}.json`), Buffer.from(`${canonicalJson({ ...change.receipt, status: 200, response: documented })}\n`));
+  }
+  return documented;
 }
 
 function describe(bytes, relative, expectedId, aliases) {

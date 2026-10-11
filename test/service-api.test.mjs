@@ -894,11 +894,13 @@ test('every contract route has a success result and an authority or boundary fai
   hit('POST', '/tasks/:taskId/status');
   const undone = await call(port, 'POST', `/api/v1/tasks/${taskId}/undo`, {
     token,
-    body: { expectedRevision: reviewed.json.data.body.revision },
+    body: { expectedRevision: reviewed.json.data.task.revision },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(undone, 200, 'task undo');
-  assert.equal(undone.json.data.body.status, 'open');
+  assert.equal(undone.json.data.task.status, 'open');
+  assert.equal(typeof undone.json.data.changeId, 'string');
+  assert.equal(typeof undone.json.data.undoOf, 'string');
   hit('POST', '/tasks/:taskId/undo');
 
   const settings = await call(port, 'PATCH', '/api/v1/settings', {

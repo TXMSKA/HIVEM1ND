@@ -92,7 +92,7 @@ test('only authorized edges commit and lead gating stays intact', async (t) => {
   await assert.rejects(() => changeStatus(agent, TASK, { status: 'closed', expectedRevision: task.revision }), (error) => error.code === 'invalid_transition');
   const original = await readFile(file);
   const delivered = await changeStatus(agent, TASK, { status: 'review', expectedRevision: task.revision, note: 'Listo: café' });
-  assert.equal(delivered.body.status, 'review');
+  assert.equal(delivered.task.status, 'review');
   const deliveredText = await readFile(file, 'utf8');
   assert.equal(deliveredText.includes('from: user'), true);
   assert.equal(deliveredText.includes('Keep this request.'), true);
@@ -121,7 +121,7 @@ test('only authorized edges commit and lead gating stays intact', async (t) => {
   await changeStatus(as(context, OTHER), TASK, { leadApproval: true, expectedRevision: task.revision });
   task = await loadTask(master, TASK);
   const accepted = await changeStatus(master, TASK, { status: 'done', expectedRevision: task.revision, note: 'Accepted.' });
-  assert.equal(accepted.body.status, 'done');
+  assert.equal(accepted.task.status, 'done');
   task = await loadTask(master, TASK);
   await assert.rejects(() => changeStatus(lead, TASK, { status: 'closed', expectedRevision: task.revision }), (error) => error.status === 403);
   await changeStatus(master, TASK, { status: 'closed', expectedRevision: task.revision });
@@ -129,7 +129,7 @@ test('only authorized edges commit and lead gating stays intact', async (t) => {
   await assert.rejects(() => changeStatus(agent, TASK, { status: 'open', expectedRevision: task.revision }), (error) => error.status === 403);
   task = await loadTask(master, TASK);
   const reopened = await changeStatus(master, TASK, { status: 'open', expectedRevision: task.revision });
-  assert.equal(reopened.body.status, 'open');
+  assert.equal(reopened.task.status, 'open');
   const chatRoot = path.join(fixture.paths.mind, 'user', 'relay', 'chats');
   const names = await readdir(chatRoot, { recursive: true });
   const messages = [];
@@ -173,7 +173,7 @@ test('send-back needs a note and undo stops at a newer edit', async (t) => {
   await writeFile(file, current);
   task = await loadTask(agent, TASK);
   const undone = await undoStatus(agent, TASK, { expectedRevision: task.revision });
-  assert.equal(undone.body.status, 'open');
+  assert.equal(undone.task.status, 'open');
   assert.equal((await readFile(file, 'utf8')).includes('Existing report.'), true);
   assert.equal((await readFile(file, 'utf8')).includes('Undone.'), true);
   task = await loadTask(agent, TASK);
@@ -199,6 +199,8 @@ test('a repeated receipt and a crashed record recover without doubling', async (
   await changeStatus(agent, TASK, { status: 'review', expectedRevision: task.revision, note: 'Once' }, { receipt });
   const again = await changeStatus(agent, TASK, { status: 'review', expectedRevision: 'stale', note: 'Twice' }, { receipt });
   assert.equal(again.replayed, true);
+  assert.equal(again.body.task.status, 'review');
+  assert.equal(typeof again.body.changeId, 'string');
   assert.equal((await records(fixture)).length, 1);
   const other = await world(t);
   const otherAgent = as(other.context, AGENT);
@@ -238,7 +240,7 @@ test('a legacy numeric task keeps its id and offers undo to the actor or request
   };
   const agent = as(context, AGENT);
   const changed = await changeStatus(agent, 'project:shop:001', { status: 'review', expectedRevision: loaded.revision, note: 'Ready' });
-  assert.equal(changed.body.status, 'review');
+  assert.equal(changed.task.status, 'review');
   const stored = await readFile(file, 'utf8');
   assert.equal(stored.includes('id: 001'), true);
   assert.equal(stored.includes('status: review'), true);
@@ -259,7 +261,7 @@ test('a legacy numeric task keeps its id and offers undo to the actor or request
   assert.equal((await readDetail(as(context, OTHER), 'tasks', 'project:shop:001')).undoAvailable, false);
   const current = await loadTask(agent, 'project:shop:001');
   const undone = await undoStatus(agent, 'project:shop:001', { expectedRevision: current.revision });
-  assert.equal(undone.body.status, 'open');
+  assert.equal(undone.task.status, 'open');
   assert.equal((await readFile(file, 'utf8')).includes('id: 001'), true);
   assert.equal((await readDetail(agent, 'tasks', 'project:shop:001')).undoAvailable, false);
 });

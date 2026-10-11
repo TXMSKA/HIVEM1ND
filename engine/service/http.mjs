@@ -992,9 +992,13 @@ async function invoke(route, scope) {
   if (route.handler === 'changeStatus') {
     const operation = credential.audience === 'phone' ? (body.status === 'done' ? 'task.accept' : 'task.send-back') : 'task.status';
     void operation;
-    return { status: 200, body: await changeStatus(domain, params.taskId, body) };
+    const changed = await changeStatus(domain, params.taskId, body);
+    return { status: 200, body: { task: changed.task, changeId: changed.changeId } };
   }
-  if (route.handler === 'undoStatus') return { status: 200, body: await undoStatus(domain, params.taskId, body) };
+  if (route.handler === 'undoStatus') {
+    const undone = await undoStatus(domain, params.taskId, body);
+    return { status: 200, body: { task: undone.task, changeId: undone.changeId, undoOf: undone.undoOf } };
+  }
   if (route.handler === 'home') {
     if (body.enabled === true) return { status: 201, body: await openHome(homeState, body) };
     if (body.enabled === false) return { status: 200, body: await closeHome(homeState) };
