@@ -229,9 +229,21 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
   res.flushHeaders();
   const filters = extras.filters ?? {};
   let subscriber;
-  const end = () => {
+  let stopped = false;
+  const keepalive = setInterval(() => {
+    if (!res.writableEnded) res.write(': keepalive\n\n');
+  }, 15000);
+  keepalive.unref?.();
+  const cleanup = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(keepalive);
     bus.release(subscriber);
+    extras.releaseSlot?.(subscriber);
+  };
+  const end = () => {
     if (extras.watch && principal.viewerId) disposeViewer(extras.watch, principal.stableId);
+    cleanup();
     if (!res.writableEnded) res.end();
     extras.req?.destroy();
   };
@@ -253,13 +265,8 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
     res.write(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
   });
   bus.replay(subscriber, cursor ?? null);
-  const keepalive = setInterval(() => {
-    if (!res.writableEnded) res.write(': keepalive\n\n');
-  }, 15000);
-  keepalive.unref?.();
-  const stop = () => clearInterval(keepalive);
-  res.on?.('close', stop);
-  extras.req?.on?.('close', stop);
+  res.on?.('close', cleanup);
+  extras.req?.socket?.on?.('close', cleanup);
   return subscriber;
 }
 
@@ -380,12 +387,21 @@ export async function createHttpServer(options) {
       };
       const filters = {};
       for (const key of ['unitId', 'chatId', 'resourceId']) if (typeof query[key] === 'string') filters[key] = query[key];
-      const subscriber = serveEvents(res, bus, principal, eventCursor, { filters, credentials, watch, req, now: options.now });
+      const subscriber = serveEvents(res, bus, principal, eventCursor, {
+        filters,
+        credentials,
+        watch,
+        req,
+        now: options.now,
+        releaseSlot: (stream) => {
+          if (stream) bucket.streams.delete(stream);
+        },
+      });
       bucket.streams.add(subscriber);
-      req.on('close', () => {
+      if (req.socket?.destroyed || res.closed || res.writableEnded) {
         bus.release(subscriber);
         bucket.streams.delete(subscriber);
-      });
+      }
       return;
     }
     const readCursor = typeof bus.captureCursor === 'function' ? bus.captureCursor() : null;

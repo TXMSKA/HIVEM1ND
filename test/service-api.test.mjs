@@ -354,6 +354,80 @@ test('event streams replay from a cursor without leaking credentials', async (t)
   assert.equal(after.status, 401);
 });
 
+test('event streams release the cap on disconnect and keep a viewer watch', async (t) => {
+  const { fixture, core, token } = await boot(t);
+  const created = await call(core.http.port, 'POST', '/api/v1/units', {
+    token,
+    body: { unit: 'builder', role: 'executor', scope: 'root', machine: fixture.machine },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(created.status, 201);
+  const watched = await call(core.http.port, 'POST', '/api/v1/watch', {
+    token,
+    body: { unitId: 'root:builder' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(watched.status, 200);
+  const watchId = watched.json.data.watchId;
+  const openStream = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('event stream timed out')), 2000);
+    const req = request({
+      host: '127.0.0.1',
+      port: core.http.port,
+      method: 'GET',
+      path: '/api/v1/events',
+      headers: {
+        host: `127.0.0.1:${core.http.port}`,
+        origin: `http://127.0.0.1:${core.http.port}`,
+        authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      if (res.statusCode !== 200) {
+        clearTimeout(timer);
+        res.resume();
+        resolve({ req, status: res.statusCode });
+        return;
+      }
+      let raw = '';
+      res.on('data', (chunk) => {
+        raw += chunk.toString('utf8');
+        if (raw.includes('event: stream.ready')) {
+          clearTimeout(timer);
+          resolve({ req, status: res.statusCode });
+        }
+      });
+    });
+    req.on('error', (error) => {
+      if (error.code === 'ECONNRESET') return;
+      reject(error);
+    });
+    req.end();
+  });
+  const closeStream = (opened) => new Promise((resolve) => {
+    opened.req.once('close', () => setImmediate(resolve));
+    opened.req.destroy();
+  });
+  const held = [];
+  for (let index = 0; index < 4; index += 1) {
+    const opened = await openStream();
+    assert.equal(opened.status, 200);
+    held.push(opened);
+  }
+  const blocked = await call(core.http.port, 'GET', '/api/v1/events', { token });
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.json.error.code, 'request_rate_limited');
+  for (const opened of held) await closeStream(opened);
+  const again = await openStream();
+  assert.equal(again.status, 200);
+  const still = await call(core.http.port, 'DELETE', `/api/v1/watch/${watchId}`, {
+    token,
+    body: {},
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(still.status, 204);
+  await closeStream(again);
+});
+
 test('unit, lead, layout and settings changes reach the running pulse', async (t) => {
   const fixture = await makeCoreFixture();
   const origin = path.join(fixture.root, 'origin');
