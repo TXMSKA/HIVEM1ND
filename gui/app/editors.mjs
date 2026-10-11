@@ -169,8 +169,7 @@ export async function createComment(api, editors, anchor, text, retained = null)
       expectedCommentsRevision: current.commentsRevision,
     },
   }, retained);
-  current.commentsRevision = result.data.commentsRevision;
-  current.threads = [...(current.threads ?? []), result.data.thread];
+  applyCommentThread(current, result.data.thread, result.data.commentsRevision);
   current.notices = result.data.notifications ?? [];
   current.commentText = "";
   return result;
@@ -184,8 +183,7 @@ export async function replyComment(api, editors, threadId, text, retained = null
     params: { resourceId: current.resourceId, threadId },
     body: { text, expectedCommentsRevision: current.commentsRevision },
   }, retained);
-  current.commentsRevision = result.data.commentsRevision;
-  current.threads = (current.threads ?? []).map((thread) => thread.id === result.data.thread.id ? result.data.thread : thread);
+  applyCommentThread(current, result.data.thread, result.data.commentsRevision);
   current.notices = result.data.notifications ?? [];
   return result;
 }
@@ -198,8 +196,7 @@ export async function resolveComment(api, editors, threadId, retained = null) {
     params: { resourceId: current.resourceId, threadId },
     body: { status: "resolved", expectedCommentsRevision: current.commentsRevision },
   }, retained);
-  current.commentsRevision = result.data.commentsRevision;
-  current.threads = (current.threads ?? []).map((thread) => thread.id === result.data.thread.id ? result.data.thread : thread);
+  applyCommentThread(current, result.data.thread, result.data.commentsRevision);
   return result;
 }
 
@@ -301,10 +298,28 @@ export function noteComment(editors, data) {
     current.commentsStale = true;
     return;
   }
-  const threads = current.threads ?? [];
-  const index = threads.findIndex((thread) => thread.id === data.thread.id);
-  current.threads = index >= 0 ? threads.map((thread) => thread.id === data.thread.id ? data.thread : thread) : [...threads, data.thread];
-  if (data.commentsRevision) current.commentsRevision = data.commentsRevision;
+  applyCommentThread(current, data.thread, data.commentsRevision);
+}
+
+function applyCommentThread(current, thread, commentsRevision) {
+  if (!current) return;
+  if (!current.priorCommentsRevisions) current.priorCommentsRevisions = new Set();
+  const stale = Boolean(commentsRevision && current.priorCommentsRevisions.has(commentsRevision));
+  if (thread?.id) {
+    let threads = [...(current.threads ?? [])];
+    if (!stale) threads = threads.filter((item) => !item.pending);
+    const index = threads.findIndex((item) => item.id === thread.id);
+    if (index >= 0) {
+      if (!stale) threads[index] = thread;
+    } else {
+      threads.push(thread);
+    }
+    current.threads = threads;
+  }
+  if (!stale && commentsRevision && commentsRevision !== current.commentsRevision) {
+    if (current.commentsRevision) current.priorCommentsRevisions.add(current.commentsRevision);
+    current.commentsRevision = commentsRevision;
+  }
 }
 
 export function noteRemote(editors, change) {

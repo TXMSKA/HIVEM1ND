@@ -21,6 +21,7 @@ import {
   applyWatch,
   createComment,
   discardEditorDraft,
+  noteComment,
   createEditors,
   createResource,
   handleActivity,
@@ -702,6 +703,72 @@ function sentinels(value, found = []) {
 }
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("a comment response and its event leave one thread", async () => {
+  const threadId = "f8a6a2ec-024c-4b7a-af0f-31cc8f04bea6";
+  const thread = { id: threadId, status: "open", messages: [{ text: "GUI quote comment" }] };
+  const newer = { id: threadId, status: "open", messages: [{ text: "newer body" }] };
+  const firstRevision = "d".repeat(64);
+  const secondRevision = "e".repeat(64);
+  const eventFirst = commentEditor();
+  const eventApi = commentApi(() => {
+    noteComment(eventFirst, { resourceId: "board-1", thread, commentsRevision: firstRevision, operation: "create" });
+    return commentEnvelope({ thread, commentsRevision: firstRevision, notifications: [] });
+  });
+  await createComment(eventApi, eventFirst, canvasAnchor(), "GUI quote comment");
+  assert.equal(eventFirst.current.threads.filter((item) => item.id === threadId).length, 1);
+  assert.equal(eventFirst.current.threads.some((item) => item.pending), false);
+  assert.equal(eventFirst.current.commentsRevision, firstRevision);
+
+  const responseFirst = commentEditor();
+  await createComment(commentApi(() => commentEnvelope({ thread, commentsRevision: firstRevision, notifications: [] })), responseFirst, canvasAnchor(), "GUI quote comment");
+  noteComment(responseFirst, { resourceId: "board-1", thread, commentsRevision: firstRevision, operation: "create" });
+  assert.equal(responseFirst.current.threads.filter((item) => item.id === threadId).length, 1);
+  assert.equal(responseFirst.current.threads.some((item) => item.pending), false);
+  assert.equal(responseFirst.current.commentsRevision, firstRevision);
+
+  const raced = commentEditor();
+  await createComment(commentApi(() => {
+    noteComment(raced, { resourceId: "board-1", thread, commentsRevision: firstRevision, operation: "create" });
+    noteComment(raced, { resourceId: "board-1", thread: newer, commentsRevision: secondRevision, operation: "create" });
+    return commentEnvelope({ thread, commentsRevision: firstRevision, notifications: [] });
+  }), raced, canvasAnchor(), "GUI quote comment");
+  assert.equal(raced.current.threads.filter((item) => item.id === threadId).length, 1);
+  assert.equal(raced.current.threads.find((item) => item.id === threadId).messages[0].text, "newer body");
+  assert.equal(raced.current.commentsRevision, secondRevision);
+});
+
+function commentEditor() {
+  return {
+    current: {
+      resourceId: "board-1",
+      revision: "a".repeat(64),
+      commentsRevision: "c".repeat(64),
+      threads: [
+        { id: "old-thread", messages: [{ text: "old" }] },
+        { id: "pending-comment", pending: true, messages: [{ text: "GUI quote comment" }] },
+      ],
+      commentText: "GUI quote comment",
+    },
+  };
+}
+
+function commentApi(fetchImpl) {
+  return createApi({
+    location: { origin: "http://127.0.0.1:9", pathname: "/", search: "", hash: "#session=token" },
+    history: { replaceState() {}, state: null },
+    fetch: fetchImpl,
+  });
+}
+
+function commentEnvelope(data) {
+  const body = JSON.stringify({
+    contract: "hivem1nd-gui-v3",
+    data,
+    meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "svc:1", sync: "local" },
+  });
+  return { status: 201, ok: true, headers: { get() { return null; } }, text: async () => body };
+}
 
 function canvasAnchor(x = 0, y = 0) {
   return { screen: null, screenTitle: null, element: null, label: "Board", path: ["Board"], point: { x, y } };
