@@ -1,7 +1,8 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
+import { stateUnitId } from './state.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 
 const VIEW_LIMIT = 16000000;
@@ -561,7 +562,7 @@ function readUnit(bytes, relative, issues) {
   }
   try {
     const headers = headerMap(bytes);
-    const id = parseUnitId(headers.get('unit-id') || derivedUnitId(relative, headers));
+    const id = parseUnitId(stateUnitId(bytes, relative));
     const role = validateRole(headers.get('role'));
     const state = headers.get('state');
     if (state !== 'in' && state !== 'out') throw new CoreError(422, 'corrupt_resource', 'The state is not valid.');
@@ -665,8 +666,8 @@ function readTask(bytes, relative, units, issues, aliases = []) {
     if (!['open', 'review', 'done', 'closed'].includes(status)) throw new Error('status');
     const body = bodyText(bytes);
     const sections = taskSections(body);
-    const toId = personId(headers.get('to-id') || headers.get('to'), units, aliases);
-    const fromId = personId(headers.get('from-id') || headers.get('from'), units, aliases);
+    const toId = personId(headers.get('to-id') || headers.get('to'), units, aliases, id.scope);
+    const fromId = personId(headers.get('from-id') || headers.get('from'), units, aliases, id.scope);
     const assignee = units.find((unit) => unit.id === toId);
     const lead = units.find((unit) => unit.id === assignee?.leadId);
     const leadLabel = lead?.unit ?? null;
@@ -888,11 +889,15 @@ function chatMessageId(relative) {
   return match[1];
 }
 
-function personId(value, units = [], aliases = []) {
+function personId(value, units = [], aliases = [], scope = null) {
   if (value == null || value === '') return null;
   const text = String(value).trim();
   if (!text) return null;
   if (resolvePerson(text, { aliases }) || text === 'root:master') return 'root:master';
+  if (scope) {
+    try { return resolveUnit(text, { units: units.filter((unit) => !unit.malformed).map((unit) => ({ ...unit, unitId: unit.id })), scope, aliases }).unitId; }
+    catch { return null; }
+  }
   try {
     const parsed = parseUnitId(text);
     if (parsed.id === 'root:master') return 'root:master';
@@ -1027,12 +1032,12 @@ function bodyText(bytes) {
 
 async function scopeRoots(mind) {
   const roots = [{ state: 'user/state', tasks: 'user/tasks', inbox: 'user/inbox', archive: 'user/relay/archive' }];
-  for (const name of await childNames(mind, 'user/environments')) {
+  for (const name of await childNames(mind, 'user/envs')) {
     roots.push({
-      state: `user/environments/${name}/state`,
-      tasks: `user/environments/${name}/tasks`,
-      inbox: `user/environments/${name}/inbox`,
-      archive: `user/environments/${name}/archive`,
+      state: `user/envs/${name}/state`,
+      tasks: `user/envs/${name}/tasks`,
+      inbox: `user/envs/${name}/inbox`,
+      archive: `user/envs/${name}/archive`,
     });
   }
   for (const name of await childNames(mind, 'user/projects')) {
@@ -1056,14 +1061,6 @@ async function childNames(root, relative) {
     throw error;
   }
   return entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => entry.name).sort();
-}
-
-function derivedUnitId(relative, headers) {
-  const name = String(headers.get('unit') || path.basename(relative, '.md')).toLowerCase();
-  const parts = relative.split('/');
-  if (parts[1] === 'projects' && parts[3] === 'state') return `project:${parts[2]}:${name}`;
-  if (parts[1] === 'environments' && parts[3] === 'state') return `env:${parts[2]}:${name}`;
-  return `root:${name}`;
 }
 
 function derivedSessionId(record) {

@@ -166,7 +166,7 @@ export function canonicalTaskId(value, relative) {
   if (!number || text.includes(':')) return text;
   const parts = String(relative ?? '').split('/');
   if (parts[1] === 'projects' && parts[3] === 'tasks') return `project:${parts[2]}:${number}`;
-  if (parts[1] === 'environments' && parts[3] === 'tasks') return `env:${parts[2]}:${number}`;
+  if (parts[1] === 'envs' && parts[3] === 'tasks') return `env:${parts[2]}:${number}`;
   return `root:${number}`;
 }
 
@@ -215,7 +215,7 @@ export function resolvePerson(value, { aliases = [] } = {}) {
 export function scopeDirectory(scope) {
   const canonical = canonicalScope(scope);
   if (canonical.kind === 'root') return 'user';
-  if (canonical.kind === 'environment') return `user/environments/${canonical.name}`;
+  if (canonical.kind === 'environment') return `user/envs/${canonical.name}`;
   return `user/projects/${canonical.name}`;
 }
 

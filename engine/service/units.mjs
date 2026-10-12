@@ -1,8 +1,9 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, validateName, validateRole, canonicalScope } from './identity.mjs';
 import { answersFor, readDetail } from './projection.mjs';
+import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -240,45 +241,10 @@ async function readBeat(context, machine) {
 
 async function leadMap(context) {
   const map = new Map();
-  for (const relative of await stateFiles(context)) {
-    const bytes = await readBytes(context.store, absolute(context, relative));
-    if (!bytes) continue;
-    const id = header(bytes, 'unit-id');
-    if (!id || map.has(id)) continue;
+  for (const { bytes, id } of await readUnitStates(context)) {
     map.set(id, { id, role: header(bytes, 'role'), leadId: header(bytes, 'lead-id') });
   }
   return map;
-}
-
-async function stateFiles(context) {
-  const relatives = [];
-  const addDir = async (relativeDir) => {
-    const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
-    let names = [];
-    try {
-      names = await readdir(directory);
-    } catch (error) {
-      if (error?.code === 'ENOENT') return;
-      throw error;
-    }
-    for (const name of names) {
-      if (!name.endsWith('.md') || name.includes('.conflict-')) continue;
-      relatives.push(`${relativeDir}/${name}`);
-    }
-  };
-  await addDir('user/state');
-  for (const kind of ['environments', 'projects']) {
-    const parent = path.join(context.paths.mind, 'user', kind);
-    let children = [];
-    try {
-      children = await readdir(parent);
-    } catch (error) {
-      if (error?.code === 'ENOENT') continue;
-      throw error;
-    }
-    for (const child of children) await addDir(`user/${kind}/${child}/state`);
-  }
-  return relatives;
 }
 
 function assertNoCycle(unitId, leadId, map) {
@@ -289,17 +255,6 @@ function assertNoCycle(unitId, leadId, map) {
     seen.add(current);
     current = map.get(current)?.leadId ?? null;
   }
-}
-
-async function readState(context, parsed) {
-  const relative = unitStatePath(parsed);
-  const bytes = await readBytes(context.store, absolute(context, relative));
-  if (bytes && header(bytes, 'unit-id') === parsed.id) return { bytes, relative, absolute: absolute(context, relative) };
-  const legacy = `user/state/${parsed.unit}.md`;
-  if (legacy === relative) return null;
-  const old = await readBytes(context.store, absolute(context, legacy));
-  if (!old || header(old, 'unit-id') !== parsed.id) return null;
-  return { bytes: old, relative: legacy, absolute: absolute(context, legacy) };
 }
 
 async function readJson(context, relative) {

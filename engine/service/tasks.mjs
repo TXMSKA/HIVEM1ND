@@ -5,6 +5,8 @@ import { CoreError, canonicalTaskId, hashBytes, isPersonAlias, parseTaskId, pars
 import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
+import { readUnitState, readUnitStates } from './state.mjs';
+import { resolveUnit } from './identity.mjs';
 import { atomicWrite, commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -34,7 +36,14 @@ export async function loadTask(context, taskId) {
       const bytes = await readBytes(context.store, absolute(context, relative));
       if (!bytes) continue;
       const task = describe(bytes, relative, parsed.id, await aliasesFor(context));
-      if (task?.id === parsed.id) return { ...task, ...(await assigneeLead(context, task.toId)) };
+      if (task?.id === parsed.id) {
+        if (!task.toId && task.to) {
+          const units = (await readUnitStates(context)).map(({ id }) => ({ unit: parseUnitId(id).unit, unitId: id, scope: parseUnitId(id).scope }));
+          try { task.toId = resolveUnit(task.to, { units, scope: parsed.scope, aliases: task.aliases }).unitId; }
+          catch (error) { if (!['unit_not_found', 'ambiguous_unit', 'invalid_unit', 'invalid_name'].includes(error?.code)) throw error; }
+        }
+        return { ...task, ...(await assigneeLead(context, task.toId)) };
+      }
     }
   }
   throw new CoreError(404, 'task_not_found', 'The task does not exist.');
@@ -56,7 +65,7 @@ export function leadApproved(body, leadName, date) {
 
 export function reviewAuthority(task) {
   const requesterId = requesterOf(task, task.aliases ?? []);
-  const reviewable = task.status === 'review' && requesterId === 'root:master' && (!task.leadId || leadApproved(task.body, task.leadUnit || '', task.date));
+  const reviewable = Boolean(task.toId) && task.status === 'review' && requesterId === 'root:master' && (!task.leadId || leadApproved(task.body, task.leadUnit || '', task.date));
   return { reviewable, requesterId, leadId: task.leadId ?? null };
 }
 
@@ -235,6 +244,7 @@ function describe(bytes, relative, expectedId, aliases) {
     from: headers.get('from') || '',
     fromId: headers.get('from-id') || '',
     toId: headers.get('to-id') || null,
+    to: headers.get('to') || '',
     date: headers.get('date') || '',
     aliases,
     bytes,
@@ -252,7 +262,7 @@ async function assigneeLead(context, unitId) {
   } catch {
     return { leadId: null, leadUnit: null };
   }
-  const bytes = await readBytes(context.store, path.join(context.paths.mind, 'user', 'state', `${parsed.unit}.md`));
+  const bytes = (await readUnitState(context, parsed))?.bytes;
   if (!bytes) return { leadId: null, leadUnit: null };
   const headers = headerMap(bytes);
   const leadId = headers.get('lead-id') || null;

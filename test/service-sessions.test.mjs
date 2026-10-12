@@ -71,6 +71,16 @@ test('unavailable clients, bad models, stale state and a quiet machine do not st
   assert.throws(() => parseClaudeLine('{"type":"system","subtype":"init"}'), (error) => error.code === 'protocol_error');
 });
 
+test('an npm wrapper probes the client version through its script prefix', async (t) => {
+  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const wrapper = path.join(fixture.root, 'codex.cmd');
+  const script = path.join(fixture.root, 'client.js');
+  await writeFile(script, 'if (process.argv[2] !== "--version") process.exit(1); console.log("codex-cli fixture-version");');
+  await writeFile(wrapper, `@echo off\n"${process.execPath}" "${script}" %*\n`);
+  const reports = await probeClients({ env: { ...fixture.env, PATH: '', HIVEM1ND_CODEX: wrapper }, spawnVersion: true });
+  assert.equal(reports.codex.version, 'codex-cli fixture-version');
+});
+
 test('a fixture launch preloads once, does not leak endpoints, and stops only an owned process', async (t) => {
   const { fixture, context, calls, signaled, file } = await world(t);
   const started = await start(context, file);
@@ -82,7 +92,7 @@ test('a fixture launch preloads once, does not leak endpoints, and stops only an
   const again = await consumeStart(context, started.request.id);
   assert.equal(again.replayed, true);
   assert.equal(again.result.state, 'started');
-  const inbox = await readdir(path.join(fixture.paths.mind, 'user', 'inbox', 'executor-shop'));
+  const inbox = await readdir(path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop'));
   assert.equal(inbox.length, 1);
   await assert.rejects(() => stopSession(context, started.result.sessionId, { confirmed: false }), { code: 'invalid_body' });
   const credentials = createCredentialStore({ now: () => fixture.clock.now });

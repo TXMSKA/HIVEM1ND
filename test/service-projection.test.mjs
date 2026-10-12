@@ -369,7 +369,7 @@ test('unit, lead, layout, and settings writes are validated before any file chan
   assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state', 'worker.md')).then(() => true, () => false), true);
   const executorPath = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state', 'executor-shop.md');
   const beforeCycle = await readFile(executorPath);
-  const overlordRevision = revisionOf(await readFile(path.join(fixture.paths.mind, 'user', 'environments', 'web', 'state', 'overlord-web.md')));
+  const overlordRevision = revisionOf(await readFile(path.join(fixture.paths.mind, 'user', 'envs', 'web', 'state', 'overlord-web.md')));
   await assert.rejects(
     () => connectLead(context, 'env:web:overlord-web', { leadId: 'project:shop:executor-shop', confirmed: true, expectedRevision: overlordRevision }),
     (error) => error.code === 'lead_cycle',

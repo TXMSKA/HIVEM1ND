@@ -1,7 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8 } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, uuidV8 } from './identity.mjs';
+import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate, readDetail } from './projection.mjs';
@@ -364,25 +365,14 @@ async function applyRevocation(context, state, request, { writeRequest }) {
 async function reconcileGrants(context) {
   const tombstones = await readTombstones(context);
   if (tombstones.ids.size === 0) return;
-  const directory = path.join(context.paths.mind, 'user', 'state');
-  let names = [];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return;
-    throw error;
-  }
-  for (const name of names) {
-    if (!name.endsWith('.md')) continue;
-    const relative = `user/state/${name}`;
-    const bytes = await readBytes(context.store, absolute(context, relative));
+  for (const { id, relative, bytes } of await readUnitStates(context)) {
     if (!bytes || headerValue(bytes, 'machine') !== context.paths.machine) continue;
     const grants = grantsOf(bytes);
     const kept = grants.filter((grant) => !tombstones.ids.has(grant.id));
     if (kept.length === grants.length) continue;
     const next = replaceHeader(bytes, 'approvals', canonicalJson(kept));
     await commitFiles(context, [entry(context, relative, revisionOf(bytes), next)], [
-      { name: 'unit.changed', data: { unit: { id: headerValue(bytes, 'unit-id') } } },
+      { name: 'unit.changed', data: { unit: { id } } },
     ]);
   }
 }
@@ -495,17 +485,6 @@ async function readTombstones(context) {
   if (!bytes) return { ids: new Set(), bytes: null };
   const parsed = JSON.parse(bytes.toString('utf8'));
   return { ids: new Set(Array.isArray(parsed.ids) ? parsed.ids : []), bytes };
-}
-
-async function readState(context, parsed) {
-  const relative = unitStatePath(parsed);
-  const bytes = await readBytes(context.store, absolute(context, relative));
-  if (bytes && headerValue(bytes, 'unit-id') === parsed.id) return { relative, bytes };
-  const legacy = `user/state/${parsed.unit}.md`;
-  if (legacy === relative) return null;
-  const old = await readBytes(context.store, absolute(context, legacy));
-  if (!old || headerValue(old, 'unit-id') !== parsed.id) return null;
-  return { relative: legacy, bytes: old };
 }
 
 async function readJson(context, relative) {

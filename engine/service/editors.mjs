@@ -13,6 +13,7 @@ import { bindProjects, commitTransaction } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { convertMedia, webpPayload } from '../sync/media.mjs';
 import { startResourceWatch } from './watch.mjs';
+import { readUnitState } from './state.mjs';
 
 const ASSET_LIMIT = 10000000;
 const PNG_RAW_LIMIT = 32_000_000;
@@ -732,14 +733,7 @@ async function canonicalAttachments(context, list) {
 
 async function unitOnMind(context, parsed) {
   if (parsed.id === 'root:master') return true;
-  const file = path.join(context.paths.mind, 'user', 'state', `${parsed.unit}.md`);
-  try {
-    const text = await readFile(file, 'utf8');
-    return text.includes(`unit-id: ${parsed.id}`);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw error;
-  }
+  return Boolean(await readUnitState(context, parsed));
 }
 
 function sniff(bytes) {

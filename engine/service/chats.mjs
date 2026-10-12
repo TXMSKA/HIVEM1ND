@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
+import { readUnitState } from './state.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
@@ -81,7 +82,7 @@ export async function postChat(context, chatId, input) {
     place: (id) => `user/relay/chats/${chatId}/${id}.md`,
   });
   if (input?.replyTo) {
-    const reply = await readBytes(context.store, absolute(context, `user/relay/chats/${chatId}/${input.replyTo}.md`));
+    const reply = (await chatRecords(context, chatId)).find((item) => item.id === input.replyTo);
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this chat.');
   }
   const notices = fanoutFor(message, chat.members, fromId);
@@ -136,8 +137,9 @@ export async function readChat(context, chatId, input) {
     throw new CoreError(403, 'not_chat_member', 'The reader is not a member of this chat.');
   }
   const ids = requireIds(input?.messageIds);
+  const records = await chatRecords(context, chatId);
   for (const id of ids) {
-    if (!(await readBytes(context.store, absolute(context, `user/relay/chats/${chatId}/${id}.md`)))) {
+    if (!records.some((item) => item.id === id)) {
       throw new CoreError(404, 'message_not_found', 'A message in the receipt does not exist.');
     }
   }
@@ -470,11 +472,29 @@ function parseChat(bytes, id) {
 
 async function unreadChat(context, chatId, reader, extra = []) {
   const directory = path.join(context.paths.mind, 'user', 'relay', 'chats', chatId);
-  const names = await readdir(directory);
   const read = new Set(extra);
   const receiptRoot = path.join(directory, 'read', Buffer.from(reader).toString('base64url'));
   await collectReceipts(receiptRoot, read);
-  return names.filter((name) => name.endsWith('.md') && name !== 'chat.md' && !read.has(name.slice(0, -3))).length;
+  return (await chatRecords(context, chatId)).filter((item) => !read.has(item.id)).length;
+}
+
+async function chatRecords(context, chatId) {
+  const records = [];
+  for (const suffix of ['', '/notices']) {
+    const relativeDir = `user/relay/chats/${chatId}${suffix}`;
+    let names;
+    try { names = await readdir(absolute(context, relativeDir)); }
+    catch (error) { if (error?.code === 'ENOENT') continue; throw error; }
+    for (const name of names) {
+      if (!name.endsWith('.md') || name === 'chat.md' || name.includes('.conflict-')) continue;
+      const relative = `${relativeDir}/${name}`;
+      const bytes = await readBytes(context.store, absolute(context, relative));
+      if (!bytes || bytes.length > RECORD_MAX) continue;
+      const id = headerMap(bytes).get('id');
+      if (id) records.push({ id, relative, bytes });
+    }
+  }
+  return records;
 }
 
 async function collectReceipts(directory, read) {
@@ -540,8 +560,7 @@ async function removeSources(context, relatives) {
 async function unitExists(context, id) {
   if (id === 'root:master') return true;
   const parsed = parseUnitId(id);
-  const bytes = await readBytes(context.store, path.join(context.paths.mind, 'user', 'state', `${parsed.unit}.md`));
-  return Boolean(bytes && headerMap(bytes).get('unit-id') === parsed.id);
+  return Boolean(await readUnitState(context, parsed));
 }
 
 function author(context) {

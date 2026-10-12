@@ -2,8 +2,9 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CLIENTS, CoreError, canonicalJson, hashBytes, parseUnitId, uuidV8 } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
 import { answersFor } from './projection.mjs';
+import { readUnitState } from './state.mjs';
 import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocks } from './store.mjs';
@@ -24,7 +25,8 @@ export async function probeClients(options = {}) {
     const installed = Boolean(command);
     let version = null;
     if (installed && options.spawnVersion === true && !String(command).toLowerCase().endsWith('.cmd')) {
-      version = await versionOf(command, client === 'cursor' ? located.args ?? [] : [], options);
+      const prefix = client === 'cursor' ? located.args ?? [] : unwrapped.args.slice(0, -launchArgs(client).length);
+      version = await versionOf(command, prefix, options);
     }
     reports[client] = {
       client,
@@ -189,7 +191,7 @@ export async function enqueueStart(context, input) {
   const client = input?.client;
   if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const unit = parseUnitId(input.unitId);
-  const state = await readBytes(context.store, path.join(context.paths.mind, 'user', 'state', `${unit.unit}.md`));
+  const state = (await readUnitState(context, unit))?.bytes;
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (hashBytes(state) !== input.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
@@ -353,7 +355,7 @@ async function launch(context, request) {
     return finish(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
   }
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
-  const state = await readBytes(context.store, statePath(context, request.unitId));
+  const state = (await readUnitState(context, parseUnitId(request.unitId)))?.bytes;
   if (!state || hashBytes(state) !== request.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   const cwd = registeredProjectCwd(context, request.unitId);
   if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
@@ -419,7 +421,7 @@ async function preload(context, request) {
   if (await readJson(context, markerPath)) return null;
   const messageId = request.id;
   const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\ntimestamp: ${stamp(context)}\n\n${request.prompt}\n`);
-  const message = `user/inbox/${parseUnitId(request.unitId).unit}/${stamp(context).replace(/[-:]/g, '').replace('.000Z', '').replace('T', '-')}-${context.paths.machine}-${messageId}.md`;
+  const message = `${inboxDirectory(parseUnitId(request.unitId))}/${stamp(context).replace(/[-:]/g, '').replace('.000Z', '').replace('T', '-')}-${context.paths.machine}-${messageId}.md`;
   await commit(context, [
     { relative: markerPath, bytes: jsonBytes({ requestId: request.id, messageId }) },
     { relative: message, bytes },
@@ -500,7 +502,7 @@ async function currentBeat(context) {
   }
 }
 
-export async function readStartRequest(context, requestId) {
+export async function readStartRequest(context, requestId, options = {}) {
   const relative = await findRequest(context, requestId);
   const request = relative ? await readJson(context, relative) : null;
   if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
@@ -508,7 +510,7 @@ export async function readStartRequest(context, requestId) {
     let result = await latestResult(context, requestId);
     const current = (await listJournals(context)).find((item) => item.requestId === requestId) ?? null;
     const consumed = current?.pid != null;
-    if (!consumed && (!result || !TERMINAL.has(result.state)) && Date.parse(request.expiresAt) <= context.now()) {
+    if (options.readOnly !== true && !consumed && (!result || !TERMINAL.has(result.state)) && Date.parse(request.expiresAt) <= context.now()) {
       if (current && current.phase !== 'failed') await writeJournal(context, { ...current, phase: 'failed', pid: null });
       result = await writeResult(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
     }
@@ -1175,10 +1177,6 @@ async function commit(context, records) {
     })),
     events: [],
   });
-}
-
-function statePath(context, unitId) {
-  return path.join(context.paths.mind, 'user', 'state', `${parseUnitId(unitId).unit}.md`);
 }
 
 function stamp(context) {
