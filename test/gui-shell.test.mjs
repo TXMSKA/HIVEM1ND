@@ -1142,7 +1142,7 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   typeInput(desktop.document.querySelector("[data-field='create-id']"), "sample-board", 0, 12);
   typeInput(desktop.document.querySelector("[data-field='create-title']"), "Sample", 0, 6);
   click(desktop.document.querySelector("[data-action='create-resource']"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board", "The new board did not open.");
+  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board" && desktop.root.querySelector("[data-editor-title]")?.getAttribute("data-editor-title") === "Sample", "The new board did not open.");
   const createdRevision = desktop.app.editors.current.revision;
   click(desktop.root.querySelector("[data-action='move-page']"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.[0]?.id === "more", "The page order was not saved.");
