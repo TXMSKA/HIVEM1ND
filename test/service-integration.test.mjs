@@ -459,7 +459,7 @@ test('an open stream receives imported chat, unit, and editor events once', asyn
   assert.equal(board.data.data.operation, 'import');
   assert.equal(board.data.data.nodeId, null);
   assert.equal(frames.filter((frame) => frame.name === 'view.changed').length, 1);
-  assert.deepEqual(frames.find((frame) => frame.name === 'view.changed').data.data.collections, ['chats', 'editors', 'leads', 'squads', 'units']);
+  assert.deepEqual(frames.find((frame) => frame.name === 'view.changed').data.data.collections, ['chats', 'editors', 'leads', 'squads', 'units', 'waiting']);
   assert.equal(outsider.length, 0);
   const sameMessage = '88888888-8888-4888-8888-888888888888';
   await publishPack(laptop, encodePack({

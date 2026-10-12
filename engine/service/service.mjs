@@ -24,6 +24,7 @@ import { createHttpServer } from './http.mjs';
 import { recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
 import { resolveActivity } from './watch.mjs';
+import { bytesAt, importedSidecarEvents } from './import-events.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -59,6 +60,7 @@ export async function startService(options) {
   };
   try {
     await acquireServiceLock(handle);
+    if (options.projects) bindProjects(options.store, options.projects);
     await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
     const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: paths.machine, mind: paths.mind });
@@ -663,6 +665,7 @@ async function retryPending(runtime, provider, bindings) {
 
 async function emitImported(runtime, result) {
   if (!runtime?.bus || result?.status !== 'applied' || result.replayed === true) return;
+  if (result.machine === runtime.paths.machine) return;
   const selected = latestImported(result.changes ?? []);
   if (selected.length === 0) return;
   const context = {
@@ -675,10 +678,21 @@ async function emitImported(runtime, result) {
   const sourceMachine = result.machine ?? selected[0].machine;
   const events = [];
   const collections = new Set();
+  const seen = new Map();
   for (const change of selected) {
     try {
       const built = await eventsForImported(runtime, context, change);
-      for (const event of built.events) events.push(event);
+      for (const event of built.events) {
+        const data = event.data ?? {};
+        const identity = event.name === 'message.read' ? `${data.chatId ?? data.mailboxId}:${data.readerId}` : data.thread?.id ?? data.proposal?.id ?? data.asset?.id ?? data.task?.id ?? data.message?.id ?? data.approval?.id ?? data.session?.id ?? data.chat?.id ?? data.noticeKey ?? data.requestId ?? event.resourceId ?? event.unitId ?? data.readerId ?? '';
+        const marker = `${event.name}:${identity}`;
+        if (seen.has(marker)) {
+          if (event.name === 'message.read') seen.get(marker).data.messageIds = [...new Set([...seen.get(marker).data.messageIds, ...data.messageIds])];
+          continue;
+        }
+        seen.set(marker, event);
+        events.push({ ...event, operationId: `sync:${sourceMachine}:${result.sequence}:${marker}`, source: event.source ?? syncSource(change) });
+      }
       for (const name of built.collections) collections.add(name);
     } catch (error) {
       runtime.lastError = error;
@@ -729,18 +743,21 @@ function syncSource(change) {
 async function eventsForImported(runtime, context, change) {
   const target = change.target ?? {};
   const file = slashPath(target.path);
-  if (!file || file.includes('.conflict-') || file.includes('/read/')) return { events: [], collections: [] };
+  if (!file || file.includes('.conflict-')) return { events: [], collections: [] };
+  const sidecar = await importedSidecarEvents(context, change);
+  if (sidecar) return sidecar;
   if (target.kind === 'project') return editorImport(runtime, change, target, file);
   return mindImport(runtime, context, change, file);
 }
 
 async function mindImport(runtime, context, change, file) {
   const source = syncSource(change);
-  const message = /^user\/relay\/chats\/([^/]+)\/([^/]+)\.md$/.exec(file);
+  const message = /^user\/relay\/chats\/([^/]+)\/(?:notices\/)?([^/]+)\.md$/.exec(file);
   if (message && message[2] !== 'chat') {
     if (change.operation === 'delete') return { events: [], collections: ['chats'] };
     const chatId = message[1];
-    const projected = await readDetail(context, 'messages', message[2], { chatId });
+    const bytes = await bytesAt(runtime.paths.mind, file);
+    const projected = await readDetail(context, 'messages', headerValue(bytes, 'id') || message[2], { chatId });
     const events = [{
       name: 'message.created',
       operationId: change.id,
@@ -768,11 +785,11 @@ async function mindImport(runtime, context, change, file) {
   const fallbackUnit = stateUnitId(file);
   if (!fallbackUnit) return { events: [], collections: [] };
   if (change.operation === 'delete') return { events: [], collections: ['units', 'leads', 'squads'] };
-  const bytes = await readFile(path.join(runtime.paths.mind, ...file.split('/')));
+  const bytes = await bytesAt(runtime.paths.mind, file);
   const unit = await readDetail(context, 'units', headerValue(bytes, 'unit-id') || fallbackUnit);
   return {
     events: [{ name: 'unit.changed', operationId: change.id, unitId: unit.id, source, data: { unit } }],
-    collections: ['units', 'leads', 'squads'],
+    collections: ['units', 'leads', 'squads', 'waiting'],
   };
 }
 
@@ -780,14 +797,14 @@ function stateUnitId(file) {
   const parts = file.split('/');
   if (parts[0] !== 'user' || !file.endsWith('.md')) return null;
   if (parts[1] === 'state' && parts.length === 3) return `root:${path.basename(parts[2], '.md').toLowerCase()}`;
-  if (parts[1] === 'environments' && parts[3] === 'state' && parts.length === 5) return `env:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
+  if (parts[1] === 'envs' && parts[3] === 'state' && parts.length === 5) return `env:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
   if (parts[1] === 'projects' && parts[3] === 'state' && parts.length === 5) return `project:${parts[2]}:${path.basename(parts[4], '.md').toLowerCase()}`;
   return null;
 }
 
 function headerValue(bytes, name) {
   const text = bytes.toString('utf8');
-  const split = text.indexOf('\n\n');
+  const split = text.search(/\r?\n\r?\n/);
   const head = split >= 0 ? text.slice(0, split) : text;
   for (const line of head.split(/\r?\n/)) {
     const colon = line.indexOf(':');
@@ -803,7 +820,7 @@ async function editorImport(runtime, change, target, file) {
   if (change.operation === 'delete') return { events: [], collections: ['editors'] };
   const project = (runtime.sync.projects ?? []).find((item) => item.name === target.project && item.localPath);
   if (!project) return { events: [], collections: [] };
-  const bytes = await readFile(path.join(project.localPath, ...file.split('/')));
+  const bytes = await bytesAt(project.localPath, file);
   const revision = hashBytes(bytes);
   const resourceId = await catalogResourceId(runtime, target.project, file, kind);
   const source = syncSource(change);
