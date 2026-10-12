@@ -22,6 +22,7 @@ import { servicePaths } from '../engine/service/paths.mjs';
 import { createStore } from '../engine/service/store.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
+import { WEBP } from './media-fixture.mjs';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
@@ -34,21 +35,7 @@ function pngChunk(type, data) {
   return chunk;
 }
 
-function framedWebp(width = 1, height = 1) {
-  const frame = Buffer.alloc(11);
-  frame[0] = 0x10;
-  frame[3] = 0x9d;
-  frame[4] = 0x01;
-  frame[5] = 0x2a;
-  frame.writeUInt16LE(width, 6);
-  frame.writeUInt16LE(height, 8);
-  const size = Buffer.alloc(4);
-  size.writeUInt32LE(frame.length);
-  const chunk = Buffer.concat([Buffer.from('VP8 '), size, frame, Buffer.from([0])]);
-  const declared = Buffer.alloc(4);
-  declared.writeUInt32LE(4 + chunk.length);
-  return Buffer.concat([Buffer.from('RIFF'), declared, Buffer.from('WEBP'), chunk]);
-}
+function framedWebp() { return Buffer.from(WEBP); }
 
 function headerOnlyWebp() {
   const webp = Buffer.alloc(30);

@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { convertMedia, findConverter } from '../engine/sync/media.mjs';
+import { convertMedia, findConverter, webpPayload } from '../engine/sync/media.mjs';
+import { WEBP, LOSSLESS_WEBP } from './media-fixture.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 function pngChunk(type, data) {
@@ -25,21 +26,22 @@ function crc32(bytes) {
   return crc ^ 0xffffffff;
 }
 
-function framedWebp(width = 1, height = 1) {
-  const frame = Buffer.alloc(11);
-  frame[0] = 0x10;
-  frame[3] = 0x9d;
-  frame[4] = 0x01;
-  frame[5] = 0x2a;
-  frame.writeUInt16LE(width, 6);
-  frame.writeUInt16LE(height, 8);
-  const size = Buffer.alloc(4);
-  size.writeUInt32LE(frame.length);
-  const chunk = Buffer.concat([Buffer.from('VP8 '), size, frame, Buffer.from([0])]);
-  const declared = Buffer.alloc(4);
-  declared.writeUInt32LE(4 + chunk.length);
-  return Buffer.concat([Buffer.from('RIFF'), declared, Buffer.from('WEBP'), chunk]);
-}
+function framedWebp() { return Buffer.from(WEBP); }
+
+test('WebP needs coded partitions beyond dimensions and retains real lossy and lossless images', async () => {
+  assert.deepEqual(webpPayload(WEBP), { width: 3, height: 2 });
+  assert.deepEqual(webpPayload(LOSSLESS_WEBP), { width: 3, height: 2 });
+  for (const tag of ['VP8 ', 'VP8L']) {
+    const frame = Buffer.alloc(tag === 'VP8 ' ? 11 : 6);
+    if (tag === 'VP8 ') { frame[0] = 0x10; frame.set([0x9d, 1, 0x2a], 3); frame.writeUInt16LE(1, 6); frame.writeUInt16LE(1, 8); }
+    else frame[0] = 0x2f;
+    const bytes = Buffer.alloc(20 + frame.length + (frame.length & 1));
+    bytes.write('RIFF'); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write('WEBP', 8); bytes.write(tag, 12); bytes.writeUInt32LE(frame.length, 16); frame.copy(bytes, 20);
+    assert.equal(webpPayload(bytes), null);
+    const result = await convertMedia({ bytes, contentType: 'image/webp', immutable: true }, { converter: null });
+    assert.equal(result.issue.code, 'invalid_asset');
+  }
+});
 
 function tinyPng() {
   const raw = Buffer.from([0, 255, 0, 0, 255]);
@@ -167,7 +169,7 @@ test('failed verification and failed conversion keep the original bytes', async 
   assert.equal(calls.length, 0);
   assert.equal(keptWebp.issue, null);
   assert.ok(keptWebp.bytes.equals(framed));
-  const truncated = Buffer.concat([framed.subarray(0, framed.length - 4), Buffer.alloc(4)]);
+  const truncated = framed.subarray(0, framed.length - 4);
   const cut = await convertMedia({
     bytes: truncated,
     contentType: 'image/webp',

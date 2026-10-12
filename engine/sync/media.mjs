@@ -286,6 +286,11 @@ function vp8xSize(data) {
 
 function vp8Size(data) {
   if (data.length < 11 || (data[0] & 1) !== 0) return null;
+  const tag = data.readUIntLE(0, 3);
+  const partitionSize = tag >>> 5;
+  if (((tag >>> 1) & 7) > 3 || !(tag & 16)) return null;
+  // The control partition excludes the ten-byte key-frame header; coefficient data follows it.
+  if (partitionSize < 2 || 10 + partitionSize >= data.length) return null;
   if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) return null;
   const width = data.readUInt16LE(6) & 0x3fff;
   const height = data.readUInt16LE(8) & 0x3fff;
@@ -294,7 +299,8 @@ function vp8Size(data) {
 }
 
 function vp8lSize(data) {
-  if (data.length < 6 || data[0] !== 0x2f) return null;
+  // Even five single-symbol prefix trees need 20 bits after transform/cache/meta flags.
+  if (data.length < 8 || data[0] !== 0x2f || !data.subarray(5).some((byte) => byte !== 0)) return null;
   const bits = data.readUInt32LE(1);
   if ((bits >>> 29) !== 0) return null;
   const width = (bits & 0x3fff) + 1;
