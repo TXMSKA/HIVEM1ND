@@ -7,6 +7,9 @@ import { answerApproval, approvalRevision, consumeAnswers, consumeRevocations, n
 import { openSync } from '../engine/sync/store.mjs';
 import { canonicalJson } from '../engine/service/identity.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
+import { createNativeAdapter, enqueueStart } from '../engine/service/adapters.mjs';
+import { dispatch } from '../engine/service/mcp.mjs';
+import { validateToolArguments } from '../engine/relay/mcp.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const UNIT = 'project:shop:executor-shop';
@@ -347,4 +350,83 @@ test('approval commits notify the running pulse with the staged transaction', as
   const state = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'));
   await revokeGrant(master, UNIT, resolved.grantId, { expectedRevision: revisionOf(state) });
   assert.equal(pulsed.length > afterAnswer, true);
+});
+
+async function childWorld(t) {
+  const { fixture, context, master } = await service(t);
+  const native = createNativeAdapter('codex', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
+  const child = createNativeAdapter('cursor', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
+  let creates = 0;
+  const create = child.create.bind(child);
+  child.create = async (request) => { creates += 1; return create(request); };
+  context.adapters = master.adapters = { codex: native, cursor: child };
+  context.projects = master.projects = [{ name: 'shop', localPath: fixture.root }];
+  context.beat = master.beat = { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() };
+  context.ownedPids = master.ownedPids = new Set();
+  const state = await readFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md'));
+  const parent = await enqueueStart(context, { unitId: UNIT, client: 'codex', runMode: 'chat', stateRevision: revisionOf(state) });
+  context.principal.sessionId = parent.result.sessionId;
+  context.credential = { audience: 'agent', unitId: UNIT, sessionId: parent.result.sessionId };
+  const unitId = 'project:shop:executor-child';
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-child.md'), `unit: executor-child\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  return { fixture, context, master, parent, pattern: { client: 'cursor', machine: 'DESKTOP', unitId, runMode: 'chat', taskId: null }, creates: () => creates };
+}
+
+test('session.open has an exact bounded shape and never permits standing authority or shell input', () => {
+  const pattern = { client: 'codex', machine: 'DESKTOP', unitId: UNIT, runMode: 'chat', taskId: null };
+  assert.equal(normalizeAction('session.open', pattern).alwaysAllowed, false);
+  assert.deepEqual(normalizeAction('session.open', pattern).pattern, pattern);
+  for (const extra of ['executable', 'cwd', 'environment', 'shell']) assert.throws(() => normalizeAction('session.open', { ...pattern, [extra]: 'foreign' }), { code: 'invalid_body' });
+  assert.throws(() => normalizeAction('session.open', { ...pattern, runMode: 'task' }), { code: 'task_required' });
+  assert.deepEqual(validateToolArguments('session_open', pattern), pattern);
+  assert.throws(() => validateToolArguments('session_open', { ...pattern, executable: 'foreign' }), { code: 'INVALID_ARGUMENTS' });
+});
+
+test('one approved session.open launches one child and replayed or synced answers cannot launch another', async (t) => {
+  const world = await childWorld(t);
+  const { context, master, pattern } = world;
+  const requested = await requestApproval(context, { action: 'session.open', pattern, display: 'Open another CLI', alwaysAllowed: true });
+  assert.equal(requested.approval.alwaysAllowed, false);
+  assert.equal(world.creates(), 0);
+  await assert.rejects(() => answerApproval(master, requested.approval.id, { decision: 'approve-always', expectedRevision: requested.approval.revision }), { code: 'always_unavailable' });
+  const remote = { ...master, paths: { ...master.paths, machine: 'LAPTOP' } };
+  const queued = await answerApproval(remote, requested.approval.id, { decision: 'approve', expectedRevision: requested.approval.revision });
+  assert.equal(queued.approval.state, 'answering');
+  assert.equal(world.creates(), 0);
+  const consumed = await consumeAnswers(master, requested.approval.id);
+  assert.equal(consumed[0].child.result.state, 'started');
+  assert.equal(consumed[0].child.request.approvalId, requested.approval.id);
+  assert.equal(world.creates(), 1);
+  await consumeAnswers(master, requested.approval.id);
+  await assert.rejects(() => answerApproval(master, requested.approval.id, { decision: 'approve', expectedRevision: queued.approval.revision }), { code: 'approval_resolved' });
+  assert.equal(world.creates(), 1);
+});
+
+test('denied expired offline and unbound session requests never open a child', async (t) => {
+  const world = await childWorld(t);
+  const { context, master, pattern, fixture } = world;
+  const denied = await requestApproval(context, { action: 'session.open', pattern, display: 'Open another CLI' });
+  await answerApproval(master, denied.approval.id, { decision: 'deny', expectedRevision: denied.approval.revision });
+  const expired = await requestApproval(context, { action: 'session.open', pattern, display: 'Open another CLI' });
+  fixture.clock.now += 120001;
+  await recoverApprovals(master);
+  await assert.rejects(() => answerApproval(master, expired.approval.id, { decision: 'approve', expectedRevision: expired.approval.revision }), { code: 'approval_expired' });
+  await assert.rejects(() => requestApproval(context, { action: 'session.open', pattern: { ...pattern, machine: 'LAPTOP' }, display: 'Open another CLI' }), { code: 'machine_unavailable' });
+  await assert.rejects(() => requestApproval({ ...context, principal: { ...context.principal, sessionId: 'foreign' } }, { action: 'session.open', pattern, display: 'Open another CLI' }), { code: 'invalid_binding' });
+  assert.equal(world.creates(), 0);
+});
+
+test('the bound MCP forwards one session approval and rejects arbitrary launch fields', async (t) => {
+  const world = await childWorld(t);
+  const args = { ...world.pattern, requestId: randomUUID() };
+  const call = (input) => dispatch(world.context, { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name: 'session_open', arguments: input } });
+  const first = await call(args);
+  assert.equal(first.result.isError, false);
+  const request = JSON.parse(first.result.content[0].text).data;
+  const repeated = JSON.parse((await call(args)).result.content[0].text).data;
+  assert.equal(request.approval.id, repeated.approval.id);
+  assert.equal(request.approval.action, 'session.open');
+  assert.equal(world.creates(), 0);
+  const invalid = await call({ ...args, cwd: 'foreign' });
+  assert.equal(invalid.error.code, -32602);
 });

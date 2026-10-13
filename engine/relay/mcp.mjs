@@ -5,7 +5,7 @@ import { toolSchemas } from '../service/mcp.mjs';
 
 const MAX_LINE_CHARS = 1_048_576;
 const SUPPORTED_PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const MUTATING_TOOLS = new Set(['register', 'send_message', 'read_inbox', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
+const MUTATING_TOOLS = new Set(['register', 'send_message', 'read_inbox', 'session_open', 'session_complete', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
 
 export const RELAY_TOOLS = [
   tool('register', 'Bind this native agent session to an explicit unit.', {
@@ -89,7 +89,7 @@ export function validateToolArguments(name, args) {
   for (const key of schema.required) if (!Object.hasOwn(args, key)) throw Object.assign(new Error(`Missing required argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
   for (const [key, value] of Object.entries(args)) {
     const rule = schema.properties[key];
-    const valid = rule.type === 'array'
+    const valid = Array.isArray(rule.type) ? value === null && rule.type.includes('null') || typeof value === 'string' && rule.type.includes('string') : rule.type === 'array'
       ? Array.isArray(value)
       : rule.type === 'integer'
         ? Number.isInteger(value)
@@ -98,7 +98,7 @@ export function validateToolArguments(name, args) {
           : typeof value === rule.type;
     if (!valid) throw Object.assign(new Error(`Invalid type for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.enum && !rule.enum.includes(value)) throw Object.assign(new Error(`Invalid value for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
-    if (rule.maxLength && value.length > rule.maxLength) throw Object.assign(new Error(`Argument is too long: ${key}`), { code: 'INVALID_ARGUMENTS' });
+    if (rule.maxLength && value != null && value.length > rule.maxLength) throw Object.assign(new Error(`Argument is too long: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.minimum !== undefined && value < rule.minimum || rule.maximum !== undefined && value > rule.maximum) throw Object.assign(new Error(`Argument is out of range: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.maxItems && value.length > rule.maxItems) throw Object.assign(new Error(`Too many values for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.type === 'array' && rule.items?.type === 'string' && value.some((item) => typeof item !== 'string' || item.length > (rule.items.maxLength ?? Infinity))) {
@@ -141,7 +141,7 @@ async function* boundedLines(stream) {
 export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, client, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env, operations = null, forwardEditor = null }) {
   if (!mindPath) throw new Error('mindPath is required');
   let service = null;
-  const editors = new Set(editorTools().map((entry) => entry.name));
+  const editors = new Set(editorTools().filter((entry) => entry.name.startsWith('blueprint_') || entry.name.startsWith('void_')).map((entry) => entry.name));
   try {
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }

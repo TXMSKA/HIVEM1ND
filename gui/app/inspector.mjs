@@ -68,6 +68,9 @@ function wakeSentence(t, wake) {
 export function renderSession(document, session, t) {
   if (!session) return element(document, "p", { text: t("unknown") });
   const block = element(document, "section", { "data-session": session.id, "data-session-state": session.state ?? "" });
+  const runs = session.launchKind === 'cli' ? t('runsCli', { client: session.client })
+    : session.launchKind === 'manual-app' ? t('runsApp', { client: session.client }) : t('unknown');
+  block.append(element(document, 'p', { 'data-runs-in': session.launchKind ?? '', text: `${t('finalRunsIn')}: ${runs} · ${session.machine ?? t('unknown')}` }));
   const activity = session.activity ?? "unknown";
   const activityText = t(ACTIVITY_COPY[activity] ?? "activityUnknown");
   if (activity === "busy" || activity === "working") {
@@ -109,7 +112,7 @@ export function renderGrants(document, grants, t, onRevoke, busyId = null) {
 
 export function renderApproval(document, approval, t, onAnswer, busy = false) {
   const block = element(document, "section", { class: "card", "data-approval": approval.id, "data-approval-state": approval.state });
-  block.append(element(document, "p", { text: approval.display ?? approval.action ?? approval.id }));
+  block.append(element(document, "p", { text: approval.action === 'session.open' ? `${t('sessionOpenAsk')}: ${approval.pattern.client} CLI · ${approval.pattern.machine}` : approval.display ?? approval.action ?? approval.id }));
   if (busy) block.append(progressMark(document, t("answering"), { "data-approval-progress": approval.id }));
   if (approval.state === "pending") {
     const button = (action, label) => element(document, "button", {

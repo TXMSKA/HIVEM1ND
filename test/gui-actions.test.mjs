@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createGuiFixture } from "./gui-fixture.mjs";
-import { createApi, request } from "../gui/app/api.mjs";
+import { createApi, createOperation, request } from "../gui/app/api.mjs";
 import {
   acknowledgeVisible,
   applyMessageRead,
@@ -337,6 +337,17 @@ test("a session stays queued until the request says otherwise and stop stays sto
   assert.equal(tracked.data.state, "failed");
   const stopped = await stopSession(api, "ses-1");
   assert.equal(stopped.data.state, "stopping");
+});
+
+test('retained task mode and identity survive an unconfirmed start without a different launch payload', async () => {
+  const bodies = [];
+  const api = apiWith(async (call) => { bodies.push(call.body); return { status: 202, data: { requestId: 'same-start', state: 'queued' } }; });
+  const unit = { id: 'project:shop:executor-shop', revision: 'a'.repeat(64) };
+  const operation = createOperation({ method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id }, body: { client: 'codex', prompt: 'Deliver task 029', runMode: 'task', taskId: 'project:shop:029', expectedRevision: unit.revision } });
+  const started = await startSession(api, unit, 'codex', 'Deliver task 029', operation, { runMode: 'task', taskId: 'project:shop:029' });
+  await startSession(api, unit, 'cursor', 'Different text', started.operation, { runMode: 'chat' });
+  assert.deepEqual(bodies[0], operation.body);
+  assert.deepEqual(bodies[1], bodies[0]);
 });
 
 test("the fixture keeps connection direction, refuses an unavailable machine, and queues a stop", async (context) => {

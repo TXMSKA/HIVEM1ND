@@ -1,7 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, uuidV8 } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, parseTaskId, parseUnitId, replaceHeader, uuidV8, validateName } from './identity.mjs';
+import { assertChatSession, enqueueStart } from './adapters.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
@@ -10,7 +11,7 @@ import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks }
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
-const ACTIONS = new Set(['process.run', 'file.write', 'network.request']);
+const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 const DECISIONS = new Set(['approve', 'approve-always', 'deny']);
 
@@ -21,6 +22,7 @@ export function normalizeAction(action, pattern, options = {}) {
   }
   if (action === 'process.run') return normalizeProcess(pattern, options.projects ?? []);
   if (action === 'file.write') return normalizeFile(pattern);
+  if (action === 'session.open') return normalizeSession(pattern);
   return normalizeNetwork(pattern);
 }
 
@@ -43,9 +45,10 @@ export async function requestApproval(context, input) {
   if (input?.alwaysAllowed !== undefined && typeof input.alwaysAllowed !== 'boolean') throw new CoreError(422, 'invalid_body', 'alwaysAllowed must be boolean.');
   const state = await readState(context, parsed);
   if (!state) throw new CoreError(404, 'unit_not_found', 'The requesting unit does not exist.');
+  if (normalized.action === 'session.open') await validateChild(context, normalized.pattern, sessionId);
   const chat = await chatFor(context, input?.chatId, parsed.id);
   const tombstones = await readTombstones(context);
-  const existing = grantsOf(state.bytes).find((grant) => !tombstones.ids.has(grant.id) && grant.action === normalized.action && normalized.exact && canonicalJson(grant.pattern) === canonicalJson(normalized.pattern));
+  const existing = normalized.action !== 'session.open' && grantsOf(state.bytes).find((grant) => !tombstones.ids.has(grant.id) && grant.action === normalized.action && normalized.exact && canonicalJson(grant.pattern) === canonicalJson(normalized.pattern));
   const id = randomUUID();
   const requestedAt = stamp(context);
   const request = {
@@ -127,7 +130,7 @@ export async function answerApproval(context, approvalId, input) {
     }
     const revision = approvalRevision({ request: loaded.requestBytes, answers: loaded.answerBytes });
     if (input.expectedRevision !== revision) throw new CoreError(409, 'revision_conflict', 'The approval dialog is stale.');
-    if (input.decision === 'approve-always' && loaded.request.alwaysAllowed !== true) {
+    if (input.decision === 'approve-always' && (loaded.request.action === 'session.open' || loaded.request.alwaysAllowed !== true)) {
       throw new CoreError(422, 'always_unavailable', 'This action cannot be granted forever.');
     }
     if (!isOwner(context, loaded.binding)) {
@@ -199,7 +202,7 @@ export async function consumeAnswers(context, approvalId = null) {
       if (!isOwner(context, loaded.binding)) return { approvalId: id, skipped: true, allow: false };
       if (loaded.result) return { approvalId: id, replayed: true, allow: false, resumed: false, state: loaded.result.state };
       if (Date.parse(loaded.request.expiresAt) <= context.now()) return settle(context, loaded, null, 'expired');
-      const winner = [...loaded.answers].sort(byArrival).find((item) => item.decision !== 'approve-always' || loaded.request.alwaysAllowed === true);
+      const winner = [...loaded.answers].sort(byArrival).find((item) => item.decision === 'approve' || item.decision === 'deny' || item.decision === 'approve-always' && loaded.request.action !== 'session.open' && loaded.request.alwaysAllowed === true);
       if (!winner) return { approvalId: id, state: 'pending', allow: false };
       return settle(context, loaded, winner, winner.decision === 'deny' ? 'denied' : 'approved');
     }));
@@ -307,8 +310,18 @@ async function settle(context, loaded, answer, state, pending = null) {
     events.push({ name: 'unit.changed', data: { unit: { id: request.unitId } } });
   }
   await commitFiles(context, entries, events);
-  const resumed = state === 'approved' && await resumeNative(context, request);
-  return { status: 200, approval, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, replayed: false };
+  let child = null;
+  if (state === 'approved' && request.action === 'session.open') {
+    const owner = { ...context, principal: { ...context.principal, unitId: request.unitId, sessionId: request.sessionId } };
+    try {
+      const target = await validateChild(owner, request.pattern, request.sessionId);
+      child = await enqueueStart(owner, { ...request.pattern, targetMachine: request.pattern.machine, stateRevision: hashBytes(target.bytes), approvalId: request.id });
+    } catch (error) {
+      child = { state: 'failed', error: { code: error.code ?? 'client_unavailable', message: 'The approved CLI could not be opened.' } };
+    }
+  }
+  const resumed = state === 'approved' && request.action !== 'session.open' && await resumeNative(context, request);
+  return { status: 200, approval, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, child, replayed: false };
 }
 
 async function recordLateAnswer(context, loaded, decision) {
@@ -600,6 +613,29 @@ function normalizeProcess(pattern, projects) {
   }
   const exact = command.length > 0 && !/[?*[\]]/.test(command) && !command.includes('..') && known.has(cwd);
   return { action: 'process.run', pattern: { command, cwd }, exact, alwaysAllowed: exact };
+}
+
+function normalizeSession(pattern) {
+  const keys = ['client', 'machine', 'unitId', 'runMode', 'taskId'];
+  if (Object.keys(pattern).length !== keys.length || keys.some((key) => !Object.hasOwn(pattern, key))
+    || !CLIENTS.includes(pattern.client) || !['task', 'chat'].includes(pattern.runMode)) {
+    throw new CoreError(422, 'invalid_body', 'The session approval must name an exact registered CLI and run mode.');
+  }
+  validateName(pattern.machine, { label: 'machine' });
+  parseUnitId(pattern.unitId);
+  if (pattern.taskId !== null) parseTaskId(pattern.taskId);
+  if (pattern.runMode === 'task' && pattern.taskId === null) throw new CoreError(422, 'task_required', 'A child task session requires its assigned task.');
+  return { action: 'session.open', pattern: { ...pattern }, exact: true, alwaysAllowed: false };
+}
+
+async function validateChild(context, pattern, sessionId) {
+  await assertChatSession(context, sessionId);
+  if (pattern.machine !== context.paths.machine) throw new CoreError(409, 'machine_unavailable', 'The child CLI must be on the requesting machine.');
+  const target = await readState(context, parseUnitId(pattern.unitId));
+  if (!target || headerValue(target.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The child unit is not registered.');
+  if (headerValue(target.bytes, 'machine') !== pattern.machine) throw new CoreError(409, 'machine_unavailable', 'The child unit belongs to another machine.');
+  if (context.adapters?.[pattern.client]?.capabilities?.create !== true) throw new CoreError(503, 'client_unavailable', 'The requested CLI is not connected.');
+  return target;
 }
 
 function normalizeFile(pattern) {

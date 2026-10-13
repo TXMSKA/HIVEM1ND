@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clientRecords, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, recoverStarts, registerNative, stopSession } from '../engine/service/adapters.mjs';
+import { cancelStart, clientRecords, completeSessionTask, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, readStartRequest, recoverStarts, registerNative, stopSession } from '../engine/service/adapters.mjs';
+import { readDetail } from '../engine/service/projection.mjs';
 import { composeCore, openNativeAdapters } from '../engine/service/service.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
@@ -132,9 +133,12 @@ test('spawned work stays ambiguous and only one of two claims creates a session'
   const recovered = await recoverStarts(spawned.context);
   assert.equal(recovered[0].error.code, 'launch_ambiguous');
   assert.equal(spawned.calls.create, 1);
-  const fresh = await start(spawned.context, spawned.file);
-  assert.equal(fresh.result.state, 'started');
-  assert.equal(spawned.calls.create, 2);
+  await assert.rejects(() => start(spawned.context, spawned.file), { code: 'unit_in_use' });
+  const journals = await readdir(path.join(spawned.fixture.paths.localDirectory, 'session-starts'));
+  const journal = JSON.parse(await readFile(path.join(spawned.fixture.paths.localDirectory, 'session-starts', journals[0])));
+  const retry = await consumeStart(spawned.context, journal.requestId);
+  assert.equal(retry.result.error.code, 'launch_ambiguous');
+  assert.equal(spawned.calls.create, 1);
 
   const { context, calls, file } = await world(t);
   let release;
@@ -452,7 +456,7 @@ test('a failed native start can be retried and an unconsumed request expires ove
   const revision = hashBytes(await readFile(file));
   const denied = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
     token,
-    body: { client: 'codex', expectedRevision: revision },
+    body: { client: 'codex', prompt: 'Complete the task', expectedRevision: revision },
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(denied.status, 503);
@@ -462,11 +466,18 @@ test('a failed native start can be retried and an unconsumed request expires ove
   projects.push({ name: 'shop', localPath: fixture.root, eligible: true });
   const retried = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
     token,
-    body: { client: 'codex', expectedRevision: revision },
+    body: { client: 'codex', prompt: 'Complete the task', expectedRevision: revision },
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(retried.status, 202);
-  assert.equal(retried.json.data.state, 'started');
+  assert.equal(retried.json.data.state, 'queued');
+  let reconciled;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    reconciled = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${retried.json.data.requestId}`, { token });
+    if (reconciled.json.data.state === 'started') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(reconciled.json.data.state, 'started');
   const queued = await enqueueStart({
     store: fixture.store,
     paths: { ...fixture.paths, origin },
@@ -474,7 +485,7 @@ test('a failed native start can be retried and an unconsumed request expires ove
     projects,
     adapters: { codex: adapter },
     principal: { unitId: 'root:master', audience: 'desktop' },
-  }, { unitId: UNIT, client: 'codex', stateRevision: revision, targetMachine: 'LAPTOP' });
+  }, { unitId: UNIT, client: 'codex', runMode: 'chat', stateRevision: revision, targetMachine: 'LAPTOP' });
   assert.equal(queued.status, 202);
   assert.equal(queued.state, 'queued');
   fixture.clock.now += 121000;
@@ -818,6 +829,200 @@ test('an unsupported Cursor native permission request receives a protocol error 
   assert.equal(completed.value.error.code, -32601);
   assert.equal(completed.value.result, undefined);
   assert.equal(JSON.stringify(completed.value).includes('allow'), false);
+});
+
+test('task mode requires an assignment and projects exact task and launch fields', async (t) => {
+  const { fixture, context, file, calls } = await world(t);
+  await assert.rejects(() => start(context, file, { prompt: '  ' }), { code: 'task_required' });
+  await assert.rejects(() => start(context, file, { runMode: 'other' }), { code: 'invalid_body' });
+  await assert.rejects(() => start(context, file, { runMode: null }), { code: 'invalid_body' });
+  assert.equal(calls.create, 0);
+  const taskId = 'project:shop:029';
+  const directory = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'tasks');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, '029.md'), `id: ${taskId}\nstatus: open\ntitle: Assigned\nto-id: ${UNIT}\nfrom-id: root:master\n\n## Request\nWork.\n`);
+  const started = await start(context, file, { prompt: null, taskId });
+  assert.equal(started.request.runMode, 'task');
+  assert.equal(started.request.taskId, taskId);
+  const session = await readDetail(context, 'sessions', started.result.sessionId);
+  assert.equal(session.runMode, 'task');
+  assert.equal(session.taskId, taskId);
+  assert.equal(session.launchKind, 'cli');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'sessions', 'later-registration.json'), JSON.stringify({
+    kind: 'registration', sessionId: session.id, unit: 'executor-shop', unitId: UNIT, nativeSessionId: session.nativeSessionId,
+    client: session.client, machine: session.machine, registeredAt: new Date(fixture.clock.now + 1000).toISOString(), activity: 'busy',
+  }));
+  assert.equal((await readDetail(context, 'sessions', session.id)).launchKind, 'cli');
+  const agent = { ...context, principal: { unitId: UNIT, sessionId: session.id, audience: 'agent' } };
+  await assert.rejects(() => completeSessionTask(agent, session.id, { outcome: 'delivered', taskId }), { code: 'task_not_terminal' });
+  await writeFile(path.join(directory, '029.md'), `id: ${taskId}\nstatus: review\ntitle: Assigned\nto-id: ${UNIT}\nfrom-id: root:master\n\n## Report\nDelivered.\n`);
+  await assert.rejects(() => completeSessionTask(agent, session.id, { outcome: 'delivered', taskId: 'project:shop:030' }), { code: 'invalid_binding' });
+  await completeSessionTask(agent, session.id, { outcome: 'delivered', taskId });
+  assert.equal((await readDetail(context, 'sessions', session.id)).state, 'registered');
+  await context.adapters.codex.taskEnded({ nativeSessionId: session.nativeSessionId });
+  assert.equal((await readDetail(context, 'sessions', session.id)).state, 'stopped');
+});
+
+test('the owned native task closes only after terminal delivery and its actual turn acknowledgment', async (t) => {
+  const { fixture, context, file } = await world(t);
+  const child = liveChild();
+  installHandshake(child, { result: { account: null, requiresOpenaiAuth: false } });
+  let turn = 0;
+  child.onRequest((message) => { if (message.method === 'turn/start') child.respond(message, { result: { turn: { id: `task-${++turn}` } } }); });
+  const adapter = createNativeAdapter('codex', { command: path.join(fixture.root, 'codex.exe'), env: fixture.env, models: ['strong'], spawn: () => child });
+  context.adapters.codex = adapter;
+  t.after(() => adapter.close());
+  const started = await start(context, file);
+  const session = await readDetail(context, 'sessions', started.result.sessionId);
+  const notice = (id, threadId = session.nativeSessionId) => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id, status: 'completed' } } })}\n`);
+  await adapter.send({ nativeSessionId: session.nativeSessionId, text: 'Work' });
+  notice('task-1');
+  await tick();
+  assert.equal(child.killed, false);
+  await adapter.send({ nativeSessionId: session.nativeSessionId, text: 'Deliver' });
+  const agent = { ...context, principal: { unitId: UNIT, sessionId: session.id, audience: 'agent' } };
+  await completeSessionTask(agent, session.id, { outcome: 'delivered' });
+  notice('task-other');
+  notice('task-2', 'other-thread');
+  await tick();
+  assert.equal(child.killed, false);
+  notice('task-2');
+  for (let count = 0; count < 100 && context.ownedPids.size; count += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(child.killed, true);
+  assert.equal((await readDetail(context, 'sessions', session.id)).state, 'stopped');
+  assert.equal((await readFile(file, 'utf8')), state());
+});
+
+test('chat mode stays open and manual app registration preserves the canonical unit', async (t) => {
+  const { context, file, signaled } = await world(t);
+  const before = await readFile(file);
+  const started = await start(context, file, { runMode: 'chat', prompt: null });
+  const session = await readDetail(context, 'sessions', started.result.sessionId);
+  const agent = { ...context, principal: { unitId: UNIT, sessionId: session.id, audience: 'agent' } };
+  await assert.rejects(() => completeSessionTask(agent, session.id, { outcome: 'delivered' }), { code: 'invalid_binding' });
+  await context.adapters.codex.taskEnded({ nativeSessionId: session.nativeSessionId });
+  assert.equal(signaled.length, 0);
+  const manual = await registerNative(context, { client: 'codex', unitId: UNIT, nativeSessionId: 'manual-app' });
+  assert.equal((await readDetail(context, 'sessions', manual.sessionId)).launchKind, 'manual-app');
+  assert.deepEqual(await readFile(file), before);
+  await stopSession(context, session.id, { confirmed: true });
+  assert.equal(signaled.length, 1);
+});
+
+test('cancel before consumption and a cancel racing spawn both settle once after verified stop', async (t) => {
+  const prepared = await world(t);
+  prepared.context.launchFault = 'prepared';
+  await assert.rejects(() => start(prepared.context, prepared.file), { code: 'injected_crash' });
+  const journalNames = await readdir(path.join(prepared.fixture.paths.localDirectory, 'session-starts'));
+  const journal = JSON.parse(await readFile(path.join(prepared.fixture.paths.localDirectory, 'session-starts', journalNames[0])));
+  assert.equal((await cancelStart(prepared.context, journal.requestId)).state, 'canceled');
+  prepared.context.launchFault = null;
+  assert.equal((await consumeStart(prepared.context, journal.requestId)).result.state, 'canceled');
+  assert.equal(prepared.calls.create, 0);
+
+  const racing = await world(t);
+  let entered;
+  const ready = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const original = racing.context.adapters.codex.create;
+  let requestId;
+  racing.context.adapters.codex.create = async (request) => { requestId = request.id; entered(); await gate; return original(request); };
+  const first = start(racing.context, racing.file);
+  await ready;
+  const canceled = cancelStart(racing.context, requestId);
+  const marker = path.join(racing.fixture.paths.mind, 'user', 'relay', 'request-cancellations', `${requestId}.json`);
+  for (let count = 0; count < 100; count += 1) { if (await readFile(marker).catch(() => null)) break; await new Promise((resolve) => setTimeout(resolve, 10)); }
+  release();
+  assert.equal((await first).result.state, 'canceled');
+  assert.equal((await canceled).state, 'canceled');
+  assert.equal(racing.calls.create, 1);
+  assert.equal(racing.signaled.length, 1);
+  assert.equal((await consumeStart(racing.context, requestId)).result.state, 'canceled');
+  assert.equal(racing.calls.create, 1);
+});
+
+test('the same uncertain request reconciles after thirty seconds and unavailable stop never claims closure', async (t) => {
+  const { fixture, context, file, calls } = await world(t);
+  context.receipt = { principalHash: 'fixture', key: randomUUID() };
+  const started = await start(context, file);
+  fixture.clock.now += 31000;
+  const retried = await start(context, file);
+  assert.equal(retried.request.id, started.request.id);
+  assert.equal(calls.create, 1);
+  context.adapters.codex.stop = async () => ({ acknowledged: false });
+  await assert.rejects(() => cancelStart(context, started.request.id), { code: 'stop_unavailable' });
+  assert.equal((await readStartRequest(context, started.request.id)).result.state, 'canceling');
+  assert.equal((await readDetail(context, 'sessions', started.result.sessionId)).state, 'registered');
+});
+
+test('Cursor and Claude task failures wait for their real terminal result and native shutdown', async (t) => {
+  for (const client of ['cursor', 'claude']) {
+    const { fixture, context, file } = await world(t);
+    const child = liveChild();
+    let nativeId;
+    let finishPrompt;
+    if (client === 'cursor') child.onRequest((message) => {
+      if (message.method === 'initialize') child.respond(message, { result: { authMethods: [{ id: 'existing-login' }] } });
+      if (message.method === 'authenticate') child.respond(message, { result: {} });
+      if (message.method === 'session/new') { nativeId = 'cursor-task'; child.respond(message, { result: { sessionId: nativeId } }); }
+      if (message.method === 'session/prompt') finishPrompt = () => child.respond(message, { result: { stopReason: 'end_turn' } });
+    });
+    const adapter = createNativeAdapter(client, { command: path.join(fixture.root, `${client}.exe`), env: fixture.env, models: ['strong'], spawn(_command, args) {
+      if (client === 'claude') {
+        nativeId = args[args.indexOf('--session-id') + 1];
+        queueMicrotask(() => child.stdout.emit('data', `${JSON.stringify({ type: 'system', subtype: 'init', session_id: nativeId })}\n`));
+        finishPrompt = () => child.stdout.emit('data', `${JSON.stringify({ type: 'result', subtype: 'success', session_id: nativeId })}\n`);
+      }
+      return child;
+    } });
+    context.adapters[client] = adapter;
+    t.after(() => adapter.close());
+    const started = await start(context, file, { client });
+    const session = await readDetail(context, 'sessions', started.result.sessionId);
+    const send = adapter.send({ nativeSessionId: nativeId, text: 'Finish assigned task' });
+    await tick();
+    const agent = { ...context, principal: { unitId: UNIT, sessionId: session.id, audience: 'agent' } };
+    await completeSessionTask(agent, session.id, { outcome: 'failed' });
+    assert.equal(child.killed, false);
+    finishPrompt();
+    assert.equal((await send).submitted, true);
+    for (let count = 0; count < 100 && context.ownedPids.size; count += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal((await readDetail(context, 'sessions', session.id)).state, 'stopped');
+  }
+});
+
+test('HTTP start responds while native creation is pending so its exact request can be canceled', async (t) => {
+  const { fixture, context, file, calls, signaled } = await world(t);
+  let entered;
+  const ready = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const create = context.adapters.codex.create.bind(context.adapters.codex);
+  context.adapters.codex.create = async (request) => { entered(); await gate; return create(request); };
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects, adapters: context.adapters, ownedPids: context.ownedPids });
+  t.after(() => core.http.close());
+  const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = local.json.data.token;
+  const headers = { 'idempotency-key': randomUUID() };
+  const started = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, { token, headers, body: { client: 'codex', runMode: 'task', taskId: null, prompt: 'Complete the assigned task', expectedRevision: hashBytes(await readFile(file)) } });
+  assert.equal(started.status, 202);
+  assert.equal(started.json.data.state, 'queued');
+  assert.equal(started.json.data.runMode, 'task');
+  await ready;
+  const requestId = started.json.data.requestId;
+  const read = await settleOr(jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${requestId}`, { token }), 500);
+  assert.equal(read.settled, true);
+  assert.equal(read.value.json.data.state, 'starting');
+  const canceled = jsonCall(core.http.port, 'POST', `/api/v1/session-requests/${requestId}/cancel`, { token, headers: { 'idempotency-key': randomUUID() }, body: {} });
+  const marker = path.join(fixture.paths.mind, 'user', 'relay', 'request-cancellations', `${requestId}.json`);
+  for (let count = 0; count < 100; count += 1) { if (await readFile(marker).catch(() => null)) break; await new Promise((resolve) => setTimeout(resolve, 10)); }
+  release();
+  assert.equal((await canceled).json.data.state, 'canceled');
+  assert.equal(calls.create, 1);
+  assert.equal(signaled.length, 1);
+  const reread = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${requestId}`, { token });
+  assert.equal(reread.json.data.state, 'canceled');
 });
 
 function jsonCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

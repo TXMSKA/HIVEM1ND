@@ -2706,6 +2706,10 @@ function finishMap(app) {
     retry: text(app.language, "retry"),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
+  if (['queued', 'starting'].includes(app.sessionRequest?.state)) {
+    const node = host.querySelector(`[data-unit-id="${app.sessionRequest.unitId}"]`);
+    node?.append(element(app.root.ownerDocument, 'span', { class: 'spinner', 'data-starting-ring': app.sessionRequest.requestId, 'aria-hidden': 'true', style: 'position:absolute;left:50%;top:50%;width:60px;height:60px;margin-left:-30px;margin-top:-30px;pointer-events:none' }));
+  }
   takePendingChat(app);
   const view = app.root.ownerDocument.defaultView;
   if (!host.clientWidth && view?.requestAnimationFrame && !app.mapFramed) {
@@ -3369,6 +3373,8 @@ const SESSION_COPY = {
   expired: "sessionRequestExpired",
   stopping: "sessionStopping",
   stopped: "sessionStopped",
+  canceled: "startCanceled",
+  canceling: "startCanceling",
 };
 
 const ACTION_COPY = {
@@ -4166,43 +4172,87 @@ function openSessionForm(app, unit) {
     const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
     if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='session']")) return;
     const machine = machines.find((item) => item.id === unit.machine) ?? null;
-  const clients = (machine?.clients ?? []).filter((item) => item.enabled === true && item.installed === true);
+  const clients = machine?.clients ?? [];
+  const available = (item) => machine?.answers !== false && item.enabled === true && item.installed === true && item.supported !== false && ['claude', 'codex', 'cursor'].includes(item.id);
   openChoiceForm(app, "session", text(app.language, "startSession"), (form, confirm) => {
     const document = form.ownerDocument;
     if (machine) form.append(renderMachine(document, machine, (key, values) => text(app.language, key, values)));
-    if (!clients.length) {
+    if (!clients.some(available)) {
       form.append(element(document, "p", { "data-client-unavailable": "true", text: text(app.language, "clientUnavailable") }));
       confirm.disabled = true;
-      return;
     }
-    appendSelect(document, form, "client", text(app.language, "client"), clients.map((item) => ({
-      value: item.id,
-      label: item.id,
-    })), clients[0].id);
-    appendInput(document, form, "prompt", text(app.language, "prompt"), "");
+    const choices = appendSelect(document, form, "client", text(app.language, "client"), clients.map((item) => ({ value: item.id, label: item.id })), clients.find(available)?.id ?? '');
+    for (const option of choices.children) {
+      if (!available(clients.find((item) => item.id === option.value) ?? {})) { option.disabled = true; option.textContent += `: ${text(app.language, machine?.answers === false ? 'offline' : 'clientUnavailable')}`; }
+    }
+    choices.hidden = true;
+    const clientRows = element(document, 'div', { role: 'radiogroup', 'aria-label': text(app.language, 'client'), style: 'display:flex;flex-direction:column;gap:14px' });
+    const buttons = clients.map((item) => element(document, 'button', { type: 'button', role: 'radio', class: 'btn', 'data-client-choice': item.id, 'aria-checked': String(choices.value === item.id), disabled: available(item) ? null : '', style: 'padding:10px 14px;border-radius:16px;text-align:left', text: `${item.id}${available(item) ? '' : ': ' + text(app.language, machine?.answers === false ? 'offline' : 'clientUnavailable')}`, onclick: () => {
+      choices.value = item.id;
+      for (const button of buttons) {
+        const selected = button.getAttribute('data-client-choice') === item.id;
+        button.setAttribute('aria-checked', String(selected));
+        button.style.background = selected ? 'var(--card2)' : 'var(--card)';
+      }
+    } }));
+    for (const button of buttons) {
+      button.style.background = button.getAttribute('aria-checked') === 'true' ? 'var(--card2)' : 'var(--card)';
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        event.preventDefault?.();
+        const enabled = buttons.filter((item) => !item.disabled);
+        const direction = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
+        const next = enabled[(enabled.indexOf(button) + direction + enabled.length) % enabled.length];
+        next?.click?.(); next?.focus?.();
+      });
+      clientRows.append(button);
+    }
+    form.append(clientRows);
+    const segment = element(document, 'fieldset', { class: 'segmented', style: 'padding:4px;gap:4px;border-radius:12px;background:var(--card)', 'data-runs-as': 'true' });
+    segment.append(element(document, 'legend', { text: text(app.language, 'runsAs') }));
+    for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
+      const input = element(document, 'input', { type: 'radio', name: 'runMode', value });
+      input.value = value;
+      input.setAttribute('style', 'position:absolute;opacity:0;pointer-events:none');
+      input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
+      const cell = element(document, 'label', { class: 'segment', style: 'padding:8px 12px;border-radius:9px;font-size:13.5px;font-weight:600' }, input, text(app.language, key));
+      cell.style.background = input.checked ? 'var(--card2)' : 'var(--card)';
+      input.addEventListener('change', () => {
+        for (const node of segment.querySelectorAll('label')) node.style.background = node.querySelector('input')?.checked ? 'var(--card2)' : 'var(--card)';
+      });
+      segment.append(cell);
+    }
+    form.append(segment, element(document, 'p', { class: 'field-hint', text: text(app.language, 'sessionModeHint') }));
+    appendInput(document, form, "prompt", text(app.language, "taskOrMessage"), "");
     form.problems = () => {
       const client = fieldValue(form, "client");
-      return clients.some((item) => item.id === client) ? [] : [{ name: "client", message: text(app.language, "clientInvalid") }];
+      const problems = clients.some((item) => item.id === client && available(item)) ? [] : [{ name: "client", message: text(app.language, "clientInvalid") }];
+      if (fieldValue(form, 'runMode') === 'task' && !fieldValue(form, 'prompt').trim()) problems.push({ name: 'prompt', message: text(app.language, 'taskRequired') });
+      return problems;
     };
   }, async (form) => {
     const client = fieldValue(form, "client");
-    if (!clients.some((item) => item.id === client)) {
+    if (!clients.some((item) => item.id === client && available(item))) {
       showOutcome(app, text(app.language, "clientUnavailable"), "client_unavailable");
       if (!app.disposed) renderShell(app);
       return false;
     }
     const prompt = fieldValue(form, "prompt").trim() || null;
-    const body = { client, prompt, expectedRevision: unit.revision };
+    const mode = { runMode: fieldValue(form, 'runMode'), taskId: null };
+    const body = { client, prompt, ...mode, expectedRevision: unit.revision };
     try {
-      const started = await startSession(app.api, unit, client, prompt, retainedOperation(app.sessionOperation, "POST", "/units/:unitId/session", body));
-      app.sessionOperation = null;
+      const operation = app.sessionOperations?.get(unit.id) ?? createOperation({ method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id }, body });
+      const started = await startSession(app.api, unit, client, prompt, operation, mode);
+      app.sessionOperations?.delete(unit.id);
       app.sessionRequestId = started.data.requestId;
+      app.sessionRequest = { ...started.data, unitId: unit.id };
       showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed"), started.data.state ?? null);
       if (started.data.state === "queued" || started.data.state === "starting") await recheckTracked(app);
       if (!app.disposed) renderShell(app);
       return true;
     } catch (error) {
-      app.sessionOperation = error?.operation ?? app.sessionOperation ?? null;
+      app.sessionOperations ??= new Map();
+      if (error?.operation) app.sessionOperations.set(unit.id, error.operation);
       showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? unit.machine })
         : actionText(app.language, error?.code), error?.code ?? null);
@@ -4255,7 +4305,9 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
   dialog.setAttribute("data-form", kind);
+  if (kind === 'session') dialog.setAttribute('style', 'width:520px;padding:24px;border-radius:22px');
   const form = element(document, "form", { method: "dialog" });
+  if (kind === 'session') form.setAttribute('style', 'display:flex;flex-direction:column;gap:18px');
   const heading = element(document, "h2", { text: title });
   labelDialog(dialog, heading);
   form.append(heading);
@@ -4491,7 +4543,19 @@ function noteSessionRequest(app, data) {
   const state = data?.state;
   if (!state || !SESSION_COPY[state]) return;
   if (data.requestId) app.sessionRequestId = data.requestId;
-  showOutcome(app, text(app.language, SESSION_COPY[state]), state);
+  app.sessionRequest = data;
+  showOutcome(app, text(app.language, data.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : SESSION_COPY[state]), state);
+  if (state === 'started' && data.unitId && !app.disposed) loadInspector(app, data.unitId);
+}
+
+function cancelSessionStart(app) {
+  const requestId = app.sessionRequestId;
+  settle(app, `cancel-start:${requestId}`, text(app.language, 'startCanceling'), async (record) => {
+    record.operation ??= createOperation({ method: 'POST', path: '/session-requests/:requestId/cancel', params: { requestId }, body: {} });
+    const result = await request(app.api, 'POST', record.operation.path, { operation: record.operation });
+    noteSessionRequest(app, { ...app.sessionRequest, ...result.data });
+    return result;
+  });
 }
 
 function messageSender(app, message) {
@@ -4517,6 +4581,15 @@ function chatPanel(app, t) {
     heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
   }
   panel.append(heading);
+  const live = app.store.view?.sessions?.find((session) => members.includes(session.unitId) && session.state !== 'stopped' && ['busy', 'active', 'working'].includes(session.activity));
+  if (live) {
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(live.registeredAt)) / 1000));
+    const work = element(document, 'div', { 'data-chat-work': live.id, style: 'display:flex;align-items:center;gap:4px;padding:10px 14px;border-radius:18px;background:var(--card)' });
+    for (let index = 0; index < 3; index += 1) work.append(element(document, 'span', { 'aria-hidden': 'true', style: 'width:7px;height:7px;border-radius:50%;background:var(--mute)' }));
+    work.append(element(document, 'span', { style: 'font-size:12px;color:var(--mute)', text: `${Number.isFinite(elapsed) ? elapsed : 0} s` }));
+    if (app.store.capabilities.includes('session.stop')) work.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'stop-work', 'data-session': live.id, text: t('stopWork'), onclick: () => confirmStop(app, live.id) }));
+    panel.append(work);
+  }
   const transcript = element(document, "div", {
     class: "transcript",
     "data-chat": thread.chat.id,
@@ -4973,6 +5046,20 @@ function renderInspector(app, t, selected) {
     const folded = card.querySelector?.("details");
     if (folded) trackDisclosure(app, folded, keepId("unit", selected.id));
     panel.append(card);
+    const tracked = app.sessionRequest;
+    if (tracked?.unitId === selected.id && ['queued', 'starting', 'canceling', 'failed'].includes(tracked.state)) {
+      const progress = element(document, 'section', { 'data-session-progress': tracked.requestId });
+      if (tracked.state !== 'failed') {
+        const mark = progressMark(document, t(SESSION_COPY[tracked.state]));
+        mark.querySelector('.spinner')?.setAttribute('style', 'width:18px;height:18px');
+        progress.append(mark);
+      }
+      else progress.append(element(document, 'p', { text: t(tracked.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : 'sessionFailed') }));
+      progress.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'cancel-start', text: t('cancelStart'), onclick: () => cancelSessionStart(app) }));
+      progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'retry-session', text: t('retry'), onclick: () => recheckTracked(app) }));
+      if (tracked.state === 'failed' && tracked.error?.code !== 'launch_ambiguous') progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'choose-client', text: t('chooseClient'), onclick: () => openSessionForm(app, selected) }));
+      panel.append(progress);
+    }
   }
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {

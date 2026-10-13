@@ -7,6 +7,8 @@ import { CoreError, canonicalJson, isUuid } from './identity.mjs';
 import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
+import { requestApproval } from './approvals.mjs';
+import { completeSessionTask } from './adapters.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 
@@ -25,6 +27,8 @@ const text = { type: 'string', maxLength: 10000 };
 
 export function toolSchemas() {
   return [
+    tool('session_open', 'Ask the person to open one connected CLI for a registered unit on this machine.', { client: { type: 'string', enum: ['claude', 'codex', 'cursor'], maxLength: 32 }, machine: label, unitId: { type: 'string', maxLength: 256 }, runMode: { type: 'string', enum: ['task', 'chat'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']),
+    tool('session_complete', 'Acknowledge terminal delivery or failure of this assigned task; wait for native completion before the CLI closes.', { outcome: { type: 'string', enum: ['delivered', 'failed'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['outcome', 'requestId']),
     tool('blueprint_open', 'Read one Blueprint board.', { resourceId }, ['resourceId']),
     tool('blueprint_add_node', 'Add a node to a board.', { resourceId, screenId: label, parentId: label, index: { type: 'integer', minimum: 0 }, node: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'screenId', 'parentId', 'node', 'expectedRevision', 'requestId']),
     tool('blueprint_update_node', 'Change a node.', { resourceId, nodeId: label, changes: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'changes', 'expectedRevision', 'requestId']),
@@ -75,6 +79,7 @@ function checkArgs(name, args) {
 }
 
 function valueMatches(rule, value) {
+  if (Array.isArray(rule.type)) return value === null && rule.type.includes('null') || typeof value === 'string' && rule.type.includes('string') && value.length <= (rule.maxLength ?? Infinity);
   if (rule.type === 'integer') return Number.isInteger(value) && value >= (rule.minimum ?? 0) && value <= Number.MAX_SAFE_INTEGER;
   if (rule.type === 'object') return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   if (rule.type !== 'string' || typeof value !== 'string') return false;
@@ -86,6 +91,12 @@ function valueMatches(rule, value) {
 }
 
 export async function callTool(context, name, args) {
+  if (name === 'session_open' || name === 'session_complete') {
+    const registration = await canonicalRegistration(context);
+    return transactLegacy(context, name, args, registration, name, () => name === 'session_open'
+      ? requestApproval(context, { action: 'session.open', pattern: { client: args.client, machine: args.machine, unitId: args.unitId, runMode: args.runMode, taskId: args.taskId }, display: `Asks to open a session: ${args.client} CLI on ${args.machine}`, alwaysAllowed: false, operationId: args.requestId })
+      : completeSessionTask(context, registration.sessionId, args));
+  }
   if (typeof args?.resourceId === 'string' && (name.startsWith('blueprint_') || name.startsWith('void_'))) {
     await requireAttachment(context, args.resourceId);
   }

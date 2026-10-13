@@ -642,6 +642,9 @@ function readSession(bytes, relative, now, issues) {
       client: record.client ?? null,
       machine: record.machine ?? null,
       nativeSessionId: record.nativeSessionId ?? null,
+      runMode: record.runMode ?? 'chat',
+      taskId: record.taskId ?? null,
+      launchKind: record.launchKind ?? 'manual-app',
       registeredAt: record.registeredAt ?? null,
       activity,
       quota,
@@ -1127,6 +1130,12 @@ function mergeSessions(observed, statuses, wakes) {
     if (!session.statusAt || String(status.at ?? '') >= String(session.statusAt)) {
       session.state = status.state;
       session.statusAt = status.at;
+    }
+  }
+  for (const session of observed.filter((session) => session.launchKind === 'cli')) {
+    const current = byId.get(session.id);
+    if (current && current.unitId === session.unitId && current.nativeSessionId === session.nativeSessionId) {
+      Object.assign(current, { launchKind: 'cli', runMode: session.runMode, taskId: session.taskId });
     }
   }
   for (const session of byId.values()) {

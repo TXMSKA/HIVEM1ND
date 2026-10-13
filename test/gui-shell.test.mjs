@@ -890,7 +890,7 @@ test("session, approval and grant outcomes use the contract events", async (t) =
   const beforeReset = urls.length;
   const firstMark = desktop.app.trackedAt ?? 0;
   await fixture.control.emit("stream.reset", { reason: "service_restarted", cursor: "0" });
-  await waitFor(() => (desktop.app.trackedAt ?? 0) > firstMark && noteText(desktop) === "The session failed. Nothing was launched." && urls.slice(beforeReset).some((url) => url.includes(`/session-requests/${started.data.requestId}`)), "The session request was not reread.");
+  await waitFor(() => (desktop.app.trackedAt ?? 0) > firstMark && noteText(desktop) === text('en', 'launchAmbiguous') && urls.slice(beforeReset).some((url) => url.includes(`/session-requests/${started.data.requestId}`)), "The session request was not reread.");
 
   const pendingId = "e80a0bf9-8fb4-4d64-9527-04524c9a2ecf";
   const pending = desktop.root.querySelector(`[data-approval="${pendingId}"]`);
@@ -1695,7 +1695,9 @@ test("unit and session forms use machines and clients, and the inspector shows t
   click(sessionForm.querySelector("[data-action='confirm-form']"));
   await waitFor(() => urls.slice(beforeSession).some((url) => url.includes("/session-requests/")), "The queued session was not read back.");
   const started = writes.find((item) => item.body?.client === "codex");
-  assert.deepEqual(Object.keys(started.body).sort(), ["client", "expectedRevision", "prompt"]);
+  assert.deepEqual(Object.keys(started.body).sort(), ["client", "expectedRevision", "prompt", "runMode", "taskId"]);
+  assert.equal(started.body.runMode, 'chat');
+  assert.equal(started.body.taskId, null);
   assert.equal(started.body.prompt, "Check the build");
   assert.equal(noteText(desktop), "The session is queued.");
 
@@ -1705,7 +1707,7 @@ test("unit and session forms use machines and clients, and the inspector shows t
   click(desktop.root.querySelector("[data-action='start-session']"));
   await waitFor(() => desktop.document.querySelector("[data-form='session']")?.querySelector("[data-client-unavailable]"), "The unavailable client was still offered.");
   const silentForm = desktop.document.querySelector("[data-form='session']");
-  assert.equal(silentForm.querySelector("[name='client']"), null);
+  assert.equal([...silentForm.querySelector("[name='client']").children].every((option) => option.disabled), true);
   assert.equal(silentForm.querySelector("[data-action='confirm-form']").disabled, true);
   assert.equal(silentForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
 });
@@ -1786,7 +1788,7 @@ test("an invalid unit form stays open and a rejected unit keeps its draft", asyn
   assert.equal(client.getAttribute("aria-describedby"), sessionForm.querySelector("[data-field-error='client']").getAttribute("id"));
   assert.equal(desktop.document.activeElement, client);
   assert.equal(writes.slice(beforeSession).some((item) => item.url.includes("/session")), false);
-  const cancel = [...sessionForm.querySelectorAll("button")].find((button) => button.getAttribute("data-action") !== "confirm-form");
+  const cancel = sessionForm.querySelector('[data-action="cancel-form"]');
   click(cancel);
   assert.equal(desktop.document.querySelector("[data-form='session']"), null);
   assert.equal(desktop.document.activeElement === desktop.root.querySelector("[data-action='start-session']"), true);
@@ -4251,6 +4253,60 @@ test("a unit remains visible while stop acknowledgment is pending and Undo does 
   clickAction(desktop.root, "map-undo");
   await waitFor(() => desktop.app.unitList.catalog.some((unit) => unit.id === id), "Undo did not restore the stopped unit.");
   assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.sessionIds.length, 0);
+});
+
+test('the Executor form defaults to one task, rejects an empty task, and cancels a kept-open chat start', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method === 'POST' && init.body) writes.push({ url: String(input), body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, 'The units did not load.');
+  const operation = createOperation({ method: 'POST', path: '/units', body: { unit: 'executor-session', role: 'executor', scope: { kind: 'project', name: 'shop' }, machine: 'DESKTOP', leadId: null, job: null, model: null } });
+  const unit = (await request(desktop.app.api, 'POST', '/units', { operation })).data;
+  await waitFor(() => desktop.app.unitList?.catalog?.some((item) => item.id === unit.id), 'The new unit did not load.');
+  desktop.app.activeHandlers.onActivate({ id: unit.id, kind: 'unit', unit }, 'double');
+  await waitFor(() => desktop.app.inspectorData?.unitId === unit.id, 'The unit inspector did not load.');
+  click(desktop.root.querySelector('[data-action="start-session"]'));
+  await waitFor(() => desktop.document.querySelector('[data-form="session"]'), 'The session form did not open.');
+  const form = desktop.document.querySelector('[data-form="session"]');
+  const modes = form.querySelectorAll('[name="runMode"]');
+  assert.equal(modes.find((item) => item.checked).value, 'task');
+  click(form.querySelector('[data-action="confirm-form"]'));
+  assert.equal(form.querySelector('[data-field-error="prompt"]').textContent, text('en', 'taskRequired'));
+  assert.equal(writes.some((item) => item.url.endsWith('/session')), false);
+  for (const mode of modes) mode.checked = mode.value === 'chat';
+  click(form.querySelector('[data-action="confirm-form"]'));
+  await waitFor(() => desktop.app.sessionRequestId && desktop.root.querySelector('[data-action="cancel-start"]'), 'The start did not stay tracked.');
+  const started = writes.find((item) => item.url.endsWith('/session'));
+  assert.equal(started.body.runMode, 'chat');
+  assert.equal(started.body.taskId, null);
+  assert.equal(started.body.prompt, null);
+  const requestId = desktop.app.sessionRequestId;
+  click(desktop.root.querySelector('[data-action="cancel-start"]'));
+  await waitFor(() => desktop.app.sessionRequest?.state === 'canceled', 'The canceled start was not acknowledged.');
+  assert.equal(desktop.app.sessionRequestId, requestId);
+  assert.equal(writes.filter((item) => item.url.endsWith('/session')).length, 1);
+});
+
+test('a working chat offers the confirmed Stop boundary and preserves the thread', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, 'The units did not load.');
+  const unit = desktop.app.unitList.catalog.find((item) => item.id === 'project:shop:executor-shop');
+  desktop.app.activeHandlers.onActivate({ id: unit.id, kind: 'unit', unit }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-action="stop-work"]'), 'The working chat had no Stop.');
+  const chatId = desktop.app.thread.chat.id;
+  click(desktop.root.querySelector('[data-action="stop-work"]'));
+  const dialog = desktop.document.querySelector('dialog');
+  assert.equal(dialog != null, true);
+  assert.equal(desktop.app.thread.chat.id, chatId);
+  dialog.close();
+  assert.equal(desktop.app.thread.chat.id, chatId);
 });
 
 async function assertAbsent(root, secret) {

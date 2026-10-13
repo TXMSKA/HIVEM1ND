@@ -2,8 +2,10 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
-import { answersFor } from './projection.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
+import { loadTask } from './tasks.mjs';
+import { answersFor, readDetail } from './projection.mjs';
+import { publishDomainEvents } from './events.mjs';
 import { readUnitState } from './state.mjs';
 import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
@@ -11,7 +13,7 @@ import { withLocks } from './store.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
-const TERMINAL = new Set(['started', 'failed', 'expired']);
+const TERMINAL = new Set(['started', 'failed', 'expired', 'canceled']);
 const STARTABLE = new Set(CLIENTS);
 
 export async function probeClients(options = {}) {
@@ -44,7 +46,7 @@ export async function probeClients(options = {}) {
 export function clientRecords(reports) {
   return CLIENTS.map((id) => {
     const installed = reports?.[id]?.installed === true;
-    return { id, enabled: installed, installed };
+    return { id, enabled: installed, installed, supported: ['claude', 'codex', 'cursor'].includes(id), reason: reports?.[id]?.reason ?? null };
   });
 }
 
@@ -59,7 +61,7 @@ export function createNativeAdapter(client, options = {}) {
     client,
     nativeSupport: false,
     capabilities: {
-      create: fixture || (options.verifiedLogin !== false && live),
+      create: ['claude', 'codex', 'cursor'].includes(client) && (fixture || (options.verifiedLogin !== false && live)),
       resume: true,
       stop: true,
       exactApproval: false,
@@ -73,7 +75,11 @@ export function createNativeAdapter(client, options = {}) {
       if (!this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       if (request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
-      if (fixture) return acceptFixture(client, options.transcript ?? [], request);
+      if (fixture) {
+        const created = acceptFixture(client, options.transcript ?? [], request);
+        sessions.set(created.nativeSessionId, { ...created, unitId: request.unitId, closedTurns: [] });
+        return created;
+      }
       const nativeLaunch = options.createNativeLaunch?.({ ...request, client }) ?? null;
       request = { ...request, nativeMcp: nativeLaunch?.mcp ?? null };
       if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
@@ -98,8 +104,13 @@ export function createNativeAdapter(client, options = {}) {
       child.once?.('exit', () => nativeLaunch?.close());
       if (child?.pid) children.set(child.pid, child);
       let opened = null;
+      let deadline;
       try {
-        opened = await openOwnedChannel(client, child, request, options.timeoutMs ?? 8000);
+        opened = await Promise.race([
+          openOwnedChannel(client, child, request, options.timeoutMs ?? 30000),
+          new Promise((_, reject) => { deadline = setTimeout(() => reject(unavailable()), options.timeoutMs ?? 30000); }),
+        ]);
+        clearTimeout(deadline);
         this.nativeSupport = true;
         const record = opened.session ?? { turnId: null, closedTurns: [] };
         record.nativeSessionId = opened.nativeSessionId;
@@ -109,14 +120,22 @@ export function createNativeAdapter(client, options = {}) {
         record.rpc = opened.rpc;
         record.unitId = request.unitId ?? null;
         record.nativeLaunch = nativeLaunch;
+        record.timeoutMs = options.timeoutMs ?? 30000;
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
         sessions.set(opened.nativeSessionId, record);
+        if (client === 'claude') pumpClaude(record);
         nativeLaunch?.ready(opened.nativeSessionId);
         return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true };
       } catch (error) {
+        clearTimeout(deadline);
         nativeLaunch?.close();
         opened?.incoming?.close();
-        await finishChild(child);
+        const exited = await finishChild(child, true);
+        if (exited === null) {
+          const ambiguous = new CoreError(409, 'launch_ambiguous', 'The launch could not be proved or stopped.');
+          ambiguous.ownedPid = child.pid;
+          throw ambiguous;
+        }
         if (child?.pid) children.delete(child.pid);
         if (error instanceof CoreError && error.code === 'client_unavailable') throw error;
         throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
@@ -125,12 +144,32 @@ export function createNativeAdapter(client, options = {}) {
     async confirm(proof) {
       if (!proof || proof.client !== client || typeof proof.nativeSessionId !== 'string') return false;
       const session = sessions.get(proof.nativeSessionId);
+      if (fixture && session) return !proof.unitId || proof.unitId === session.unitId;
       if (!session?.child || session.child.exitCode != null || session.child.killed === true) return false;
       if (proof.unitId && session.unitId && proof.unitId !== session.unitId) return false;
       return true;
     },
-    async registered(request, registration) {
+    async registered(request, registration, context) {
+      const session = sessions.get(registration.nativeSessionId);
+      if (session && context) {
+        session.onCompleted = async () => {
+          if (!session.taskTerminal || request.runMode !== 'task') return;
+          await stopSession(context, registration.sessionId, { confirmed: true });
+        };
+        session.child?.once?.('exit', () => stopSession(context, registration.sessionId, { confirmed: true }).catch(() => {}));
+      }
       return options.onNativeRegistered?.({ request, registration });
+    },
+    async completeTask(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || session.unitId !== input.unitId) throw new CoreError(409, 'stop_unavailable', 'The native task binding is unavailable.');
+      session.taskTerminal = true;
+      session.terminalTurnId = session.turnId;
+      return { acknowledged: true };
+    },
+    async taskEnded(input) {
+      if (!fixture) throw new CoreError(409, 'stop_unavailable', 'Only the native transport observes completion.');
+      await sessions.get(input.nativeSessionId)?.onCompleted?.();
     },
     async send(input = {}) {
       const session = sessions.get(input?.nativeSessionId);
@@ -158,11 +197,14 @@ export function createNativeAdapter(client, options = {}) {
       if (!child) {
         if (!fixture) return { acknowledged: false, code: 'stop_unavailable' };
         options.signaled?.push(session.pid);
+        releaseSession(sessions, session.pid);
         return { acknowledged: true, exitCode: 0 };
       }
-      releaseSession(sessions, session.pid);
       const exitCode = await finishChild(child, true);
-      if (exitCode !== null) children.delete(session.pid);
+      if (exitCode !== null) {
+        releaseSession(sessions, session.pid);
+        children.delete(session.pid);
+      }
       options.signaled?.push(session.pid);
       return { acknowledged: exitCode !== null, exitCode };
     },
@@ -211,21 +253,36 @@ export async function enqueueStart(context, input) {
   const unit = parseUnitId(input.unitId);
   const state = (await readUnitState(context, unit))?.bytes;
   if (!state || /^removed:\s*true\s*$/m.test(state.toString('utf8').split(/\r?\n\r?\n/, 1)[0])) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  const id = input.approvalId ? uuidV8(['session-child', input.approvalId])
+    : context.receipt ? uuidV8(['session-request', context.receipt.principalHash, context.receipt.key]) : randomUUID();
+  const targetMachine = input.targetMachine ?? state.toString('utf8').match(/^machine:\s*(\S+)/m)?.[1] ?? context.paths.machine;
+  const previous = await readJson(context, `user/relay/requests/${targetMachine}/${id}.json`);
+  if (previous) return input.queueOnly === true ? { status: 202, request: previous, result: await latestResult(context, id), state: 'queued' } : consumeStart(context, id);
   if (hashBytes(state) !== input.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const prompt = input.prompt ?? null;
   if (prompt != null && (typeof prompt !== 'string' || Buffer.byteLength(prompt) > PROMPT_MAX)) {
     throw new CoreError(413, 'message_too_large', 'The start prompt is too large.');
   }
+  const role = state.toString('utf8').match(/^role:\s*(\S+)/m)?.[1];
+  if (input.runMode !== undefined && !['task', 'chat'].includes(input.runMode)) throw new CoreError(422, 'invalid_body', 'The run mode is not valid.');
+  const runMode = input.runMode ?? (role === 'executor' ? 'task' : 'chat');
+  const taskId = input.taskId ?? null;
+  if (taskId !== null) {
+    parseTaskId(taskId);
+    const task = await loadTask(context, taskId);
+    if (task.toId !== unit.id) throw new CoreError(422, 'invalid_binding', 'The task belongs to another unit.');
+  }
+  if (runMode === 'task' && taskId === null && !prompt?.trim()) throw new CoreError(422, 'task_required', 'A task or task prompt is required.');
   const adapter = adapterFor(context, client);
   if (input.model && !adapter.models.includes(input.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
   if (!adapter.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
-  const id = randomUUID();
+  if (targetMachine === context.paths.machine && !registeredProjectCwd(context, unit.id)) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
   const request = {
     format: 'hivem1nd-session-request-v1',
     id,
     unitId: unit.id,
-    targetMachine: input.targetMachine ?? context.paths.machine,
+    targetMachine,
     requestedBy: context.principal?.unitId ?? 'root:master',
     sourceMachine: context.paths.machine,
     client,
@@ -233,20 +290,34 @@ export async function enqueueStart(context, input) {
     leadId: input.leadId ?? null,
     job: input.job ?? null,
     prompt,
+    runMode,
+    taskId,
+    launchKind: 'cli',
+    approvalId: input.approvalId ?? null,
     stateRevision: input.stateRevision,
     createdAt: new Date(context.now()).toISOString(),
     expiresAt: new Date(context.now() + LIFETIME_MS).toISOString(),
   };
   await writeJson(context, `user/relay/requests/${request.targetMachine}/${id}.json`, request);
   if (request.targetMachine !== context.paths.machine) return { status: 202, request, state: 'queued' };
+  if (input.queueOnly === true) {
+    await writeJournal(context, { requestId: id, unitId: unit.id, client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
+    return { status: 202, request, state: 'queued' };
+  }
   return consumeStart(context, id);
 }
 
 export async function consumeStart(context, requestId) {
-  const request = await readJson(context, await findRequest(context, requestId));
-  if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
-  if (request.targetMachine !== context.paths.machine) return { status: 202, request, state: 'queued' };
-  return withLocks(context.store, [`launch:${request.unitId}`, `request:${requestId}`], () => launch(context, request));
+  context.store.sessionLaunches ??= new Map();
+  if (context.store.sessionLaunches.has(requestId)) return context.store.sessionLaunches.get(requestId);
+  const work = Promise.resolve().then(async () => {
+    const request = await readJson(context, await findRequest(context, requestId));
+    if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
+    if (request.targetMachine !== context.paths.machine) return { status: 202, request, state: 'queued' };
+    return withLocks(context.store, [`launch:${request.unitId}`, `request:${requestId}`], () => launch(context, request));
+  }).finally(() => context.store.sessionLaunches.delete(requestId));
+  context.store.sessionLaunches.set(requestId, work);
+  return work;
 }
 
 export async function recoverStarts(context) {
@@ -261,11 +332,11 @@ export async function recoverStarts(context) {
       results.push({ requestId: journal.requestId, state: 'started', sessionId: journal.sessionId, recovered: true });
       continue;
     }
-    if (journal.phase === 'failed') {
-      results.push({ requestId: journal.requestId, state: 'failed', recovered: true });
+    if (journal.phase === 'failed' || journal.phase === 'stopped') {
+      results.push({ requestId: journal.requestId, state: journal.phase, recovered: true });
       continue;
     }
-    await writeJournal(context, { ...journal, phase: 'failed', error: 'launch_ambiguous' });
+    await writeJournal(context, { ...journal, phase: 'ambiguous', error: 'launch_ambiguous' });
     const failed = await writeResult(context, { ...journal, id: journal.requestId }, 'failed', null, { code: 'launch_ambiguous', message: 'The launch could not be proved.' });
     results.push(failed);
   }
@@ -290,6 +361,9 @@ export async function registerNative(context, input) {
     activityObservedAt: new Date(context.now()).toISOString(),
     quota: null,
     quotaObservedAt: null,
+    runMode: input.runMode ?? 'chat',
+    taskId: input.taskId ?? null,
+    launchKind: input.launchKind ?? 'manual-app',
   };
   assertNoSecret(canonicalJson(registration));
   await writeJson(context, `user/relay/sessions/${registration.registrationId}.json`, registration);
@@ -314,10 +388,18 @@ export function projectSessionRequest(value) {
     sessionId: result?.sessionId ?? null,
     error,
     expiresAt,
+    client: request.client ?? null,
+    runMode: request.runMode ?? 'task',
+    taskId: request.taskId ?? null,
+    launchKind: request.launchKind ?? 'cli',
   };
 }
 
 export async function stopSession(context, sessionId, input = {}) {
+  return withLocks(context.store, [`stop:${sessionId}`], () => stopOwnedSession(context, sessionId, input));
+}
+
+async function stopOwnedSession(context, sessionId, input) {
   if (input?.confirmed !== true) throw new CoreError(422, 'invalid_body', 'Stopping a session needs confirmation.');
   const statusDirectory = `user/relay/session-status/${sessionId}`;
   let names = [];
@@ -354,12 +436,80 @@ export async function stopSession(context, sessionId, input = {}) {
     ...(input.onAcknowledged ? await input.onAcknowledged(status) : []),
   ], events: [] });
   context.ownedPids.delete(journal.pid);
+  await writeJournal(context, { ...journal, phase: 'stopped', at: stamp(context) });
   context.credentials?.revokeSession?.(sessionId);
   if (context.watch && journal.unitId) {
     const { clearUnit } = await import('./watch.mjs');
     clearUnit(context.watch, journal.unitId);
   }
+  if (context.bus) publishDomainEvents(context, [{ name: 'session.changed', unitId: journal.unitId, data: { session: await readDetail(context, 'sessions', sessionId) } },
+    { name: 'unit.changed', unitId: journal.unitId, data: { unit: await readDetail(context, 'units', journal.unitId) } }]);
   return { sessionId, state: 'stopping', acknowledged: true };
+}
+
+export async function completeSessionTask(context, sessionId, input) {
+  const registration = await registrationFor(context, sessionId);
+  if (!registration || sessionId !== context.principal?.sessionId || registration.unitId !== context.principal?.unitId || registration.runMode !== 'task'
+    || registration.launchKind !== 'cli' || !['delivered', 'failed'].includes(input?.outcome)) {
+    throw new CoreError(422, 'invalid_binding', 'The completion must belong to the assigned task session.');
+  }
+  if (input.taskId !== undefined && input.taskId !== registration.taskId) throw new CoreError(422, 'invalid_binding', 'The task does not match this session.');
+  if (registration.taskId) {
+    const task = await loadTask(context, registration.taskId);
+    if (task.toId !== registration.unitId || input.outcome === 'delivered' && !['review', 'done', 'closed'].includes(task.status)) {
+      throw new CoreError(409, 'task_not_terminal', 'The assigned task has not been delivered or closed.');
+    }
+  }
+  const adapter = adapterFor(context, registration.client);
+  if (await adapter.confirm?.(registration) !== true) throw new CoreError(409, 'stop_unavailable', 'The native completion cannot be verified.');
+  if (typeof adapter.completeTask !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot observe task completion.');
+  const journal = (await listJournals(context)).find((item) => item.sessionId === sessionId);
+  if (!journal || !context.ownedPids?.has(journal.pid)) throw new CoreError(409, 'stop_unavailable', 'The native task is not owned by this service.');
+  await writeJournal(context, { ...journal, taskCompletion: { taskId: registration.taskId, outcome: input.outcome, at: stamp(context) } });
+  const result = await adapter.completeTask(registration);
+  if (result?.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native completion was not acknowledged.');
+  return { sessionId, taskId: registration.taskId, state: 'awaiting-native-completion' };
+}
+
+export async function assertChatSession(context, sessionId) {
+  const registration = await registrationFor(context, sessionId);
+  const adapter = registration && context.adapters?.[registration.client];
+  if (!registration || registration.unitId !== context.principal?.unitId || registration.runMode !== 'chat'
+    || registration.machine !== context.paths.machine || await adapter?.confirm?.(registration) !== true) {
+    throw new CoreError(403, 'invalid_binding', 'Only a bound, connected chat session may request another CLI.');
+  }
+  return registration;
+}
+
+export async function cancelStart(context, requestId) {
+  const request = await readJson(context, await findRequest(context, requestId));
+  if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
+  const marker = `user/relay/request-cancellations/${requestId}.json`;
+  await withLocks(context.store, [`cancel:${requestId}`], async () => {
+    if (!await readJson(context, marker)) await writeJson(context, marker, { requestId, at: stamp(context) });
+  });
+  if (request.targetMachine !== context.paths.machine) return { status: 202, requestId, state: 'canceling' };
+  return withLocks(context.store, [`launch:${request.unitId}`, `request:${requestId}`], async () => {
+    await cancelOwnedStart(context, request);
+    return { status: 200, requestId, state: 'canceled' };
+  });
+}
+
+async function cancelOwnedStart(context, request) {
+  const journal = (await listJournals(context)).find((item) => item.requestId === request.id);
+  if (journal?.pid && journal.phase !== 'stopped') {
+    if (journal.sessionId) await stopSession(context, journal.sessionId, { confirmed: true });
+    else {
+      if (!context.ownedPids?.has(journal.pid)) throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
+      const stopped = await adapterFor(context, journal.client).stop({ owned: true, pid: journal.pid });
+      if (stopped?.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
+      context.ownedPids.delete(journal.pid);
+      await writeJournal(context, { ...journal, phase: 'stopped', at: stamp(context) });
+    }
+  } else if (journal?.createAttempted && !['failed', 'stopped'].includes(journal.phase)) {
+    throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
+  }
+  return writeResult(context, request, 'canceled', journal?.sessionId ?? null, null);
 }
 
 async function registrationFor(context, sessionId) {
@@ -371,18 +521,29 @@ async function registrationFor(context, sessionId) {
     if (error?.code === 'ENOENT') return null;
     throw error;
   }
+  const records = [];
   for (const name of names) {
     const record = await readJson(context, `user/relay/sessions/${name}`);
-    if (record?.sessionId === sessionId) return record;
+    if (record?.sessionId === sessionId) records.push(record);
   }
-  return null;
+  const latest = records.sort((left, right) => String(right.registeredAt ?? '').localeCompare(String(left.registeredAt ?? '')))[0];
+  if (!latest) return null;
+  const cli = records.find((record) => record.launchKind === 'cli' && ['unitId', 'client', 'machine', 'nativeSessionId'].every((key) => record[key] === latest[key]));
+  return cli ? { ...latest, launchKind: 'cli', runMode: cli.runMode, taskId: cli.taskId } : latest;
 }
 
 async function launch(context, request) {
+  if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) {
+    return { status: 200, request, result: await cancelOwnedStart(context, request), replayed: true };
+  }
   const existing = await latestResult(context, request.id);
   if (existing && TERMINAL.has(existing.state)) return { status: 200, request, result: existing, replayed: true };
   const journals = await listJournals(context);
   const current = journals.find((item) => item.requestId === request.id);
+  if (current?.createAttempted === true) {
+    await writeJournal(context, { ...current, phase: 'ambiguous' });
+    return finish(context, request, 'failed', null, { code: 'launch_ambiguous', message: 'The launch could not be proved.' });
+  }
   if (Date.parse(request.expiresAt) <= context.now()) {
     if (current && current.phase !== 'failed') await writeJournal(context, { ...current, phase: 'failed' });
     return finish(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
@@ -392,12 +553,8 @@ async function launch(context, request) {
   if (!state || hashBytes(state) !== request.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   const cwd = registeredProjectCwd(context, request.unitId);
   if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
-  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && item.phase !== 'failed' && item.pid != null)) {
+  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && !['failed', 'stopped'].includes(item.phase) && item.createAttempted === true)) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
-  }
-  if (current?.phase === 'spawned' || current?.createAttempted === true) {
-    if (current.pid == null) await writeJournal(context, { ...current, phase: 'failed', pid: null });
-    return finish(context, request, 'failed', null, { code: 'launch_ambiguous', message: 'The launch could not be proved.' });
   }
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
   if (context.launchFault === 'prepared') throw new CoreError(500, 'injected_crash', 'Injected crash before native creation.');
@@ -408,6 +565,12 @@ async function launch(context, request) {
   try {
     created = await adapter.create({ ...request, cwd });
   } catch (error) {
+    if (error?.ownedPid) {
+      context.ownedPids ??= new Set();
+      context.ownedPids.add(error.ownedPid);
+      await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'ambiguous', pid: error.ownedPid, sessionId: null, createAttempted: true, at: stamp(context) });
+      return finish(context, request, 'failed', null, { code: 'launch_ambiguous', message: 'The native launch has not been confirmed.' });
+    }
     if (error instanceof CoreError && (error.code === 'client_unavailable' || error.code === 'protocol_error')) {
       await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
       await writeResult(context, request, 'failed', null, { code: error.code, message: error.message });
@@ -419,15 +582,16 @@ async function launch(context, request) {
   context.ownedPids.add(pid);
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
-  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId });
+  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
   try {
-    await adapter.registered?.(request, registration);
+    await adapter.registered?.(request, registration, context);
   } catch (error) {
     await stopSession(context, registration.sessionId, { confirmed: true });
     await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
     return finish(context, request, 'failed', null, { code: error.code ?? 'native_login_unverified', message: 'The native session could not enter Relay.' });
   }
+  if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) return { status: 200, request, result: await cancelOwnedStart(context, request) };
   await preload(context, request);
   return finish(context, request, 'started', registration.sessionId, null);
 }
@@ -439,7 +603,8 @@ async function finish(context, request, state, sessionId, error) {
 
 async function writeResult(context, request, state, sessionId, error) {
   const previous = await latestResult(context, request.id);
-  if (previous && TERMINAL.has(previous.state)) return previous;
+  if (previous && TERMINAL.has(previous.state) && state !== 'canceled') return previous;
+  if (previous?.state === 'canceled') return previous;
   const result = {
     format: 'hivem1nd-session-result-v1',
     id: randomUUID(),
@@ -456,11 +621,15 @@ async function writeResult(context, request, state, sessionId, error) {
 }
 
 async function preload(context, request) {
-  if (!request.prompt) return null;
+  if (!request.prompt && !request.taskId) return null;
   const markerPath = `user/relay/preloads/${request.id}.json`;
   if (await readJson(context, markerPath)) return null;
   const messageId = request.id;
-  const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\ntimestamp: ${stamp(context)}\n\n${request.prompt}\n`);
+  const assignment = request.prompt ?? `Carry out assigned task ${request.taskId}.`;
+  const lifecycle = request.runMode === 'task'
+    ? `After terminal delivery or failure of ${request.taskId ?? 'this task'}, call session_complete with outcome delivered or failed. The CLI closes only after native completion.`
+    : 'This chat remains open until explicitly stopped. Use session_open to request another connected CLI with approval.';
+  const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\nrun-mode: ${request.runMode}\ntask-id: ${request.taskId ?? ''}\ntimestamp: ${stamp(context)}\n\n${assignment}\n\n${lifecycle}\n`);
   const message = `${inboxDirectory(parseUnitId(request.unitId))}/${stamp(context).replace(/[-:]/g, '').replace('.000Z', '').replace('T', '-')}-${context.paths.machine}-${messageId}.md`;
   await commit(context, [
     { relative: markerPath, bytes: jsonBytes({ requestId: request.id, messageId }) },
@@ -483,7 +652,7 @@ async function latestResult(context, requestId) {
     const value = await readJson(context, `user/relay/request-results/${requestId}/${name}`);
     if (value) results.push(value);
   }
-  results.sort((left, right) => Date.parse(left.at) - Date.parse(right.at) || (left.id < right.id ? -1 : 1));
+  results.sort((left, right) => Number(left.state === 'canceled') - Number(right.state === 'canceled') || Date.parse(left.at) - Date.parse(right.at) || (left.id < right.id ? -1 : 1));
   return results.at(-1) ?? null;
 }
 
@@ -546,15 +715,25 @@ export async function readStartRequest(context, requestId, options = {}) {
   const relative = await findRequest(context, requestId);
   const request = relative ? await readJson(context, relative) : null;
   if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
-  return withLocks(context.store, [`request:${requestId}`], async () => {
-    let result = await latestResult(context, requestId);
+  const snapshot = async () => {
+    const result = await latestResult(context, requestId);
     const current = (await listJournals(context)).find((item) => item.requestId === requestId) ?? null;
-    const consumed = current?.pid != null;
-    if (options.readOnly !== true && !consumed && (!result || !TERMINAL.has(result.state)) && Date.parse(request.expiresAt) <= context.now()) {
-      if (current && current.phase !== 'failed') await writeJournal(context, { ...current, phase: 'failed', pid: null });
-      result = await writeResult(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
+    const consumed = current?.createAttempted === true && current?.phase !== 'failed';
+    const canceling = !result || result.state !== 'canceled' ? await readJson(context, `user/relay/request-cancellations/${requestId}.json`) : null;
+    return { request, result: canceling ? { ...result, state: 'canceling' } : result, now: context.now(), consumed, state: current && !result ? 'starting' : 'queued', current };
+  };
+  const loaded = await snapshot();
+  if (options.readOnly !== true && request.targetMachine === context.paths.machine && !loaded.result && !loaded.consumed && Date.parse(request.expiresAt) > context.now()) {
+    consumeStart(context, requestId).catch(() => {});
+  }
+  if (options.readOnly === true || loaded.consumed || TERMINAL.has(loaded.result?.state) || Date.parse(request.expiresAt) > context.now()) return loaded;
+  return withLocks(context.store, [`request:${requestId}`], async () => {
+    const fresh = await snapshot();
+    if (!fresh.consumed && !TERMINAL.has(fresh.result?.state)) {
+      if (fresh.current && fresh.current.phase !== 'failed') await writeJournal(context, { ...fresh.current, phase: 'failed', pid: null });
+      fresh.result = await writeResult(context, request, 'expired', null, { code: 'approval_expired', message: 'The start request expired.' });
     }
-    return { request, result, now: context.now(), consumed };
+    return fresh;
   });
 }
 
@@ -829,31 +1008,42 @@ async function submitCursor(session, text) {
     prompt: [{ type: 'text', text }],
   });
   if (!prompted?.result || typeof prompted.result !== 'object') return { submitted: false, ambiguous: true };
+  if (typeof prompted.result.stopReason === 'string') await session.onCompleted?.();
   return { submitted: true };
 }
 
 async function submitClaude(session, text) {
+  if (session.submission) return { submitted: false, ambiguous: true };
+  let timer;
+  const submitted = new Promise((resolve) => {
+    session.submission = (result) => { clearTimeout(timer); session.submission = null; resolve(result); };
+    timer = setTimeout(() => session.submission?.({ submitted: false, ambiguous: true }), session.timeoutMs);
+  });
   try {
     sendLine(session.child, { type: 'user', message: { role: 'user', content: text } });
   } catch {
+    session.submission?.({ submitted: false });
     return { submitted: false };
   }
-  try {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const line = await session.incoming.line();
-      let message;
-      try {
-        message = parseClaudeLine(line);
-      } catch {
-        continue;
-      }
-      if (message?.type === 'result' && message.is_error) return { submitted: false, ambiguous: true };
-      if (message?.type === 'assistant' || message?.type === 'result') return { submitted: true };
+  return submitted;
+}
+
+async function pumpClaude(session) {
+  while (session.child.exitCode == null && !session.child.killed) {
+    let message;
+    try { message = parseClaudeLine(await session.incoming.line()); }
+    catch (error) {
+      if (error?.timeout === true) continue;
+      session.submission?.({ submitted: false, ambiguous: true });
+      break;
     }
-  } catch {
-    return { submitted: false, ambiguous: true };
+    if (message.session_id && message.session_id !== session.nativeSessionId) continue;
+    if (message.type === 'assistant' || message.type === 'result') {
+      session.submission?.({ submitted: !message.is_error, ...(message.is_error ? { ambiguous: true } : {}) });
+      session.submission = null;
+    }
+    if (message.type === 'result' && message.session_id === session.nativeSessionId) await session.onCompleted?.().catch(() => {});
   }
-  return { submitted: false, ambiguous: true };
 }
 
 function startupInstruction(request) {
@@ -862,6 +1052,8 @@ function startupInstruction(request) {
   if (typeof request.model === 'string' && request.model) lines.push(`Model: ${request.model}`);
   if (typeof request.leadId === 'string' && request.leadId) lines.push(`Lead: ${request.leadId}`);
   lines.push('Read the unit role, job and lead from the registered files and stay ready.');
+  if (request.runMode === 'task') lines.push(`Assigned task: ${request.taskId ?? 'the task prompt in the mailbox'}. After terminal delivery or failure, call session_complete with outcome delivered or failed. The CLI closes after native completion is acknowledged.`);
+  else if (request.runMode === 'chat') lines.push('Remain open as a chat until the person stops this session. Use session_open to request another CLI with approval.');
   return lines.join('\n');
 }
 
@@ -894,6 +1086,7 @@ function noteTurn(session, message) {
   if (session.closedTurns.length >= 16) session.closedTurns.shift();
   session.closedTurns.push(turnId);
   if (session.turnId === turnId) session.turnId = null;
+  if (session.terminalTurnId === turnId) session.onCompleted?.().catch(() => {});
 }
 
 function openRpc(child, incoming, session, timeoutMs) {

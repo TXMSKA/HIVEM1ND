@@ -479,6 +479,9 @@ async function loadSessions(fx, byId) {
       client: record.client,
       machine: record.machine,
       nativeSessionId: record.nativeSessionId,
+      launchKind: record.launchKind ?? 'manual-app',
+      runMode: record.runMode ?? 'chat',
+      taskId: record.taskId ?? null,
       registeredAt: record.registeredAt,
       activity: activityOf(record, now),
       quota: quotaOf(record, now),
@@ -1716,6 +1719,7 @@ function routeTable() {
     { pattern: "/units/:unitId/alias", PATCH: { capability: "unit.create", validate: validateAlias } },
     { pattern: "/units/:unitId/session", POST: { capability: "session.start", validate: validateSession, runtime: true } },
     { pattern: "/session-requests/:requestId", GET: { query: [] } },
+    { pattern: "/session-requests/:requestId/cancel", POST: { capability: 'session.start', validate: (body) => requireObject(body, []), runtime: true } },
     { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
     { pattern: "/leads", GET: { query: ["q", "limit", "cursor", "project"] } },
     { pattern: "/squads", GET: { query: ["q", "limit", "cursor", "project", "leadId"] } },
@@ -2328,10 +2332,12 @@ function validateLead(body) {
 }
 
 function validateSession(body) {
-  requireObject(body, ["client", "prompt", "expectedRevision"]);
+  requireObject(body, ["client", "prompt", "runMode", "taskId", "expectedRevision"]);
   requireKeys(body, ["client", "expectedRevision"]);
   if (typeof body.client !== "string" || !body.client) throw new HttpError(422, "invalid_body", "The client is not valid.");
   if (body.prompt !== undefined && body.prompt !== null && typeof body.prompt !== "string") throw new HttpError(422, "invalid_body", "The prompt is not valid.");
+  if (body.runMode !== undefined && !['task', 'chat'].includes(body.runMode)) throw new HttpError(422, 'invalid_body', 'The run mode is not valid.');
+  if (body.taskId !== undefined && body.taskId !== null && typeof body.taskId !== 'string') throw new HttpError(422, 'invalid_body', 'The task is not valid.');
   revisionField(body.expectedRevision);
 }
 
@@ -2377,6 +2383,7 @@ function rejectLead(snap, unitId, body) {
 async function rejectSession(fx, snap, unitId, body) {
   const target = snap.units.find((unit) => unit.id === unitId);
   if (!target || target.revision === null) throw new HttpError(404, "unit_not_found", "The unit was not found.");
+  if ((body.runMode ?? (target.role === 'executor' ? 'task' : 'chat')) === 'task' && !body.taskId && !body.prompt?.trim()) throw new HttpError(422, 'task_required', 'A task or task prompt is required.');
   if (target.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit was changed elsewhere.", { currentRevision: target.revision });
   const machine = snap.machines.find((item) => item.id === target.machine);
   if (!machine || !machine.answers) {
@@ -2537,10 +2544,13 @@ async function prepareSession(fx, unitId, body) {
     expiresAt: new Date(fx.nowMs + 60_000).toISOString(),
     prompt: body.prompt ?? null,
     client: body.client,
+    runMode: body.runMode ?? (target.role === 'executor' ? 'task' : 'chat'),
+    taskId: body.taskId ?? null,
+    launchKind: 'cli',
   };
   return {
     status: 202,
-    data: { requestId, state: "queued", expiresAt: record.expiresAt },
+    data: { ...sessionRequestData(record), expiresAt: record.expiresAt },
     writes: [],
     events: [{ name: "session.request.changed", global: true, unitId: record.unitId, data: sessionRequestData(record) }],
     apply() { fx.sessionRequests.set(requestId, record); },
@@ -2595,6 +2605,10 @@ function sessionRequestData(record) {
     state: record.state,
     sessionId: record.sessionId ?? null,
     error: record.error ?? null,
+    client: record.client,
+    runMode: record.runMode,
+    taskId: record.taskId,
+    launchKind: record.launchKind,
   };
 }
 
@@ -3922,6 +3936,13 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
   if (pattern === "/units/:unitId/alias") return prepareAlias(fx, params.unitId, body);
   if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);
+  if (pattern === '/session-requests/:requestId/cancel') {
+    const current = fx.sessionRequests.get(params.requestId);
+    if (!current) throw new HttpError(404, 'request_not_found', 'The start request does not exist.');
+    if (current.sessionId && current.state !== 'canceled') throw new HttpError(409, 'stop_unavailable', 'The native stop has not been acknowledged.');
+    const record = { ...current, state: 'canceled' };
+    return { status: 200, data: { requestId: params.requestId, state: 'canceled' }, writes: [], events: [{ name: 'session.request.changed', global: true, unitId: current.unitId, data: sessionRequestData(record) }], apply() { fx.sessionRequests.set(params.requestId, record); } };
+  }
   if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
   if (pattern === "/approvals/:approvalId/answer") return prepareAnswer(fx, params.approvalId, body);
   if (pattern === "/units/:unitId/approval-grants/:grantId") return prepareRevoke(fx, params, body);

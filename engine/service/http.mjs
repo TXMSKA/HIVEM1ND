@@ -13,7 +13,7 @@ import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } f
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
+import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
@@ -51,6 +51,7 @@ const ROUTES = [
   ['PUT', '/units/:unitId/lead', 'unit.connect', 'D', 'connectLead'],
   ['POST', '/units/:unitId/session', 'session.start', 'D', 'enqueueStart'],
   ['GET', '/session-requests/:requestId', 'read', 'DPA', 'detail', 'sessions'],
+  ['POST', '/session-requests/:requestId/cancel', 'session.start', 'D', 'cancelStart'],
   ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
   ['GET', '/layout', 'read', 'DP', 'layout'],
   ['PATCH', '/layout', 'layout.write', 'D', 'patchLayout'],
@@ -863,7 +864,7 @@ async function agentScope(route, domain, credential, params, body) {
     return { scope: 'own', unitId };
   }
   if (route.template === '/session-requests/:requestId') {
-    const loaded = await readStartRequest(domain, params.requestId);
+    const loaded = await readStartRequest(domain, params.requestId, { readOnly: true });
     if (loaded.request?.unitId !== unitId) throw new CoreError(403, 'forbidden', 'The agent cannot read that.');
     return { scope: 'own', unitId };
   }
@@ -927,7 +928,8 @@ function allowedBody(route) {
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
-    'POST /units/:unitId/session': ['client', 'prompt', 'model', 'expectedRevision'],
+    'POST /units/:unitId/session': ['client', 'prompt', 'model', 'runMode', 'taskId', 'expectedRevision'],
+    'POST /session-requests/:requestId/cancel': [],
     'POST /sessions/:sessionId/stop': ['confirmed'],
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
     'POST /chats': ['members', 'title'],
@@ -1145,12 +1147,22 @@ async function invoke(route, scope) {
     return { status: 200, body: connected.unit };
   }
   if (route.handler === 'enqueueStart') {
-    const queued = await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision });
+    const queued = await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision, queueOnly: true });
+    if (queued.request.targetMachine === domain.paths.machine) consumeStart(domain, queued.request.id).then((outcome) => {
+      domain.bus?.emit({ name: 'session.request.changed', unitId: queued.request.unitId, data: projectSessionRequest(outcome) });
+    }).catch(async () => {
+      const outcome = await readStartRequest(domain, queued.request.id, { readOnly: true }).catch(() => null);
+      if (outcome) domain.bus?.emit({ name: 'session.request.changed', unitId: queued.request.unitId, data: projectSessionRequest(outcome) });
+    });
     return { status: 202, body: projectSessionRequest(queued) };
   }
   if (route.handler === 'stopSession') {
     const stopped = await stopSession(domain, params.sessionId, body ?? {});
     return { status: 202, body: { sessionId: stopped.sessionId, state: 'stopping' } };
+  }
+  if (route.handler === 'cancelStart') {
+    const canceled = await cancelStart(domain, params.requestId);
+    return { status: canceled.status, body: { requestId: canceled.requestId, state: canceled.state } };
   }
   if (route.handler === 'patchLayout') {
     await patchLayout(domain, body);
