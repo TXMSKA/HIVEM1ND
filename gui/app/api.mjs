@@ -1,4 +1,4 @@
-export const REQUEST_DEADLINE_MS = 15_000;
+export const REQUEST_DEADLINE_MS = 30_000;
 
 export class ApiError extends Error {
   constructor(status, code, message, details = {}, retryAt = null, retryAfter = null) {

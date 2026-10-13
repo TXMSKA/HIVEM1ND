@@ -730,7 +730,7 @@ test("the fixture retries one lost layout write and reset sees the latest record
 });
 
 test("stalled reads time out and a mutation retry keeps the same operation", async () => {
-  assert.equal(REQUEST_DEADLINE_MS, 15_000);
+  assert.equal(REQUEST_DEADLINE_MS, 30_000);
   assert.equal(STREAM_HANDSHAKE_MS, REQUEST_DEADLINE_MS);
   assert.ok(STREAM_INACTIVITY_MS > STREAM_HANDSHAKE_MS);
   let held = 0;
@@ -840,4 +840,11 @@ test("a stalled event stream reports reconnect instead of staying pending", asyn
   );
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 30 && elapsed < 500);
+});
+
+test('the GUI response deadline covers thirty seconds independently of send deadlines', () => {
+  const { api } = harness({ fetch: async () => jsonResponse(200, envelope({})) });
+  assert.equal(api.deadlineMs, 30000);
+  assert.equal(STREAM_HANDSHAKE_MS, 30000);
+  dispose(api);
 });
