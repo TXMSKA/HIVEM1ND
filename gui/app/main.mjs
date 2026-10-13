@@ -33,7 +33,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { ApiError, REQUEST_DEADLINE_MS, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
+import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -71,6 +71,27 @@ import { close as closeStream, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
+
+const OPENING_COPY = {
+  reading: ["Reading the M1ND", "Leyendo el M1ND"],
+  failure: ["The M1ND cannot be read", "No se puede leer el M1ND"],
+  chooseFolder: ["Choose another folder", "Elegir otra carpeta"],
+  noUnits: ["No units yet", "Todavía no hay unidades"],
+  first: ["The Overseer comes first; create it from the inspector.", "Crear primero el Overseer desde el inspector."],
+  empty: ["Your M1ND is empty", "El M1ND está vacío"],
+  coordinates: ["The Overseer coordinates every other unit. Create it first; then add Overlords and Executors from the Map.", "El Overseer coordina las demás unidades. Crearlo primero y agregar después Overlords y Executors desde el Mapa."],
+  create: ["Create the Overseer", "Crear el Overseer"],
+  goesHere: ["The Overseer goes here", "El Overseer se coloca aquí"],
+  timeout: ["{path} did not answer in 30 s. The drive may be offline, or another program may hold the folder.", "{path} no respondió en 30 s. La unidad puede estar desconectada o la carpeta puede estar bloqueada por otro programa."],
+  counts: ["{units} units, {groups} groups, {chats} chats, {boards} boards", "{units} unidades, {groups} grupos, {chats} chats, {boards} tableros"],
+  connecting: ["Connecting to the service", "Conectando con el servicio"],
+  read: ["Reading", "Leyendo"],
+  notRead: ["M1ND not read", "M1ND sin leer"],
+};
+
+function openingText(app, key, variables = {}) {
+  return OPENING_COPY[key][app.language === "es" ? 1 : 0].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
+}
 
 export function presentation(viewer, settings) {
   return {
@@ -110,6 +131,9 @@ export async function mount(root, env = globalThis) {
     disposed: false,
     hierarchy: { shown: new Map(), collapsed: new Set() },
     restoreSearch: false,
+    bootReading: Boolean(api.token),
+    selectedFolder: env.mindPath ?? new URLSearchParams(api.location.search ?? "").get("mind") ?? "",
+    chooseFolder: env.chooseFolder ?? null,
   };
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
@@ -158,6 +182,14 @@ async function runBoot(app) {
   app.bootRetrying = true;
   app.bootFailed = false;
   app.bootSettled = false;
+  app.bootReading = true;
+  app.bootError = null;
+  if (!app.selectedFolder && app.store.audience !== "phone") {
+    request(app.api, "GET", "/viewer/folder", { deadlineMs: 30000 }).then((result) => {
+      app.selectedFolder = result.data.mindPath;
+      if (!app.disposed && app.bootFailed) renderShell(app);
+    }).catch(() => {});
+  }
   synchronize(app.api, app.store, {
     cursor: () => app.store.cursor,
     onEvent: (event) => onStream(app, event),
@@ -166,13 +198,16 @@ async function runBoot(app) {
     },
   });
   try {
-    await loadSnapshot(app.store, app.api);
+    await loadSnapshot(app.store, { ...app.api, deadlineMs: 30000 });
+    if (app.disposed || app.bootFailed) return app;
     if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, app.readyBudgetMs);
     await loadPresentation(app);
+    if (app.disposed || app.bootFailed) return app;
     await loadLists(app);
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
+      if (error?.status === 401) clearCredentials(app.api);
       app.bootFailed = true;
       clearTimeout(app.readyTimer);
       renderFailure(app, error);
@@ -191,7 +226,7 @@ function resumeBoot(app) {
 
 function armBootDeadline(app, budgetMs) {
   clearTimeout(app.readyTimer);
-  const budget = Number.isFinite(budgetMs) ? budgetMs : REQUEST_DEADLINE_MS;
+  const budget = Number.isFinite(budgetMs) ? budgetMs : 30000;
   const timer = setTimeout(() => {
     if (app.disposed || app.bootSettled || app.bootFailed || app.layout !== "unknown" || app.store.capabilities?.length) return;
     app.bootFailed = true;
@@ -247,6 +282,7 @@ async function logoutOwnViewer(app) {
 }
 
 export function navigate(app, mode) {
+  if (app.bootReading || app.bootFailed) return;
   if (app.layout === "phone") {
     if (!PHONE_MODES.includes(mode)) return;
     if (mode === "waiting") {
@@ -290,7 +326,9 @@ function paintShell(app) {
   const t = (key, variables) => text(app.language, key, variables);
   const view = app.store.view;
   const counts = view?.counts ?? {};
-  const shell = element(document, "div", { class: "shell", "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode, "data-tab": app.tab });
+  const opening = app.layout !== "phone" && (app.bootReading || app.bootFailed);
+  const empty = !opening && emptyMind(app);
+  const shell = element(document, "div", { class: `shell${opening ? " shell-opening" : empty ? " shell-empty" : ""}`, "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode, "data-tab": app.tab, "data-boot": opening ? app.bootFailed ? "failed" : "reading" : "ready" });
   const heading = viewTitle(app, t);
   document.title = `${heading} · HIVEM1ND`;
   const workspace = renderWorkspace(app, t, view, counts);
@@ -300,7 +338,7 @@ function paintShell(app) {
     element(document, "h1", { class: "sr", text: heading }),
     renderBar(app, t, counts),
     workspace,
-    renderFooter(app, t),
+    opening ? openingFooter(app) : renderFooter(app, t),
   );
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   app.root.replaceChildren(shell);
@@ -690,6 +728,7 @@ async function loadPresentation(app, options = {}) {
   const settings = await request(app.api, "GET", "/settings");
   if (app.disposed || ticket !== app.presentationTicket) return;
   app.store.settings = settings.data;
+  app.selectedFolder = settings.data.locations?.mind ?? app.selectedFolder;
   app.readAt = settings.meta.readAt;
   app.sync = settings.meta.sync;
   if (app.store.capabilities.includes("viewer.write")) {
@@ -707,7 +746,8 @@ async function loadPresentation(app, options = {}) {
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
   app.store.settings.home = home.home;
-  if (app.layout !== "unknown") {
+  if (app.layout !== "unknown" && app.store.snapshotReady) {
+    app.bootReading = false;
     app.bootSettled = true;
     clearTimeout(app.readyTimer);
     app.readyTimer = null;
@@ -791,7 +831,8 @@ function renderBar(app, t, counts) {
       renderShell(app);
     },
   });
-  const bar = element(document, "header", { class: "bar" }, brand(document), modes, waiting);
+  const bar = element(document, "header", { class: "bar" }, brand(document), modes);
+  if (counts.waiting || (!app.bootReading && !app.bootFailed && !emptyMind(app))) bar.append(waiting);
   if (app.layout !== "phone") {
     bar.append(catalogToggle);
     if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
@@ -801,6 +842,8 @@ function renderBar(app, t, counts) {
 }
 
 function renderWorkspace(app, t, view, counts) {
+  if (app.layout !== "phone" && (app.bootReading || app.bootFailed)) return openingWorkspace(app, t);
+  if (emptyMind(app) && app.mode === "map" && !app.waitingOpen) return emptyWorkspace(app, t);
   if (app.mode === "focus") return renderFocusWorkspace(app, t);
   if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
@@ -914,6 +957,118 @@ function renderWorkspace(app, t, view, counts) {
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
   const showSide = app.layout !== "phone" || app.mode !== "waiting";
   return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
+}
+
+function skeletonPanel(document, name, sizes) {
+  const panel = element(document, "aside", { class: `panel ${name} opening-skeletons`, "aria-hidden": "true" });
+  for (const [width, height = 14] of sizes) {
+    const block = element(document, "div", { class: "opening-skeleton" });
+    block.style.width = `${width}px`;
+    block.style.height = `${height}px`;
+    panel.append(block);
+  }
+  return panel;
+}
+
+function openingWorkspace(app, t) {
+  const document = app.root.ownerDocument;
+  const failed = app.bootFailed;
+  const content = element(document, "div", { class: `opening-content${failed ? " opening-failure" : ""}` });
+  if (failed) {
+    content.append(element(document, "div", { class: "opening-error-icon" }, icon(document, "alert")));
+    content.append(element(document, "h2", { text: openingText(app, "failure") }));
+    const path = app.selectedFolder || "M1ND";
+    const cause = app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
+    content.append(element(document, "p", { "data-opening-cause": "true", text: cause }));
+    const actions = element(document, "div", { class: "opening-actions" },
+      element(document, "button", { type: "button", class: "btn primary", "data-action": "retry-boot", text: t("retry"), onclick: () => resumeBoot(app) }),
+      element(document, "button", { type: "button", class: "btn", "data-action": "choose-folder", text: openingText(app, "chooseFolder"), onclick: () => chooseOpeningFolder(app) }),
+    );
+    content.append(actions);
+  } else {
+    content.append(element(document, "span", { class: "spinner", "aria-hidden": "true" }));
+    content.append(element(document, "h2", { text: openingText(app, "reading") }));
+    const counts = app.store.view?.counts;
+    if (counts) content.append(element(document, "p", { class: "opening-counts", text: openingText(app, "counts", { units: counts.units ?? 0, groups: app.store.view.groups?.length ?? 0, chats: counts.chats ?? 0, boards: app.store.view.editors?.filter((editor) => editor.kind === "blueprint").length ?? 0 }) }));
+  }
+  return element(document, "div", { class: "workspace workspace-opening" },
+    skeletonPanel(document, "side", [[200, 30], [230, 34], ...[150, 190, 120, 170, 140, 180, 110].map((width) => [width])]),
+    element(document, "section", { class: "panel stage opening-stage", "aria-busy": String(!failed) }, content),
+    skeletonPanel(document, "inspector", [[220, 38], [300, 70], ...[260, 200, 240].map((width) => [width, 44])]),
+  );
+}
+
+function safeOpeningCause(app) {
+  let cause = String(app.bootError?.message || text(app.language, "unavailable"));
+  for (const secret of [app.api.token, app.api.homeKey]) if (secret) cause = cause.split(secret).join("[redacted]");
+  return cause.replace(/Bearer\s+\S+|(?:session|home|token|secret|password)=[^\s&]+/gi, "[redacted]");
+}
+
+function openingFooter(app) {
+  const document = app.root.ownerDocument;
+  const machine = app.store.settings?.service?.machine;
+  return element(document, "footer", { class: "foot" },
+    element(document, "span", { text: machine ? text(app.language, "serviceRunning", { machine }) : openingText(app, "connecting") }),
+    element(document, "span", { text: openingText(app, app.bootFailed ? "notRead" : "read") }),
+  );
+}
+
+async function chooseOpeningFolder(app) {
+  if (app.folderChoosing) return;
+  app.folderChoosing = true;
+  try {
+    if (app.chooseFolder) await app.chooseFolder({ mindPath: app.selectedFolder });
+    else {
+      // A second setup window keeps the current host, credential and drafts alive.
+      const window = app.root.ownerDocument.defaultView?.open?.("", "_blank");
+      if (!window) throw new ApiError(0, "folder_unavailable", app.language === "es" ? "No se pudo abrir la selección de carpeta." : "The folder selection could not be opened.");
+      try {
+        window.opener = null;
+        const result = await request(app.api, "POST", "/viewer/folder", { body: {} });
+        const target = new URL(result.data.url);
+        if (target.protocol !== "http:" || target.hostname !== "127.0.0.1" || target.pathname !== "/" || target.username || target.password || target.search) throw new ApiError(0, "invalid_url", "The folder selection could not be opened.");
+        window.location.replace(target.href);
+      } catch (error) {
+        window.close();
+        throw error;
+      }
+    }
+  } catch (error) {
+    app.bootError = error;
+    renderFailure(app, error);
+  } finally {
+    app.folderChoosing = false;
+  }
+}
+
+function emptyMind(app) {
+  if (app.layout !== "desktop" || !app.store.snapshotReady || !app.store.capabilities.includes("unit.create")) return false;
+  const units = app.unitList?.catalog ?? [...app.store.indexes.units.values()];
+  return units.length === 1 && units[0].id === "root:master";
+}
+
+function emptyWorkspace(app, t) {
+  const document = app.root.ownerDocument;
+  const tabs = element(document, "div", { class: "tabs" });
+  for (const tab of ["hierarchy", "chats"]) tabs.append(element(document, "button", { type: "button", class: "tab", "aria-pressed": String(app.tab === tab), onclick: () => navigate(app, tab) }, icon(document, tab), t(tab)));
+  const search = element(document, "input", { type: "search", class: "search", "aria-label": t("search"), placeholder: t("search") });
+  const side = element(document, "aside", { class: "panel side" }, tabs, search,
+    element(document, "div", { class: "empty-side" }, element(document, "h2", { text: openingText(app, "noUnits") }), element(document, "p", { text: openingText(app, "first") })),
+  );
+  const master = element(document, "div", { class: "empty-master", "data-unit": "root:master" }, icon(document, "person"), element(document, "span", { class: "map-label", text: app.language === "es" ? "Usted" : "You" }));
+  const stage = element(document, "section", { class: "panel stage empty-stage" }, master,
+    element(document, "div", { class: "empty-overseer", "aria-hidden": "true" }),
+    element(document, "p", { class: "empty-placeholder", text: openingText(app, "goesHere") }),
+  );
+  const create = element(document, "button", { type: "button", class: "btn primary", "data-action": "create-overseer", text: openingText(app, "create"), onclick: () => openUnitForm(app, true) });
+  create.disabled = Boolean(app.overseerCreating);
+  if (app.overseerCreating) create.replaceChildren(progressMark(document, openingText(app, "create")));
+  const inspector = element(document, "aside", { class: "panel inspector empty-inspector" }, icon(document, "crown"),
+    element(document, "h2", { text: openingText(app, "empty") }),
+    element(document, "p", { text: openingText(app, "coordinates") }), create,
+  );
+  if (app.overseerError) inspector.append(element(document, "p", { role: "alert", text: actionText(app.language, app.overseerError.code, { machine: app.overseerError.details?.machine ?? app.store.settings?.service?.machine ?? "" }) }));
+  return element(document, "div", { class: "workspace workspace-empty" }, side, stage, inspector);
 }
 
 async function loadLists(app) {
@@ -2973,6 +3128,13 @@ async function submitCode(app, code) {
 }
 
 function renderFailure(app, error) {
+  if (app.layout !== "phone" && app.api.token) {
+    app.bootFailed = true;
+    app.bootError = error;
+    renderShell(app);
+    releaseBootstrapAnnouncement(app, openingText(app, "failure"));
+    return;
+  }
   const document = app.root.ownerDocument;
   const key = error?.status === 401 || error?.status === 410 ? "sessionExpired" : "unavailable";
   const message = text(app.language, key);
@@ -3004,6 +3166,15 @@ function renderFailure(app, error) {
 const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the mind.", "Leyendo la mente."]);
 
 function renderStatus(app, key) {
+  if (app.api.token && app.layout !== "phone") {
+    app.bootReading = true;
+    app.bootstrapAnnouncement = openingText(app, "reading");
+    renderShell(app);
+    ensureLive(app);
+    app.liveStatus.textContent = app.bootstrapAnnouncement;
+    app.liveError.textContent = "";
+    return;
+  }
   const document = app.root.ownerDocument;
   const label = text(app.language, key);
   app.bootstrapAnnouncement = label;
@@ -3339,7 +3510,8 @@ function restoreInvoker(app, opener) {
   live?.focus?.();
 }
 
-function openUnitForm(app) {
+function openUnitForm(app, firstRun = false) {
+  if (firstRun) return createOverseer(app);
   settle(app, "unit-form", text(app.language, "loadingClients"), async () => {
     const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
     if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='unit']")) return;
@@ -3420,6 +3592,35 @@ function openUnitForm(app) {
     }
   }, "new-unit");
   });
+}
+
+async function createOverseer(app) {
+  if (app.overseerCreating || !emptyMind(app)) return;
+  app.overseerCreating = true;
+  app.overseerError = null;
+  renderShell(app);
+  try {
+    const machineId = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine;
+    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
+    if (!machines.some((machine) => machine.id === machineId && machine.answers)) throw new ApiError(409, "machine_unavailable", text(app.language, "machineUnavailable", { machine: machineId }));
+    const input = { unit: "overseer", role: "overseer", scope: { kind: "root", name: null }, machine: machineId, position: { x: 372, y: 178 } };
+    const created = await createUnit(app.api, input, app.overseerOperation);
+    app.overseerOperation = null;
+    const unit = created.data.unit?.id ? created.data.unit : created.data;
+    app.store.indexes.units.set(unit.id, unit);
+    app.store.selected.unitId = unit.id;
+    if (app.unitList) await reloadList(app.unitList);
+    const map = ensureMap(app);
+    map.selection = new Set([unit.id]);
+    map.focusId = unit.id;
+    if (!app.disposed) await loadInspector(app, unit.id);
+  } catch (error) {
+    app.overseerOperation = error.operation ?? app.overseerOperation ?? null;
+    app.overseerError = error;
+  } finally {
+    app.overseerCreating = false;
+    if (!app.disposed) renderShell(app);
+  }
 }
 
 function openSessionForm(app, unit) {

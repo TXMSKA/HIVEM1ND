@@ -13,6 +13,8 @@
   --ring: #a48aaf;
   --working: #8fd19e;
   --waiting: #e6c06f;
+  --error: #e58e7c;
+  --error-soft: rgba(229, 142, 124, 0.12);
   --idle: #8e8496;
   --line: rgba(236, 230, 218, 0.08);
   --line2: rgba(236, 230, 218, 0.15);
@@ -132,6 +134,36 @@ button, input { font: inherit; color: inherit; }
 }
 
 .shell * { min-width: 0; }
+
+.shell-opening, .shell-empty { grid-template-rows: var(--bar) minmax(0, 1fr) var(--footer); }
+.shell-opening .workspace, .shell-empty .workspace { padding: 0 var(--gap); }
+.opening-skeletons { padding: 18px; gap: 14px; }
+.opening-skeleton { flex: none; max-width: 100%; border-radius: 6px; background: var(--card2); }
+.shell-opening .opening-stage { padding: 0; align-items: center; justify-content: center; }
+.opening-content { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.opening-stage .opening-content h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.opening-content p { margin: 0; }
+.opening-content > .spinner { width: 28px; height: 28px; }
+.opening-counts { color: var(--mute); font-size: 12.5px; }
+.opening-failure { width: 420px; max-width: calc(100% - 32px); }
+.opening-stage .opening-failure h2 { font-size: 16px; font-weight: 700; }
+.opening-failure p { font-size: 13px; overflow-wrap: anywhere; }
+.opening-error-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: var(--radius-circle); background: var(--error-soft); color: var(--error); }
+.opening-error-icon .icon { width: 24px; height: 24px; }
+.opening-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.opening-actions .btn, .empty-inspector .btn { min-height: 32px; }
+.empty-side { padding: 24px 20px; display: grid; gap: 8px; }
+.empty-side h2 { margin: 0; font-size: 14px; color: var(--text); }
+.empty-side p { margin: 0; font-size: 13px; color: var(--mute); }
+.shell-empty .empty-stage { position: relative; padding: 0; }
+.empty-master { position: absolute; top: 38px; left: 352px; display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-circle); background: var(--text); color: var(--bg); }
+.empty-master .icon { width: 18px; height: 18px; }
+.empty-overseer { position: absolute; top: 146px; left: 340px; width: 64px; height: 64px; border: 2px dashed var(--accent); border-radius: var(--radius-circle); }
+.empty-placeholder { position: absolute; top: 220px; left: 272px; width: 200px; text-align: center; font-size: 12.5px; color: var(--mute); }
+.empty-inspector { padding: 32px; gap: 14px; align-items: center; justify-content: center; text-align: center; }
+.empty-inspector > .icon { width: 28px; height: 28px; color: var(--mute); }
+.empty-inspector h2 { margin: 0; color: var(--text); font-size: 16px; }
+.empty-inspector p { margin: 0; font-size: 13px; line-height: 1.6; }
 
 .gate {
   min-height: 100dvh;

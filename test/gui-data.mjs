@@ -159,6 +159,7 @@ function bulkUnits(size) {
 export function scenarioData(size, scenario = "standard", now = DEFAULT_NOW) {
   const resolvedSize = size ?? (scenario === "large" ? 1200 : 0);
   const empty = scenario === "empty";
+  const firstRun = scenario === "first-run";
   const settings = {
     format: "hivem1nd-settings-v1",
     look: scenario === "high-contrast" ? "high-contrast" : "modern",
@@ -182,7 +183,7 @@ export function scenarioData(size, scenario = "standard", now = DEFAULT_NOW) {
     empty,
     settings: empty ? null : settings,
     layout: empty ? null : layout,
-    units: empty ? [] : castUnits(now),
+    units: empty ? [] : firstRun ? castUnits(now).slice(0, 1) : castUnits(now),
     bulk: bulkUnits(resolvedSize),
     malformed: { path: "user/state/broken.md", contents: "this is not a record\n" },
     issues: [
@@ -269,14 +270,17 @@ export async function seedRecords(tree, options = {}) {
   await chmod(local, 0o700).catch(() => undefined);
 
   await writeOwned(paths, join(user, "VERSION"), "3.0.0\n");
-  await writeOwned(paths, join(user, data.malformed.path.slice("user/".length)), data.malformed.contents);
+  if (data.scenario !== "first-run") await writeOwned(paths, join(user, data.malformed.path.slice("user/".length)), data.malformed.contents);
 
   for (const record of [...data.units, ...data.bulk]) {
     if (!ROLES.has(record.role) && record.unit !== "partial") continue;
     const file = join(scopeDir(user, record), "state", `${record.unit}.md`);
     await writeOwned(paths, file, stateDocument(record));
   }
-  if (!data.empty) {
+  if (data.scenario === "first-run") {
+    await writeMachines(paths, user, data.now, data.scenario);
+    await writeOwned(paths, join(user, "gui", "layout.json"), stableJson({ ...data.layout, nodes: { "root:master": { x: 372, y: 58 } }, groups: {} }));
+  } else if (!data.empty) {
     await writeOwned(paths, join(user, "projects", "shop", "brief.md"), markdownRecord({
       project: "shop", title: "Shop", environment: "web",
     }));

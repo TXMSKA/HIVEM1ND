@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
@@ -22,6 +22,8 @@ import { applyReset, createStore, startCollection, writeCollection } from "../gu
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
+import { closeGuiHost, createFolderReopen, startGui } from "../gui/index.mjs";
+import { dispose as disposeCoreFixture, makeCoreFixture } from "./core-fixture.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
@@ -2719,13 +2721,14 @@ test("startup shows Retry when stream.ready never arrives", async (t) => {
     return fetch(input, init);
   }, { readyBudgetMs: 200 });
   t.after(() => dispose(booted.app));
-  await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "Startup did not fail closed.");
-  assert.equal(booted.root.querySelector("button")?.textContent, "Retry");
+  await waitFor(() => booted.root.querySelector("[data-boot='failed']"), "Startup did not fail closed.");
+  assert.equal(booted.root.querySelector("h2")?.textContent, "The M1ND cannot be read");
+  assert.equal(booted.root.querySelector("[data-action='retry-boot']")?.textContent, "Retry");
   assert.equal(booted.document.querySelectorAll("[data-live='status']").length, 1);
   assert.equal(booted.document.querySelectorAll("[data-live='error']").length, 1);
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
-  assert.equal(booted.document.querySelector("[data-live='error']").textContent, "The service is unavailable.");
+  assert.equal(booted.document.querySelector("[data-live='error']").textContent, "The M1ND cannot be read");
   assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/settings"), true);
   assert.equal(urls.some((url) => new URL(url).pathname === "/api/v1/viewer"), false);
 });
@@ -2752,15 +2755,15 @@ test("startup Retry repeats the failed read with the same authorized API", async
   }, { history });
   t.after(() => dispose(booted.app));
   const api = booted.app.api;
-  await waitFor(() => booted.root.querySelector("h2")?.textContent === "The service is unavailable.", "The failed startup did not stay recoverable.");
+  await waitFor(() => booted.root.querySelector("[data-boot='failed']"), "The failed startup did not stay recoverable.");
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
   assert.equal(api.token, token);
   assert.equal(history.urls.length, 1);
   assert.equal(history.urls[0].includes(token), false);
   assert.equal(history.urls[0].includes("session="), false);
-  click(booted.root.querySelector("button"));
-  await waitFor(() => booted.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "Retry did not open the desktop shell.");
+  click(booted.root.querySelector("[data-action='retry-boot']"));
+  await waitFor(() => booted.root.querySelector("[data-boot='ready']"), "Retry did not open the desktop shell.");
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Loading."), false);
   assert.equal(booted.document.querySelector("[data-live='status']").textContent.includes("Reading the mind."), false);
   assert.equal(booted.document.querySelector("[data-live='error']").textContent.includes("The service is unavailable."), false);
@@ -2771,6 +2774,199 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(authorizations.length >= 2, true);
   assert.equal(authorizations.every((value) => value === `Bearer ${token}`), true);
   assert.equal(history.urls.length, 1);
+});
+
+test("a delayed initial read keeps the desktop frame and skeleton panels visible", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const { document, root } = createTestDocument(1440);
+  const url = new URL(fixture.desktopUrl);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const pending = mount(root, {
+    location: url, history: { replaceState() {} }, mindPath: join(fixture.root, "Cosmic", "hivem1nd"),
+    fetch: async (input, init) => {
+      if (new URL(input).pathname === "/api/v1/view") await gate;
+      return fetch(input, init);
+    },
+  });
+  assert.equal(root.querySelector("[data-boot='reading']") != null, true);
+  assert.equal(root.querySelector(".bar") != null, true);
+  assert.equal(root.querySelector(".foot") != null, true);
+  assert.equal(root.querySelectorAll(".opening-skeleton").length, 14);
+  assert.equal(root.querySelector("h2").textContent, "Reading the M1ND");
+  assert.equal(document.querySelector("[data-live='status']").textContent, "Reading the M1ND");
+  await delay(50);
+  assert.equal(root.querySelector("[data-boot='reading']") != null, true);
+  release();
+  const app = await pending;
+  t.after(() => dispose(app));
+  assert.equal(root.querySelector("[data-boot='ready']") != null, true);
+  assert.equal(root.querySelector(".opening-skeleton"), null);
+  assert.equal(document.querySelector("[data-live='status']").textContent, "");
+});
+
+test("the initial read ends at 30000 milliseconds with its selected folder and Retry", async (t) => {
+  const { document, root } = createTestDocument(1440);
+  const selected = "C:\\fixtures\\offline\\.m1nd";
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = mount(root, {
+    location: { origin: "http://127.0.0.1:43123", pathname: "/gui/viewer", hash: "#session=fixture-credential" },
+    history: { replaceState() {} }, mindPath: selected,
+    fetch: async (input, init) => {
+      if (new URL(input).pathname === "/api/v1/events") return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "text/event-stream" } });
+      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+    },
+  });
+  t.mock.timers.tick(29999);
+  assert.equal(root.querySelector("[data-boot='reading']") != null, true);
+  t.mock.timers.tick(1);
+  const app = await pending;
+  t.after(() => dispose(app));
+  assert.equal(root.querySelector("[data-boot='failed']") != null, true);
+  assert.equal(root.querySelector("[data-opening-cause]").textContent, `${selected} did not answer in 30 s. The drive may be offline, or another program may hold the folder.`);
+  assert.equal(root.querySelector("[data-action='retry-boot']").textContent, "Retry");
+  assert.equal(root.querySelector("[data-action='choose-folder']").textContent, "Choose another folder");
+  assert.equal(root.querySelectorAll(".opening-skeleton").length, 14);
+  assert.equal(document.querySelector("[data-live='error']").textContent, "The M1ND cannot be read");
+  assert.equal(app.api.token != null, true);
+  app.language = "es";
+  renderShell(app);
+  assert.equal(root.querySelector("h2").textContent, "No se puede leer el M1ND");
+  assert.equal(root.querySelector("[data-action='choose-folder']").textContent, "Elegir otra carpeta");
+  assert.equal(root.querySelector("[data-opening-cause]").textContent.includes("no respondió en 30 s"), true);
+  t.mock.timers.reset();
+});
+
+test("an inaccessible-folder cause exposes no credential and choosing another folder retains drafts", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const selected = join(fixture.root, "Cosmic", "hivem1nd");
+  let handoff = null;
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    if (new URL(input).pathname === "/api/v1/view") return new Response(JSON.stringify({ error: { code: "folder_unreadable", message: `Access is denied. ${init.headers.Authorization}` } }), { status: 403, headers: { "content-type": "application/json" } });
+    return fetch(input, init);
+  }, { mindPath: selected, chooseFolder: async (input) => { handoff = input; } });
+  t.after(() => dispose(booted.app));
+  assert.equal(booted.root.querySelector("[data-opening-cause]").textContent.includes(selected), true);
+  assert.equal(booted.root.querySelector("[data-opening-cause]").textContent.includes("Access is denied."), true);
+  const token = booted.app.api.token;
+  for (const node of booted.document.querySelectorAll("p, h2, [data-live]")) assert.equal(node.textContent.includes(token), false);
+  const drafts = new Map([["document", { text: "Keep this draft." }]]);
+  booted.app.store.drafts = drafts;
+  const api = booted.app.api;
+  click(booted.root.querySelector("[data-action='choose-folder']"));
+  await delay(0);
+  assert.deepEqual(handoff, { mindPath: selected });
+  assert.equal(booted.app.api, api);
+  assert.equal(api.token, token);
+  assert.equal(booted.app.store.drafts, drafts);
+  assert.equal(booted.app.disposed, false);
+  assert.equal(booted.root.querySelector("[data-boot='failed']") != null, true);
+});
+
+test("folder reopening enters Location once without answering or replacing the existing host", async () => {
+  const calls = [];
+  const session = { currentStep: 8, answer() { throw new Error("The existing setup draft must not be written."); } };
+  const wizard = { url: "http://127.0.0.1:43123/#session=fixture-credential" };
+  const reopen = createFolderReopen({ mindPath: "C:\\fixtures\\.m1nd", kitPath: resolve(".") }, {
+    createSetupSession: async (input) => { calls.push(input); return session; },
+    createWizardServer: async (input) => { assert.equal(input.session, session); return wizard; },
+  });
+  const [first, second] = await Promise.all([reopen(), reopen()]);
+  assert.equal(first, wizard);
+  assert.equal(second, wizard);
+  assert.equal(session.currentStep, 2);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].resume, false);
+  assert.equal(calls[0].serviceSetup, true);
+});
+
+test("the owned folder handoff protects its authority and preserves the host and checkpoint bytes", async (t) => {
+  const fixture = await makeCoreFixture();
+  let host;
+  t.after(async () => { await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
+  const origin = join(fixture.root, "gui-origin");
+  await mkdir(origin, { recursive: true });
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: "hivem1nd-service-config-v1", mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: "folder", path: origin }, stagingPath: fixture.paths.staging, port: 0 }));
+  const draft = join(fixture.paths.localDirectory, "setup-draft.json");
+  const checkpoint = join(fixture.paths.localDirectory, "setup.json");
+  const before = Buffer.from('{"sentinel":"retain the existing setup"}\n');
+  await writeFile(draft, before);
+  await writeFile(checkpoint, before);
+  host = await startGui({ mindPath: fixture.paths.mind, env: fixture.env, home: fixture.home, platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: fixture.store.aclRunner });
+  const headers = { Origin: host.origin, Authorization: `Bearer ${host.token}`, "Content-Type": "application/json" };
+  const selected = await fetch(`${host.origin}/api/v1/viewer/folder`, { headers });
+  assert.equal(selected.status, 200);
+  assert.equal((await selected.json()).data.mindPath, fixture.paths.mind);
+  const rejected = await fetch(`${host.origin}/api/v1/viewer/folder`, { method: "POST", headers: { ...headers, Origin: "http://127.0.0.1:1" }, body: "{}" });
+  assert.equal(rejected.status, 403);
+  await rejected.arrayBuffer();
+  const opened = await fetch(`${host.origin}/api/v1/viewer/folder`, { method: "POST", headers, body: "{}" });
+  assert.equal(opened.status, 200);
+  const wizard = new URL((await opened.json()).data.url);
+  const credential = new URLSearchParams(wizard.hash.slice(1)).get("session");
+  const step = await fetch(`${wizard.origin}/api/v1/step`, { headers: { Origin: wizard.origin, Authorization: `Bearer ${credential}` } });
+  assert.equal(step.status, 200);
+  assert.equal((await step.json()).data.id, "location");
+  assert.equal((await readFile(draft)).equals(before), true);
+  assert.equal((await readFile(checkpoint)).equals(before), true);
+  assert.equal(host.stopped, false);
+  const viewer = await fetch(`${host.origin}/api/v1/viewer`, { headers });
+  assert.equal(viewer.status, 200);
+  await viewer.arrayBuffer();
+});
+
+test("first-run creates the Overseer once despite repeated clicks and selects the actual unit", async (t) => {
+  const fixture = await createGuiFixture({ scenario: "first-run" });
+  t.after(() => fixture.close());
+  const writes = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const booted = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (new URL(input).pathname === "/api/v1/units" && init.method === "POST") { writes.push(JSON.parse(init.body)); await gate; }
+  });
+  t.after(() => dispose(booted.app));
+  assert.equal(booted.root.querySelector(".workspace-empty") != null, true);
+  assert.equal(booted.root.querySelector("[data-action='waiting']"), null);
+  assert.equal(booted.root.querySelectorAll("[data-unit]").length, 1);
+  assert.equal(booted.root.querySelector(".map-edge"), null);
+  const create = booted.root.querySelector("[data-action='create-overseer']");
+  click(create);
+  click(create);
+  await waitFor(() => writes.length === 1, "The Overseer create request was not sent.");
+  click(booted.root.querySelector("[data-action='create-overseer']"));
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0], { unit: "overseer", role: "overseer", scope: { kind: "root", name: null }, machine: "DESKTOP", leadId: null, job: null, model: null, position: { x: 372, y: 178 } });
+  release();
+  await waitFor(() => !booted.app.overseerCreating, "The creation did not settle.");
+  assert.equal(booted.app.overseerError?.message ?? null, null);
+  assert.equal(booted.app.store.selected.unitId, "root:overseer");
+  assert.equal(booted.root.querySelector(".map-node.is-selected")?.getAttribute("data-unit-id"), "root:overseer");
+  const units = (await request(apiFrom(fixture.desktopUrl), "GET", "/units")).data.items;
+  assert.deepEqual(units.map((unit) => unit.id).sort(), ["root:master", "root:overseer"]);
+  assert.equal(booted.root.querySelector(".workspace-empty"), null);
+});
+
+test("a failed first-run request keeps the empty state and its creation control", async (t) => {
+  const fixture = await createGuiFixture({ scenario: "first-run" });
+  t.after(() => fixture.close());
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    if (new URL(input).pathname === "/api/v1/units" && init.method === "POST") return new Response(JSON.stringify({ error: { code: "machine_unavailable", message: "The machine is unavailable.", details: { machine: "DESKTOP" } } }), { status: 409, headers: { "content-type": "application/json" } });
+    return fetch(input, init);
+  });
+  t.after(() => dispose(booted.app));
+  booted.app.language = "es";
+  renderShell(booted.app);
+  assert.equal(booted.root.querySelector("[data-action='create-overseer']").textContent, "Crear el Overseer");
+  click(booted.root.querySelector("[data-action='create-overseer']"));
+  await waitFor(() => booted.app.overseerError && !booted.app.overseerCreating, "The failed creation did not settle.");
+  assert.equal(booted.root.querySelector(".workspace-empty") != null, true);
+  assert.equal(booted.root.querySelector("[data-action='create-overseer']").disabled, false);
+  assert.equal(booted.app.store.selected.unitId, null);
+  assert.equal(booted.root.querySelector("[role='alert']") != null, true);
+  const units = (await request(apiFrom(fixture.desktopUrl), "GET", "/units")).data.items;
+  assert.deepEqual(units.map((unit) => unit.id), ["root:master"]);
 });
 
 test("manual presentation choices replace only their viewer override and retry without another settings write", async (t) => {
