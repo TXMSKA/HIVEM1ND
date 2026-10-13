@@ -1,10 +1,11 @@
 import { canAccept, canSendBack } from "./actions.mjs";
 import { element, labeledField, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
+import { unitDisplayName } from './hierarchy.mjs';
 
 export function renderUnit(document, unit, t, language = "en") {
   const card = element(document, "section", { class: "unit-card" });
-  card.append(element(document, "h3", { text: unit?.unit ?? t("unknown") }));
+  card.append(element(document, "h3", { text: unit ? unitDisplayName(unit) : t("unknown") }));
   card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ?? t("unknown")}` }));
   card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [

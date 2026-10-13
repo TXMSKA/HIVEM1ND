@@ -187,7 +187,7 @@ function takeVisible(members, groupId, state, query) {
 
 function matches(unit, query) {
   const needle = String(query).toLowerCase();
-  return [unit.unit, unit.job, unit.context].some((value) => String(value ?? "").toLowerCase().includes(needle));
+  return [unit.unit, unit.alias, unit.job, unit.context].some((value) => String(value ?? "").toLowerCase().includes(needle));
 }
 
 function scopeKey(unit) {
@@ -201,5 +201,11 @@ function heading(id, labelKey) {
 }
 
 function unitRow(unit, depth) {
-  return { id: unit.id, kind: "unit", unit, depth, label: unit.unit };
+  return { id: unit.id, kind: "unit", unit, depth, label: unitDisplayName(unit) };
+}
+
+export function unitDisplayName(unit) {
+  const id = String(unit?.unit ?? unit?.id ?? '');
+  const alias = typeof unit?.alias === 'string' ? unit.alias.trim() : '';
+  return alias ? alias + ' (' + id + ')' : id;
 }
