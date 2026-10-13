@@ -8,7 +8,7 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
-import { connectLead, createUnit, patchLayout, patchSettings, setUnitAlias } from './units.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, setUnitAlias } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
@@ -45,6 +45,7 @@ const ROUTES = [
   ['GET', '/sync', 'read', 'DPA', 'collection', 'sync'],
   ['GET', '/sessions', 'read', 'DPA', 'collection', 'sessions'],
   ['GET', '/units/:unitId', 'read', 'DPA', 'detail', 'units'],
+  ['DELETE', '/units/:unitId', 'unit.create', 'D', 'removeUnit'],
   ['PATCH', '/units/:unitId/alias', 'unit.create', 'D', 'setUnitAlias'],
   ['POST', '/units', 'unit.create', 'D', 'createUnit'],
   ['PUT', '/units/:unitId/lead', 'unit.connect', 'D', 'connectLead'],
@@ -769,7 +770,7 @@ function allowedQuery(route) {
   const list = ['q', 'limit', 'cursor'];
   const table = {
     '/view': ['project'],
-    '/units': [...list, 'project', 'machine', 'leadId', 'status'],
+    '/units': [...list, 'project', 'machine', 'leadId', 'status', 'archived'],
     '/leads': [...list, 'project'],
     '/squads': [...list, 'project', 'leadId'],
     '/projects': list,
@@ -778,7 +779,7 @@ function allowedQuery(route) {
     '/chats': [...list, 'unitId', 'listed', 'pinned', 'archived'],
     '/groups': list,
     '/chats/:chatId/messages': [...list, 'before'],
-    '/mailboxes': list,
+    '/mailboxes': [...list, 'archived'],
     '/mailboxes/:unitId/messages': [...list, 'state'],
     '/approvals': [...list, 'unitId', 'state'],
     '/units/:unitId/approval-grants': list,
@@ -924,6 +925,7 @@ function allowedBody(route) {
   const table = {
     'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
+    'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
     'POST /units/:unitId/session': ['client', 'prompt', 'model', 'expectedRevision'],
     'POST /sessions/:sessionId/stop': ['confirmed'],
@@ -1133,6 +1135,7 @@ async function invoke(route, scope) {
     const changed = await setUnitAlias(domain, params.unitId, body);
     return { status: 200, body: changed.unit };
   }
+  if (route.handler === 'removeUnit') return { status: 200, body: await removeUnit(domain, params.unitId, body) };
   if (route.handler === 'createUnit') {
     const created = await createUnit(domain, body);
     return { status: 201, body: created.unit };
@@ -1154,6 +1157,9 @@ async function invoke(route, scope) {
     return { status: 200, body: await readDetail(domain, 'layout') };
   }
   if (route.handler === 'createChat') {
+    for (const id of body?.members ?? []) {
+      if ((await readDetail(domain, 'units', id)).removed) throw new CoreError(422, 'invalid_members', 'An archived unit cannot join an active chat.');
+    }
     const created = await createChat(domain, body);
     return { status: created.status === 200 ? 200 : 201, body: created.chat };
   }
@@ -1163,6 +1169,8 @@ async function invoke(route, scope) {
   }
   if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
   if (route.handler === 'patchChat') {
+    const chat = await readDetail(domain, 'chats', params.chatId);
+    if (chat.archived && chat.kind === 'direct' && body.listed === true) throw new CoreError(409, 'chat_changed', 'Restore the archived unit with Undo.');
     const patched = await patchChat(domain, params.chatId, body);
     return { status: 200, body: patched.chat };
   }

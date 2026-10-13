@@ -178,6 +178,10 @@ export function removeGroup(api, group, retained = null) {
   return commit(api, retained ?? createOperation({ method: 'DELETE', path: '/groups/:groupId', params: { groupId: group.id },
     body: { confirmed: true, expectedRevision: group.revision } }));
 }
+export function removeUnit(api, unit, retained = null) {
+  return commit(api, retained ?? createOperation({ method: 'DELETE', path: '/units/:unitId', params: { unitId: unit.id },
+    body: { confirmed: true, expectedRevision: unit.revision } }));
+}
 export function undoChange(api, changeId, retained = null) {
   return commit(api, retained ?? createOperation({ method: 'POST', path: '/changes/:changeId/undo', params: { changeId }, body: {} }));
 }

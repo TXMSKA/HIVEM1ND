@@ -23,6 +23,30 @@ export async function listGroups(context, query = {}) {
   return readCollection(context, 'groups', query);
 }
 
+export async function prepareUnitMembershipRemoval(context, unitId) {
+  const entries = [], events = [], undoEvents = [];
+  const groups = [];
+  let cursor = null;
+  do {
+    const page = await listGroups(context, { limit: 200, cursor });
+    groups.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  for (const group of groups) {
+    if (!group.members.includes(unitId)) continue;
+    const current = await loadGroup(context, group.id);
+    const members = current.record.members.filter((id) => id !== unitId);
+    if (!members.length) throw new CoreError(422, 'invalid_members', 'Remove the one-member group before removing its last unit.');
+    const chatBytes = editChatMetadata(current.chatBytes, { members: ['root:master', ...members].sort() });
+    const bytes = groupBytes({ ...current.record, members,
+      formerMembers: [...new Set([...(current.record.formerMembers ?? []), unitId])], chatRevision: revisionOf(chatBytes) });
+    entries.push(entry(context, current.relative, current.bytes, bytes), entry(context, current.chatRelative, current.chatBytes, chatBytes));
+    events.push(...changed(projectGroup(bytes, group.id), projectChatBytes(chatBytes, group.id, current.chat)));
+    undoEvents.push(...changed(group, current.chat));
+  }
+  return { entries, events, undoEvents };
+}
+
 export async function createGroup(context, input) {
   desktop(context);
   return withLocalChanges(context.store, async () => {

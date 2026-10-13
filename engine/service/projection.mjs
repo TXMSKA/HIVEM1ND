@@ -207,7 +207,7 @@ export async function readDetail(context, name, id, scope = {}) {
     if (!foundMessage) throw new CoreError(404, 'message_not_found', 'The record does not exist.');
     return foundMessage;
   }
-  const found = visibleToPrincipal(collectionItems(view, name, {}), name, view, context.principal).find((item) => item.id === id);
+  const found = visibleToPrincipal(name === 'units' ? view.allUnits : collectionItems(view, name, {}), name, view, context.principal).find((item) => item.id === id);
   if (!found) throw new CoreError(404, `${name.replace(/s$/, '')}_not_found`, 'The record does not exist.');
   return found;
 }
@@ -331,6 +331,7 @@ async function loadMind(context) {
 }
 
 function assemble(loaded, query, aliases = [], machine = null, editors = []) {
+  const removed = new Set(loaded.units.filter((unit) => unit.removed).map((unit) => unit.id));
   const waiting = waitingFor([
     ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
       id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
@@ -338,11 +339,11 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     ...loaded.messages.filter((message) => message.replyRequested && isMaster(message.toId)).map((message) => ({
       id: `message:${message.id}`, kind: 'message', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
     })),
-    ...personQuestions(loaded.units, aliases),
-    ...(loaded.approvals ?? []),
+    ...personQuestions(loaded.units.filter((unit) => !unit.removed), aliases),
+    ...(loaded.approvals ?? []).filter((approval) => !removed.has(approval.unitId)),
   ]);
   const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
-  const units = loaded.units.map((unit) => {
+  const allUnits = loaded.units.map((unit) => {
     const published = {
       ...unit,
       status: statusFor({
@@ -356,6 +357,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     delete published.path;
     return published;
   });
+  const units = allUnits.filter((unit) => !unit.removed);
   const overseers = units.filter((unit) => unit.role === 'overseer' && !unit.malformed);
   const canonical = overseers.find((unit) => unit.id === 'root:overseer') ?? overseers[0] ?? null;
   const issues = [...loaded.issues];
@@ -390,6 +392,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     editors,
   };
   Object.defineProperty(view, 'allChats', { value: loaded.chats });
+  Object.defineProperty(view, 'allUnits', { value: allUnits });
   return view;
 }
 
@@ -409,7 +412,7 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     review: tasks.filter((task) => task.status === 'review').length,
     done: tasks.filter((task) => task.status === 'done').length,
     closed: tasks.filter((task) => task.status === 'closed').length,
-    unread: loaded.messages.filter((message) => message.read === false && !loaded.chats.some((chat) => chat.archived && chatIdFromPath(message.path) === chat.id)).length,
+    unread: loaded.messages.filter((message) => message.read === false && !loaded.units.some((unit) => unit.removed && unit.id === message.toId) && !loaded.chats.some((chat) => chat.archived && chatIdFromPath(message.path) === chat.id)).length,
     issues: issues.length,
   };
 }
@@ -582,7 +585,7 @@ function idleLimits() {
 
 function readUnit(bytes, relative, issues) {
   const blank = {
-    id: null, unit: path.basename(relative, '.md'), alias: null, role: null, scope: null, leadId: null, job: null, model: null,
+    id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null,
     machine: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
     sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
   };
@@ -601,6 +604,7 @@ function readUnit(bytes, relative, issues) {
       id: id.id,
       unit: headers.get('unit') || id.unit,
       alias: headers.get('alias')?.trim() || null,
+      removed: headers.get('removed') === 'true',
       role,
       scope: id.scope,
       leadId: headers.get('lead-id') || null,
@@ -839,7 +843,8 @@ function buildSquads(units) {
 }
 
 function collectionItems(view, name, query = {}) {
-  if (name === 'units' || name === 'leads') return name === 'leads' ? view.units.filter((unit) => view.leads.includes(unit.id)) : view.units;
+  if (name === 'units') return query.archived != null ? view.allUnits.filter((unit) => unit.removed === queryFlag(query.archived)) : view.units;
+  if (name === 'leads') return view.units.filter((unit) => view.leads.includes(unit.id));
   if (name === 'squads') return view.squads;
   if (name === 'machines') return view.machines;
   if (name === 'projects') return view.projects;
@@ -848,7 +853,8 @@ function collectionItems(view, name, query = {}) {
   if (name === 'groups') return view.groups;
   if (name === 'tasks') return view.tasks;
   if (name === 'waiting') return view.waiting;
-  if (name === 'mailboxes') return mailboxSummaries(view.messages);
+  if (name === 'mailboxes') return mailboxSummaries(view.messages).map((box) => ({ ...box, archived: view.allUnits.some((unit) => unit.id === box.unitId && unit.removed) }))
+    .filter((box) => box.archived === (query.archived != null ? queryFlag(query.archived) : false));
   if (name === 'messages') return selectMessages(view.messages, query);
   return [];
 }
@@ -901,7 +907,7 @@ function searchText(item, name) {
 
 function normalizeFilters(query) {
   const filters = {};
-  for (const key of ['q', 'project', 'machine', 'leadId', 'status', 'unitId', 'listed', 'pinned', 'state', 'kind', 'chatId', 'mailboxId', 'before']) {
+  for (const key of ['q', 'project', 'machine', 'leadId', 'status', 'unitId', 'listed', 'pinned', 'archived', 'state', 'kind', 'chatId', 'mailboxId', 'before']) {
     if (query[key] !== undefined) filters[key] = query[key];
   }
   return filters;

@@ -1353,6 +1353,13 @@ test('every contract route has a success result and an authority or boundary fai
     token, body: {}, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(groupUndone, 200, 'undo group deletion');
   hit('POST', '/changes/:changeId/undo');
+  const removable = (await call(port, 'GET', '/api/v1/units/root:reviewer', { token })).json.data;
+  const removalBody = { confirmed: true, expectedRevision: removable.revision };
+  expectStatus(await call(port, 'DELETE', '/api/v1/units/root:reviewer', { token,
+    body: { ...removalBody, confirmed: false }, headers: { 'idempotency-key': randomUUID() } }), 422, 'unconfirmed unit removal');
+  expectStatus(await call(port, 'DELETE', '/api/v1/units/root:reviewer', { token,
+    body: removalBody, headers: { 'idempotency-key': randomUUID() } }), 200, 'unit removal');
+  hit('DELETE', '/units/:unitId');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');
@@ -1692,5 +1699,34 @@ test('group HTTP receipts survive a partial write and enforce desktop authority 
   assert.equal(restored.status, 200);
   assert.deepEqual((await call(port, 'POST', undoTarget, { token, body: {}, headers: { 'idempotency-key': undoKey } })).json.data, restored.json.data);
   assert.equal((await call(port, 'GET', '/api/v1/groups', { token })).json.data.items[0].revision, patched.json.data.revision);
+});
+
+test('unit removal archives with one receipt, keeps archived reads and requires desktop authority', async (t) => {
+  const { core, paths, fixture, token } = await boot(t);
+  await mkdir(path.join(paths.mind, 'user', 'state'), { recursive: true });
+  const file = path.join(paths.mind, 'user', 'state', 'one.md');
+  await writeFile(file, 'unit: one\nunit-id: root:one\nrole: executor\nstate: out\n\nRetained context.\n');
+  const port = core.http.port;
+  const unit = (await call(port, 'GET', '/api/v1/units/root:one', { token })).json.data;
+  const target = '/api/v1/units/root:one';
+  const body = { confirmed: true, expectedRevision: unit.revision };
+  const phone = core.credentials.issue({ audience: 'phone', expiresAt: '2027-01-01T00:00:00.000Z' });
+  const agent = core.credentials.issue({ audience: 'agent', unitId: 'root:one', capabilities: ['read', 'unit.create'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  for (const denied of [phone, agent]) assert.equal((await call(port, 'DELETE', target, { token: denied.token, body, headers: { 'idempotency-key': randomUUID() } })).status, 403);
+  assert.equal((await call(port, 'DELETE', target, { token, body: { ...body, unknown: true }, headers: { 'idempotency-key': randomUUID() } })).status, 400);
+  const key = randomUUID();
+  fixture.store.fault = { afterRenames: 1 };
+  assert.equal((await call(port, 'DELETE', target, { token, body, headers: { 'idempotency-key': key } })).status, 500);
+  const removed = await call(port, 'DELETE', target, { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(removed.status, 200);
+  assert.deepEqual((await call(port, 'DELETE', target, { token, body, headers: { 'idempotency-key': key } })).json.data, removed.json.data);
+  assert.equal((await call(port, 'GET', '/api/v1/units', { token })).json.data.total, 0);
+  const archived = await call(port, 'GET', '/api/v1/units?archived=true', { token });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.json.data.items[0].removed, true);
+  assert.equal((await call(port, 'GET', '/api/v1/units?archived=wrong', { token })).status, 422);
+  const restored = await call(port, 'POST', `/api/v1/changes/${removed.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(restored.status, 200);
+  assert.equal((await call(port, 'GET', '/api/v1/units', { token })).json.data.items[0].revision, unit.revision);
 });
 });

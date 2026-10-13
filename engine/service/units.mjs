@@ -2,9 +2,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateName, validateRole, canonicalScope } from './identity.mjs';
-import { answersFor, readDetail } from './projection.mjs';
+import { answersFor, readDetail, readProjection } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
-import { commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
+import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
+import { prepareUnitMembershipRemoval } from './groups.mjs';
+import { editChatMetadata, projectChatBytes } from './chats.mjs';
+import { stopSession } from './adapters.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 export async function createUnit(context, input, options = {}) {
@@ -28,7 +31,7 @@ export async function connectLead(context, unitId, input) {
     throw new CoreError(422, 'invalid_lead', 'Master cannot have a lead.');
   }
   const current = await readState(context, parsed);
-  if (!current) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  if (!current || header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (header(current.bytes, 'role') === 'master' || parsed.unit === 'master') {
     throw new CoreError(422, 'invalid_lead', 'Master cannot have a lead.');
   }
@@ -36,7 +39,7 @@ export async function connectLead(context, unitId, input) {
   if (leadId !== null) {
     const lead = parseUnitId(leadId);
     const leadState = await readState(context, lead);
-    if (!leadState) throw new CoreError(422, 'invalid_lead', 'The lead does not exist.');
+    if (!leadState || header(leadState.bytes, 'removed') === 'true') throw new CoreError(422, 'invalid_lead', 'The lead does not exist.');
     assertNoCycle(parsed.id, lead.id, await leadMap(context));
   }
   let next = setHeader(current.bytes, 'lead-id', leadId);
@@ -62,7 +65,7 @@ export async function connectLead(context, unitId, input) {
 export async function setUnitAlias(context, unitId, input) {
   const parsed = parseUnitId(unitId);
   const current = await readState(context, parsed);
-  if (!current) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  if (!current || header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (!Object.hasOwn(input ?? {}, 'alias')) throw new CoreError(422, 'invalid_body', 'An alias value is required.');
   const alias = input.alias === null ? '' : input.alias;
   if (typeof alias !== 'string' || alias.length > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(alias)) {
@@ -78,6 +81,94 @@ export async function setUnitAlias(context, unitId, input) {
     stage: [{ target: { kind: 'mind', path: current.relative }, bytes: next }],
   }, transactionOf(context, [{ resource: current.relative, recordPath: current.absolute,
     beforeRevision: input.expectedRevision, afterBytes: next }], events));
+}
+
+export async function removeUnit(context, unitId, input) {
+  if (context.principal?.audience !== 'desktop' || context.principal.capabilities && !context.principal.capabilities.includes('unit.create')) {
+    throw new CoreError(403, 'forbidden', 'Only the desktop can remove a unit.');
+  }
+  if (input?.confirmed !== true) throw new CoreError(422, 'confirmation_required', 'Removing a unit requires confirmation.');
+  const parsed = parseUnitId(unitId);
+  if (parsed.id === 'root:master') throw new CoreError(422, 'invalid_unit', 'Master cannot be removed.');
+  return withLocks(context.store, [`launch:${parsed.id}`], () => withLocalChanges(context.store, async () => {
+    const current = await readState(context, parsed);
+    if (!current) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+    if (header(current.bytes, 'role') === 'master') throw new CoreError(422, 'invalid_unit', 'Master cannot be removed.');
+    const key = uuidV8(['unit-removal', parsed.id, context.receipt?.principalHash ?? null, context.receipt?.key ?? input.expectedRevision]);
+    const journalPath = path.join(context.store.localDirectory, 'unit-removals', `${key}.json`);
+    let journalBytes = await readBytes(context.store, journalPath);
+    let journal = journalBytes ? JSON.parse(journalBytes) : null;
+    if (journal?.phase === 'committed' && header(current.bytes, 'removed') === 'true') return journal.response;
+    if (header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit is archived.');
+    checkRevision(current.bytes, input.expectedRevision);
+    let view = await readProjection(context);
+    if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    let membership = await prepareUnitMembershipRemoval(context, parsed.id);
+    const newJournal = !journal || journal.phase === 'committed';
+    if (newJournal) {
+      journal = { format: 'hivem1nd-unit-removal-v1', id: randomUUID(), unitId: parsed.id, expectedRevision: input.expectedRevision,
+        phase: 'prepared', stoppedSessionIds: [], stoppingSessionId: null };
+    }
+    const journalEntry = (value) => ({ resource: `unit-removal:${key}`, recordPath: journalPath,
+      beforeRevision: revisionOf(journalBytes), afterBytes: Buffer.from(`${canonicalJson(value)}\n`), private: true });
+    const saveJournal = async (value) => {
+      const entry = journalEntry(value);
+      await commitTransaction(context.store, { id: randomUUID(), entries: [entry], events: [] });
+      journalBytes = entry.afterBytes;
+      journal = value;
+    };
+    if (newJournal) await saveJournal(journal);
+    for (const session of view.sessions.filter((session) => session.unitId === parsed.id && session.state !== 'stopped')) {
+      if (journal.stoppedSessionIds.includes(session.id)) continue;
+      if (journal.phase === 'stopping') {
+        // An interrupted native call is reconciled from its durable acknowledgment, never signaled again.
+        const stopped = await readProjection(context);
+        if (!stopped.sessions.some((item) => item.id === journal.stoppingSessionId && item.state === 'stopped')) {
+          throw new CoreError(409, 'stop_unavailable', 'The interrupted stop has no verified acknowledgment.');
+        }
+      }
+      await saveJournal({ ...journal, phase: 'stopping', stoppingSessionId: session.id });
+      try {
+        await stopSession(context, session.id, { confirmed: true, onAcknowledged: () => {
+          const value = { ...journal, phase: 'prepared', stoppingSessionId: null, stoppedSessionIds: [...journal.stoppedSessionIds, session.id] };
+          const entry = journalEntry(value);
+          journal = value;
+          journalBytes = entry.afterBytes;
+          return [entry];
+        } });
+      } catch (error) {
+        if (['remote_session', 'stop_unavailable', 'client_unavailable'].includes(error.code)) throw new CoreError(409, 'stop_unavailable', 'The running session could not be stopped safely.');
+        throw error;
+      }
+      if (context.removalFault === 'after-stop') throw new CoreError(500, 'injected_crash', 'Injected crash after acknowledged stop.');
+    }
+    checkRevision((await readState(context, parsed))?.bytes, input.expectedRevision);
+    view = await readProjection(context);
+    if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    membership = await prepareUnitMembershipRemoval(context, parsed.id);
+    const unit = view.units.find((unit) => unit.id === parsed.id);
+    const next = replaceHeader(current.bytes, 'removed', 'true');
+    const entries = [{ resource: current.relative, recordPath: current.absolute, beforeRevision: input.expectedRevision, beforeBytes: current.bytes, afterBytes: next }, ...membership.entries];
+    const archivedUnit = { ...unit, removed: true, revision: revisionOf(next), sessionIds: [] };
+    const events = [{ name: 'unit.changed', data: { unit: archivedUnit } }, ...membership.events];
+    const undoEvents = [{ name: 'unit.changed', data: { unit: { ...unit, sessionIds: [] } } }, ...membership.undoEvents];
+    for (const chat of view.allChats.filter((chat) => chat.kind === 'direct' && !chat.archived && chat.members.includes(parsed.id))) {
+      const relative = `user/relay/chats/${chat.id}/chat.md`;
+      const beforeBytes = await readBytes(context.store, absolute(context, relative));
+      const afterBytes = editChatMetadata(beforeBytes, { listed: false, archived: true });
+      entries.push({ resource: relative, recordPath: absolute(context, relative), beforeRevision: revisionOf(beforeBytes), beforeBytes, afterBytes });
+      events.push({ name: 'chat.changed', chatId: chat.id, data: { chat: projectChatBytes(afterBytes, chat.id, chat) } });
+      undoEvents.push({ name: 'chat.changed', chatId: chat.id, data: { chat } });
+    }
+    const changed = { name: 'view.changed', data: { revision: revisionOf(next), collections: ['units', 'mailboxes', 'chats', 'groups', 'leads', 'squads'] } };
+    events.push(changed);
+    undoEvents.push({ ...changed, data: { ...changed.data, revision: unit.revision } });
+    const undo = await prepareChangeUndo(context, { id: journal.id, permission: 'unit.create', resourceIds: [parsed.id], entries, events: undoEvents });
+    const response = { unitId: parsed.id, changeId: journal.id, undoUntil: undo.undoUntil };
+    await commitChange(context, { id: journal.id, entries: [...entries, undo.entry, journalEntry({ ...journal, phase: 'committed', response })],
+      events, response: { status: 200, body: response } });
+    return response;
+  }));
 }
 
 export async function patchLayout(context, input) {
@@ -202,6 +293,11 @@ async function finish(context, prepared, transaction) {
 }
 
 async function finishLocked(context, prepared, transaction) {
+  const leadId = prepared.events.find((event) => event.name === 'unit.changed')?.data?.unit?.leadId;
+  if (leadId) {
+    const lead = await readState(context, parseUnitId(leadId));
+    if (!lead || header(lead.bytes, 'removed') === 'true') throw new CoreError(422, 'invalid_lead', 'The lead does not exist.');
+  }
   const result = await commitTransaction(context.store, transaction);
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
   const changes = await stageTransaction(sync, prepared.stage.map((entry) => ({

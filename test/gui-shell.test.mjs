@@ -4171,6 +4171,88 @@ function selectorPart(node, selector) {
   return rest.length === 0;
 }
 
+test("unit removal confirms scope, cancels safely, retries the same write and restores visibility with Undo", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const id = "project:blog:executor-shop";
+  const group = (await createGroup(api, "Shared work", [id, "project:shop:executor-shop"])).data;
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], (input, init) => {
+    if (init?.method === "DELETE" && String(input).includes("/units/")) writes.push({ key: init.headers["Idempotency-Key"], body: init.body });
+  });
+  t.after(() => dispose(desktop.app));
+  const choose = () => { desktop.app.mapState.selection = new Set([id]); desktop.app.mapState.onSelection([id]); };
+  choose();
+  clickAction(desktop.root, "remove-unit");
+  let dialog = desktop.document.querySelector("[data-remove-unit]");
+  assert.equal(dialog.querySelector("h2").textContent, "Remove executor-shop?");
+  assert.match(dialog.querySelector("p").textContent, /tasks stay in the project/);
+  assert.equal(dialog.style.width, "480px");
+  assert.equal(dialog.style.borderRadius, "22px");
+  assert.equal(dialog.querySelectorAll("button")[1].style.background, "var(--error)");
+  click(dialog.querySelector("button"));
+  assert.equal(writes.length, 0);
+  assert.equal((await request(api, "GET", "/units")).data.items.some((unit) => unit.id === id), true);
+  choose();
+  clickAction(desktop.root, "remove-unit");
+  dialog = desktop.document.querySelector("[data-remove-unit]");
+  fixture.control.setFault({ method: "DELETE", path: `/api/v1/units/${id}`, dropAfterCommit: true });
+  click(dialog.querySelector("button.primary"));
+  await waitFor(() => dialog.querySelector("[data-dialog-error]"), "The unconfirmed removal did not retain its dialog.");
+  click(dialog.querySelector("button.primary"));
+  await waitFor(() => desktop.document.querySelector("[data-remove-unit]") == null && desktop.root.querySelector("[data-action='map-undo']"), "The replayed removal did not offer Undo.");
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].key, writes[1].key);
+  assert.equal(writes[0].body, writes[1].body);
+  assert.equal(desktop.app.unitList.catalog.some((unit) => unit.id === id), false);
+  assert.match(desktop.root.querySelector("[data-map-toast]").textContent, /Archived/);
+  assert.deepEqual(desktop.app.store.indexes.groups.get(group.id).members, ["project:shop:executor-shop"]);
+  assert.equal((await request(api, "GET", "/units", { query: { archived: "true" } })).data.items[0].id, id);
+  const undoKey = desktop.app.mapToast.key;
+  clickAction(desktop.root, "map-undo");
+  await waitFor(() => ["success", "error"].includes(desktop.app.activity.get(undoKey)?.phase), "Undo did not finish.");
+  assert.equal(desktop.app.activity.get(undoKey)?.phase, "success", `${desktop.app.activity.get(undoKey)?.error?.message} ${desktop.app.activity.get(undoKey)?.error?.details?.path}`);
+  await waitFor(() => desktop.app.unitList.catalog.some((unit) => unit.id === id), "Undo did not restore the unit.");
+  await waitFor(() => desktop.app.store.indexes.groups.get(group.id)?.members.includes(id), "Undo did not restore group membership.");
+  assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.sessionIds.length, 0);
+  desktop.app.language = "es";
+  choose();
+  clickAction(desktop.root, "remove-unit");
+  dialog = desktop.document.querySelector("[data-remove-unit]");
+  assert.equal(dialog.querySelector("h2").textContent, "Quitar executor-shop?");
+  assert.match(dialog.querySelector("p").textContent, /El chat y el buzón pasan a Archivados/);
+  assertVisibleCopy("es", [["Removal dialog", dialog.textContent]]);
+  click(dialog.querySelector("button"));
+});
+
+test("a unit remains visible while stop acknowledgment is pending and Undo does not restart its session", async (t) => {
+  let release, entered;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  const fixture = await createGuiFixture({ stopNative: () => { entered(); return new Promise((resolve) => { release = resolve; }); } });
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  const id = "project:shop:executor-shop";
+  const unit = desktop.app.unitList.catalog.find((unit) => unit.id === id);
+  desktop.app.mapState.selection = new Set([id]);
+  desktop.app.mapState.onSelection([id]);
+  clickAction(desktop.root, "remove-unit");
+  const dialog = desktop.document.querySelector("[data-remove-unit]");
+  click(dialog.querySelector("button.primary"));
+  await waitFor(() => dialog.querySelector("button.primary").getAttribute("aria-busy") === "true", "Removal did not wait for native shutdown.");
+  assert.equal(desktop.app.unitList.catalog.some((unit) => unit.id === id), true);
+  const api = apiFrom(fixture.desktopUrl);
+  await waiting;
+  assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.removed, false);
+  release({ acknowledged: true });
+  await waitFor(() => desktop.root.querySelector("[data-action='map-undo']"), "Acknowledged removal did not commit.");
+  assert.equal(desktop.app.unitList.catalog.some((unit) => unit.id === id), false);
+  clickAction(desktop.root, "map-undo");
+  await waitFor(() => desktop.app.unitList.catalog.some((unit) => unit.id === id), "Undo did not restore the stopped unit.");
+  assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.sessionIds.length, 0);
+});
+
 async function assertAbsent(root, secret) {
   const entries = await readdir(root, { recursive: true });
   for (const entry of entries) {

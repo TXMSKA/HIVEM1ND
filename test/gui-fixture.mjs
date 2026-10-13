@@ -269,6 +269,7 @@ async function buildProjection(fx) {
         id,
         unit: field(parsed.fields, "unit") ?? entry.name.replace(/\.md$/, ""),
         alias: field(parsed.fields, "alias")?.trim() || null,
+        removed: field(parsed.fields, "removed") === "true",
         role: ROLES.has(role) ? role : role,
         scope: scope.kind === "root" ? { kind: "root", name: null } : { kind: scope.kind, name: scope.name },
         leadId: field(parsed.fields, "lead-id"),
@@ -302,7 +303,7 @@ async function buildProjection(fx) {
   const waiting = buildWaiting(units, tasks, mailboxes, approvals);
   const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
   for (const unit of units) {
-    unit.sessionIds = sessions.filter((session) => session.unitId === unit.id).map((session) => session.id);
+    unit.sessionIds = sessions.filter((session) => session.unitId === unit.id && session.state !== "stopped" && fx.sessionStops.get(session.id)?.state !== "stopped").map((session) => session.id);
     unit.status = unit.malformed ? "unknown" : statusOf(unit, sessions, waitingUnits);
     unit.position = null;
   }
@@ -310,8 +311,8 @@ async function buildProjection(fx) {
   for (const unit of units) unit.position = layout.layout.nodes[unit.id] ?? null;
   const settings = await loadSettings(fx);
   const projects = await loadProjects(fx, units);
-  const squads = buildSquads(units);
-  const leads = buildLeads(units);
+  const squads = buildSquads(units.filter((unit) => !unit.removed));
+  const leads = buildLeads(units.filter((unit) => !unit.removed));
   sortUnits(units);
   const publicUnits = units.map(publicUnit);
   return {
@@ -342,6 +343,7 @@ function publicUnit(unit) {
     id: unit.id,
     unit: unit.unit,
     alias: unit.alias ?? null,
+    removed: unit.removed === true,
     role: unit.role,
     scope: unit.scope,
     leadId: unit.leadId,
@@ -1101,7 +1103,7 @@ function homeStatus(fx) {
 }
 
 function viewData(fx, snap, project) {
-  let units = snap.units;
+  let units = snap.units.filter((unit) => !unit.removed);
   let tasks = snap.tasks;
   if (project) {
     const local = new Set(units.filter((unit) => unit.scope.kind === "project" && unit.scope.name === project).map((unit) => unit.id));
@@ -1384,7 +1386,7 @@ function intentIdPlaceholder() {
 }
 
 function authorize(principal, route) {
-  if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias"].includes(route.pattern)) {
+  if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias", "/units/:unitId"].includes(route.pattern)) {
     throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
   }
   const names = [route.capability, ...(route.allow ?? [])].filter(Boolean);
@@ -1707,9 +1709,9 @@ function matchPath(pattern, pathname) {
 function routeTable() {
   return [
     { pattern: "/view", GET: { query: ["project"] } },
-    { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status"] } },
+    { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status", "archived"] } },
     { pattern: "/units", POST: { capability: "unit.create", validate: validateUnit } },
-    { pattern: "/units/:unitId", GET: { query: [] } },
+    { pattern: "/units/:unitId", GET: { query: [] }, DELETE: { capability: "unit.create", validate: validateUnitRemoval } },
     { pattern: "/units/:unitId/lead", PUT: { capability: "unit.connect", validate: validateLead } },
     { pattern: "/units/:unitId/alias", PATCH: { capability: "unit.create", validate: validateAlias } },
     { pattern: "/units/:unitId/session", POST: { capability: "session.start", validate: validateSession, runtime: true } },
@@ -1725,12 +1727,12 @@ function routeTable() {
     { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned", "archived"] }, POST: { capability: "chat.manage", validate: validateChat } },
     { pattern: "/groups", GET: { query: ["q", "limit", "cursor"] }, POST: { capability: "chat.manage", validate: validateGroup } },
     { pattern: "/groups/:groupId", PATCH: { capability: "chat.manage", validate: validateGroupPatch }, DELETE: { capability: "chat.manage", validate: validateGroupRemoval } },
-    { pattern: "/changes/:changeId/undo", POST: { capability: "chat.manage", validate: validateEmpty } },
+    { pattern: "/changes/:changeId/undo", POST: { capability: "read", validate: validateEmpty } },
     { pattern: "/chats/:chatId", PATCH: { capability: "chat.manage", validate: validateChatPatch } },
     { pattern: "/chats/:chatId", GET: { query: [] } },
     { pattern: "/chats/:chatId/messages", GET: { query: ["q", "limit", "cursor", "before"] }, POST: { capability: "chat.post", validate: validateMessage } },
     { pattern: "/chats/:chatId/read", POST: { capability: "master.read", allow: ["read", "master.read"], validate: validateRead } },
-    { pattern: "/mailboxes", GET: { query: ["q", "limit", "cursor"] } },
+    { pattern: "/mailboxes", GET: { query: ["q", "limit", "cursor", "archived"] } },
     { pattern: "/mailboxes/:unitId/messages", GET: { query: ["q", "limit", "cursor", "state"] }, POST: { capability: "chat.post", validate: validateMessage } },
     { pattern: "/mailboxes/:unitId/messages/:messageId", GET: { query: [] } },
     { pattern: "/mailboxes/:unitId/read", POST: { capability: "mailbox.read", allow: ["mailbox.read", "master.read"], validate: validateRead } },
@@ -1822,7 +1824,9 @@ async function readData(fx, snap, spec, params, query) {
     return data;
   }
   if (pattern === "/units") {
-    return page(filterUnits(snap.units, query), query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.alias, q) || includes(unit.job, q) || includes(unit.context, q), snap.issues.filter((issue) => issue.path?.includes("/state/")));
+    const archived = query.get("archived");
+    if (archived !== undefined && !["true", "false"].includes(archived)) throw new HttpError(422, "invalid_query", "The archive filter is not valid.");
+    return page(filterUnits(snap.units.filter((unit) => unit.removed === (archived === "true")), query), query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.alias, q) || includes(unit.job, q) || includes(unit.context, q), snap.issues.filter((issue) => issue.path?.includes("/state/")));
   }
   if (pattern === "/units/:unitId") {
     noneQuery(query);
@@ -1879,7 +1883,10 @@ async function readData(fx, snap, spec, params, query) {
   }
   if (pattern === "/chats/:chatId/messages" && spec.method === "GET") return messagePage(snap, params.chatId, query, spec.GET.query);
   if (pattern === "/mailboxes") {
-    const items = snap.mailboxes.map((box) => ({ id: box.unitId, unitId: box.unitId, unread: box.unread, total: box.total })).sort((left, right) => left.unitId.localeCompare(right.unitId, "en"));
+    const archived = query.get("archived");
+    if (archived !== undefined && !["true", "false"].includes(archived)) throw new HttpError(422, "invalid_query", "The archive filter is not valid.");
+    const items = snap.mailboxes.map((box) => ({ id: box.unitId, unitId: box.unitId, unread: box.unread, total: box.total, archived: snap.byId.get(box.unitId)?.removed === true }))
+      .filter((box) => box.archived === (archived === "true")).sort((left, right) => left.unitId.localeCompare(right.unitId, "en"));
     return page(items, query, spec.GET.query, (box, q) => includes(box.unitId, q), []);
   }
   if (pattern === "/mailboxes/:unitId/messages" && spec.method === "GET") {
@@ -2638,6 +2645,86 @@ function validateGroupRemoval(body) {
   if (body.confirmed !== true) throw new HttpError(422, "confirmation_required", "Deleting a group requires confirmation.");
 }
 
+function validateUnitRemoval(body) {
+  requireObject(body, ["confirmed", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (body.confirmed !== true) throw new HttpError(422, "confirmation_required", "Removing a unit requires confirmation.");
+}
+
+async function prepareUnitRemoval(fx, unitId, body) {
+  const snap = await projection(fx);
+  const unit = snap.units.find((unit) => unit.id === unitId && !unit.removed);
+  if (!unit) throw new HttpError(404, "unit_not_found", "The unit does not exist.");
+  if (unitId === "root:master" || unit.role === "master") throw new HttpError(422, "invalid_unit", "Master cannot be removed.");
+  if (unit.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit changed.");
+  if (snap.units.some((item) => !item.removed && item.leadId === unitId)) throw new HttpError(409, "unit_has_reports", "Connect the surviving reports to another lead first.");
+  const groups = snap.groups.filter((group) => !group.deleted && group.members.includes(unitId));
+  if (groups.some((group) => group.members.length === 1)) throw new HttpError(422, "invalid_members", "Remove the one-member group before removing its last unit.");
+  const writes = [], originals = [], events = [], undoEvents = [];
+  const add = (file, before, after) => { originals.push(before); writes.push(fixtureWrite(file, before, after)); };
+  for (const group of groups) {
+    const file = join(fx.tree.user, "gui", "groups", `${group.id}.json`);
+    const before = await readFile(file);
+    const record = JSON.parse(before);
+    const chat = snap.chats.find((chat) => chat.id === group.chatId);
+    if (!chat || record.chatRevision !== chat.revision) throw new HttpError(409, "chat_changed", "The linked chat changed.");
+    const members = group.members.filter((id) => id !== unitId);
+    const prepared = await rewriteChat(fx, chat, { members: ["root:master", ...members].sort() });
+    const next = { ...record, members, formerMembers: [...new Set([...(record.formerMembers ?? []), unitId])], chatRevision: prepared.data.revision };
+    const bytes = Buffer.from(stableJson(next));
+    add(file, before, bytes);
+    add(chat.file, await readFile(chat.file), Buffer.from(prepared.writes[0].afterBytesBase64, "base64"));
+    events.push({ name: "group.changed", chatId: chat.id, data: { group: publicGroup(next, sha256(bytes)) } }, ...prepared.events);
+    undoEvents.push({ name: "group.changed", chatId: chat.id, data: { group } }, { name: "chat.changed", chatId: chat.id, data: { chat: publicChat(chat) } });
+  }
+  const journalFile = join(fx.local, "unit-removals", `${sha256(Buffer.from(`${unitId}:${body.expectedRevision}`))}.json`);
+  const saved = await readJsonFile(journalFile).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+  let journal = saved?.value;
+  if (!journal || journal.phase === "committed") journal = { id: uuid(), unitId, phase: "prepared", stoppedSessionIds: [] };
+  for (const session of snap.sessions.filter((session) => session.unitId === unitId && session.state !== "stopped")) {
+    if (journal.stoppedSessionIds.includes(session.id)) continue;
+    if (journal.phase === "stopping") throw new HttpError(409, "stop_unavailable", "The interrupted stop has no verified acknowledgment.");
+    if (session.machine !== LOCAL_MACHINE) throw new HttpError(409, "stop_unavailable", "The running session could not be stopped safely.");
+    journal = { ...journal, phase: "stopping" };
+    await writeAtomic(journalFile, Buffer.from(stableJson(journal)));
+    let result;
+    if (fx.stopNative) result = await fx.stopNative(session);
+    else result = await new Promise((resolve) => { fx.sessionStops.set(session.id, { sessionId: session.id, state: "stopping", resolve }); });
+    if (result?.acknowledged !== true) throw new HttpError(409, "stop_unavailable", "The native process did not acknowledge the stop.");
+    const status = { format: "hivem1nd-session-status-v1", sessionId: session.id, machine: LOCAL_MACHINE, state: "stopped", reason: "native-acknowledged", at: clock(fx).toISOString() };
+    await writeAtomic(join(fx.tree.user, "relay", "session-status", session.id, `${uuid()}.json`), Buffer.from(stableJson(status)));
+    journal = { ...journal, phase: "prepared", stoppedSessionIds: [...journal.stoppedSessionIds, session.id] };
+    await writeAtomic(journalFile, Buffer.from(stableJson(journal)));
+    fx.sessionStops.set(session.id, { sessionId: session.id, state: "stopped" });
+    publish(fx, [{ name: "session.changed", global: true, data: { session: { ...session, state: "stopped" } } }], fx.primary);
+  }
+  const file = snap.files.units.get(unitId);
+  const before = await readFile(file);
+  if (sha256(before) !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit changed.");
+  const state = before.toString("utf8");
+  const end = state.search(/\r?\n\r?\n/);
+  const header = state.slice(0, end).split(/\r?\n/).filter((line) => !line.startsWith("removed:"));
+  const bytes = Buffer.from(`${header.join("\n")}\nremoved: true${state.slice(end)}`);
+  add(file, before, bytes);
+  events.push({ name: "unit.changed", unitId, data: { unit: { ...unit, removed: true, revision: sha256(bytes), sessionIds: [] } } });
+  undoEvents.push({ name: "unit.changed", unitId, data: { unit: { ...unit, sessionIds: [] } } });
+  for (const chat of snap.chats.filter((chat) => chat.kind === "direct" && !chat.archived && chat.members.includes(unitId))) {
+    const prepared = await rewriteChat(fx, chat, { archived: true, listed: false });
+    add(chat.file, await readFile(chat.file), Buffer.from(prepared.writes[0].afterBytesBase64, "base64"));
+    events.push(...prepared.events);
+    undoEvents.push({ name: "chat.changed", chatId: chat.id, data: { chat: publicChat(chat) } });
+  }
+  events.push({ name: "view.changed", global: true, data: { collections: ["units", "groups", "chats", "mailboxes"] } });
+  undoEvents.push(events.at(-1));
+  const changeId = journal.id, undoUntil = new Date(fx.nowMs + 10000).toISOString();
+  const undo = { id: changeId, permission: "unit.create", undoUntil, undone: false, resourceIds: [unitId],
+    entries: writes.map((write, index) => ({ path: write.path, afterRevision: write.afterRevision, beforeBytesBase64: originals[index].toString("base64") })), events: undoEvents };
+  writes.push(fixtureWrite(join(fx.local, "change-undo", `${changeId}.json`), null, Buffer.from(stableJson(undo))));
+  writes.push(fixtureWrite(journalFile, await readFile(journalFile).catch((error) => { if (error.code === "ENOENT") return null; throw error; }), Buffer.from(stableJson({ ...journal, phase: "committed" }))));
+  return { status: 200, data: { unitId, changeId, undoUntil }, writes, events };
+}
+
 function groupTitle(value) {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 240 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) throw new HttpError(422, "invalid_title", "A group title must be one nonblank line of at most 240 characters.");
   return value.trim();
@@ -2657,7 +2744,7 @@ async function prepareGroup(fx, groupId, body) {
   if (groupId && !existing) throw new HttpError(404, "group_not_found", "The group does not exist.");
   if (existing && existing.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The group changed.");
   const members = [...(body.members ?? existing?.members ?? [])].sort();
-  if (members.some((id) => !snap.units.some((unit) => unit.id === id && unit.role !== "master" && unit.revision))) throw new HttpError(422, "invalid_members", "A group member does not exist.");
+  if (members.some((id) => !snap.units.some((unit) => unit.id === id && !unit.removed && unit.role !== "master" && unit.revision))) throw new HttpError(422, "invalid_members", "A group member does not exist.");
   const title = "title" in body ? groupTitle(body.title) : existing.title;
   const id = groupId ?? uuid();
   const file = join(fx.tree.user, "gui", "groups", `${id}.json`);
@@ -2703,7 +2790,7 @@ async function prepareChangeUndo(fx, changeId) {
   if (record.undone) throw new HttpError(409, "undo_conflict", "The change was already undone.");
   const writes = [];
   for (const entry of record.entries) {
-    if (await hashExisting(entry.path) !== entry.afterRevision) throw new HttpError(409, "undo_conflict", "A changed record prevents Undo.");
+    if (await hashExisting(entry.path) !== entry.afterRevision) throw new HttpError(409, "undo_conflict", "A changed record prevents Undo.", { path: relMind(fx.tree.mind, entry.path) });
     writes.push({ path: entry.path, beforeRevision: entry.afterRevision, afterBytesBase64: entry.beforeBytesBase64, afterRevision: sha256(Buffer.from(entry.beforeBytesBase64, "base64")) });
   }
   const id = uuid();
@@ -2732,7 +2819,7 @@ function validateChatPatch(body) {
 async function prepareChat(fx, body, principal) {
   const snap = await projection(fx);
   const selected = [...new Set(body.members.filter((id) => id !== principal.unitId))];
-  if (!selected.length || selected.some((id) => !snap.units.some((unit) => unit.id === id && unit.revision))) {
+  if (!selected.length || selected.some((id) => !snap.units.some((unit) => unit.id === id && !unit.removed && unit.revision))) {
     throw new HttpError(422, "invalid_members", "The chat members are not valid.");
   }
   const members = [principal.unitId, ...selected];
@@ -2754,6 +2841,7 @@ async function prepareChatPatch(fx, chatId, body) {
   const chat = snap.chats.find((item) => item.id === chatId);
   if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
   if (chat.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The chat was changed elsewhere.", { currentRevision: chat.revision });
+  if (chat.archived && chat.kind === "direct" && body.listed === true) throw new HttpError(409, "chat_changed", "Restore the archived unit with Undo.");
   const prepared = await rewriteChat(fx, chat, {
     pinned: body.pinned ?? chat.pinned,
     listed: body.listed ?? chat.listed,
@@ -3826,6 +3914,7 @@ async function checkMutation(fx, pattern, params, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal) {
+  if (pattern === "/units/:unitId") return prepareUnitRemoval(fx, params.unitId, body);
   if (pattern === "/groups") return prepareGroup(fx, null, body);
   if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);
   if (pattern === "/changes/:changeId/undo") return prepareChangeUndo(fx, params.changeId);
@@ -4142,6 +4231,7 @@ export async function createGuiFixture(options = {}) {
     activity: [],
     sessionRequests: new Map(),
     sessionStops: new Map(),
+    stopNative: options.stopNative ?? null,
     cache: null,
     tail: Promise.resolve(),
     closed: false,
@@ -4353,9 +4443,10 @@ export async function createGuiFixture(options = {}) {
         });
       },
       acknowledgeStop(sessionId) {
+        fx.sessionStops.get(sessionId)?.resolve?.({ acknowledged: true });
         return enqueue(fx, async () => {
           const current = fx.sessionStops.get(sessionId);
-          if (!current || current.state !== "stopping") throw new Error("The session is not stopping.");
+          if (!current || !["stopping", "stopped"].includes(current.state)) throw new Error("The session is not stopping.");
           current.state = "stopped";
           const found = (await projection(fx)).sessions.find((item) => item.id === sessionId);
           const session = { ...(found ?? { id: sessionId }), state: "stopped" };

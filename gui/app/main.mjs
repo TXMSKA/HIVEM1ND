@@ -8,6 +8,7 @@ import {
   createGroup,
   patchGroup,
   removeGroup,
+  removeUnit,
   setUnitAlias,
   undoChange,
   revokeGrant,
@@ -599,6 +600,13 @@ async function onStream(app, event) {
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
     if (app.unitList) await reloadList(app.unitList);
     if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
+    if (event?.name === "unit.changed" && dataOf(event).unit?.removed) {
+      const id = dataOf(event).unit.id;
+      if (app.pendingChat?.unitId === id) app.pendingChat = null;
+      app.mapState?.selection.delete(id);
+      if (app.store.selected.unitId === id) app.store.selected.unitId = null;
+      if (app.thread?.chat?.kind === "direct" && app.thread.chat.members.includes(id)) app.thread = null;
+    }
   }
   if (event?.name === "chat.changed") {
     if (app.chatList) await reloadList(app.chatList);
@@ -3653,7 +3661,59 @@ function unitMenu(app, unit) {
   const document = app.root.ownerDocument;
   const menu = trackDisclosure(app, element(document, "details", { class: "map-menu", "data-unit-menu": unit.id }), keepId("unit-menu", unit.id));
   menu.append(element(document, "summary", { "aria-label": text(app.language, "finalMore"), title: text(app.language, "finalMore"), text: text(app.language, "finalMore") }), mapButton(app, "rename-unit", text(app.language, "rename"), () => beginAlias(app, unit.id)));
+  if (unit.id !== "root:master" && unit.role !== "master") menu.append(mapButton(app, "remove-unit", removalText(app, "confirm"), () => removeSelectedUnit(app, unit)));
   return menu;
+}
+
+function removalText(app, key, unit = "") {
+  const copy = {
+    title: ["Remove {unit}?", "Quitar {unit}?"],
+    body: ["It leaves the Map and Hierarchy. Its chat and mailbox move to Archived and its tasks stay in the project. A session running now is stopped first.", "La unidad deja de aparecer en el Mapa y la Jerarquía. El chat y el buzón pasan a Archivados; las tareas permanecen en el proyecto. Una sesión en ejecución se detiene primero."],
+    confirm: ["Remove unit", "Quitar unidad"],
+    archived: ["Archived", "Archivados"],
+  };
+  return copy[key][app.language === "es" ? 1 : 0].replace("{unit}", unit);
+}
+
+function removeSelectedUnit(app, unit) {
+  if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
+  let operation = null;
+  const refresh = async () => {
+    await loadSnapshot(app.store, app.api);
+    if (app.unitList) await reloadList(app.unitList);
+    if (app.chatList) await reloadList(app.chatList);
+    await refreshGroups(app);
+  };
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: removalText(app, "title", unitDisplayName(unit)), body: removalText(app, "body"),
+    confirm: removalText(app, "confirm"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+    onConfirm: async () => {
+      try {
+        const result = await removeUnit(app.api, unit, operation);
+        if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
+        app.mapState?.selection.delete(unit.id);
+        app.store.selected.unitId = null;
+        if (app.thread?.chat?.kind === "direct" && app.thread.chat.members.includes(unit.id)) app.thread = null;
+        await refresh();
+        showMapToast(app, `${unitDisplayName(unit)} · ${removalText(app, "archived")}`, async (record) => {
+          await undoChange(app.api, result.data.changeId, record.operation);
+          await refresh();
+          app.store.selected.unitId = unit.id;
+          app.mapState?.onSelection([unit.id]);
+          focusUnitRow(app, unit.id);
+        }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
+        renderShell(app);
+      } catch (error) { operation = error.operation ?? operation; throw error; }
+    },
+  });
+  dialog.setAttribute("data-remove-unit", unit.id);
+  Object.assign(dialog.style, { width: "480px", maxWidth: "calc(100vw - 32px)", padding: "24px", borderRadius: "22px", background: "var(--panel)", border: "1px solid var(--line2)" });
+  Object.assign(dialog.querySelector("h2").style, { fontSize: "18px", fontWeight: "700", margin: "0 0 18px" });
+  Object.assign(dialog.querySelector("p").style, { fontSize: "13.5px", color: "var(--mute)", margin: "0 0 18px" });
+  const buttons = dialog.querySelectorAll("button");
+  for (const button of buttons) Object.assign(button.style, { minWidth: "32px", minHeight: "32px" });
+  Object.assign(buttons[0].style, { background: "transparent", border: "0" });
+  Object.assign(buttons[1].style, { background: "var(--error)", color: "var(--error-ink)" });
 }
 
 function selectionInspector(app, t, units) {

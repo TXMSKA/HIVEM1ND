@@ -161,8 +161,8 @@ export function createNativeAdapter(client, options = {}) {
         return { acknowledged: true, exitCode: 0 };
       }
       releaseSession(sessions, session.pid);
-      const exitCode = await finishChild(child);
-      children.delete(session.pid);
+      const exitCode = await finishChild(child, true);
+      if (exitCode !== null) children.delete(session.pid);
       options.signaled?.push(session.pid);
       return { acknowledged: exitCode !== null, exitCode };
     },
@@ -210,7 +210,7 @@ export async function enqueueStart(context, input) {
   if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const unit = parseUnitId(input.unitId);
   const state = (await readUnitState(context, unit))?.bytes;
-  if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  if (!state || /^removed:\s*true\s*$/m.test(state.toString('utf8').split(/\r?\n\r?\n/, 1)[0])) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (hashBytes(state) !== input.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const prompt = input.prompt ?? null;
@@ -319,6 +319,15 @@ export function projectSessionRequest(value) {
 
 export async function stopSession(context, sessionId, input = {}) {
   if (input?.confirmed !== true) throw new CoreError(422, 'invalid_body', 'Stopping a session needs confirmation.');
+  const statusDirectory = `user/relay/session-status/${sessionId}`;
+  let names = [];
+  try { names = await readdir(absolute(context, statusDirectory)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  for (const name of names.filter((name) => name.endsWith('.json'))) {
+    const status = await readJson(context, `${statusDirectory}/${name}`);
+    if (status?.sessionId === sessionId && status.state === 'stopped' && status.reason === 'native-acknowledged'
+      && status.machine === context.paths.machine) return { sessionId, state: 'stopped', acknowledged: true };
+  }
   const registration = await registrationFor(context, sessionId);
   if (registration?.machine && registration.machine !== context.paths.machine) {
     throw new CoreError(409, 'remote_session', 'The session belongs to another machine.');
@@ -328,6 +337,7 @@ export async function stopSession(context, sessionId, input = {}) {
     throw new CoreError(409, 'stop_unavailable', 'The session is not an owned native process.');
   }
   const adapter = adapterFor(context, journal.client);
+  if (adapter.capabilities?.stop !== true || typeof adapter.stop !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot stop this session.');
   const stopped = await adapter.stop({ owned: true, pid: journal.pid, sessionId });
   if (stopped.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native process did not acknowledge the stop.');
   const status = {
@@ -338,13 +348,18 @@ export async function stopSession(context, sessionId, input = {}) {
     at: new Date(context.now()).toISOString(),
     reason: 'native-acknowledged',
   };
-  await writeJson(context, `user/relay/session-status/${sessionId}/${randomUUID()}.json`, status);
+  const relative = `${statusDirectory}/${randomUUID()}.json`;
+  await commitTransaction(context.store, { id: randomUUID(), entries: [
+    { resource: relative, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: jsonBytes(status) },
+    ...(input.onAcknowledged ? await input.onAcknowledged(status) : []),
+  ], events: [] });
+  context.ownedPids.delete(journal.pid);
   context.credentials?.revokeSession?.(sessionId);
   if (context.watch && journal.unitId) {
     const { clearUnit } = await import('./watch.mjs');
     clearUnit(context.watch, journal.unitId);
   }
-  return { sessionId, state: 'stopping' };
+  return { sessionId, state: 'stopping', acknowledged: true };
 }
 
 async function registrationFor(context, sessionId) {
@@ -1128,7 +1143,7 @@ function readLines(child, timeoutMs) {
   };
 }
 
-function finishChild(child) {
+function finishChild(child, requireExit = false) {
   if (!child) return Promise.resolve(null);
   return new Promise((resolve) => {
     if (child.exitCode != null) {
@@ -1137,7 +1152,7 @@ function finishChild(child) {
     }
     const timer = setTimeout(() => {
       try { child.kill(); } catch { /* The process is already gone. */ }
-      resolve(1);
+      resolve(requireExit ? null : 1);
     }, 2000);
     child.once?.('exit', (code) => {
       clearTimeout(timer);
@@ -1145,7 +1160,7 @@ function finishChild(child) {
     });
     try { child.kill(); } catch {
       clearTimeout(timer);
-      resolve(1);
+      resolve(requireExit ? null : 1);
     }
   });
 }
