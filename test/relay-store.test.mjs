@@ -157,6 +157,19 @@ test('a message with invalid headers is skipped and named while the valid ones a
   assert.equal(await readFile(badPath, 'utf8'), bad, 'the malformed file stays where it was written');
 });
 
+test('a new instance that serves a registered native session keeps its unit; another session or machine is not registered', async (context) => {
+  const { mind } = await fixture(context);
+  const first = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-first', client: 'claude' });
+  await first.register({ unit: 'overseer', nativeSessionId: 'chat-native', activity: 'active' });
+  const restarted = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-second', client: 'claude', nativeSessionId: 'chat-native' });
+  assert.equal((await restarted.inbox()).unit, 'overseer');
+  assert.equal((await restarted.send({ to: 'overseer', subject: 'Self', body: 'note' })).from, 'overseer');
+  const other = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-third', client: 'claude', nativeSessionId: 'another-native' });
+  await assert.rejects(other.inbox(), code('NOT_REGISTERED'));
+  const elsewhere = await createRelay({ mindPath: mind, hostname: 'OTHERBOX', sessionId: 'mcp-fourth', client: 'claude', nativeSessionId: 'chat-native' });
+  await assert.rejects(elsewhere.inbox(), code('NOT_REGISTERED'));
+});
+
 test('a session record that is unparseable or briefly unreadable is skipped while the other registrations still list', async (context) => {
   const { mind } = await fixture(context);
   const alpha = await bind(mind, 'executor-alpha', 'sync-alpha');

@@ -124,24 +124,20 @@ async function* boundedLines(stream) {
   else if (pending) yield pending.replace(/\r$/, '');
 }
 
-// A Claude chat that continues under a new native session ID gets a new MCP process, which holds no registration yet.
-// When the chat's hook has already carried the unit to that ID, the process adopts it instead of failing the call.
-async function adoptClaudeSession(relay, { client, env }) {
-  const id = env.CLAUDE_CODE_SESSION_ID;
-  if (client !== 'claude' || typeof id !== 'string' || !id || id.length > 180 || /[\u0000-\u001f\u007f]/.test(id)) return false;
-  const known = await relay.reminder({ nativeSessionId: id, client });
-  if (!known.registered) return false;
-  await relay.register({ unit: known.unit, nativeSessionId: id, client });
-  return true;
+function validSessionId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 180 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env }) {
   if (!mindPath) throw new Error('mindPath is required');
-  const relay = await createRelay({ mindPath, hostname, sessionId, client });
+  const ownSession = client === 'claude' && validSessionId(env.CLAUDE_CODE_SESSION_ID) ? env.CLAUDE_CODE_SESSION_ID : null;
+  // A client starts this server again after a restart or a reconnect, and the new process is a new instance. The native
+  // session it serves still names its registration, so the chat keeps its unit instead of answering NOT_REGISTERED.
+  const served = ownSession ?? (validSessionId(nativeSessionId) ? nativeSessionId : null);
+  const relay = await createRelay({ mindPath, hostname, sessionId, client, ...(served ? { nativeSessionId: served } : {}) });
   if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
   // Every Claude session starts this server, so the same conversation under a new native session ID gets its unit and its
   // wake back here, before any tool call and before a message arrives. Tool calls wait for it; initialize does not.
-  const ownSession = client === 'claude' && typeof env.CLAUDE_CODE_SESSION_ID === 'string' ? env.CLAUDE_CODE_SESSION_ID : null;
   const carrying = ownSession
     ? carryClaudeSession({ mindPath, nativeSessionId: ownSession, env, ...(hostname ? { hostname } : {}), startWorker: true })
       .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; })
@@ -172,13 +168,7 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         if (id === undefined) continue;
         const args = validateToolArguments(params.name, params.arguments ?? {});
         await carrying;
-        let value;
-        try {
-          value = await callMethod(relay, params.name, args, defaults);
-        } catch (error) {
-          if (error.code !== 'NOT_REGISTERED' || !(await adoptClaudeSession(relay, { client, env }))) throw error;
-          value = await callMethod(relay, params.name, args, defaults);
-        }
+        const value = await callMethod(relay, params.name, args, defaults);
         if (params.name === 'register' && ownSession && value?.nativeSessionId === ownSession && value?.client === 'claude') {
           // A hand registration of the same conversation takes the wake it still holds under an earlier session ID.
           await carryClaudeWake({ mindPath, nativeSessionId: ownSession, unit: value.unit, env, ...(hostname ? { hostname } : {}), startWorker: true })

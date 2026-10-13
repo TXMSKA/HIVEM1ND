@@ -521,12 +521,14 @@ function toPublicRegistration(record) {
 }
 
 export async function createRelay(options = {}) {
-  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client']);
+  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client', 'nativeSessionId']);
   if (options.mindPath !== undefined && typeof options.mindPath !== 'string') throw relayError('INVALID_ROOT', 'mindPath must be a filesystem path string.');
   const mindPath = path.resolve(options.mindPath ?? process.cwd());
   const hostname = safeMachine(options.hostname ?? os.hostname());
   const defaultClient = options.client === undefined ? null : scalar(options.client, 'client', 80);
   const instanceId = options.sessionId === undefined ? randomUUID() : scalar(options.sessionId, 'sessionId', 180);
+  // The native session this instance serves for its whole life, as the MCP server of a chat does, when the client names it.
+  const servedSession = options.nativeSessionId === undefined ? null : scalar(options.nativeSessionId, 'nativeSessionId', 180);
   await assertRoot(mindPath);
   const canonicalMind = await realpath(mindPath);
 
@@ -876,12 +878,34 @@ export async function createRelay(options = {}) {
   const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, latestRegistration: latestWakeRegistration, read: readWakeRecord, list: listWakeRecords,
     write: writeWakeRecord, remove: removeWakeRecord, withLock: withWakeLock, removeLegacy: removeLegacyWakeRecords });
 
+  // The newest registration of the native session this instance serves. The registration may come from an earlier process of
+  // the same chat: a client starts its MCP server again after a restart or a reconnect, and the new process has a new instance.
+  async function servedRegistration() {
+    if (servedSession === null) return null;
+    if (defaultClient !== null) {
+      const found = await newestRegistration(hostname, defaultClient, servedSession);
+      if (found?.ambiguous) throw relayError('AMBIGUOUS_SESSION', 'This session id has simultaneous registrations for different units.');
+      return found?.latest ?? null;
+    }
+    const records = (await registrations()).filter((record) => record.nativeSessionId === servedSession && record.machine === hostname)
+      .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || b.registrationId.localeCompare(a.registrationId));
+    if (!records.length) return null;
+    if (records.some((item) => item.registeredAt === records[0].registeredAt && (item.unit !== records[0].unit || item.client !== records[0].client))) {
+      throw relayError('AMBIGUOUS_SESSION', 'This session id has simultaneous registrations for different units.');
+    }
+    return records[0];
+  }
+
   async function currentIdentity() {
     if (currentRegistration) return currentRegistration;
     const matches = (await registrations()).filter((record) => record.instanceId === instanceId
       && record.machine === hostname && (defaultClient === null || record.client === defaultClient))
       .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || b.registrationId.localeCompare(a.registrationId));
-    if (!matches.length) return null;
+    if (!matches.length) {
+      const served = await servedRegistration();
+      if (served) currentRegistration = served;
+      return served;
+    }
     const newest = matches[0];
     if (matches.some((item) => item.registeredAt === newest.registeredAt && (item.unit !== newest.unit || item.client !== newest.client))) {
       throw relayError('AMBIGUOUS_SESSION', 'This session id has simultaneous registrations for different units.');

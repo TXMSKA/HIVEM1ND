@@ -147,6 +147,36 @@ async function mcpCall(mindPath, env, request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8').trim()).result;
 }
 
+test('a restarted MCP server of the same native session reads the inbox its earlier process registered', async (context) => {
+  const { mindPath, config } = await fixture(context);
+  const env = { CLAUDE_CONFIG_DIR: config, CLAUDE_CODE_SESSION_ID: 'session-a' };
+  const registered = await mcpCall(mindPath, env, { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'session-a', client: 'claude', activity: 'active' } });
+  assert.notEqual(registered.isError, true);
+  const read = await mcpCall(mindPath, env, { name: 'read_inbox', arguments: { limit: 10 } });
+  assert.notEqual(read.isError, true, JSON.stringify(read.structuredContent));
+  assert.deepEqual(read.structuredContent.messages, []);
+  const sent = await mcpCall(mindPath, env, { name: 'send_message', arguments: { to: 'overseer', subject: 'Self', body: 'note' } });
+  assert.equal(sent.structuredContent.from, 'overseer');
+});
+
+test('an MCP server started for an explicit native session keeps its unit across a restart for any client', async (context) => {
+  const { mindPath } = await fixture(context);
+  const serve = async (request) => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const chunks = [];
+    stdout.on('data', (chunk) => chunks.push(chunk));
+    const server = serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client: 'codex', sessionId: `mcp-${Math.random()}`, nativeSessionId: 'codex-native', stdin, stdout, stderr: new PassThrough(), env: {} });
+    stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: request })}\n`);
+    await server;
+    return JSON.parse(Buffer.concat(chunks).toString('utf8').trim()).result;
+  };
+  await serve({ name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'codex-native', client: 'codex' } });
+  const inbox = await serve({ name: 'list_inbox', arguments: {} });
+  assert.notEqual(inbox.isError, true);
+  assert.equal(inbox.structuredContent.unit, 'overseer');
+});
+
 test('the MCP server of a new session of the same host conversation takes the unit and the wake back before any call', async (context) => {
   const { mindPath, config } = await fixture(context);
   const relay = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'old-mcp', client: 'claude' });
