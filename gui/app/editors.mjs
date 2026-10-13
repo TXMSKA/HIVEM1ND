@@ -410,3 +410,25 @@ export function markDirty(api, editors, capabilities, dirty) {
   editors.viewerPatch = request(api, "PATCH", "/viewer", { operation });
   return editors.viewerPatch;
 }
+
+export function libraryChange(api, editor, title, folderId, libraryRevision, retained = null) {
+  return perform(api, { method: 'PATCH', path: '/editors/:resourceId/library', params: { resourceId: editor.id ?? editor.resourceId },
+    body: { title, folderId, expectedRevision: editor.revision, expectedLibraryRevision: libraryRevision } }, retained);
+}
+export function duplicateEditor(api, editor, destination, retained = null) {
+  return perform(api, { method: 'POST', path: '/editors/:resourceId/duplicate', params: { resourceId: editor.id ?? editor.resourceId },
+    body: { project: destination.project, folderId: destination.folderId, title: destination.title,
+      path: destination.path, expectedRevision: editor.revision } }, retained);
+}
+export function moveEditor(api, editor, destination, libraryRevision, retained = null) {
+  return perform(api, { method: 'POST', path: '/editors/:resourceId/move', params: { resourceId: editor.id ?? editor.resourceId },
+    body: { project: destination.project, folderId: destination.folderId, path: destination.path,
+      confirmedRepositoryChange: destination.confirmedRepositoryChange === true, expectedRevision: editor.revision,
+      expectedCommentsRevision: editor.commentsRevision ?? null, expectedAttachmentRevision: editor.attachmentRevision ?? null,
+      expectedLibraryRevision: libraryRevision } }, retained);
+}
+export function deleteEditor(api, editor, libraryRevision, retained = null) {
+  return perform(api, { method: 'DELETE', path: '/editors/:resourceId', params: { resourceId: editor.id ?? editor.resourceId },
+    body: { confirmed: true, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision ?? null,
+      expectedAttachmentRevision: editor.attachmentRevision ?? null, expectedLibraryRevision: libraryRevision } }, retained);
+}
