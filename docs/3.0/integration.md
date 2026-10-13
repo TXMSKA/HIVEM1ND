@@ -17,7 +17,7 @@ Document checks passed: 64 sequential tasks, 36 MECHANICAL and 28 JUDGMENT, no f
 
 ## Governing requirements
 
-Only `final.md` decisions 1 to 22 and packages P0 to P12 apply. The final board has row counts 10, 18, 11, 14, 11, 12 and 7, totaling 83 screens.
+Only `final.md` decisions 1 to 23 and packages P0 to P13 apply. After the P13 addition at `10b62b4`, the final board has row counts 10, 22, 11, 14, 11, 12 and 7, totaling 87 screens. The baseline and its original document-check counts remain historical evidence. T001 to T006 are committed and their task text is retained.
 Older references in resolved review comments are historical. Current screen references and notes govern. The earlier 67-screen specification, sync picker, four Settings tabs and phone standing approvals are superseded.
 
 MECHANICAL tasks contain literal patches or complete additions and tests. JUDGMENT tasks remain with the planner, who resolves the named implementation decision and implements the task before its dependents proceed.
@@ -2704,6 +2704,801 @@ test('icon buttons require an accessible name and retain a hidden decorative ico
 - Proof: `node --test test/gui-shell.test.mjs test/service-api.test.mjs test/interfaces-server.test.mjs test/service-install.test.mjs`; zero failures, packaged fonts served as `font/woff2`, plus every measured pair at least 4.5: 1 and target at least 32 pixels recorded in `test/gui-browser.md`. Node tests alone do not satisfy this browser gate.
 - Depends on: T061. Commit message: `Meet contrast target and keyboard requirements in every look`.
 
+### P13. Add to M1ND
+
+Execute T065 to T072 in the order below after T062 and before T063. Retain these task numbers despite their position before the final gates. P13 extends C09 and T054; it does not replace the Settings reports, existing content preferences or repository visibility rules. The earlier tasks remain unchanged. No final gate begins with an unfinished P13 task.
+
+The board's tool-server row is recognized but disabled in 3.0. Python used by a selected skill is a runtime requirement, not authorization to install Python or start a tool server. Source acquisition writes protected local staging; copying into the M1ND and registering a project occur only after the check and explicit confirmation. The code blocks below are future implementation instructions, not code installed by this documentation change.
+
+#### T065. Define the Add to M1ND contract
+
+- Screens: 2.19 to 2.22, 6.8 and the shared desktop bar in Map, Blueprint, Void and Settings. Decisions: 23. Kind: MECHANICAL.
+- Files: `docs/3.0/contract.md`, section `### 2.7. Layout and settings`, addition C12 immediately below the heading. Existing C01 to C11 remain intact.
+- Change: insert the following exact normative text. C12 extends the Content and project reports in C09 and governs the new operations, fields and ownership rules.
+
+```text
+Final integration amendment C12: Add to M1ND.
+
+Add to M1ND accepts skills, repositories and docs. Tool servers are recognition-only candidates with supported:false and blockedReason:"after_3_0"; selection, placement and updates of tool servers return 422 unsupported_addition. No acquisition, inspection or placement runs package install scripts, Git hooks, imported scripts, npm, Python or a tool server. A skill's declared runtime requirements are shown as a caution and apply only to its selected units. Source checks are evidence about the accepted bytes, not a claim that imported instructions are trusted.
+
+Source is {kind:"link"|"git"|"registry",url:string} or {kind:"folder",uploadId:UUID}. The GUI submits kind:"link"; the owner resolves its Git or registry identity before inspection. Explicit git/registry kinds bind a previously identified source, not a visible source-type selector. Links are public HTTPS URLs without user information, credential-bearing query strings or fragments. Private-network destinations and redirect targets are refused. A folder is uploaded as bounded file chunks, never as an arbitrary server filesystem path. Source resolution, extraction and all redirects have a 30000 ms deadline. Acquisition is bounded to 1024 regular files, 16 MiB per file, 64 MiB total decoded bytes, path depth 40, and 3 redirects. Symlinks, junctions, hard links, device files, absolute paths, traversal, Windows device names, alternate streams and case-insensitive duplicate paths are refused. Uploaded chunks contain at most 65536 decoded bytes. Credentials, environment/key files and source contents never appear in previews, events, diagnostics or receipts.
+
+Pin is {kind:"commit"|"version"|"snapshot",value:string,digest:Hash}. A commit is its full immutable Git object ID, a registry version is its exact version plus verified archive digest, and a folder is its complete staged manifest digest. Branch names, tags and latest are resolved before review; they are never an accepted pin. publishedAt:Time|null comes from the pinned commit/release evidence, never a download time or file mtime. A folder without verifiable commit/release evidence has unknown age. Check is {pin:{ok:boolean,kind:string,value:string},license:{ok:boolean,value:string|null},age:{ok:boolean,days:integer|null,publishedAt:Time|null},scripts:{ok:boolean,noInstallScripts:boolean},runtime:{ok:boolean,verified:boolean,requirements:string[]},eligible:boolean}. Seven complete days, a verified pin, a reported license, supported kind, verified runtime evidence and verified no-install-script execution are required. Unknown dates, future dates, missing licenses, unknown runtime evidence and younger sources fail the check without an override. Declared installation scripts may exist but are never run. Runtime requirements never authorize an installation or broader client permission.
+
+Candidate is {id:UUID,kind:"skill"|"repository"|"docs"|"tool-server",name:Name,title:string,description:string,path:string,supported:boolean,blockedReason:null|"after_3_0",requirements:string[],check:Check}. Every SKILL.md directory, standalone docs/documentation/knowledge tree, repository root and detected tool manifest is a separate candidate; nested skill support docs remain part of their skill. Raw manifest/script content is not returned. Candidate selection is separate from recognition. Scope is {everyUnit:boolean,units:UnitId[],groups:UUID[]}. Every unit is exclusive with explicit units/groups. Selected group members and direct units are deduplicated; removed units, root master and deleted groups are excluded. Empty or stale scope is refused. Group membership is resolved from current canonical records at each use; acceptance binds the reviewed group/unit revisions and rejects intervening changes.
+
+Addition is {id:UUID,kind:"skill"|"repository"|"docs",name:Name,title:string,source:{kind:"git"|"registry"|"folder",display:string,url:string|null},sourcePath:string,pin:Pin,license:string,publishedAt:Time,requirements:string[],scope:Scope,unitCount:integer,machine:Name,projectId:Name|null,installedAt:Time,updatedAt:Time,revision:Revision,removed:boolean}. Shared records are P/additions/<id>.json. Accepted skill bytes are P/features/<name>/; accepted docs bytes are P/knowledge/<name>/. Kit files and preexisting private names are never replaced by Add. Candidate names collide case-insensitively. Scope/provenance and accepted content sync together; staged source bytes, uploads, previews, absolute checkout paths and kept copies stay in protected L/additions/. No credential or transport endpoint is synced. Repository paths are registered through the selected machine's C09 project operation and recorded in its existing machine mapping. Uploaded and downloaded repositories are published to an owned local checkout with a recovery record before registration. A dropped source remains unchanged; its absolute location is not inferred from uploaded data. Removing, unregistering or undoing a repository never deletes its checkout/source files.
+
+POST /additions/uploads accepts {machine:Name,name:string} and returns 201 {uploadId:UUID,expiresAt:Time}. PUT /additions/uploads/:uploadId/chunks accepts {path:string,index:integer,total:integer,base64:string}, with index starting at 0 and total fixed per file, and returns 200 {uploadId:UUID,path:string,index:integer}. Exact replay is harmless; conflicting chunks fail. DELETE /additions/uploads/:uploadId accepts {} and returns 204, canceling unaccepted local staging only. No uploaded file enters the M1ND before acceptance.
+
+POST /additions/previews accepts {machine:Name,source:Source,updateOf:UUID|null} and returns 202 Preview. GET /additions/previews/:previewId returns 200 Preview. DELETE /additions/previews/:previewId accepts {} and returns 204. Preview is {id:UUID,machine:Name,state:"inspecting"|"ready"|"failed"|"accepted",sourceDisplay:string,pin:Pin|null,candidates:Candidate[],choices:{units:[{id:UnitId,title:string}],groups:[{id:UUID,title:string,members:UnitId[]}]},scopeRevision:Revision|null,contentRevision:Revision|null,projectRevision:Revision|null,expiresAt:Time,error:null|{code:string,message:string},result:Acceptance|null}. Acceptance is the POST /additions result defined below. Choice labels and IDs come from the same canonical unit/group revision snapshot held privately by the owner and rechecked on acceptance. A review is owner/principal-bound, expires after 15 minutes, and binds acquired hashes, checks, target revisions and reviewed scope revisions. After acceptance, its consumed binding and result survive through the existing 24-hour receipt retention; staging can be disposed without deleting owner/request/hash proof. GET returns accepted/result during that retention. Cancellation cannot erase the accepted binding or undo a committed operation. Returning Back, cancellation and failed inspection do not mutate the M1ND, client configuration or repository registration.
+
+POST /additions/previews/:previewId/retry accepts {} and returns 202 Preview. It retries a failed inspection under the same owner-bound preview ID and immutable resolved pin, with a new per-attempt operation identity retained through response loss. If no pin was resolved, resolve the original source again and require a new displayed check before acceptance. A resolved pin cannot silently change on Retry. Replayed initial POST only reconciles its initial response; it does not restart a failed inspection. An inspecting or accepted preview is returned without starting another acquisition. An expired unaccepted review returns 409 preview_expired. Lost acceptance responses use the accepted preview result or exact original acceptance receipt, never a second placement.
+
+POST /additions accepts {machine:Name,previewId:UUID,selections:[{candidateId:UUID,scope:Scope}],expectedContentRevision:Revision|null,expectedProjectRevision:Revision|null,confirmed:true} and returns 201 {items:Addition[],changeId:UUID,undoUntil:Time,contentRevision:Revision|null,projectRevision:Revision|null}. At least one supported, eligible candidate and one allowed unit are required. A mixed selection commits as one recoverable acceptance, with exact receipt replay and no partial visible registration. A consumed preview cannot create another addition. A changed staged hash, scope or destination returns 409 and leaves the accepted state unchanged. Updates use POST /additions/previews with updateOf bound to the existing addition and the same source identity; they show the same check and require the same explicit acceptance. The old pin remains active until replacement commits. No background update changes accepted bytes.
+
+GET /additions accepts machine?:Name and returns 200 {machine:Name,readOnly:boolean,items:Addition[]}. DELETE /additions/:additionId accepts {machine:Name,confirmed:true,expectedRevision:Revision} and returns 200 {additionId:UUID,changeId:UUID,undoUntil:Time,revision:Revision}. Remove revokes future scoped availability, archives owned imported content and provenance, preserves foreign edits and kit content, and uses the existing 10-second POST /changes/:changeId/undo. Undo checks post-change revisions. Scope controls service-owned session availability, including verified manually registered app sessions; it is not a global skill installation. Unknown client scope support fails closed. No Add operation changes client configuration without the existing C09 concrete preview/apply review.
+
+C09 Content feature/knowledge items add additionId:UUID|null, origin:string|null, pin:Pin|null, scope:Scope|null, unitCount:integer, removable:boolean and revision:Revision|null; kit items use null provenance and removable:false. Existing included/category/preferences fields remain. C09 project repository items add additionId:UUID|null, origin:string|null and pin:Pin|null, preserving machine-local path authority. A registered project with zero units appears in GET /projects and GET /view, Hierarchy and the Map without fabricating a unit or Overlord. Its inspector shows origin, accepted pin, No units yet and New unit in <project>; no lead is created automatically.
+
+All Add routes are authenticated desktop-only and reuse settings.write, including inspection and uploads. Phone and agent calls are rejected with 403 forbidden before receipt lookup, source reads or staging writes. Selected offline machines return 409 machine_unavailable; no local fallback is permitted. Unknown fields are rejected. Errors are 404 addition_not_found or preview_not_found; 409 preview_expired, preview_changed, scope_changed, source_changed, destination_changed, name_conflict or revision_conflict; 413 addition_too_large; 422 invalid_source, invalid_path, invalid_scope, check_failed or unsupported_addition; 503 source_unavailable, source_timeout, runtime_unavailable or scope_unavailable. A failed bounded source request exposes a safe cause and Retry, never source command output. additions.changed emits {additionId:UUID,operation:"add"|"update"|"remove"|"undo",revision:Revision}; it contains no preview or source bytes. Publication also emits the existing settings.content.changed or machine.settings.changed for the changed report, after durable acceptance.
+```
+
+Run this complete insertion program through `node --input-type=module` after creating no other files:
+
+```js
+import { readFile, writeFile } from 'node:fs/promises';
+const plan = (await readFile('docs/3.0/integration.md', 'utf8')).replaceAll('\r\n', '\n');
+const task = plan.split('#### T065. Define the Add to M1ND contract\n')[1]?.split('\n#### T066.')[0];
+const block = task?.match(/```text\n([\s\S]*?)\n```/)?.[1];
+if (!block?.startsWith('Final integration amendment C12:')) throw new Error('Missing literal C12 block.');
+let contract = (await readFile('docs/3.0/contract.md', 'utf8')).replaceAll('\r\n', '\n');
+if (contract.includes('Final integration amendment C12:')) throw new Error('C12 is already present.');
+const anchor = '### 2.7. Layout and settings\n';
+if (contract.split(anchor).length !== 2) throw new Error('Unexpected contract section 2.7.');
+contract = contract.replace(anchor, anchor + '\n' + block + '\n');
+await writeFile('docs/3.0/contract.md', contract, 'utf8');
+console.log('Inserted Add to M1ND amendment C12.');
+```
+
+- Tests: no runtime test is added for a documentation-only task. The contract lint and the explicit insertion guard validate this change.
+- Proof: the program prints `Inserted Add to M1ND amendment C12.`; `npm.cmd run lint` exits 0 with zero issues; the diff contains one C12 and unchanged C01 to C11.
+- Depends on: T001, T054, T062. Commit message: `Define the Add to M1ND contract`.
+
+#### T066. Recognize separate parts in a bounded source manifest
+
+- Screens: 2.19, 2.20. Decisions: 23. Kind: MECHANICAL.
+- Files: new `engine/service/addition-parts.mjs`, all code below; new `test/service-addition-parts.test.mjs`, all tests below. No source I/O or renderer is changed.
+- Change: create the module exactly. Its input is the staged regular-file inventory from T068, not a filesystem path. Recognize each part independently, retain tool candidates as unsupported, and return runtime names without command text. Docs under a skill remain support files. A repository can be offered beside its contained skills/docs.
+
+```js
+import path from 'node:path';
+import { parseFrontmatter } from '../records.mjs';
+import { CoreError, uuidV8, validateName } from './identity.mjs';
+
+export function additionPath(value) {
+  if (typeof value !== 'string' || !value || value.length > 1024 || /[\\\x00-\x1f\x7f:]/.test(value)) {
+    throw new CoreError(422, 'invalid_path', 'The source path is not a regular relative path.');
+  }
+  const parts = value.split('/');
+  if (parts.length > 40 || parts.some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part)
+    || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
+    throw new CoreError(422, 'invalid_path', 'The source path is not a regular relative path.');
+  }
+  return value;
+}
+
+function scalar(value, fallback, limit) {
+  let result = String(value ?? fallback).trim();
+  if (/^(['"])[\s\S]*\1$/.test(result)) result = result.slice(1, -1);
+  if (!result || result.length > limit || /[\x00-\x1f\x7f]/.test(result)) {
+    throw new CoreError(422, 'invalid_source', 'A source name or description is invalid.');
+  }
+  return result;
+}
+
+function packageData(file) {
+  try {
+    const value = JSON.parse(file.text);
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || value.name != null && typeof value.name !== 'string'
+      || value.description != null && typeof value.description !== 'string') throw new Error('Invalid manifest');
+    return value;
+  }
+  catch { throw new CoreError(422, 'invalid_source', 'A package manifest is invalid.'); }
+}
+
+export function recognizeAdditionParts(entries, { repository = false, name = 'repository' } = {}) {
+  if (!Array.isArray(entries) || entries.length > 1024) throw new CoreError(413, 'addition_too_large', 'The source has too many files.');
+  const seen = new Set();
+  let total = 0;
+  const files = entries.map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new CoreError(422, 'invalid_source', 'The source inventory is invalid.');
+    const relative = additionPath(entry.path);
+    if (entry.kind !== 'file' || !Number.isInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > 16777216
+      || entry.text !== null && typeof entry.text !== 'string') throw new CoreError(422, 'invalid_source', 'The source inventory is invalid.');
+    if (seen.has(relative.toLowerCase())) throw new CoreError(422, 'invalid_path', 'The source contains colliding paths.');
+    seen.add(relative.toLowerCase());
+    total += entry.bytes;
+    if (total > 67108864) throw new CoreError(413, 'addition_too_large', 'The source is too large.');
+    if (entry.text !== null && Buffer.byteLength(entry.text, 'utf8') !== entry.bytes) {
+      throw new CoreError(422, 'invalid_source', 'The source inventory does not match its bytes.');
+    }
+    return { ...entry, path: relative };
+  }).sort((left, right) => left.path.localeCompare(right.path, 'en'));
+  const result = [];
+  const skillRoots = files.filter(file => path.posix.basename(file.path) === 'SKILL.md')
+    .map(file => path.posix.dirname(file.path));
+  const within = (file, root) => root === '.' || file.path.startsWith(root + '/');
+  const requirements = root => {
+    const names = new Set();
+    for (const file of files.filter(item => within(item, root))) {
+      if (/\.py$/i.test(file.path)) names.add('Python');
+      if (/\.(?:js|mjs|cjs)$/i.test(file.path)) names.add('Node.js');
+      if (/\.sh$/i.test(file.path)) names.add('Bash');
+      if (/\.ps1$/i.test(file.path)) names.add('PowerShell');
+      if (/\.(?:exe|dll|so|dylib)$/i.test(file.path)) names.add('Native executable');
+    }
+    return [...names].sort();
+  };
+  const add = (kind, root, title, description) => {
+    const itemName = scalar(title, name, 128);
+    validateName(itemName, { label: 'addition name' });
+    result.push({ id: uuidV8({ kind, path: root, name: itemName }), kind, name: itemName, title: itemName,
+      description: scalar(description, itemName, 1000), path: root, supported: kind !== 'tool-server',
+      blockedReason: kind === 'tool-server' ? 'after_3_0' : null, requirements: requirements(root) });
+  };
+  for (const file of files.filter(item => path.posix.basename(item.path) === 'SKILL.md')) {
+    if (file.text === null) throw new CoreError(422, 'invalid_source', 'SKILL.md must be UTF-8 text.');
+    const attributes = parseFrontmatter(file.text).attributes;
+    const root = path.posix.dirname(file.path);
+    add('skill', root, attributes.name ?? (root === '.' ? name : path.posix.basename(root)), attributes.description);
+  }
+  const docs = new Set();
+  for (const file of files) {
+    if (skillRoots.some(root => within(file, root))) continue;
+    const parts = file.path.split('/');
+    const index = parts.findIndex(part => ['docs', 'documentation', 'knowledge'].includes(part.toLowerCase()));
+    if (index >= 0 && /\.(?:md|txt|rst|html|pdf|docx)$/i.test(file.path)) docs.add(parts.slice(0, index + 1).join('/'));
+  }
+  for (const root of [...docs].sort()) add('docs', root, path.posix.basename(root), 'Documentation');
+  for (const file of files) {
+    const base = path.posix.basename(file.path);
+    if (file.text === null || !['package.json', 'mcp.json', '.mcp.json', 'tool-manifest.json'].includes(base)) continue;
+    const manifest = packageData(file);
+    const tool = base !== 'package.json' || manifest.mcpServers != null || manifest.mcp != null;
+    if (tool) {
+      const root = path.posix.dirname(file.path);
+      const title = String(manifest.name ?? (root === '.' ? name : path.posix.basename(root))).replace(/^@[^/]+\//, '');
+      if (!result.some(item => item.kind === 'tool-server' && item.path === root)) add('tool-server', root, title, manifest.description ?? 'Tool server');
+    }
+  }
+  if (repository) add('repository', '.', name, 'Git repository');
+  return result;
+}
+```
+
+- Tests: create the complete test file:
+
+```js
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { additionPath, recognizeAdditionParts } from '../engine/service/addition-parts.mjs';
+const file = (path, text) => ({ path, kind: 'file', bytes: Buffer.byteLength(text), text });
+test('a mixed repository offers separate skills docs repository and a disabled tool', () => {
+  const parts = recognizeAdditionParts([
+    file('pdf/SKILL.md', '---\nname: pdf\ndescription: Read PDF files\n---\nInstructions.\n'),
+    file('pdf/scripts/read.py', 'print(1)\n'), file('pdf/docs/help.md', '# Skill support\n'),
+    file('docx/SKILL.md', '---\nname: docx\ndescription: Word documents\n---\nInstructions.\n'),
+    file('docs/guide.md', '# Project documentation\n'),
+    file('tools/package.json', '{"name":"acme-files","mcp":true,"scripts":{"postinstall":"never execute"}}'),
+  ], { repository: true, name: 'landing-site' });
+  assert.deepEqual(parts.map(item => [item.kind, item.name]).sort(), [
+    ['docs', 'docs'], ['repository', 'landing-site'], ['skill', 'docx'], ['skill', 'pdf'], ['tool-server', 'acme-files'],
+  ]);
+  assert.deepEqual(parts.find(item => item.name === 'pdf').requirements, ['Python']);
+  assert.equal(parts.find(item => item.kind === 'tool-server').supported, false);
+  assert.equal(parts.find(item => item.kind === 'tool-server').blockedReason, 'after_3_0');
+  assert.equal(JSON.stringify(parts).includes('never execute'), false);
+});
+test('unsafe inventories fail before any candidate can be accepted', () => {
+  for (const value of ['/root/file', '../file', 'a/../file', 'a\\file', 'C:/file', 'a:stream', 'CON/file', 'a./file']) {
+    assert.throws(() => additionPath(value), error => error.code === 'invalid_path');
+  }
+  assert.throws(() => recognizeAdditionParts([file('docs/a.md', 'a'), file('DOCS/A.md', 'b')]), error => error.code === 'invalid_path');
+  assert.throws(() => recognizeAdditionParts([{ path: 'a', kind: 'link', bytes: 0, text: null }]), error => error.code === 'invalid_source');
+  assert.throws(() => recognizeAdditionParts(Array.from({ length: 1025 }, (_, index) => file(String(index), ''))), error => error.code === 'addition_too_large');
+  for (const body of ['{', 'null', '[]', '{"name":42}']) {
+    assert.throws(() => recognizeAdditionParts([file('package.json', body)]), error => error.code === 'invalid_source');
+  }
+});
+```
+
+- Proof: `node --test test/service-addition-parts.test.mjs`; 2 passed, 0 failed; mixed recognition retains one disabled tool and no script command appears in its projection.
+- Depends on: T065. Commit message: `Recognize separate parts of an imported source`.
+
+#### T067. Bind check eligibility and deduplicate unit scope
+
+- Screens: 2.20, 2.21. Decisions: 23. Kind: MECHANICAL.
+- Files: new `engine/service/addition-check.mjs`, all code below; new `test/service-addition-check.test.mjs`, all tests below.
+- Change: create the pure check and scope module. The acquisition task supplies verified evidence; this module cannot infer a date, license or successful script policy from source claims. Runtime needs remain a caution, with actual selected-session support checked by T069.
+
+```js
+import { CoreError } from './identity.mjs';
+export function checkAddition(candidate, evidence, nowMs) {
+  const pin = evidence.pin;
+  const pinned = evidence.pinVerified === true && /^[a-f0-9]{64}$/.test(pin?.digest ?? '')
+    && (pin.kind === 'commit' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(pin.value)
+      || pin.kind === 'version' && typeof pin.value === 'string' && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$/.test(pin.value) && pin.value.length <= 128
+      || pin.kind === 'snapshot' && pin.value === pin.digest);
+  const published = typeof evidence.publishedAt === 'string' ? Date.parse(evidence.publishedAt) : NaN;
+  const elapsed = Number.isFinite(published) && Number.isFinite(nowMs) ? nowMs - published : NaN;
+  const days = Number.isFinite(elapsed) && elapsed >= 0 ? Math.floor(elapsed / 86400000) : null;
+  const license = typeof evidence.license === 'string' && evidence.license.trim()
+    && evidence.license.length <= 128 && !/[\x00-\x1f\x7f]/.test(evidence.license) ? evidence.license.trim() : null;
+  const scripts = evidence.noInstallScripts === true;
+  const ageOk = days !== null && days >= 7;
+  return { pin: { ok: pinned, kind: pin?.kind ?? '', value: pin?.value ?? '' },
+    license: { ok: license !== null, value: license }, age: { ok: ageOk, days, publishedAt: Number.isFinite(published) ? evidence.publishedAt : null },
+    scripts: { ok: scripts, noInstallScripts: scripts },
+    runtime: { ok: evidence.runtimeVerified === true && candidate.requirements.length === 0,
+      verified: evidence.runtimeVerified === true, requirements: [...candidate.requirements] },
+    eligible: candidate.supported === true && pinned && license !== null && ageOk && scripts && evidence.runtimeVerified === true };
+}
+
+export function resolveAdditionScope(scope, units, groups) {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope) || Object.keys(scope).some(key => !['everyUnit', 'units', 'groups'].includes(key))
+    || typeof scope.everyUnit !== 'boolean' || !Array.isArray(scope.units) || !Array.isArray(scope.groups)
+    || scope.units.length > 255 || scope.groups.length > 255 || scope.everyUnit && (scope.units.length || scope.groups.length)) {
+    throw new CoreError(422, 'invalid_scope', 'Choose Every unit or specific units and groups.');
+  }
+  const known = new Set(units.filter(id => id !== 'root:master'));
+  const selected = new Set(scope.everyUnit ? known : []);
+  const selectedGroups = new Set();
+  for (const id of scope.units) {
+    if (!known.has(id)) throw new CoreError(409, 'scope_changed', 'A selected unit is no longer available.');
+    selected.add(id);
+  }
+  for (const id of scope.groups) {
+    const group = groups.find(item => item.id === id && item.deleted !== true);
+    if (!group) throw new CoreError(409, 'scope_changed', 'A selected group is no longer available.');
+    selectedGroups.add(id);
+    for (const member of group.members) {
+      if (!known.has(member)) throw new CoreError(409, 'scope_changed', 'A selected group changed its members.');
+      selected.add(member);
+    }
+  }
+  if (!selected.size) throw new CoreError(422, 'invalid_scope', 'Choose at least one available unit.');
+  return { scope: { everyUnit: scope.everyUnit, units: [...new Set(scope.units)].sort(), groups: [...selectedGroups].sort() },
+    unitIds: [...selected].sort(), unitCount: selected.size };
+}
+```
+
+- Tests: create:
+
+```js
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { checkAddition, resolveAdditionScope } from '../engine/service/addition-check.mjs';
+const now = Date.parse('2026-10-13T12:00:00.000Z');
+const candidate = { supported: true, requirements: ['Python'] };
+const evidence = { pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) },
+  pinVerified: true, license: 'MIT', publishedAt: '2026-10-06T12:00:00.000Z', noInstallScripts: true, runtimeVerified: true };
+test('seven complete days pass while runtime requirements remain an explicit caution', () => {
+  const check = checkAddition(candidate, evidence, now);
+  assert.equal(check.eligible, true); assert.equal(check.age.days, 7); assert.equal(check.runtime.ok, false);
+  assert.deepEqual(check.runtime.requirements, ['Python']);
+  for (const patch of [ { publishedAt: '2026-10-06T12:00:00.001Z' }, { publishedAt: null },
+    { publishedAt: '2026-10-14T12:00:00.000Z' }, { license: null }, { pinVerified: false }, { noInstallScripts: false }, { runtimeVerified: false } ]) {
+    assert.equal(checkAddition(candidate, { ...evidence, ...patch }, now).eligible, false);
+  }
+  assert.equal(checkAddition({ ...candidate, supported: false }, evidence, now).eligible, false);
+});
+test('group and direct selection produce four distinct allowed units', () => {
+  const units = ['root:master', 'root:adjutant', 'project:shop:one', 'project:shop:two', 'project:shop:three'];
+  const groups = [{ id: 'checkout', members: units.slice(2), deleted: false }];
+  const result = resolveAdditionScope({ everyUnit: false, units: ['root:adjutant', 'project:shop:one'], groups: ['checkout'] }, units, groups);
+  assert.equal(result.unitCount, 4); assert.equal(result.unitIds.includes('root:master'), false);
+  assert.equal(resolveAdditionScope({ everyUnit: true, units: [], groups: [] }, units, groups).unitCount, 4);
+  for (const scope of [{ everyUnit: false, units: [], groups: [] }, { everyUnit: true, units: ['root:adjutant'], groups: [] },
+    { everyUnit: false, units: ['root:master'], groups: [] }, { everyUnit: false, units: [], groups: ['missing'] }]) {
+    assert.throws(() => resolveAdditionScope(scope, units, groups));
+  }
+  assert.throws(() => resolveAdditionScope({ everyUnit: false, units: [], groups: ['checkout'] }, units,
+    [{ ...groups[0], members: ['project:shop:gone'] }]), error => error.code === 'scope_changed');
+});
+```
+
+- Proof: `node --test test/service-addition-check.test.mjs`; 2 passed, 0 failed; the seven-day boundary is exact and the mixed selection counts four units once.
+- Depends on: T066. Commit message: `Check pinned additions and resolve their unit scope`.
+
+#### T068. Acquire immutable sources into owner-bound local previews
+
+- Screens: 2.19, 2.20. Decisions: 23. Kind: JUDGMENT.
+- Files: new `engine/service/addition-source.mjs`, `acquireAdditionSource`, `receiveAdditionChunk`, `disposeAdditionSource`, pin/license/date evidence and safe extraction; new `engine/service/additions.mjs`, `openAdditionUpload`, `writeAdditionChunk`, `inspectAddition`, `readAdditionPreview`, `cancelAdditionPreview`, `retryAdditionPreview`; `engine/service/http.mjs`, C12 upload/preview routes, `allowedBody`, `bodyLimitFor`, `objectFor`, `credentialFor`, `mutate`; `engine/service/service.mjs`, `composeCore`, injected acquisition runner and owner routing; `engine/service/security.mjs`, protected preview storage and safe error projection; new `test/service-addition-source.test.mjs`; new `test/service-additions.test.mjs`, preview/upload cases; `test/service-api.test.mjs`, desktop/phone/agent request matrix; `test/gui-fixture.mjs`, independent C12 preview/upload protocol.
+- Change: settle exact Git/registry provider resolution and safe extraction while implementing C12 without another installer. Public registry links resolve package metadata/archive bytes directly; they never invoke a package manager. Git acquisition uses a bounded injected runner with hooks, credential helpers, submodules and external filters disabled, no shell, sanitized environment and no inherited private credentials. Every redirect/DNS address is checked before connecting. The full pin and manifest hash bind the staged bytes, not the mutable source link. Implement a timed inspection job returning 202 before the GUI waits, with authenticated polling of the same preview ID. Per-job acquisition ends at 30000 ms with source_timeout; other transport failures use source_unavailable and do not claim a timeout. Failure projects a safe code and retryable state. Jobs and uploads expire at 15 minutes, and owner/principal checks precede staging reads, writes and receipt lookup. Implement the C12 same-preview retry transition and preserve consumed owner/request/hash/result bindings for 24 hours; fifteen-minute review expiry only disposes unaccepted staging. Reject Add-route phone/agent audiences with `403 forbidden` before the existing generic phone mutation branch. Expose the privately bound unit/group choice snapshot and scopeRevision in Preview.
+  Stage only under the verified local `L/additions/` root, using `assertLocalStaging`, `assertNoLinks`, `atomicWriteFile` and injected `protectLocalFile`. Validate every path with T066 before extracting or joining it; enforce link/device/size/chunk collision limits across the complete tree. Incomplete files cannot enter recognition. Preserve arbitrary binary support files without rendering their bytes. Resolve each part's nearest declared license and pinned commit/release date; do not substitute MIT, a download date or mtime. Local folder snapshots without credible date evidence remain inspectable with failed age check and a literal reason from T071. Source metadata is data, never code. Verify and augment T066 runtime hints from package engines, declared dependencies and script entry points without running them; an empty extension-derived array alone cannot prove that no runtime is needed. Unknown runtime evidence fails the check. Apply T066 recognition and T067 check per candidate. Unsupported tools remain disabled rows, with no install action.
+  A dropped folder is uploaded through the chunk API; an absolute path or File.path supplied over HTTP is never accepted. Scope revisions and target Content/project revisions are captured for T069. Candidate requirements include verified declarative metadata, not only extension hints. Existing update targets bind kind, name and source identity; inspection leaves their accepted bytes active. Back and Cancel dispose only unaccepted local resources and never modify either source or M1ND. Repeated inspection, chunk upload and timeout retry retain operation/preview identity. No real network service, client configuration, native session or package manager is used by tests.
+- Tests: in `test/service-addition-source.test.mjs`, use injected transport/runner fixtures for Git full pin, registry exact version/digest, mixed-source extraction, dropped chunks, root skill, nested skills, docs and disabled tool. Include 7-day boundary/unknown/future date, missing license, package postinstall that writes a sentinel if executed, private-network redirect, credential URL, bad digest, truncated archive, link/hardlink/device/traversal/device-name/alternate-stream/case collision, 1025 files, 16 MiB plus one file, 64 MiB plus one tree, interrupted/repeated/conflicting chunks, abort at 30000 ms and 15-minute expiry. Sentinels remain absent and fake execution counters remain zero. In `test/service-additions.test.mjs` and `test/service-api.test.mjs`, test exact bodies, wrong owner/machine/principal, offline selected machine, phone/agent rejection before staging/receipt, safe diagnostics with secret sentinel absent, preview cancellation and update inspection with hashes of M1ND/client/source unchanged. The fixture returns independent protocol records, not production recognition results.
+- Proof: `node --test test/service-addition-source.test.mjs test/service-additions.test.mjs test/service-api.test.mjs test/gui-fixture.test.mjs`; 0 failures, 0 canceled; every rejected/canceled preview has unchanged M1ND/client/source hashes and zero installer/script/native launches.
+- Depends on: T051, T065, T066, T067. Commit message: `Inspect pinned sources in protected local staging`.
+
+#### T069. Accept scoped content and projects with recoverable ownership
+
+- Screens: 2.20, 2.21, 2.22, 6.8. Decisions: 23. Kind: JUDGMENT.
+- Files: `engine/service/additions.mjs`, `applyAdditions`, `removeAddition`, `readAdditions`, `readScopedAdditions`, acceptance/update recovery; `engine/service/settings.mjs`, T054 Content/project report extensions and registration reuse; `engine/install.mjs`, `installableAssetRoots`, `listInstallableAssets`, `planAgentAssets`, imported-content exclusion from global client installation; `engine/service/adapters.mjs`, `launch`, verified per-session content availability; `engine/service/bridge.mjs`, `createNativeLaunch`, native scoped capability binding; `engine/relay/local-wake.mjs`, verified manually registered app-session binding; `engine/service/projection.mjs`, `projectRecord`, zero-unit projects and provenance; `engine/service/service.mjs`, `configuredProjects`, selected-owner publication and project refresh; `engine/service/store.mjs`, owned content transaction authorization and `bindProjects`; `engine/service/http.mjs`, C12 read/apply/remove schema/authorization/dispatch; `engine/service/import-events.mjs`, accepted addition events; `engine/sync/store.mjs`, `stageTransaction`, accepted content/provenance eligibility; `engine/sync/apply.mjs`, imported bundle validation; `test/service-additions.test.mjs`, acceptance/scope/update/remove/Undo/recovery cases; `test/install-ownership.test.mjs`; `test/service-sessions.test.mjs`; `test/service-projection.test.mjs`; `test/sync-apply.test.mjs`; `test/gui-fixture.mjs`, independent accepted records and report extensions.
+- Change: decide publication/recovery of local repository checkouts before the existing registration transaction, and implement all C12 accepted-state operations. Reuse T054 registration, machine path mapping, report publication and revision rules; refresh store/project/sync bindings without a service restart. The original dropped folder is not registered by an inferred path. Its uploaded snapshot and a downloaded repository are published to a protected owned checkout under `L/additions/repositories/<additionId>/`, with a byte-verified recovery record, then registered. The original dropped source is never rewritten. The ordinary M1ND journal does not authorize arbitrary repository-tree writes. Never fabricate an Overlord or unit to make the project appear.
+  Skills use private `user/features/<name>/`, including their SKILL.md and support files; docs use private `user/knowledge/<name>/`. Preserve the reviewed license/NOTICE bytes in the owned package; an inherited license above the candidate root is included as its owned LICENSE file only after hash verification and collision checks. Preserve kit categories, private-name precedence and person preferences. Include accepted additions in T054 reports with origin, pin, scope, actual unit count, Remove and revision. Additions retain a separately owned manifest and tombstone; generic kit evolve cannot replace, delete or globally install them. Reuse owned file/hash planning, but do not send scoped assets through the current all-client `planAgentAssets` loop.
+  Decide and prove the adapter-specific boundary that makes selected content available only to the canonical selected unit's service-owned CLI or verified app session. Resolve groups at use; prevent exposure through global client skills roots, a shared unfiltered retrieval route or merely an instruction to ignore content. A client without an enforceable scoped mechanism returns `scope_unavailable`, preserving accepted bytes and other clients. Runtime requirements do not create a tool process, install a runtime or broaden git/shell permission. If a required runtime is unavailable, return `runtime_unavailable` with the explicit requirement; no fallback installer. Configuration changes use T052 review/apply.
+  Acceptance rechecks hashes, eligibility, current Content/project/scope revisions and local owner. A mixed selection is one recoverable transaction with the original receipt; any failing part leaves no partial visible Content/project registration. New-name collisions never replace kit/private content. Updates replace only owned accepted bytes after a new reviewed pin; foreign edits yield `destination_changed`, and the prior pin stays active until commit. Removal archives only owned imported content/provenance and revokes future availability; repository source/checkout bytes stay. Ten-second Undo shares T014/T028 revision gates. Publish source-free events and sync only the accepted shared bundle; do not sync absolute checkout paths or preview/staging credentials.
+- Tests: `test/service-additions.test.mjs` must cover skill+support placement, docs knowledge pack placement, mixed atomic acceptance, C09 field retention, actual four-unit count, no global/client write, unit/group-only availability, group membership changes, deleted unit/group, unsupported client, unavailable Python, no runtime/script launch on Add, duplicate acceptance/receipt replay, stale preview/hash/scope/name/destination, shared Content sync, local repo mapping, zero-unit project projection, no fabricated unit/lead, interrupted checkout publication/registration/content write with verified reopen, update inspection without replacement, rejected update preserving prior pin, successful owned update, foreign edit preservation, Remove and valid/expired/conflicting Undo. `test/install-ownership.test.mjs` verifies evolve cannot globally install or prune accepted scoped content. `test/service-sessions.test.mjs` verifies two units on the same client see different allowed additions and verified manual sessions do not widen scope. `test/sync-apply.test.mjs` verifies accepted hashes/scopes/provenance on a second machine and absence of local preview paths, credentials and checkout bytes. Repository source/checkout inventories remain identical after Remove/Undo.
+- Proof: `node --test test/service-additions.test.mjs test/service-settings.test.mjs test/install-ownership.test.mjs test/service-sessions.test.mjs test/service-projection.test.mjs test/sync-apply.test.mjs`; 0 failures, 0 canceled; rejected acceptance produces no partial visibility, unselected sessions receive no imported assets, and Remove/Undo leave repository bytes identical.
+- Depends on: T014, T028, T052, T053, T054, T068. Commit message: `Accept scoped additions without replacing existing content`.
+
+#### T070. Retain Add operations through uncertain responses
+
+- Screens: 2.19 to 2.22, 6.8. Decisions: 23. Kind: MECHANICAL.
+- Files: new `gui/app/add-api.mjs`, complete module below; new `test/gui-add-api.test.mjs`, complete tests below. Existing API deadlines and credentials are reused, not replaced.
+- Change: create:
+
+```js
+import { createOperation, request } from './api.mjs';
+async function mutation(api, spec, retained) {
+  const operation = retained ?? createOperation(spec);
+  try {
+    const result = await request(api, operation.method, operation.path, { operation });
+    result.operation = operation;
+    return result;
+  } catch (error) {
+    if (error && typeof error === 'object' && error.operation == null) error.operation = operation;
+    throw error;
+  }
+}
+export function beginAdditionUpload(api, machine, name, retained = null) {
+  return mutation(api, { method: 'POST', path: '/additions/uploads', body: { machine, name } }, retained);
+}
+export function sendAdditionChunk(api, uploadId, chunk, retained = null) {
+  const { path, index, total, base64 } = chunk;
+  return mutation(api, { method: 'PUT', path: '/additions/uploads/:uploadId/chunks', params: { uploadId },
+    body: { path, index, total, base64 } }, retained);
+}
+export function cancelAdditionUpload(api, uploadId, retained = null) {
+  return mutation(api, { method: 'DELETE', path: '/additions/uploads/:uploadId', params: { uploadId }, body: {} }, retained);
+}
+export function inspectAdditionSource(api, machine, source, updateOf = null, retained = null) {
+  return mutation(api, { method: 'POST', path: '/additions/previews', body: { machine, source, updateOf } }, retained);
+}
+export function getAdditionPreview(api, previewId) {
+  return request(api, 'GET', '/additions/previews/:previewId', { params: { previewId } });
+}
+export function retryAdditionPreview(api, previewId, retained = null) {
+  return mutation(api, { method: 'POST', path: '/additions/previews/:previewId/retry', params: { previewId }, body: {} }, retained);
+}
+export function cancelAdditionPreview(api, previewId, retained = null) {
+  return mutation(api, { method: 'DELETE', path: '/additions/previews/:previewId', params: { previewId }, body: {} }, retained);
+}
+export function acceptAdditions(api, input, retained = null) {
+  const { machine, previewId, selections, expectedContentRevision, expectedProjectRevision } = input;
+  return mutation(api, { method: 'POST', path: '/additions', body: { machine, previewId, selections,
+    expectedContentRevision, expectedProjectRevision, confirmed: true } }, retained);
+}
+export function getAdditions(api, machine) {
+  return request(api, 'GET', '/additions', { query: { machine } });
+}
+export function removeAddition(api, machine, additionId, expectedRevision, retained = null) {
+  return mutation(api, { method: 'DELETE', path: '/additions/:additionId', params: { additionId },
+    body: { machine, confirmed: true, expectedRevision } }, retained);
+}
+```
+
+- Tests: create:
+
+```js
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createApi } from '../gui/app/api.mjs';
+import { beginAdditionUpload, sendAdditionChunk, cancelAdditionUpload, inspectAdditionSource, getAdditionPreview, retryAdditionPreview,
+  cancelAdditionPreview, acceptAdditions, getAdditions, removeAddition } from '../gui/app/add-api.mjs';
+function fixture(statuses = []) {
+  const calls = [];
+  const api = createApi({ location: { origin: 'http://127.0.0.1:43210' },
+    fetch: async (url, options) => {
+      calls.push({ path: new URL(url).pathname + new URL(url).search, method: options.method,
+        body: options.body == null ? null : JSON.parse(options.body), key: options.headers['Idempotency-Key'] });
+      const status = statuses.shift() ?? 200;
+      return new Response(JSON.stringify(status < 400 ? { contract: 'hivem1nd-gui-v3', data: { accepted: true },
+        meta: { requestId: 'fixture-request', readAt: '2026-10-13T12:00:00.000Z', eventCursor: '0', sync: 'local' } }
+        : { error: { code: 'source_unavailable', message: 'The source did not answer.' } }),
+        { status, headers: { 'Content-Type': 'application/json' } });
+    } });
+  api.token = 'public-fixture-token';
+  return { api, calls };
+}
+test('Add operations send the exact contract fields and reject unsafe IDs', async () => {
+  const { api, calls } = fixture();
+  const uploadId = '11111111-1111-4111-8111-111111111111';
+  const previewId = '22222222-2222-4222-8222-222222222222';
+  const additionId = '33333333-3333-4333-8333-333333333333';
+  await assert.rejects(sendAdditionChunk(api, '../foreign', { path: 'docs/a.md', index: 0, total: 1, base64: 'YQ==' }), error => error.code === 'invalid_path');
+  await beginAdditionUpload(api, 'DESKTOP', 'folder');
+  await sendAdditionChunk(api, uploadId, { path: 'docs/a.md', index: 0, total: 1, base64: 'YQ==' });
+  await cancelAdditionUpload(api, uploadId);
+  await inspectAdditionSource(api, 'DESKTOP', { kind: 'git', url: 'https://example.com/skills.git' });
+  await getAdditionPreview(api, previewId);
+  await retryAdditionPreview(api, previewId);
+  await cancelAdditionPreview(api, previewId);
+  await acceptAdditions(api, { machine: 'DESKTOP', previewId: 'preview', selections: [], expectedContentRevision: null, expectedProjectRevision: null });
+  await getAdditions(api, 'DESKTOP');
+  await removeAddition(api, 'DESKTOP', additionId, 'revision');
+  assert.deepEqual(calls.map(call => [call.method, call.path]), [
+    ['POST', '/api/v1/additions/uploads'], ['PUT', '/api/v1/additions/uploads/11111111-1111-4111-8111-111111111111/chunks'],
+    ['DELETE', '/api/v1/additions/uploads/11111111-1111-4111-8111-111111111111'], ['POST', '/api/v1/additions/previews'],
+    ['GET', '/api/v1/additions/previews/22222222-2222-4222-8222-222222222222'], ['POST', '/api/v1/additions/previews/22222222-2222-4222-8222-222222222222/retry'], ['DELETE', '/api/v1/additions/previews/22222222-2222-4222-8222-222222222222'],
+    ['POST', '/api/v1/additions'], ['GET', '/api/v1/additions?machine=DESKTOP'], ['DELETE', '/api/v1/additions/33333333-3333-4333-8333-333333333333'],
+  ]);
+  assert.deepEqual(calls[3].body, { machine: 'DESKTOP', source: { kind: 'git', url: 'https://example.com/skills.git' }, updateOf: null });
+  assert.deepEqual(calls[7].body, { machine: 'DESKTOP', previewId: 'preview', selections: [], expectedContentRevision: null,
+    expectedProjectRevision: null, confirmed: true });
+  assert.deepEqual(calls[9].body, { machine: 'DESKTOP', confirmed: true, expectedRevision: 'revision' });
+  assert.equal(calls[4].key, undefined); assert.equal(calls[8].key, undefined);
+});
+test('Retry preserves the original Add operation body and idempotency identity', async () => {
+  const { api, calls } = fixture([503, 201]);
+  const input = { machine: 'DESKTOP', previewId: 'preview', selections: [{ candidateId: 'pdf',
+    scope: { everyUnit: false, units: ['root:adjutant'], groups: [] } }], expectedContentRevision: 'before', expectedProjectRevision: null };
+  let retained;
+  try { await acceptAdditions(api, input); } catch (error) { retained = error.operation; }
+  assert.ok(retained); input.selections[0].scope.units = ['root:other'];
+  await acceptAdditions(api, input, retained);
+  assert.equal(calls[0].key, calls[1].key); assert.deepEqual(calls[0].body, calls[1].body);
+  assert.deepEqual(calls[1].body.selections[0].scope.units, ['root:adjutant']);
+});
+```
+
+- Proof: `node --test test/gui-add-api.test.mjs test/gui-transport.test.mjs`; the two new tests pass, existing transport tests pass, 0 failures, 0 canceled. Retry retains the original payload and operation identity.
+- Depends on: T018, T069. Commit message: `Retain Add operations for safe retries`.
+
+#### T071. Render the Add discovery and check windows
+
+- Screens: 2.19, 2.20, 2.21, 6.8 and shared desktop Add buttons. Decisions: 23. Kind: MECHANICAL.
+- Files: new `gui/app/add-view.mjs`, complete copy/renderer below; `gui/app/styles.css`, append the complete CSS below; new `test/add-dom-fixture.mjs`, complete isolated DOM fixture below; new `test/gui-add-view.test.mjs`, complete tests below. T072 wires these renderers into the existing shell.
+- Change: create the module. All product copy is literal below. Source descriptions remain third-party data, rendered with textContent. Never interpolate them into HTML or translate their instructions. Model fields are `language`, `stage` (`source` or `check`), `link`, `preview`, `selected` (candidate IDs), `scopes` (candidate-ID keyed Scope), `choices` (`units:[{id,title}]`, `groups:[{id,title,members}]`), `busy`, and `errorCode`. Actions are `onInspect`, `onDrop`, `onSelect`, `onScope`, `onContinue`, `onBack`, `onCancel`, `onAccept`, `onRetry`. Renderer output does not authorize a write.
+
+```js
+import { element, labelDialog, progressMark } from './components.mjs';
+export const ADD_COPY = Object.freeze({
+  title: ['Add to M1ND', 'Agregar al M1ND'],
+  add: ['Add', 'Agregar'],
+  linkHint: ['Paste a link to a repository or a registry, or drop a folder.', 'Pegar un enlace a un repositorio o registro, o soltar una carpeta.'],
+  link: ['Link', 'Enlace'],
+  found: ['Found in {source}, {kind} {pin}', 'Detectado en {source}, {kind} {pin}'],
+  commit: ['commit', 'commit'], version: ['version', 'versión'], snapshot: ['snapshot', 'copia'],
+  skill: ['Skill', 'Skill'], repository: ['Repository', 'Repositorio'], docs: ['Docs', 'Documentación'],
+  'tool-server': ['Tool server', 'Servidor de herramientas'],
+  docsDescription: ['Documentation', 'Documentación'], repositoryDescription: ['Git repository', 'Repositorio Git'],
+  toolDescription: ['Available after 3.0', 'Disponible después de 3.0'],
+  cancel: ['Cancel', 'Cancelar'], back: ['Back', 'Volver'], continue: ['Continue', 'Continuar'],
+  inspect: ['Reading the source', 'Leyendo el origen'], adding: ['Adding', 'Agregando'],
+  addName: ['Add {name}', 'Agregar {name}'], addMany: ['Add {count} items', 'Agregar {count} elementos'],
+  checkSub: ['{kind} from {source}. Nothing is copied until you press {action}.', '{kind} de {source}. No se copia nada hasta seleccionar {action}.'],
+  pinned: ['Pinned to {kind} {pin}', 'Fijado a {kind} {pin}'],
+  unknownPin: ['The pin could not be verified', 'No se pudo verificar la versión fijada'],
+  updateHint: ['updates wait for your yes', 'las actualizaciones requieren confirmación'],
+  license: ['{license} license', 'Licencia {license}'],
+  unknownLicense: ['License not reported', 'Licencia no informada'],
+  age: ['Older than 7 days, no install scripts', 'Más de 7 días, sin ejecutar scripts de instalación'],
+  young: ['Less than 7 complete days old', 'Antigüedad menor a 7 días completos'],
+  unknownAge: ['Age could not be verified', 'No se pudo verificar la antigüedad'],
+  scriptUnknown: ['No-install-script execution could not be verified', 'No se pudo verificar que no se ejecutaron scripts de instalación'],
+  needs: ['Its scripts run {requirements}', 'Los scripts utilizan {requirements}'],
+  noRuntime: ['No executable runtime required', 'No se requiere un entorno de ejecución'],
+  unknownRuntime: ['Runtime requirements could not be verified', 'No se pudieron verificar los requisitos de ejecución'],
+  native: ['Native executable', 'Ejecutable nativo'],
+  onlyUnits: ['only in the units below', 'solo en las unidades seleccionadas'],
+  who: ['Who can use it', 'Quién puede utilizarlo'], every: ['Every unit', 'Todas las unidades'],
+  groupOne: ['Group, 1 unit', 'Grupo, 1 unidad'], groupMany: ['Group, {count} units', 'Grupo, {count} unidades'],
+  originOne: ['from {source}, 1 unit', 'de {source}, 1 unidad'], originMany: ['from {source}, {count} units', 'de {source}, {count} unidades'],
+  addedOne: ['{name} added for 1 unit', '{name} agregado para 1 unidad'], addedMany: ['{name} added for {count} units', '{name} agregado para {count} unidades'],
+  remove: ['Remove', 'Quitar'], undo: ['Undo', 'Deshacer'], retry: ['Retry', 'Reintentar'],
+  checkUpdates: ['Check for updates', 'Comprobar actualizaciones'],
+  removeTitle: ['Remove {name}?', '¿Quitar {name}?'],
+  removeContent: ['Its added content and access are removed. Kit content and source files stay. Undo is available for 10 s.', 'Se quitan el contenido agregado y su acceso. Se conservan el contenido del kit y los archivos de origen. Deshacer está disponible durante 10 s.'],
+  removeRepository: ['The project leaves the Map and Hierarchy. Repository files and work stay. Undo is available for 10 s.', 'El proyecto se quita del Mapa y la Jerarquía. Se conservan los archivos del repositorio y el trabajo. Deshacer está disponible durante 10 s.'],
+  projectOrigin: ['Project from {source}', 'Proyecto de {source}'],
+  noUnits: ['No units yet', 'Sin unidades todavía'],
+  repoPinned: ['The repository is pinned at commit {pin}. Add its first unit to start working on it.', 'El repositorio está fijado al commit {pin}. Agregar la primera unidad para comenzar a trabajar.'],
+  newUnit: ['New unit in {project}', 'Nueva unidad en {project}'],
+  repoAdded: ['{project} added', '{project} agregado'], newUnitShort: ['New unit', 'Nueva unidad'],
+  newProject: ['new', 'nuevo'],
+  failureHint: ['The selection is kept. Retry checks the saved operation before sending it again.', 'Se conserva la selección. Reintentar comprueba la operación guardada antes de volver a enviarla.'],
+  error_source_unavailable: ['The source could not be read. Check the link and retry.', 'No se pudo leer el origen. Comprobar el enlace y reintentar.'],
+  error_source_timeout: ['The source did not answer in 30 s.', 'El origen no respondió en 30 s.'],
+  error_invalid_source: ['The source link or manifest is invalid.', 'El enlace o manifiesto de origen no es válido.'],
+  error_invalid_path: ['The source contains an unsafe file path or link.', 'El origen contiene una ruta de archivo o enlace no seguro.'],
+  error_addition_too_large: ['The source exceeds the file or size limit.', 'El origen supera el límite de archivos o tamaño.'],
+  error_check_failed: ['The source did not pass its pin, license, age or script check.', 'El origen no superó la comprobación de versión, licencia, antigüedad o scripts.'],
+  error_unsupported_addition: ['Tool servers are available after 3.0.', 'Los servidores de herramientas estarán disponibles después de 3.0.'],
+  error_preview_expired: ['The check expired. Read the source again.', 'La comprobación venció. Leer el origen de nuevo.'],
+  error_preview_changed: ['The reviewed source changed. Read it again.', 'Cambió el origen revisado. Leerlo de nuevo.'],
+  error_source_changed: ['The source bytes changed. Read the source again.', 'Cambiaron los archivos de origen. Leer el origen de nuevo.'],
+  error_scope_changed: ['The selected units or group members changed. Review the selection.', 'Cambiaron las unidades o integrantes del grupo seleccionados. Revisar la selección.'],
+  error_invalid_scope: ['Choose at least one available unit or group.', 'Seleccionar al menos una unidad o grupo disponible.'],
+  error_destination_changed: ['Existing content changed. It was not replaced.', 'Cambió el contenido existente. No se reemplazó.'],
+  error_name_conflict: ['The name is already used by existing content. Nothing was replaced.', 'El nombre ya corresponde a contenido existente. No se reemplazó nada.'],
+  error_revision_conflict: ['Content or project registration changed. Review the check again.', 'Cambió el contenido o registro de proyectos. Revisar la comprobación de nuevo.'],
+  error_machine_unavailable: ['The selected machine is offline. Its files were not changed.', 'La máquina seleccionada está desconectada. No se modificaron sus archivos.'],
+  error_runtime_unavailable: ['A required runtime is unavailable on the selected machine.', 'No está disponible un entorno de ejecución requerido en la máquina seleccionada.'],
+  error_scope_unavailable: ['The selected client cannot provide content only to the selected units.', 'El cliente seleccionado no puede ofrecer el contenido solo a las unidades seleccionadas.'],
+  error_addition_not_found: ['The addition is no longer available.', 'El elemento agregado ya no está disponible.'],
+  error_preview_not_found: ['The source check is no longer available.', 'La comprobación de origen ya no está disponible.'],
+  error_forbidden: ['Add to M1ND is available on the computer only.', 'Agregar al M1ND está disponible solo en la computadora.'],
+  error_unknown: ['The operation could not be confirmed. Retry to check its state.', 'No se pudo confirmar la operación. Reintentar para comprobar su estado.'],
+});
+export function addText(language, key, values = {}) {
+  const pair = ADD_COPY[key];
+  if (!pair) throw new Error('Unknown Add copy key: ' + key);
+  return pair[language === 'es' ? 1 : 0].replace(/\{([A-Za-z]+)\}/g, (_, name) => String(values[name] ?? ''));
+}
+function plus(document) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('class', 'add-plus');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M12 5v14M5 12h14'); svg.append(path); return svg;
+}
+export function addButton(document, language, onOpen, content = false) {
+  const button = element(document, 'button', { type: 'button', class: content ? 'btn primary add-content' : 'add-button',
+    'data-action': content ? 'add-content' : 'add-to-mind', 'aria-label': addText(language, 'title'), onclick: onOpen });
+  button.append(plus(document), element(document, 'span', { text: addText(language, 'add') })); return button;
+}
+function button(document, text, id, handler, disabled, primary = false) {
+  return element(document, 'button', { type: 'button', class: primary ? 'btn primary' : 'btn', 'data-action': id,
+    disabled: disabled ? '' : null, text, onclick: handler });
+}
+function choice(document, title, checked, disabled, onChange, badge = null, description = null) {
+  const row = element(document, 'label', { class: 'add-choice' + (checked ? ' is-selected' : '') });
+  const input = element(document, 'input', { type: 'checkbox', disabled: disabled ? '' : null }); input.checked = checked;
+  input.addEventListener('change', () => onChange?.(input.checked));
+  row.append(input, element(document, 'strong', { text: title }));
+  if (description) row.append(element(document, 'span', { class: 'add-description', text: description }));
+  if (badge) row.append(element(document, 'span', { class: 'add-badge', text: badge })); return row;
+}
+function checkLine(document, ok, value, note = null) {
+  const row = element(document, 'div', { class: 'add-check-line', 'data-check-ok': String(ok) });
+  row.append(element(document, 'span', { class: ok ? 'add-check-dot complete' : 'add-check-dot caution', 'aria-hidden': 'true' }),
+    element(document, 'span', { text: value }));
+  if (note) row.append(element(document, 'span', { class: 'add-check-note', text: note })); return row;
+}
+function displayPin(pin) { return pin.kind === 'commit' ? pin.value.slice(0, 7) : pin.value; }
+export function renderAdd(document, model, actions) {
+  const t = (key, values) => addText(model.language, key, values);
+  const selected = (model.preview?.candidates ?? []).filter(item => model.selected.includes(item.id));
+  const accept = selected.length === 1 ? t('addName', { name: selected[0].title }) : t('addMany', { count: selected.length });
+  const dialog = element(document, 'dialog', { class: 'add-dialog', 'data-add-stage': model.stage, 'aria-busy': String(model.busy) });
+  const title = element(document, 'h2', { text: model.stage === 'check' ? accept : t('title') }); labelDialog(dialog, title); dialog.append(title);
+  dialog.append(element(document, 'p', { class: 'add-subtitle', text: model.stage === 'check' && selected.length === 1
+    ? t('checkSub', { kind: t(selected[0].kind), source: model.preview.sourceDisplay, action: accept }) : t('linkHint') }));
+  if (model.stage === 'source') {
+    const input = element(document, 'input', { type: 'url', id: 'add-link', 'aria-label': t('link'), class: 'add-link',
+      disabled: model.busy ? '' : null, placeholder: 'https://', onchange: event => actions.onInspect?.(event.target.value) }); input.value = model.link;
+    dialog.append(input);
+    if (model.preview?.pin) dialog.append(element(document, 'p', { class: 'add-field-label', text: t('found', {
+      source: model.preview.sourceDisplay, kind: t(model.preview.pin.kind), pin: displayPin(model.preview.pin) }) }));
+    const found = element(document, 'div', { class: 'add-found', 'data-add-found': 'true' });
+    for (const item of model.preview?.candidates ?? []) {
+      const description = ['skill', 'tool-server'].includes(item.kind) ? item.description : t(item.kind === 'docs' ? 'docsDescription'
+        : item.kind === 'repository' ? 'repositoryDescription' : 'toolDescription');
+      const row = choice(document, item.title, model.selected.includes(item.id), model.busy || !item.supported,
+        checked => actions.onSelect?.(item.id, checked), t(item.kind), description);
+      if (!item.supported) row.children[0].setAttribute('aria-label', item.title + ', ' + t('toolDescription'));
+      row.setAttribute('data-candidate-id', item.id); found.append(row);
+    }
+    dialog.append(found);
+    dialog.addEventListener('dragover', event => event.preventDefault());
+    dialog.addEventListener('drop', event => { event.preventDefault(); if (!model.busy) actions.onDrop?.(event); });
+  } else {
+    for (const item of selected) {
+      const check = item.check;
+      const block = element(document, 'section', { class: 'add-part-check', 'data-candidate-id': item.id });
+      if (selected.length > 1) block.append(element(document, 'h3', { text: item.title }));
+      const checks = element(document, 'div', { class: 'add-checks', 'aria-label': item.title });
+      checks.append(checkLine(document, check.pin.ok, check.pin.ok ? t('pinned', { kind: t(check.pin.kind), pin: displayPin(check.pin) }) : t('unknownPin'), t('updateHint')),
+        checkLine(document, check.license.ok, check.license.value ? t('license', { license: check.license.value }) : t('unknownLicense')),
+        checkLine(document, check.age.ok && check.scripts.ok, !check.scripts.ok ? t('scriptUnknown') : check.age.ok ? t('age') : check.age.days === null ? t('unknownAge') : t('young')),
+        checkLine(document, check.runtime.ok, check.runtime.requirements.length ? t('needs', {
+          requirements: check.runtime.requirements.map(name => name === 'Native executable' ? t('native') : name).join(', '),
+        }) : t(check.runtime.verified === false ? 'unknownRuntime' : 'noRuntime'), check.runtime.requirements.length ? t('onlyUnits') : null));
+      block.append(checks, element(document, 'p', { class: 'add-field-label', text: t('who') }));
+      const scope = model.scopes[item.id] ?? { everyUnit: false, units: [], groups: [] };
+      const choices = element(document, 'div', { class: 'add-scope' });
+      choices.append(choice(document, t('every'), scope.everyUnit, model.busy,
+        checked => actions.onScope?.(item.id, 'everyUnit', null, checked)));
+      for (const group of model.choices.groups) choices.append(choice(document, group.title, scope.groups.includes(group.id), model.busy,
+        checked => actions.onScope?.(item.id, 'group', group.id, checked), group.members.length === 1 ? t('groupOne') : t('groupMany', { count: group.members.length })));
+      for (const unit of model.choices.units) choices.append(choice(document, unit.title, scope.units.includes(unit.id), model.busy,
+        checked => actions.onScope?.(item.id, 'unit', unit.id, checked)));
+      block.append(choices); dialog.append(block);
+    }
+  }
+  if (model.busy) dialog.append(element(document, 'p', { role: 'status', class: 'add-wait', text: t(model.stage === 'check' ? 'adding' : 'inspect') }));
+  if (model.errorCode) {
+    const error = element(document, 'div', { role: 'alert', class: 'add-error' });
+    const key = 'error_' + model.errorCode;
+    error.append(element(document, 'strong', { text: t(ADD_COPY[key] ? key : 'error_unknown') }), element(document, 'p', { text: t('failureHint') }));
+    dialog.append(error);
+  }
+  const controls = element(document, 'div', { class: 'add-actions' });
+  controls.append(button(document, t(model.stage === 'check' ? 'back' : 'cancel'), model.stage === 'check' ? 'add-back' : 'add-cancel',
+    model.stage === 'check' ? actions.onBack : actions.onCancel, model.busy));
+  const valid = selected.length > 0 && selected.every(item => item.supported && item.check.eligible
+    && (model.scopes[item.id]?.everyUnit || model.scopes[item.id]?.units.length || model.scopes[item.id]?.groups.length));
+  const next = button(document, model.busy ? t(model.stage === 'check' ? 'adding' : 'inspect')
+    : model.errorCode ? t('retry') : model.stage === 'check' ? accept : t('continue'), model.stage === 'check' ? 'add-confirm' : 'add-continue',
+    model.errorCode ? actions.onRetry : model.stage === 'check' ? actions.onAccept : actions.onContinue,
+    model.busy || !model.errorCode && (model.stage === 'check' ? !valid : selected.length === 0), true);
+  if (model.busy) {
+    next.setAttribute('aria-busy', 'true');
+    next.replaceChildren(progressMark(document, t(model.stage === 'check' ? 'adding' : 'inspect')));
+  }
+  controls.append(next);
+  dialog.append(controls);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); if (!model.busy) actions.onCancel?.(); }); return dialog;
+}
+export function renderAddedContent(document, item, language, actions) {
+  const t = (key, values) => addText(language, key, values);
+  const row = element(document, 'div', { class: 'add-content-row', 'data-addition-id': item.additionId });
+  const inclusion = choice(document, item.title, item.included, false, checked => actions.onIncluded?.(item, checked));
+  inclusion.className = 'add-content-choice'; row.append(inclusion);
+  row.append(element(document, 'button', { type: 'button', class: 'add-origin', title: t('checkUpdates'),
+    'aria-label': t('checkUpdates') + ': ' + item.title, onclick: () => actions.onUpdate?.(item),
+    text: t(item.unitCount === 1 ? 'originOne' : 'originMany', { source: item.origin, count: item.unitCount }) }));
+  if (item.removable) row.append(button(document, t('remove'), 'remove-addition', () => actions.onRemove?.(item), false));
+  return row;
+}
+```
+
+Append this CSS. Modern values come directly from `bar`, `dialog`, `foundRow`, `checkLine`, `mapAddCheck` and `settingsContent`; token roles inherit the current look. Nocturne keeps the bar's 8-pixel button radius. The 18-pixel checkbox is inside a label target at least 32 pixels tall. The error/wait states use the existing error tokens supplied by earlier tasks.
+
+```css
+.add-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 7px 13px; border: 0; border-radius: 11px; background: var(--accent); color: var(--accent-ink); font: 700 13px var(--font); }
+.add-plus { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+[data-look="high-contrast"] .add-button { border-radius: 8px; }
+.add-dialog { width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; margin: auto; padding: 24px; border: 1px solid var(--line2); border-radius: 22px; background: var(--panel); color: var(--text); font-family: var(--font); }
+.add-dialog { --add-scrim: rgba(4,2,6,0.62); }
+.add-dialog::backdrop { background: var(--add-scrim); }
+.add-dialog h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+.add-dialog h3 { margin: 0 0 8px; font-size: 14px; }
+.add-subtitle { margin: 0 0 18px; font-size: 13.5px; line-height: 1.5; color: var(--mute); }
+.add-link { box-sizing: border-box; width: 100%; min-height: 32px; padding: 11px 13px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--text); font: 13px var(--mono); }
+.add-field-label { margin: 18px 0 6px; color: var(--mute); font-size: 12.5px; font-weight: 600; }
+.add-found, .add-scope { display: grid; gap: 6px; }
+.add-choice { display: flex; align-items: center; gap: 12px; min-height: 32px; padding: 10px 12px; border: 1px solid transparent; border-radius: 12px; background: var(--card); font-size: 13.5px; cursor: pointer; }
+.add-choice.is-selected { border-color: var(--accent); background: var(--card2); }
+.add-choice strong { font-size: 14px; font-weight: 700; }
+.add-choice input { appearance: none; flex: 0 0 18px; width: 18px; height: 18px; margin: 0; border: 2px solid var(--line2); border-radius: 4px; background: transparent; }
+.add-choice input:checked { border-color: var(--accent); background: var(--accent); }
+.add-choice input:checked::after { display: block; width: 8px; height: 4px; margin: 3px 2px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: rotate(-45deg); content: ''; }
+.add-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--mute); }
+.add-badge { margin-left: auto; padding: 2px 9px; border-radius: var(--radius-pill); background: var(--card2); color: var(--body); font-size: 12px; white-space: nowrap; }
+.add-part-check + .add-part-check { margin-top: 18px; }
+.add-checks { display: grid; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--card); }
+.add-check-line { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.add-check-dot { box-sizing: border-box; flex: 0 0 12px; width: 12px; height: 12px; border-radius: var(--radius-circle); }
+.add-check-dot.complete { background: var(--accent); }
+.add-check-dot.caution { border: 2px solid var(--waiting); }
+.add-check-note { margin-left: auto; font-size: 12px; color: var(--mute); }
+.add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.add-actions button { min-height: 32px; padding: 7px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 600; }
+.add-content-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 9px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card2); }
+.add-content-row .add-origin { margin-left: auto; font-size: 12.5px; color: var(--accent); }
+.add-content-row button.add-origin { padding: 0; border: 0; background: transparent; font-family: var(--font); cursor: pointer; }
+.add-content-row input { accent-color: var(--accent); width: 18px; height: 18px; }
+.add-content-choice { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.add-content-row button { min-height: 32px; }
+.add-content { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.add-error { display: grid; gap: 8px; margin-top: 18px; padding: 12px 14px; border: 1px solid var(--error); border-radius: 14px; background: var(--error-soft); font-size: 13px; }
+.add-error p { margin: 0; color: var(--body); }
+.add-wait { margin: 18px 0 0; color: var(--body); font-size: 13px; }
+@media (max-width: 720px) { .add-choice { flex-wrap: wrap; } .add-check-line { flex-wrap: wrap; } .add-check-note { margin-left: 22px; } .add-description { white-space: normal; } .add-content-row { flex-wrap: wrap; } }
+```
+
+- Tests: create `test/add-dom-fixture.mjs` exactly:
+
+```js
+class Node {
+  constructor(tag, nodeType = 1, text = '') { this.tagName = tag.toUpperCase(); this.nodeType = nodeType; this.attributes = {}; this.children = []; this.listeners = {}; this.textContent = text; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  addEventListener(name, action) { this.listeners[name] = action; }
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = children; this.textContent = ''; }
+}
+export const document = { createElement: name => new Node(name), createElementNS: (_namespace, name) => new Node(name),
+  createTextNode: text => new Node('#text', 3, String(text)) };
+export function nodes(root) { return [root, ...root.children.flatMap(child => child?.nodeType ? nodes(child) : [])]; }
+export function copy(root) { return nodes(root).map(node => node.textContent).filter(Boolean).join('\n'); }
+```
+
+Create `test/gui-add-view.test.mjs` exactly:
+
+```js
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { ADD_COPY, addText, addButton, renderAdd, renderAddedContent } from '../gui/app/add-view.mjs';
+import { document, nodes, copy } from './add-dom-fixture.mjs';
+const check = { pin: { ok: true, kind: 'commit', value: '4f2c9e1'.padEnd(40, '0') }, license: { ok: true, value: 'MIT' },
+  age: { ok: true, days: 9, publishedAt: '2026-10-01T00:00:00.000Z' }, scripts: { ok: true, noInstallScripts: true },
+  runtime: { ok: false, verified: true, requirements: ['Python'] }, eligible: true };
+const pdf = { id: 'pdf', kind: 'skill', title: 'pdf', description: 'Reads, fills and merges PDF files', supported: true, check };
+const model = { language: 'en', stage: 'source', link: 'https://example.com/skills', preview: { sourceDisplay: 'acme/agent-skills',
+  pin: { kind: 'commit', value: check.pin.value }, candidates: [pdf, { ...pdf, id: 'docx', title: 'docx' },
+    { ...pdf, id: 'tool', kind: 'tool-server', title: 'acme-files', description: 'Reads and writes cloud files', supported: false }] }, selected: ['pdf'],
+  scopes: { pdf: { everyUnit: false, units: ['root:adjutant'], groups: ['checkout'] } },
+  choices: { units: [{ id: 'root:adjutant', title: 'adjutant' }], groups: [{ id: 'checkout', title: 'Checkout launch', members: ['one', 'two', 'three'] }] }, busy: false, errorCode: null };
+test('discovery lists mixed parts and disables the excluded tool with a named control', () => {
+  const view = renderAdd(document, model, {});
+  assert.match(copy(view), /Add to M1ND/); assert.match(copy(view), /Found in acme\/agent-skills, commit 4f2c9e1/);
+  const rows = nodes(view).filter(node => node.getAttribute('data-candidate-id'));
+  assert.deepEqual(rows.map(row => row.getAttribute('data-candidate-id')), ['pdf', 'docx', 'tool']);
+  assert.equal(rows[2].children[0].getAttribute('disabled'), ''); assert.match(copy(rows[2]), /Reads and writes cloud files/);
+  assert.match(rows[2].children[0].getAttribute('aria-label'), /Available after 3.0/);
+  assert.equal(addButton(document, 'en', () => {}).getAttribute('aria-label'), 'Add to M1ND');
+  assert.match(copy(renderAdd(document, { ...model, language: 'es' }, {})), /Agregar al M1ND/);
+});
+test('the check precedes unit selection and runtime caution does not imply installation', () => {
+  const view = renderAdd(document, { ...model, stage: 'check' }, {});
+  const text = copy(view);
+  for (const value of ['Add pdf', 'Pinned to commit 4f2c9e1', 'MIT license', 'Older than 7 days, no install scripts',
+    'Its scripts run Python', 'only in the units below', 'Who can use it', 'Every unit', 'Checkout launch', 'Group, 3 units', 'adjutant', 'Back']) assert.ok(text.includes(value), value);
+  assert.ok(text.indexOf('MIT license') < text.indexOf('Who can use it'));
+  assert.equal(nodes(view).filter(node => node.getAttribute('data-check-ok') === 'false').length, 1);
+  const buttons = nodes(view).filter(node => node.tagName === 'BUTTON');
+  assert.deepEqual(buttons.map(node => node.textContent), ['Back', 'Add pdf']);
+  assert.equal(buttons[1].getAttribute('disabled'), null);
+  const noScope = renderAdd(document, { ...model, stage: 'check', scopes: {} }, {});
+  assert.equal(nodes(noScope).find(node => node.getAttribute('data-action') === 'add-confirm').getAttribute('disabled'), '');
+});
+test('added content preserves origin scope count and Remove while copy is bilingual', () => {
+  const row = renderAddedContent(document, { title: 'pdf', included: true, additionId: 'owned', origin: 'acme/agent-skills', unitCount: 4, removable: true }, 'en', {});
+  assert.match(copy(row), /from acme\/agent-skills, 4 units/); assert.match(copy(row), /Remove/);
+  for (const [key, pair] of Object.entries(ADD_COPY)) {
+    assert.equal(pair.length, 2); assert.equal(typeof addText('en', key), 'string'); assert.equal(typeof addText('es', key), 'string');
+    assert.doesNotMatch(pair.join(' '), /\u2014/);
+  }
+  const malicious = renderAdd(document, { ...model, preview: { ...model.preview, candidates: [{ ...pdf, description: '<script>run()</script>' }] } }, {});
+  assert.equal(nodes(malicious).some(node => node.tagName === 'SCRIPT'), false);
+});
+test('failed inspection retains an enabled Retry and unknown evidence is shown without a false claim', () => {
+  let retried = 0;
+  const failure = renderAdd(document, { ...model, preview: null, selected: [], errorCode: 'source_unavailable' }, { onRetry() { retried += 1; } });
+  const retry = nodes(failure).find(node => node.getAttribute('data-action') === 'add-continue');
+  assert.equal(retry.getAttribute('disabled'), null); assert.equal(retry.textContent, 'Retry'); retry.listeners.click(); assert.equal(retried, 1);
+  const unknown = { ...pdf, check: { ...check, pin: { ok: false, kind: '', value: '' },
+    runtime: { ok: false, verified: false, requirements: [] }, eligible: false } };
+  const view = renderAdd(document, { ...model, stage: 'check', preview: { ...model.preview, candidates: [unknown] } }, {});
+  assert.match(copy(view), /The pin could not be verified/); assert.match(copy(view), /Runtime requirements could not be verified/);
+  assert.doesNotMatch(copy(view), /No executable runtime required/);
+  const versioned = renderAdd(document, { ...model, preview: { ...model.preview, pin: { kind: 'version', value: '12.34.56-rc.10' } } }, {});
+  assert.match(copy(versioned), /12\.34\.56-rc\.10/);
+});
+```
+
+- Proof: `node --test test/gui-add-view.test.mjs test/gui-shell.test.mjs`; 4 new tests and existing shell tests pass, 0 failed, 0 canceled. Browser verification of exact bounds, all six looks, keyboard order, disabled tools and both languages is completed in T072/T064; this DOM fixture is not browser evidence.
+- Depends on: T062, T067, T070. Commit message: `Render Add discovery checks and selected unit scopes`.
+
+#### T072. Connect one Add window and show projects without units
+
+- Screens: 2.19 to 2.22, 6.8 and every shared desktop bar. Decisions: 23. Kind: JUDGMENT.
+- Files: new `gui/app/add-controller.mjs`, `openAdd`, `closeAdd`, source upload/inspection/check/accept/retry state and retained operations; `gui/app/main.mjs`, `renderBar`, mount/dispose, `settingsSurface`, project selection/inspector, shared modal and event refresh; `gui/app/settings.mjs`, T055 Content Add/provenance/Remove; `gui/app/hierarchy.mjs`, `buildHierarchy`, `flattenVisibleHierarchy`, zero-unit projects; `gui/app/map.mjs`, `createMap`, project circles and hit/selection integration; `gui/app/map-geometry.mjs`, `groupOriginsFor`, registered zero-unit project anchors; `gui/app/inspector.mjs`, `renderProject`; `gui/app/state.mjs`, project/addition report and retained Add draft, `additions.changed`; `engine/service/http.mjs`, `BROWSER_STATIC_FILES` add exact basenames `add-api.mjs`, `add-view.mjs`, `add-controller.mjs`; `test/gui-add-controller.test.mjs`, new; `test/gui-shell.test.mjs`; `test/gui-map.test.mjs`; `test/gui-fixture.mjs`; `test/gui-data.mjs`; `test/service-integration.test.mjs`; `test/service-api.test.mjs`; `test/gui-browser.md`, P13 observations only.
+- Change: decide modal lifecycle/focus and project hit behavior, then compose T070/T071 against the completed T055 shell. The common desktop bar places the 32-pixel-or-larger `addButton` after modes and before Waiting, with icon 15, gap 6, padding 7x13, radius 11 in Modern and 8 in Nocturne, accent fill/ink, 13/700 label. Content's Features heading has its own Add with plus, using that same `openAdd` controller. Map, Blueprint, Void and Settings open the same one 600-pixel dialog, preserving their underlying selection, unsaved editor text and invoker. Phone and agent/embed audiences without desktop settings.write do not get this control or an alternate import path.
+  The source step has the link/drop affordance, detection progress and separate candidate rows from T071. Debounce changed links by 300 ms; Enter inspects immediately; source reads carry the same retained operation and submit `{kind:"link",url:link}`. Source-type resolution is owned by the service, not guessed from a URL hostname in the browser. Chunk a dropped regular-file tree into 65536-byte chunks, rejecting symlinks and oversized/deep/duplicate paths before uploading; directory handles are traversed only within the dropped root. Never serialize File.path. Cancel disposes the owned preview/upload only. Continue selects the check stage without an acceptance request; Back retains candidate choices and scopes without repeating acquisition. Mixed selections show each part's check and scope in source order. Every unit clears explicit unit/group selections; explicit unit/group selection clears Every unit. Unit IDs and group IDs remain canonical, aliases affect labels only. C12 revision/eligibility rechecks remain authoritative.
+  The accept button is the only placement request. It disables controls, displays a spinner in the pressed control and `Adding`, and retains exact fields/operation through response loss. A 30-second timeout ends local waiting, keeps the selection and offers Retry; reconciliation reads the same preview/receipt before another send. Preview state `accepted` settles from its stored result; state `failed` retries inspection through its C12 retry route using a retained per-attempt operation, not by replaying the initial 202. Close cannot claim cancellation of a committed Add. Group membership drift and expired checks require a new review, not a blind resubmission. Error keys and literal bilingual explanations come from T071; raw Git/package/script output never reaches the DOM. Returning from Cancel/Back/removal/Undo restores keyboard focus. Remove shows T071's confirmation with the actual name and correct content/repository explanation, then calls the C12 operation; Undo uses the existing ten-second change route.
+  After skill acceptance open Settings, Content with its checked `renderAddedContent` row, actual origin and deduplicated unit count, Remove, and `addedOne`/`addedMany` toast with Undo. Docs appear in Knowledge packs with the same provenance/ownership affordances. Preserve all kit Features, Knowledge packs and Preferences. The imported origin text is a named Check for updates button, at least 32 pixels tall; it calls onUpdate and opens the same window/check/scopes and labels its new pin; the accepted old pin remains visible until replacement commits. No update is silently accepted on app open, event refresh, retry or a Settings checkbox.
+  A repository acceptance loads the real `/projects` collection and selects its project in Hierarchy, Map and inspector. A project with `unitIds:[]` is represented as a project, not a synthetic Unit. Add it under Without an Overlord, with grid icon, zero count and its real project ID. On the board fixture place the new project circle at x320/y575 with diameter 46; real empty projects use the existing free-position layout placement and store their anchor in `layout.groups["project:" + projectId]` using its existing x/y position format. Never put a project ID in the UnitId-only `layout.nodes` map. Show the literal `new` / `nuevo` badge for a newly added empty project in Hierarchy and the zero count on its Map circle; after a real unit is created, show the actual count. `renderProject` uses the existing 366-pixel inspector, grid/title, origin subtitle `projectOrigin`, centered body padding 32/gap 12, title `noUnits` at 16/700, `repoPinned` at 13.5/mute/center, and primary `newUnit` button. It prefills the existing New unit dialog with that project and no Overlord, rather than creating a unit automatically. Success toast uses `repoAdded` and `newUnitShort`; count rises only after real unit creation.
+  Project/addition events refresh report data while preserving the current mode, editor drafts and other inspector/chat state. Serve all three new browser module basenames through the existing exact static allowlist and verify they are packaged. Correct only measured P13 contrast/geometry/focus defects in the named files using current quiet theme tokens. Do not introduce a second desktop host, new package dependency, tool Connect UI or installer.
+- Tests: `test/gui-add-controller.test.mjs` covers both entry points sharing one modal, en/es source/check, disabled tool, mixed selections, default no grant, actual canonical group/direct deduplication, 300 ms debounce/Enter, dropped chunk order/size and File.path exclusion, Continue/Back/Cancel with no acceptance, safe error mapping, in-button busy state, lost response and same-operation Retry, expired/stale checks, accepted Content placement/Undo, docs knowledge row, Remove confirmation/revision/foreign-edit failure and update check leaving old pin active. `test/gui-shell.test.mjs` checks Add before Waiting in Map/Blueprint/Void/Settings and absent on phone, Content Add opening the same controller, 32-pixel targets/names/focus restoration. `test/gui-map.test.mjs` checks a zero-unit registered project in Hierarchy/Map, project selection distinct from unit selection, inspector and prefilled New unit, no fabricated unit/lead, position persistence and subsequent real count. `test/service-integration.test.mjs` performs actual-core acceptance/read-back/reopen/sync/remove/Undo with injected acquisition/native/OS runners; fixture-only visual success cannot satisfy this integration test. `test/service-api.test.mjs` checks all three browser files' static MIME/allowlist. Observe 2.19 to 2.22 and the 6.8 Add control in both languages at 1440x900 and 720x600, all six looks, keyboard-only, 200% zoom and reduced motion; record actual outcomes in `test/gui-browser.md`.
+- Proof: `node --test test/gui-add-api.test.mjs test/gui-add-view.test.mjs test/gui-add-controller.test.mjs test/gui-shell.test.mjs test/gui-map.test.mjs test/gui-fixture.test.mjs test/service-integration.test.mjs test/service-api.test.mjs`; 0 failed, 0 canceled; the named browser observations pass with recorded actual viewport/target/contrast evidence. T063/T064 remain the subsequent full-suite and 87-screen acceptance gates.
+- Depends on: T016, T055, T062, T069, T070, T071. Commit message: `Connect Add to M1ND across desktop modes and Content`.
+
 ### P12. Verification
 
 #### T063. Run the final automated gates and report every result
@@ -2726,23 +3521,23 @@ git diff --check
 
 #### T064. Verify all final screens against the actual core and capture evidence
 
-- Screens: all 83. Decisions: 1 to 22. Kind: JUDGMENT.
-- Files: `test/gui-browser.md`, per-screen actual results and evidence; `test/gui-data.mjs`, final board sample/scenario state generation; `test/gui-fixture.mjs`, final independent protocol scenarios; `test/service-integration.test.mjs`, actual-core/GUI protocol coverage; `docs/3.0/verification/<reference>-<language>-modern.png`, 166 new captures, with reference drawn from the complete 83-entry verification list and language exactly `en` or `es`; `docs/3.0/verification/6.1-en-<look>.png`, five additional captures with look exactly `high-contrast`, `nebula`, `txmska`, `coffee-cat` or `ntk`. This closed naming rule defines every capture filename. These files are execution artifacts, not outputs of the current planning session.
-- Change: decide reproducible scenario controls for real core persistence, client ownership and adverse states. Execute the verification list at 1440 by 900 on desktop and 390 by 844 on phone, in both languages. Check common chrome and contrast in all six looks. Record the 171 captures named above, reach steps, expected and actual elements, pass/fail, look, language, viewport, and whether the source is core or fixture. Use temporary M1NDs and repositories with injected client/OS adapters. Cross-project moves, assets, Void saves, History Restore, Undo, owner permissions and stopped-service recovery must exercise the actual core. Return defects to the owning task and repeat affected checks before the final full gate. Manual sessions and Windows/Linux service tests remain explicit release gates requiring platform access. Live-machine deployment is outside this planning task.
-- Tests: all routes enumerated in C01 to C11, including authorization before receipt, exact schemas, status codes, revision conflicts, crash recovery, sync and states; all 83 screen reach cases; actual QR decoding; every disabled/error/loading/optimistic state; keyboard/scroll/zoom/contrast; no secret logging/storage/output.
-- Proof: `node --test test/service-integration.test.mjs`; zero failures, plus 83/83 observed screen passes and no unresolved material risk in test/gui-browser.md. Capture references are real files; mocks or unrun commands do not count as browser evidence.
+- Screens: all 87. Decisions: 1 to 23. Kind: JUDGMENT.
+- Files: `test/gui-browser.md`, per-screen actual results and evidence; `test/gui-data.mjs`, final board sample/scenario state generation; `test/gui-fixture.mjs`, final independent protocol scenarios; `test/service-integration.test.mjs`, actual-core/GUI protocol coverage; `docs/3.0/verification/<reference>-<language>-modern.png`, 174 new captures, with reference drawn from the complete 87-entry verification list and language exactly `en` or `es`; `docs/3.0/verification/6.1-en-<look>.png`, five additional captures with look exactly `high-contrast`, `nebula`, `txmska`, `coffee-cat` or `ntk`. This closed naming rule defines every capture filename. These files are execution artifacts, not outputs of the current planning session.
+- Change: decide reproducible scenario controls for real core persistence, client ownership and adverse states. Execute the verification list at 1440 by 900 on desktop and 390 by 844 on phone, in both languages. Check common chrome and contrast in all six looks. Record the 179 captures named above, reach steps, expected and actual elements, pass/fail, look, language, viewport, and whether the source is core or fixture. Use temporary M1NDs and repositories with injected client/OS adapters. Add source inspection/acceptance/update/removal, scoped session availability, empty-project registration, cross-project moves, assets, Void saves, History Restore, Undo, owner permissions and stopped-service recovery must exercise the actual core. Return defects to the owning task and repeat affected checks before the final full gate. Manual sessions and Windows/Linux service tests remain explicit release gates requiring platform access. Live-machine deployment is outside this planning task.
+- Tests: all routes enumerated in C01 to C12, including authorization before receipt, exact schemas, status codes, revision conflicts, crash recovery, sync and states; all 87 screen reach cases; actual QR decoding; every disabled/error/loading/optimistic state; keyboard/scroll/zoom/contrast; no secret logging/storage/output.
+- Proof: `node --test test/service-integration.test.mjs`; zero failures, plus 87/87 observed screen passes and no unresolved material risk in test/gui-browser.md. Capture references are real files; mocks or unrun commands do not count as browser evidence.
 - Depends on: T063. Commit message: `Verify all final screens against the running integration`.
 
-## GUI verification list
+##### GUI verification list for T064
 
 The following checks are mandatory execution work, not completed browser observations. Common chrome applies to every screen that uses it. Each entry gives reach steps followed by visible elements in drawing order. Check each item in English and Spanish using the literal copy in its owning task.
 Use a temporary M1ND with the board's sample data. Paths, timestamps, counts and client versions are fixture data; real product values are dynamic. Mask generated pairing credentials in every stored capture and report.
 
-Desktop common chrome: viewport 1440 by 900; top bar 52 pixels, workspace 818 pixels, footer 30 pixels. The bar contains the mark, HIVEM1ND, Map/Blueprint/Void modes with the active mode distinguished, the Waiting pill when its active count is positive, Open on the phone, Notifications and Settings. Horizontal workspace padding and panel gaps are 12 pixels. Modern panels have a 20-pixel radius and panel fill; quiet borders use line. The footer contains the service shape and text, last read, and machine timestamps.
+Desktop common chrome: viewport 1440 by 900; top bar 52 pixels, workspace 818 pixels, footer 30 pixels. The bar contains the mark, HIVEM1ND, Map/Blueprint/Void modes with the active mode distinguished, the + Add button with the accessible name Add to M1ND, the Waiting pill when its active count is positive, Open on the phone, Notifications and Settings. Horizontal workspace padding and panel gaps are 12 pixels. Modern panels have a 20-pixel radius and panel fill; quiet borders use line. The footer contains the service shape and text, last read, and machine timestamps.
 Common Map: Hierarchy/Chats tabs, search, My groups, Chain of command, Without an Overlord and Services; free unit circles, role icons, status shapes, names and lead lines; three drag hints; Zoom in, Zoom out, Fit and 100%; Incubator and Genesis controls; inspector. Map columns are 266, 760 and 366 pixels.
 Common editor: shared library 228 pixels, canvas 796 pixels, comments or History 368 pixels. The toolbar is centered 14 pixels below the canvas top. Every icon control has a name. Nocturne uses its quiet palette and ruled layout; family looks use Modern layout.
 
-### Row 1: setup and first run
+###### Row 1: setup and first run
 
 - **1.1 Install:** open setup without a configured M1ND. Brand at x32/y26; centered 640-pixel card; four progress markers and Step 1 of 4; Install HIVEM1ND; Setup takes about a minute.; graph icon and Control the Swarm from the Map; hierarchy icon and Organize agents to reach objectives faster and better; ray icon and Relay is used for inter-session communication; Start setup. No Back control.
 - **1.2 Where the M1ND lives:** continue with a detected 2.x tree. Step 2 of 4; title and two-sentence M1ND/cloud-folder explanation; Folder label, default Cosmic/.m1nd path and Change; checked Migrate legacy M1ND, detected source and copied/original-untouched explanation; disabled Use Relay+, Coming soon and Nebula+ description; Back and Continue. No synchronization, origin or mode picker.
@@ -2755,7 +3550,7 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **1.9 The M1ND cannot be read:** delay the folder read for 30 seconds. Retain frame and skeleton panels; centered 52-pixel error circle with 24-pixel alert; The M1ND cannot be read; actual selected folder, timeout and offline/held-folder explanation; Retry and Choose another folder; footer M1ND not read. No credential appears in the cause.
 - **1.10 An empty M1ND:** load only root master. Hierarchy/Chats and search; No units yet and Overseer-first explanation; 40-pixel You circle; no lead lines or groups; dashed 64-pixel Overseer placeholder centered at x372/y178 and The Overseer goes here; inspector Your M1ND is empty, coordination explanation and Create the Overseer. Waiting pill is absent. Create once and select root:overseer.
 
-### Row 2: the Map
+###### Row 2: the Map
 
 - **2.1 Map:** open the populated fixture with nothing selected. Common Map; My groups/API work folder/count; Chain of command, loose projects and Services; empty inspector with 56-pixel Map icon, title and selection explanation, working/asks/unread/groups summaries and New unit. Each node retains its position and reporting line.
 - **2.2 A unit selected:** click executor-shop. Selected circle and connected lines; inspector avatar/name/status; Machine/Runs in/Model/Reports to facts; Pin and More; history messages; build ask with Approve/Always for this unit/Deny; delivered task with Accept/Send back/Open task; composer/Send and immediate-session-notification hint. Double click its Hierarchy row to center the same unit.
@@ -2776,7 +3571,12 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **2.17 Stop a session:** choose Stop for a live unit. Scrim and 480-pixel dialog; Stop the session of {unit}?; explanation names stopped work and retained unit/chat/mailbox/tasks/groups; Cancel and Stop session. Stopped appears only after verified native acknowledgment.
 - **2.18 Remove a unit:** choose More/Remove for executor-mobile. Scrim and 480-pixel dialog; Remove {unit}?; explanation names Map/Hierarchy removal, archived chat/mailbox, retained tasks and session stop first; Cancel and Remove unit. After commit, Undo restores visibility; repository/task bytes remain identical.
 
-### Row 3: chats and Waiting
+- **2.19 Add to M1ND:** press + Add in the Map bar, or Content/Add. Retain the underlying mode, selection and unsaved drafts. Scrim and one 600-pixel dialog, padding 24/gap 18/radius 22/panel/line2; Add to M1ND; link-or-registry/drop-folder instruction; focused Link field in monospace 13 with padding 11x13/radius 12/card/accent line; Found in the actual source and pinned commit/version; separate pdf, docx and acme-files rows in the mixed fixture. Rows use padding 10x12/gap 12/radius 12; 18-pixel ticks; pdf checked with card2/accent, docx unchecked, acme-files disabled with Reads and writes cloud files, Tool server and the accessible Available after 3.0 reason. Cancel and Continue. Paste/drop inspection shows progress and ends at 30 s with safe cause/Retry; no imported content, project or client configuration is written before acceptance. Repeat from Blueprint, Void, Settings and 6.8; each opens this same window and preserves the invoker and underlying drafts. Verify dropped chunks privately with fixture sources; never show a credential or file body in a capture.
+- **2.20 Check and who uses it:** select only pdf and press Continue. The same 600-pixel window has Add pdf and its actual Skill/source/no-copy-before-confirmation explanation. The check precedes scope choices: Pinned to commit/full accepted identity represented by the short commit display and updates wait for your yes; actual MIT license; Older than 7 days, no install scripts; Its scripts run Python and only in the units below. Three 12-pixel filled accent marks and the 12-pixel thick waiting ring distinguish the runtime caution; check container padding 12x14/gap 8/radius 14/card; text 13.5 and notes 12/mute. Who can use it follows: Every unit unchecked, Checkout launch selected with Group, 3 units, adjutant selected; four deduplicated actual units. Choices use 18-pixel ticks, padding 10x12/gap 12/radius 12, selected card2/accent. Back retains choices without accepting; Add pdf is the only placement control and displays a spinner while busy. Missing license/date/runtime evidence, younger-than-seven-days source and stale scope disable acceptance and name the reason. Verify docs/repository and multiple selected parts show their own check/scope, tool selection is impossible, full registry version is retained, and a reviewed update keeps the prior pin active until confirmation.
+- **2.21 A skill in Content:** confirm the eligible pdf check for the selected group and adjutant. Open Settings/Content in the current machine context. Retain common bar with + Add, five Settings tabs, all existing Features/Knowledge packs/Preferences and the Features/Add action. The added checked pdf row sits beside kit content with padding 9x12/gap 10/radius 10/card2/accent line, pdf at 13/700, from acme/agent-skills, 4 units at 12.5/accent, and Remove. The toast reads pdf added for 4 units and Undo; count derives from current canonical scope. Remove asks with the actual name, imported-content/access removal, retained kit/source files and ten-second Undo; Cancel changes nothing and successful Undo restores the same owned bytes/scope. Verify docs appear as a knowledge pack with origin/Remove, accepted content survives reopen/sync, selected sessions receive it and unselected sessions do not, and no global client skills root changes. The origin control has the accessible name Check for updates: pdf and opens the same check; it does not replace content until accepted.
+- **2.22 A repository on the Map:** accept the eligible landing-site repository fixture. Retain the existing units, lead lines, groups and chats. Hierarchy includes landing-site under Without an Overlord with the new badge; Map has its separate project circle at fixture x320/y575, diameter 46, grid icon and zero count, with no fabricated Unit or Overlord. Select it: 366-pixel inspector with grid/title landing-site and Project from github.com/acme/landing-site; centered body padding 32/gap 12; No units yet at 16/700; actual pinned-commit/first-unit instruction at 13.5/mute/center; New unit in landing-site. Toast landing-site added has New unit. That action opens the existing unit form with this project selected and no Overlord, without submitting it. Reopen keeps the actual project registration, origin, pin and layout.groups project anchor; group/lead gestures cannot turn the project circle into a unit. Remove/unregister and Undo preserve the repository/source checkout byte inventory.
+
+###### Row 3: chats and Waiting
 
 - **3.1 A chat:** select Chats, then the pinned executor conversation. Pinned/Recent lists with timestamps, unread counts and group preview; selected conversation in inspector; unit facts, history, ask/review cards and composer. Archived is reachable after group or unit deletion.
 - **3.2 Sending:** submit a message while its POST is pending. Own bubble appears immediately with You, now, body and Sending/spinner; composer clears for the next draft. A second send has an independent operation and cannot replace the first pending bubble.
@@ -2790,7 +3590,7 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **3.10 Send back:** choose Send back on a review. Scrim and 480-pixel dialog; Send task {number} back; open-status/unit-note explanation; What needs to change field; Cancel and Send back. Empty notes are refused and typed drafts remain after failure.
 - **3.11 Accepted:** accept a reviewable delivery. Approved build summary and Accepted task summary; unit idle and task done; Waiting pill disappears when its active count reaches zero; Task accepted notice and Undo. Undo through the existing task-status operation retains report history.
 
-### Row 4: Blueprint
+###### Row 4: Blueprint
 
 - **4.1 A board:** open Blueprint and select an editable board without attachments. Boards library; Filters, New folder, New board; Search boards; project folders/counts/items; board artboards; toolbar Select, Frame, Text, Draw, Comment; No agents attached; Attach agents; Comments/title; No comments yet and C shortcut explanation; comment composer/Send; disabled unchecked Send to agent/No agents attached.
 - **4.2 Board menu:** open an item's More control. Selected item remains selected; menu Rename, Duplicate, Move to folder/submenu indicator, separator, Delete in error color. Folder menus expose Rename/Delete and folder chevrons collapse children.
@@ -2807,7 +3607,7 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **4.13 Changed while editing:** retain local edit, receive an overlapping agent change and turn Send to agent off. Conflict banner names the unit; Show changes/Keep mine/Reload; unchecked checkbox/Kept as a note, not sent. Show changes compares both; either answer preserves both snapshots before replacing the chosen document.
 - **4.14 History:** open History after creation, comment, agent drawing and conflict resolution. Board remains visible; History button selected; History/title panel; newest-first version rows with author/time/action; Current on current version; Restore on older versions; retention explanation. Restore and restore-back preserve the replaced current bytes.
 
-### Row 5: Void
+###### Row 5: Void
 
 - **5.1 Document:** open Void/select text. Texts library; Filters/New folder/New text/Search texts; Release/Manuals/Drafts folders/counts/items; toolbar Attached unit, Watch, divider, Find and replace, Source, Focus, divider, Saved; document title/subtitle/body/headings; Comments/title/empty passage-selection explanation; reply composer/Send to agent. The shared History action is available for texts as required by 4.14's note.
 - **5.2 Rename and folders:** begin inline text rename and create a folder. Editable name/caret; surrounding folder counts; new folder already named and editable; selected document remains in place; Enter saves, Escape cancels; no separate editor flow.
@@ -2821,7 +3621,7 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **5.10 Focus:** enter Focus. Pure black; 640-pixel text at top 120; quiet navigation/mouse/Escape hints; title/body/caret; no normal panels or bar. Arrows change pages while retaining the same resource/draft.
 - **5.11 Focus, tools shown:** move pointer in Focus. Black and text remain; top tools Document, Page 1of 3, attached unit, Watch; page dots at bottom; Escape/Document returns with same caret/page/draft and focus restored.
 
-### Row 6: Settings and the service
+###### Row 6: Settings and the service
 
 - **6.1 Settings:** press gear. Title; tabs General, Agents, Permissions, Projects, Content; selected-machine picker. Left: Look previews Modern, Nocturne, Nebula then Waves, Toxic, Kinetic in own palettes/selected marker; immediate-choice note; Language English/Español; Phone on the home network description, current expiry/phone count, Close access, Open on the phone. Right: Relay service State, Version, Started, unchecked Start with Windows/Off, Restart service; Relay+/Coming soon/description; Locations actual M1ND/Staging paths. No Sync/Change origin section.
 - **6.2 Agents:** select Agents. Agents on selected machine/scan time/Scan again; columns Agent, Command line(CLI): runs your units, Desktop app: optional. Rows in sample order Claude Code, Codex, Cursor, OpenCode, GitHub Copilot; actual CLI versions; Connected/Auto/On demand or changes-needed/Review changes; optional app connections named by client/app; missing client/Find manually. Explanations cover CLI lifecycle, optional app and manual command sessions. Mode/app actions open review before mutation.
@@ -2830,13 +3630,13 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **6.5 Permissions:** select Permissions. Standing approvals: unit, exact command, grant time, Revoke for each; Always for this unit explanation. Agent permissions: client, scoped git commit/git push, time, Revoke; machine/owned-session/explicit-instruction explanation. Revoke only named authority and verify next request asks again.
 - **6.6 Projects:** select Projects. Project folders/title/detected counts; three sample roots; folder icon/path/optional Environment chip or No environment/More; repository chips/name/named remove control; Add folder; auto-discovery/removal explanation. Actual counts come from selected-machine report.
 - **6.7 Remove a repository:** select sample shop removal. Scrim; Remove shop from the M1ND?; its units/boards/texts stop showing; repository/files untouched/readding restores explanation; Cancel/Remove repository. Successful unregister offers ten-second Undo; full repository hash remains identical.
-- **6.8 Content:** select Content. Features columns Planning:Plan/Brainstorm/Task; Quality:QA/Tribunal/Cyberattack; Continuity:Relay/Catchup/Docs with inclusion states. Knowledge packs:Security/Design/Copy/Coding. Preferences:Address style/Impersonal/Formal/Explanatory; Additional instructions; Keep existing preferences first/On; Check for updates/Daily. Existing preference content survives; configuration writes use review.
+- **6.8 Content:** select Content. The Features heading includes Add with a plus icon; it opens the same Add to M1ND window as the shared bar, preserving the selected tab/machine and preferences. Features columns Planning:Plan/Brainstorm/Task; Quality:QA/Tribunal/Cyberattack; Continuity:Relay/Catchup/Docs with inclusion states. Knowledge packs:Security/Design/Copy/Coding. Preferences:Address style/Impersonal/Formal/Explanatory; Additional instructions; Keep existing preferences first/On; Check for updates/Daily. Existing preference content survives; configuration writes use review.
 - **6.9 Open on the phone:** press Open on the phone. 600-pixel dialog/title/same-network instruction; real black/white QR with quiet zone; Or type this code with generated six characters masked in captures; At/actual LAN origin; expiry; replacement/sign-out note; Close access/Done. Decode real QR privately; replacement/close clears old secret DOM/memory.
 - **6.10 Reconnecting:** interrupt response while composing/sending. Selected Map/chat retained; reconnect banner/spinner/retained-work explanation/Retry now; own line Waiting for the service; footer reconnecting/last read. Recovery reconciles the same operation, not a second send.
 - **6.11 Service stopped:** stop the owned fixture runtime. Map retained; stopped banner names machine; Details/Restart service; inspector summary; stopped service footer/last read. Restart uses verified launcher, not a dead HTTP port; no duplicate singleton.
 - **6.12 Taking longer:** delay a non-send request for 12 seconds. Retained own line/composer; Taking longer than usual/spinner/elapsed explanation/30-second limit/Cancel. At 30 seconds waiting ends, Retry appears and retained operation is unchanged. Ordinary sends already stop waiting after 10 seconds.
 
-### Row 7: the phone
+###### Row 7: the phone
 
 - **7.1 Pair:** open LAN shell without credential and enter code. 390 × 844; 44-pixel status/brand; mark 56; Open your M1ND; computer Settings/Open on the phone instruction; six 40 × 50 cells, gap 8, radius 12; filled accent/empty quiet lines; QR-camera note; Opening spinner during exchange. No password or code stored.
 - **7.2 Wrong code:** submit one wrong code. Same six cells/error lines; alert/That code does not match.; computer-check/retry/4 tries left explanation; Try again. Next attempts show 3, 2, 1 from server details, not browser guesses.
@@ -2868,6 +3668,10 @@ The following defects refine PARTIAL rows without inventing another work package
 - Current GUI/core text stripping differ: `gui/app/markup.mjs:1` retains line separators after removing only b/i; `features/void/text.mjs:10` normalizes paragraph gaps. Markdown and caret/anchor behavior require one explicit compatible mapping, covered by T045.
 
 ## Risks and release gates
+
+- P13 acquisition reads untrusted repositories, registry archives and folder uploads. Immutable hash/date/license/runtime evidence must be bound before acceptance; archive paths and network redirects cannot escape the named staging/transport limits. A source check does not certify the instructions as safe.
+- Existing global client skill installation cannot enforce P13 unit/group selection. Availability must use verified scoped adapter bindings or report scope_unavailable; generic kit evolve must not install or prune imported content globally.
+- Repository checkout publication is outside the ordinary M1ND journal. Its owned local recovery record and later project registration must prevent partial visibility and preserve checkout/source bytes through Remove and Undo.
 
 - Legacy sessions may still have remote or uncertain ownership. Migration cannot claim shutdown from registry presence alone; offline closure must precede 3.0wake adoption. Original trees remain byte-identical.
 - Joining currently rewrites shared routes and drafts inside the selected M1ND. The checkpoint/join change must preserve all shared records outside the explicitly reviewed machine write.
@@ -2913,4 +3717,7 @@ The following defects refine PARTIAL rows without inventing another work package
 - T056: verified same-user recovery bridge for a stopped service and safe draft/credential replacement.
 - T059: accessible code input, server-derived lock state, restricted phone cards and expiry cleanup.
 - T062: measured palette/fill corrections, target geometry and complete keyboard/live-region behavior.
-- T064: reproducible actual-core scenarios, 83screen captures and the final observed acceptance decision.
+- T064: reproducible actual-core scenarios, 87 screen captures and the final observed acceptance decision.
+- T068: immutable source/provider resolution, bounded extraction/uploads, credible date/license/runtime evidence and owner-bound preview/retry retention.
+- T069: recoverable checkout/content acceptance, session-scoped availability, ownership-preserving updates/removal and accepted bundle sync.
+- T072: shared modal lifecycle/focus, uncertain-operation reconciliation and zero-unit project Map/Hierarchy integration.
