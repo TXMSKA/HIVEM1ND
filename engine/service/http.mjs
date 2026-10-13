@@ -8,7 +8,7 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
-import { connectLead, createUnit, patchLayout, patchSettings } from './units.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings, setUnitAlias } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
@@ -44,6 +44,7 @@ const ROUTES = [
   ['GET', '/sync', 'read', 'DPA', 'collection', 'sync'],
   ['GET', '/sessions', 'read', 'DPA', 'collection', 'sessions'],
   ['GET', '/units/:unitId', 'read', 'DPA', 'detail', 'units'],
+  ['PATCH', '/units/:unitId/alias', 'unit.create', 'D', 'setUnitAlias'],
   ['POST', '/units', 'unit.create', 'D', 'createUnit'],
   ['PUT', '/units/:unitId/lead', 'unit.connect', 'D', 'connectLead'],
   ['POST', '/units/:unitId/session', 'session.start', 'D', 'enqueueStart'],
@@ -915,6 +916,7 @@ function boundRecord(value, label, limit) {
 function allowedBody(route) {
   const table = {
     'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
+    'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
     'POST /units/:unitId/session': ['client', 'prompt', 'model', 'expectedRevision'],
     'POST /sessions/:sessionId/stop': ['confirmed'],
@@ -1109,6 +1111,10 @@ async function invoke(route, scope) {
       return { status: 200, body: { settings: detail.settings, revision: detail.revision, service, home: homeStatus(homeState) } };
     }
     return { status: 200, body: { ...detail, service, home: homeStatus(homeState) } };
+  }
+  if (route.handler === 'setUnitAlias') {
+    const changed = await setUnitAlias(domain, params.unitId, body);
+    return { status: 200, body: changed.unit };
   }
   if (route.handler === 'createUnit') {
     const created = await createUnit(domain, body);

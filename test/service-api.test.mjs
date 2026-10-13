@@ -1313,6 +1313,24 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(opened.raw.includes(token), false);
   opened.req.destroy();
   hit('GET', '/events');
+  const aliasTarget = await call(port, 'GET', '/api/v1/units/root:executor', { token });
+  expectStatus(aliasTarget, 200, 'alias unit');
+  const aliased = await call(port, 'PATCH', '/api/v1/units/root:executor/alias', {
+    token,
+    body: { alias: 'Blog', expectedRevision: aliasTarget.json.data.revision },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(aliased, 200, 'alias');
+  assert.equal(aliased.json.data.alias, 'Blog');
+  assert.equal(aliased.json.data.id, 'root:executor');
+  const aliasUnknown = await call(port, 'PATCH', '/api/v1/units/root:executor/alias', {
+    token,
+    body: { alias: 'Blog', expectedRevision: aliased.json.data.revision, name: 'changed-id' },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(aliasUnknown, 400, 'alias unknown field');
+  assert.equal(aliasUnknown.json.error.code, 'unknown_field');
+  hit('PATCH', '/units/:unitId/alias');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');
@@ -1571,5 +1589,28 @@ test('an agent cannot read another unit chat or session request', async (t) => {
   assert.equal(missing.status, 404);
   const desktop = await call(port, 'GET', '/api/v1/chats', { token });
   assert.equal(desktop.json.data.items.some((item) => item.id === foreignId), true);
+});
+
+test('alias HTTP writes return a complete unit and replay the same receipt', async (t) => {
+  const { core, paths, fixture, token } = await boot(t);
+  await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
+  const created = await call(core.http.port, 'POST', '/api/v1/units', {
+    token, headers: { 'idempotency-key': randomUUID() },
+    body: { unit: 'executor-blog', role: 'executor', scope: 'root', machine: fixture.machine },
+  });
+  assert.equal(created.status, 201);
+  const key = randomUUID();
+  const body = { alias: 'Blog', expectedRevision: created.json.data.revision };
+  const target = '/api/v1/units/root%3Aexecutor-blog/alias';
+  const first = await call(core.http.port, 'PATCH', target, { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(first.status, 200);
+  assert.equal(first.json.data.alias, 'Blog');
+  const repeated = await call(core.http.port, 'PATCH', target, { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(repeated.status, 200);
+  assert.deepEqual(repeated.json.data, first.json.data);
+  const unknown = await call(core.http.port, 'PATCH', target, { token,
+    body: { ...body, name: 'changed-id' }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.json.error.code, 'unknown_field');
 });
 });

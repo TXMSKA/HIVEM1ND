@@ -158,3 +158,11 @@ function looksLikeCycle(source, target) {
   }
   return false;
 }
+
+export async function setUnitAlias(api, unit, alias, retained = null) {
+  const operation = retained ?? createOperation({
+    method: 'PATCH', path: '/units/:unitId/alias', params: { unitId: unit.id },
+    body: { alias, expectedRevision: unit.revision },
+  });
+  return commit(api, operation);
+}
