@@ -46,12 +46,10 @@ export async function createUnit(api, input, retained = null) {
   return commit(api, operation);
 }
 
-export async function startSession(api, unit, client, prompt = null, retained = null) {
+export async function startSession(api, unit, client, prompt = null, retained = null, mode = {}) {
   const operation = retained ?? createOperation({
-    method: "POST",
-    path: "/units/:unitId/session",
-    params: { unitId: unit.id },
-    body: { client, prompt, expectedRevision: unit.revision },
+    method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id },
+    body: { client, prompt, runMode: mode.runMode ?? 'task', taskId: mode.taskId ?? null, expectedRevision: unit.revision },
   });
   const result = await commit(api, operation);
   return { ...result, operation };
