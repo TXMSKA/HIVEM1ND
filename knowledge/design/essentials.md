@@ -22,7 +22,7 @@ A surface that breaks one of these is not finished, whatever the direction asks.
 
 A floor applies as its standard writes it, at its narrowest reading; a stricter house reading is named as one and never applied silently. Passing the floors is not a verdict on the design: [visual-critique](protocols/visual-critique.md) gives that. When an approved design misses a floor, the least visible means that meets it comes first.
 
-- **Boundaries.** A control boundary at 3:1 takes the theme's own line hue at the lowest step that reaches it, never a near-white. A fill that tells the control apart removes the need for the border.
+- **Boundaries.** A control boundary at 3:1 takes the theme's own line hue at the lowest step that reaches it. When that step would stand out against the design (a light edge on a dark theme, an outline that draws more attention than the content it frames), the control gets a fill that tells it apart instead, and the border stays the theme's quiet line. A white or near-white border is never added to pass a floor.
 - **Text edited in place.** Reading text that can be edited keeps its look: a 3:1 bottom rule at rest, the full border on hover and focus, never a boxed form.
 - **Instructions and readouts.** What the board draws bare stays bare on screen: the instruction is visually hidden and tied by `aria-describedby` or a status region.
 - **Long motion.** Motion past 5 seconds gets one pause for the page, or each scene stays under 5 seconds; never a control under every scene.
