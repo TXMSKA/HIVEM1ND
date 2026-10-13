@@ -1,861 +1,235 @@
-function folderIcon() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>`;
-}
-
-function searchIcon() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>`;
-}
-
-function chevronIcon() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`;
-}
-
-function closeIcon() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
-}
-
-function iconElement(markup) {
-  const template = document.createElement("template");
-  template.innerHTML = markup;
-  return template.content.firstElementChild;
-}
-
-const elements = {
-  navigation: document.querySelector(".nav-panel"),
-  progress: document.querySelector("#progress"),
-  language: document.querySelector("#language-panel"),
-  form: document.querySelector("#step-form"),
-  fields: document.querySelector("#fields"),
-  preview: document.querySelector("#preview"),
-  title: document.querySelector("#step-title"),
-  description: document.querySelector("#step-description"),
-  error: document.querySelector("#status-message"),
-  live: document.querySelector("#live-status"),
-  back: document.querySelector("#back-button"),
-  continue: document.querySelector("#continue-button"),
-  dialog: document.querySelector("#mode-dialog"),
-  dialogTitle: document.querySelector("#mode-dialog-title"),
-  dialogCopy: document.querySelector("#mode-dialog-copy"),
-  dialogClose: document.querySelector("#mode-dialog-close"),
-};
-
+const elements = Object.fromEntries(['progress', 'step-form', 'fields', 'preview', 'step-title', 'step-description', 'status-message', 'live-status', 'back-button', 'continue-button', 'mode-dialog', 'mode-dialog-title', 'mode-dialog-copy', 'mode-dialog-close'].map(id => [id, document.getElementById(id)]));
 const fragment = new URLSearchParams(location.hash.slice(1));
-const tokenFromHash = fragment.get("session");
-if (tokenFromHash) sessionStorage.setItem("hivem1nd.session", tokenFromHash);
-const sessionToken = tokenFromHash ?? sessionStorage.getItem("hivem1nd.session");
-history.replaceState({}, "", "/");
-
+const tokenFromHash = fragment.get('session');
+if (tokenFromHash) sessionStorage.setItem('hivem1nd.session', tokenFromHash);
+const sessionToken = tokenFromHash ?? sessionStorage.getItem('hivem1nd.session');
+history.replaceState({}, '', '/');
 let currentStep;
-let currentPreview;
-let language = "en";
 let busy = false;
-let onDemandNoticeShown = false;
-const groupExpansion = new Map();
 
-function isGroupExpanded(groupId, totalGroups) {
-  if (!groupExpansion.has(groupId)) groupExpansion.set(groupId, totalGroups <= 3);
-  return groupExpansion.get(groupId);
-}
-
-function el(tag, className, text) {
+function el(tag, className, value) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
+  if (value !== undefined) node.textContent = value;
   return node;
 }
-
-function ui() {
-  return currentStep?.ui ?? {};
+function icon(name, className = '') {
+  const paths = {
+    folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7l7.4.8M7 8.4l1.4 7.2M16.6 10l-5.8 6.3"/>',
+    net: '<circle cx="12" cy="4" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><path d="M12 6v6M4 17v-5h16v5"/>',
+    zap: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+    check: '<path d="M5 12l4.5 4.5L19 7"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    back: '<path d="M15 6l-6 6 6 6"/>', power: '<path d="M12 3v8"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/>',
+    term: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+    retry: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+    spinner: '<circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/>',
+  };
+  const template = document.createElement('template');
+  template.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[name] + '</svg>';
+  const svg = template.content.firstElementChild;
+  svg.setAttribute('class', className);
+  return svg;
 }
-
-function formatCount(template, count) {
-  return (template ?? "").replace("{count}", String(count));
-}
-
-function format(template, variables) {
-  return Object.entries(variables).reduce((result, [name, value]) => result.replaceAll(`{${name}}`, String(value)), template ?? "");
-}
-
-function progressLabel(index) {
-  return ui()[`step${index}Title`] ?? "";
-}
-
-function lastPathSegment(value) {
-  return value.split(/[\\/]/).filter(Boolean).pop() ?? value;
-}
-
-function fieldLabel(field) {
-  if (!field) return "";
-  return field.label?.trim() === currentStep?.title?.trim() ? "" : (field.label ?? "");
-}
-
-function hasBrowseBridge() {
-  return typeof window.hivem1nd?.browseFolder === "function";
-}
-
-function groupFilesByOwner(files) {
-  const groups = new Map();
-  for (const file of files) {
-    const key = file.owner?.id ?? "";
-    if (!groups.has(key)) groups.set(key, { label: file.owner?.label ?? key, files: [] });
-    groups.get(key).files.push(file);
-  }
-  return groups;
-}
-
+const card = document.getElementById('step-card');
+const progressRow = el('div', 'setup-progress');
+const stepCount = el('span', 'step-count');
+progressRow.append(elements.progress, stepCount);
+card.prepend(progressRow);
+document.getElementById('language-panel').hidden = true;
+const brand = document.querySelector('.brand-lockup');
+const mark = document.createElement('template');
+mark.innerHTML = '<svg class="brand-mark" viewBox="0 0 56 48" aria-hidden="true"><path class="mark-first" d="M14 2 26 9 26 23 14 30 2 23 2 9Z"/><path class="mark-second" d="M30 18 42 25 42 39 30 46 18 39 18 25Z"/></svg>';
+brand.prepend(mark.content.firstElementChild);
+function ui() { return currentStep?.ui ?? {}; }
 function setError(message) {
-  elements.error.hidden = !message;
-  elements.error.textContent = message ?? "";
+  elements['status-message'].hidden = !message;
+  elements['status-message'].textContent = message ?? '';
 }
-
-function setBusy(value, message = "") {
+function setBusy(value) {
   busy = value;
-  for (const control of document.querySelectorAll("button, input, select, textarea")) control.disabled = value;
-  elements.live.textContent = message;
+  for (const control of document.querySelectorAll('button, input, select')) control.disabled = value || control.dataset.permanentDisabled === 'true';
+  elements['step-form'].setAttribute('aria-busy', String(value));
 }
-
-async function api(path, { method = "GET", body } = {}) {
-  if (!sessionToken) throw new Error(ui().sessionMissing ?? "The local session link is incomplete. Open the wizard again from the HIVEM1ND command.");
-  const response = await fetch(`/api/v1/${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${sessionToken}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
+async function api(path, { method = 'GET', body } = {}) {
+  if (!sessionToken) throw new Error(ui().sessionMissing ?? 'The local session link is incomplete. Open the wizard again from the HIVEM1ND command.');
+  const response = await fetch('/api/v1/' + path, {
+    method, headers: { Authorization: 'Bearer ' + sessionToken, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const fallback = format(ui().requestFailed ?? "The local wizard request failed (status {status}).", { status: response.status });
-    throw new Error(payload?.error?.message ?? fallback);
-  }
+  if (!response.ok) throw new Error(payload?.error?.message ?? (ui().requestFailed ?? 'The local wizard request failed (status {status}).').replace('{status}', String(response.status)));
   return payload.data;
 }
-
-async function submitAnswer(values) {
-  setBusy(true, ui().loading);
-  setError();
-  try {
-    await api("answer", { method: "POST", body: { values } });
-    await render(await api("step"));
-  } catch (error) {
-    setError(error.message);
-  } finally {
-    setBusy(false);
-    elements.live.textContent = "";
-  }
-}
-
-function renderProgress(number) {
+function renderProgress(step) {
   elements.progress.replaceChildren();
-  for (let index = 1; index <= 8; index += 1) {
-    const item = el("li");
-    if (index < number) item.classList.add("complete");
-    if (index === number) item.classList.add("current");
-    if (index === number) item.setAttribute("aria-current", "step");
-    item.append(el("span", "progress-number", String(index)), el("span", "progress-label", progressLabel(index)));
+  for (let number = 1; number <= 4; number += 1) {
+    const item = el('li', number === step.number ? 'current' : number < step.number ? 'complete' : '');
+    item.append(el('span', 'visually-hidden', ui()['step' + number + 'Title']));
+    if (number === step.number) item.setAttribute('aria-current', 'step');
     elements.progress.append(item);
   }
-  const percent = ((Math.min(Math.max(number, 1), 8) - 1) / 7) * 100;
-  requestAnimationFrame(() => elements.progress.style.setProperty("--timeline-progress", `${percent}%`));
+  stepCount.textContent = ui().stepOfFour.replace('{step}', String(step.number));
 }
-
-function renderLanguage(step) {
-  const c = ui();
-  elements.language.replaceChildren();
-  const languages = step.languages ?? [];
-  elements.language.append(el("span", "language-label", c.language));
-  const optionsContainer = el("div", "language-options");
-  let query = "";
-
-  function renderOptions() {
-    optionsContainer.replaceChildren();
-    for (const option of languages) {
-      if (query && !option.label.toLowerCase().includes(query)) continue;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "language-option";
-      button.textContent = option.value.toUpperCase();
-      button.setAttribute("aria-pressed", String(option.value === language));
-      button.addEventListener("click", async () => {
-        if (busy || option.value === language) return;
-        setBusy(true, ui().loading);
-        setError();
-        try {
-          await api("language", { method: "POST", body: { language: option.value } });
-          await render(await api("step"));
-        } catch (error) {
-          setError(error.message);
-        } finally {
-          setBusy(false);
-          elements.live.textContent = "";
-        }
-      });
-      optionsContainer.append(button);
-    }
-  }
-
-  if (languages.length > 5) {
-    const search = document.createElement("input");
-    search.type = "text";
-    search.className = "language-search";
-    search.placeholder = c.searchLanguages;
-    search.setAttribute("aria-label", c.searchLanguages);
-    search.addEventListener("input", () => {
-      query = search.value.trim().toLowerCase();
-      renderOptions();
-    });
-    elements.language.append(search);
-  }
-  elements.language.append(optionsContainer);
-  renderOptions();
+function offer(title, body, { id, checked = false, disabled = false, badge = null } = {}) {
+  const label = el('label', 'setup-offer' + (disabled ? ' relay-plus' : ''));
+  const checkbox = el('input');
+  checkbox.type = 'checkbox'; checkbox.id = id; checkbox.checked = checked; checkbox.disabled = disabled;
+  if (disabled) checkbox.dataset.permanentDisabled = 'true';
+  const copy = el('span', 'offer-copy');
+  const heading = el('span', 'offer-heading');
+  heading.append(el('strong', '', title));
+  if (badge) heading.append(el('span', 'offer-badge', badge));
+  copy.append(heading, el('span', 'offer-body', body));
+  label.append(checkbox, copy);
+  return label;
 }
-
-function showModeDialog(notice) {
-  if (!notice) return;
-  elements.dialogTitle.textContent = notice.title;
-  elements.dialogCopy.textContent = notice.body;
-  elements.dialogClose.textContent = ui().continue;
-  elements.dialog.showModal();
-}
-
-function renderInstallMode(step) {
-  const field = step.fields[0];
-  const grid = el("div", "mode-grid");
-  for (const option of field.options ?? []) {
-    const label = el("label", "mode-card");
-    const input = document.createElement("input");
-    input.type = "radio";
-    input.name = "installMode";
-    input.value = option.value;
-    input.checked = option.value === step.values.installMode;
-    input.required = true;
-    label.append(input, el("strong", "", option.label), el("span", "", option.hint ?? ""));
-    grid.append(label);
-  }
-  return [grid];
-}
-
-function renderLocation(step) {
-  const field = step.fields[0];
-  const blocks = [];
-  if (step.alert) {
-    const alert = el("p", "warning", step.alert);
-    alert.setAttribute("role", "status");
-    blocks.push(alert);
-  }
-  const wrapper = el("div", "field");
-  const label = el("label", "", fieldLabel(field) || field.label);
-  label.htmlFor = "mind-path";
-  wrapper.append(label);
-  if (field.help) wrapper.append(el("p", "field-help", field.help));
-
-  const control = el("div", "path-control");
-  const input = document.createElement("input");
-  input.type = "text";
-  input.id = "mind-path";
-  input.required = true;
-  input.value = step.values.mindPath ?? "";
-  control.append(input);
-
-  if (hasBrowseBridge()) {
-    const browse = el("button", "icon-button");
-    browse.type = "button";
-    browse.title = ui().browse;
-    browse.setAttribute("aria-label", ui().browse);
-    browse.append(iconElement(folderIcon()));
-    browse.addEventListener("click", async () => {
-      const chosen = await window.hivem1nd.browseFolder();
-      if (chosen) input.value = chosen;
-    });
-    control.append(browse);
-  }
-  wrapper.append(control);
-
-  const presets = el("div", "path-presets");
-  for (const preset of step.presets ?? []) {
-    const chip = el("button", "path-chip", preset.label);
-    chip.type = "button";
-    if (preset.path === input.value) chip.classList.add("selected");
-    chip.addEventListener("click", () => {
-      input.value = preset.path;
-      presets.querySelectorAll(".path-chip").forEach((node) => node.classList.remove("selected"));
-      chip.classList.add("selected");
-    });
-    presets.append(chip);
-  }
-  wrapper.append(presets);
-  blocks.push(wrapper);
-
-  const attachField = step.fields.find((candidate) => candidate.id === "attach");
-  if (attachField) {
-    const attachWrapper = el("div", "field");
-    const line = el("label", "check-option");
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.id = "attach-mind";
-    checkbox.checked = step.values.attach !== false;
-    line.append(checkbox, document.createTextNode(attachField.label));
-    attachWrapper.append(line);
-    if (attachField.help) attachWrapper.append(el("p", "field-help", attachField.help));
-    blocks.push(attachWrapper);
-  }
-  return blocks;
-}
-
-function renderAgents(step) {
-  if (!step.scanned) {
-    const field = step.fields[0];
-    const button = el("button", "button primary scan-action", fieldLabel(field) || field.label);
-    button.type = "button";
-    button.addEventListener("click", () => elements.form.requestSubmit());
-    return [button];
-  }
-
-  const nodes = [];
-  const agentsField = step.fields.find((candidate) => candidate.id === "agents");
-  const labelById = new Map((agentsField?.options ?? []).map((option) => [option.value, option.label]));
-  const results = el("div", "agent-results");
-  for (const agent of step.agents ?? []) {
-    const row = el("div", "agent-result");
-    const selectLabel = el("label", "agent-select");
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.dataset.agentId = agent.id;
-    checkbox.checked = agent.selected;
-    selectLabel.append(checkbox, document.createTextNode(labelById.get(agent.id) ?? agent.name));
-    row.append(selectLabel);
-
-    const modes = el("div", "attach-modes");
-    modes.setAttribute("role", "group");
-    modes.dataset.agentId = agent.id;
-    const autoButton = el("button", "attach-mode", ui().attachAuto);
-    autoButton.type = "button";
-    autoButton.dataset.agentMode = "auto";
-    autoButton.setAttribute("aria-pressed", String(agent.attach === "auto"));
-    const onDemandButton = el("button", "attach-mode", ui().attachOnDemand);
-    onDemandButton.type = "button";
-    onDemandButton.dataset.agentMode = "on-demand";
-    onDemandButton.setAttribute("aria-pressed", String(agent.attach === "onDemand"));
-    modes.append(autoButton, onDemandButton);
-    row.append(modes);
-    results.append(row);
-  }
-  nodes.push(results);
-
-  const addAgentField = step.fields.find((candidate) => candidate.id === "addAgent");
-  if (addAgentField && (step.addableAgents ?? []).length > 0) {
-    const toggle = el("button", "manual-agent-action");
-    toggle.type = "button";
-    toggle.append(iconElement(searchIcon()), el("span", "", fieldLabel(addAgentField) || addAgentField.label));
-    const searchRow = el("div", "manual-agent-search");
-    searchRow.hidden = true;
-    const select = document.createElement("select");
-    for (const option of step.addableAgents) {
-      const node = document.createElement("option");
-      node.value = option.value;
-      node.textContent = option.label;
-      select.append(node);
-    }
-    const addButton = el("button", "button secondary", ui().add);
-    addButton.type = "button";
-    addButton.addEventListener("click", () => {
-      if (select.value) submitAnswer({ addAgent: select.value });
-    });
-    searchRow.append(select, addButton);
-    toggle.addEventListener("click", () => {
-      searchRow.hidden = false;
-      toggle.hidden = true;
-    });
-    nodes.push(toggle, searchRow);
-  }
-
-  return nodes;
-}
-
-function renderContent(step) {
-  if (!(step.categories?.length > 0)) return [];
-  const includedField = step.fields.find((candidate) => candidate.id === "included");
-  const labelById = new Map((includedField?.options ?? []).map((option) => [option.value, option.label]));
-  const included = new Set(step.values.included ?? []);
-  const tree = el("div", "feature-tree");
-  for (const category of step.categories) {
-    const section = el("section", "feature-category");
-    const head = el("div", "category-head");
-
-    const items = el("div", "feature-items");
-    items.id = `feature-items-${category.id}`;
-    items.hidden = true;
-    for (const item of category.items) {
-      const row = el("label", "feature-item");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.dataset.feature = item.id;
-      checkbox.checked = included.has(item.id);
-      row.append(checkbox);
-      if (item.commands) row.append(el("span", "pack-name", item.name), el("span", "feature-command pack-command", item.commands.join(" ")));
-      else row.append(el("span", "feature-command", labelById.get(item.id) ?? item.name));
-      items.append(row);
-    }
-
-    if (category.items.length > 0) {
-      const toggle = el("button", "group-toggle");
-      toggle.type = "button";
-      toggle.setAttribute("aria-expanded", "false");
-      toggle.setAttribute("aria-controls", items.id);
-      toggle.append(iconElement(chevronIcon()), el("span", "category-name", category.label));
-      toggle.addEventListener("click", () => {
-        const next = toggle.getAttribute("aria-expanded") !== "true";
-        toggle.setAttribute("aria-expanded", String(next));
-        items.hidden = !next;
-      });
-      head.append(toggle);
-    } else {
-      head.append(el("span", "category-name", category.label));
-    }
-    head.append(el("span", "category-count"));
-
-    const headingCheckbox = document.createElement("input");
-    headingCheckbox.type = "checkbox";
-    headingCheckbox.dataset.category = category.id;
-    headingCheckbox.checked = category.items.length > 0 && category.items.every((item) => included.has(item.id));
-    headingCheckbox.setAttribute("aria-label", category.label);
-    head.append(headingCheckbox);
-
-    section.append(head, items);
-    updateCategoryCount(section);
-    tree.append(section);
-  }
-  return [tree];
-}
-
-function updateCategoryCount(section) {
-  const checkboxes = [...section.querySelectorAll("[data-feature]")];
-  section.querySelector(".category-count").textContent = `${checkboxes.filter((checkbox) => checkbox.checked).length}/${checkboxes.length}`;
-}
-
-function renderProjectsConfirm(step) {
-  const nodes = [];
-  const groups = step.groups ?? [];
-  const removeProjectLabel = step.fields.find((candidate) => candidate.id === "removeProject")?.label ?? "";
-  const removeEnvironmentLabel = step.fields.find((candidate) => candidate.id === "removeEnvironment")?.label ?? "";
-
-  const addRootField = step.fields.find((candidate) => candidate.id === "addRoot");
-  if (addRootField && hasBrowseBridge()) {
-    const addButton = el("button", "add-folder-action");
-    addButton.type = "button";
-    const addRootLabel = fieldLabel(addRootField) || addRootField.label;
-    addButton.title = addRootLabel;
-    addButton.append(iconElement(folderIcon()), el("span", "", addRootLabel));
-    addButton.addEventListener("click", async () => {
-      const chosen = await window.hivem1nd.browseFolder();
-      if (chosen) await submitAnswer({ addRoot: chosen });
-    });
-    nodes.push(addButton);
-  }
-
-  const list = el("div", "group-list");
-  for (const [index, group] of groups.entries()) {
-    const card = el("section", "group-card");
-    const head = el("div", "group-head");
-
-    const toggle = el("button", "group-toggle");
-    toggle.type = "button";
-    const expanded = isGroupExpanded(group.id, groups.length);
-    toggle.setAttribute("aria-expanded", String(expanded));
-    toggle.title = group.folder;
-    const groupNameSpan = el("span", "group-name", lastPathSegment(group.folder));
-    toggle.append(iconElement(chevronIcon()), groupNameSpan);
-    head.append(toggle);
-
-    const envField = step.fields.find((candidate) => candidate.id === `groupEnvironment.${index}`);
-    if (envField) {
-      const envInput = document.createElement("input");
-      envInput.type = "text";
-      envInput.className = "group-environment-input";
-      envInput.id = `group-environment-${index}`;
-      envInput.dataset.groupIndex = String(index);
-      envInput.value = group.environment ?? "";
-      envInput.placeholder = ui().environmentPlaceholder;
-      envInput.setAttribute("aria-label", envField.label);
-      head.append(envInput);
-    }
-
-    const removeGroupButton = el("button", "icon-button small");
-    removeGroupButton.type = "button";
-    removeGroupButton.title = removeEnvironmentLabel;
-    removeGroupButton.setAttribute("aria-label", removeEnvironmentLabel);
-    removeGroupButton.append(iconElement(closeIcon()));
-    removeGroupButton.addEventListener("click", () => submitAnswer({ removeEnvironment: group.id }));
-    head.append(removeGroupButton);
-    card.append(head);
-
-    const repos = el("div", "repo-list");
-    repos.hidden = !expanded;
-    toggle.addEventListener("click", () => {
-      const next = toggle.getAttribute("aria-expanded") !== "true";
-      toggle.setAttribute("aria-expanded", String(next));
-      repos.hidden = !next;
-      groupExpansion.set(group.id, next);
-    });
-
-    for (const project of group.projects) {
-      const row = el("div", "repo-row");
-      const nameSpan = el("span", "repo-name", project.name);
-      const repoPathSpan = el("span", "repo-path", project.path);
-      repoPathSpan.title = project.path;
-      const removeButton = el("button", "icon-button small");
-      removeButton.type = "button";
-      const label = `${removeProjectLabel} ${project.name}`.trim();
-      removeButton.title = label;
-      removeButton.setAttribute("aria-label", label);
-      removeButton.append(iconElement(closeIcon()));
-      removeButton.addEventListener("click", () => submitAnswer({ removeProject: project.index }));
-      row.append(nameSpan, repoPathSpan, removeButton);
-      repos.append(row);
-    }
-    card.append(repos);
-    list.append(card);
-  }
-  nodes.push(list);
-  return nodes;
-}
-
-function renderConfirm(step) {
-  const byId = new Map(step.fields.map((field) => [field.id, field]));
-  const grid = el("div", "confirm-grid");
-
-  const preferencesSection = el("section", "confirm-section");
-  const skipField = byId.get("skipPreferences");
-  const skipLabel = el("label", "check-option");
-  const skipCheckbox = document.createElement("input");
-  skipCheckbox.type = "checkbox";
-  skipCheckbox.id = "skip-preferences";
-  skipCheckbox.checked = step.values.skipPreferences === true;
-  skipLabel.append(skipCheckbox, document.createTextNode(fieldLabel(skipField) || skipField.label));
-  preferencesSection.append(skipLabel);
-
-  const details = el("div", "preference-details");
-  details.hidden = skipCheckbox.checked;
-
-  const addressField = byId.get("addressStyle");
-  const addressWrapper = el("div", "field");
-  addressWrapper.append(el("label", "", addressField.label));
-  const segments = el("div", "segments");
-  for (const option of addressField.options ?? []) {
-    const segment = el("label", "segment");
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "addressStyle";
-    radio.value = option.value;
-    radio.checked = option.value === step.values.addressStyle;
-    segment.append(radio, document.createTextNode(option.label));
-    segments.append(segment);
-  }
-  addressWrapper.append(segments);
-  details.append(addressWrapper);
-
-  const customField = byId.get("customPreference");
-  const customWrapper = el("div", "field");
-  const customLabel = el("label", "", customField.label);
-  customLabel.htmlFor = "custom-preference";
-  const textarea = document.createElement("textarea");
-  textarea.id = "custom-preference";
-  textarea.value = step.values.customPreference ?? "";
-  customWrapper.append(customLabel, textarea);
-  details.append(customWrapper);
-
-  const keepField = byId.get("keepExistingPreferences");
-  if (keepField) {
-    const keepLabel = el("label", "check-option");
-    const keepCheckbox = document.createElement("input");
-    keepCheckbox.type = "checkbox";
-    keepCheckbox.id = "keep-existing-preferences";
-    keepCheckbox.checked = step.values.keepExistingPreferences !== false;
-    keepLabel.append(keepCheckbox, document.createTextNode(keepField.label));
-    details.append(keepLabel);
-  }
-  preferencesSection.append(details);
-  skipCheckbox.addEventListener("change", () => {
-    details.hidden = skipCheckbox.checked;
-  });
-
-  const updatesSection = el("section", "confirm-section");
-  const updatesField = byId.get("autoUpdates");
-  const updatesLabel = el("label", "check-option");
-  const updatesCheckbox = document.createElement("input");
-  updatesCheckbox.type = "checkbox";
-  updatesCheckbox.id = "auto-updates";
-  updatesCheckbox.checked = step.values.autoUpdates !== false;
-  updatesLabel.append(updatesCheckbox, document.createTextNode(updatesField.label));
-  updatesSection.append(updatesLabel);
-
-  grid.append(preferencesSection, updatesSection);
-  return [grid];
-}
-
-function renderInstallPreview(step, preview) {
-  elements.preview.replaceChildren();
-  elements.preview.hidden = false;
-  const c = ui();
-  const files = preview.files ?? [];
-  const fileCountText = files.length === 1 ? formatCount(c.filesCountOne, files.length) : formatCount(c.filesCountOther, files.length);
-  elements.preview.append(el("p", "preview-meta", files.length === 0 ? c.noFiles : fileCountText));
-
-  if (files.length > 0) {
-    const actionLabels = { create: c.actionCreate, update: c.actionUpdate, unchanged: c.actionUnchanged, append: c.actionAppend, conflict: c.actionConflict };
-    const scrollArea = el("div", "preview-files");
-    const groupsWrap = el("div", "install-groups");
-    for (const [, group] of groupFilesByOwner(files)) {
-      const groupSection = el("section", "install-group");
-      groupSection.append(el("h2", "", group.label));
-      for (const file of group.files) {
-        const row = el("div", "preview-file");
-        row.append(el("span", "preview-action", actionLabels[file.action] ?? file.action), el("span", "preview-path", file.path));
-        groupSection.append(row);
-      }
-      groupsWrap.append(groupSection);
-    }
-    scrollArea.append(groupsWrap);
-    elements.preview.append(scrollArea);
-  }
-
-  for (const warning of preview.warnings ?? []) elements.preview.append(el("div", "warning", warning));
-
-  for (const [index, conflict] of (preview.conflicts ?? []).entries()) {
-    const conflictField = step.fields.find((candidate) => candidate.id === `conflict.${index}`);
-    const card = el("fieldset", "conflict-card");
-    card.dataset.conflictPath = conflict.path;
-    card.append(el("h3", "", conflict.path), el("p", "", conflict.reason));
-    for (const choice of conflict.choices ?? ["keep", "replace"]) {
-      const optionLabel = conflictField?.options?.find((option) => option.value === choice)?.label ?? choice;
-      const label = el("label", "radio-option");
-      const input = document.createElement("input");
-      input.type = "radio";
-      input.name = `conflict-${index}`;
-      input.value = choice;
-      input.required = true;
-      input.checked = conflict.selection === choice;
-      label.append(input, document.createTextNode(optionLabel));
-      card.append(label);
-    }
-    elements.preview.append(card);
-  }
-}
-
-function renderDone(step) {
-  const blocks = [];
-  for (const notice of step.result?.notices ?? []) blocks.push(el("p", "warning", notice));
-  if (step.result?.reportPath) {
-    blocks.push(el("p", "warning", ui().reportSaved.replace("{path}", step.result.reportPath)));
-  }
-  const panel = el("div", "success-panel");
-  const command = step.result?.firstCommand ?? "/executor <project>";
-  panel.append(el("p", "result-label", ui().firstCommand), el("code", "", command));
-  blocks.push(panel);
-  return blocks;
-}
-
-function continueLabel(step) {
-  const c = ui();
-  if (step.number === 7) return c.install;
-  if (step.number === 1 && step.values.installMode === "simple") return c.install;
-  return c.continue;
-}
-
-async function render(step) {
-  currentStep = step;
-  currentPreview = undefined;
-  if (["en", "es"].includes(step.language)) language = step.language;
-  onDemandNoticeShown = step.onDemandNoticeShown === true;
-
-  document.documentElement.lang = language;
-  document.title = ui().documentTitle;
-  elements.navigation.setAttribute("aria-label", Array.from({ length: 8 }, (_, index) => progressLabel(index + 1)).join(", "));
-  setError();
-  elements.fields.replaceChildren();
-  elements.preview.replaceChildren();
-  elements.preview.hidden = true;
-  elements.form.querySelector(".actions").hidden = step.done || step.number === 8;
-  renderProgress(step.number ?? 1);
-  renderLanguage(step);
-  elements.title.textContent = step.title ?? "HIVEM1ND";
-  elements.description.textContent = step.description ?? "";
-  elements.back.hidden = (step.number ?? 1) <= 1 || step.done;
-  elements.back.textContent = ui().back;
-  elements.continue.textContent = continueLabel(step);
-
-  if (step.done || step.number === 8) {
-    elements.fields.append(...renderDone(step));
-  } else if (step.number === 1) {
-    elements.fields.append(...renderInstallMode(step));
-  } else if (step.number === 2) {
-    elements.fields.append(...renderLocation(step));
-  } else if (step.number === 3) {
-    elements.fields.append(...renderAgents(step));
-  } else if (step.number === 4) {
-    elements.fields.append(...renderContent(step));
-  } else if (step.number === 5) {
-    elements.fields.append(...renderProjectsConfirm(step));
-  } else if (step.number === 6) {
-    elements.fields.append(...renderConfirm(step));
-  } else if (step.number === 7) {
-    currentPreview = step.preview ?? await api("preview");
-    renderInstallPreview(step, currentPreview);
-  }
-
-  elements.title.tabIndex = -1;
-  elements.title.focus({ preventScroll: true });
-}
-
-function collectProjectsConfirmValues() {
-  const values = { projectsConfirmed: true };
-  for (const input of elements.fields.querySelectorAll("[data-group-index]")) values[`groupEnvironment.${input.dataset.groupIndex}`] = input.value.trim();
-  return values;
-}
-
-function collectConfirmValues() {
-  const values = {
-    skipPreferences: document.getElementById("skip-preferences").checked,
-    addressStyle: elements.fields.querySelector('input[name="addressStyle"]:checked')?.value ?? currentStep.values.addressStyle,
-    customPreference: document.getElementById("custom-preference").value,
-    autoUpdates: document.getElementById("auto-updates").checked,
-  };
-  const keepBox = document.getElementById("keep-existing-preferences");
-  if (keepBox) values.keepExistingPreferences = keepBox.checked;
-  return values;
-}
-
 function collectValues() {
-  switch (currentStep.number) {
-    case 1:
-      return { installMode: document.querySelector('input[name="installMode"]:checked')?.value ?? currentStep.values.installMode };
-    case 2: {
-      const values = { mindPath: document.getElementById("mind-path").value.trim() };
-      const attachBox = document.getElementById("attach-mind");
-      if (attachBox) values.attach = attachBox.checked;
-      return values;
-    }
-    case 3:
-      if (!currentStep.scanned || !currentStep.agents?.length) return {};
-      return {
-        agents: [...elements.fields.querySelectorAll(".agent-select input[type=checkbox]")]
-          .filter((checkbox) => checkbox.checked)
-          .map((checkbox) => checkbox.dataset.agentId),
-        attachModes: Object.fromEntries([...elements.fields.querySelectorAll(".attach-modes")]
-          .map((group) => [group.dataset.agentId, group.querySelector('[aria-pressed="true"]')?.dataset.agentMode ?? "on-demand"])),
-      };
-    case 4:
-      return { included: [...elements.fields.querySelectorAll("[data-feature]:checked")].map((checkbox) => checkbox.dataset.feature) };
-    case 5:
-      return collectProjectsConfirmValues();
-    case 6:
-      return collectConfirmValues();
-    default:
-      return {};
-  }
+  if (currentStep.id !== 'location') return {};
+  const values = { mindPath: document.getElementById('mind-path').value.trim() };
+  const legacy = document.getElementById('migrate-legacy');
+  const join = document.getElementById('join-mind');
+  if (legacy) values.migrateLegacy = legacy.checked;
+  if (join) values.attach = join.checked;
+  return values;
 }
-
-elements.fields.addEventListener("click", (event) => {
-  const modeButton = event.target.closest("[data-agent-mode]");
-  if (!modeButton) return;
-  const group = modeButton.closest(".attach-modes");
-  group.querySelectorAll("[data-agent-mode]").forEach((node) => node.setAttribute("aria-pressed", String(node === modeButton)));
-  if (modeButton.dataset.agentMode === "on-demand" && !onDemandNoticeShown) {
-    onDemandNoticeShown = true;
-    showModeDialog(currentStep.onDemandNotice);
-  }
-});
-
-elements.fields.addEventListener("change", (event) => {
-  if (event.target.dataset.category !== undefined) {
-    const section = event.target.closest(".feature-category");
-    section.querySelectorAll("[data-feature]").forEach((checkbox) => {
-      checkbox.checked = event.target.checked;
-    });
-    updateCategoryCount(section);
-    return;
-  }
-  if (event.target.dataset.feature !== undefined) {
-    const section = event.target.closest(".feature-category");
-    section.querySelector("[data-category]").checked = [...section.querySelectorAll("[data-feature]")].every((checkbox) => checkbox.checked);
-    updateCategoryCount(section);
-  }
-});
-
-elements.form.addEventListener("change", (event) => {
-  if (event.target.name === "installMode" && currentStep.number === 1) {
-    elements.continue.textContent = event.target.value === "simple" ? ui().install : ui().continue;
-  }
-});
-
-elements.dialogClose.addEventListener("click", () => elements.dialog.close());
-
-elements.form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (busy || !elements.form.reportValidity()) return;
-  setError();
-  try {
-    if (currentStep.number === 7) {
-      setBusy(true, ui().installing);
-      const conflicts = Object.fromEntries((currentPreview?.conflicts ?? []).map((conflict) => {
-        const card = [...elements.preview.querySelectorAll("[data-conflict-path]")]
-          .find((node) => node.dataset.conflictPath === conflict.path);
-        return [conflict.path, card?.querySelector("input:checked")?.value];
-      }));
-      await api("install", { method: "POST", body: { confirm: true, conflicts } });
-      await render(await api("step"));
-    } else {
-      setBusy(true, ui().loading);
-      const values = collectValues();
-      const wasSimple = currentStep.number === 1 && values.installMode === "simple";
-      await api("answer", { method: "POST", body: { values } });
-      const next = await api("step");
-      if (wasSimple && next.number === 7) {
-        const preview = next.preview ?? await api("preview");
-        if ((preview.conflicts ?? []).length === 0) {
-          await api("install", { method: "POST", body: { confirm: true, conflicts: {} } });
-          await render(await api("step"));
-        } else {
-          await render(next);
-        }
-      } else {
-        await render(next);
-      }
-    }
-  } catch (error) {
-    setError(error.message);
-  } finally {
-    setBusy(false);
-    elements.live.textContent = "";
-  }
-});
-
-elements.back.addEventListener("click", async () => {
+function renderLocation(step) {
+  const field = el('div', 'folder-field');
+  const label = el('label', '', ui().folder); label.htmlFor = 'mind-path';
+  const path = el('div', 'path-control');
+  const input = el('input'); input.type = 'text'; input.id = 'mind-path'; input.required = true; input.value = step.values.mindPath;
+  const change = el('button', 'button plain', ui().change); change.type = 'button'; change.id = 'change-folder';
+  change.addEventListener('click', async () => {
+    if (busy) return;
+    if (typeof window.hivem1nd?.browseFolder === 'function') {
+      const chosen = await window.hivem1nd.browseFolder();
+      if (chosen) { input.value = chosen; await changeFolder(); }
+    } else { input.focus(); input.select(); }
+  });
+  input.addEventListener('change', changeFolder);
+  path.append(icon('folder'), input, change); field.append(label, path); elements.fields.append(field);
+  if (step.join) elements.fields.append(offer(step.join.title, step.join.body, { id: 'join-mind', checked: step.values.attach }));
+  else if (step.legacy) elements.fields.append(offer(step.legacy.title, step.legacy.body, { id: 'migrate-legacy', checked: step.values.migrateLegacy }));
+  elements.fields.append(offer(step.relayPlus.title, step.relayPlus.body, { id: 'relay-plus', disabled: true, badge: step.relayPlus.badge }));
+}
+async function changeFolder() {
   if (busy) return;
-  setBusy(true, ui().loading);
-  setError();
-  try {
-    await api("back", { method: "POST", body: {} });
-    await render(await api("step"));
-  } catch (error) {
-    setError(error.message);
-  } finally {
-    setBusy(false);
-    elements.live.textContent = "";
+  setBusy(true); setError();
+  try { render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } })); }
+  catch (error) { setError(error.message); }
+  finally { setBusy(false); }
+}
+function renderLegacyDialog(step) {
+  const legacy = step.legacy;
+  elements['mode-dialog-title'].textContent = legacy.closeTitle;
+  elements['mode-dialog-copy'].textContent = legacy.closeCopy;
+  document.getElementById('legacy-sessions')?.remove();
+  const list = el('div', 'legacy-sessions'); list.id = 'legacy-sessions';
+  const clients = { codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor', opencode: 'OpenCode', copilot: 'GitHub Copilot', vscode: 'GitHub Copilot' };
+  for (const item of legacy.sessions) {
+    const row = el('div', 'legacy-session'); row.append(icon('term'), el('strong', '', item.unit), el('span', '', ui().onMachine.replace('{client}', clients[item.client] ?? item.client).replace('{machine}', item.machine))); list.append(row);
   }
-});
-
-async function loadStep() {
-  setBusy(true, ui().loading);
+  if (legacy.sessions.some(item => !item.local)) list.append(el('p', 'offline-legacy', legacy.offline));
+  elements['mode-dialog-copy'].after(list);
+  elements['mode-dialog-close'].textContent = legacy.action;
+  elements['mode-dialog-close'].onclick = () => closeLegacy(true);
+  let cancel = document.getElementById('cancel-legacy');
+  if (!cancel) { cancel = el('button', 'button ghost'); cancel.id = 'cancel-legacy'; cancel.type = 'button'; elements['mode-dialog-close'].before(cancel); }
+  cancel.textContent = ui().cancel; cancel.onclick = () => closeLegacy(false);
+  if (!elements['mode-dialog'].open) elements['mode-dialog'].showModal();
+}
+async function closeLegacy(close) {
+  elements['mode-dialog'].close(); setBusy(true);
   try {
-    await render(await api("step"));
-  } catch (error) {
-    setError(error.message);
-  } finally {
-    setBusy(false);
-    elements.live.textContent = "";
+    render(await api('answer', { method: 'POST', body: { values: { ...collectValues(), closeLegacy: close } } }));
+    if (currentStep.id === 'service') await runInstall();
+  } catch (error) { setError(error.message); }
+  finally { setBusy(false); }
+}
+elements['mode-dialog'].addEventListener('cancel', event => { event.preventDefault(); void closeLegacy(false); });
+function renderService(step) {
+  const list = el('ol', 'service-progress'); list.setAttribute('aria-label', step.title); list.setAttribute('aria-live', 'polite');
+  for (const row of step.progress) {
+    const item = el('li', 'progress-row ' + row.state); item.dataset.progress = row.id;
+    const status = el('span', 'progress-status'); status.setAttribute('aria-label', ui()['progress' + row.state[0].toUpperCase() + row.state.slice(1)]);
+    if (row.state !== 'todo') status.append(icon(row.state === 'done' ? 'check' : row.state === 'fail' ? 'x' : 'spinner'));
+    item.append(status, el('span', 'progress-copy', row.label), el('span', 'progress-time', row.elapsedSeconds === null ? '' : row.elapsedSeconds + ' s'));
+    list.append(item);
+  }
+  elements.fields.append(list);
+  if (step.failure) {
+    const notice = el('div', 'setup-failure'); notice.setAttribute('role', 'alert');
+    notice.append(el('strong', '', step.failure.headline), el('p', '', step.failure.body)); elements.fields.append(notice);
+  }
+  for (const [index, conflict] of (step.preview?.conflicts ?? []).entries()) {
+    const field = el('fieldset', 'conflict-card'); field.dataset.conflictPath = conflict.path;
+    field.append(el('legend', '', conflict.path), el('p', '', conflict.reason));
+    for (const option of step.fields[index].options) {
+      const label = el('label', 'conflict-choice'); const input = el('input'); input.type = 'radio'; input.name = 'conflict-' + index; input.value = option.value;
+      input.checked = conflict.selection === option.value; input.required = true; label.append(input, document.createTextNode(option.label)); field.append(label);
+    }
+    elements.fields.append(field);
   }
 }
-
-await loadStep();
+function renderReady(step) {
+  const summary = el('div', 'setup-summary');
+  for (const row of step.summary) {
+    const item = el('div', 'summary-row'); item.dataset.summary = row.id;
+    item.append(icon({ mind: 'folder', legacy: 'retry', service: 'power', agents: 'term', projects: 'folder' }[row.id]), el('span', 'summary-label', row.label));
+    const value = el('span', 'summary-value' + (row.id === 'mind' ? ' path-value' : ''), row.value);
+    if (row.running) value.prepend(el('span', 'status-running'));
+    item.append(value); summary.append(item);
+  }
+  elements.fields.append(summary, el('p', 'setup-note', step.notice));
+}
+function render(step) {
+  const previousId = currentStep?.id;
+  currentStep = step;
+  document.documentElement.lang = step.language; document.title = ui().documentTitle;
+  elements.fields.replaceChildren(); elements.preview.hidden = true;
+  elements['step-title'].textContent = step.title; elements['step-description'].textContent = step.description;
+  renderProgress(step); elements['back-button'].hidden = !step.back; elements['back-button'].replaceChildren(icon('back'), document.createTextNode(ui().back));
+  elements['continue-button'].replaceChildren();
+  if (step.busy || busy && step.id === 'service') elements['continue-button'].append(icon('spinner', 'button-spinner'));
+  elements['continue-button'].append(document.createTextNode(step.action));
+  if (step.id === 'install') {
+    const list = el('div', 'setup-bullets'); step.bullets.forEach((copy, index) => {
+      const row = el('div', 'setup-bullet'); const image = el('span', 'bullet-icon'); image.append(icon(['graph', 'net', 'zap'][index])); row.append(image, el('span', '', copy)); list.append(row);
+    }); elements.fields.append(list);
+  }
+  if (step.id === 'location') renderLocation(step);
+  if (step.id === 'service') renderService(step);
+  if (step.id === 'ready') renderReady(step);
+  if (step.legacy?.confirmation) renderLegacyDialog(step);
+  elements['step-title'].tabIndex = -1;
+  if (previousId !== step.id) elements['step-title'].focus({ preventScroll: true });
+  setBusy(busy);
+}
+async function runInstall() {
+  if (currentStep.preview?.conflicts?.some(conflict => !document.querySelector('[data-conflict-path="' + CSS.escape(conflict.path) + '"] input:checked'))) return;
+  const conflicts = Object.fromEntries([...elements.fields.querySelectorAll('[data-conflict-path]')].map(field => [field.dataset.conflictPath, field.querySelector('input:checked')?.value]));
+  setBusy(true); setError();
+  let pending = true;
+  const install = api('install', { method: 'POST', body: { confirm: true, conflicts } }).finally(() => { pending = false; });
+  const poll = (async () => { while (pending) { await new Promise(resolve => setTimeout(resolve, 1000)); if (pending) render(await api('step')); } })();
+  try { await install; }
+  finally { await poll; render(await api('step')); setBusy(false); }
+}
+elements['step-form'].addEventListener('submit', async event => {
+  event.preventDefault(); if (busy || !elements['step-form'].reportValidity()) return;
+  setBusy(true); setError();
+  try {
+    if (currentStep.id === 'ready') { const opened = await api('open', { method: 'POST', body: {} }); if (opened.viewerUrl) location.assign(opened.viewerUrl); }
+    else if (currentStep.id === 'service') await runInstall();
+    else { render(await api('answer', { method: 'POST', body: { values: collectValues() } })); if (currentStep.id === 'service') await runInstall(); }
+  } catch (error) { setError(error.message); }
+  finally { setBusy(false); }
+});
+elements['back-button'].addEventListener('click', async () => {
+  if (busy) return; setBusy(true); setError();
+  try { render(await api('back', { method: 'POST', body: {} })); } catch (error) { setError(error.message); } finally { setBusy(false); }
+});
+try {
+  render(await api('step'));
+  if (currentStep.id === 'service' && !currentStep.failure) await runInstall();
+} catch (error) { setError(error.message); }

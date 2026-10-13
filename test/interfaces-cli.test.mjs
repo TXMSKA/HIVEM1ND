@@ -193,43 +193,18 @@ test("Electron shows the window after the local wizard finishes loading", async 
 
 test("terminal setup renders descriptors and installs only after preview", async () => {
   const steps = [
-    { number: 1, language: "es", title: "Modo de instalación", fields: [{ id: "installMode", type: "select", label: "Modo de instalación", options: [{ value: "custom", label: "Personalizada" }], required: true }], values: { installMode: "custom" } },
-    { number: 2, language: "es", title: "Mind", fields: [{ id: "mindPath", type: "text", label: "Ruta", required: true }], values: { mindPath: "C:/mind" } },
-    {
-      number: 3,
-      language: "es",
-      title: "Agentes",
-      fields: [
-        { id: "agents", type: "multiselect", label: "Agentes", options: [{ value: "codex", label: "Codex" }], required: false },
-        { id: "attachModes", type: "object", label: "Modo de conexión", options: [{ value: "codex", label: "Codex" }], required: false },
-      ],
-      values: { agents: ["codex"], attachModes: { codex: "on-demand" } },
-    },
-    { number: 4, language: "es", title: "Contenido", fields: [], values: {} },
-    {
-      number: 5,
-      language: "es",
-      title: "Proyectos",
-      groups: [{ id: "g1", folder: "C:/projects", environment: "", projects: [{ index: 0, name: "app", path: "C:/projects/app" }] }],
-      fields: [
-        { id: "addRoot", type: "text", label: "Agregar carpeta", required: false },
-        { id: "removeProject", type: "number", label: "Quitar repositorio", required: false },
-        { id: "removeEnvironment", type: "text", label: "Quitar entorno", required: false },
-        { id: "projectsConfirmed", type: "boolean", label: "Confirmar proyectos", required: true },
-      ],
-      values: { addRoot: "", projectsConfirmed: false },
-    },
-    { number: 6, language: "es", title: "Confirmación", fields: [{ id: "customPreference", type: "textarea", label: "Preferencia", required: false }, { id: "autoUpdates", type: "boolean", label: "Actualizaciones", required: false }], values: { customPreference: "", autoUpdates: true } },
-    { number: 7, language: "es", title: "Vista previa", fields: [], values: {} },
-    { number: 8, language: "es", title: "Listo", description: "Listo.", fields: [], values: {}, done: true, result: { message: "Listo.", attachPrompts: [{ agent: "otro", text: "Adjuntar" }] } },
-  ];
+ {id:'install',number:1,total:4,language:'es',title:'Instalar HIVEM1ND',fields:[],values:{}},
+ {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda el M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
+ {id:'service',number:3,total:4,language:'es',title:'Iniciando el servicio Relay',fields:[],values:{}},
+ {id:'ready',number:4,total:4,language:'es',title:'HIVEM1ND está en ejecución',description:'Listo.',fields:[],values:{},done:true,result:{completed:true,message:'Listo.',attachPrompts:[{agent:'otro',text:'Adjuntar'}]}}
+ ];
   let index = 0;
   const answers = [];
   let installed = false;
   let intro = "";
   const session = {
     async getStep() { return steps[index]; },
-    async answer(values) { answers.push(values); if (steps[index].number !== 7) index += 1; },
+    async answer(values) { answers.push(values); if (steps[index].number !== 3) index += 1; },
     async preview() { return { files: [{ action: "create", path: "C:/mind/user/VERSION" }], warnings: [], conflicts: [] }; },
     async install() { installed = true; index += 1; return { completed: true }; },
   };
@@ -261,7 +236,7 @@ test("terminal setup renders descriptors and installs only after preview", async
   assert.equal(installed, true);
   assert.match(intro, /HIVEM1ND/);
   assert.doesNotMatch(intro, /⬡/);
-  assert.ok(stepLogs.includes("Paso 1/8 · Modo de instalación"));
+  assert.ok(stepLogs.includes("Paso 1/4 · Instalar HIVEM1ND"));
   assert.equal(notes.some((note) => note.message === ""), false);
   assert.deepEqual(answers.at(-1), { confirm: true, conflicts: {} });
   assert.ok(notes.some((note) => note.title === "Vista previa"));
@@ -271,7 +246,7 @@ test("terminal setup renders descriptors and installs only after preview", async
 test("a descriptor field of type number prompts as text and is sent as a number", async () => {
   const steps = [
     { number: 1, language: "en", title: "Count", fields: [{ id: "count", type: "number", label: "Count", required: false }], values: {} },
-    { number: 8, language: "en", title: "Done", description: "Done.", fields: [], values: {}, done: true, result: { message: "Done." } },
+    { id: "ready", number: 4, language: "en", title: "Done", description: "Done.", fields: [], values: {}, done: true, result: { message: "Done." } },
   ];
   let index = 0;
   const answers = [];
@@ -302,70 +277,8 @@ test("a descriptor field of type number prompts as text and is sent as a number"
   assert.equal(typeof answers[0].count, "number");
 });
 
-test("terminal setup walks step 5 of a real session: remove a repository, remove an environment, rename one, then confirm", async (context) => {
-  const fixture = await makeTerminalProjectsFixture();
-  context.after(() => rm(fixture.root, { recursive: true, force: true }));
-
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: "TERMINALBOX",
-    language: "en",
-    env: { PATH: "" },
-    resume: false,
-  });
-
-  const notes = [];
-  let actionStep = 0;
-  const actionScript = ["removeProject", "removeEnvironment", "rename", "confirm"];
-  const prompts = {
-    intro() {},
-    outro() {},
-    note(message, title) { notes.push({ message, title }); },
-    log: { step() {}, info() {}, warn() {} },
-    isCancel() { return false; },
-    cancel() {},
-    async group(group) {
-      const result = {};
-      for (const [key, prompt] of Object.entries(group)) result[key] = await prompt({ results: result });
-      return result;
-    },
-    async text(options) {
-      if (String(options.message).includes(path.join(fixture.homeDir, "GitHub"))) return "oss";
-      return options.initialValue ?? "value";
-    },
-    async multiline(options) { return options.initialValue ?? ""; },
-    async select(options) {
-      const values = options.options.map((option) => option.value);
-      if (values.includes("confirm") && values.includes("addRoot")) {
-        const action = actionScript[actionStep];
-        actionStep += 1;
-        return action;
-      }
-      if (values.length > 0 && values.every((value) => typeof value === "number")) {
-        return options.options.find((option) => option.label.includes("repo2")).value;
-      }
-      if (values.some((value) => typeof value === "string" && (value.startsWith("folder:") || value.startsWith("project:")))) {
-        return options.options.find((option) => option.label.includes("Unity")).value;
-      }
-      return options.initialValue ?? options.options[0]?.value;
-    },
-    async multiselect(options) { return options.initialValues ?? options.options.map((option) => option.value); },
-    async confirm() { return true; },
-    spinner() { return { start() {}, stop() {} }; },
-  };
-
-  const result = await runTerminalSetup(session, prompts);
-
-  assert.equal(actionStep, 4);
-  assert.ok(notes.some((note) => typeof note.message === "string" && note.message.includes("repo1")));
-  const routes = await readFile(path.join(fixture.mindPath, "user", "routes.md"), "utf8");
-  assert.match(routes, /- repo1 \(oss\)/);
-  assert.match(routes, /- oss: repo1/);
-  assert.doesNotMatch(routes, /repo2/);
-  assert.doesNotMatch(routes, /repo3/);
-  assert.equal(result.mindPath, fixture.mindPath);
+test('terminal setup follows four stages and uses detected repository defaults',async context=>{
+ const fixture=await makeTerminalProjectsFixture();context.after(()=>rm(fixture.root,{recursive:true,force:true}));const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TERMINALBOX',language:'en',env:{PATH:''},resume:false,aclRunner:stubAclRunner()});const steps=[];const prompts={intro(){},outro(){},note(_message,title){if(title?.startsWith('Step '))steps.push(title);},log:{step(value){steps.push(value);},info(){},warn(){}},isCancel(){return false;},cancel(){},async group(group){const result={};for(const [key,prompt]of Object.entries(group))result[key]=await prompt({results:result});return result;},async text(options){return options.initialValue;},async confirm(){return true;},spinner(){return {start(){},stop(){}};}};const result=await runTerminalSetup(session,prompts);assert.equal(result.completed,true);assert.deepEqual(steps.map(value=>value.match(/Step (\d)\/4/)[1]),['1','2','3']);const ready=await session.getStep();const projects=ready.summary.find(row=>row.id==='projects');assert.equal(projects.repositories,3);assert.equal(projects.folders,2);const routes=await readFile(path.join(fixture.mindPath,'user','routes.md'),'utf8');for(const name of ['repo1','repo2','repo3'])assert.match(routes,new RegExp('- '+name));
 });
 
 async function makeTerminalProjectsFixture() {
@@ -567,7 +480,7 @@ test("terminal setup retries a failed service phase and opens the completed view
   const opened = [];
   const stops = [];
   const session = {
-    async getStep() { return installs < 2 ? { number: 7, title: "Install", language: "en" } : { number: 8, done: true, language: "en", result: { completed: true, message: "Installed" } }; },
+    async getStep() { return installs < 2 ? { id: "service", number: 3, title: "Install", language: "en" } : { id: "ready", number: 4, done: true, language: "en", result: { completed: true, message: "Installed" } }; },
     async preview() { return { files: [], conflicts: [] }; },
     async answer() {},
     async install() { installs += 1; return installs === 1 ? { completed: false, service: { error: "Service unavailable" } } : { completed: true, viewerUrl: "http://127.0.0.1:1234/gui/viewer" }; },

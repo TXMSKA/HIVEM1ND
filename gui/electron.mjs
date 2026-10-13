@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { createWizardServer } from "./server.mjs";
 import { defaultMind } from '../engine/service/paths.mjs';
+import { startConfiguredViewer } from '../engine/service/install.mjs';
 
 export const secureWebPreferences = Object.freeze({
   contextIsolation: true,
@@ -49,13 +50,15 @@ export function parseElectronOptions(argv, homeDir, env = process.env) {
 
 export function createWindowOptions(icon, preload) {
   return {
-    width: 694,
-    height: 540,
+    width: 1440,
+    height: 900,
+    minWidth: 720,
+    minHeight: 600,
     useContentSize: true,
-    resizable: false,
-    maximizable: false,
+    resizable: true,
+    maximizable: true,
     fullscreenable: false,
-    backgroundColor: "#0e0a12",
+    backgroundColor: "#0f0b13",
     show: false,
     title: "HIVEM1ND setup",
     ...(icon ? { icon } : {}),
@@ -64,7 +67,7 @@ export function createWindowOptions(icon, preload) {
   };
 }
 
-export async function startElectronApp(electron, argv = process.argv.slice(2)) {
+export async function startElectronApp(electron, argv = process.argv.slice(2), dependencies = {}) {
   const { app, BrowserWindow, dialog, ipcMain, session } = electron;
   const launchOptions = parseElectronOptions(argv, app.getPath("home"));
   if (launchOptions.userDataDir) app.setPath("userData", launchOptions.userDataDir);
@@ -76,6 +79,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2)) {
   let wizard;
   let window;
   let closing = false;
+  let viewerTarget;
 
   const closeWizard = async () => {
     if (closing || !wizard) return;
@@ -95,7 +99,29 @@ export async function startElectronApp(electron, argv = process.argv.slice(2)) {
     if (!wizard) {
       const { userDataDir: _userDataDir, ...sessionOptions } = launchOptions;
       sessionOptions.kitPath ??= app.getAppPath();
-      wizard = await createWizardServer({ sessionOptions });
+      sessionOptions.serviceSetup = true;
+      sessionOptions.serviceDryRun = false;
+      sessionOptions.serviceStart = async config => {
+        const started = await (dependencies.startConfiguredViewer ?? startConfiguredViewer)(config, {
+          homeDir: launchOptions.homeDir, hostname: launchOptions.hostname,
+        });
+        const target = new URL(started.viewerUrl);
+        if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.username || target.password
+          || target.pathname !== '/gui/viewer') throw new Error('The local Map URL could not be verified.');
+        viewerTarget = { origin: target.origin, pathname: target.pathname };
+        return started;
+      };
+      wizard = await (dependencies.createWizardServer ?? createWizardServer)({
+        sessionOptions,
+        async openCompletedViewer(url) {
+          const target = new URL(url);
+          if (!viewerTarget || target.origin !== viewerTarget.origin || target.pathname !== viewerTarget.pathname
+            || target.username || target.password || !window || window.isDestroyed()) {
+            throw new Error('The local Map window is unavailable.');
+          }
+          await window.loadURL(url);
+        },
+      });
     }
 
     const createdWindow = new BrowserWindow(createWindowOptions(
@@ -109,7 +135,9 @@ export async function startElectronApp(electron, argv = process.argv.slice(2)) {
     createdWindow.webContents.on("will-navigate", (event, targetUrl) => {
       try {
         const target = new URL(targetUrl);
+        if (target.username || target.password) throw new Error('Invalid navigation target');
         if (target.origin === allowedOrigin && target.pathname === "/") return;
+        if (viewerTarget && target.origin === viewerTarget.origin && target.pathname === viewerTarget.pathname) return;
       } catch {
         // Invalid navigation targets are blocked below.
       }

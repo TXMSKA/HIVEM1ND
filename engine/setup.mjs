@@ -137,6 +137,8 @@ class SetupSession {
   constructor(options) {
     Object.assign(this, options);
     this.currentStep = 1;
+    this.detectedLegacyPath = options.legacySourcePath;
+    this.installing = false;
     this.answers = {
       language: options.language,
       installMode: 'custom',
@@ -178,12 +180,17 @@ class SetupSession {
       if (draft.destinationPath !== this.mindPath || !draft.answers || !Number.isInteger(draft.step)) throw new CoreError(409, 'checkpoint_changed', 'The local setup draft does not match this M1ND.');
       this.answers = { ...this.answers, ...draft.answers, mindPath: this.mindPath };
       this.legacySourcePath = draft.answers.legacySourcePath ?? this.legacySourcePath;
+      this.detectedLegacyPath ??= this.legacySourcePath;
       this.answers.language = normalizeLanguage(this.answers.language);
       this.currentStep = clampStep(draft.step);
     }
     const { record } = await readMachineRecord(this.mindPath, this.hostname);
     this.machineRecord = record;
     this.existingMind = await this.inspectMind(this.mindPath);
+    if (!this.detectedLegacyPath) {
+      const found = await this.findInstalledMind();
+      if (/^2\./.test(found?.version ?? '')) this.detectedLegacyPath = found.path;
+    }
     this.checkpoint = this.resume ? await this.readLocal('setup.json') : null;
     if (this.checkpoint) {
       await this.verifyCheckpoint();
@@ -206,7 +213,8 @@ class SetupSession {
           this.currentStep = 7;
           this.checkpoint.completed = SETUP_PHASES.slice(0, 5);
           this.checkpoint.phase = 'start';
-          this.checkpoint.error = { code: 'setup_failed', message: 'The service could not start.' };
+          const failure = safeServiceFailure(service, this.answers.language, 'start');
+          this.checkpoint.error = { code: failure.code, message: failure.safeSetupMessage };
           await this.saveCheckpoint();
         } else if (this.openViewer && service.viewerUrl) {
           await this.openViewer(service.viewerUrl);
@@ -246,225 +254,110 @@ class SetupSession {
 
   async getStep() {
     const language = this.answers.language;
+    const number = this.currentStep === 7 ? 3 : this.currentStep === 8 ? 4 : this.currentStep === 1 ? 1 : 2;
+    const id = ['install', 'location', 'service', 'ready'][number - 1];
     const base = {
-      number: this.currentStep,
-      title: text(language, `step${this.currentStep}Title`),
-      description: text(language, `step${this.currentStep}Description`),
-      fields: [],
-      values: {},
-      done: this.currentStep === 8,
-      result: this.currentStep === 8 ? this.result : null,
-      language,
-      languages: LANGUAGES.map((code) => option(language, code, code === 'es' ? 'spanish' : 'english')),
+      id, number, total: 4, title: text(language, `step${number}Title`),
+      description: text(language, `step${number}Description`, { machine: this.hostname }),
+      fields: [], values: {}, done: number === 4, result: number === 4 ? this.result : null,
+      language, languages: LANGUAGES.map(code => option(language, code, code === 'es' ? 'spanish' : 'english')),
+      back: number === 2, busy: this.installing === true,
+      action: text(language, number === 1 ? 'startSetup' : number === 4 ? 'openMap' : number === 3 ? this.checkpoint?.error ? 'retry' : 'installing' : 'continue'),
     };
-
-    if (this.currentStep === 1) {
-      base.fields = [field('installMode', 'select', text(language, 'step1Title'), true, [
-        option(language, 'simple', 'simple', 'simpleCopy'),
-        option(language, 'custom', 'custom', 'customCopy'),
-      ])];
-      base.values = { installMode: this.answers.installMode };
-    }
-    if (this.currentStep === 2) {
-      base.fields = [
-        field('mindPath', 'text', text(language, 'mindPath'), true, undefined, text(language, 'mindPathHelp')),
-      ];
+    if (id === 'install') base.bullets = ['setupMap', 'setupObjectives', 'setupRelay'].map(key => text(language, key));
+    if (id === 'location') {
+      base.fields = [field('mindPath', 'text', text(language, 'folder'), true)];
       base.values = { mindPath: this.mindPath };
-      base.presets = this.presets.map((preset) => ({
-        id: preset.id,
-        label: preset.label ?? text(language, preset.labelKey),
-        path: preset.path,
-      }));
+      base.relayPlus = { title: text(language, 'relayPlus'), badge: text(language, 'comingSoon'),
+        body: text(language, 'relayPlusCopy'), disabled: true };
       if (this.canAttach()) {
-        base.existingMind = { ...this.existingMind };
-        base.alert = text(language, 'existingMindFound', {
-          path: this.existingMind.path,
-          version: this.existingMind.version || text(language, 'unknownVersion'),
-        });
-        base.fields.push(field(
-          'attach',
-          'boolean',
-          text(language, 'attachQuestion'),
-          true,
-          [option(language, true, 'yes'), option(language, false, 'no')],
-          text(language, 'attachHelp'),
-        ));
+        const summary = await this.joinSummary();
+        base.fields.push(field('attach', 'boolean', text(language, 'joinMind'), true));
         base.values.attach = this.answers.attach ?? true;
-        base.join = { title: SETUP_COPY[language].joinTitle, action: SETUP_COPY[language].join };
+        base.join = { title: text(language, 'joinMind'), action: text(language, 'join'),
+          body: text(language, 'joinOffer', summary), ...summary };
+        base.action = base.join.action;
         this.alertedMind = normalizePath(this.mindPath);
-      }
-      if (this.legacySourcePath) {
-        const sessions = await legacySessions(this.legacySourcePath);
-        base.legacy = { sourcePath: this.legacySourcePath, title: SETUP_COPY[language].closeTitle,
-          action: SETUP_COPY[language].close, offline: SETUP_COPY[language].offline,
+      } else if (this.detectedLegacyPath) {
+        const sessions = await legacySessions(this.detectedLegacyPath);
+        base.fields.push(field('migrateLegacy', 'boolean', text(language, 'migrateLegacy'), false));
+        base.values.migrateLegacy = this.answers.migrateLegacy !== false;
+        base.legacy = { sourcePath: this.detectedLegacyPath, title: text(language, 'migrateLegacy'),
+          body: text(language, 'legacyOffer', { path: this.detectedLegacyPath }), confirmation: this.legacyConfirmation === true,
+          closeTitle: text(language, 'closeLegacyTitle'), closeCopy: text(language, 'closeLegacyCopy'),
+          action: text(language, 'closeLegacy'), offline: text(language, 'offlineLegacy'),
           sessions: sessions.map(({ binding }) => ({ unit: binding.unit, client: binding.client, machine: binding.machine,
             local: binding.machine === this.hostname })) };
       }
-      base.fields.push(
-        field('originKind', 'select', serviceText(language, 'originKind'), false, [
-          { value: 'folder', label: serviceText(language, 'folder') },
-          { value: 'onedrive', label: serviceText(language, 'onedrive') },
-        ], serviceText(language, 'originKindHelp')),
-        field('originPath', 'text', serviceText(language, 'originPath'), false, undefined, serviceText(language, 'originPathHelp')),
-      );
-      base.values.originKind = this.answers.originKind || 'folder';
-      base.values.originPath = this.answers.originPath || '';
     }
-    if (this.currentStep === 3) {
-      base.scanned = this.answers.agentsScanned === true;
-      if (!base.scanned) {
-        base.fields = [field('scan', 'boolean', text(language, 'scan'), true)];
-        base.values = {};
-      } else {
-        const known = this.answers.agents ?? [];
-        const agentsView = known.map((agent) => ({
-          id: agent.id,
-          name: displayAgent(agent.id, this.adapters),
-          detected: agent.detected === true,
-          selected: agent.selected !== false,
-          attach: agent.attach === 'onDemand' ? 'onDemand' : 'auto',
-        }));
-        const addableAgents = this.adapters
-          .filter((adapter) => !known.some((agent) => agent.id === adapter.id))
-          .map((adapter) => ({ value: adapter.id, label: adapter.displayName }));
-        base.agents = agentsView;
-        base.addableAgents = addableAgents;
-        base.onDemandNotice = { title: text(language, 'onDemandTitle'), body: text(language, 'onDemandCopy') };
-        base.onDemandNoticeShown = this.answers.onDemandNoticeShown === true;
-        if (agentsView.length === 0) base.description = text(language, 'noAgentsDetected');
-
-        base.fields = [];
-        if (agentsView.length > 0) {
-          base.fields.push(field('agents', 'multiselect', text(language, 'agentsFound'), false, agentsView.map((agent) => ({
-            value: agent.id,
-            label: agent.detected ? `${agent.name} (${text(language, 'detected')})` : agent.name,
-          }))));
-          base.fields.push(field('attachModes', 'object', text(language, 'attachModes'), false, agentsView.map((agent) => ({
-            value: agent.id,
-            label: agent.name,
-          }))));
-        }
-        if (addableAgents.length > 0) {
-          base.fields.push(field('addAgent', 'select', text(language, 'manualSearch'), false, [
-            option(language, '', 'no'),
-            ...addableAgents,
-          ]));
-        }
-        base.values = {
-          agents: agentsView.filter((agent) => agent.selected).map((agent) => agent.id),
-          attachModes: Object.fromEntries(agentsView.map((agent) => [agent.id, agent.attach === 'auto' ? 'auto' : 'on-demand'])),
-          addAgent: '',
-        };
-      }
-    }
-    if (this.currentStep === 4) {
-      const content = await this.availableContent();
-      base.categories = buildContentCategories(content, language);
-      base.fields = content.length === 0 ? [] : [field(
-        'included',
-        'multiselect',
-        text(language, 'included'),
-        false,
-        content.map((item) => ({
-          value: item.id,
-          label: item.type === 'feature' ? `/${item.name}` : [item.name, ...packCommands(item)].join(' '),
-        })),
-      )];
-      if (content.length === 0) base.description = text(language, 'nothingToInclude');
-      base.values = { included: this.answers.included ?? content.map((item) => item.id) };
-    }
-    if (this.currentStep === 5) {
-      if (!this.answers.projectsScanned) await this.scanHomeProjects();
-      const groups = groupProjectsByFolder(this.answers.projects);
-      base.groups = groups.map((group) => ({
-        id: group.id,
-        folder: group.folder,
-        environment: group.environment,
-        projects: group.projects.map((project) => ({
-          index: project.index,
-          name: project.name,
-          path: project.path,
-        })),
-      }));
-      base.fields = [field('addRoot', 'text', text(language, 'addRoot'), false)];
-      for (const [index, group] of groups.entries()) {
-        base.fields.push(field(`groupEnvironment.${index}`, 'text', text(language, 'environment'), false));
-      }
-      base.fields.push(field('removeProject', 'number', text(language, 'removeRepository'), false));
-      base.fields.push(field('removeEnvironment', 'text', text(language, 'removeEnvironment'), false));
-      base.fields.push(field(
-        'projectsConfirmed',
-        'boolean',
-        text(language, 'projects'),
-        true,
-        [option(language, true, 'yes'), option(language, false, 'no')],
-      ));
-      base.values = { addRoot: '', projectsConfirmed: this.answers.projectsConfirmed };
-      groups.forEach((group, index) => { base.values[`groupEnvironment.${index}`] = group.environment; });
-    }
-    if (this.currentStep === 6) {
-      this.preferenceFiles = await discoverPreferenceFiles(this.selectedAgentIds(), {
-        adapters: this.adapters,
-        homeDir: this.homeDir,
-        env: this.env,
-      });
-      base.fields = [
-        field('skipPreferences', 'boolean', text(language, 'skipPreferences'), false, [
-          option(language, true, 'yes'), option(language, false, 'no'),
-        ]),
-        field('addressStyle', 'select', text(language, 'addressUser'), false, [
-          option(language, 'impersonal', 'impersonal'),
-          option(language, 'formal', 'formal'),
-          option(language, 'explanatory', 'explanatory'),
-          option(language, 'swarm', 'swarm'),
-        ]),
-        field('customPreference', 'textarea', text(language, 'anythingElse'), false),
-      ];
-      if (this.preferenceFiles.length > 0) {
-        base.fields.push(field(
-          'keepExistingPreferences',
-          'boolean',
-          text(language, 'keepExistingPreferences'),
-          false,
-          [option(language, true, 'yes'), option(language, false, 'no')],
-        ));
-      }
-      base.fields.push(field('autoUpdates', 'boolean', text(language, 'updates'), false, [
-        option(language, true, 'yes'), option(language, false, 'no'),
-      ]));
-      base.values = {
-        skipPreferences: this.answers.skipPreferences,
-        addressStyle: this.answers.addressStyle,
-        customPreference: this.answers.customPreference,
-        keepExistingPreferences: this.answers.keepExistingPreferences,
-        autoUpdates: this.answers.updateCheck === 'daily',
-      };
-    }
-    if (this.currentStep === 7) {
-      const preview = await this.preview();
-      base.preview = preview;
-      base.fields = preview.conflicts.map((conflict, index) => field(
-        `conflict.${index}`,
-        'select',
-        conflict.path,
-        true,
-        conflict.choices.map((choice) => option(language, choice, conflictChoiceKey(conflict, choice))),
-        conflict.reason,
-      ));
-      base.fields.push(field(
-        'confirm',
-        'boolean',
-        text(language, 'confirmWrite'),
-        true,
-        [option(language, true, 'yes'), option(language, false, 'no')],
-      ));
+    if (id === 'service') {
+      base.progress = this.setupProgress();
+      base.failure = this.checkpoint?.error ? { code: this.checkpoint.error.code,
+        headline: this.checkpoint.error.message, body: text(language, 'failureScope') } : null;
+      const preview = this.checkpoint?.completed.includes('configure') ? { conflicts: [] }
+        : this.installing || this.checkpoint ? this.setupPreview ?? { conflicts: [] } : await this.preview();
+      base.preview = { ...preview, conflicts: (preview.conflicts ?? []).map(conflict => ({
+        ...conflict, selection: this.answers.conflicts[conflict.path] ?? conflict.selection,
+      })) };
+      base.fields = (base.preview.conflicts ?? []).map((conflict, index) => field(
+        `conflict.${index}`, 'select', conflict.path, true,
+        conflict.choices.map(choice => option(language, choice, conflictChoiceKey(conflict, choice))), conflict.reason));
       base.values = { confirm: this.answers.confirm, conflicts: { ...this.answers.conflicts } };
-      for (const [index, conflict] of preview.conflicts.entries()) {
-        base.values[`conflict.${index}`] = this.answers.conflicts[conflict.path] ?? conflict.selection ?? null;
-      }
-      if (this.result?.service?.status === 'failed') base.description = serviceText(language, 'serviceFailed');
+    }
+    if (id === 'ready') {
+      const agents = (this.answers.agents ?? []).filter(agent => agent.selected !== false).map(agent => displayAgent(agent.id, this.adapters));
+      const projects = this.includedProjects();
+      const folders = new Set(projects.map(project => path.dirname(project.path))).size;
+      base.summary = [
+        { id: 'mind', label: 'M1ND', value: this.mindPath },
+        ...(this.result?.mode === 'migrate' ? [{ id: 'legacy', label: text(language, 'legacyMind'), value: text(language, 'migratedLegacy') }] : []),
+        { id: 'service', label: text(language, 'service'), value: this.result?.service?.status === 'started' ? text(language, 'running') : text(language, 'serviceNotStarted'), running: this.result?.service?.status === 'started' },
+        { id: 'agents', label: text(language, 'agentsFound'), value: agents.join(', '), count: agents.length },
+        { id: 'projects', label: text(language, 'step5Title'), value: text(language, 'repositoriesInFolders', { repositories: projects.length, folders }), repositories: projects.length, folders },
+      ];
+      base.notice = text(language, 'detectedDefaults');
     }
     return base;
+  }
+
+  async joinSummary() {
+    const files = await legacyTreeInventory(this.mindPath);
+    const units = new Set();
+    const machines = [];
+    for (const entry of files) {
+      if (entry.kind !== 'file') continue;
+      if (/^user\/(?:state|(?:projects|envs)\/[^/]+\/state)\/[^/]+\.md$/.test(entry.path)) {
+        const content = await readFile(path.join(this.mindPath, entry.path), 'utf8');
+        const unit = /^unit:\s*(\S+)/m.exec(content)?.[1];
+        if (unit && !['master', 'user'].includes(unit)) units.add(entry.path);
+      }
+      if (/^user\/machines\/[^/]+\.md$/.test(entry.path)) {
+        const record = parseMachineRecord(await readFile(path.join(this.mindPath, entry.path), 'utf8'));
+        machines.push(record);
+      }
+    }
+    machines.sort((left, right) => String(right.lastCheck ?? '').localeCompare(String(left.lastCheck ?? '')));
+    return { units: units.size, machine: machines[0]?.machine || text(this.answers.language, 'unknownMachine'),
+      time: machines[0]?.lastCheck || text(this.answers.language, 'unknownTime') };
+  }
+
+  setupProgress() {
+    const phases = [this.checkpoint?.mode === 'migrate' ? ['prepare', 'close-legacy', 'copy'] : ['prepare'],
+      ['close-legacy', 'copy', 'migrate'], ['configure'], ['start'], ['open', 'ready']];
+    const keys = ['progressFolder', 'progressLegacy', 'progressRegistration', 'progressStart', 'progressOpen'];
+    const completed = new Set(this.checkpoint?.completed ?? []);
+    const phase = this.checkpoint?.phase;
+    return keys.map((key, index) => {
+      const group = phases[index];
+      const done = group.every(value => completed.has(value));
+      const current = group.includes(phase);
+      const state = done ? 'done' : current && this.checkpoint?.error ? 'fail' : current && this.installing ? 'busy' : 'todo';
+      const timings = this.checkpointProof.timings ?? {};
+      const duration = group.reduce((sum, value) => sum + (timings[value] ?? 0), 0)
+        + (state === 'busy' && this.phaseStartedAt ? Date.now() - this.phaseStartedAt : 0);
+      return { id: ['folder', 'legacy', 'registration', 'start', 'open'][index], label: text(this.answers.language, key),
+        state, elapsedSeconds: duration > 0 ? Math.ceil(duration / 1000) : null };
+    });
   }
 
   async setLanguage(value) {
@@ -475,145 +368,33 @@ class SetupSession {
 
   async answer(values = {}) {
     if (!values || typeof values !== 'object' || Array.isArray(values)) throw new SetupValidationError('Answers must be an object');
+    if (this.installing) throw new CoreError(409, 'setup_busy', 'Setup is already running.');
     if (this.currentStep === 8) return this.getStep();
-
     if (this.currentStep === 1) {
-      const mode = values.installMode ?? this.answers.installMode;
-      if (mode !== 'simple' && mode !== 'custom') throw new SetupValidationError('installMode must be simple or custom');
-      this.answers.installMode = mode;
-      if (mode === 'simple') {
-        // A mind already on this machine is attached instead of installed over.
-        const found = this.existingMind ?? await this.findInstalledMind();
-        if (found) {
-          if (/^2\./.test(found.version)) this.legacySourcePath = found.path;
-          else {
-            await this.selectMind(found.path);
-            this.answers.attach = this.canAttach();
-          }
-        }
-        await this.applySimpleDefaults();
-        this.currentStep = 7;
-      } else {
-        this.currentStep = 2;
-      }
+      this.currentStep = 2;
     } else if (this.currentStep === 2) {
-      if (values.originKind !== undefined && values.originKind !== '' && values.originKind !== 'folder' && values.originKind !== 'onedrive') {
-        throw new SetupValidationError('originKind must be folder or onedrive');
-      }
-      if (values.originKind === 'folder' || values.originKind === 'onedrive') this.answers.originKind = values.originKind;
-      if (typeof values.originPath === 'string' && values.originPath.trim() !== '') {
-        const origin = path.resolve(values.originPath);
-        validateMindSelection(origin, this.kitPath);
-        this.answers.originPath = origin;
-      }
       const selected = path.resolve(requireValue(values.mindPath ?? this.mindPath, 'mindPath'));
       validateMindSelection(selected, this.kitPath);
       await validateDestinationType(selected);
-      if (this.answers.serviceOnly) {
-        if (normalizePath(selected) !== normalizePath(this.mindPath)) throw new SetupValidationError('Service setup keeps the installed mind in its existing location.');
-        this.currentStep = 7;
-        await this.persistDraft(7);
-        return this.getStep();
-      }
-      if (values.migrateLegacy === false) this.legacySourcePath = null;
-      else if (values.legacySourcePath) this.legacySourcePath = path.resolve(values.legacySourcePath);
       await this.selectMind(selected);
-      if (/^2\./.test(this.existingMind?.version ?? '')) {
-        this.legacySourcePath = selected;
-        throw new SetupValidationError('Choose a separate destination for the legacy M1ND copy.');
-      }
-      // A path that turns out to hold a mind goes back to this step with the alert, so the
-      // attach question is answered about the folder the answer belongs to.
-      if (this.canAttach() && this.alertedMind !== normalizePath(selected)) {
+      if (/^2\./.test(this.existingMind?.version ?? '')) throw new SetupValidationError('Choose a separate destination for the legacy M1ND copy.');
+      if (values.changeFolder === true) { this.legacyConfirmation = false; await this.persistDraft(); return this.getStep(); }
+      if (this.canAttach() && this.alertedMind !== normalizePath(selected)) { await this.persistDraft(); return this.getStep(); }
+      this.answers.attach = this.canAttach();
+      if (this.answers.attach && values.attach === false) throw new SetupValidationError('Choose another folder to create a new M1ND.');
+      if (values.migrateLegacy !== undefined && typeof values.migrateLegacy !== 'boolean') throw new SetupValidationError('migrateLegacy must be a boolean');
+      this.answers.migrateLegacy = values.migrateLegacy ?? this.answers.migrateLegacy ?? true;
+      this.legacySourcePath = !this.answers.attach && this.answers.migrateLegacy ? this.detectedLegacyPath : null;
+      if (values.closeLegacy === false) { this.legacyConfirmation = false; await this.persistDraft(); return this.getStep(); }
+      if (this.legacySourcePath && (await legacySessions(this.legacySourcePath)).length && values.closeLegacy !== true) {
+        this.legacyConfirmation = true;
         await this.persistDraft();
         return this.getStep();
       }
-      this.answers.attach = this.canAttach() && values.attach !== false;
-      this.currentStep = 3;
-      await this.persistDraft();
-      return this.getStep();
-    } else if (this.currentStep === 3) {
-      if (this.answers.agentsScanned !== true) {
-        await this.scanAgents();
-        return this.getStep();
-      }
-      const addAgentId = values.addAgent;
-      if (typeof addAgentId === 'string' && addAgentId !== '') {
-        this.addManualAgent(addAgentId);
-        await this.persistDraft();
-        return this.getStep();
-      }
-      const known = this.answers.agents ?? [];
-      const knownIds = new Set(known.map((agent) => agent.id));
-      const selected = values.agents ?? known.filter((agent) => agent.selected !== false).map((agent) => agent.id);
-      requireStringArray(selected, 'agents');
-      if (selected.some((id) => !knownIds.has(id))) throw new SetupValidationError('agents contains an unknown agent');
-      const attachValues = values.attachModes && typeof values.attachModes === 'object' ? values.attachModes : {};
-      this.answers.agents = known.map((agent) => {
-        const requested = attachValues[agent.id];
-        const attach = requested === undefined ? agent.attach : normalizeAttach(requested);
-        return { ...agent, selected: selected.includes(agent.id), attach };
-      });
-      if (this.answers.agents.some((agent) => agent.selected && agent.attach === 'onDemand')) {
-        this.answers.onDemandNoticeShown = true;
-      }
-      this.currentStep = 4;
-    } else if (this.currentStep === 4) {
-      const available = await this.availableContent();
-      const valid = new Set(available.map((item) => item.id));
-      const included = values.included ?? this.answers.included ?? [...valid];
-      requireStringArray(included, 'included');
-      if (included.some((item) => !valid.has(item))) throw new SetupValidationError('included contains an unavailable item');
-      this.answers.included = [...new Set(included)];
-      this.currentStep = 5;
-    } else if (this.currentStep === 5) {
-      if (!this.answers.projectsScanned) await this.scanHomeProjects();
-      const addRoot = values.addRoot;
-      if (typeof addRoot === 'string' && addRoot.trim() !== '') {
-        await this.addProjectRoot(addRoot.trim());
-        return this.getStep();
-      }
-      if (typeof values.removeProject === 'number') {
-        this.removeProject(values.removeProject);
-        await this.persistDraft();
-        return this.getStep();
-      }
-      if (typeof values.removeEnvironment === 'string' && values.removeEnvironment !== '') {
-        this.removeEnvironmentGroup(values.removeEnvironment);
-        await this.persistDraft();
-        return this.getStep();
-      }
-
-      if (values.projectsConfirmed !== true) throw new SetupValidationError('projectsConfirmed must be true');
-      const groups = groupProjectsByFolder(this.answers.projects);
-      for (const [index, group] of groups.entries()) {
-        const provided = values[`groupEnvironment.${index}`];
-        if (provided === undefined) continue;
-        const environment = provided ? validateRouteName(provided, 'environment name') : '';
-        const memberIndices = new Set(group.projects.map((project) => project.index));
-        this.answers.projects = this.answers.projects.map((project, projectIndex) => (
-          memberIndices.has(projectIndex) ? { ...project, environment } : project
-        ));
-      }
-      this.answers.projectsConfirmed = true;
-      // Preferences belong to the mind, not to the machine: an attach leaves them as they are.
-      this.currentStep = this.answers.attach ? 7 : 6;
-    } else if (this.currentStep === 6) {
-      this.answers.skipPreferences = values.skipPreferences === true;
-      if (values.keepExistingPreferences !== undefined) {
-        this.answers.keepExistingPreferences = values.keepExistingPreferences !== false;
-      }
-      if (!this.answers.skipPreferences) {
-        const addressStyle = values.addressStyle ?? this.answers.addressStyle;
-        if (!ADDRESS_STYLES.has(addressStyle)) throw new SetupValidationError('Invalid addressStyle');
-        this.answers.addressStyle = addressStyle;
-        this.answers.customPreference = normalizePreference(values.customPreference ?? this.answers.customPreference);
-      } else {
-        this.answers.customPreference = '';
-      }
-      const autoUpdates = values.autoUpdates ?? (this.answers.updateCheck === 'daily');
-      this.answers.updateCheck = autoUpdates === false ? 'off' : 'daily';
+      this.answers.closeLegacy = values.closeLegacy === true;
+      await this.applySimpleDefaults();
       this.currentStep = 7;
+      this.setupPreview = await this.preview();
     } else if (this.currentStep === 7) {
       const preview = await this.preview();
       const nested = values.conflicts && typeof values.conflicts === 'object' ? values.conflicts : {};
@@ -625,29 +406,16 @@ class SetupSession {
         }
       }
       this.answers.confirm = values.confirm === true;
-      if (values.closeLegacy !== undefined) this.answers.closeLegacy = values.closeLegacy === true;
-      await this.persistDraft(7);
-      return this.getStep();
     }
-
     await this.persistDraft();
     return this.getStep();
   }
 
   async back() {
-    if (this.currentStep <= 1) return this.getStep();
-    if (this.answers.serviceOnly && this.currentStep === 7) {
-      this.currentStep = 2;
-      this.answers.confirm = false;
-      await this.persistDraft(2);
-      return this.getStep();
-    }
-    if (this.currentStep === 8) this.currentStep = 7;
-    else if (this.currentStep === 7) {
-      this.currentStep = this.answers.installMode === 'simple' ? 1 : (this.answers.attach ? 5 : 6);
-    } else this.currentStep -= 1;
-    this.answers.confirm = false;
-    await this.persistDraft(this.currentStep);
+    if (this.currentStep >= 7 || this.installing) throw new CoreError(409, 'back_unavailable', text(this.answers.language, 'backUnavailable'));
+    if (this.currentStep === 2) this.currentStep = 1;
+    this.legacyConfirmation = false;
+    await this.persistDraft();
     return this.getStep();
   }
 
@@ -812,8 +580,14 @@ class SetupSession {
     if (this.checkpoint.completed.includes(phase)) return;
     if (this.checkpoint.phase !== phase) throw new CoreError(409, 'checkpoint_changed', 'Setup phases cannot be skipped.');
     this.checkpoint.error = null;
+    this.phaseStartedAt = Date.now();
     await this.saveCheckpoint();
-    await operation();
+    try { await operation(); }
+    finally {
+      this.checkpointProof.timings ??= {};
+      this.checkpointProof.timings[phase] = Date.now() - this.phaseStartedAt;
+      this.phaseStartedAt = null;
+    }
     this.checkpoint.completed.push(phase);
     this.checkpoint.phase = SETUP_PHASES[this.checkpoint.completed.length] ?? 'ready';
     await this.saveCheckpoint();
@@ -979,8 +753,10 @@ class SetupSession {
   async install() {
     if (this.currentStep !== 7) throw new Error('Install is available at step 7');
     if (!this.answers.confirm) throw new SetupValidationError('Installation must be confirmed');
-    await this.prepareSetup();
+    if (this.installing) throw new CoreError(409, 'setup_busy', 'Setup is already running.');
+    this.installing = true;
     try {
+      await this.prepareSetup();
       await this.phase('prepare', () => this.prepareDestination());
       await this.phase('close-legacy', () => this.closeLegacy());
       await this.phase('copy', () => this.copyLegacy());
@@ -1033,6 +809,7 @@ class SetupSession {
       this.result.checkpoint = { ...this.checkpoint, completed: [...this.checkpoint.completed] };
       return this.result;
     } catch (error) {
+      if (!this.checkpoint) throw error;
       const code = ['port_in_use', 'legacy_closure_required', 'legacy_changed', 'checkpoint_changed', 'invalid_path', 'unsafe_path', 'destination_exists', 'setup_incomplete'].includes(error.code)
         ? error.code : 'setup_failed';
       this.checkpoint.error = { code, message: error.safeSetupMessage ?? (this.answers.language === 'es'
@@ -1045,6 +822,8 @@ class SetupSession {
         service: { ...(this.result?.service ?? {}), status: 'failed', phase: this.checkpoint.phase,
           code, error: this.checkpoint.error.message }, checkpoint: { ...this.checkpoint, completed: [...this.checkpoint.completed] } };
       return this.result;
+    } finally {
+      this.installing = false;
     }
   }
 
@@ -1461,7 +1240,7 @@ class SetupSession {
     }
     notices.push(...(outcome.relay ?? []).map((item) => relayLine(language, item)));
     return {
-      message: text(language, 'step8Description'),
+      message: text(language, 'step4Description', { machine: this.hostname }),
       firstCommand: '/executor <project>',
       mindPath: this.mindPath,
       attached: this.answers.attach === true,
@@ -1941,7 +1720,7 @@ function normalizeLanguage(value) {
 
 function clampStep(value) {
   const number = Number(value);
-  return Number.isInteger(number) && number >= 1 && number <= 8 ? number : 1;
+  return [1, 2, 7, 8].includes(number) ? number : number >= 3 && number <= 6 ? 2 : 1;
 }
 
 function requireValue(value, label) {

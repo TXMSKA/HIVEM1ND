@@ -19,206 +19,32 @@ import { legacySessions } from '../engine/relay/local-wake.mjs';
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const createSetupSession = options => rawCreateSetupSession({ aclRunner: stubAclRunner(), ...options });
 
-test('setup runs all eight custom-mode steps against isolated homes and resumes', async (context) => {
-  const fixture = await makeFixture(context);
-  let session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'es',
-    env: { PATH: '' },
-  });
-
-  const first = await session.getStep();
-  assert.equal(first.number, 1);
-  assert.equal(first.language, 'es');
-  assert.deepEqual(first.languages.map((entry) => entry.value), ['en', 'es']);
-  await session.setLanguage('en');
-  const agentStep = await session.answer({ installMode: 'custom' }).then(() => session.answer({ mindPath: fixture.mindPath }));
-  assert.equal(agentStep.number, 3);
-  assert.equal(agentStep.scanned, false);
-  const scannedStep = await session.answer({ scan: true });
-  assert.equal(scannedStep.number, 3);
-  assert.equal(scannedStep.scanned, true);
-  assert.deepEqual(scannedStep.agents.map((agent) => agent.id), ['codex']);
-  assert.equal(scannedStep.agents[0].attach, 'auto');
-  assert.deepEqual(
-    scannedStep.addableAgents.map((agent) => agent.value).sort(),
-    ['claude-code', 'cursor', 'opencode', 'vscode'],
-  );
-
-  session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    env: { PATH: '' },
-    resume: true,
-  });
-  const resumedAgentStep = await session.getStep();
-  assert.equal(resumedAgentStep.number, 3);
-  assert.equal(resumedAgentStep.scanned, true);
-
-  await session.answer({ addAgent: 'vscode' });
-  const withManualAgent = await session.getStep();
-  assert.ok(withManualAgent.agents.some((agent) => agent.id === 'vscode' && agent.detected === false));
-
-  await session.answer({ agents: ['codex', 'vscode'], attachModes: { codex: 'auto', vscode: 'auto' } });
-  const includeStep = await session.getStep();
-  assert.equal(includeStep.number, 4);
-  assert.equal(includeStep.fields[0].options.find((entry) => entry.value === 'feature:brainstorm').label, '/brainstorm');
-  assert.deepEqual(includeStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
-  await session.answer({ included: includeStep.values.included });
-  const scanStep = await session.answer({ addRoot: fixture.projectsRoot });
-  assert.equal(scanStep.number, 5);
-  assert.equal(scanStep.groups[0].projects[0].name, 'sample');
-  assert.equal(scanStep.values['groupEnvironment.0'], 'web');
-  const confirmStep = await session.answer({ projectsConfirmed: true });
-  assert.equal(confirmStep.number, 6);
-  assert.equal(confirmStep.values.autoUpdates, true);
-  await session.answer({ addressStyle: 'explanatory', customPreference: 'answers stay concise', autoUpdates: false });
-
-  const preview = await session.preview();
-  assert.equal(preview.conflicts.length, 0);
-  assert.ok(preview.clientChanges.files.some((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')));
-  await session.answer({ confirm: true });
-  const result = await session.install();
-  assert.equal(result.firstCommand, '/executor <project>');
-  assert.equal((await session.getStep()).number, 8);
-  assert.equal((await session.getStep()).done, true);
-  assert.deepEqual(result.attachPrompts, []);
-  assert.equal(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), 'Existing agent preference stays first.\n');
-  assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills')), false);
-  assert.equal(await pathExists(path.join(fixture.homeDir, '.copilot', 'instructions')), false);
-  assert.equal(result.clientChanges.requiresReview, true);
-  await applyReviewedClients(fixture);
-  const copilot = await readFile(path.join(fixture.homeDir, '.copilot', 'instructions', 'hivem1nd.instructions.md'), 'utf8');
-  assert.match(copilot, /^---\ndescription: .+\napplyTo: "\*\*"\n---\n\nHIVEM1ND: the mind is at /);
-
-  const installed = await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'), 'utf8');
-  assert.match(installed, new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
-  const installedSkills = await readdir(path.join(fixture.homeDir, '.agents', 'skills'));
-  const featureNames = (await readdir(path.join(KIT_PATH, 'features')))
-    .filter((name) => name.endsWith('.md') && name.toLowerCase() !== 'readme.md')
-    .map((name) => path.basename(name, '.md'));
-  assert.ok(featureNames.length > 0);
-  assert.ok(featureNames.every((name) => installedSkills.includes(name)));
-  const rules = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
-  assert.ok(rules.startsWith('Existing agent preference stays first.\n'));
-  assert.match(rules, /HIVEM1ND: the mind is at/);
-  const routes = await readFile(path.join(fixture.mindPath, 'user', 'routes.md'), 'utf8');
-  assert.match(routes, /- sample \(web\)/);
-  const preferences = await readFile(path.join(fixture.mindPath, 'user', 'preferences.md'), 'utf8');
-  assert.match(preferences, /Existing preference stays first\./);
-  assert.match(preferences, /answers stay concise\. Why: chosen at setup\./);
-
-  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
-  assert.equal(machine.setup, 'done');
-  assert.equal(machine.language, 'en');
-  assert.equal(machine.updateCheck, 'off');
-  assert.equal(machine.keepExistingPreferences, true);
-  assert.equal(machine.draft && Object.keys(machine.draft).length, 0);
-  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
-  assert.equal(machine.managedFiles[path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md')], undefined);
-  assert.equal((await lstat(path.join(fixture.mindPath, 'user', 'projects', 'sample', 'state'))).isDirectory(), true);
-  await assert.rejects(() => lstat(path.join(fixture.mindPath, 'test')), { code: 'ENOENT' });
+test('setup exposes four descriptors and preserves unreviewed client files', async context => {
+ const fixture=await makeFixture(context); const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});
+ const first=await session.getStep();
+ assert.deepEqual({id:first.id,number:first.number,total:first.total,back:first.back,busy:first.busy,done:first.done,title:first.title,description:first.description,fields:first.fields,values:first.values,action:first.action}, {id:'install',number:1,total:4,back:false,busy:false,done:false,title:'Install HIVEM1ND',description:'Setup takes about a minute.',fields:[],values:{},action:'Start setup'});
+ assert.deepEqual(first.bullets,['Control the Swarm from the Map','Organize agents to reach objectives faster and better','Relay is used for inter-session communication']);
+ const location=await session.answer({}); assert.equal(location.id,'location');assert.equal(location.number,2);assert.equal(location.back,true);assert.deepEqual(location.fields.map(field=>field.id),['mindPath']);assert.equal(location.values.mindPath,fixture.mindPath);assert.equal(location.relayPlus.disabled,true);
+ const service=await session.answer({mindPath:fixture.mindPath}); assert.equal(service.id,'service');assert.equal(service.number,3);assert.equal(service.back,false);assert.deepEqual(service.progress.map(row=>row.state),['todo','todo','todo','todo','todo']);
+ await session.answer({confirm:true});await session.install();const ready=await session.getStep();assert.equal(ready.id,'ready');assert.equal(ready.number,4);assert.equal(ready.done,true);assert.equal(ready.back,false);assert.equal(ready.action,'Open the Map');assert.deepEqual(ready.summary.map(row=>row.id),['mind','service','agents','projects']);assert.equal(ready.summary.find(row=>row.id==='agents').count,1);
+ assert.equal(await readFile(path.join(fixture.homeDir,'.codex','AGENTS.md'),'utf8'),'Existing agent preference stays first.\n');assert.equal(await pathExists(path.join(fixture.homeDir,'.agents','skills')),false);
+ const resumed=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},resume:true});assert.equal((await resumed.getStep()).id,'ready');
 });
 
-test('simple install mode accepts every default and reaches install directly', async (context) => {
-  const fixture = await makeFixture(context);
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: { PATH: '' },
-  });
-
-  const step = await session.answer({ installMode: 'simple' });
-  assert.equal(step.number, 7);
-  assert.equal(step.preview.conflicts.length, 0);
-  await session.answer({ confirm: true });
-  const result = await session.install();
-  assert.equal(result.firstCommand, '/executor <project>');
-
-  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
-  assert.equal(machine.setup, 'done');
-  assert.equal(machine.updateCheck, 'daily');
-  assert.deepEqual(machine.agents, [{ name: 'codex', mode: 'auto' }]);
-  assert.deepEqual(machine.paths, []);
+test('setup detects agents and content with defaults',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});await session.answer({});await session.answer({mindPath:fixture.mindPath});assert.equal((await session.getStep()).number,3);assert.deepEqual(session.answers.agents.map(agent=>agent.id),['codex']);assert.deepEqual(session.answers.included,(await session.availableContent()).map(item=>item.id));assert.equal(session.answers.updateCheck,'daily');await session.answer({confirm:true});await session.install();assert.equal((await readMachineRecord(fixture.mindPath,'TESTBOX')).record.updateCheck,'daily');
 });
 
-test('back from install returns to install mode after simple and to confirm after custom', async (context) => {
-  const simpleFixture = await makeFixture(context);
-  const simpleSession = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: simpleFixture.mindPath,
-    homeDir: simpleFixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: { PATH: '' },
-  });
-  await simpleSession.answer({ installMode: 'simple' });
-  const backFromSimple = await simpleSession.back();
-  assert.equal(backFromSimple.number, 1);
-  assert.equal(backFromSimple.values.installMode, 'simple');
-
-  const customFixture = await makeFixture(context);
-  const customSession = await completeAnswers(customFixture, ['codex']);
-  const backFromCustom = await customSession.back();
-  assert.equal(backFromCustom.number, 6);
+test('Back is available only from location',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''}});await session.answer({});assert.equal((await session.back()).id,'install');await session.answer({});await session.answer({mindPath:fixture.mindPath});await assert.rejects(session.back(),error=>error.code==='back_unavailable');await session.answer({confirm:true});await session.install();await assert.rejects(session.back(),error=>error.code==='back_unavailable');
 });
 
-test('language can change mid-flow without losing answers or position', async (context) => {
-  const fixture = await makeFixture(context);
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: { PATH: '' },
-  });
-  await session.answer({ installMode: 'custom' });
-  await session.answer({ mindPath: fixture.mindPath });
-  await session.answer({ scan: true });
-
-  const step = await session.setLanguage('es');
-  assert.equal(step.number, 3);
-  assert.equal(step.language, 'es');
-  assert.equal(step.scanned, true);
-  assert.deepEqual(step.agents.map((agent) => agent.id), ['codex']);
-  assert.equal(step.title, 'Agentes');
+test('language changes preserve folder and four-step position',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});await session.answer({});const step=await session.setLanguage('es');assert.equal(step.title,'Dónde se guarda el M1ND');assert.equal(step.values.mindPath,fixture.mindPath);assert.equal(step.action,'Continuar');await session.answer({mindPath:fixture.mindPath});assert.equal((await session.getStep()).title,'Iniciando el servicio Relay');
 });
 
-test('the automatic update checkbox on the confirm step survives resume', async (context) => {
-  const fixture = await makeFixture(context);
-  const session = await completeAnswers(fixture, ['codex']);
-  await session.back();
-  const confirmStep = await session.getStep();
-  assert.equal(confirmStep.number, 6);
-  assert.equal(confirmStep.values.autoUpdates, false);
-
-  const resumed = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    env: { PATH: '' },
-    resume: true,
-  });
-  const resumedStep = await resumed.getStep();
-  assert.equal(resumedStep.number, 6);
-  assert.equal(resumedStep.values.autoUpdates, false);
-  await resumed.answer({ autoUpdates: true });
-  const installStep = await resumed.getStep();
-  await resumed.answer({ confirm: true });
-  await resumed.install();
-  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
-  assert.equal(machine.updateCheck, 'daily');
-  assert.equal(installStep.number, 7);
+test('a resumed location retains the selected folder',async context=>{
+ const fixture=await makeFixture(context);const options={kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'};const session=await createSetupSession(options);await session.answer({});const chosen=path.join(fixture.root,'chosen');await session.answer({mindPath:chosen,changeFolder:true});const resumed=await createSetupSession({...options,mindPath:chosen,resume:true});const step=await resumed.getStep();assert.equal(step.id,'location');assert.equal(step.values.mindPath,chosen);
 });
 
 test('unowned files and modified managed skills require per-file choices', async (context) => {
@@ -437,69 +263,12 @@ test('the default mind path is the user home, never the kit tree or a QA fixture
   assert.ok(!step.values.mindPath.startsWith(path.join(KIT_PATH, 'user')));
 });
 
-test('mind location presets always offer the installer, drive and user folders, and OneDrive only when detected', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-presets-'));
-  context.after(() => rm(root, { recursive: true, force: true }));
-  const homeDir = path.join(root, 'home');
-  await mkdir(homeDir, { recursive: true });
-
-  const withoutOneDrive = await createSetupSession({
-    kitPath: KIT_PATH,
-    homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: {},
-  });
-  await withoutOneDrive.answer({ installMode: 'custom' });
-  const stepWithout = await withoutOneDrive.getStep();
-  assert.deepEqual(stepWithout.presets.map((preset) => preset.id), ['cosmic', 'installer', 'drive', 'user']);
-  assert.equal(stepWithout.presets.find((preset) => preset.id === 'installer').path, KIT_PATH);
-  assert.equal(stepWithout.presets.find((preset) => preset.id === 'user').path, path.join(homeDir, 'HIVEM1ND'));
-
-  const oneDrivePath = path.join(root, 'OneDriveFolder');
-  await mkdir(oneDrivePath, { recursive: true });
-  const withOneDrive = await createSetupSession({
-    kitPath: KIT_PATH,
-    homeDir,
-    hostname: 'TESTBOX2',
-    language: 'en',
-    env: { OneDrive: oneDrivePath },
-  });
-  await withOneDrive.answer({ installMode: 'custom' });
-  const stepWith = await withOneDrive.getStep();
-  const oneDrivePreset = stepWith.presets.find((preset) => preset.id === 'oneDrive');
-  assert.ok(oneDrivePreset);
-  assert.equal(oneDrivePreset.path, path.join(oneDrivePath, 'HIVEM1ND'));
-  assert.equal(oneDrivePreset.label, 'OneDrive');
-
-  const missingOneDriveFolder = await createSetupSession({
-    kitPath: KIT_PATH,
-    homeDir,
-    hostname: 'TESTBOX3',
-    language: 'en',
-    env: { OneDrive: path.join(root, 'does-not-exist') },
-  });
-  await missingOneDriveFolder.answer({ installMode: 'custom' });
-  const stepMissing = await missingOneDriveFolder.getStep();
-  assert.ok(!stepMissing.presets.some((preset) => preset.id === 'oneDrive'));
+test('location has Folder and disabled Relay+ without mode, sync or origin controls',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});const step=await session.answer({});assert.deepEqual(step.fields,[{id:'mindPath',type:'text',label:'Folder',required:true}]);for(const key of ['presets','originKind','sync','installMode','agents','categories','groups'])assert.equal(step[key],undefined);assert.deepEqual(step.relayPlus,{title:'Use Relay+',badge:'Coming soon',body:'Sync your preferences on any device, phones included, through the same service as Nebula+.',disabled:true});
 });
 
-test('applying a mind location preset updates the mind path', async (context) => {
-  const fixture = await makeFixture(context);
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: { PATH: '' },
-  });
-  await session.answer({ installMode: 'custom' });
-  const step = await session.getStep();
-  const userPreset = step.presets.find((preset) => preset.id === 'user');
-  assert.equal(userPreset.path, path.join(fixture.homeDir, 'HIVEM1ND'));
-  const next = await session.answer({ mindPath: userPreset.path });
-  assert.equal(next.number, 3);
+test('Change reviews a folder without leaving location',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''}});await session.answer({});const chosen=path.join(fixture.homeDir,'chosen');const step=await session.answer({mindPath:chosen,changeFolder:true});assert.equal(step.id,'location');assert.equal(step.values.mindPath,chosen);assert.equal((await session.answer({mindPath:chosen})).id,'service');
 });
 
 test('choosing the kit fixtures tree during mind location is rejected', async (context) => {
@@ -644,41 +413,8 @@ test('replacing a junction inside a skills folder removes the link, writes the f
   assert.equal(record.managedFiles[path.join(qaLink, 'SKILL.md')] !== undefined, true);
 });
 
-test('content categories group every feature deterministically and control the included set', async (context) => {
-  const fixture = await makeFixture(context);
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env: { PATH: '' },
-  });
-  await session.answer({ installMode: 'custom' });
-  await session.answer({ mindPath: fixture.mindPath });
-  await session.answer({ scan: true });
-  const contentStep = await session.answer({});
-  assert.equal(contentStep.number, 4);
-
-  assert.deepEqual(contentStep.categories.map((category) => category.id).filter((id) => id !== 'other'), ['planning', 'quality', 'continuity', 'knowledge']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.name), ['blueprint', 'brainstorm', 'plan', 'report', 'void']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.name), ['conflicts', 'corpo', 'observer', 'qa', 'tribunal']);
-  assert.deepEqual(contentStep.categories.find((category) => category.id === 'continuity').items.map((item) => item.name), ['catchup', 'cleaner', 'docs', 'relay-client-setup', 'release']);
-  const allIds = contentStep.categories.flatMap((category) => category.items.map((item) => item.id));
-  const featureCount = (await readdir(path.join(KIT_PATH, 'features')))
-    .filter((name) => (name.endsWith('.md') || !name.includes('.')) && name.toLowerCase() !== 'readme.md').length;
-  assert.equal(new Set(allIds).size, allIds.length);
-  assert.equal(allIds.filter((id) => id.startsWith('feature:')).length, featureCount);
-
-  const planningIds = contentStep.categories.find((category) => category.id === 'planning').items.map((item) => item.id);
-  const qualityIds = contentStep.categories.find((category) => category.id === 'quality').items.map((item) => item.id);
-  const selection = [...planningIds, qualityIds[0]];
-  const nextStep = await session.answer({ included: selection });
-  assert.equal(nextStep.number, 5);
-
-  const backToContent = await session.back();
-  assert.equal(backToContent.number, 4);
-  assert.deepEqual(backToContent.values.included, selection);
+test('all detected content is included by default',async context=>{
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''}});await session.applySimpleDefaults();const content=await session.availableContent();assert.equal(new Set(content.map(item=>item.id)).size,content.length);assert.ok(content.some(item=>item.id==='feature:blueprint'));assert.deepEqual(session.answers.included,content.map(item=>item.id));
 });
 
 test('knowledge packs form their own last group, and each option names the pack and the commands it installs', async (context) => {
@@ -707,23 +443,7 @@ test('knowledge packs form their own last group, and each option names the pack 
     env: { PATH: '' },
     resume: false,
   });
-  await session.answer({ installMode: 'custom' });
-  await session.answer({ mindPath });
-  await session.answer({ scan: true });
-  const step = await session.answer({});
-  assert.equal(step.number, 4);
-
-  assert.deepEqual(step.categories.map((category) => category.id), ['planning', 'knowledge']);
-  const packs = step.categories.at(-1);
-  assert.equal(packs.label, text('en', 'categoryPacks'));
-  assert.deepEqual(packs.items, [
-    { id: 'knowledge:design', name: 'design', commands: [] },
-    { id: 'knowledge:security', name: 'security', commands: ['/cyberattack'] },
-  ]);
-  const labelById = new Map(step.fields[0].options.map((entry) => [entry.value, entry.label]));
-  assert.equal(labelById.get('knowledge:security'), 'security /cyberattack');
-  assert.equal(labelById.get('knowledge:design'), 'design');
-  assert.equal(labelById.get('feature:alpha'), '/alpha');
+  const items=await session.availableContent();assert.ok(items.some(item=>item.id==='knowledge:design'));assert.ok(items.some(item=>item.id==='knowledge:security'));assert.ok(items.some(item=>item.id==='feature:alpha'));
 });
 
 test('the preview groups files by owner: the mind for kit and data files, the adapter for agent files', async (context) => {
@@ -732,9 +452,9 @@ test('the preview groups files by owner: the mind for kit and data files, the ad
   const preview = await session.preview();
 
   const rulesFile = preview.files.find((file) => file.path === path.join(fixture.mindPath, 'rules.md'));
-  assert.deepEqual(rulesFile.owner, { id: 'mind', label: 'Mind' });
+  assert.deepEqual(rulesFile.owner, { id: 'mind', label: 'M1ND' });
   const versionFile = preview.files.find((file) => file.path === path.join(fixture.mindPath, 'user', 'VERSION'));
-  assert.deepEqual(versionFile.owner, { id: 'mind', label: 'Mind' });
+  assert.deepEqual(versionFile.owner, { id: 'mind', label: 'M1ND' });
   const skillFile = preview.clientChanges.files.find((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
   assert.deepEqual(skillFile.owner, { id: 'codex', label: 'Codex' });
 });
@@ -851,7 +571,8 @@ test('running setup again keeps the evidence folder recorded in the machine path
   const fixture = await makeFixture(context);
   const options = { kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', language: 'en', env: { PATH: '' }, resume: false };
   let session = await createSetupSession(options);
-  await session.answer({ installMode: 'simple' });
+  await session.answer({});
+  await session.answer({ mindPath: fixture.mindPath });
   await session.answer({ confirm: true });
   await session.install();
 
@@ -869,93 +590,19 @@ test('running setup again keeps the evidence folder recorded in the machine path
   assert.equal(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')], undefined);
 });
 
-test('custom mode alerts about an installed mind, attaches the machine and leaves the mind content alone', async (context) => {
-  const fixture = await makeFixture(context);
-  await makeInstalledMind(fixture, '1.0.0');
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'SECOND',
-    language: 'en',
-    env: { PATH: '' },
-    resume: false,
-  });
-
-  await session.answer({ installMode: 'custom' });
-  const location = await session.getStep();
-  assert.equal(location.number, 2);
-  assert.equal(location.existingMind.path, fixture.mindPath);
-  assert.equal(location.existingMind.version, '1.0.0');
-  assert.match(location.alert, /1\.0\.0/);
-  const attachField = location.fields.find((field) => field.id === 'attach');
-  assert.ok(attachField, 'expected the attach question');
-  assert.equal(location.values.attach, true);
-
-  await session.answer({ mindPath: fixture.mindPath, attach: true });
-  await session.answer({ scan: true });
-  await session.answer({ agents: ['codex'], attachModes: { codex: 'auto' } });
-  const includeStep = await session.getStep();
-  await session.answer({ included: includeStep.values.included });
-  await session.answer({ addRoot: fixture.projectsRoot });
-  // Preferences belong to the mind, so an attach goes straight to the install step.
-  const installStep = await session.answer({ projectsConfirmed: true });
-  assert.equal(installStep.number, 7);
-
-  const preview = await session.preview();
-  const mindFiles = preview.files.filter((file) => file.path.startsWith(`${fixture.mindPath}${path.sep}`));
-  assert.deepEqual(
-    mindFiles.map((file) => path.relative(fixture.mindPath, file.path)).sort(),
-    [path.join('user', 'machines', 'SECOND.md')],
-  );
-
-  await session.answer({ confirm: true });
-  const result = await session.install();
-  assert.equal(result.attached, true);
-  assert.ok(result.notices.some((notice) => notice.includes(fixture.mindPath)));
-  assert.ok(result.notices.some((notice) => notice.includes('1.0.0')), 'expected the version pair notice');
-  assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'VERSION'), 'utf8'), '1.0.0\n');
-  assert.equal(
-    await readFile(path.join(fixture.mindPath, 'user', 'preferences.md'), 'utf8'),
-    '- 2026-01-01: Existing preference stays first. Why: chosen before setup.\n',
-  );
-  assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Older rules kept.\n');
-  const machine = (await readMachineRecord(fixture.mindPath, 'SECOND')).record;
-  assert.equal(machine.setup, 'done');
-  assert.equal(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')], undefined);
+test('Join preserves an existing 3.0 M1ND',async context=>{
+ const fixture=await makeFixture(context);await makeInstalledMind(fixture,'3.0.0');const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'SECOND',env:{PATH:''},language:'en',resume:false});const step=await session.answer({});assert.equal(step.values.attach,true);assert.equal(step.join.title,'Join this M1ND');assert.equal(step.legacy,undefined);assert.equal(step.action,'Join');await session.answer({mindPath:fixture.mindPath,attach:true});assert.deepEqual((await session.preview()).files.map(file=>file.path),[path.join(fixture.mindPath,'user','machines','SECOND.md')]);await session.answer({confirm:true});assert.equal((await session.install()).mode,'join');assert.equal(await readFile(path.join(fixture.mindPath,'rules.md'),'utf8'),'Older rules kept.\n');
 });
 
-test('simple mode attaches to a mind already installed on this machine instead of writing a second one', async (context) => {
-  const fixture = await makeFixture(context);
-  const installed = path.join(fixture.homeDir, 'HIVEM1ND');
-  await makeInstalledMind({ ...fixture, mindPath: installed }, '1.1.1');
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: path.join(fixture.root, 'unused'),
-    homeDir: fixture.homeDir,
-    hostname: 'SECOND',
-    language: 'en',
-    env: { PATH: '' },
-    resume: false,
-  });
-
-  const step = await session.answer({ installMode: 'simple' });
-  assert.equal(step.number, 7);
-  const preview = await session.preview();
-  assert.equal(preview.files.some((file) => file.path.startsWith(`${path.join(fixture.root, 'unused')}${path.sep}`)), false);
-  await session.answer({ confirm: true });
-  const result = await session.install();
-  assert.equal(result.attached, true);
-  assert.equal(result.mindPath, installed);
-  assert.equal(await pathExists(path.join(fixture.root, 'unused')), false);
-  assert.equal(await readFile(path.join(installed, 'user', 'VERSION'), 'utf8'), '1.1.1\n');
-  assert.ok(await pathExists(path.join(installed, 'user', 'machines', 'SECOND.md')));
+test('Change to an existing M1ND presents Join before installation',async context=>{
+ const fixture=await makeFixture(context);const installed=path.join(fixture.homeDir,'HIVEM1ND');await makeInstalledMind({...fixture,mindPath:installed},'3.0.0');const unused=path.join(fixture.root,'unused');const session=await createSetupSession({kitPath:KIT_PATH,...fixture,mindPath:unused,hostname:'SECOND',env:{PATH:''},resume:false});await session.answer({});const step=await session.answer({mindPath:installed,changeFolder:true});assert.equal(step.id,'location');assert.equal(step.values.attach,true);await session.answer({mindPath:installed,attach:true});await session.answer({confirm:true});assert.equal((await session.install()).mindPath,installed);assert.equal(await pathExists(unused),false);
 });
 
 test('a migration failure leaves setup resumable until the remaining work succeeds', async (context) => {
   const fixture = await makeFixture(context);
   const session = await createSetupSession({ kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, language: 'en' });
-  await session.answer({ installMode: 'simple' });
+  await session.answer({});
+  await session.answer({ mindPath: fixture.mindPath });
   await session.answer({ confirm: true });
   const progress = path.join(fixture.mindPath, '.migration', 'migration-3.0.0.json');
   await mkdir(path.dirname(progress), { recursive: true });
@@ -971,66 +618,11 @@ test('a migration failure leaves setup resumable until the remaining work succee
   assert.match(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
 });
 
-test('service setup writes config before startup and retries the failed phase once', async (context) => {
-  const fixture = await makeFixture(context);
-  const env = process.platform === 'win32'
-    ? { PATH: '', LOCALAPPDATA: path.join(fixture.root, 'local') }
-    : process.platform === 'darwin'
-      ? { PATH: '' }
-      : { PATH: '', XDG_DATA_HOME: path.join(fixture.root, 'share') };
-  const commands = [];
-  const opened = [];
-  let starts = 0;
-  const session = await createSetupSession({
-    kitPath: KIT_PATH,
-    mindPath: fixture.mindPath,
-    homeDir: fixture.homeDir,
-    hostname: 'TESTBOX',
-    language: 'en',
-    env,
-    serviceSetup: true,
-    serviceDryRun: false,
-    serviceProtect: false,
-    aclRunner: stubAclRunner(),
-    serviceQuery: async (plan) => commands.length === 0 ? { present: false } : { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments },
-    serviceRunner: async (command) => { commands.push(command); },
-    serviceStart: async () => {
-      starts += 1;
-      if (starts === 1) throw new Error('starter down');
-      return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' };
-    },
-    openViewer: async (url) => { opened.push(url); },
-  });
-  const located = await session.answer({ installMode: 'custom' });
-  assert.equal(located.number, 2);
-  assert.equal(located.fields.some((item) => item.id === 'originKind'), true);
-  await session.answer({ mindPath: fixture.mindPath, originKind: 'folder' });
-  await session.answer({ scan: true });
-  await session.answer({ agents: [], attachModes: {} });
-  const includeStep = await session.getStep();
-  await session.answer({ included: includeStep.values.included });
-  await session.answer({ projectsConfirmed: true });
-  await session.answer({ skipPreferences: true, autoUpdates: false });
-  await session.answer({ confirm: true });
-  const failed = await session.install();
-  assert.equal(failed.service.status, 'failed');
-  assert.equal(failed.service.phase, 'start');
-  assert.equal((await session.getStep()).number, 7);
-  assert.equal((await session.getStep()).done, false);
-  assert.match((await session.getStep()).description, /could not start/);
-  assert.match(await readFile(failed.service.configFile, 'utf8'), /hivem1nd-service-config-v1/);
-  assert.equal(opened.length, 0);
-  const recorded = commands.length;
-  assert.equal(recorded > 0, true);
-  const retried = await session.install();
-  assert.equal(retried.service.status, 'started');
-  assert.equal(retried.completed, true);
-  assert.equal((await session.getStep()).done, true);
-  assert.equal(commands.length, recorded);
-  assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
-  await session.retryService();
-  assert.equal(opened.length, 1);
-  assert.equal(commands.length, recorded);
+test('service progress retains completed rows through failure, reopen and retry without logon registration',async context=>{
+ const fixture=await makeFixture(context);let starts=0,release;const gate=new Promise(resolve=>{release=resolve;});
+ const options={kitPath:KIT_PATH,...fixture,cosmicPath:path.join(fixture.root,'Cosmic'),hostname:'TESTBOX',env:{},language:'en',serviceSetup:true,serviceDryRun:false,serviceProtect:false,serviceRunner:async()=>assert.fail('No logon registration'),serviceQuery:async()=>assert.fail('No logon query'),serviceStart:async()=>{if(++starts===1){await gate;throw Object.assign(new Error('port 43210 occupied; private output omitted'),{code:'EADDRINUSE'});}return {viewerUrl:'http://127.0.0.1:9/gui/viewer'};}};
+ const session=await createSetupSession(options);await session.answer({});await session.answer({mindPath:fixture.mindPath});await session.answer({confirm:true});const installation=session.install();while(starts===0)await new Promise(resolve=>setTimeout(resolve,10));const busy=await session.getStep();assert.equal(busy.busy,true);assert.deepEqual(busy.progress.map(row=>row.state),['done','done','done','busy','todo']);release();assert.equal((await installation).completed,false);const failed=await session.getStep();assert.equal(failed.id,'service');assert.equal(failed.action,'Retry');assert.equal(failed.back,false);assert.deepEqual(failed.progress.map(row=>row.state),['done','done','done','fail','todo']);assert.equal(failed.failure.headline,'The service did not start: port 43210 is used by another program.');assert.doesNotMatch(JSON.stringify(failed.failure),/private output|Nothing outside/);
+ const resumed=await createSetupSession({...options,resume:true});assert.deepEqual((await resumed.getStep()).progress.map(row=>row.state),['done','done','done','fail','todo']);assert.equal((await resumed.install()).completed,true);const ready=await resumed.getStep();assert.equal(ready.id,'ready');assert.equal(ready.summary.find(row=>row.id==='service').running,true);assert.equal(starts,2);
 });
 
 async function makeInstalledMind(fixture, version) {
@@ -1076,16 +668,10 @@ async function completeAnswers(fixture, agents) {
   return session;
 }
 
-async function answerReconfiguration(session, fixture, agents) {
-  await session.answer({ installMode: 'custom' });
-  await session.answer({ mindPath: fixture.mindPath });
-  await session.answer({ scan: true });
-  await session.answer({ agents, attachModes: Object.fromEntries(agents.map((agent) => [agent, 'on-demand'])) });
-  const includeStep = await session.getStep();
-  await session.answer({ included: includeStep.values.included });
-  await session.answer({ addRoot: fixture.projectsRoot });
-  await session.answer({ projectsConfirmed: true });
-  await session.answer({ skipPreferences: true, autoUpdates: false });
+async function answerReconfiguration(session,fixture,agents){
+ await session.answer({});await session.answer({mindPath:fixture.mindPath});
+ // Exercise reviewed machine configuration at the plan boundary, outside the setup UI.
+ session.answers.agents=agents.map(id=>({id,selected:true,attach:'on-demand',detected:true}));await session.addProjectRoot(fixture.projectsRoot);session.answers.skipPreferences=true;session.answers.updateCheck='off';await session.persistDraft();
 }
 
 function escapeRegExp(value) {
@@ -1140,11 +726,8 @@ function ownedLegacyControl(events = []) {
   };
 }
 
-async function confirmedSetup(options, values = {}) {
-  const session = await createSetupSession(options);
-  await session.answer({ installMode: 'simple' });
-  await session.answer({ confirm: true, ...values });
-  return session;
+async function confirmedSetup(options,values={}){
+ const session=await createSetupSession(options);await session.answer({});await session.answer({mindPath:session.answers.mindPath,...values});if((await session.getStep()).legacy?.confirmation)await session.answer({mindPath:session.answers.mindPath,closeLegacy:true,...values});await session.answer({confirm:true});return session;
 }
 
 async function trackSetupWrites(roots, operation, onWrite = () => {}) {
@@ -1230,7 +813,7 @@ test('failed copy resumes only verified checkpoint entries', async context => {
   assert.equal(session.checkpoint.phase, 'copy');
   assert.deepEqual(session.checkpoint.completed, ['prepare', 'close-legacy']);
   const resumed = await createSetupSession(fixture.options);
-  assert.equal((await resumed.getStep()).number, 7);
+  assert.equal((await resumed.getStep()).number, 3);
   await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async writes => {
     assert.equal((await resumed.install()).completed, true);
     assert.ok(!writes.some(item => item.operation === 'copyFile' && item.path === path.join(fixture.mindPath, first)));
@@ -1359,7 +942,7 @@ test('local setup storage cannot be placed inside either M1ND or a synced root',
   await assert.rejects(createSetupSession({ ...fixture.options, mindPath: fixture.sourcePath, legacySourcePath: null,
     cosmicPath: path.join(fixture.sourcePath, 'local') }), error => error.code === 'invalid_path');
   const session = await createSetupSession({ ...fixture.options, env: { PATH: '', OneDrive: fixture.cosmicPath } });
-  await assert.rejects(session.answer({ installMode: 'simple' }), error => error.code === 'unsafe_staging');
+  await assert.rejects(session.answer({}), error => error.code === 'unsafe_staging');
   assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
   assert.equal(await pathExists(fixture.mindPath), false);
 });

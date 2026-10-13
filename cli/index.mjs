@@ -609,8 +609,8 @@ const terminalCopy = {
     report: "Report",
     confirm: "Write these files?",
     cancelled: "Nothing was written.",
-    installing: "Installing the mind",
-    installed: "Mind installed",
+    installing: "Installing the M1ND",
+    installed: "M1ND installed",
     stopped: "Installation stopped",
     done: "Done.",
     step: "Step",
@@ -634,8 +634,8 @@ const terminalCopy = {
     report: "Reporte",
     confirm: "¿Escribir estos archivos?",
     cancelled: "No se escribió nada.",
-    installing: "Instalando el mind",
-    installed: "Mind instalado",
+    installing: "Instalando el M1ND",
+    installed: "M1ND instalado",
     stopped: "Instalación detenida",
     done: "Listo.",
     step: "Paso",
@@ -862,22 +862,26 @@ export async function runTerminalSetup(session, prompts) {
   while (true) {
     const step = await session.getStep();
     const labels = terminalCopy[step.language ?? "en"];
-    if (step.done || step.number === 8) {
+    if (step.done || step.number === 4) {
       reportOutcome(prompts, labels, step.result);
       prompts.outro(step.result?.message ?? step.description ?? step.title);
       return step.result ?? step;
     }
 
-    const heading = `${labels.step} ${step.number}/8 · ${step.title}`;
+    const heading = `${labels.step} ${step.number}/4 · ${step.title}`;
     if (step.description) prompts.note(step.description, heading);
     else prompts.log.step(heading);
     if (step.alert) prompts.log.warn(step.alert);
-    if (step.number === 5) {
-      const result = await runProjectsStep(session, prompts, step);
-      if (result === null) return null;
+    if (step.id === 'location' && step.legacy?.confirmation) {
+      prompts.note(step.legacy.closeCopy, step.legacy.closeTitle);
+      for (const item of step.legacy.sessions) prompts.log.info([item.unit, item.client, item.machine].join(' · '));
+      if (step.legacy.sessions.some(item => !item.local)) prompts.note(step.legacy.offline);
+      const closeLegacy = await prompts.confirm({message:step.legacy.action,initialValue:false});
+      if (cancelled(prompts, closeLegacy, labels.cancelled)) return null;
+      await session.answer({...step.values,closeLegacy});
       continue;
     }
-    if (step.number === 7) {
+    if (step.id === 'service' || step.number === 3) {
       const preview = await session.preview();
       prompts.note(previewText(preview, step.language ?? "en"), labels.writePreview);
       const conflicts = {};

@@ -6,6 +6,7 @@ import path from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { stubAclRunner } from "../engine/service/security.mjs";
 import { createWizardServer } from "../gui/server.mjs";
 
 function createStubSession({ failFirstAnswer = false, failInstallAfterCompletion = false, language = "en" } = {}) {
@@ -15,11 +16,12 @@ function createStubSession({ failFirstAnswer = false, failInstallAfterCompletion
   return {
     answers,
     async getStep() {
-      if (number === 8) {
-        return { number, language, title: "Done", description: "Done.", fields: [], values: {}, done: true, result: { firstCommand: "/executor <project>" } };
+      if (number === 4) {
+        return { id:"ready", total:4, back:false, number, language, title: "Done", description: "Done.", fields: [], values: {}, done: true, result: { firstCommand: "/executor <project>" } };
       }
-      if (number === 7) return { number, language, title: "Preview", description: "Review writes.", fields: [], values: {}, done: false };
+      if (number === 3) return { id:"service", total:4, back:false, number, language, title: "Preview", description: "Review writes.", fields: [], values: {}, done: false };
       return {
+        id: number === 1 ? "install" : "location", total:4, back:number === 2,
         number,
         language,
         title: `Step ${number}`,
@@ -35,7 +37,7 @@ function createStubSession({ failFirstAnswer = false, failInstallAfterCompletion
         throw new Error("simulated answer failure");
       }
       answers.push(values);
-      if (number < 7) number += 1;
+      if (number < 3) number += 1;
     },
     async back() {
       number = Math.max(1, number - 1);
@@ -48,7 +50,7 @@ function createStubSession({ failFirstAnswer = false, failInstallAfterCompletion
       };
     },
     async install() {
-      number = 8;
+      number = 4;
       if (failInstallAfterCompletion) {
         throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
       }
@@ -82,34 +84,8 @@ test("wizard serves only allow-listed assets with security headers", async (cont
   assert.equal((await fetch(`${server.origin}/package.json`)).status, 404);
 });
 
-test("wizard uses the compact square theme and keeps long previews bounded", async (context) => {
-  const { server } = await start();
-  context.after(() => server.close());
-  const [pageResponse, scriptResponse, styleResponse] = await Promise.all([
-    fetch(server.origin),
-    fetch(`${server.origin}/app.js`),
-    fetch(`${server.origin}/styles.css`),
-  ]);
-  const [page, script, styles] = await Promise.all([pageResponse.text(), scriptResponse.text(), styleResponse.text()]);
-  const texts = await readFile(new URL("../engine/texts.mjs", import.meta.url), "utf8");
-  assert.match(texts, /reasonUnownedFile: 'Ya existe un archivo ajeno a HIVEM1ND/);
-  assert.doesNotMatch(script, /Ya existe un archivo ajeno a HIVEM1ND/);
-  assert.match(texts, /actionUnchanged: 'sin cambios'/);
-  assert.match(script, /formatCount\(c\.filesCountOne, files\.length\)/);
-  assert.match(script, /sessionStorage\.setItem\("hivem1nd\.session", tokenFromHash\)/);
-  assert.match(script, /tokenFromHash \?\? sessionStorage\.getItem\("hivem1nd\.session"\)/);
-  assert.match(script, /field\.label\?\.trim\(\) === currentStep\?\.title\?\.trim\(\)/);
-  assert.match(styles, /\.preview-files\s*\{[^}]*max-height:\s*min\(34vh, 260px\)/s);
-  assert.match(styles, /\[hidden\]\s*\{[^}]*display:\s*none !important/s);
-  assert.match(styles, /grid-template-columns:\s*232px minmax\(0, 1fr\)/);
-  assert.match(styles, /--surface:\s*#18121d/);
-  assert.match(styles, /--purple-strong:\s*#81648c/);
-  assert.match(styles, /--acid:\s*#bdcd79/);
-  assert.match(styles, /#step-title:focus\s*\{[^}]*outline:\s*none/s);
-  assert.match(styles, /\.fields:empty\s*\{[^}]*display:\s*none/s);
-  assert.match(styles, /input\[type="radio"\][^{]*\{[^}]*appearance:\s*none/s);
-  assert.doesNotMatch(styles, /border-radius|gradient|clip-path/);
-  assert.doesNotMatch(page, /brand-tagline|privacy-note|connection-label|language-switch|step-number|class="signal"/);
+test("wizard serves the four-step board layout with authenticated assets",async context=>{
+ const {server}=await start();context.after(()=>server.close());const script=await(await fetch(server.origin+'/app.js')).text();const styles=await(await fetch(server.origin+'/styles.css')).text();assert.match(script,/sessionStorage/);assert.match(script,/renderLocation/);assert.match(script,/renderService/);assert.match(script,/renderReady/);assert.doesNotMatch(script,/renderAgents|renderProjects|originKind|installMode/);assert.match(styles,/width:\s*640px/);assert.match(styles,/border-radius:\s*24px/);assert.match(styles,/--accent:\s*#bdcd79/);assert.match(styles,/\[hidden\]/);assert.match(styles,/@media/);
 });
 
 test("API accepts token-authenticated same-origin GET without Origin", async (context) => {
@@ -222,7 +198,7 @@ test("concurrent answers validate against the step inside the queue", async (con
 test("HTTP wizard flow reaches preview, resolves conflicts and installs", async (context) => {
   const { server, session, headers } = await start();
   context.after(() => server.close());
-  for (let number = 1; number <= 6; number += 1) {
+  for (let number = 1; number <= 2; number += 1) {
     const response = await fetch(`${server.origin}/api/v1/answer`, {
       method: "POST",
       headers: jsonHeaders(headers),
@@ -248,7 +224,7 @@ test("HTTP wizard flow reaches preview, resolves conflicts and installs", async 
   });
   assert.equal(install.status, 200);
   assert.equal((await install.json()).data.completed, true);
-  assert.equal((await (await fetch(`${server.origin}/api/v1/step`, { headers })).json()).data.number, 8);
+  assert.equal((await (await fetch(`${server.origin}/api/v1/step`, { headers })).json()).data.number, 4);
   assert.deepEqual(session.answers.at(-1), { confirm: true, conflicts: { "/tmp/mind/rules.md": "keep" } });
 });
 
@@ -256,7 +232,7 @@ test("an install that fails after completing the write still lands on Done and r
   const session = createStubSession({ language: "es", failInstallAfterCompletion: true });
   const { server, headers } = await start({ session });
   context.after(() => server.close());
-  for (let number = 1; number <= 6; number += 1) {
+  for (let number = 1; number <= 2; number += 1) {
     await fetch(`${server.origin}/api/v1/answer`, {
       method: "POST",
       headers: jsonHeaders(headers),
@@ -276,7 +252,7 @@ test("an install that fails after completing the write still lands on Done and r
   assert.doesNotMatch(body.error.message, /The local wizard could not complete the request/);
 
   const step = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
-  assert.equal(step.data.number, 8);
+  assert.equal(step.data.number, 4);
   assert.equal(step.data.done, true);
 });
 
@@ -310,7 +286,7 @@ test("the real engine reports conflict reasons localized to the session language
 
   const kitPath = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const server = await createWizardServer({
-    sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "es", env: {} },
+    sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "es", env: {}, aclRunner: stubAclRunner() },
     token: "e".repeat(43),
   });
   context.after(() => server.close());
@@ -320,13 +296,8 @@ test("the real engine reports conflict reasons localized to the session language
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
   };
 
-  await answer({ installMode: "custom" });
-  await answer({ mindPath });
-  await answer({ scan: true });
   await answer({});
-  await answer({ included: [] });
-  await answer({ projectsConfirmed: true });
-  await answer({ skipPreferences: true, addressStyle: "impersonal", customPreference: "", autoUpdates: false });
+  await answer({ mindPath });
 
   const preview = await (await fetch(`${server.origin}/api/v1/preview`, { headers })).json();
   const conflict = preview.data.conflicts.find((item) => item.path === path.join(mindPath, "rules.md"));
@@ -343,7 +314,7 @@ test("browser API completes the real setup engine inside an isolated home", asyn
 
   const kitPath = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const server = await createWizardServer({
-    sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "en", env: {} },
+    sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "en", env: {}, aclRunner: stubAclRunner() },
     token: "b".repeat(43),
   });
   context.after(() => server.close());
@@ -357,17 +328,11 @@ test("browser API completes the real setup engine inside an isolated home", asyn
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
   };
 
-  await answer({ installMode: "custom" });
-  await answer({ mindPath });
-  await answer({ scan: true });
   await answer({});
-  await answer({ included: [] });
-  await answer({ addRoot: projectRoot });
-  await answer({ projectsConfirmed: true });
-  await answer({ skipPreferences: true, addressStyle: "impersonal", customPreference: "", autoUpdates: false });
+  await answer({ mindPath });
 
   const stepSeven = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
-  assert.equal(stepSeven.data.number, 7);
+  assert.equal(stepSeven.data.number, 3);
   assert.equal(stepSeven.data.ui.back, "Back");
   assert.equal(stepSeven.data.ui.actionUnchanged, "unchanged");
   const preview = await (await fetch(`${server.origin}/api/v1/preview`, { headers })).json();
@@ -382,9 +347,9 @@ test("browser API completes the real setup engine inside an isolated home", asyn
   });
   assert.equal(languageChanged.status, 200, JSON.stringify(await languageChanged.json()));
   const afterLanguage = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
-  assert.equal(afterLanguage.data.number, 7);
+  assert.equal(afterLanguage.data.number, 3);
   assert.equal(afterLanguage.data.language, "es");
-  assert.equal(afterLanguage.data.ui.back, "Atrás");
+  assert.equal(afterLanguage.data.ui.back, "Volver");
   assert.equal(afterLanguage.data.ui.actionUnchanged, "sin cambios");
   await fetch(`${server.origin}/api/v1/language`, { method: "POST", headers, body: JSON.stringify({ language: "en" }) });
 
@@ -395,102 +360,20 @@ test("browser API completes the real setup engine inside an isolated home", asyn
   });
   assert.equal(installed.status, 200, JSON.stringify(await installed.json()));
   const done = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
-  assert.equal(done.data.number, 8);
+  assert.equal(done.data.number, 4);
   assert.equal(done.data.done, true);
   const kitVersion = JSON.parse(await readFile(path.join(kitPath, "package.json"), "utf8")).version;
   assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), `${kitVersion}\n`);
 });
 
-test("removing a repository or an environment over HTTP drops it before install", async (context) => {
-  const scratch = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-browser-remove-"));
-  const homeDir = path.join(scratch, "home");
-  const mindPath = path.join(scratch, "mind");
-  await mkdir(path.join(homeDir, "GitHub", "repo1", ".git"), { recursive: true });
-  await mkdir(path.join(homeDir, "GitHub", "repo2", ".git"), { recursive: true });
-  await mkdir(path.join(homeDir, "Unity", "repo3", ".git"), { recursive: true });
-  context.after(() => rm(scratch, { recursive: true, force: true }));
-
-  const kitPath = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const server = await createWizardServer({
-    sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "en", env: {} },
-    token: "c".repeat(43),
-  });
-  context.after(() => server.close());
-  const headers = { Authorization: `Bearer ${server.token}`, Origin: server.origin, "Content-Type": "application/json" };
-  const answer = async (values) => {
-    const response = await fetch(`${server.origin}/api/v1/answer`, { method: "POST", headers, body: JSON.stringify({ values }) });
-    const body = await response.json();
-    assert.equal(response.status, 200, JSON.stringify(body));
-    return body.data;
-  };
-
-  await answer({ installMode: "custom" });
-  await answer({ mindPath });
-  await answer({ scan: true });
-  await answer({});
-  await answer({ included: [] });
-  const projectsStep = await (await fetch(`${server.origin}/api/v1/step`, { headers })).json();
-  assert.equal(projectsStep.data.groups.length, 2);
-  const gitHubGroup = projectsStep.data.groups.find((group) => group.folder === path.join(homeDir, "GitHub"));
-  const unityGroup = projectsStep.data.groups.find((group) => group.folder === path.join(homeDir, "Unity"));
-  const repo2 = gitHubGroup.projects.find((project) => project.name === "repo2");
-
-  const afterRemoveProject = await answer({ removeProject: repo2.index });
-  assert.deepEqual(
-    afterRemoveProject.groups.find((group) => group.folder === path.join(homeDir, "GitHub")).projects.map((project) => project.name),
-    ["repo1"],
-  );
-
-  const afterRemoveEnvironment = await answer({ removeEnvironment: unityGroup.id });
-  assert.ok(!afterRemoveEnvironment.groups.some((group) => group.folder === path.join(homeDir, "Unity")));
-
-  await answer({ projectsConfirmed: true });
-  await answer({ skipPreferences: true, addressStyle: "impersonal", customPreference: "", autoUpdates: false });
-  await fetch(`${server.origin}/api/v1/install`, { method: "POST", headers, body: JSON.stringify({ confirm: true, conflicts: {} }) });
-
-  const routes = await readFile(path.join(mindPath, "user", "routes.md"), "utf8");
-  assert.match(routes, /- repo1/);
-  assert.doesNotMatch(routes, /repo2/);
-  assert.doesNotMatch(routes, /repo3/);
+test("setup detects accurate repository and folder counts without editing projects",async context=>{
+ const scratch=await mkdtemp(path.join(os.tmpdir(),'hivem1nd-setup-counts-'));context.after(()=>rm(scratch,{recursive:true,force:true}));const homeDir=path.join(scratch,'home'),mindPath=path.join(scratch,'mind');for(const name of ['GitHub/repo1','GitHub/repo2','Unity/repo3'])await mkdir(path.join(homeDir,name,'.git'),{recursive:true});const server=await createWizardServer({sessionOptions:{kitPath:path.dirname(path.dirname(fileURLToPath(import.meta.url))),mindPath,homeDir,hostname:'INTERFACE-TEST',language:'en',env:{},aclRunner:stubAclRunner()}});context.after(()=>server.close());const headers={Authorization:'Bearer '+server.token,Origin:server.origin,'Content-Type':'application/json'};const post=values=>fetch(server.origin+'/api/v1/answer',{method:'POST',headers,body:JSON.stringify({values})});assert.equal((await post({})).status,200);assert.equal((await post({mindPath})).status,200);assert.equal((await post({removeProject:0})).status,400);assert.equal((await fetch(server.origin+'/api/v1/install',{method:'POST',headers,body:JSON.stringify({confirm:true,conflicts:{}})})).status,200);const step=(await(await fetch(server.origin+'/api/v1/step',{headers})).json()).data;const projects=step.summary.find(row=>row.id==='projects');assert.equal(projects.repositories,3);assert.equal(projects.folders,2);assert.equal(projects.value,'3 repositories in 2 folders');
 });
 
-test("the projects step UI gates adding a root behind the native folder bridge and gives icon buttons aria-labels", async (context) => {
-  const { server } = await start();
-  context.after(() => server.close());
-  const script = await (await fetch(`${server.origin}/app.js`)).text();
-  assert.match(script, /addRootField && hasBrowseBridge\(\)/);
-  assert.match(script, /window\.hivem1nd\.browseFolder\(\)/);
-  assert.match(script, /submitAnswer\(\{ removeEnvironment: group\.id \}\)/);
-  assert.match(script, /submitAnswer\(\{ removeProject: project\.index \}\)/);
-  assert.match(script, /toggle\.setAttribute\("aria-expanded"/);
-  assert.match(script, /removeGroupButton\.setAttribute\("aria-label", removeEnvironmentLabel\)/);
-  assert.match(script, /removeButton\.setAttribute\("aria-label", label\)/);
+test("Folder Change uses the native bridge with an editable browser fallback",async context=>{
+ const {server}=await start();context.after(()=>server.close());const script=await(await fetch(server.origin+'/app.js')).text();assert.match(script,/window\.hivem1nd\.browseFolder/);assert.match(script,/changeFolder: true/);assert.doesNotMatch(script,/removeEnvironment|removeProject|addRoot/);
 });
 
-test("the agents step advances when no agent is detected", async (context) => {
-  const scratch = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-browser-no-agents-"));
-  const mindPath = path.join(scratch, "mind");
-  await mkdir(path.join(scratch, "home"));
-  context.after(() => rm(scratch, { recursive: true, force: true }));
-
-  const kitPath = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const server = await createWizardServer({
-    sessionOptions: { kitPath, mindPath, homeDir: path.join(scratch, "home"), hostname: "INTERFACE-TEST", language: "en", env: {} },
-    token: "d".repeat(43),
-  });
-  context.after(() => server.close());
-  const headers = { Authorization: `Bearer ${server.token}`, Origin: server.origin, "Content-Type": "application/json" };
-  const post = (values) => fetch(`${server.origin}/api/v1/answer`, { method: "POST", headers, body: JSON.stringify({ values }) });
-
-  await post({ installMode: "custom" });
-  await post({ mindPath });
-  const scanned = (await (await post({ scan: true })).json()).data;
-  assert.equal(scanned.agents.length, 0);
-  assert.equal((await post({ agents: [], attachModes: {} })).status, 400);
-  const advanced = await post({});
-  assert.equal(advanced.status, 200);
-  assert.equal((await advanced.json()).data.number, 4);
-
-  const script = await (await fetch(`${server.origin}/app.js`)).text();
-  assert.match(script, /if \(!currentStep\.scanned \|\| !currentStep\.agents\?\.length\) return \{\};/);
+test("setup reaches service with no detected agents and rejects removed controls",async context=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'hivem1nd-no-agents-'));context.after(()=>rm(root,{recursive:true,force:true}));const homeDir=path.join(root,'home'),mindPath=path.join(root,'mind');await mkdir(homeDir);const server=await createWizardServer({sessionOptions:{kitPath:path.dirname(path.dirname(fileURLToPath(import.meta.url))),mindPath,homeDir,hostname:'INTERFACE-TEST',language:'en',env:{},aclRunner:stubAclRunner()}});context.after(()=>server.close());const headers={Authorization:'Bearer '+server.token,Origin:server.origin,'Content-Type':'application/json'};const post=values=>fetch(server.origin+'/api/v1/answer',{method:'POST',headers,body:JSON.stringify({values})});for(const key of ['installMode','sync','originKind'])assert.equal((await post({[key]:'custom'})).status,400);await post({});assert.equal((await post({changeFolder:'yes'})).status,400);const service=await post({mindPath});assert.equal(service.status,200);assert.equal((await service.json()).data.id,'service');assert.equal((await post({scan:true})).status,400);assert.equal((await fetch(server.origin+'/api/v1/back',{method:'POST',headers,body:'{}'})).status,409);
 });

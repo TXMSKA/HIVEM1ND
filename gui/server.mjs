@@ -12,7 +12,9 @@ const UI_KEYS = [
   "browse", "add", "attachAuto", "attachOnDemand", "noFiles", "filesCountOne", "filesCountOther",
   "firstCommand", "actionCreate", "actionUpdate", "actionUnchanged", "actionAppend", "actionConflict",
   "documentTitle", "environmentPlaceholder", "reportSaved",
-  "step1Title", "step2Title", "step3Title", "step4Title", "step5Title", "step6Title", "step7Title", "step8Title",
+  "step1Title", "step2Title", "step3Title", "step4Title",
+  "stepOfFour", "startSetup", "folder", "change", "cancel", "retry", "openMap",
+  "progressDone", "progressBusy", "progressTodo", "progressFail", "onMachine",
   "sessionMissing", "requestFailed",
 ];
 
@@ -225,10 +227,6 @@ export async function createWizardServer({
 
       if (url.pathname === "/api/v1/step" && request.method === "GET") {
         const step = await activeSession.getStep();
-        if (step.done && !viewerOpened && step.result?.viewerUrl && typeof openCompletedViewer === "function") {
-          viewerOpened = true;
-          await openCompletedViewer(step.result.viewerUrl);
-        }
         sendJson(response, 200, { data: withUi(step) });
         return;
       }
@@ -243,7 +241,15 @@ export async function createWizardServer({
         const result = await enqueue(async () => {
           const step = await activeSession.getStep();
           const allowedFields = new Set((step.fields ?? []).map((field) => field.id));
+          if (step.id === "location") {
+            allowedFields.add("changeFolder");
+            if (step.legacy) allowedFields.add("closeLegacy");
+          }
+          if (step.id === "service") { allowedFields.add("confirm"); allowedFields.add("conflicts"); }
           requireExactKeys(body.values, allowedFields);
+          for (const key of ["changeFolder", "closeLegacy", "attach", "migrateLegacy", "confirm"]) {
+            if (Object.hasOwn(body.values, key) && typeof body.values[key] !== "boolean") throw new HttpError(400, "invalid_values", `${key} must be a boolean.`);
+          }
           return activeSession.answer(body.values);
         });
         sendJson(response, 200, { data: withUi(result ?? await activeSession.getStep()) });
@@ -252,7 +258,11 @@ export async function createWizardServer({
       if (url.pathname === "/api/v1/back" && request.method === "POST") {
         const body = await readJson(request);
         requireExactKeys(body, new Set());
-        const result = await enqueue(() => activeSession.back());
+        const result = await enqueue(async () => {
+          const step = await activeSession.getStep();
+          if (step.back === false || step.busy) throw new HttpError(409, "back_unavailable", engineText(step.language, "backUnavailable"));
+          return activeSession.back();
+        });
         sendJson(response, 200, { data: withUi(result ?? await activeSession.getStep()) });
         return;
       }
@@ -271,7 +281,7 @@ export async function createWizardServer({
         if (!isPlainObject(body.conflicts ?? {})) throw new HttpError(400, "invalid_conflicts", "conflicts must be an object.");
         const result = await enqueue(async () => {
           const step = await activeSession.getStep();
-          if (step.number !== 7) throw new HttpError(409, "invalid_step", "Installation is only available from the preview step.");
+          if (step.id !== "service" || step.number !== 3 || step.busy) throw new HttpError(409, "invalid_step", "Installation is only available from the service step.");
           const preview = await activeSession.preview();
           const allowedConflicts = new Map((preview.conflicts ?? []).map((conflict) => [conflict.path, new Set(conflict.choices ?? ["keep", "replace"])]));
           requireExactKeys(body.conflicts ?? {}, new Set(allowedConflicts.keys()));
@@ -281,11 +291,21 @@ export async function createWizardServer({
           }
           await activeSession.answer({ confirm: true, conflicts: body.conflicts ?? {} });
           const result = await activeSession.install();
-          if (!viewerOpened && result?.viewerUrl && typeof openCompletedViewer === "function") {
-            viewerOpened = true;
-            await openCompletedViewer(result.viewerUrl);
-          }
           return result;
+        });
+        sendJson(response, 200, { data: result });
+        return;
+      }
+      if (url.pathname === "/api/v1/open" && request.method === "POST") {
+        requireExactKeys(await readJson(request), new Set());
+        const result = await enqueue(async () => {
+          const step = await activeSession.getStep();
+          if (step.id !== "ready" || !step.done || !step.result?.viewerUrl) throw new HttpError(409, "viewer_unavailable", "The Map is not ready.");
+          if (typeof openCompletedViewer === "function") {
+            if (!viewerOpened) { await openCompletedViewer(step.result.viewerUrl); viewerOpened = true; }
+            return { opened: true, viewerUrl: null };
+          }
+          return { opened: false, viewerUrl: step.result.viewerUrl };
         });
         sendJson(response, 200, { data: result });
         return;
