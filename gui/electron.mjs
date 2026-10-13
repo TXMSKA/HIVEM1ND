@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { createWizardServer } from "./server.mjs";
+import { defaultMind } from '../engine/service/paths.mjs';
 
 export const secureWebPreferences = Object.freeze({
   contextIsolation: true,
@@ -10,7 +11,7 @@ export const secureWebPreferences = Object.freeze({
   webSecurity: true,
 });
 
-export function parseElectronOptions(argv, homeDir) {
+export function parseElectronOptions(argv, homeDir, env = process.env) {
   const options = {
     homeDir,
     hostname: os.hostname(),
@@ -42,7 +43,7 @@ export function parseElectronOptions(argv, homeDir) {
     index += 1;
   }
   if (options.language && !["en", "es"].includes(options.language)) throw new Error("--language must be en or es.");
-  if (!hasMindPath) options.mindPath = path.join(options.homeDir, "HIVEM1ND");
+  if (!hasMindPath) options.mindPath = defaultMind({ platform: process.platform, env, home: options.homeDir });
   return options;
 }
 

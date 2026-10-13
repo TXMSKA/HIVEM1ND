@@ -106,11 +106,11 @@ test('local Cosmic paths reject synced staging and Windows device junctions', as
   );
   assert.equal(
     defaultMind({ platform: 'linux', env: { XDG_DATA_HOME: 'relative' }, home: '/home/example' }),
-    path.posix.join('/home/example', '.local', 'share', 'Cosmic', 'hivem1nd'),
+    path.posix.join('/home/example', '.local', 'share', 'Cosmic', '.m1nd'),
   );
   assert.equal(
     defaultMind({ platform: 'linux', env: { XDG_DATA_HOME: '/var/data' }, home: '/home/example' }),
-    '/var/data/Cosmic/hivem1nd',
+    '/home/example/.local/share/Cosmic/.m1nd',
   );
   assert.equal(
     localCosmic({ platform: 'darwin', env: {}, home: '/Users/example' }),

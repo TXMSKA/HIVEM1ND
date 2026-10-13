@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
 import { formatBytes } from '../engine/measure.mjs';
 import { relayLine } from '../engine/texts.mjs';
+import { defaultMind, MIND_DIRECTORY_NAME } from '../engine/service/paths.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -558,7 +559,7 @@ function setupOptions(options, { env = process.env, lifecycle = false, serviceRu
     ...(options.mindPath
       ? { mindPath: path.resolve(options.mindPath) }
       : lifecycle
-        ? { mindPath: existsSync(currentMind) ? process.cwd() : path.join(homeDir, "HIVEM1ND") }
+        ? { mindPath: existsSync(currentMind) ? process.cwd() : defaultMind({ platform: process.platform, env, home: homeDir }) }
         : {}),
     homeDir,
     hostname: options.hostname ?? os.hostname(),
@@ -1070,7 +1071,7 @@ async function runService(options, dependencies, output) {
   }
   const mindPath = options.mindPath
     ? path.resolve(options.mindPath)
-    : path.join(path.resolve(options.cosmicPath), "hivem1nd");
+    : path.join(path.resolve(options.cosmicPath), MIND_DIRECTORY_NAME);
   const registration = {
     platform: dependencies.platform ?? process.platform,
     nodePath: process.execPath,

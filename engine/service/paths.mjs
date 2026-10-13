@@ -4,6 +4,8 @@ import path from 'node:path';
 import { CoreError, validateMachineName } from './identity.mjs';
 
 const ONE_DRIVE_ENV = ['OneDrive', 'OneDriveConsumer', 'OneDriveCommercial'];
+export const COSMIC_ROOT_NAME = 'Cosmic';
+export const MIND_DIRECTORY_NAME = '.m1nd';
 
 function library(platform) {
   return platform === 'win32' ? path.win32 : path.posix;
@@ -17,19 +19,24 @@ export function localCosmic({ platform, env = {}, home } = {}) {
   const lib = library(platform);
   if (platform === 'win32') {
     if (!absolute(lib, env.LOCALAPPDATA)) throw new CoreError(422, 'invalid_path', 'LOCALAPPDATA must be an absolute path.');
-    return lib.resolve(lib.join(env.LOCALAPPDATA, 'Cosmic'));
+    return lib.resolve(lib.join(env.LOCALAPPDATA, COSMIC_ROOT_NAME));
   }
   if (platform === 'darwin') {
     if (!absolute(lib, home)) throw new CoreError(422, 'invalid_path', 'The home directory must be absolute.');
-    return lib.resolve(lib.join(home, 'Library', 'Application Support', 'Cosmic'));
+    return lib.resolve(lib.join(home, 'Library', 'Application Support', COSMIC_ROOT_NAME));
   }
-  if (absolute(lib, env.XDG_DATA_HOME)) return lib.resolve(lib.join(env.XDG_DATA_HOME, 'Cosmic'));
   if (!absolute(lib, home)) throw new CoreError(422, 'invalid_path', 'The home directory must be absolute.');
-  return lib.resolve(lib.join(home, '.local', 'share', 'Cosmic'));
+  return lib.resolve(lib.join(home, '.local', 'share', COSMIC_ROOT_NAME));
 }
 
-export function defaultMind(options) {
-  return library(options.platform).join(localCosmic(options), 'hivem1nd');
+export function defaultMind({ platform, env = {}, home } = {}) {
+  const lib = library(platform);
+  const localEnv = { ...env };
+  if (platform === 'win32' && !localEnv.LOCALAPPDATA) {
+    if (!absolute(lib, home)) throw new CoreError(422, 'invalid_path', 'The home directory must be absolute.');
+    localEnv.LOCALAPPDATA = lib.join(home, 'AppData', 'Local');
+  }
+  return lib.join(localCosmic({ platform, env: localEnv, home }), MIND_DIRECTORY_NAME);
 }
 
 export function oneDriveRoots({ platform = 'win32', env = {} } = {}) {

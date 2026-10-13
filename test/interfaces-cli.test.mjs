@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { helpText, parseArgs, runCli, runTerminalSetup } from "../cli/index.mjs";
 import { createWindowOptions, parseElectronOptions, secureWebPreferences } from "../gui/electron.mjs";
 import { createSetupSession } from "../engine/setup.mjs";
+import { defaultMind } from "../engine/service/paths.mjs";
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -83,12 +84,15 @@ test("lifecycle receives isolated paths and injected environment", async () => {
 test("Electron defaults stay inside the selected test home", () => {
   const testHome = path.join(os.tmpdir(), "hivem1nd-electron-home");
   const overrideHome = path.join(os.tmpdir(), "hivem1nd-electron-override");
-  assert.equal(parseElectronOptions([], testHome).mindPath, path.join(testHome, "HIVEM1ND"));
-  const options = parseElectronOptions(["--home-dir", overrideHome], testHome);
+  const expected = (home) => defaultMind({ platform: process.platform, env: {}, home });
+  assert.equal(parseElectronOptions([], testHome, {}).mindPath, expected(testHome));
+  const options = parseElectronOptions(["--home-dir", overrideHome], testHome, {});
   assert.equal(options.homeDir, path.resolve(overrideHome));
-  assert.equal(options.mindPath, path.join(path.resolve(overrideHome), "HIVEM1ND"));
+  assert.equal(options.mindPath, expected(path.resolve(overrideHome)));
   const userData = path.join(os.tmpdir(), "hivem1nd-electron-profile");
-  assert.equal(parseElectronOptions([`--user-data-dir=${userData}`], testHome).userDataDir, path.resolve(userData));
+  assert.equal(parseElectronOptions(['--user-data-dir=' + userData], testHome, {}).userDataDir, path.resolve(userData));
+  const selected = path.join(testHome, 'explicit');
+  assert.equal(parseElectronOptions(['--mind-path', selected], testHome, {}).mindPath, path.resolve(selected));
 });
 
 test("evolve accepts repeatable explicit conflict choices", () => {

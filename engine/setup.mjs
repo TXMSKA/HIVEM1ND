@@ -14,7 +14,7 @@ import {
   resolveAdapterPaths,
 } from './discovery.mjs';
 import { configureOwnedService } from './service/install.mjs';
-import { localCosmic } from './service/paths.mjs';
+import { localCosmic, defaultMind, MIND_DIRECTORY_NAME } from './service/paths.mjs';
 import {
   applyInstallPlan,
   combinePlans,
@@ -84,7 +84,7 @@ export async function createSetupSession(options = {}) {
   const defaultMindPath = options.mindPath
     ? path.resolve(options.mindPath)
     : options.cosmicPath
-      ? path.join(path.resolve(options.cosmicPath), 'hivem1nd')
+      ? path.join(path.resolve(options.cosmicPath), MIND_DIRECTORY_NAME)
       : cosmicMind(env, homeDir);
   validateMindSelection(defaultMindPath, kitPath);
 
@@ -1308,13 +1308,7 @@ async function computeMindPresets({ kitPath, homeDir, env }) {
 }
 
 function cosmicMind(env, homeDir) {
-  try {
-    return path.join(localCosmic({ platform: process.platform, env, home: homeDir }), 'hivem1nd');
-  } catch {
-    if (process.platform === 'darwin') return path.join(homeDir, 'Library', 'Application Support', 'Cosmic', 'hivem1nd');
-    if (process.platform === 'win32') return path.join(homeDir, 'AppData', 'Local', 'Cosmic', 'hivem1nd');
-    return path.join(homeDir, '.local', 'share', 'Cosmic', 'hivem1nd');
-  }
+  return defaultMind({ platform: process.platform, env, home: homeDir });
 }
 
 function driveRoot(env, homeDir) {

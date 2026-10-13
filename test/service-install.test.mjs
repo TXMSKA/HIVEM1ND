@@ -1010,7 +1010,7 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   const recorded = await readFile(recordFile, 'utf8');
   assert.match(recorded, /init/);
   assert.match(recorded, /--gui/);
-  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd')), { code: 'ENOENT' });
+  await assert.rejects(() => access(path.join(local, 'Cosmic', '.m1nd')), { code: 'ENOENT' });
   const target = path.join(root, 'junction-target');
   const linked = path.join(root, 'linked-local');
   await mkdir(target, { recursive: true });
@@ -1071,7 +1071,7 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   assert.notEqual(malformed.status, 0);
   assert.match(`${malformed.stderr}\n${malformed.stdout}`, /does not match/);
   assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
-  const mind = path.join(local, 'Cosmic', 'hivem1nd');
+  const mind = path.join(local, 'Cosmic', '.m1nd');
   await mkdir(mind, { recursive: true });
   await writeFile(path.join(mind, 'keep.txt'), 'mind');
   await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });

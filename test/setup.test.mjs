@@ -417,7 +417,7 @@ test('the default mind path is the user home, never the kit tree or a QA fixture
   });
   await session.answer({ installMode: 'custom' });
   const step = await session.getStep();
-  assert.equal(step.values.mindPath, path.join(homeDir, 'AppData', 'Local', 'Cosmic', 'hivem1nd'));
+  assert.equal(step.values.mindPath, path.join(homeDir, 'AppData', 'Local', 'Cosmic', '.m1nd'));
   assert.ok(!step.values.mindPath.toLowerCase().includes('.qa'));
   assert.ok(!step.values.mindPath.startsWith(path.join(KIT_PATH, 'user')));
 });
