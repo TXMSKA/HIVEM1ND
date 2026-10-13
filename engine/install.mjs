@@ -502,7 +502,15 @@ async function removalReason(filePath, root, recordedHashes) {
   return null;
 }
 
+// Setup prepares owned client changes for Settings. This plan is deliberately
+// ineligible for the setup write path; reviewed installation remains separate.
+export async function prepareSetupAgentAssets(options) {
+  const adapters = options.adapters ?? await loadAdapters({ kitPath: options.kitPath });
+  return { ...await planAgentAssets({ ...options, adapters }), requiresReview: true };
+}
+
 export async function applyInstallPlan(plan, conflictChoices = {}) {
+  if (plan.requiresReview) throw new Error('Client configuration requires Review changes in Settings.');
   const selected = new Map(Object.entries(conflictChoices ?? {}));
   for (const conflict of plan.conflicts ?? []) {
     const choice = selected.get(conflict.path) ?? conflict.selection;
@@ -645,7 +653,8 @@ export function combinePlans(...plans) {
     warnings.push(...(plan.warnings ?? []));
     linkComponents.push(...(plan.linkComponents ?? []));
   }
-  return { items, conflicts: deduplicateConflicts(conflicts), warnings: [...new Set(warnings)], linkComponents };
+  return { items, conflicts: deduplicateConflicts(conflicts), warnings: [...new Set(warnings)], linkComponents,
+    ...(plans.some(plan => plan?.requiresReview) ? { requiresReview: true } : {}) };
 }
 
 // One conflict per link, not per file: a single junction can stand in front of every skill

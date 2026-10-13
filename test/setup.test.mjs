@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadAdapters } from '../engine/discovery.mjs';
 import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, planDataFile, planManagedFileRemovals } from '../engine/install.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { assertSafePath, hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
-import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
+import { createSetupSession as rawCreateSetupSession, SetupValidationError } from '../engine/setup.mjs';
 import { text } from '../engine/texts.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
+import { legacySessions } from '../engine/relay/local-wake.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const createSetupSession = options => rawCreateSetupSession({ aclRunner: stubAclRunner(), ...options });
 
 test('setup runs all eight custom-mode steps against isolated homes and resumes', async (context) => {
   const fixture = await makeFixture(context);
@@ -76,13 +81,18 @@ test('setup runs all eight custom-mode steps against isolated homes and resumes'
 
   const preview = await session.preview();
   assert.equal(preview.conflicts.length, 0);
-  assert.ok(preview.files.some((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')));
+  assert.ok(preview.clientChanges.files.some((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')));
   await session.answer({ confirm: true });
   const result = await session.install();
   assert.equal(result.firstCommand, '/executor <project>');
   assert.equal((await session.getStep()).number, 8);
   assert.equal((await session.getStep()).done, true);
   assert.deepEqual(result.attachPrompts, []);
+  assert.equal(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), 'Existing agent preference stays first.\n');
+  assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills')), false);
+  assert.equal(await pathExists(path.join(fixture.homeDir, '.copilot', 'instructions')), false);
+  assert.equal(result.clientChanges.requiresReview, true);
+  await applyReviewedClients(fixture);
   const copilot = await readFile(path.join(fixture.homeDir, '.copilot', 'instructions', 'hivem1nd.instructions.md'), 'utf8');
   assert.match(copilot, /^---\ndescription: .+\napplyTo: "\*\*"\n---\n\nHIVEM1ND: the mind is at /);
 
@@ -219,13 +229,12 @@ test('unowned files and modified managed skills require per-file choices', async
   const session = await completeAnswers(fixture, ['codex']);
 
   let preview = await session.preview();
-  const conflict = preview.conflicts.find((item) => item.path === skillPath);
+  const conflict = preview.clientChanges.conflicts.find((item) => item.path === skillPath);
   assert.equal(conflict.reason, 'An unowned file already exists at this path.');
   await session.answer({ confirm: true });
-  await assert.rejects(() => session.install(), SetupValidationError);
-  await session.answer({ conflicts: { [skillPath]: 'keep' }, confirm: true });
   await session.install();
   assert.equal(await readFile(skillPath, 'utf8'), 'private executor\n');
+  await applyReviewedClients(fixture, { [skillPath]: 'keep' });
 
   const replaceSession = await createSetupSession({
     kitPath: KIT_PATH,
@@ -238,9 +247,11 @@ test('unowned files and modified managed skills require per-file choices', async
   });
   await answerReconfiguration(replaceSession, fixture, ['codex']);
   preview = await replaceSession.preview();
-  assert.ok(preview.conflicts.some((item) => item.path === skillPath));
-  await replaceSession.answer({ conflicts: { [skillPath]: 'replace' }, confirm: true });
+  assert.ok(preview.clientChanges.conflicts.some((item) => item.path === skillPath));
+  await replaceSession.answer({ confirm: true });
   await replaceSession.install();
+  assert.equal(await readFile(skillPath, 'utf8'), 'private executor\n');
+  await applyReviewedClients(fixture, { [skillPath]: 'replace' });
   assert.match(await readFile(skillPath, 'utf8'), /# Executor/);
 
   await writeFile(skillPath, 'user changed the managed skill\n');
@@ -289,23 +300,26 @@ test('install and evolve prune retired kit files and skills, and previews leave 
     const machinePath = path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md');
     const before = await readFile(machinePath, 'utf8');
     const session = action === 'install' ? await completeAnswers(fixture, ['codex']) : null;
-    const preview = session ? await session.preview() : await installAgentAssets({ ...options, previewOnly: true });
-    const removals = session ? preview.files.filter((item) => item.action === 'delete').map((item) => item.path) : preview.removed;
+    if (session) await session.preview();
+    const preview = await installAgentAssets({ ...options, previewOnly: true });
+    const removals = preview.removed;
     assert.ok([copyPath, skillPath, supportPath].every((filePath) => removals.includes(filePath)), action);
     for (const filePath of [copyPath, skillPath, supportPath]) assert.equal(await pathExists(filePath), true);
     if (!session) assert.equal(await readFile(machinePath, 'utf8'), before);
 
     if (session) await session.answer({ confirm: true });
-    const result = session ? await session.install() : await evolve({ ...options, pull: false });
+    const setupResult = session ? await session.install() : null;
+    const setupReport = setupResult ? await readFile(setupResult.reportPath, 'utf8') : '';
+    const result = session ? await applyReviewedClients(fixture) : await evolve({ ...options, pull: false });
     for (const filePath of [copyPath, skillPath, supportPath, skillDirectory, bundleDirectory]) {
       assert.equal(await pathExists(filePath), false, `${action}: ${filePath}`);
     }
-    assert.ok(result.removed.includes(copyPath));
+    assert.ok([...result.removed, ...(setupResult?.removed ?? [])].includes(copyPath));
     assert.ok(result.removed.includes(skillPath));
     const record = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
     for (const filePath of [copyPath, skillPath, supportPath]) assert.equal(record.managedFiles[filePath], undefined);
     assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')), true);
-    const report = await readFile(result.reportPath, 'utf8');
+    const report = setupReport + await readFile(result.reportPath, 'utf8');
     assert.match(report, /## Removed/);
     assert.ok(report.includes(copyPath));
   }
@@ -400,6 +414,7 @@ async function makeRetirementFixture(context) {
   const session = await completeAnswers(fixture, ['codex']);
   await session.answer({ confirm: true });
   await session.install();
+  await applyReviewedClients(fixture);
   return fixture;
 }
 
@@ -551,25 +566,25 @@ test('a symbolic ancestor becomes one conflict with replace as the default, and 
     /symbolic destination/,
   );
   const preview = await session.preview();
-  const linkConflicts = preview.conflicts.filter((conflict) => conflict.link === true);
+  const linkConflicts = preview.clientChanges.conflicts.filter((conflict) => conflict.link === true);
   assert.equal(linkConflicts.length, 1);
   assert.equal(linkConflicts[0].path, link);
   assert.deepEqual(linkConflicts[0].choices, ['replace', 'omit']);
   assert.equal(linkConflicts[0].selection, 'replace');
-  const perFileConflicts = preview.conflicts.filter((conflict) => conflict.path.startsWith(`${link}${path.sep}`));
+  const perFileConflicts = preview.clientChanges.conflicts.filter((conflict) => conflict.path.startsWith(`${link}${path.sep}`));
   assert.equal(perFileConflicts.length, 0);
-  assert.ok(preview.files.some((file) => file.path.startsWith(`${link}${path.sep}`)), 'files behind the link stay in the plan');
+  assert.ok(preview.clientChanges.files.some((file) => file.path.startsWith(`${link}${path.sep}`)), 'files behind the link stay in the review plan');
 
   const step = await session.getStep();
   const conflictField = step.fields.find((field) => field.label === link);
-  assert.deepEqual(conflictField.options.map((option) => option.value), ['replace', 'omit']);
-  assert.equal(conflictField.options[0].label, text('en', 'replaceLink'));
+  assert.equal(conflictField, undefined);
 
   await session.answer({ confirm: true, conflicts: { [link]: 'omit' } });
-  const result = await session.install();
+  await session.install();
+  const result = await applyReviewedClients(fixture, { [link]: 'omit' });
   assert.ok(result.omitted.length > 0);
   assert.ok(result.omitted.every((item) => item.component === link));
-  assert.equal(result.files.filter((file) => file.startsWith(`${link}${path.sep}`)).length, 0);
+  assert.equal(result.agents.flatMap(agent => agent.files).filter(file => file.startsWith(`${link}${path.sep}`)).length, 0);
   assert.deepEqual(await readdir(outside), []);
   assert.equal((await lstat(link)).isSymbolicLink(), true);
 
@@ -606,15 +621,17 @@ test('replacing a junction inside a skills folder removes the link, writes the f
 
   const session = await completeAnswers(fixture, ['codex']);
   const preview = await session.preview();
-  const linkConflicts = preview.conflicts.filter((conflict) => conflict.link === true);
+  const linkConflicts = preview.clientChanges.conflicts.filter((conflict) => conflict.link === true);
   assert.deepEqual(linkConflicts.map((conflict) => conflict.path).sort(), [qaLink, reportLink].sort());
 
   await session.answer({ confirm: true, conflicts: { [qaLink]: 'replace', [reportLink]: 'replace' } });
-  const result = await session.install();
+  await session.install();
+  assert.equal((await lstat(qaLink)).isSymbolicLink(), true);
+  const result = await applyReviewedClients(fixture, { [qaLink]: 'replace', [reportLink]: 'replace' });
   assert.deepEqual(result.omitted, []);
   assert.deepEqual([...result.replacedLinks].sort(), [qaLink, reportLink].sort());
   assert.equal((await lstat(qaLink)).isSymbolicLink(), false);
-  assert.ok(result.files.includes(path.join(qaLink, 'SKILL.md')));
+  assert.ok(result.agents.flatMap(agent => agent.files).includes(path.join(qaLink, 'SKILL.md')));
   assert.ok((await readdir(qaLink)).includes('SKILL.md'));
   // The folder the junction pointed at keeps its own content.
   assert.deepEqual(await readdir(outsideQa), ['kept.md']);
@@ -718,7 +735,7 @@ test('the preview groups files by owner: the mind for kit and data files, the ad
   assert.deepEqual(rulesFile.owner, { id: 'mind', label: 'Mind' });
   const versionFile = preview.files.find((file) => file.path === path.join(fixture.mindPath, 'user', 'VERSION'));
   assert.deepEqual(versionFile.owner, { id: 'mind', label: 'Mind' });
-  const skillFile = preview.files.find((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
+  const skillFile = preview.clientChanges.files.find((file) => file.path === path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
   assert.deepEqual(skillFile.owner, { id: 'codex', label: 'Codex' });
 });
 
@@ -779,6 +796,9 @@ test('setup installs a role and a feature added to the mind folder', async (cont
   await session.answer({ confirm: true });
   await session.install();
 
+  assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'archivist')), false);
+  await applyReviewedClients(fixture);
+
   const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'archivist', 'SKILL.md');
   assert.match(await readFile(skillPath, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
   assert.match(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'tidy', 'SKILL.md'), 'utf8'), /# Tidy/);
@@ -803,6 +823,9 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
   await session.answer({ confirm: true });
   const result = await session.install();
 
+  assert.equal(await pathExists(path.join(fixture.homeDir, '.agents', 'skills', 'curator')), false);
+  await applyReviewedClients(fixture);
+
   const privateSkill = path.join(fixture.homeDir, '.agents', 'skills', 'curator', 'SKILL.md');
   assert.match(await readFile(privateSkill, 'utf8'), new RegExp(`Mind: ${escapeRegExp(fixture.mindPath)}`));
   const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
@@ -811,7 +834,7 @@ test('a private role in user/roles installs like a kit role, and a kit name keep
   assert.equal(await pathExists(path.join(fixture.mindPath, 'roles', 'curator.md')), false);
   // A name the kit already ships keeps the kit file and says so.
   assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'relay', 'SKILL.md'), 'utf8'), /# Local relay/);
-  assert.ok(result.warnings.some((warning) => warning.includes(path.join('user', 'commands', 'relay.md'))));
+  assert.ok(result.clientChanges.warnings.some((warning) => warning.includes(path.join('user', 'commands', 'relay.md'))));
 });
 
 async function pathExists(target) {
@@ -843,7 +866,7 @@ test('running setup again keeps the evidence folder recorded in the machine path
   await session.install();
   const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
   assert.ok(machine.paths.some((entry) => entry.name === 'evidence' && entry.path === path.join(fixture.root, 'evidence')));
-  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
+  assert.equal(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')], undefined);
 });
 
 test('custom mode alerts about an installed mind, attaches the machine and leaves the mind content alone', async (context) => {
@@ -883,7 +906,7 @@ test('custom mode alerts about an installed mind, attaches the machine and leave
   const mindFiles = preview.files.filter((file) => file.path.startsWith(`${fixture.mindPath}${path.sep}`));
   assert.deepEqual(
     mindFiles.map((file) => path.relative(fixture.mindPath, file.path)).sort(),
-    [path.join('user', 'machines', 'SECOND.md'), path.join('user', 'routes.md')].sort(),
+    [path.join('user', 'machines', 'SECOND.md')],
   );
 
   await session.answer({ confirm: true });
@@ -899,7 +922,7 @@ test('custom mode alerts about an installed mind, attaches the machine and leave
   assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Older rules kept.\n');
   const machine = (await readMachineRecord(fixture.mindPath, 'SECOND')).record;
   assert.equal(machine.setup, 'done');
-  assert.ok(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')]);
+  assert.equal(machine.managedFiles[path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md')], undefined);
 });
 
 test('simple mode attaches to a mind already installed on this machine instead of writing a second one', async (context) => {
@@ -938,7 +961,9 @@ test('a migration failure leaves setup resumable until the remaining work succee
   await mkdir(path.dirname(progress), { recursive: true });
   await writeFile(progress, '{broken');
   await assert.rejects(session.install(), SyntaxError);
-  assert.match(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
+  assert.equal(await pathExists(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md')), false);
+  assert.equal(session.checkpoint.phase, 'migrate');
+  assert.equal(session.checkpoint.error.code, 'setup_failed');
   assert.equal((await session.getStep()).done, false);
   await rm(progress);
   const completed = await session.install();
@@ -1066,3 +1091,415 @@ async function answerReconfiguration(session, fixture, agents) {
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+async function applyReviewedClients(fixture, conflictChoices = {}) {
+  return installAgentAssets({ ...fixture, kitPath: fixture.kitPath ?? KIT_PATH, hostname: 'TESTBOX', env: { PATH: '' }, conflictChoices });
+}
+
+async function checkpointFixture(context, version = '2.0.0') {
+  const fixture = await makeFixture(context);
+  fixture.sourcePath = fixture.mindPath;
+  await makeInstalledMind(fixture, version);
+  await mkdir(path.join(fixture.sourcePath, 'user', 'state'), { recursive: true });
+  await writeFile(path.join(fixture.sourcePath, 'user', 'state', 'user.md'), 'unit: user\n\nPrivate person state.\n');
+  await writeFile(path.join(fixture.sourcePath, 'user', 'private.json'), '{"unknown":{"keep":true}}\n');
+  fixture.mindPath = path.join(fixture.root, 'destination');
+  fixture.cosmicPath = path.join(fixture.root, 'local', 'Cosmic');
+  fixture.kitPath = path.join(fixture.root, 'kit');
+  await mkdir(path.join(fixture.kitPath, 'migrations'), { recursive: true });
+  await writeFile(path.join(fixture.kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["rules.md","files.md","migrations/"]}\n');
+  await writeFile(path.join(fixture.kitPath, 'rules.md'), 'Current rules.\n');
+  await writeFile(path.join(fixture.kitPath, 'files.md'), 'Current formats.\n');
+  for (const name of ['2.0.0-experimental.4', '3.0.0']) {
+    await writeFile(path.join(fixture.kitPath, 'migrations', `${name}.mjs`),
+      `export {version, idempotent, migrate} from ${JSON.stringify(pathToFileURL(path.join(KIT_PATH, 'migrations', `${name}.mjs`)).href)};\n`);
+  }
+  fixture.options = { kitPath: fixture.kitPath, mindPath: fixture.mindPath, legacySourcePath: fixture.sourcePath,
+    cosmicPath: fixture.cosmicPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, language: 'en' };
+  return fixture;
+}
+
+async function addLegacySession(fixture, machine = 'TESTBOX', overrides = {}) {
+  const record = { kind: 'registration', registrationId: '11111111-1111-4111-8111-111111111111',
+    sessionId: '33333333-3333-4333-8333-333333333333', unit: 'executor', unitId: 'root:executor', client: 'host',
+    machine, nativeSessionId: 'native-one', registeredAt: '2026-10-13T00:00:00.000Z', pid: 999999, ...overrides };
+  const directory = path.join(fixture.sourcePath, 'user', 'relay', 'sessions');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${record.registrationId}.json`), JSON.stringify(record));
+  return record;
+}
+
+function ownedLegacyControl(events = []) {
+  let live = true;
+  let saved = false;
+  return {
+    reopen() { live = true; },
+    async confirm(binding) { events.push(live ? 'confirm-live' : 'confirm-closed'); assert.equal(binding.pid, undefined); return { binding, owned: true, live, saved }; },
+    async save(binding) { events.push('saved'); saved = true; return { binding, saved }; },
+    async close(binding) { events.push('closed'); assert.equal(saved, true); live = false; return { binding, closed: true }; },
+  };
+}
+
+async function confirmedSetup(options, values = {}) {
+  const session = await createSetupSession(options);
+  await session.answer({ installMode: 'simple' });
+  await session.answer({ confirm: true, ...values });
+  return session;
+}
+
+async function trackSetupWrites(roots, operation, onWrite = () => {}) {
+  const originals = new Map();
+  const writes = [];
+  const within = (root, value) => { const relative = path.relative(root, path.resolve(value));
+    return relative === '' || !relative.startsWith('..') && !path.isAbsolute(relative); };
+  for (const name of ['writeFile', 'appendFile', 'open', 'mkdir', 'rename', 'unlink', 'rmdir', 'rm', 'copyFile', 'chmod']) {
+    const original = fs[name];
+    originals.set(name, original);
+    fs[name] = async (...args) => {
+      const targets = name === 'rename' ? args.slice(0, 2) : name === 'copyFile' ? [args[1]]
+        : name === 'open' && !/[wa]/.test(String(args[1])) ? [] : [args[0]];
+      for (const target of targets) {
+        assert.equal(typeof target, 'string');
+        const existingAncestor = name === 'mkdir' && roots.some(root => within(path.resolve(target), root))
+          && await lstat(path.resolve(target)).then(state => state.isDirectory(), () => false);
+        assert.ok(roots.some(root => within(root, target)) || existingAncestor, `${name} leaves the allowed destination and local storage`);
+        writes.push({ operation: name, path: path.resolve(target) });
+        await onWrite(name, path.resolve(target));
+      }
+      return original(...args);
+    };
+  }
+  syncBuiltinESMExports();
+  try { await operation(writes); }
+  finally { for (const [name, original] of originals) fs[name] = original; syncBuiltinESMExports(); }
+  return writes;
+}
+
+test('joining preserves every existing record except the joining machine record', async context => {
+  const fixture = await checkpointFixture(context, '3.0.0');
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const homeBefore = await legacyTreeInventory(fixture.homeDir);
+  const options = { ...fixture.options, mindPath: fixture.sourcePath, legacySourcePath: null, hostname: 'JOINING' };
+  const writes = await trackSetupWrites([fixture.cosmicPath, path.join(fixture.sourcePath, 'user', 'machines')], async () => {
+    const session = await confirmedSetup(options);
+    const preview = await session.preview();
+    assert.deepEqual(preview.files.map(file => file.path), [path.join(fixture.sourcePath, 'user', 'machines', 'JOINING.md')]);
+    const result = await session.install();
+    assert.equal(result.completed, true);
+    assert.equal(result.mode, 'join');
+    assert.equal(result.clientChanges.requiresReview, true);
+  });
+  const after = (await legacyTreeInventory(fixture.sourcePath)).filter(entry => entry.path !== 'user/machines/JOINING.md');
+  assert.deepEqual(after, before);
+  assert.deepEqual(await legacyTreeInventory(fixture.homeDir), homeBefore);
+  assert.ok(writes.some(item => item.path.endsWith('JOINING.md')));
+  assert.ok(writes.filter(item => item.operation !== 'mkdir' && item.path.startsWith(fixture.sourcePath)).every(item =>
+    item.path === path.join(fixture.sourcePath, 'user', 'machines') || item.path.includes('JOINING.md')));
+});
+
+test('legacy shutdown finishes before a destination copy', async context => {
+  const fixture = await checkpointFixture(context);
+  await addLegacySession(fixture);
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const events = [];
+  const control = ownedLegacyControl(events);
+  await trackSetupWrites([fixture.cosmicPath, fixture.mindPath], async () => {
+    const session = await confirmedSetup({ ...fixture.options, legacyControl: control }, { closeLegacy: true });
+    assert.equal((await session.install()).completed, true);
+  }, (operation, target) => {
+    if (target === fixture.mindPath || target.startsWith(`${fixture.mindPath}${path.sep}`)) {
+      assert.ok(events.includes('saved'));
+      assert.ok(events.includes('closed'));
+      assert.ok(events.includes('confirm-closed'));
+    }
+  });
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+  assert.deepEqual(await readdir(path.join(fixture.mindPath, 'user', 'relay', 'sessions')), []);
+});
+
+test('failed copy resumes only verified checkpoint entries', async context => {
+  const fixture = await checkpointFixture(context);
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  let copied = 0;
+  let first;
+  const session = await confirmedSetup({ ...fixture.options, copyCheckpoint: async entry => {
+    first ??= entry.path;
+    if (++copied === 2) throw new Error('injected copy interruption');
+  } });
+  await assert.rejects(session.install(), /injected copy interruption/);
+  assert.equal(session.checkpoint.phase, 'copy');
+  assert.deepEqual(session.checkpoint.completed, ['prepare', 'close-legacy']);
+  const resumed = await createSetupSession(fixture.options);
+  assert.equal((await resumed.getStep()).number, 7);
+  await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async writes => {
+    assert.equal((await resumed.install()).completed, true);
+    assert.ok(!writes.some(item => item.operation === 'copyFile' && item.path === path.join(fixture.mindPath, first)));
+  });
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+});
+
+test('changed partial copy entries block resume without changing either tree', async context => {
+  const fixture = await checkpointFixture(context);
+  let copiedPath;
+  const session = await confirmedSetup({ ...fixture.options, copyCheckpoint: async entry => { copiedPath = entry.path; throw new Error('copy stopped'); } });
+  await assert.rejects(session.install(), /copy stopped/);
+  await writeFile(path.join(fixture.mindPath, copiedPath), 'foreign edit\n');
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const destinationBefore = await legacyTreeInventory(fixture.mindPath);
+  const resumed = await createSetupSession(fixture.options);
+  await assert.rejects(resumed.install(), error => error.code === 'checkpoint_changed');
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+  assert.deepEqual(await legacyTreeInventory(fixture.mindPath), destinationBefore);
+});
+
+test('migration writes only destination paths', async context => {
+  const fixture = await checkpointFixture(context, '2.0.0-experimental.3');
+  await writeFile(path.join(fixture.sourcePath, 'user', 'state', 'manager.md'), 'unit: manager\n\nLegacy coordinator.\n');
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const homeBefore = await legacyTreeInventory(fixture.homeDir);
+  const session = await confirmedSetup(fixture.options);
+  const writes = await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async () => {
+    const result = await session.install();
+    assert.equal(result.completed, true);
+    assert.deepEqual(session.checkpointProof.migrations, ['2.0.0-experimental.4', '3.0.0']);
+  });
+  assert.ok(writes.some(item => item.operation === 'unlink' && item.path === path.join(fixture.mindPath, 'user', 'state', 'user.md')));
+  assert.equal(await pathExists(path.join(fixture.mindPath, 'user', 'state', 'master.md')), true);
+  assert.equal(await pathExists(path.join(fixture.mindPath, 'user', 'state', 'overseer.md')), true);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+  assert.deepEqual(await legacyTreeInventory(fixture.homeDir), homeBefore);
+});
+
+test('reopening a failed service step preserves completed copy and migration', async context => {
+  const fixture = await checkpointFixture(context);
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const commands = [];
+  let starts = 0;
+  const options = { ...fixture.options, serviceSetup: true, serviceDryRun: false, serviceProtect: false,
+    serviceRunner: async argv => { commands.push(argv); },
+    serviceQuery: async plan => {
+      if (!commands.length) return { present: false };
+      const ownership = JSON.parse(await readFile(path.join(session.localDirectory(), 'registration.json'), 'utf8'));
+      return { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments, installationId: ownership.installationId };
+    },
+    serviceStart: async () => { if (++starts === 1) throw Object.assign(new Error('port 43210 occupied; private native output omitted'), { code: 'EADDRINUSE' });
+      return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/fixture' }; } };
+  const session = await confirmedSetup(options);
+  const failed = await session.install();
+  assert.equal(failed.completed, false);
+  assert.equal(failed.checkpoint.phase, 'start');
+  assert.deepEqual(failed.checkpoint.completed, ['prepare', 'close-legacy', 'copy', 'migrate', 'configure']);
+  assert.equal(failed.checkpoint.error.code, 'port_in_use');
+  assert.equal(failed.checkpoint.error.message, 'The service did not start: port 43210 is used by another program.');
+  const local = JSON.parse(await readFile(path.join(session.localDirectory(), 'setup.json'), 'utf8'));
+  assert.deepEqual(Object.keys(local).sort(), ['format', 'mode', 'sourcePath', 'destinationPath', 'phase', 'completed', 'error', 'updatedAt'].sort());
+  assert.equal(JSON.stringify(local).includes('private native output'), false);
+  const destinationBefore = await legacyTreeInventory(fixture.mindPath);
+  const registered = commands.length;
+  const resumed = await createSetupSession(options);
+  assert.equal(resumed.result.service.error, local.error.message);
+  const writes = await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async () => {
+    assert.equal((await resumed.install()).completed, true);
+  });
+  assert.equal(commands.length, registered);
+  assert.equal(starts, 2);
+  assert.equal(writes.some(item => item.operation === 'copyFile' || item.operation === 'unlink' || item.operation === 'rename' && item.path.includes('user/state')), false);
+  const excludeMachine = entries => entries.filter(entry => !entry.path.startsWith('user/machines/TESTBOX.'));
+  assert.deepEqual(excludeMachine(await legacyTreeInventory(fixture.mindPath)), excludeMachine(destinationBefore));
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});
+
+test('unsupported or unsaved legacy shutdown leaves both trees unchanged', async context => {
+  for (const mode of ['unsupported', 'unsaved', 'mismatched']) {
+    const fixture = await checkpointFixture(context);
+    await addLegacySession(fixture);
+    const before = await legacyTreeInventory(fixture.sourcePath);
+    const control = mode === 'unsupported' ? null : ownedLegacyControl();
+    if (mode === 'unsaved') control.save = async binding => ({ binding, saved: false });
+    if (mode === 'mismatched') control.confirm = async binding => ({ binding: { ...binding, nativeSessionId: 'another' }, owned: true, live: true });
+    const session = await confirmedSetup({ ...fixture.options, legacyControl: control }, { closeLegacy: true });
+    await assert.rejects(session.install(), error => error.code === 'legacy_closure_required');
+    assert.equal(await pathExists(fixture.mindPath), false);
+    assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+  }
+});
+
+test('a closed legacy checkpoint is verified again before copy resume', async context => {
+  const fixture = await checkpointFixture(context);
+  await addLegacySession(fixture);
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const control = ownedLegacyControl();
+  const session = await confirmedSetup({ ...fixture.options, legacyControl: control, copyCheckpoint: async () => { throw new Error('copy stopped'); } }, { closeLegacy: true });
+  await assert.rejects(session.install(), /copy stopped/);
+  control.reopen();
+  await assert.rejects(createSetupSession({ ...fixture.options, legacyControl: control }), error => error.code === 'legacy_closure_required');
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+});
+
+test('native history selects the newest binding and excludes acknowledged stopped sessions', async context => {
+  const fixture = await checkpointFixture(context);
+  const old = await addLegacySession(fixture);
+  const newer = await addLegacySession(fixture, 'TESTBOX', { registrationId: '22222222-2222-4222-8222-222222222222',
+    unit: 'overseer', unitId: 'root:overseer', registeredAt: '2026-10-13T01:00:00.000Z' });
+  const sessions = await legacySessions(fixture.sourcePath);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].binding.registrationId, newer.registrationId);
+  assert.equal(sessions[0].sessionId, newer.sessionId);
+  const directory = path.join(fixture.sourcePath, 'user', 'relay', 'session-status', newer.sessionId);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${old.registrationId}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: newer.sessionId,
+    state: 'stopped', machine: 'TESTBOX', at: '2026-10-13T02:00:00.000Z', reason: 'native-acknowledged' }));
+  assert.deepEqual(await legacySessions(fixture.sourcePath), []);
+});
+
+test('local setup storage cannot be placed inside either M1ND or a synced root', async context => {
+  const fixture = await checkpointFixture(context);
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  await assert.rejects(createSetupSession({ ...fixture.options, cosmicPath: path.join(fixture.sourcePath, 'local') }), error => error.code === 'invalid_path');
+  await assert.rejects(createSetupSession({ ...fixture.options, mindPath: fixture.sourcePath, legacySourcePath: null,
+    cosmicPath: path.join(fixture.sourcePath, 'local') }), error => error.code === 'invalid_path');
+  const session = await createSetupSession({ ...fixture.options, env: { PATH: '', OneDrive: fixture.cosmicPath } });
+  await assert.rejects(session.answer({ installMode: 'simple' }), error => error.code === 'unsafe_staging');
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+  assert.equal(await pathExists(fixture.mindPath), false);
+});
+
+test('an interrupted quarantine move resumes from its byte-verified move record', async context => {
+  const fixture = await checkpointFixture(context);
+  await addLegacySession(fixture, 'OFFLINEBOX');
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup(fixture.options);
+  const original = fs.rename;
+  let interrupted = false;
+  fs.rename = async (from, to) => {
+    await original(from, to);
+    if (!interrupted && to.includes(`${path.sep}legacy-relay${path.sep}`)) {
+      interrupted = true;
+      throw new Error('injected quarantine interruption');
+    }
+  };
+  syncBuiltinESMExports();
+  try { await assert.rejects(session.install(), /injected quarantine interruption/); }
+  finally { fs.rename = original; syncBuiltinESMExports(); }
+  assert.equal(session.checkpoint.phase, 'migrate');
+  assert.ok(session.checkpointProof.pendingMove);
+  const resumed = await createSetupSession(fixture.options);
+  assert.equal((await resumed.install()).completed, true);
+  assert.equal(resumed.checkpointProof.pendingMove, undefined);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});
+
+test('an interrupted person migration reopens without copying again', async context => {
+  const fixture = await checkpointFixture(context);
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup({ ...fixture.options, migrationFaultAfterMoves: 1 });
+  await assert.rejects(session.install(), error => error.code === 'MIGRATION_INTERRUPTED');
+  assert.equal(session.checkpoint.phase, 'migrate');
+  const resumed = await createSetupSession(fixture.options);
+  const writes = await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async () => {
+    assert.equal((await resumed.install()).completed, true);
+  });
+  assert.equal(writes.some(item => item.operation === 'copyFile'), false);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});
+
+test('person migration recovers an unlink that completed before its checkpoint', async context => {
+  const fixture = await checkpointFixture(context);
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup(fixture.options);
+  const original = fs.unlink;
+  let interrupted = false;
+  fs.unlink = async target => {
+    await original(target);
+    if (!interrupted && target === path.join(fixture.mindPath, 'user', 'state', 'user.md')) {
+      interrupted = true;
+      throw new Error('injected person unlink interruption');
+    }
+  };
+  syncBuiltinESMExports();
+  try { await assert.rejects(session.install(), /injected person unlink interruption/); }
+  finally { fs.unlink = original; syncBuiltinESMExports(); }
+  assert.ok(session.checkpointProof.pendingPersonMove);
+  const resumed = await createSetupSession(fixture.options);
+  assert.equal((await resumed.install()).completed, true);
+  assert.equal(resumed.checkpointProof.pendingPersonMove, null);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});
+
+test('preceding migration resumes only its exact interrupted header and folder transforms', async context => {
+  for (const mutation of ['rm', 'rename']) {
+    const fixture = await checkpointFixture(context, '2.0.0-experimental.3');
+    await writeFile(path.join(fixture.sourcePath, 'user', 'state', 'manager.md'), 'unit: manager\n\nPrevious coordinator state.\n');
+    await mkdir(path.join(fixture.sourcePath, 'user', 'manager'), { recursive: true });
+    await writeFile(path.join(fixture.sourcePath, 'user', 'manager', 'notes.md'), 'Private coordinator notes.\n');
+    const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+    const session = await confirmedSetup(fixture.options);
+    const original = fs[mutation];
+    let interrupted = false;
+    const wanted = mutation === 'rm' ? path.join(fixture.mindPath, 'user', 'state', 'manager.md')
+      : path.join(fixture.mindPath, 'user', 'manager', 'notes.md');
+    fs[mutation] = async (...args) => {
+      await original(...args);
+      if (!interrupted && args[0] === wanted) { interrupted = true; throw new Error('injected preceding migration interruption'); }
+    };
+    syncBuiltinESMExports();
+    try { await assert.rejects(session.install(), /injected preceding migration interruption/); }
+    finally { fs[mutation] = original; syncBuiltinESMExports(); }
+    assert.equal(session.checkpointProof.activeMigration.version, '2.0.0-experimental.4');
+    const resumed = await createSetupSession(fixture.options);
+    const writes = await trackSetupWrites([fixture.mindPath, fixture.cosmicPath], async () => {
+      assert.equal((await resumed.install()).completed, true);
+    });
+    assert.equal(writes.some(item => item.operation === 'copyFile'), false);
+    assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+    assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'overseer', 'notes.md'), 'utf8'), 'Private coordinator notes.\n');
+  }
+});
+
+test('a preceding state collision resumes after its acknowledged retirement write', async context => {
+  const fixture = await checkpointFixture(context, '2.0.0-experimental.3');
+  await writeFile(path.join(fixture.sourcePath, 'user', 'state', 'manager.md'), 'unit: manager\n\nPrevious manager state.\n');
+  await writeFile(path.join(fixture.sourcePath, 'user', 'state', 'overseer.md'), 'unit: overseer\ndate: 2026-10-13 00:00\n\nExisting overseer state.\n');
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup(fixture.options);
+  const original = fs.rm;
+  let interrupted = false;
+  fs.rm = async (...args) => {
+    await original(...args);
+    if (!interrupted && args[0] === path.join(fixture.mindPath, 'user', 'state', 'overseer.md')) {
+      interrupted = true;
+      throw new Error('injected collision retirement interruption');
+    }
+  };
+  syncBuiltinESMExports();
+  try { await assert.rejects(session.install(), /injected collision retirement interruption/); }
+  finally { fs.rm = original; syncBuiltinESMExports(); }
+  const resumed = await createSetupSession(fixture.options);
+  assert.equal((await resumed.install()).completed, true);
+  assert.match(await readFile(path.join(fixture.mindPath, 'user', 'log', '20261013-0000-overseer-retired.md'), 'utf8'), /Existing overseer state/);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});
+
+test('migration progress written before its protected proof is reconciled on reopen', async context => {
+  const fixture = await checkpointFixture(context);
+  await mkdir(path.join(fixture.sourcePath, 'user', 'inbox', 'user'), { recursive: true });
+  await writeFile(path.join(fixture.sourcePath, 'user', 'inbox', 'user', 'message.md'), 'id: message-one\nto: user\nfrom: executor\n\nPrivate person message.\n');
+  const sourceBefore = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup(fixture.options);
+  const original = fs.rename;
+  let writes = 0;
+  fs.rename = async (from, to) => {
+    await original(from, to);
+    if (to === path.join(fixture.mindPath, '.migration', 'migration-3.0.0.json') && ++writes === 3) {
+      throw new Error('injected shared progress interruption');
+    }
+  };
+  syncBuiltinESMExports();
+  try { await assert.rejects(session.install(), /injected shared progress interruption/); }
+  finally { fs.rename = original; syncBuiltinESMExports(); }
+  assert.ok(session.checkpointProof.pendingProgress);
+  const resumed = await createSetupSession(fixture.options);
+  assert.equal((await resumed.install()).completed, true);
+  assert.equal(resumed.checkpointProof.pendingProgress, undefined);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
+});

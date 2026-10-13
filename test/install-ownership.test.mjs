@@ -3,10 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { installAgentAssets, planKitCopy } from '../engine/install.mjs';
+import { applyInstallPlan, combinePlans, installAgentAssets, planKitCopy, prepareSetupAgentAssets } from '../engine/install.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { hashContent, machineManagedPath, machineRecordPath, readMachineRecord } from '../engine/records.mjs';
-import { createSetupSession } from '../engine/setup.mjs';
+import { createSetupSession as rawCreateSetupSession } from '../engine/setup.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
+const createSetupSession = options => rawCreateSetupSession({ aclRunner: stubAclRunner(), ...options });
 
 const OLD_LICENSE = 'Permission is granted.\n\nThe software is provided as is.\n';
 const NEW_LICENSE = 'Permission is granted.\n\nThe software is provided as is, without warranty.\n';
@@ -263,13 +266,13 @@ test('binary content is compared by its bytes even when it holds line ending byt
   }
 });
 
-test('setup previews no conflict for a kit file another machine installed', async (t) => {
+test('joining does not prepare a kit replacement even when another machine owns it', async (t) => {
   const fixture = await makeFixture(t);
   await writeKit(fixture, { 'rules.md': NEW_LICENSE, 'files.md': 'Formats.\n' });
   const rulesPath = await writeMind(fixture, 'rules.md', text(OLD_LICENSE, 'crlf'));
   await writeMind(fixture, 'files.md', 'Formats.\n');
+  await writeMind(fixture, 'user/VERSION', '3.0.0\n');
   const preview = async () => {
-    // Previewing saves a draft over the machine record, which would make the next session an attach.
     await writeMachine(fixture, 'TEST');
     const session = await createSetupSession({
       kitPath: fixture.kitPath,
@@ -283,11 +286,25 @@ test('setup previews no conflict for a kit file another machine installed', asyn
     return (await session.answer({ installMode: 'simple' })).preview;
   };
 
-  assert.equal((await preview()).conflicts.find((conflict) => conflict.path === rulesPath)?.reason, UNOWNED_REASON);
+  assert.deepEqual((await preview()).conflicts, []);
   await writeMachine(fixture, 'OTHER', { [rulesPath]: hashContent(text(OLD_LICENSE, 'lf')) });
   const planned = await preview();
   assert.deepEqual(planned.conflicts, []);
-  assert.equal(planned.files.find((file) => file.path === rulesPath)?.action, 'update');
+  assert.equal(planned.files.some(file => file.path === rulesPath), false);
+  assert.deepEqual(await readFile(rulesPath), text(OLD_LICENSE, 'crlf'));
+});
+
+test('prepared setup client changes cannot be applied directly or through a combined plan', async t => {
+  const fixture = await makeFixture(t);
+  await writeKit(fixture, { 'roles/executor.md': '---\nname: executor\ndescription: Fixture role.\n---\n\n# Executor\n' });
+  const before = await legacyTreeInventory(fixture.homeDir);
+  const plan = await prepareSetupAgentAssets({ kitPath: fixture.kitPath, mindPath: fixture.mindPath,
+    homeDir: fixture.homeDir, env: { PATH: '' }, agents: [{ name: 'codex', mode: 'auto' }] });
+  assert.ok(plan.items.length > 0);
+  assert.equal(plan.requiresReview, true);
+  await assert.rejects(applyInstallPlan(plan), /Review changes in Settings/);
+  await assert.rejects(applyInstallPlan(combinePlans(plan)), /Review changes in Settings/);
+  assert.deepEqual(await legacyTreeInventory(fixture.homeDir), before);
 });
 
 test('the kit copy carries the runtime dependency closure into the mind and warns on a missing one', async (t) => {

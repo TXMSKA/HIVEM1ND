@@ -32,6 +32,18 @@ async function files(directory) {
   return found.sort((left, right) => left[0].localeCompare(right[0]));
 }
 
+test('legacy person migration refuses a source or progress directory outside the prepared copy', async t => {
+  const user = await userRoot(t);
+  const mind = path.dirname(user);
+  await mkdir(path.join(user, 'state'), { recursive: true });
+  await writeFile(path.join(user, 'state', 'user.md'), 'unit: user\n\nOriginal person record.\n');
+  const before = await files(mind);
+  await assert.rejects(migrate({ userPath: user, legacySourcePath: mind, destinationPath: mind }), error => error.code === 'invalid_path');
+  await assert.rejects(migrate({ userPath: user, legacySourcePath: path.join(path.dirname(mind), 'separate-source'),
+    destinationPath: mind, progressDirectory: path.join(path.dirname(mind), 'foreign-progress') }), error => error.code === 'invalid_path');
+  assert.deepEqual(await files(mind), before);
+});
+
 test('person migration is repeatable and leaves private history in place', async (t) => {
   const root = await userRoot(t);
   const historical = Buffer.concat([

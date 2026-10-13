@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CoreError } from './identity.mjs';
 import { assertLocalStaging, assertNoLinks, localCosmic, mindKeyFor, oneDriveRoots } from './paths.mjs';
 import { aclRunnerFrom, protectLocalFile } from './security.mjs';
+import { assertLegacyWakeClosure, requireLegacyClosure } from '../relay/local-wake.mjs';
 
 function fail(status, code, message) {
   throw new CoreError(status, code, message);
@@ -339,6 +340,7 @@ export function bootstrapConfig(config) {
   }
   if (!config.mindPath || !config.stagingPath) fail(422, 'invalid_body', 'Config needs a mind and a staging path.');
   if (!config.machine) fail(422, 'invalid_body', 'Config needs a machine.');
+  assertLegacyWakeClosure(config.mindPath, config.machine);
   const origin = config.origin ?? { kind: 'folder', path: config.originPath };
   if (!origin?.path || (origin.kind !== 'folder' && origin.kind !== 'onedrive')) {
     fail(422, 'invalid_body', 'Config needs a folder or OneDrive origin.');
@@ -434,7 +436,8 @@ export async function runServicePhases(input, options = {}) {
       state.start = true;
       state.viewerUrl = started?.viewerUrl ?? null;
     } catch (error) {
-      return { status: 'failed', phase: 'start', state, os: false, error: error.message, viewerUrl: null };
+      return { status: 'failed', phase: 'start', state, os: false, error: error.message, code: error.code ?? 'service_unavailable',
+        port: Number.isInteger(error.port) && error.port > 0 && error.port <= 65535 ? error.port : null, viewerUrl: null };
     }
   }
   return { status: 'started', phase: null, state, os: false, viewerUrl: state.viewerUrl ?? null };
@@ -449,6 +452,7 @@ export async function configureOwnedService(options = {}) {
     : localCosmic({ platform, env, home });
   const mindPath = path.resolve(options.mindPath);
   const machine = options.hostname ?? options.machine;
+  await requireLegacyClosure(mindPath, { machine, control: options.legacyControl });
   const mindKey = mindKeyFor(mindPath, platform);
   const localDirectory = path.join(cosmic, 'hivem1nd-service', mindKey, machine);
   const configFile = path.join(localDirectory, 'config.json');
@@ -493,6 +497,23 @@ export async function configureOwnedService(options = {}) {
     else if (platform === 'darwin') registration.label = current.name;
     else if (platform === 'linux') registration.unitName = current.name;
   }
+  let resumedState = options.state;
+  if (options.resumeSetup && existing) {
+    const expected = bootstrapConfig({ mindPath, machine, origin, stagingPath,
+      syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }) });
+    if (JSON.stringify(existing) !== JSON.stringify(expected)) fail(409, 'checkpoint_changed', 'The saved service configuration changed.');
+    resumedState = { config: true, configBody: existing, registration: false, start: false };
+    if (current) {
+      const plan = planRegistration(registration);
+      const actual = await (options.query ?? options.serviceQuery ?? (value => queryRegistration(value, { current })))(plan);
+      if (!verifyOwnedRegistration(current, plan).owned || !sameActual(actual, plan, current)
+        || current.installationId && actual.installationId !== current.installationId) {
+        fail(409, 'checkpoint_changed', 'The saved service registration could not be verified.');
+      }
+      resumedState.registration = true;
+      resumedState.installed = current;
+    }
+  }
   let writtenOwnershipFile = null;
   const persistRegistration = async (installed) => {
     await mkdir(localDirectory, { recursive: true });
@@ -513,10 +534,10 @@ export async function configureOwnedService(options = {}) {
     registration,
   }, {
     dryRun: options.dryRun !== false,
-    state: options.state,
+    state: resumedState,
     current,
     run: options.run ?? options.serviceRunner,
-    start: options.start ?? options.serviceStart,
+    start: options.configureOnly ? null : options.start ?? options.serviceStart,
     query: options.query ?? options.serviceQuery ?? ((plan) => queryRegistration(plan, { current })),
     aclRunner: options.aclRunner,
     persistRegistration,
@@ -530,6 +551,11 @@ export async function configureOwnedService(options = {}) {
       if (options.protect !== false) await protectLocalFile(configFile, { aclRunner: options.aclRunner, store: options.store });
     },
   });
+  if (options.configureOnly && result.phase === 'start' && result.state.config && result.state.registration) {
+    result.status = 'configured';
+    result.phase = null;
+    delete result.error;
+  }
   if (writtenOwnershipFile) result.ownershipFile = writtenOwnershipFile;
   result.configFile = configFile;
   result.localDirectory = localDirectory;

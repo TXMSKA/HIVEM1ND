@@ -1,6 +1,121 @@
 import { fork } from 'node:child_process';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
+import { CoreError, uuidV8 } from '../service/identity.mjs';
+import { assertNoLinks } from '../service/paths.mjs';
+import { atomicWriteFile } from '../records.mjs';
 import { getWakeAdapter } from './wake-adapters.mjs';
+
+const CLOSURE_FILE = 'legacy-closure.json';
+
+function closureError() {
+  return new CoreError(409, 'legacy_closure_required', 'Verified saved-work and native closure acknowledgments are required before migration or wake adoption.');
+}
+
+function sameLegacyBinding(actual, expected) {
+  return actual && ['registrationId', 'unit', 'unitId', 'client', 'machine', 'nativeSessionId']
+    .every(key => actual[key] === expected[key]);
+}
+
+export async function legacySessions(sourcePath) {
+  const directory = path.join(sourcePath, 'user', 'relay', 'sessions');
+  await assertNoLinks(directory);
+  const entries = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const latest = new Map();
+  for (const name of entries.sort()) {
+    if (!/^[a-f0-9-]{36}\.json$/i.test(name)) continue;
+    const file = path.join(directory, name);
+    await assertNoLinks(file);
+    if (!(await lstat(file)).isFile()) throw closureError();
+    const record = JSON.parse(await readFile(file, 'utf8'));
+    if (record.kind !== 'registration') continue;
+    const binding = Object.fromEntries(['registrationId', 'unit', 'unitId', 'client', 'machine', 'nativeSessionId']
+      .map(key => [key, record[key] ?? null]));
+    if (!['registrationId', 'unit', 'client', 'machine', 'nativeSessionId'].every(key =>
+      typeof binding[key] === 'string' && binding[key].length > 0 && binding[key].length <= 180 && !/[\u0000-\u001f\u007f]/.test(binding[key]))) throw closureError();
+    const key = JSON.stringify([binding.machine, binding.client, binding.nativeSessionId]);
+    const previous = latest.get(key);
+    if (!previous || String(record.registeredAt ?? '') > previous.registeredAt) {
+      latest.set(key, { binding, registeredAt: String(record.registeredAt ?? ''), file: name,
+        sessionId: record.sessionId ?? uuidV8(['session', record.machine, record.client ?? '', record.nativeSessionId ?? '',
+          record.unitId ?? `${record.scopeId ?? 'root'}:${record.unit}`]) });
+    }
+  }
+  const active = [];
+  for (const { binding, file, sessionId, registeredAt } of latest.values()) {
+    if (!/^[a-f0-9-]{36}$/i.test(sessionId)) throw closureError();
+    const statuses = path.join(sourcePath, 'user', 'relay', 'session-status', sessionId);
+    await assertNoLinks(statuses);
+    const names = await readdir(statuses).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+    let ended = false;
+    for (const name of names) {
+      if (!/^[a-f0-9-]{36}\.json$/i.test(name)) continue;
+      const statusFile = path.join(statuses, name);
+      await assertNoLinks(statusFile);
+      const status = JSON.parse(await readFile(statusFile, 'utf8'));
+      if (status.format === 'hivem1nd-session-status-v1' && status.sessionId === sessionId && status.machine === binding.machine
+        && status.state === 'stopped' && status.reason === 'native-acknowledged' && Number.isFinite(Date.parse(status.at))
+        && Date.parse(status.at) >= Date.parse(registeredAt)) ended = true;
+    }
+    if (!ended) active.push({ binding, file, sessionId });
+  }
+  return active;
+}
+
+// The owner supplies a live native channel. Persisted process IDs are neither
+// accepted nor passed to it. Unsupported clients fail closed without a signal.
+export async function verifiedLegacyStop(binding, { machine = os.hostname(), control } = {}) {
+  binding = Object.fromEntries(['registrationId', 'unit', 'unitId', 'client', 'machine', 'nativeSessionId'].map(key => [key, binding?.[key] ?? null]));
+  if (!['registrationId', 'unit', 'client', 'machine', 'nativeSessionId'].every(key => typeof binding[key] === 'string'
+    && binding[key].length > 0 && binding[key].length <= 180 && !/[\u0000-\u001f\u007f]/.test(binding[key]))) throw closureError();
+  if (binding.machine !== machine || !control?.confirm || !control?.save || !control?.close) throw closureError();
+  const live = await control.confirm(binding);
+  if (!sameLegacyBinding(live?.binding, binding) || live.owned !== true) throw closureError();
+  if (live.live === false && live.saved === true) return { binding, saved: true, closed: true };
+  if (live.live !== true) throw closureError();
+  const saved = await control.save(binding);
+  if (!sameLegacyBinding(saved?.binding, binding) || saved.saved !== true) throw closureError();
+  const closed = await control.close(binding);
+  if (!sameLegacyBinding(closed?.binding, binding) || closed.closed !== true) throw closureError();
+  const ended = await control.confirm(binding);
+  if (!sameLegacyBinding(ended?.binding, binding) || ended.owned !== true || ended.live !== false) throw closureError();
+  return { binding, saved: true, closed: true };
+}
+
+export async function writeLegacyClosure(mindPath, handoff) {
+  const file = path.join(mindPath, '.migration', CLOSURE_FILE);
+  await assertNoLinks(file);
+  await atomicWriteFile(file, `${JSON.stringify(handoff, null, 2)}\n`, { root: mindPath });
+}
+
+export async function requireLegacyClosure(mindPath, { machine = os.hostname(), control } = {}) {
+  const file = path.join(mindPath, '.migration', CLOSURE_FILE);
+  await assertNoLinks(file);
+  const handoff = await readFile(file, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!handoff) return;
+  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions)) throw closureError();
+  for (const session of handoff.sessions) {
+    if (!['closed', 'required'].includes(session.status) || !session.binding?.machine) throw closureError();
+    if (session.binding.machine !== machine || session.status === 'closed') continue;
+    await verifiedLegacyStop(session.binding, { machine, control });
+    session.status = 'closed';
+    await writeLegacyClosure(mindPath, handoff);
+  }
+}
+
+export function assertLegacyWakeClosure(mindPath, machine) {
+  const file = path.join(mindPath, '.migration', CLOSURE_FILE);
+  for (let entry = file; entry !== path.dirname(entry); entry = path.dirname(entry)) {
+    if (existsSync(entry) && lstatSync(entry).isSymbolicLink()) throw closureError();
+  }
+  if (!existsSync(file)) return;
+  const handoff = JSON.parse(readFileSync(file, 'utf8'));
+  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions)
+    || handoff.sessions.some(session => !session.binding?.machine || !['required', 'closed'].includes(session.status)
+      || session.binding.machine === machine && session.status !== 'closed')) throw closureError();
+}
 
 export function validWakeBinding(binding, client) {
   return binding?.client === client && binding.machine === os.hostname()
@@ -37,6 +152,7 @@ export function spawnLocalWakeWorker({ cliPath, mindPath, binding, env = process
   if (!cliPath || !mindPath || !getWakeAdapter(binding?.client)?.workerEnvKeys || !validWakeBinding(binding, binding.client) || !binding.unit) {
     throw new TypeError('Wake worker requires a complete explicit local binding.');
   }
+  assertLegacyWakeClosure(mindPath, binding.machine);
   const child = forkProcess(cliPath, ['relay', 'wake', 'watch', '--mind-path', mindPath, '--unit', binding.unit,
     '--native-session-id', binding.nativeSessionId, '--client', binding.client, '--hostname', binding.machine], {
     execPath: nodePath, execArgv: [], detached: true, windowsHide: true,

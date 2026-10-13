@@ -3,6 +3,7 @@ import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises
 import path from 'node:path';
 import { CoreError, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { atomicWrite, createStore } from '../engine/service/store.mjs';
+import { assertNoLinks } from '../engine/service/paths.mjs';
 
 export const version = '3.0.0';
 export const idempotent = true;
@@ -60,8 +61,22 @@ async function scopeDirectories(userPath) {
   return scopes;
 }
 
-export async function migrate({ userPath, faultAfterMoves = null, progressDirectory = null } = {}) {
+export async function migrate({ userPath, faultAfterMoves = null, progressDirectory = null, legacySourcePath = null, destinationPath = null, beforeCheckpoint = null, onCheckpoint = null } = {}) {
   const root = path.resolve(userPath);
+  if (legacySourcePath) {
+    const destination = path.resolve(destinationPath ?? path.dirname(root));
+    const source = path.resolve(legacySourcePath);
+    const overlaps = (parent, child) => {
+      const relative = path.relative(parent, child);
+      return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    };
+    if (root !== path.join(destination, 'user') || overlaps(source, destination) || overlaps(destination, source)
+      || path.resolve(progressDirectory ?? path.join(destination, '.migration')) !== path.join(destination, '.migration')) {
+      throw new CoreError(422, 'invalid_path', 'Legacy migration writes require a separate prepared destination.');
+    }
+    await assertNoLinks(destination);
+    await assertNoLinks(root);
+  }
   const rootState = await stats(root);
   if (!rootState || rootState.isSymbolicLink() || !rootState.isDirectory()) return { moved: 0, notice: false };
   const progressRoot = path.resolve(progressDirectory ?? path.join(path.dirname(root), '.migration'));
@@ -90,14 +105,45 @@ export async function migrate({ userPath, faultAfterMoves = null, progressDirect
   const movedAlready = new Set(progress.moves.map((entry) => entry.from));
 
   async function checkpoint() {
-    await atomicWrite(progressStore, progressPath, Buffer.from(`${JSON.stringify(progress)}\n`));
+    const bytes = Buffer.from(`${JSON.stringify(progress)}\n`);
+    await beforeCheckpoint?.({ progress, sha256: hashBytes(bytes) });
+    await atomicWrite(progressStore, progressPath, bytes);
+    await onCheckpoint?.(progress);
+  }
+
+  if (progress.pendingMove) {
+    const entry = progress.pendingMove;
+    if ([entry.from, entry.to].some(value => typeof value !== 'string' || !value || path.isAbsolute(value) || value.split(/[\\/]/).includes('..'))) {
+      throw new CoreError(409, 'migration_verify_failed', 'A pending person move leaves the destination.');
+    }
+    const source = path.join(root, entry.from);
+    const target = path.join(root, entry.to);
+    await assertNoLinks(source);
+    await assertNoLinks(target);
+    if (hashBytes(await readFile(target)) !== entry.sha256) throw new CoreError(409, 'migration_verify_failed', 'A pending person move changed.');
+    const input = await readFile(source).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (input) {
+      if (hashBytes(input) !== entry.sourceSha256) throw new CoreError(409, 'migration_verify_failed', 'A pending person source changed.');
+      await unlink(source);
+    }
+    if (!movedAlready.has(entry.from)) progress.moves.push({ from: entry.from, to: entry.to, sha256: entry.sha256 });
+    movedAlready.add(entry.from);
+    delete progress.pendingMove;
+    await checkpoint();
   }
 
   async function finishMove(source, target, bytes) {
+    if (!relativeTo(root, source) || relativeTo(root, source).startsWith('../') || relativeTo(root, target).startsWith('../')) {
+      throw new CoreError(422, 'invalid_path', 'A person migration cannot leave the destination user folder.');
+    }
     const written = await readFile(target);
     if (!written.equals(bytes)) throw new CoreError(500, 'migration_verify_failed', 'A migrated file did not match its source bytes.');
+    progress.pendingMove = { from: relativeTo(root, source), to: relativeTo(root, target), sha256: hashBytes(bytes),
+      sourceSha256: hashBytes(await readFile(source)) };
+    await checkpoint();
     await unlink(source);
     progress.moves.push({ from: relativeTo(root, source), to: relativeTo(root, target), sha256: hashBytes(bytes) });
+    delete progress.pendingMove;
     await checkpoint();
     moved += 1;
     if (faultAfterMoves !== null && moved >= faultAfterMoves) {

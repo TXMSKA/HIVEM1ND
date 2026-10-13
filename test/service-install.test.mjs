@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -13,7 +14,9 @@ import { bootstrapConfig, configureOwnedService, installService, planRegistratio
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
 import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
-import { composeCore, stopService } from '../engine/service/service.mjs';
+import { composeCore, runConfiguredService, stopService } from '../engine/service/service.mjs';
+import { requireLegacyClosure, spawnLocalWakeWorker, writeLegacyClosure } from '../engine/relay/local-wake.mjs';
+import { copyLegacyTree, legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -27,6 +30,58 @@ const base = {
   localDirectory: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd-service\\key\\DESKTOP',
   sid: 'S-1-5-21-1',
 };
+
+test('offline legacy ownership blocks wake adoption until closure', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-closure-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'legacy');
+  const mind = path.join(root, 'destination');
+  const cosmic = path.join(root, 'local', 'Cosmic');
+  const machine = os.hostname();
+  await mkdir(path.join(source, 'user'), { recursive: true });
+  await writeFile(path.join(source, 'user', 'VERSION'), '2.0.0\n');
+  await writeFile(path.join(source, 'user', 'private.txt'), 'Original private record.\n');
+  const sourceBefore = await legacyTreeInventory(source);
+  await copyLegacyTree(source, mind);
+  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), machine);
+  const config = bootstrapConfig({ mindPath: mind, machine, origin: { kind: 'folder', path: path.join(root, 'origin') }, stagingPath: path.join(directory, 'staging') });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'config.json'), JSON.stringify(config));
+  const binding = { registrationId: '11111111-1111-4111-8111-111111111111', unit: 'executor', unitId: 'root:executor',
+    client: 'host', machine, nativeSessionId: 'offline-native' };
+  await writeLegacyClosure(mind, { format: 'hivem1nd-legacy-closure-v1', sourcePath: source, sessions: [{ binding, status: 'required' }] });
+  let forks = 0;
+  const forkProcess = () => {
+    forks += 1;
+    const child = new EventEmitter();
+    child.unref = () => {};
+    child.disconnect = () => {};
+    child.kill = () => assert.fail('No native process may be signaled');
+    setImmediate(() => child.emit('message', { type: 'relay-wake-ready', state: 'already-running', ownsLease: false }));
+    return child;
+  };
+  const blocked = error => error.code === 'legacy_closure_required';
+  assert.throws(() => bootstrapConfig(config), blocked);
+  await assert.rejects(runConfiguredService({ mindPath: mind, hostname: machine, cosmicPath: cosmic }), blocked);
+  assert.throws(() => spawnLocalWakeWorker({ cliPath: 'fixture.mjs', mindPath: mind, binding, forkProcess }), blocked);
+  assert.equal(forks, 0);
+  await assert.rejects(requireLegacyClosure(mind, { machine }), blocked);
+  const events = [];
+  let live = true;
+  const control = {
+    async confirm(expected) { events.push(live ? 'live' : 'ended'); return { binding: expected, owned: true, live }; },
+    async save(expected) { events.push('saved'); return { binding: expected, saved: true }; },
+    async close(expected) { events.push('closed'); live = false; return { binding: expected, closed: true }; },
+  };
+  await requireLegacyClosure(mind, { machine, control });
+  assert.deepEqual(events, ['live', 'saved', 'closed', 'ended']);
+  assert.equal(bootstrapConfig(config).machine, machine);
+  const worker = spawnLocalWakeWorker({ cliPath: 'fixture.mjs', mindPath: mind, binding, forkProcess });
+  assert.deepEqual(await worker.ready, { state: 'already-running', ownsLease: false });
+  assert.equal(forks, 1);
+  assert.deepEqual(await legacyTreeInventory(source), sourceBefore);
+  assert.equal(JSON.parse(await readFile(path.join(mind, '.migration', 'legacy-closure.json'), 'utf8')).sessions[0].status, 'closed');
+});
 
 test('the real wizard retries only service startup and opens its authenticated viewer', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
@@ -110,7 +165,6 @@ test('the real wizard retries only service startup and opens its authenticated v
   await server.close();
   wizardClosed = true;
   assert.equal((await fetch(url)).status, 200);
-  await writeFile(path.join(mind, 'user', 'VERSION'), '2.0.0\n');
   const resumed = await createSetupSession(sessionOptions);
   assert.equal((await resumed.getStep()).done, true);
   const resumedOpened = [];
@@ -134,19 +188,18 @@ test('the real wizard retries only service startup and opens its authenticated v
   assert.equal((await retry.install()).completed, true);
   assert.equal(commands.length, registered);
   assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
-  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '2.0.0\n');
+  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '3.0.0\n');
   const progressFile = path.join(mind, '.migration', 'migration-3.0.0.json');
   const progress = await readFile(progressFile).catch(error => { if (error?.code === 'ENOENT') return null; throw error; });
   await mkdir(path.dirname(progressFile), { recursive: true });
   await writeFile(progressFile, '{broken');
   const migrationRetry = await createSetupSession(sessionOptions);
-  assert.equal((await migrationRetry.getStep()).done, false);
-  assert.equal(migrationRetry.result.service.phase, 'migration');
-  assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
+  assert.equal((await migrationRetry.getStep()).done, true);
+  assert.equal(await readFile(progressFile, 'utf8'), '{broken');
+  assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
   if (progress) await writeFile(progressFile, progress);
   else await unlink(progressFile);
-  await migrationRetry.answer({ confirm: true });
-  assert.equal((await migrationRetry.install()).completed, true);
+  assert.equal(migrationRetry.result.completed, true);
   assert.equal(commands.length, registered);
   assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
 });

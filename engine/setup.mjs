@@ -1,6 +1,7 @@
-import { lstat, readFile, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   detectExistingMind,
   discoverAgents,
@@ -11,14 +12,17 @@ import {
   discoverProjects,
   envValue,
   loadAdapters,
-  resolveAdapterPaths,
 } from './discovery.mjs';
 import { configureOwnedService } from './service/install.mjs';
-import { localCosmic, defaultMind, MIND_DIRECTORY_NAME } from './service/paths.mjs';
+import { assertLocalStaging, assertNoLinks, defaultMind, mindKeyFor, oneDriveRoots, MIND_DIRECTORY_NAME } from './service/paths.mjs';
+import { CoreError } from './service/identity.mjs';
+import { protectLocalFile } from './service/security.mjs';
+import { copyLegacyTree, legacyTreeInventory } from './legacy-copy.mjs';
+import { legacySessions, verifiedLegacyStop, writeLegacyClosure } from './relay/local-wake.mjs';
 import {
   applyInstallPlan,
   combinePlans,
-  planAgentAssets,
+  prepareSetupAgentAssets,
   planDataFile,
   planKitCopy,
   planManagedFileRemovals,
@@ -30,15 +34,24 @@ import {
 } from './install.mjs';
 import {
   ensureSafeDirectory,
+  atomicWriteFile,
   parseMachineRecord,
   readMachineRecord,
   readTextIfPresent,
   serializeMachineRecord,
+  hashContent,
   writeMachineRecord,
 } from './records.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
+const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
+const SETUP_COPY = {
+  en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Close them and migrate',
+    offline: 'A session on an offline machine closes the next time that machine starts HIVEM1ND.', review: 'Review changes in Settings' },
+  es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Cerrar las sesiones y migrar',
+    offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
+};
 
 const SERVICE_COPY = {
   en: {
@@ -111,6 +124,10 @@ export async function createSetupSession(options = {}) {
     cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : null,
     originKind: options.originKind ?? 'folder',
     originPath: options.originPath ?? '',
+    legacySourcePath: options.legacySourcePath ? path.resolve(options.legacySourcePath) : null,
+    legacyControl: options.legacyControl ?? null,
+    copyCheckpoint: options.copyCheckpoint ?? null,
+    migrationFaultAfterMoves: options.migrationFaultAfterMoves ?? null,
   });
   await session.initialize();
   return session;
@@ -151,12 +168,55 @@ class SetupSession {
     this.existingMind = null;
     this.attachOutdated = null;
     this.alertedMind = null;
+    this.checkpoint = null;
+    this.checkpointProof = {};
   }
 
   async initialize() {
+    const draft = this.resume ? await this.readLocal('setup-draft.json') : null;
+    if (draft) {
+      if (draft.destinationPath !== this.mindPath || !draft.answers || !Number.isInteger(draft.step)) throw new CoreError(409, 'checkpoint_changed', 'The local setup draft does not match this M1ND.');
+      this.answers = { ...this.answers, ...draft.answers, mindPath: this.mindPath };
+      this.legacySourcePath = draft.answers.legacySourcePath ?? this.legacySourcePath;
+      this.answers.language = normalizeLanguage(this.answers.language);
+      this.currentStep = clampStep(draft.step);
+    }
     const { record } = await readMachineRecord(this.mindPath, this.hostname);
     this.machineRecord = record;
     this.existingMind = await this.inspectMind(this.mindPath);
+    this.checkpoint = this.resume ? await this.readLocal('setup.json') : null;
+    if (this.checkpoint) {
+      await this.verifyCheckpoint();
+      this.legacySourcePath = this.checkpoint.sourcePath;
+      this.answers.attach = this.checkpoint.mode === 'join';
+      this.currentStep = this.checkpoint.phase === 'ready' && this.checkpoint.completed.includes('ready') ? 8 : 7;
+      this.result = this.completionResult([], []);
+      if (this.currentStep === 7) {
+        if (this.checkpoint.completed.includes('configure')) this.answers.serviceOnly = true;
+        this.result.completed = false;
+        if (this.checkpoint.error) this.result.service = { status: 'failed', phase: this.checkpoint.phase, code: this.checkpoint.error.code, error: this.checkpoint.error.message };
+      } else if (this.serviceSetup) {
+        if (record) await this.writeSetupMachineRecord({ ...record, setup: 7 });
+        const service = await this.configureService();
+        this.result.service = service;
+        this.result.completed = service.status !== 'failed';
+        this.result.viewerUrl = service.viewerUrl ?? null;
+        if (service.status === 'failed') {
+          this.answers.serviceOnly = true;
+          this.currentStep = 7;
+          this.checkpoint.completed = SETUP_PHASES.slice(0, 5);
+          this.checkpoint.phase = 'start';
+          this.checkpoint.error = { code: 'setup_failed', message: 'The service could not start.' };
+          await this.saveCheckpoint();
+        } else if (this.openViewer && service.viewerUrl) {
+          await this.openViewer(service.viewerUrl);
+          this.viewerOpened = true;
+        }
+        if (service.status !== 'failed' && record) await this.writeSetupMachineRecord(record);
+      }
+      return;
+    }
+    if (draft) return;
     if (!record) return;
     if (record.machine && record.machine !== this.hostname) return;
 
@@ -230,7 +290,15 @@ class SetupSession {
           text(language, 'attachHelp'),
         ));
         base.values.attach = this.answers.attach ?? true;
+        base.join = { title: SETUP_COPY[language].joinTitle, action: SETUP_COPY[language].join };
         this.alertedMind = normalizePath(this.mindPath);
+      }
+      if (this.legacySourcePath) {
+        const sessions = await legacySessions(this.legacySourcePath);
+        base.legacy = { sourcePath: this.legacySourcePath, title: SETUP_COPY[language].closeTitle,
+          action: SETUP_COPY[language].close, offline: SETUP_COPY[language].offline,
+          sessions: sessions.map(({ binding }) => ({ unit: binding.unit, client: binding.client, machine: binding.machine,
+            local: binding.machine === this.hostname })) };
       }
       base.fields.push(
         field('originKind', 'select', serviceText(language, 'originKind'), false, [
@@ -417,8 +485,11 @@ class SetupSession {
         // A mind already on this machine is attached instead of installed over.
         const found = this.existingMind ?? await this.findInstalledMind();
         if (found) {
-          await this.selectMind(found.path);
-          this.answers.attach = this.canAttach();
+          if (/^2\./.test(found.version)) this.legacySourcePath = found.path;
+          else {
+            await this.selectMind(found.path);
+            this.answers.attach = this.canAttach();
+          }
         }
         await this.applySimpleDefaults();
         this.currentStep = 7;
@@ -444,19 +515,22 @@ class SetupSession {
         await this.persistDraft(7);
         return this.getStep();
       }
-      const previousMind = this.mindPath;
+      if (values.migrateLegacy === false) this.legacySourcePath = null;
+      else if (values.legacySourcePath) this.legacySourcePath = path.resolve(values.legacySourcePath);
       await this.selectMind(selected);
+      if (/^2\./.test(this.existingMind?.version ?? '')) {
+        this.legacySourcePath = selected;
+        throw new SetupValidationError('Choose a separate destination for the legacy M1ND copy.');
+      }
       // A path that turns out to hold a mind goes back to this step with the alert, so the
       // attach question is answered about the folder the answer belongs to.
       if (this.canAttach() && this.alertedMind !== normalizePath(selected)) {
         await this.persistDraft();
-        if (normalizePath(previousMind) !== normalizePath(selected)) await removeOwnedDraft(previousMind, this.hostname);
         return this.getStep();
       }
       this.answers.attach = this.canAttach() && values.attach !== false;
       this.currentStep = 3;
       await this.persistDraft();
-      if (normalizePath(previousMind) !== normalizePath(selected)) await removeOwnedDraft(previousMind, this.hostname);
       return this.getStep();
     } else if (this.currentStep === 3) {
       if (this.answers.agentsScanned !== true) {
@@ -551,6 +625,7 @@ class SetupSession {
         }
       }
       this.answers.confirm = values.confirm === true;
+      if (values.closeLegacy !== undefined) this.answers.closeLegacy = values.closeLegacy === true;
       await this.persistDraft(7);
       return this.getStep();
     }
@@ -578,21 +653,402 @@ class SetupSession {
 
   async preview() {
     if (this.currentStep < 7) throw new Error('Preview is available at step 7');
-    if (this.answers.serviceOnly) return { files: [], kept: [], warnings: [], conflicts: [] };
+    if (this.answers.serviceOnly || this.checkpoint?.completed.includes('configure')) return { files: [], kept: [], warnings: [], conflicts: [] };
     const plan = await this.buildPlan();
     const preview = publicPreview(plan, this.answers.language);
     preview.conflicts = preview.conflicts.map((conflict) => ({
       ...conflict,
       selection: this.answers.conflicts[conflict.path] ?? conflict.selection ?? null,
     }));
+    preview.clientChanges = { ...publicPreview(this.clientPlan, this.answers.language), requiresReview: true,
+      action: SETUP_COPY[this.answers.language].review };
     return preview;
+  }
+
+  localDirectory() {
+    const directory = path.join(this.cosmicPath ?? path.dirname(defaultMind({ platform: process.platform, env: this.env, home: this.homeDir })),
+      'hivem1nd-service', mindKeyFor(this.mindPath, process.platform), this.hostname);
+    if (isWithin(this.mindPath, directory) || isWithin(directory, this.mindPath)
+      || this.legacySourcePath && (isWithin(this.legacySourcePath, directory) || isWithin(directory, this.legacySourcePath))) {
+      throw new CoreError(422, 'invalid_path', 'Local setup storage must stay outside both M1ND trees.');
+    }
+    return directory;
+  }
+
+  async readLocal(name) {
+    const file = path.join(this.localDirectory(), name);
+    await assertNoLinks(file);
+    return readFile(file, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  }
+
+  async writeLocal(name, value) {
+    const directory = this.localDirectory();
+    const file = path.join(directory, name);
+    await assertLocalStaging(directory, { platform: process.platform, origin: this.mindPath,
+      syncedRoots: oneDriveRoots({ platform: process.platform, env: this.env }), env: this.env });
+    for (let ancestor = directory; ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
+      const mind = await this.inspectMind(ancestor);
+      if (/^[23]\./.test(mind?.version ?? '')) throw new CoreError(422, 'invalid_path', 'Local setup storage cannot be inside an existing M1ND.');
+    }
+    await assertNoLinks(file);
+    await atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`, { root: directory });
+    if (this.serviceProtect !== false) await protectLocalFile(file, { aclRunner: this.aclRunner });
+  }
+
+  async saveCheckpoint() {
+    this.checkpoint.updatedAt = new Date().toISOString();
+    await this.writeLocal('setup-proof.json', this.checkpointProof);
+    await this.writeLocal('setup.json', this.checkpoint);
+  }
+
+  async verifyCheckpoint() {
+    const checkpoint = this.checkpoint;
+    const fields = ['format', 'mode', 'sourcePath', 'destinationPath', 'phase', 'completed', 'error', 'updatedAt'];
+    if (JSON.stringify(Object.keys(checkpoint).sort()) !== JSON.stringify(fields.sort())
+      || checkpoint.format !== 'hivem1nd-setup-v1' || !['create', 'join', 'migrate'].includes(checkpoint.mode)
+      || checkpoint.destinationPath !== this.mindPath || !SETUP_PHASES.includes(checkpoint.phase)
+      || !Array.isArray(checkpoint.completed) || checkpoint.completed.some((phase, index) => phase !== SETUP_PHASES[index])
+      || checkpoint.completed.length > SETUP_PHASES.length || !Number.isFinite(Date.parse(checkpoint.updatedAt))
+      || checkpoint.mode === 'migrate' && typeof checkpoint.sourcePath !== 'string'
+      || checkpoint.mode !== 'migrate' && checkpoint.sourcePath !== null
+      || checkpoint.phase !== (SETUP_PHASES[checkpoint.completed.length] ?? 'ready')) {
+      throw new CoreError(409, 'checkpoint_changed', 'The setup checkpoint is invalid.');
+    }
+    this.checkpointProof = await this.readLocal('setup-proof.json');
+    if (!this.checkpointProof) throw new CoreError(409, 'checkpoint_changed', 'The setup checkpoint has no verification record.');
+    await assertNoLinks(this.mindPath);
+    if (this.checkpointProof.pendingProgress) {
+      const pending = this.checkpointProof.pendingProgress;
+      const file = path.join(this.mindPath, '.migration', 'migration-3.0.0.json');
+      await assertNoLinks(file);
+      const bytes = await readFile(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      const hash = bytes ? hashContent(bytes) : null;
+      if (hash === pending.sha256) {
+        this.checkpointProof.destination = (this.checkpointProof.destination ?? []).filter(entry => entry.path !== '.migration/migration-3.0.0.json');
+        this.checkpointProof.destination.push({ path: '.migration/migration-3.0.0.json', kind: 'file', sha256: hash });
+        this.checkpointProof.pendingPersonMove = pending.progress.pendingMove ?? null;
+        for (const move of pending.progress.moves) {
+          if ([move.from, move.to].some(value => typeof value !== 'string' || !value || path.isAbsolute(value) || value.split(/[\\/]/).includes('..'))) {
+            throw new CoreError(409, 'checkpoint_changed', 'A pending migration progress entry is invalid.');
+          }
+          const target = path.join(this.mindPath, 'user', move.to);
+          const source = path.join(this.mindPath, 'user', move.from);
+          await assertNoLinks(target);
+          await assertNoLinks(source);
+          if (hashContent(await readFile(target)) !== move.sha256) throw new CoreError(409, 'checkpoint_changed', 'A pending migration target changed.');
+          const exists = await lstat(source).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+          if (!exists) this.checkpointProof.destination = this.checkpointProof.destination.filter(entry => entry.path !== `user/${move.from}`);
+        }
+      } else if (hash !== pending.previousSha256) throw new CoreError(409, 'checkpoint_changed', 'The migration progress write could not be verified.');
+    }
+    if (this.checkpointProof.pendingMove) {
+      const move = this.checkpointProof.pendingMove;
+      if (!['user/relay/sessions/', 'user/relay/wake/policies/', '.migration/migration-3.0.0.json'].some(prefix => move.from.startsWith(prefix))
+        || !move.to.startsWith('.migration/') || [move.from, move.to].some(value => value.split(/[\\/]/).includes('..') || path.isAbsolute(value))) {
+        throw new CoreError(409, 'checkpoint_changed', 'The pending migration move is invalid.');
+      }
+      const source = path.join(this.mindPath, move.from);
+      const target = path.join(this.mindPath, move.to);
+      await assertNoLinks(source);
+      await assertNoLinks(target);
+      const input = await readFile(source).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      const output = await readFile(target).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (input && !output && hashContent(input) === move.sha256) {
+        // The move was recorded before mutation and can be retried normally.
+      } else if (!input && output && hashContent(output) === move.sha256) {
+        this.checkpointProof.destination = (this.checkpointProof.destination ?? []).filter(entry => entry.path !== move.from);
+        this.checkpointProof.destination.push({ path: move.to, kind: 'file', sha256: move.sha256 });
+      } else throw new CoreError(409, 'checkpoint_changed', 'A pending migration move could not be verified.');
+    }
+    if (this.checkpointProof.pendingPersonMove) {
+      const move = this.checkpointProof.pendingPersonMove;
+      if ([move.from, move.to].some(value => typeof value !== 'string' || !value || path.isAbsolute(value) || value.split(/[\\/]/).includes('..'))) {
+        throw new CoreError(409, 'checkpoint_changed', 'The pending person move is invalid.');
+      }
+      const from = path.join(this.mindPath, 'user', move.from);
+      const to = path.join(this.mindPath, 'user', move.to);
+      await assertNoLinks(from);
+      await assertNoLinks(to);
+      const input = await readFile(from).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      const output = await readFile(to);
+      if (hashContent(output) !== move.sha256 || input && hashContent(input) !== move.sourceSha256) {
+        throw new CoreError(409, 'checkpoint_changed', 'A pending person move changed.');
+      }
+      if (!input) this.checkpointProof.destination = this.checkpointProof.destination.filter(entry => entry.path !== `user/${move.from}`);
+    }
+    if (checkpoint.mode === 'migrate' && checkpoint.completed.includes('prepare') && !checkpoint.completed.includes('ready')) {
+      if (JSON.stringify(await legacyTreeInventory(checkpoint.sourcePath)) !== JSON.stringify(this.checkpointProof.inventory)) {
+        throw new CoreError(409, 'legacy_changed', 'The legacy M1ND changed after setup was prepared.');
+      }
+    }
+    if (checkpoint.completed.includes('prepare') && !(await lstat(this.mindPath).catch(error => {
+      if (checkpoint.mode === 'migrate' && !checkpoint.completed.includes('copy') && error.code === 'ENOENT') return null;
+      throw error;
+    }))?.isDirectory() && (checkpoint.mode !== 'migrate' || checkpoint.completed.includes('copy'))) throw new CoreError(409, 'checkpoint_changed', 'The prepared M1ND folder is missing.');
+    if (!checkpoint.completed.includes('ready')) {
+      if (this.checkpointProof.activeMigration?.version === '2.0.0-experimental.4') await verifyInterruptedCoordinatorMigration(this);
+      if (checkpoint.completed.includes('close-legacy')) {
+        for (const session of this.checkpointProof.sessions ?? []) {
+          if (session.binding.machine === this.hostname && session.status === 'closed') await this.verifyClosedSession(session.binding);
+        }
+      }
+      for (const entry of this.checkpointProof.destination ?? []) {
+        const file = path.join(this.mindPath, entry.path);
+        await assertNoLinks(file);
+        const current = await readFile(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (!current || hashContent(current) !== entry.sha256) {
+          throw new CoreError(409, 'checkpoint_changed', 'A completed setup entry is missing or changed.');
+        }
+      }
+      for (const entry of this.checkpointProof.service ?? []) {
+        const file = path.join(this.localDirectory(), entry.path);
+        await assertNoLinks(file);
+        if (hashContent(await readFile(file)) !== entry.sha256) throw new CoreError(409, 'checkpoint_changed', 'A completed service configuration entry changed.');
+      }
+    }
+  }
+
+  async phase(phase, operation) {
+    if (this.checkpoint.completed.includes(phase)) return;
+    if (this.checkpoint.phase !== phase) throw new CoreError(409, 'checkpoint_changed', 'Setup phases cannot be skipped.');
+    this.checkpoint.error = null;
+    await this.saveCheckpoint();
+    await operation();
+    this.checkpoint.completed.push(phase);
+    this.checkpoint.phase = SETUP_PHASES[this.checkpoint.completed.length] ?? 'ready';
+    await this.saveCheckpoint();
+  }
+
+  async destinationProof() {
+    this.checkpointProof.destination = (await legacyTreeInventory(this.mindPath))
+      .filter(entry => entry.kind === 'file' && !entry.path.startsWith(`user/machines/${this.hostname}.`));
+    await this.saveCheckpoint();
+  }
+
+  async prepareSetup() {
+    if (this.checkpoint) {
+      await this.verifyCheckpoint();
+      return;
+    }
+    const selected = await this.inspectMind(this.mindPath);
+    if (/^2\./.test(selected?.version ?? '')) throw new SetupValidationError('Choose a separate destination for the legacy M1ND copy.');
+    const mode = selected ? 'join' : this.legacySourcePath ? 'migrate' : 'create';
+    this.answers.attach = mode === 'join';
+    this.checkpoint = { format: 'hivem1nd-setup-v1', mode, sourcePath: mode === 'migrate' ? this.legacySourcePath : null,
+      destinationPath: this.mindPath, phase: 'prepare', completed: [], error: null, updatedAt: new Date().toISOString() };
+    this.checkpointProof = {};
+    await this.saveCheckpoint();
+  }
+
+  async prepareDestination() {
+    if (this.checkpoint.mode === 'migrate') {
+      const source = await this.inspectMind(this.legacySourcePath);
+      if (!/^2\./.test(source?.version ?? '')) throw new SetupValidationError('Migration requires a detected HIVEM1ND 2.x M1ND.');
+      if (isWithin(this.legacySourcePath, this.mindPath) || isWithin(this.mindPath, this.legacySourcePath)) {
+        throw new CoreError(422, 'invalid_path', 'The source and destination must be separate folders.');
+      }
+      await assertNoLinks(this.legacySourcePath);
+      await assertNoLinks(this.mindPath);
+      const exists = await lstat(this.mindPath).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (exists) throw new CoreError(409, 'destination_exists', 'The migration destination must be a new folder.');
+      this.checkpointProof.sourceVersion = source.version;
+      this.checkpointProof.inventory = await legacyTreeInventory(this.legacySourcePath);
+      this.checkpointProof.sessions = await legacySessions(this.legacySourcePath);
+      this.checkpointProof.copied = [];
+    } else {
+      await this.createMindLayout();
+      if (this.checkpoint.mode === 'join') await this.destinationProof();
+    }
+  }
+
+  async closeLegacy() {
+    if (this.checkpoint.mode !== 'migrate') return;
+    const sessions = this.checkpointProof.sessions;
+    if (sessions.some(session => session.binding.machine === this.hostname && session.status !== 'closed') && this.answers.closeLegacy !== true) {
+      throw new CoreError(409, 'legacy_closure_required', SETUP_COPY[this.answers.language].closeTitle);
+    }
+    for (const session of sessions) {
+      if (session.binding.machine !== this.hostname) session.status = 'required';
+      else if (session.status !== 'closed') {
+        await verifiedLegacyStop(session.binding, { machine: this.hostname, control: this.legacyControl });
+        session.status = 'closed';
+      } else await this.verifyClosedSession(session.binding);
+      await this.saveCheckpoint();
+    }
+  }
+
+  async verifyClosedSession(binding) {
+    const state = await this.legacyControl?.confirm?.(binding);
+    if (!state || state.owned !== true || state.live !== false || ['registrationId', 'unit', 'unitId', 'client', 'machine', 'nativeSessionId']
+      .some(key => state.binding?.[key] !== binding[key])) throw new CoreError(409, 'legacy_closure_required', 'The legacy session closure could not be verified.');
+  }
+
+  async quarantineLegacy(from, target) {
+    await assertNoLinks(from);
+    await assertNoLinks(target);
+    const relative = value => path.relative(this.mindPath, value).split(path.sep).join('/');
+    const pending = this.checkpointProof.pendingMove;
+    const input = await readFile(from).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    const output = await readFile(target).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!input && output && pending?.from === relative(from) && pending.to === relative(target) && hashContent(output) === pending.sha256) {
+      if (pending.from === '.migration/migration-3.0.0.json') this.checkpointProof.legacyProgressPrepared = true;
+      delete this.checkpointProof.pendingMove;
+      await this.destinationProof();
+      return;
+    }
+    if (!input || output) throw new CoreError(409, 'checkpoint_changed', 'Legacy Relay evidence could not be moved safely.');
+    this.checkpointProof.pendingMove = { from: relative(from), to: relative(target), sha256: hashContent(input) };
+    await this.saveCheckpoint();
+    await mkdir(path.dirname(target), { recursive: true });
+    await rename(from, target);
+    if (relative(from) === '.migration/migration-3.0.0.json') this.checkpointProof.legacyProgressPrepared = true;
+    delete this.checkpointProof.pendingMove;
+    await this.destinationProof();
+  }
+
+  async copyLegacy() {
+    if (this.checkpoint.mode !== 'migrate') return;
+    await mkdir(path.dirname(this.mindPath), { recursive: true });
+    const partial = await lstat(this.mindPath).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    await copyLegacyTree(this.legacySourcePath, this.mindPath, { inventory: this.checkpointProof.inventory,
+      completed: this.checkpointProof.copied, resume: Boolean(partial), onCheckpoint: async entry => {
+        if (!this.checkpointProof.copied.some(item => item.path === entry.path)) this.checkpointProof.copied.push(entry);
+        await this.saveCheckpoint();
+        await this.copyCheckpoint?.(entry);
+      } });
+    await this.destinationProof();
+  }
+
+  async migrateDestination() {
+    if (this.checkpoint.mode === 'join') return;
+    if (this.checkpoint.mode === 'migrate') {
+      if (this.checkpointProof.pendingMove) {
+        const move = this.checkpointProof.pendingMove;
+        await this.quarantineLegacy(path.join(this.mindPath, move.from), path.join(this.mindPath, move.to));
+      }
+      await writeLegacyClosure(this.mindPath, { format: 'hivem1nd-legacy-closure-v1', sourcePath: this.legacySourcePath,
+        sessions: this.checkpointProof.sessions.map(({ binding, status }) => ({ binding, status })) });
+      // Legacy registrations are evidence, never 3.0 live bindings. Quarantine
+      // inside the destination before any service can adopt its copied policies.
+      const relay = path.join(this.mindPath, 'user', 'relay');
+      for (const bucket of ['sessions', path.join('wake', 'policies')]) {
+        const directory = path.join(relay, bucket);
+        await assertNoLinks(directory);
+        const entries = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+        for (const name of entries) {
+          const from = path.join(directory, name);
+          await assertNoLinks(from);
+          if (!(await lstat(from)).isFile()) throw new CoreError(422, 'unsafe_path', 'Legacy Relay evidence must be a regular file.');
+          const target = path.join(this.mindPath, '.migration', 'legacy-relay', bucket, name);
+          await assertNoLinks(target);
+          await this.quarantineLegacy(from, target);
+        }
+      }
+      if (!this.checkpointProof.legacyProgressPrepared) {
+        const progress = path.join(this.mindPath, '.migration', 'migration-3.0.0.json');
+        const copied = this.checkpointProof.inventory.find(entry => entry.path === '.migration/migration-3.0.0.json');
+        if (copied) {
+          await assertNoLinks(progress);
+          if (hashContent(await readFile(progress)) !== copied.sha256) throw new CoreError(409, 'checkpoint_changed', 'The copied migration evidence changed.');
+          const target = path.join(this.mindPath, '.migration', 'legacy-migration-3.0.0.json');
+          await assertNoLinks(target);
+          if (await readTextIfPresent(target) !== null) throw new CoreError(409, 'checkpoint_changed', 'The copied migration evidence conflicts.');
+          await this.quarantineLegacy(progress, target);
+        }
+        this.checkpointProof.legacyProgressPrepared = true;
+      }
+      await this.destinationProof();
+      await runSetupMigrations(this);
+    } else {
+      await (await import('../migrations/3.0.0.mjs')).migrate({ userPath: path.join(this.mindPath, 'user'),
+        progressDirectory: path.join(this.mindPath, '.migration') });
+    }
+    await this.destinationProof();
+  }
+
+  async writeSetupMachineRecord(record) {
+    if (this.checkpoint?.mode === 'join') {
+      const file = path.join(this.mindPath, 'user', 'machines', `${this.hostname}.md`);
+      const existing = await readTextIfPresent(file);
+      if (existing !== null && parseMachineRecord(existing).machine !== this.hostname) throw new SetupValidationError('The joining machine record is not owned by this machine.');
+      await atomicWriteFile(file, serializeMachineRecord(record), { root: this.mindPath });
+    } else await writeMachineRecord(this.mindPath, this.hostname, record);
+    this.machineRecord = record;
   }
 
   async install() {
     if (this.currentStep !== 7) throw new Error('Install is available at step 7');
     if (!this.answers.confirm) throw new SetupValidationError('Installation must be confirmed');
-    if (this.answers.serviceOnly) return this.resumeInstalledService();
-    if (this.result?.service?.status === 'failed' && this.result.unwritten.length === 0) return this.retryService();
+    await this.prepareSetup();
+    try {
+      await this.phase('prepare', () => this.prepareDestination());
+      await this.phase('close-legacy', () => this.closeLegacy());
+      await this.phase('copy', () => this.copyLegacy());
+      await this.phase('migrate', () => this.migrateDestination());
+      await this.phase('configure', async () => {
+        if (!this.checkpointProof.configurationApplied) {
+          await this.configureDestination();
+          if (this.result.unwritten.length) throw new CoreError(409, 'setup_incomplete', 'Some selected M1ND files were not written.');
+          this.checkpointProof.configurationApplied = true;
+          this.checkpointProof.outcome = { ...this.result, checkpoint: null };
+          await this.destinationProof();
+        }
+        if (this.serviceSetup) {
+          const service = await this.configureService({ configureOnly: true });
+          if (service.status === 'failed') throw safeServiceFailure(service, this.answers.language, 'configure');
+          await this.saveServiceProof();
+        }
+      });
+      this.result = this.result ?? this.completionResult([], []);
+      if (this.checkpointProof.outcome) this.result = { ...this.checkpointProof.outcome, ...this.completionResult(
+        this.checkpointProof.outcome.files, this.checkpointProof.outcome.warnings, this.checkpointProof.outcome) };
+      await this.phase('start', async () => {
+        if (!this.serviceSetup) return;
+        const service = await this.configureService();
+        this.result.service = service;
+        if (service.status === 'failed') throw safeServiceFailure(service, this.answers.language, 'start');
+        this.result.viewerUrl = service.viewerUrl ?? null;
+      });
+      // A process-local viewer credential is reacquired, never checkpointed.
+      if (this.serviceSetup && !this.result.service && this.checkpoint.completed.includes('start')) {
+        this.serviceState = null;
+        const service = await this.configureService();
+        if (service.status === 'failed') throw new CoreError(503, 'service_unavailable', 'The running service could not be verified.');
+        this.result.service = service;
+        this.result.viewerUrl = service.viewerUrl ?? null;
+      }
+      await this.phase('open', async () => {
+        if (this.openViewer && this.result.viewerUrl && !this.viewerOpened) {
+          await this.openViewer(this.result.viewerUrl);
+          this.viewerOpened = true;
+        }
+      });
+      await this.phase('ready', async () => {
+        const record = this.buildMachineRecord('done');
+        await this.writeSetupMachineRecord(record);
+        await this.persistDraft(8);
+      });
+      this.currentStep = 8;
+      this.result.completed = true;
+      this.result.checkpoint = { ...this.checkpoint, completed: [...this.checkpoint.completed] };
+      return this.result;
+    } catch (error) {
+      const code = ['port_in_use', 'legacy_closure_required', 'legacy_changed', 'checkpoint_changed', 'invalid_path', 'unsafe_path', 'destination_exists', 'setup_incomplete'].includes(error.code)
+        ? error.code : 'setup_failed';
+      this.checkpoint.error = { code, message: error.safeSetupMessage ?? (this.answers.language === 'es'
+        ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación.` : `Setup could not complete the ${this.checkpoint.phase} phase.`) };
+      await this.saveCheckpoint();
+      this.currentStep = 7;
+      await this.persistDraft(7);
+      if (!['configure', 'start', 'open', 'ready'].includes(this.checkpoint.phase)) throw error;
+      this.result = { ...(this.result ?? this.completionResult([], [])), completed: false, viewerUrl: null,
+        service: { ...(this.result?.service ?? {}), status: 'failed', phase: this.checkpoint.phase,
+          code, error: this.checkpoint.error.message }, checkpoint: { ...this.checkpoint, completed: [...this.checkpoint.completed] } };
+      return this.result;
+    }
+  }
+
+  async configureDestination() {
     const plan = await this.buildPlan();
     for (const conflict of plan.conflicts) {
       const choice = this.answers.conflicts[conflict.path];
@@ -616,10 +1072,10 @@ class SetupSession {
     const record = this.buildMachineRecord(7);
     record.draft = { ...this.answers, mindPath: this.mindPath };
     record.managedFiles = managedFiles;
-    await writeMachineRecord(this.mindPath, this.hostname, record);
+    await this.writeSetupMachineRecord(record);
     this.machineRecord = record;
     const reportPath = await writeInstallReport({
-      mindPath: this.mindPath,
+      mindPath: this.answers.attach ? this.localDirectory() : this.mindPath,
       hostname: this.hostname,
       language: this.answers.language,
       report: {
@@ -635,19 +1091,8 @@ class SetupSession {
         warnings: plan.warnings,
       },
     });
-    if (unwritten.length === 0) {
-      await (await import('../migrations/3.0.0.mjs')).migrate({
-        userPath: path.join(this.mindPath, 'user'),
-        progressDirectory: path.join(this.mindPath, '.migration'),
-      });
-    }
-    const { relay, failure: relayFailure } = unwritten.length === 0
-      ? await this.configureRelay() : { relay: [], failure: null };
-    this.currentStep = unwritten.length === 0 ? 8 : 7;
-    let service = relayFailure;
-    if (this.serviceSetup && unwritten.length === 0 && !service) service = await this.configureService();
     this.result = this.completionResult(applied.files, plan.warnings, {
-      relay,
+      relay: [],
       omitted: applied.omitted,
       replacedLinks: applied.replacedLinks,
       removed: applied.removed,
@@ -655,92 +1100,43 @@ class SetupSession {
       reportPath,
     });
     this.result.completed = unwritten.length === 0;
-    if (service) {
-      this.result.service = service;
-      this.result.viewerUrl = service.status === 'started' ? (service.viewerUrl ?? null) : null;
-      this.result.completed = unwritten.length === 0 && service.status !== 'failed';
-      if (service.status === 'failed') {
-        this.currentStep = 7;
-        await this.persistDraft(7);
-      }
-    }
-    if (unwritten.length === 0 && service?.status !== 'failed') {
-      const finished = this.buildMachineRecord('done');
-      finished.managedFiles = managedFiles;
-      await writeMachineRecord(this.mindPath, this.hostname, finished);
-      this.machineRecord = finished;
-    }
     return this.result;
   }
 
   async retryService() {
-    if (!this.serviceSetup || !this.result) return this.result;
-    let relay = this.result.relay;
-    let service;
-    if (this.result.service?.phase === 'relay') {
-      const retried = await this.configureRelay();
-      relay = retried.relay;
-      service = retried.failure;
-    }
-    service ??= await this.configureService();
-    this.result = { ...this.result, ...this.completionResult(this.result.files, this.result.warnings, { ...this.result, relay }),
-      service, viewerUrl: service.viewerUrl ?? null, completed: service.status !== 'failed' };
-    this.currentStep = service.status === 'failed' ? 7 : 8;
-    const record = this.buildMachineRecord(service.status === 'failed' ? 7 : 'done');
-    record.draft = service.status === 'failed' ? { ...this.answers, mindPath: this.mindPath } : {};
-    await writeMachineRecord(this.mindPath, this.hostname, record);
-    this.machineRecord = record;
-    return this.result;
+    if (!this.serviceSetup || !this.result || this.result.completed) return this.result;
+    return this.install();
   }
 
   async resumeInstalledService() {
     this.currentStep = 7;
-    await this.persistDraft(7);
-    let phase = 'migration';
-    let relay = [];
-    let service;
-    try {
-      await (await import('../migrations/3.0.0.mjs')).migrate({ userPath: path.join(this.mindPath, 'user'), progressDirectory: path.join(this.mindPath, '.migration') });
-      phase = 'relay';
-      const configured = await this.configureRelay();
-      relay = configured.relay;
-      service = configured.failure ?? await this.configureService();
-    } catch (error) {
-      service = { status: 'failed', phase, state: this.serviceState ?? {}, error: error.message, code: error.code ?? 'service_unavailable', viewerUrl: null };
-    }
-    const completed = service.status !== 'failed';
-    this.result = { ...this.completionResult([], [], { relay }), completed, service, viewerUrl: completed ? service.viewerUrl ?? null : null };
-    this.currentStep = completed ? 8 : 7;
-    const record = { ...this.machineRecord, setup: completed ? 'done' : 7,
-      draft: completed ? {} : { ...this.answers, mindPath: this.mindPath } };
-    await writeMachineRecord(this.mindPath, this.hostname, record);
-    this.machineRecord = record;
-    return this.result;
+    this.answers.confirm = true;
+    return this.install();
   }
 
   async configureRelay() {
-    const relay = this.relaySetup
-      ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.kitPath, mindPath: this.mindPath }) : [];
-    const failed = relay.filter(item => item.status === 'failed');
-    const failure = this.serviceSetup && failed.length
-      ? { status: 'failed', phase: 'relay', state: this.serviceState ?? {}, code: 'service_unavailable',
-        error: failed.map(item => `${item.client}: ${item.reason}`).join('\n'), viewerUrl: null } : null;
-    return { relay, failure };
+    return { relay: [], failure: null };
   }
 
-  async configureService() {
+  async saveServiceProof() {
+    this.checkpointProof.service = (await legacyTreeInventory(this.localDirectory()))
+      .filter(entry => entry.kind === 'file' && ['config.json', 'registration.json'].includes(entry.path));
+    await this.saveCheckpoint();
+  }
+
+  async configureService({ configureOnly = false } = {}) {
     let service;
     try {
       service = await configureOwnedService({
         env: this.env,
         homeDir: this.homeDir,
-        cosmicPath: this.cosmicPath,
+        cosmicPath: this.cosmicPath ?? path.dirname(defaultMind({ platform: process.platform, env: this.env, home: this.homeDir })),
         mindPath: this.mindPath,
         hostname: this.hostname,
         kitPath: this.kitPath,
         originKind: this.answers.originKind || 'folder',
         originPath: this.answers.originPath || null,
-        requireOrigin: Boolean(this.existingMind || this.answers.serviceOnly),
+        requireOrigin: false,
         dryRun: this.serviceDryRun !== false,
         run: this.serviceRunner,
         start: this.serviceStart,
@@ -750,6 +1146,9 @@ class SetupSession {
         protect: this.serviceProtect !== false,
         state: this.serviceState,
         current: this.serviceCurrent,
+        legacyControl: this.legacyControl,
+        configureOnly,
+        resumeSetup: !this.serviceState && Boolean(this.checkpointProof.service?.length),
       });
     } catch (error) {
       service = { status: 'failed', phase: 'config', state: this.serviceState ?? {}, error: error.message, code: error.code ?? 'service_unavailable', viewerUrl: null };
@@ -757,10 +1156,6 @@ class SetupSession {
     this.serviceState = service.state;
     if (service.state?.installed?.digest) {
       this.serviceCurrent = service.state.installed;
-    }
-    if (service.status === 'started' && service.viewerUrl && this.openViewer && !this.viewerOpened) {
-      this.viewerOpened = true;
-      await this.openViewer(service.viewerUrl);
     }
     return service;
   }
@@ -887,11 +1282,8 @@ class SetupSession {
   }
 
   async persistDraft(step = this.currentStep) {
-    const record = this.answers.serviceOnly ? { ...this.machineRecord, setup: step, language: this.answers.language } : this.buildMachineRecord(step);
-    record.draft = { ...this.answers, mindPath: this.mindPath };
-    record.managedFiles = { ...(this.machineRecord?.managedFiles ?? {}) };
-    await writeMachineRecord(this.mindPath, this.hostname, record);
-    this.machineRecord = record;
+    await this.writeLocal('setup-draft.json', { destinationPath: this.mindPath, step,
+      answers: { ...this.answers, legacySourcePath: this.legacySourcePath, mindPath: this.mindPath } });
   }
 
   buildMachineRecord(setup) {
@@ -920,7 +1312,7 @@ class SetupSession {
   // The machine can be attached while the mind is already installed and this machine has no
   // finished record in it. A machine that finished its setup there is running it again.
   canAttach() {
-    return Boolean(this.existingMind) && this.machineRecord?.setup !== 'done';
+    return Boolean(this.existingMind) && !/^2\./.test(this.existingMind.version);
   }
 
   async inspectMind(candidate) {
@@ -961,12 +1353,20 @@ class SetupSession {
   }
 
   async buildPlan() {
-    const existingManaged = this.machineRecord?.managedFiles ?? {};
+    const existingManaged = { ...(this.machineRecord?.managedFiles ?? {}) };
+    const packageJson = JSON.parse(await readFile(path.join(this.kitPath, 'package.json'), 'utf8'));
+    if (this.checkpoint?.mode === 'migrate') {
+      for (const entry of this.checkpointProof.inventory ?? []) {
+        if (entry.kind === 'file' && !entry.path.startsWith('user/') && (packageJson.files ?? []).some(prefix =>
+          entry.path === prefix || prefix.endsWith('/') && entry.path.startsWith(prefix))) existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
+      }
+    }
     const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
     // An attach writes what belongs to this machine. The kit copy, the preferences and the
     // recorded version belong to the mind and stay as the mind already has them.
-    const attach = this.answers.attach === true;
-    const kitPlan = await planKitCopy({
+    const attach = this.answers.attach === true || /^3\./.test(this.existingMind?.version ?? '');
+    this.answers.attach = attach;
+    const kitPlan = attach ? combinePlans() : await planKitCopy({
       kitPath: this.kitPath,
       mindPath: this.mindPath,
       managedFiles: existingManaged,
@@ -974,7 +1374,6 @@ class SetupSession {
       language: this.answers.language,
       peerHashes,
     });
-    const packageJson = JSON.parse(await readFile(path.join(this.kitPath, 'package.json'), 'utf8'));
     const versionPath = path.join(this.mindPath, 'user', 'VERSION');
     const preferencesPath = path.join(this.mindPath, 'user', 'preferences.md');
     const routesPath = path.join(this.mindPath, 'user', 'routes.md');
@@ -993,11 +1392,11 @@ class SetupSession {
       planDataFile({ destination: versionPath, content: `${packageJson.version}\n`, root: this.mindPath, managedHash: existingManaged[versionPath], kind: 'version', allowExisting: true, language: this.answers.language }),
       planDataFile({ destination: preferencesPath, content: preferences, root: this.mindPath, managedHash: existingManaged[preferencesPath], kind: 'preferences', allowExisting: true, language: this.answers.language }),
     ];
-    const dataPlans = await Promise.all([
+    const dataPlans = await Promise.all(attach ? [] : [
       ...mindPlans,
       planDataFile({ destination: routesPath, content: routes, root: this.mindPath, managedHash: existingManaged[routesPath], kind: 'routes', allowExisting: true, language: this.answers.language }),
     ]);
-    const agentPlan = await planAgentAssets({
+    this.clientPlan = registerLinkConflicts(await prepareSetupAgentAssets({
       kitPath: this.kitPath,
       mindPath: this.mindPath,
       homeDir: this.homeDir,
@@ -1009,7 +1408,8 @@ class SetupSession {
       retiredSources: retiredKitSources(kitPlan, existingManaged, this.kitPath, this.mindPath),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       language: this.answers.language,
-    });
+    }), this.answers.language);
+    this.clientPlan.requiresReview = true;
     const machinePlan = await planDataFile({
       destination: machinePath,
       content: serializeMachineRecord({ ...finalRecord, setup: 7, draft: { ...this.answers, mindPath: this.mindPath } }),
@@ -1020,18 +1420,19 @@ class SetupSession {
       language: this.answers.language,
     });
     return planManagedFileRemovals(registerLinkConflicts(
-      combinePlans(attach ? null : kitPlan, ...dataPlans, agentPlan, machinePlan),
+      combinePlans(attach ? null : kitPlan, ...dataPlans, machinePlan),
       this.answers.language,
     ), {
-      managedFiles: existingManaged,
+      managedFiles: Object.fromEntries(Object.entries(existingManaged).filter(([file]) => isWithin(this.mindPath, file))),
       mindPath: this.mindPath,
-      retainedPaths: attach ? kitPlan.items.map((item) => item.path) : [],
-      skillsRoots: this.adapters.map((adapter) => resolveAdapterPaths(adapter, { homeDir: this.homeDir, env: this.env }).skillsRoot),
+      retainedPaths: attach ? Object.keys(existingManaged) : [],
+      skillsRoots: [],
       peerHashes,
     });
   }
 
   async createMindLayout() {
+    if (this.answers.attach) return;
     const directories = [
       'user/knowledge', 'user/state', 'user/inbox', 'user/tasks', 'user/log', 'user/machines',
     ];
@@ -1076,8 +1477,158 @@ class SetupSession {
       relay: outcome.relay ?? [],
       reportPath: outcome.reportPath ?? null,
       attachPrompts: attachAgents.map((agent) => ({ agent, text: prompt })),
+      mode: this.checkpoint?.mode ?? (this.answers.attach ? 'join' : this.legacySourcePath ? 'migrate' : 'create'),
+      legacySourcePath: this.legacySourcePath,
+      checkpoint: this.checkpoint ? { ...this.checkpoint, completed: [...this.checkpoint.completed] } : null,
+      clientChanges: this.clientPlan ? { ...publicPreview(this.clientPlan, language), requiresReview: true,
+        action: SETUP_COPY[language].review } : { files: [], kept: [], warnings: [], conflicts: [], requiresReview: true, action: SETUP_COPY[language].review },
     };
   }
+}
+
+function safeServiceFailure(service, language, phase) {
+  const match = /\bport[: ]+(\d{1,5})\b/i.exec(service.error ?? '');
+  const port = Number.isInteger(service.port) ? service.port : match ? Number(match[1]) : null;
+  const conflict = service.code === 'EADDRINUSE' && port > 0 && port <= 65535;
+  const message = conflict ? (language === 'es' ? `El servicio no se inició: otro programa utiliza el puerto ${port}.`
+    : `The service did not start: port ${port} is used by another program.`)
+    : language === 'es' ? `No se pudo completar la fase ${phase} del servicio.` : `The service could not complete the ${phase} phase.`;
+  const error = new CoreError(503, conflict ? 'port_in_use' : service.code ?? 'service_unavailable', message);
+  error.safeSetupMessage = message;
+  return error;
+}
+
+function compareSetupVersions(left, right) {
+  const parse = value => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+    if (!match) throw new SetupValidationError('Setup migrations require a valid version.');
+    return { numbers: match.slice(1, 4).map(Number), prerelease: match[4]?.split('.') ?? [] };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < 3; index += 1) if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] - b.numbers[index];
+  if (!a.prerelease.length || !b.prerelease.length) return Number(!a.prerelease.length) - Number(!b.prerelease.length);
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const x = a.prerelease[index];
+    const y = b.prerelease[index];
+    if (x === y) continue;
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) return Number(x) - Number(y);
+    if (/^\d+$/.test(x) !== /^\d+$/.test(y)) return /^\d+$/.test(x) ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+async function runSetupMigrations(session) {
+  const directory = path.join(session.kitPath, 'migrations');
+  await assertNoLinks(directory);
+  const names = await readdir(directory);
+  const toVersion = JSON.parse(await readFile(path.join(session.kitPath, 'package.json'), 'utf8')).version;
+  const selected = names.filter(name => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.mjs$/.test(name))
+    .map(name => ({ name, version: name.slice(0, -4) }))
+    .filter(entry => compareSetupVersions(entry.version, session.checkpointProof.sourceVersion) > 0 && compareSetupVersions(entry.version, toVersion) <= 0)
+    .sort((a, b) => compareSetupVersions(a.version, b.version));
+  session.checkpointProof.migrations ??= [];
+  for (const entry of selected) {
+    if (session.checkpointProof.migrations.includes(entry.version)) continue;
+    await legacyTreeInventory(session.mindPath);
+    const file = path.join(directory, entry.name);
+    await assertNoLinks(file);
+    const migration = await import(pathToFileURL(file).href);
+    if (migration.idempotent !== true || typeof (migration.migrate ?? migration.default) !== 'function'
+      || migration.version && migration.version !== entry.version) throw new SetupValidationError('A setup migration is not resumable or has an invalid version.');
+    if (!session.checkpointProof.activeMigration) {
+      session.checkpointProof.activeMigration = { version: entry.version, before: session.checkpointProof.destination };
+      await session.saveCheckpoint();
+    }
+    if (entry.version === '2.0.0-experimental.4') await verifyInterruptedCoordinatorMigration(session);
+    await (migration.migrate ?? migration.default)({ userPath: path.join(session.mindPath, 'user'),
+      progressDirectory: path.join(session.mindPath, '.migration'), legacySourcePath: session.legacySourcePath,
+      destinationPath: session.mindPath, fromVersion: session.checkpointProof.sourceVersion, toVersion,
+      faultAfterMoves: session.migrationFaultAfterMoves,
+      beforeCheckpoint: async ({ progress, sha256 }) => {
+        const file = path.join(session.mindPath, '.migration', 'migration-3.0.0.json');
+        await assertNoLinks(file);
+        const previous = await readFile(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        session.checkpointProof.pendingProgress = { sha256, previousSha256: previous ? hashContent(previous) : null,
+          progress: JSON.parse(JSON.stringify(progress)) };
+        await session.saveCheckpoint();
+      },
+      onCheckpoint: progress => {
+        session.checkpointProof.pendingPersonMove = progress.pendingMove ? { ...progress.pendingMove } : null;
+        delete session.checkpointProof.pendingProgress;
+        return session.destinationProof();
+      } });
+    session.checkpointProof.migrations.push(entry.version);
+    delete session.checkpointProof.activeMigration;
+    await session.destinationProof();
+  }
+}
+
+// The preceding migration has no callback. Its exact file/header transforms
+// bound the states accepted on reopen; arbitrary edits are never blessed.
+async function verifyInterruptedCoordinatorMigration(session) {
+  const before = session.checkpointProof.activeMigration.before;
+  const allowed = new Map();
+  const moved = new Map();
+  const add = (file, hash) => { if (!allowed.has(file)) allowed.set(file, new Set()); allowed.get(file).add(hash); };
+  for (const entry of before) add(entry.path, entry.sha256);
+  for (const entry of before) {
+    let target = null;
+    if (entry.path.startsWith('user/manager/')) target = entry.path.replace('user/manager/', 'user/overseer/');
+    if (entry.path.startsWith('user/inbox/manager/')) target = entry.path.replace('user/inbox/manager/', 'user/inbox/overseer/');
+    const state = /^user\/state\/manager(.*)\.md$/.exec(entry.path);
+    if (state) target = `user/state/overseer${state[1]}.md`;
+    if (target) { add(target, entry.sha256); moved.set(entry.path, { target, hashes: new Set([entry.sha256]) }); }
+    const inbox = /^user\/inbox\/(?:manager|overseer)\/.+\.md$/.test(entry.path);
+    const oldTarget = /^user\/state\/overseer.*\.md$/.test(entry.path);
+    if (!state && !inbox && !oldTarget) continue;
+    const file = path.join(session.checkpoint.sourcePath, entry.path);
+    await assertNoLinks(file);
+    const bytes = await readFile(file);
+    if (hashContent(bytes) !== entry.sha256) throw new CoreError(409, 'legacy_changed', 'The legacy migration input changed.');
+    const value = bytes.toString('utf8');
+    if (state) {
+      const transformed = value.replace(/^unit:[ \t]*manager(\S*)[ \t]*$/m, (_, suffix) => `unit: overseer${suffix}`);
+      const hash = hashContent(transformed);
+      add(target, hash);
+      moved.set(entry.path, { target, hashes: new Set([hash]) });
+    }
+    if (inbox) {
+      const transformed = value.replace(/^to:[ \t]*manager[ \t]*$/m, 'to: overseer');
+      const hash = hashContent(transformed);
+      add(target ?? entry.path, hash);
+      if (target) moved.get(entry.path).hashes.add(hash);
+    }
+    if (oldTarget) {
+      const header = key => value.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim() ?? '';
+      const unit = header('unit') || path.basename(entry.path, '.md');
+      const date = header('date').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/);
+      const stamp = date ? `${date[1]}${date[2]}${date[3]}-${date[4]}${date[5]}` : '00000000-0000';
+      const body = value.split(/\r?\n\r?\n/).slice(1).join('\n\n').trim();
+      const retired = `unit: ${unit}\ndate: ${header('date')}\n\nState retired when the Manager role became Overseer.\n\n${body}\n`;
+      const log = `user/log/${stamp}-${unit}-retired.md`;
+      if (log.split(/[\\/]/).includes('..') || path.isAbsolute(log)
+        || !isWithin(path.join(session.mindPath, 'user', 'log'), path.resolve(session.mindPath, log))) {
+        throw new CoreError(409, 'checkpoint_changed', 'The retired state path is invalid.');
+      }
+      add(log, hashContent(retired));
+      moved.set(entry.path, { target: log, hashes: new Set([hashContent(retired)]) });
+    }
+  }
+  const actual = (await legacyTreeInventory(session.mindPath)).filter(entry => entry.kind === 'file'
+    && !entry.path.startsWith(`user/machines/${session.hostname}.`));
+  const hashes = new Map(actual.map(entry => [entry.path, entry.sha256]));
+  for (const entry of actual) {
+    if (!allowed.get(entry.path)?.has(entry.sha256)) throw new CoreError(409, 'checkpoint_changed', 'An interrupted migration entry changed unexpectedly.');
+  }
+  for (const entry of before) {
+    if (hashes.has(entry.path)) continue;
+    const move = moved.get(entry.path);
+    if (!move?.hashes.has(hashes.get(move.target))) throw new CoreError(409, 'checkpoint_changed', 'An interrupted migration entry is missing.');
+  }
+  session.checkpointProof.destination = actual;
 }
 
 export class SetupValidationError extends Error {
