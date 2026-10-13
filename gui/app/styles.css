@@ -735,3 +735,5 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .empty-selection > .icon { width: 56px; height: 56px; margin: auto; }
 .group-inspector, .selection-inspector { display: grid; gap: 8px; }
 .group-inspector .btn, .selection-inspector .btn, .map-toast .btn { min-height: 32px; }
+.waiting-section-title { margin: 0; padding: 12px 8px 6px; font-size: 12.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--mute); }
+[data-look="high-contrast"] .waiting-section-title { font-size: 11.5px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; }

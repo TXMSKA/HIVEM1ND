@@ -179,25 +179,31 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
 }
 
 export function renderWaiting(document, items, t, onOpen, emptyAction = null) {
-  const block = element(document, "section", { class: "waiting-list", "data-waiting": String(items?.length ?? 0) });
+  const activeCount = (items ?? []).filter((item) => item.state !== 'expired').length;
+  const block = element(document, 'section', { class: 'waiting-list', 'data-waiting': String(activeCount) });
   if (!items?.length) {
-    block.append(element(document, "p", { "data-empty": "waiting", text: t("emptyWaiting") }));
-    block.append(element(document, "p", { class: "field-hint", "data-empty-next": "waiting", text: t("emptyWaitingNext") }));
+    block.append(element(document, 'p', { 'data-empty': 'waiting', text: t('emptyWaiting') }));
+    block.append(element(document, 'p', { class: 'field-hint', 'data-empty-next': 'waiting', text: t('emptyWaitingNext') }));
     if (emptyAction) block.append(emptyAction);
   }
-  for (const item of items ?? []) {
-    const attrs = {
-      "data-waiting-item": item.id,
-      "data-kind": item.kind ?? "",
-      "data-approval": item.approvalId ?? "",
-      "data-task": item.taskId ?? "",
-      "data-chat": item.chatId ?? "",
-      "data-message": item.messageId ?? "",
-      "data-unit": item.unitId ?? "",
-      text: item.title || item.kind || "",
-    };
-    if (onOpen) block.append(element(document, "button", { type: "button", class: "btn", ...attrs, onclick: () => onOpen(item) }));
-    else block.append(element(document, "p", attrs));
+  for (const section of waitingSections(items ?? [])) {
+    if (!section.items.length) continue;
+    block.append(element(document, 'h3', { class: 'waiting-section-title', text: t(section.key) }));
+    for (const item of section.items) {
+      const attrs = {
+        'data-waiting-item': item.id,
+        'data-kind': item.kind ?? '',
+        'data-state': item.state ?? 'pending',
+        'data-approval': item.approvalId ?? '',
+        'data-task': item.taskId ?? '',
+        'data-chat': item.chatId ?? '',
+        'data-message': item.messageId ?? '',
+        'data-unit': item.unitId ?? '',
+        text: (item.title || item.kind || '') + (item.state === 'expired' ? ' · ' + t('expiredAsk') : ''),
+      };
+      if (onOpen) block.append(element(document, 'button', { type: 'button', class: 'btn', ...attrs, onclick: () => onOpen(item) }));
+      else block.append(element(document, 'p', attrs));
+    }
   }
   return block;
 }
@@ -216,4 +222,12 @@ export function openTaskDetail(document, task, t) {
 function patternText(pattern) {
   if (!pattern || typeof pattern !== "object") return "";
   return Object.keys(pattern).sort().map((key) => `${key}: ${pattern[key]}`).join(", ");
+}
+
+export function waitingSections(items) {
+  return [
+    { key: 'asks', items: items.filter((item) => item.state !== 'expired' && item.kind !== 'review') },
+    { key: 'reviews', items: items.filter((item) => item.state !== 'expired' && item.kind === 'review') },
+    { key: 'endedWithoutAnswer', items: items.filter((item) => item.state === 'expired') },
+  ];
 }

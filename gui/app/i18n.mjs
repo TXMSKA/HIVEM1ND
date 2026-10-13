@@ -509,6 +509,10 @@ const COPY = {
   finalTakingLonger: ['Taking longer than usual', 'Tardando más de lo habitual'],
   finalSlowExplanation: ['The service has not answered for {seconds} s. It stops waiting at 30 s and offers Retry.', 'El servicio no respondió durante {seconds} s. La espera termina a los 30 s y ofrece Reintentar.'],
   rateLimited: ["Too many attempts. Wait and try again.", "Demasiados intentos. Esperar y volver a intentar."],
+  asks: ['Asks', 'Solicitudes'],
+  reviews: ['Reviews', 'Revisiones'],
+  endedWithoutAnswer: ['Ended without an answer', 'Finalizadas sin respuesta'],
+  expiredAsk: ['Expired', 'Vencida'],
 };
 
 const DICTIONARIES = {
