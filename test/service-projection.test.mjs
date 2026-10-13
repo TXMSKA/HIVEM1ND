@@ -12,7 +12,7 @@ import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
 import { clientRecords, probeClients } from '../engine/service/adapters.mjs';
 import { composeCore, writeBeat } from '../engine/service/service.mjs';
-import { connectLead, createUnit, patchLayout, patchSettings } from '../engine/service/units.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings, setUnitAlias } from '../engine/service/units.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const NOW = Date.parse('2026-10-10T12:00:00.000Z');
@@ -833,4 +833,25 @@ test('machine clients are the probed availability records without executable pat
     { id: 'cursor', enabled: false, installed: false },
   ]);
   assert.equal(JSON.stringify(machine).includes(executable), false);
+});
+
+test('an alias changes display and search without changing identity or lead', async (t) => {
+  const fixture = await mind(t);
+  const context = serviceContext(fixture);
+  const relative = path.join(fixture.paths.mind, 'user', 'state', 'executor-blog.md');
+  const original = Buffer.from('unit: executor-blog\nunit-id: root:executor-blog\nrole: executor\nstate: out\nmachine: DESKTOP\nlead-id: root:overseer\n\nalias: body content stays.\n');
+  await writeFile(relative, original);
+  const changed = await setUnitAlias(context, 'root:executor-blog', { alias: ' Blog ', expectedRevision: revisionOf(original) });
+  assert.equal(changed.unit.id, 'root:executor-blog');
+  assert.equal(changed.unit.unit, 'executor-blog');
+  assert.equal(changed.unit.alias, 'Blog');
+  assert.equal(changed.unit.leadId, 'root:overseer');
+  const found = await readCollection(context, 'units', { q: 'Blog' });
+  assert.equal(found.items.some((unit) => unit.id === 'root:executor-blog'), true);
+  const beforeClear = await readFile(relative);
+  const cleared = await setUnitAlias(context, 'root:executor-blog', { alias: null, expectedRevision: revisionOf(beforeClear) });
+  assert.equal(cleared.unit.alias, null);
+  assert.ok((await readFile(relative, 'utf8')).endsWith('\nalias: body content stays.\n'));
+  await assert.rejects(setUnitAlias(context, 'root:executor-blog', { alias: 'Unsafe\nline', expectedRevision: cleared.unit.revision }), { code: 'invalid_alias' });
+  await assert.rejects(setUnitAlias(context, 'root:executor-blog', { alias: 'Other', expectedRevision: revisionOf(original) }), { code: 'revision_conflict' });
 });

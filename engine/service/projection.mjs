@@ -552,7 +552,7 @@ function idleLimits() {
 
 function readUnit(bytes, relative, issues) {
   const blank = {
-    id: null, unit: path.basename(relative, '.md'), role: null, scope: null, leadId: null, job: null, model: null,
+    id: null, unit: path.basename(relative, '.md'), alias: null, role: null, scope: null, leadId: null, job: null, model: null,
     machine: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
     sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
   };
@@ -570,6 +570,7 @@ function readUnit(bytes, relative, issues) {
       ...blank,
       id: id.id,
       unit: headers.get('unit') || id.unit,
+      alias: headers.get('alias')?.trim() || null,
       role,
       scope: id.scope,
       leadId: headers.get('lead-id') || null,
@@ -854,7 +855,9 @@ function chatListed(chat, query) {
 }
 
 function searchText(item, name) {
-  if (name === 'units' || name === 'leads') return `${item.unit ?? ''} ${item.job ?? ''} ${item.context ?? ''}`;
+  if (name === 'units' || name === 'leads') {
+    return [item.unit, item.alias, item.job, item.context].filter((value) => typeof value === 'string').join(' ');
+  }
   if (name === 'messages') return `${item.subject ?? ''} ${item.body ?? ''}`;
   if (name === 'tasks') return `${item.number ?? ''} ${item.title ?? ''} ${item.report ?? ''}`;
   return `${item.title ?? ''} ${item.id ?? ''} ${item.unit ?? ''}`;

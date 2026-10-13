@@ -59,6 +59,27 @@ export async function connectLead(context, unitId, input) {
   }], events));
 }
 
+export async function setUnitAlias(context, unitId, input) {
+  const parsed = parseUnitId(unitId);
+  const current = await readState(context, parsed);
+  if (!current) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  if (!Object.hasOwn(input ?? {}, 'alias')) throw new CoreError(422, 'invalid_body', 'An alias value is required.');
+  const alias = input.alias === null ? '' : input.alias;
+  if (typeof alias !== 'string' || alias.length > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(alias)) {
+    throw new CoreError(422, 'invalid_alias', 'The alias must be a single line of at most 128 characters.');
+  }
+  const next = replaceHeader(current.bytes, 'alias', alias.trim());
+  const events = [
+    { name: 'unit.changed', data: { unit: { id: parsed.id } } },
+    { name: 'view.changed', data: { revision: hashBytes(next), collections: ['units', 'leads', 'squads'] } },
+  ];
+  return finish(context, {
+    events,
+    stage: [{ target: { kind: 'mind', path: current.relative }, bytes: next }],
+  }, transactionOf(context, [{ resource: current.relative, recordPath: current.absolute,
+    beforeRevision: input.expectedRevision, afterBytes: next }], events));
+}
+
 export async function patchLayout(context, input) {
   const nodes = input?.nodes ?? null;
   const groups = input?.groups ?? null;
