@@ -160,6 +160,8 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         .catch((error) => stderr.write(`Relay wake resume unavailable: ${error.message}\n`));
     }
     ensuredAt = Date.now();
+    // This server runs for as long as its session, so the session counts as open while it does.
+    await relay.hold().catch(() => {});
     return carried;
   })() : Promise.resolve(null);
   // A registration takes the consent that an earlier session of the same unit holds on this machine, so a message wakes the
@@ -215,6 +217,7 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         await carrying;
         const value = await callMethod(relay, params.name, args, defaults);
         if (params.name === 'register') await followWake(value).catch((error) => stderr.write(`Relay wake carry-over unavailable: ${error.message}\n`));
+        await relay.hold().catch(() => {});
         const wakeNotice = await touchWake().catch((error) => { stderr.write(`Relay wake renewal unavailable: ${error.message}\n`); return null; });
         response = result(wakeNotice ? { ...value, wakeNotice } : value);
       } else {

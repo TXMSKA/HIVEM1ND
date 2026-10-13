@@ -1,6 +1,6 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
@@ -209,4 +209,31 @@ test('a Relay tool call keeps the wake window of its session open, and the first
   assert.match(lines[0].result.structuredContent.wakeNotice, /^Relay wake for overseer ended at .+ relay wake attach .+--client codex --unit overseer --native-session-id native-1$/);
   assert.equal(lines[0].result.structuredContent.unit, 'overseer');
   assert.equal(lines[1].result.structuredContent.wakeNotice, undefined, 'the notice is given once');
+});
+
+test('the MCP server of a chat holds its session, so a later registration of the unit keeps it while an abandoned one is retired', async (context) => {
+  const mindPath = await fixture(context);
+  const sessions = path.join(mindPath, 'user', 'relay', 'sessions');
+  await mkdir(sessions, { recursive: true });
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
+  const old = async (index, nativeSessionId) => {
+    const registrationId = `00000000-0000-4000-8000-00000000000${index}`;
+    await writeFile(path.join(sessions, `${registrationId}.json`), JSON.stringify({ kind: 'registration', registrationId, instanceId: `old-${index}`,
+      unit: 'overseer', scopeId: 'user', nativeSessionId, client: 'codex', machine: 'RELAYTEST', registeredAt: twoHoursAgo,
+      activity: null, activityObservedAt: null, quota: null, quotaObservedAt: null }));
+    return `${registrationId}.json`;
+  };
+  const open = await old(1, 'open-native');
+  const abandoned = await old(2, 'abandoned-native');
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const server = serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client: 'codex', sessionId: 'open-server', nativeSessionId: 'open-native', stdin, stdout, stderr: new PassThrough() });
+  stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_inbox', arguments: {} } })}\n`);
+  await server;
+  const relay = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'new-server', client: 'codex' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'new-native', activity: 'active' });
+  const left = await readdir(sessions);
+  assert.equal(left.includes(open), true, 'a session whose server still runs is kept');
+  assert.equal(left.includes(abandoned), false);
+  assert.deepEqual(await readdir(path.join(sessions, 'retired')), [abandoned]);
 });

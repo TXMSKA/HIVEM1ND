@@ -724,9 +724,9 @@ export async function createRelay(options = {}) {
 
   const wakeRoot = path.join(relayPath, 'wake');
   const localRoot = relayLocalStatePath(canonicalMind);
-  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index']);
-  // A policy describes a binding and is read from other machines; a lease and a lock hold a process id that means something only on the machine that wrote it, and the index records what this machine has read.
-  const localBuckets = new Set(['workers', 'locks', 'index']);
+  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index', 'holders']);
+  // A policy describes a binding and is read from other machines; a lease, a lock and a holder hold a process id that means something only on the machine that wrote it, and the index records what this machine has read.
+  const localBuckets = new Set(['workers', 'locks', 'index', 'holders']);
   function wakeStorage(bucket) {
     return localBuckets.has(bucket)
       ? { root: localRoot, directory: path.join(localRoot, 'wake', bucket) }
@@ -1109,7 +1109,25 @@ export async function createRelay(options = {}) {
       };
       await publishExclusive(mindPath, path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
       currentRegistration = record;
+      // Clearing out what the new record replaced is best effort and never undoes the registration.
+      await retireStale(record).catch(() => {});
       return toPublicRegistration(record);
+    },
+
+    /**
+     * Records that this process serves the session of its registration for as long as it runs, as the MCP server of a chat
+     * does, so a later registration of the unit does not retire a session that is still open. Returns whether it did.
+     */
+    async hold() {
+      let registration = null;
+      try { registration = await currentIdentity(); } catch (error) { if (error?.code !== 'AMBIGUOUS_SESSION') throw error; }
+      if (typeof registration?.client !== 'string') return false;
+      const key = holderKey(registration.client, registration.nativeSessionId);
+      if (heldKey === key) return true;
+      await writeWakeRecord('holders', key, { kind: 'relay-session-holder', machine: hostname, client: registration.client,
+        nativeSessionId: registration.nativeSessionId, pid: process.pid, at: isoNow() });
+      heldKey = key;
+      return true;
     },
 
     async send(args = {}) {
@@ -1503,6 +1521,67 @@ export async function createRelay(options = {}) {
   };
 
   let currentRegistration = null;
+  let heldKey = null;
+
+  function holderKey(client, nativeSessionId) {
+    return createHash('sha256').update(JSON.stringify(['relay-session-holder', hostname, client, nativeSessionId])).digest('hex');
+  }
+
+  // Whether a session of this machine shows a sign of life: a record of it written or observed in the last minutes, the
+  // process that serves it (its MCP server) or the worker of its wake still running, or its wake marked busy or idle or
+  // started again in the last minutes. Anything that cannot be read counts as alive, so a doubt never retires a session.
+  async function sessionLive(records, now) {
+    const recent = (at) => typeof at === 'string' && now - Date.parse(at) < OBSERVATION_MAX_AGE_MS;
+    if (records.some((item) => recent(item.registeredAt) || recent(item.activityObservedAt))) return true;
+    const [{ client, nativeSessionId }] = records;
+    if (typeof client !== 'string') return false;
+    try {
+      const holder = await readWakeRecord('holders', holderKey(client, nativeSessionId));
+      if (holder?.kind === 'relay-session-holder' && await processIsAlive(holder.pid)) return true;
+      for (const unit of new Set(records.map((item) => item.unit))) {
+        const key = createHash('sha256').update(JSON.stringify([unit, nativeSessionId, client, hostname])).digest('hex');
+        const policy = await readWakeRecord('policies', key);
+        if (recent(policy?.activity?.observedAt) || recent(policy?.startedAt)) return true;
+        const lease = await readWakeRecord('workers', key);
+        if (lease?.expiresAt > now && await processIsAlive(lease.pid)) return true;
+      }
+    } catch { return true; }
+    return false;
+  }
+
+  // A new registration of a unit retires the older registrations of the same unit on this machine whose sessions show no
+  // sign of life, so they stop piling up in every listing and no wake follows them. Another machine's records, another
+  // unit's and those of a live session are left alone. The files move to sessions/retired, where they stay readable.
+  async function retireStale(record) {
+    const now = Date.now();
+    const sessions = new Map();
+    for (const item of await registrations()) {
+      if (item.machine !== hostname || item.client === record.client && item.nativeSessionId === record.nativeSessionId) continue;
+      const key = sessionKey(item.machine, item.client, item.nativeSessionId);
+      if (!sessions.has(key)) sessions.set(key, []);
+      sessions.get(key).push(item);
+    }
+    const retiredPath = path.join(sessionsPath, 'retired');
+    const retired = [];
+    for (const records of sessions.values()) {
+      const stale = records.filter((item) => item.unit.toLowerCase() === record.unit.toLowerCase() && String(item.registeredAt) < record.registeredAt);
+      if (!stale.length || await sessionLive(records, now)) continue;
+      await ensureDirectory(mindPath, retiredPath);
+      for (const item of stale) {
+        const source = path.join(sessionsPath, `${item.registrationId}.json`);
+        const destination = path.join(retiredPath, `${item.registrationId}.json`);
+        try {
+          await safePath(mindPath, source, { missing: false });
+          await safePath(mindPath, destination);
+          if (await lstatOrNull(destination)) continue;
+          await rename(source, destination);
+          retired.push(item.registrationId);
+        } catch (error) { if (!isMissingPath(error) && !isTransientFsError(error)) throw error; }
+      }
+      if (typeof records[0].client === 'string') await removeWakeRecord('holders', holderKey(records[0].client, records[0].nativeSessionId)).catch(() => {});
+    }
+    return retired;
+  }
 
   async function requireRegistration() {
     const registration = await currentIdentity();
