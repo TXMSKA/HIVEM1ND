@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose, fetchAsset, operationId, request, retryOperation } from "../gui/app/api.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, SEND_DEADLINE_MS, createApi, createOperation, dispose, fetchAsset, operationId, request, retryOperation } from "../gui/app/api.mjs";
 import { FRAME_LIMIT, STREAM_HANDSHAKE_MS, STREAM_INACTIVITY_MS, STREAM_RETRY_ATTEMPTS, STREAM_RETRY_BUDGET_MS, close, createSseParser, decodeEvent, reconnectDelay, subscribe, synchronize } from "../gui/app/stream.mjs";
 import { acceptStreamEvent, applyEvent, applyReset, createStore, isAfterCursor, loadResource, loadSnapshot, setDraft } from "../gui/app/state.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
@@ -847,4 +847,10 @@ test('the GUI response deadline covers thirty seconds independently of send dead
   assert.equal(api.deadlineMs, 30000);
   assert.equal(STREAM_HANDSHAKE_MS, 30000);
   dispose(api);
+});
+
+test('send timeout and general response timeout remain distinct', () => {
+  assert.equal(SEND_DEADLINE_MS, 10000);
+  assert.equal(REQUEST_DEADLINE_MS, 30000);
+  assert.ok(SEND_DEADLINE_MS < REQUEST_DEADLINE_MS);
 });

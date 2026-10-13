@@ -1,4 +1,5 @@
 export const REQUEST_DEADLINE_MS = 30_000;
+export const SEND_DEADLINE_MS = 10_000;
 
 export class ApiError extends Error {
   constructor(status, code, message, details = {}, retryAt = null, retryAfter = null) {
@@ -86,9 +87,10 @@ export async function request(api, method, path, options = {}) {
     headers["Idempotency-Key"] = operation.id;
   }
   const mutation = Boolean(operation) && !authExchange && actualMethod !== "GET" && actualMethod !== "HEAD";
+  const send = actualMethod === 'POST' && /^\/(chats|mailboxes)\/[^/]+\/messages$/.test(suffix);
   const parsed = await withDeadline(api, {
     signal: options.signal,
-    deadlineMs: options.deadlineMs,
+    deadlineMs: options.deadlineMs ?? (send ? SEND_DEADLINE_MS : undefined),
     mutation,
     operation,
     method: actualMethod,
