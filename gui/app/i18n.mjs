@@ -1,6 +1,6 @@
 const COPY = {
   loading: ["Loading.", "Cargando."],
-  loadingView: ["Reading the mind.", "Leyendo la mente."],
+  loadingView: ["Reading the mind.", "Leyendo el M1ND."],
   skipToContent: ["Skip to the workspace", "Saltar al espacio de trabajo"],
   reopenTitle: ["Open HIVEM1ND again", "Abrir HIVEM1ND de nuevo"],
   reopenBody: ["This page no longer has a session.", "Esta página ya no tiene una sesión."],
@@ -59,7 +59,7 @@ const COPY = {
   reapplyDraft: ["Reapply draft", "Volver a aplicar el borrador"],
   unavailable: ["The service is unavailable.", "El servicio no está disponible."],
   requestTimeout: ["The request timed out.", "La solicitud agotó el tiempo."],
-  mindUnavailable: ["The mind is unavailable.", "La mente no está disponible."],
+  mindUnavailable: ["The mind is unavailable.", "El M1ND no está disponible."],
   internalError: ["The service reported an internal error.", "El servicio informó un error interno."],
   requestLimited: ["The request limit was reached.", "Se alcanzó el límite de solicitudes."],
   missingRecord: ["The record was not found.", "No se encontró el registro."],
@@ -74,7 +74,7 @@ const COPY = {
   phoneReadOnly: ["The phone cannot change this.", "El teléfono no puede cambiar esto."],
   forbidden: ["This action is not available.", "Esta acción no está disponible."],
   later: ["This screen is not ready yet.", "Esta pantalla todavía no está lista."],
-  viewTooLarge: ["The mind is too large to load at once.", "La mente es demasiado grande para cargarla de una vez."],
+  viewTooLarge: ["The mind is too large to load at once.", "El M1ND es demasiado grande para cargarlo de una vez."],
   unitCountOne: ["{count} unit", "{count} unidad"],
   unitCountOther: ["{count} units", "{count} unidades"],
   waitingCountOne: ["{count} waiting", "{count} pendiente"],
@@ -348,7 +348,9 @@ const DICTIONARIES = {
 export function text(language, key, variables = {}) {
   const dictionary = DICTIONARIES[language] ?? DICTIONARIES.en;
   if (!Object.hasOwn(dictionary, key)) throw new Error(`Unknown copy key: ${key}`);
-  return dictionary[key].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
+  return dictionary[key]
+    .replace(/(^|[^\p{L}\p{N}_{}/\\-])(mind|mente)(?=$|[^\p{L}\p{N}_{}/\\-])/giu, '$1M1ND')
+    .replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ''));
 }
 
 function locale(language) {

@@ -89,12 +89,12 @@ function originOf(value) {
 }
 
 export async function startGui(input = {}) {
-  if (!input.mindPath || typeof input.mindPath !== 'string') fail(422, 'mind_not_configured', 'The mind is not configured.');
+  if (!input.mindPath || typeof input.mindPath !== 'string') fail(422, 'mind_not_configured', 'The M1ND is not configured.');
   const mindPath = path.resolve(input.mindPath);
   const info = await lstat(mindPath).catch(() => null);
-  if (!info?.isDirectory() || info.isSymbolicLink()) fail(422, 'mind_not_configured', 'The mind is not configured.');
+  if (!info?.isDirectory() || info.isSymbolicLink()) fail(422, 'mind_not_configured', 'The M1ND is not configured.');
   const user = await lstat(path.join(mindPath, 'user')).catch(() => null);
-  if (!user?.isDirectory()) fail(422, 'mind_not_configured', 'The mind is not configured.');
+  if (!user?.isDirectory()) fail(422, 'mind_not_configured', 'The M1ND is not configured.');
   const embedded = input.embedded === true;
   const hostOrigin = input.hostOrigin ?? null;
   if (embedded && !originOf(hostOrigin)) fail(422, 'invalid_body', 'An embedded host needs one http or https origin.');
