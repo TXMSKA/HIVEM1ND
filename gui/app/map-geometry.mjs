@@ -244,3 +244,15 @@ function clampPoint(point) {
     y: Math.min(LIMIT, Math.max(-LIMIT, point.y)),
   };
 }
+
+export function personalGroupBounds(memberIds, nodes, padding = 24) {
+  const members = new Set(memberIds);
+  const selected = nodes.filter((node) => members.has(node.id));
+  if (!selected.length) return null;
+  const left = Math.min(...selected.map((node) => node.x - node.radius));
+  const right = Math.max(...selected.map((node) => node.x + node.radius));
+  const top = Math.min(...selected.map((node) => node.y - node.radius));
+  const bottom = Math.max(...selected.map((node) => node.y + node.radius + 24));
+  return { x: left - padding, y: top - padding,
+    w: right - left + padding * 2, h: bottom - top + padding * 2 };
+}
