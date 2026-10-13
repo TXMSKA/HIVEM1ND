@@ -307,7 +307,7 @@ async function loadMind(context) {
     task.undoAvailable = taskUndoAvailable(task, undone.get(task.id), actor);
   }
   await readApprovals(mind, issues);
-  const approvals = await readPendingApprovals(mind, issues);
+  const approvals = await readPendingApprovals(mind, issues, now);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
   const chats = await readChats(mind, messages, issues);
   const groups = [];
@@ -334,15 +334,15 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
   const removed = new Set(loaded.units.filter((unit) => unit.removed).map((unit) => unit.id));
   const waiting = waitingFor([
     ...loaded.tasks.filter((task) => task.reviewable).map((task) => ({
-      id: `review:${task.id}`, kind: 'review', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
+      id: `review:${task.id}`, kind: 'review', state: 'pending', unitId: task.toId, title: task.title, since: task.date ?? '', chatId: null, approvalId: null, taskId: task.id, messageId: null, blocking: true,
     })),
     ...loaded.messages.filter((message) => message.replyRequested && isMaster(message.toId)).map((message) => ({
-      id: `message:${message.id}`, kind: 'message', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
+      id: `message:${message.id}`, kind: 'message', state: 'pending', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
     })),
     ...personQuestions(loaded.units.filter((unit) => !unit.removed), aliases),
     ...(loaded.approvals ?? []).filter((approval) => !removed.has(approval.unitId)),
   ]);
-  const waitingUnits = new Set(waiting.map((item) => item.unitId).filter(Boolean));
+  const waitingUnits = new Set(waiting.filter((item) => item.state !== 'expired').map((item) => item.unitId).filter(Boolean));
   const allUnits = loaded.units.map((unit) => {
     const published = {
       ...unit,
@@ -407,7 +407,7 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     sessions: loaded.sessions.length,
     chats: chats.length,
     groups: loaded.groups.filter((group) => !group.deleted).length,
-    waiting: waiting.length,
+    waiting: waiting.filter((item) => item.state !== 'expired').length,
     open: tasks.filter((task) => task.status === 'open').length,
     review: tasks.filter((task) => task.status === 'review').length,
     done: tasks.filter((task) => task.status === 'done').length,
@@ -965,6 +965,7 @@ function personQuestions(units, aliases = []) {
         items.push({
           id: `question:${unit.id}:${hashText(title)}`,
           kind: 'question',
+          state: 'pending',
           unitId: unit.id,
           title,
           since: unit.date ?? '',
@@ -1211,36 +1212,29 @@ async function readReceipts(mind, issues) {
   return byReader;
 }
 
-async function readPendingApprovals(mind, issues) {
-  const pending = [];
+async function readPendingApprovals(mind, issues, now) {
+  const items = [];
   for (const relative of await filesUnder(mind, 'user/relay/approvals')) {
     if (!relative.endsWith('/request.json')) continue;
     const bytes = await readSafe(mind, relative);
     if (!bytes) continue;
     try {
       const request = JSON.parse(bytes.toString('utf8'));
-      const result = await readSafe(mind, relative.replace(/request\.json$/, 'result.json'));
-      if (result) {
-        const parsed = JSON.parse(result.toString('utf8'));
-        if (parsed.state && parsed.state !== 'pending') continue;
-      }
-      pending.push({
-        id: `approval:${request.id}`,
-        kind: 'approval',
-        unitId: request.unitId ?? null,
-        title: request.display ?? request.action ?? '',
-        since: request.requestedAt ?? '',
-        chatId: request.chatId ?? null,
-        approvalId: request.id ?? null,
-        taskId: null,
-        messageId: null,
-        blocking: true,
-      });
+      const resultBytes = await readSafe(mind, relative.replace(/request\.json$/, 'result.json'));
+      const result = resultBytes ? JSON.parse(resultBytes.toString('utf8')) : null;
+      if (result?.state === 'approved' || result?.state === 'denied') continue;
+      const expired = result?.state === 'expired' || Date.parse(request.expiresAt) <= now;
+      const answers = await filesUnder(mind, relative.replace(/request\.json$/, 'answers'));
+      const state = expired ? 'expired' : answers.some((file) => file.endsWith('.json')) ? 'answering' : 'pending';
+      items.push({ id: 'approval:' + request.id, kind: 'approval', state,
+        unitId: request.unitId ?? null, title: request.display ?? request.action ?? '',
+        since: request.requestedAt ?? '', chatId: request.chatId ?? null, approvalId: request.id ?? null,
+        taskId: null, messageId: null, blocking: !expired });
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The approval could not be projected.' });
     }
   }
-  return pending;
+  return items;
 }
 
 async function readUndo(mind, issues) {

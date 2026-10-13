@@ -855,3 +855,21 @@ test('an alias changes display and search without changing identity or lead', as
   await assert.rejects(setUnitAlias(context, 'root:executor-blog', { alias: 'Unsafe\nline', expectedRevision: cleared.unit.revision }), { code: 'invalid_alias' });
   await assert.rejects(setUnitAlias(context, 'root:executor-blog', { alias: 'Other', expectedRevision: revisionOf(original) }), { code: 'revision_conflict' });
 });
+
+test('expired asks stay readable and do not count as active Waiting', async (t) => {
+  const fixture = await mind(t);
+  const context = serviceContext(fixture);
+  const id = '11111111-1111-4111-8111-111111111111';
+  const directory = path.join(fixture.paths.mind, 'user', 'relay', 'approvals', id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'request.json'), JSON.stringify({ id, unitId: 'root:executor-shop', display: 'Push to the remote', requestedAt: '2026-10-09T12:00:00.000Z', expiresAt: '2026-10-09T12:02:00.000Z', chatId: null }));
+  await writeFile(path.join(directory, 'result.json'), JSON.stringify({ state: 'expired' }));
+  const view = await readProjection(context);
+  const expired = view.waiting.find((item) => item.approvalId === id);
+  assert.ok(expired);
+  assert.equal(expired.state, 'expired');
+  assert.equal(expired.blocking, false);
+  assert.equal(view.counts.waiting, 0);
+  await writeFile(path.join(directory, 'result.json'), JSON.stringify({ state: 'denied' }));
+  assert.equal((await readProjection(context)).waiting.some((item) => item.approvalId === id), false);
+});
