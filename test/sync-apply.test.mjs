@@ -6,12 +6,12 @@ import assert from 'node:assert/strict';
 import { hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
 import { createStore } from '../engine/service/store.mjs';
-import { applyPack, compareVersions } from '../engine/sync/apply.mjs';
+import { applyPack, compareVersions, recoverIncomingGroups } from '../engine/sync/apply.mjs';
 import { limitsFor, openLedger } from '../engine/sync/limits.mjs';
 import { closeOrigin, openOrigin, publishBeat, publishPack, readHead, watchOrigin } from '../engine/sync/origin.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
 import { startService, stopService } from '../engine/service/service.mjs';
-import { listStaged, openSync, stageBaselines, stageTransaction, targetKey } from '../engine/sync/store.mjs';
+import { listStaged, observeLocalChange, openSync, settleAppliedMarker, stageBaselines, stageTransaction, targetKey } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
@@ -248,6 +248,126 @@ test('a crashed group resumes once and a crashed head is not reused for other by
   await publishBeat(laptopOrigin, beat);
   const service = JSON.parse(await readFile(path.join(fixture.root, 'origin', 'machines', 'LAPTOP', 'service.json'), 'utf8'));
   assert.equal(service.machine, 'LAPTOP');
+});
+
+test('local recovery finishes a crashed delete and put group without an origin or a second receipt charge', async (t) => {
+  for (const afterWrites of [2, 3]) await t.test(`after operation ${afterWrites}`, async (t) => {
+    const { fixture, desktop, ledger } = await world(t);
+    const removedTarget = { kind: 'mind', path: 'user/removed.txt' };
+    const addedTarget = { kind: 'mind', path: 'user/added.txt' };
+    await writeFile(path.join(fixture.paths.mind, 'user', 'removed.txt'), 'previous');
+    const raw = Buffer.from('imported');
+    const transactionId = uuidV8(['recover-offline', afterWrites]);
+    const removal = { ...put(removedTarget, raw, { transactionId, at: LATER }), operation: 'delete', hash: null, size: 0 };
+    const addition = put(addedTarget, raw, { transactionId, at: LATER });
+    const body = pack([removal, addition], [{ hash: hashBytes(raw), raw }], {
+      transactions: [{ id: transactionId, changeIds: [removal.id, addition.id] }],
+    });
+    desktop.applyFault = { afterWrites };
+    await assert.rejects(() => applyPack(desktop, body, { ledger }), { code: 'injected_crash' });
+    const charged = (await limitsFor(ledger, 'receipt', 'LAPTOP')).syncBytes.used;
+    const restarted = openSync({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
+    assert.deepEqual(await recoverIncomingGroups(restarted), [transactionId]);
+    assert.deepEqual(await recoverIncomingGroups(restarted), []);
+    await assert.rejects(() => readFile(path.join(fixture.paths.mind, 'user', 'removed.txt')), { code: 'ENOENT' });
+    assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'added.txt'), 'utf8'), 'imported');
+    const baseline = await stageBaselines(restarted);
+    assert.equal(baseline.some(change => ['user/removed.txt', 'user/added.txt'].includes(change.target.path)), false);
+    assert.equal((await limitsFor(ledger, 'receipt', 'LAPTOP')).syncBytes.used, charged);
+    await applyPack(restarted, body, { ledger });
+    assert.equal((await limitsFor(ledger, 'receipt', 'LAPTOP')).syncBytes.used, charged);
+    const applied = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'received', 'LAPTOP', '1.applied.json'), 'utf8'));
+    assert.deepEqual(applied.targets, [removedTarget, addedTarget]);
+  });
+});
+
+test('local recovery rejects a remove journal outside the mind and local service roots', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const id = uuidV8(['unsafe-recovery']);
+  const outside = path.join(fixture.root, 'outside.txt');
+  await writeFile(outside, 'keep');
+  const directory = path.join(fixture.paths.localDirectory, 'received', 'groups');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${id}.json`), JSON.stringify({ id, done: 0, emitted: false, events: [], ops: [{ kind: 'remove', file: outside }] }));
+  await assert.rejects(() => recoverIncomingGroups(desktop), { code: 'unsafe_path' });
+  assert.equal(await readFile(outside, 'utf8'), 'keep');
+});
+
+test('only a completed import marker can settle before a later local edit, preserving held bytes once', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const raw = Buffer.from('imported');
+  const later = Buffer.from('local after import');
+  const incompleteTarget = { kind: 'mind', path: 'user/incomplete.txt' };
+  await observeLocalChange(desktop, incompleteTarget, { bytes: raw, applied: true, machine: 'LAPTOP', at: AT });
+  assert.equal((await settleAppliedMarker(desktop, incompleteTarget)).settled, false);
+  const target = { kind: 'mind', path: 'user/settled.txt' };
+  await applyPack(desktop, pack([put(target, raw)], [{ hash: hashBytes(raw), raw }]));
+  await writeFile(path.join(fixture.paths.mind, 'user', 'settled.txt'), later);
+  const writes = fixture.store.writes.length;
+  const preview = await observeLocalChange(desktop, target, { bytes: later, stage: false });
+  assert.equal(preview.held, true);
+  assert.equal(fixture.store.writes.length, writes);
+  const settled = await settleAppliedMarker(desktop, target);
+  assert.equal(settled.settled, true);
+  assert.equal(settled.change, null);
+  assert.equal((await observeLocalChange(desktop, target, { bytes: later, stage: false })).changed, true);
+  const edited = await observeLocalChange(desktop, target, { bytes: later });
+  assert.equal(edited.staged, true);
+  assert.equal(edited.change.baseHash, hashBytes(raw));
+  const heldTarget = { kind: 'mind', path: 'user/held.txt' };
+  await applyPack(desktop, pack([put(heldTarget, raw, { id: uuidV8(['held-import']) })], [{ hash: hashBytes(raw), raw }], { sequence: 2 }));
+  assert.equal((await observeLocalChange(desktop, heldTarget, { bytes: later })).held, true);
+  const restored = await settleAppliedMarker(desktop, heldTarget);
+  assert.equal(restored.settled, true);
+  assert.equal(restored.change.hash, hashBytes(later));
+  assert.equal(restored.change.baseHash, hashBytes(raw));
+  assert.equal((await settleAppliedMarker(desktop, heldTarget)).settled, false);
+  assert.equal((await listStaged(desktop)).filter(change => change.target.path === heldTarget.path).length, 1);
+});
+
+test('a service save immediately after import retires its marker and keeps earlier held bytes', async (t) => {
+  const { desktop } = await world(t);
+  const raw = Buffer.from('imported');
+  const local = Buffer.from('own save');
+  const held = Buffer.from('earlier external bytes');
+  const targets = [
+    { kind: 'mind', path: 'user/own-after-import.txt' },
+    { kind: 'mind', path: 'user/own-after-held.txt' },
+  ];
+  await applyPack(desktop, pack(targets.map(target => put(target, raw)), [{ hash: hashBytes(raw), raw }]));
+  assert.equal((await observeLocalChange(desktop, targets[1], { bytes: held })).held, true);
+  const transactionId = uuidV8(['own-after-import']);
+  const changes = await stageTransaction(desktop, targets.map(target => ({ target, bytes: local })), { transactionId });
+  assert.equal(changes.every(change => change.transactionId === transactionId), true);
+  for (const target of targets) {
+    assert.equal((await settleAppliedMarker(desktop, target)).settled, false);
+    assert.equal((await observeLocalChange(desktop, target, { bytes: local, stage: false })).changed, false);
+  }
+  const staged = await listStaged(desktop);
+  assert.equal(staged.filter(change => change.target.path === targets[1].path && change.hash === hashBytes(held)).length, 1);
+  const later = await observeLocalChange(desktop, targets[0], { bytes: Buffer.from('next outside edit') });
+  assert.equal(later.staged, true);
+});
+
+test('a retained local reversion after import is not confused with older pending identical bytes', async t => {
+  const { fixture, desktop } = await world(t);
+  const target = { kind: 'mind', path: 'user/retained-reversion.txt' };
+  const first = Buffer.from('A');
+  const imported = Buffer.from('B');
+  const original = await observeLocalChange(desktop, target, { bytes: first });
+  const incoming = put(target, imported, { at: LATER });
+  await applyPack(desktop, pack([incoming], [{ hash: incoming.hash, raw: imported }]));
+  fixture.clock.now += 10000;
+  await writeFile(path.join(fixture.paths.mind, 'user', 'retained-reversion.txt'), first);
+  assert.equal((await observeLocalChange(desktop, target, { bytes: first })).held, true);
+  const retained = await settleAppliedMarker(desktop, target);
+  assert.equal(retained.settled, true);
+  assert.notEqual(retained.change.id, original.change.id);
+  assert.equal(retained.change.at, new Date(fixture.clock.now).toISOString());
+  assert.equal(retained.change.baseHash, incoming.hash);
+  assert.equal((await listStaged(desktop)).filter(change => change.target.path === target.path).length, 2);
+  assert.equal((await observeLocalChange(desktop, target, { bytes: first, stage: false })).changed, false);
+  assert.equal((await observeLocalChange(desktop, target, { bytes: first })).unchanged, true);
 });
 
 test('a registered project imports only cataloged documents, sidecars, and assets', async (t) => {

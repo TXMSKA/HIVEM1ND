@@ -558,8 +558,8 @@ test('two machines on one origin replicate a change and one ledger stops a flood
     await dispose(right);
     await rm(origin, { recursive: true, force: true });
   });
-  leftService = await startService(serviceOptions(left, origin));
-  rightService = await startService(serviceOptions(right, origin));
+  leftService = await startService({ ...serviceOptions(left, origin), now: () => left.clock.now });
+  rightService = await startService({ ...serviceOptions(right, origin), now: () => right.clock.now });
   assert.deepEqual(await packNames(origin), []);
   const changes = await stageTransaction(leftService.runtime.sync, [{
     target: { kind: 'mind', path: 'user/notes/hello.txt' },
@@ -583,7 +583,7 @@ test('two machines on one origin replicate a change and one ledger stops a flood
   const context = {
     store: left.store,
     paths: leftService.runtime.paths,
-    now: () => Date.now(),
+    now: () => left.clock.now,
     principal: { audience: 'desktop', unitId: 'root:master' },
     ledger: leftService.runtime.ledger,
     sync: leftService.runtime.sync,

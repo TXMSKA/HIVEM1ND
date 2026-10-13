@@ -465,26 +465,41 @@ export async function evolve(options = {}) {
   const lastCheck = isoDate(resolved.now);
   let completed = conflicts.length === 0;
   let service = null;
-  // Relay points the clients at the mind's own copy of the CLI, so it runs after the update wrote it.
   const relay = completed && resolved.relaySetup === true
     ? await (await import("./relay/config.mjs")).ensureRelayClients({
       homeDir: resolved.homeDir,
       env: resolved.env,
-      kitPath: resolved.mindPath,
+      kitPath: resolved.kitPath,
       mindPath: resolved.mindPath,
     })
     : [];
 
-  if (completed) {
-    await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
-    await updateLastCheck(resolved.mindPath, resolved.hostname, lastCheck);
+  if (completed && resolved.serviceSetup === true && relay.some(item => item.status === "failed")) {
+    completed = false;
+    service = { status: "failed", phase: "relay", code: "service_unavailable",
+      error: relay.filter(item => item.status === "failed").map(item => `${item.client}: ${item.reason}`).join("\n"), viewerUrl: null };
   }
-
   if (completed && resolved.serviceSetup === true) {
     const configure = resolved.configureService
       ?? (await import("./service/install.mjs")).configureOwnedService;
-    service = await configure({ ...resolved, kitPath: resolved.kitPath, dryRun: resolved.serviceDryRun !== false });
+    try {
+      service = await configure({
+        ...resolved,
+        kitPath: resolved.kitPath,
+        dryRun: resolved.serviceDryRun !== false,
+        run: resolved.serviceRunner,
+        start: resolved.serviceStart,
+        query: resolved.serviceQuery,
+        requireOrigin: true,
+      });
+    } catch (error) {
+      service = { status: "failed", phase: "config", code: error.code ?? "service_unavailable", error: error.message, viewerUrl: null };
+    }
     if (service?.status === "failed") completed = false;
+  }
+  if (completed) {
+    await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
+    await updateLastCheck(resolved.mindPath, resolved.hostname, lastCheck);
   }
 
   return {

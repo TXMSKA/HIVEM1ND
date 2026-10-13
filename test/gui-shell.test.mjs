@@ -524,6 +524,28 @@ test("a failed home binding leaves no active grant", async (t) => {
   assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 410);
 });
 
+for (const reason of ["closed", "expired"]) test(`a ${reason} home event clears the phone session without closing the desktop viewer`, async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const phone = await bootApp(fixture.phoneUrl, 390, []);
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(phone.app));
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => phone.root.querySelector(".shell") && desktop.root.querySelector(".shell"), "The viewers did not open.");
+  const desktopToken = desktop.app.api.token;
+  await fixture.control.emit("home.changed", { reason, home: { enabled: false } });
+  await waitFor(() => phone.root.querySelector("[data-home-code]"), "The closed phone session did not show reopening guidance.");
+  assert.equal(phone.app.api.token, null);
+  assert.equal(phone.app.api.homeKey, null);
+  assert.equal(phone.app.api.live.stopped, true);
+  assert.equal(phone.root.querySelector(".shell"), null);
+  assert.equal(phone.root.querySelector(".gate")?.querySelector("p")?.textContent, text(phone.app.language, reason === "expired" ? "homeExpired" : "homeClosed"));
+  renderShell(phone.app);
+  assert.equal(phone.root.querySelector(".shell"), null);
+  assert.equal(desktop.app.api.token, desktopToken);
+  assert.ok(desktop.root.querySelector(".shell"));
+});
+
 test("a home code is cleared before it is sent and a bad code keeps no secret", async (t) => {
   const document = createTestDocument().document;
   let submitted = null;
@@ -1041,6 +1063,27 @@ test("visible chat lines are marked read and mailbox inspection stays closed", a
   assert.equal(phoneUrls.some((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)), false);
 });
 
+test("waiting task acceptance and undo work without opening the unit inspector", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.items?.some(item => item.taskId === "project:shop:029"), "The review task did not load.");
+  assert.equal(desktop.app.inspectorData ?? null, null);
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  click(desktop.root.querySelector("[data-waiting-surface]").querySelector("[data-task='project:shop:029']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-record='review']")?.querySelector("[data-action='accept']"), "The review did not open.");
+  click(desktop.root.querySelector("[data-waiting-record='review']").querySelector("[data-action='accept']"));
+  await waitFor(() => desktop.app.activity.get("task:project:shop:029")?.phase === "success", "Task acceptance did not settle.");
+  assert.equal(desktop.app.waitingRecord.task.status, "done");
+  assert.equal((await request(desktop.app.api, "GET", "/tasks/project%3Ashop%3A029")).data.status, "done");
+  click(desktop.root.querySelector("[data-waiting-record='review']").querySelector("[data-action='undo']"));
+  await waitFor(() => desktop.app.activity.get("undo:project:shop:029")?.phase === "success", "Undo did not settle.");
+  assert.equal(desktop.app.waitingRecord.task.status, "review");
+  assert.equal(desktop.app.inspectorData ?? null, null);
+  assert.equal(desktop.app.store.indexes.tasks.get("project:shop:029").status, "review");
+});
+
 test("waiting opens from either navigation surface and refreshes without a selected unit", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
@@ -1065,6 +1108,15 @@ test("waiting opens from either navigation surface and refreshes without a selec
   assert.equal(desktop.root.querySelector("[data-waiting-surface]"), null);
   navigate(desktop.app, "map");
   assert.equal(desktop.root.querySelector("[data-waiting-surface]") != null, true);
+
+  for (const mode of ["settings", "blueprint", "document", "focus"]) {
+    navigate(desktop.app, mode);
+    assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "false");
+    click(desktop.root.querySelector("[data-action='waiting']"));
+    await waitFor(() => desktop.root.querySelector("[data-waiting-surface]"), `Waiting did not open from ${mode}.`);
+    assert.equal(desktop.app.mode, "map");
+    assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "true");
+  }
 
   const phone = await bootApp(fixture.phoneUrl, 390, []);
   t.after(() => dispose(phone.app));
@@ -1144,6 +1196,7 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   click(desktop.document.querySelector("[data-action='create-resource']"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board" && desktop.root.querySelector("[data-editor-title]")?.getAttribute("data-editor-title") === "Sample", "The new board did not open.");
   const createdRevision = desktop.app.editors.current.revision;
+  assert.equal(desktop.root.querySelector("[data-structure]").children.some(child => child.textContent === "null"), false);
   click(desktop.root.querySelector("[data-action='move-page']"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.[0]?.id === "more", "The page order was not saved.");
   assert.equal(writes.filter((item) => item.method === "PUT" && item.body?.document?.id === "sample-board").at(-1).body.expectedRevision, createdRevision);
@@ -2386,7 +2439,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   await waitFor(() => phone.root.querySelector("h1")?.textContent === "Waiting", "Waiting kept the conversation title.");
   assert.equal(phone.document.title, "Waiting · HIVEM1ND");
   assert.equal(phone.root.querySelector("[data-stage-title]")?.textContent, "Waiting");
-  assert.equal(phone.root.querySelector("[data-phone-title]")?.textContent, "Waiting");
+  assert.equal(phone.root.querySelector(".side"), null);
   assert.equal(phone.root.querySelector("[data-phone-mode='waiting']")?.getAttribute("aria-pressed"), "true");
   assert.equal(phone.root.querySelector("[data-phone-mode='chats']")?.getAttribute("aria-pressed"), "false");
   click(phone.root.querySelector("[data-phone-mode='chats']"));
@@ -2718,6 +2771,44 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(authorizations.length >= 2, true);
   assert.equal(authorizations.every((value) => value === `Bearer ${token}`), true);
   assert.equal(history.urls.length, 1);
+});
+
+test("manual presentation choices replace only their viewer override and retry without another settings write", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  await request(api, "PATCH", "/viewer", { operation: createOperation({
+    method: "PATCH", path: "/viewer", body: { look: "modern", language: "en" },
+  }) });
+  const writes = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method === "PATCH") writes.push({ path: new URL(String(input)).pathname, key: headerValue(init.headers, "Idempotency-Key") });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-look='high-contrast']"), "Settings did not open.");
+  const before = await countNamedEvents(fixture.root, "settings.changed");
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/viewer", dropAfterCommit: true });
+  click(desktop.root.querySelector("[data-look='high-contrast']"));
+  await waitFor(() => desktop.root.querySelector("[data-action='retry-activity']"), "The lost viewer response did not offer Retry.");
+  click(desktop.root.querySelector("[data-action='retry-activity']"));
+  await waitFor(() => desktop.app.activity.get("settings")?.phase === "success", "The viewer retry did not finish.");
+  assert.equal(desktop.app.look, "high-contrast");
+  assert.equal(desktop.app.language, "en");
+  const viewerWrites = writes.filter(item => item.path === "/api/v1/viewer");
+  assert.equal(viewerWrites.length, 2);
+  assert.equal(viewerWrites[0].key, viewerWrites[1].key);
+  assert.equal(writes.filter(item => item.path === "/api/v1/settings").length, 1);
+  assert.equal(await countNamedEvents(fixture.root, "settings.changed"), before + 1);
+  let viewer = (await request(api, "GET", "/viewer")).data;
+  assert.equal(viewer.look, null);
+  assert.equal(viewer.language, "en");
+  click(desktop.root.querySelector("[data-language='es']"));
+  await waitFor(() => desktop.app.language === "es" && desktop.app.activity.get("settings")?.phase === "success", "The language override was not replaced.");
+  viewer = (await request(api, "GET", "/viewer")).data;
+  assert.equal(viewer.language, null);
+  assert.equal(desktop.document.documentElement.lang, "es");
 });
 
 test("a lost settings or home response retries the same mutation", async (t) => {
@@ -3364,7 +3455,7 @@ function createTestDocument(width = 390) {
         }
       },
       getAttribute(name) { return this.attributes.get(name) ?? null; },
-      append(...kids) { for (const kid of kids) this.appendChild(kid); },
+      append(...kids) { for (const kid of kids) this.appendChild(kid && typeof kid === "object" ? kid : document.createTextNode(String(kid))); },
       appendChild(kid) {
         if (kid == null) return;
         kid.parent = this;

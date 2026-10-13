@@ -1,23 +1,24 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { watch } from 'node:fs';
-import { mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, uuidV8 } from './identity.mjs';
+import { fileURLToPath } from 'node:url';
+import { CoreError, canonicalJson, hashBytes, uuidV8, validateName } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
 import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
-import { applyPack } from '../sync/apply.mjs';
+import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
-import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure, stageBaselines } from '../sync/store.mjs';
+import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
-import { createRelay } from '../relay/store.mjs';
+import { createRelay, parseRoutes } from '../relay/store.mjs';
+import { machineRecordPath, parseMachineRecord } from '../records.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
-import { closeBridge, openBridge } from './bridge.mjs';
+import { closeBridge, createNativeLaunch, dispatchLocal, handleNativeHook, handleRelayPolicy, initializeNativeEntry, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
-import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, wakeBindingLive } from './security.mjs';
+import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, verifyBootstrapFiles, wakeBindingLive } from './security.mjs';
 import { createEventBus, publishDomainEvents } from './events.mjs';
 import { projectChat, readDetail, readSync } from './projection.mjs';
 import { createHttpServer } from './http.mjs';
@@ -25,6 +26,7 @@ import { recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
 import { resolveActivity } from './watch.mjs';
 import { bytesAt, importedSidecarEvents } from './import-events.mjs';
+import { watchLocalChanges } from './local-watch.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -87,8 +89,26 @@ export async function startService(options) {
       relay: handle.relay,
       paths,
       operations: bridgeOperations(handle.relay, options, bridgeRuntime),
+      ownerShutdown: async (binding, { afterReply = false } = {}) => {
+        const expected = handle.shutdown;
+        if (!expected || binding.mindPath !== expected.mindPath || binding.machine !== expected.machine
+            || binding.startedAt !== expected.startedAt || binding.nonce !== handle.nonce) {
+          throw new CoreError(403, 'forbidden', 'The shutdown binding does not match this service.');
+        }
+        const lock = parseLock(await readFile(lockPath(options)).catch(() => null));
+        if (lock?.nonce !== handle.nonce || lock.digest !== handle.lock.digest) {
+          throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
+        }
+        if (afterReply) return stopService(handle);
+        return { accepted: true };
+      },
     });
-    handle.adapters = openNativeAdapters(options.env ?? process.env);
+    handle.adapters = openNativeAdapters(options.env ?? process.env, {
+      createNativeLaunch: request => createNativeLaunch(handle.bridge, request),
+      onNativeRegistered: ({ request, registration }) => initializeNativeEntry({
+        controller: handle.adopted?.controller?.wake, bridge: handle.bridge, request, registration,
+      }),
+    });
     if (options.adapters) Object.assign(handle.adapters.adapters, options.adapters);
     bridgeRuntime.adapters = handle.adapters.adapters;
     bridgeRuntime.ownedPids = options.ownedPids ?? bridgeRuntime.ownedPids;
@@ -97,6 +117,7 @@ export async function startService(options) {
     handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
       ...options,
+      assetDir: options.assetDir ?? fileURLToPath(new URL('../../gui/app/', import.meta.url)),
       paths,
       bus,
       credentials: handle.credentials,
@@ -106,9 +127,28 @@ export async function startService(options) {
       pulse: handle.runtime.pulse,
       adapters: handle.adapters.adapters,
     });
+    handle.bridge.origin = `http://127.0.0.1:${handle.http.port}`;
+    handle.bridge.onNativeHook = binding => handleNativeHook({
+      controller: handle.adopted?.controller?.wake,
+      credentials: handle.credentials,
+      binding,
+    });
+    handle.bridge.adoptWake = binding => handle.adopted?.controller?.wake.adopt(binding);
+    handle.bridge.operations.policy = binding => handleRelayPolicy({
+      controller: handle.adopted?.controller?.wake,
+      bridge: handle.bridge,
+      binding,
+    });
     bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
+    handle.shutdown = {
+      format: 'hivem1nd-shutdown-v1', endpoint: handle.bridge.endpoint, secret: handle.bridge.secret,
+      mindPath: paths.mind, machine: paths.machine, startedAt: handle.bootstrap.startedAt, nonce,
+    };
+    handle.shutdownBytes = Buffer.from(`${canonicalJson(handle.shutdown)}\n`);
+    await atomicWrite(options.store, shutdownPath(options), handle.shutdownBytes);
+    await protectBootstrapFiles(paths.localDirectory, shutdownPath(options), { aclRunner: options.aclRunner, store: options.store });
     handle.beat = await armServiceBeat(handle.runtime);
     return handle;
   } catch (error) {
@@ -125,6 +165,7 @@ export async function runConfiguredService(options = {}) {
     env: options.env ?? process.env,
     home: options.home ?? options.homeDir ?? os.homedir(),
     mindPath: located.mindPath,
+    cosmicPath: located.cosmic,
     machine: located.config.machine,
     originPath: located.config.origin.path,
   });
@@ -134,15 +175,60 @@ export async function runConfiguredService(options = {}) {
   if (path.resolve(paths.staging) !== path.resolve(located.config.stagingPath)) {
     throw new CoreError(422, 'invalid_path', 'The configured staging path does not match the mind.');
   }
-  const store = options.store ?? createRuntimeStore(paths, options);
+  const projects = options.projects ?? await configuredProjects(paths);
+  const store = options.store ?? createRuntimeStore(paths, { ...options, projects });
   return startService({
     ...options,
     store,
     paths,
+    projects,
     port: located.config.port,
     userKey: options.userKey,
     guardPort: options.guardPort,
   });
+}
+
+async function configuredProjects(paths) {
+  const readRecord = async (file) => {
+    await assertNoLinks(file, { root: paths.mind });
+    const state = await lstat(file).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!state) return null;
+    if (!state.isFile()) throw new CoreError(422, 'invalid_path', 'A project registry record is not a regular file.');
+    return readFile(file, 'utf8');
+  };
+  const routes = parseRoutes(await readRecord(path.join(paths.mind, 'user', 'routes.md')) ?? '');
+  if (routes.projects.length === 0) return [];
+  const machineText = await readRecord(machineRecordPath(paths.mind, paths.machine));
+  const machine = machineText === null ? null : parseMachineRecord(machineText);
+  if (machine && (machine.machine !== paths.machine || !path.isAbsolute(machine.mind) || path.resolve(machine.mind) !== path.resolve(paths.mind))) {
+    throw new CoreError(422, 'invalid_body', 'The project registry does not match the configured machine and mind.');
+  }
+  const names = new Set();
+  const projects = [];
+  for (const project of routes.projects) {
+    validateName(project.name, { label: 'project' });
+    const key = project.name.toLowerCase();
+    if (names.has(key)) throw new CoreError(409, 'project_unavailable', 'The project registry is ambiguous.');
+    names.add(key);
+    const mappings = (machine?.paths ?? []).filter(entry => entry.name.toLowerCase() === key);
+    if (mappings.length > 1) throw new CoreError(409, 'project_unavailable', 'The machine project path is ambiguous.');
+    const unavailable = { name: project.name, localPath: null, eligible: false };
+    const localPath = mappings[0]?.path;
+    if (!localPath) { projects.push(unavailable); continue; }
+    if (!path.isAbsolute(localPath)) throw new CoreError(422, 'invalid_path', 'A registered project path must be absolute.');
+    await assertNoLinks(localPath);
+    const state = await lstat(localPath).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!state) { projects.push(unavailable); continue; }
+    if (!state.isDirectory()) throw new CoreError(422, 'invalid_path', 'A registered project path must be a directory.');
+    projects.push({ name: project.name, localPath: await realpath(localPath), eligible: true });
+  }
+  return projects;
 }
 
 export async function attachOrStart(options, port = options.guardPort) {
@@ -210,20 +296,29 @@ export async function adoptWake(options, { nonce } = {}) {
     const parsed = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
     policies.push(parsed);
   }
-  const merged = new Map();
-  for (const policy of policies) {
-    const id = policy.binding?.unitId || policy.binding?.unit;
-    const prior = merged.get(id);
-    merged.set(id, prior ? mergePolicy(prior, policy) : policy);
-  }
-  return finishWake([...merged.values()], options, nonce);
+  return finishWake(policies, options, nonce);
 }
 
 async function finishWake(policies, options, nonce) {
   const controller = await startWakeController(options, nonce);
   const now = options.now?.() ?? Date.now();
   let workersSpawned = 0;
-  for (const policy of policies) {
+  const merged = new Map();
+  const invalid = new Set();
+  for (let policy of policies) {
+    let malformed = false;
+    if (policy?.kind === 'relay-wake-policy' && policy.version === 1 && policy.binding?.machine === options.paths?.machine) {
+      try { policy = await controller.wake.adopt(policy.binding) ?? policy; }
+      catch { malformed = true; }
+    }
+    const binding = policy.binding ?? {};
+    const id = canonicalJson([binding.unitId ?? binding.unit, binding.nativeSessionId, binding.client, binding.machine]);
+    if (malformed) invalid.add(id);
+    const prior = merged.get(id);
+    merged.set(id, prior ? mergePolicy(prior, policy) : policy);
+  }
+  for (const [id, policy] of merged) {
+    if (invalid.has(id)) continue;
     if (!eligibleWake(policy, options, now)) continue;
     try {
       controller.wake.start(policy.binding);
@@ -232,7 +327,7 @@ async function finishWake(policies, options, nonce) {
       // A binding that cannot be normalized does not become a worker.
     }
   }
-  return { policies, workersSpawned, signaled: [], nonce, controller };
+  return { policies: [...merged.values()], workersSpawned, signaled: [], nonce, controller };
 }
 
 function eligibleWake(policy, options, now) {
@@ -403,6 +498,7 @@ export async function composeCore(options) {
   const runtime = await openServiceSync({ ...options, paths, bus }, paths);
   const http = await createHttpServer({
     ...options,
+    assetDir: options.assetDir ?? fileURLToPath(new URL('../../gui/app/', import.meta.url)),
     paths,
     bus,
     credentials,
@@ -434,19 +530,92 @@ export async function stopService(handle) {
     await unlink(lockPath(handle.options)).catch(() => {});
     await unlink(bootstrapPath(handle.options)).catch(() => {});
     await unlink(activePath(handle.options)).catch(() => {});
+    const shutdown = await readFile(shutdownPath(handle.options)).catch(() => null);
+    if (shutdown && handle.shutdownBytes?.equals(shutdown)) await unlink(shutdownPath(handle.options));
   }
   if (handle.guard) await new Promise((resolve) => handle.guard.close(() => resolve()));
   return { stopped: true, signaled: handle.signaled };
 }
 
+export async function readOwnedServiceBridge(options = {}) {
+  const platform = options.platform ?? process.platform;
+  const paths = servicePaths({
+    platform, env: options.env ?? process.env, home: options.homeDir ?? options.home ?? os.homedir(),
+    mindPath: options.mindPath, cosmicPath: options.cosmicPath,
+    machine: options.hostname ?? options.machine ?? os.hostname(),
+  });
+  const selected = { ...options, paths };
+  const userKey = await resolveUserKey(selected);
+  const port = options.guardPort ?? guardPortFor(userKey);
+  if (!await guardOccupied(port)) return { absent: true };
+  for (const file of [activePath(selected), lockPath(selected), shutdownPath(selected)]) await assertNoLinks(file);
+  const active = await readOptionalJson(activePath(selected));
+  if (active && active.mindPath !== paths.mind) {
+    const otherPaths = servicePaths({ platform, env: options.env ?? process.env, home: options.homeDir ?? options.home ?? os.homedir(),
+      mindPath: active.mindPath, cosmicPath: paths.cosmic, machine: active.machine });
+    await assertNoLinks(bootstrapPath({ paths: otherPaths }));
+    await verifyBootstrapFiles(otherPaths.localDirectory, bootstrapPath({ paths: otherPaths }), { aclRunner: options.aclRunner, store: options.store });
+    await attachOrStart({ ...selected, paths: otherPaths, userKey, attachTimeoutMs: options.shutdownTimeoutMs ?? 3000 }, port);
+    return { unrelated: true };
+  }
+  const attached = await attachOrStart({ ...selected, userKey, attachTimeoutMs: options.shutdownTimeoutMs ?? 3000 }, port);
+  const file = shutdownPath(selected);
+  await verifyBootstrapFiles(paths.localDirectory, file, { aclRunner: options.aclRunner, store: options.store });
+  const raw = await readFile(file);
+  let descriptor;
+  try { descriptor = JSON.parse(raw.toString('utf8')); } catch { throw new CoreError(503, 'service_unavailable', 'The shutdown descriptor is not valid.'); }
+  const lock = parseLock(await readFile(lockPath(selected)).catch(() => null));
+  if (!descriptor || Object.keys(descriptor).sort().join(',') !== 'endpoint,format,machine,mindPath,nonce,secret,startedAt'
+      || descriptor.format !== 'hivem1nd-shutdown-v1' || descriptor.mindPath !== paths.mind || descriptor.machine !== paths.machine
+      || descriptor.startedAt !== attached.active.startedAt || descriptor.startedAt !== attached.bootstrap.startedAt
+      || descriptor.nonce !== lock?.nonce || !/^[A-Za-z0-9_-]{43}$/.test(descriptor.secret)
+      || typeof descriptor.endpoint !== 'string' || !descriptor.endpoint.startsWith(process.platform === 'win32' ? '\\\\.\\pipe\\hivem1nd-' : `${os.tmpdir()}${path.sep}hivem1nd-`)) {
+    throw new CoreError(503, 'service_unavailable', 'The shutdown descriptor does not match the running service.');
+  }
+  if (!(await readFile(file)).equals(raw)) throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
+  return { descriptor, paths, file, port };
+}
+
+export async function stopConfiguredService(options = {}) {
+  const owned = await readOwnedServiceBridge(options);
+  if (!owned.descriptor) return { stopped: false, ...owned };
+  const { descriptor, paths, file, port } = owned;
+  const selected = { ...options, paths };
+  const result = await dispatchLocal(descriptor, 'shutdown', {
+    mindPath: paths.mind, machine: paths.machine, startedAt: descriptor.startedAt, nonce: descriptor.nonce,
+  });
+  if (result?.accepted !== true) throw new CoreError(503, 'service_unavailable', 'The service did not accept shutdown.');
+  const deadline = Date.now() + (options.shutdownTimeoutMs ?? 10000);
+  while (Date.now() <= deadline) {
+    const remaining = await Promise.all([file, activePath(selected), lockPath(selected)].map(target => readFile(target).catch(error => { if (error?.code === 'ENOENT') return null; throw error; })));
+    if (remaining.every(value => value === null) && !await guardOccupied(port)) return { stopped: true, authenticated: true };
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new CoreError(503, 'service_unavailable', 'The authenticated service has not finished shutdown.');
+}
+
+function guardOccupied(port) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    socket.setTimeout(1000, () => socket.destroy(new CoreError(503, 'service_unavailable', 'The service guard did not answer.')));
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('error', error => error?.code === 'ECONNREFUSED' ? resolve(false) : reject(error));
+  });
+}
+
 function mergePolicy(left, right) {
+  if (left.key && left.key === right.key && left.generation === right.generation) return right;
   const deadline = earlier(left.deadlineAt, right.deadlineAt);
-  const maxHandoffs = Math.min(left.maxHandoffs ?? Infinity, right.maxHandoffs ?? Infinity);
+  const wakeCount = Math.max(left.wakeCount ?? 0, right.wakeCount ?? 0);
+  const remaining = Math.min((left.maxHandoffs ?? 20) - (left.wakeCount ?? 0), (right.maxHandoffs ?? 20) - (right.wakeCount ?? 0));
   const deliveries = { ...(left.deliveries ?? {}), ...(right.deliveries ?? {}) };
   for (const id of new Set([...Object.keys(left.deliveries ?? {}), ...Object.keys(right.deliveries ?? {})])) {
     deliveries[id] = dominate(left.deliveries?.[id], right.deliveries?.[id]);
   }
-  return { ...left, deadlineAt: deadline, maxHandoffs, deliveries, unlimited: false, extended: left.extended === true && right.extended === true };
+  return { ...left, startedAt: earlier(left.startedAt, right.startedAt), deadlineAt: deadline,
+    wakeCount, maxHandoffs: wakeCount + remaining, deliveries,
+    enabled: left.enabled === true && right.enabled === true, pausedReason: left.pausedReason ?? right.pausedReason,
+    unlimited: left.unlimited === true && right.unlimited === true && !deadline, extended: left.extended === true && right.extended === true };
 }
 
 function dominate(left, right) {
@@ -479,8 +648,11 @@ function quietTimer(fn, ms) {
 function bindRuntime(handle) {
   const closeHttp = handle.http.close.bind(handle.http);
   handle.http.close = async () => {
-    await closeServiceSync(handle.runtime);
-    await closeHttp();
+    try {
+      await closeServiceSync(handle.runtime);
+    } finally {
+      await closeHttp();
+    }
   };
 }
 
@@ -508,14 +680,19 @@ async function openServiceSync(options, paths) {
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   try {
-    await stageBaselines(sync);
+    try {
+      await recoverIncomingGroups(sync);
+    } catch (error) {
+      runtime.lastError = error;
+      runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'incoming_recovery_failed', code: error?.code ?? 'sync_failed' } });
+    }
+    runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes));
     await pulse.resume();
     runtime.unwatch = watchOrigin(origin, () => {
       reconcileOrigin(runtime).catch((error) => {
         runtime.lastError = error;
       });
     });
-    runtime.unwatchProject = watchProjects(paths.mind);
     return runtime;
   } catch (error) {
     await closeServiceSync(runtime, { beat: false });
@@ -553,8 +730,11 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
   runtime.closed = true;
   if (runtime.beatTimer) clearInterval(runtime.beatTimer);
   runtime.beatTimer = null;
+  if (runtime.unwatch) await runtime.unwatch();
+  runtime.unwatch = null;
   if (runtime.unwatchProject) await runtime.unwatchProject();
   runtime.unwatchProject = null;
+  if (runtime.reconciling) await runtime.reconciling.catch(() => {});
   if (beat) {
     try {
       await publishServiceBeat(runtime, 'stopped');
@@ -563,11 +743,23 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
     }
   }
   await runtime.pulse.close().done;
-  if (runtime.unwatch) await runtime.unwatch();
   await closeOrigin(runtime.origin);
 }
 
 async function reconcileOrigin(runtime) {
+  if (runtime.closed) return;
+  runtime.reconcileAgain = true;
+  if (runtime.reconciling) return runtime.reconciling;
+  runtime.reconciling = (async () => {
+    do {
+      runtime.reconcileAgain = false;
+      await reconcileIncoming(runtime);
+    } while (runtime.reconcileAgain && !runtime.closed);
+  })().finally(() => { runtime.reconciling = null; });
+  return runtime.reconciling;
+}
+
+async function reconcileIncoming(runtime) {
   try {
     await receiveOrigin(runtime);
     const previous = await readInboundFailure(runtime.sync);
@@ -615,11 +807,13 @@ async function receiveOrigin(runtime) {
     async readPack(machine, sequence) { return readOriginPack(runtime.origin, machine, sequence); },
   };
   for (const machine of names) {
+    if (runtime.closed) return;
     await mirrorBeat(runtime, machine);
     if (machine === runtime.origin.machine) continue;
     const head = await readHead(runtime.origin, machine);
     const sequence = head?.sequence ?? 0;
     for (let index = 1; index <= sequence; index += 1) {
+      if (runtime.closed) return;
       const packed = await readOriginPack(runtime.origin, machine, index);
       if (!packed) continue;
       const applied = await applyPack(runtime.sync, packed, {
@@ -644,9 +838,11 @@ async function retryPending(runtime, provider, bindings) {
     throw error;
   }
   for (const machine of machines) {
+    if (runtime.closed) return;
     if (!machine.isDirectory() || machine.isSymbolicLink()) continue;
     const names = await readdir(path.join(root, machine.name));
     for (const name of names) {
+      if (runtime.closed) return;
       if (!name.endsWith('.json')) continue;
       const sequence = Number(name.slice(0, -'.json'.length));
       if (!Number.isInteger(sequence)) continue;
@@ -666,6 +862,15 @@ async function retryPending(runtime, provider, bindings) {
 async function emitImported(runtime, result) {
   if (!runtime?.bus || result?.status !== 'applied' || result.replayed === true) return;
   if (result.machine === runtime.paths.machine) return;
+  return emitChanges(runtime, result);
+}
+
+async function emitObserved(runtime, changes) {
+  return emitChanges(runtime, { machine: runtime.paths.machine, sequence: changes.map(change => change.id).join(':'), changes }, true);
+}
+
+async function emitChanges(runtime, result, local = false) {
+  if (!runtime?.bus) return;
   const selected = latestImported(result.changes ?? []);
   if (selected.length === 0) return;
   const context = {
@@ -691,7 +896,7 @@ async function emitImported(runtime, result) {
           continue;
         }
         seen.set(marker, event);
-        events.push({ ...event, operationId: `sync:${sourceMachine}:${result.sequence}:${marker}`, source: event.source ?? syncSource(change) });
+        events.push({ ...event, operationId: `sync:${sourceMachine}:${result.sequence}:${marker}`, source: local ? { kind: 'service', id: sourceMachine, unitId: null } : event.source ?? syncSource(change) });
       }
       for (const name of built.collections) collections.add(name);
     } catch (error) {
@@ -702,7 +907,7 @@ async function emitImported(runtime, result) {
     events.push({
       name: 'view.changed',
       operationId: `sync-view:${sourceMachine}:${result.sequence}`,
-      source: { kind: 'sync', id: sourceMachine, unitId: null },
+      source: { kind: local ? 'service' : 'sync', id: sourceMachine, unitId: null },
       data: {
         revision: hashBytes(Buffer.from(selected.map((item) => item.id).sort().join('\n'))),
         collections: [...collections].sort(),
@@ -1042,6 +1247,8 @@ async function writeDescriptor(store, destination, bytes) {
 async function rollback(handle) {
   if (handle.bootstrapState) handle.bootstrapState.valid = false;
   if (handle.bootstrapState?.file) await unlink(handle.bootstrapState.file).catch(() => {});
+  const shutdown = await readFile(shutdownPath(handle.options)).catch(() => null);
+  if (shutdown && handle.shutdownBytes?.equals(shutdown)) await unlink(shutdownPath(handle.options)).catch(() => {});
   await closeOwned(handle, { beat: false });
   const raw = await readFile(lockPath(handle.options)).catch(() => null);
   if (parseLock(raw)?.nonce === handle.nonce) await unlink(lockPath(handle.options)).catch(() => {});
@@ -1158,7 +1365,7 @@ async function startWakeController(options, nonce) {
 }
 
 export function openNativeAdapters(env = process.env, hooks = {}) {
-  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs };
+  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs, createNativeLaunch: hooks.createNativeLaunch, onNativeRegistered: hooks.onNativeRegistered };
   const adapters = {
     claude: createNativeAdapter('claude', shared),
     codex: createNativeAdapter('codex', shared),
@@ -1182,20 +1389,6 @@ async function armServiceBeat(runtime) {
   }, 60000);
   runtime.beatTimer.unref?.();
   return runtime.beat;
-}
-
-function watchProjects(directory) {
-  let watcher = null;
-  try {
-    watcher = watch(directory, { persistent: false, recursive: process.platform === 'win32' || process.platform === 'darwin' }, () => {});
-    watcher.unref?.();
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  return async () => {
-    watcher?.close();
-    watcher = null;
-  };
 }
 
 async function closeOwned(handle, { beat = true } = {}) {
@@ -1280,6 +1473,10 @@ function lockPath(options) {
 
 function bootstrapPath(options) {
   return path.join(options.paths.localDirectory, 'bootstrap.json');
+}
+
+function shutdownPath(options) {
+  return path.join(options.paths.localDirectory, 'shutdown.json');
 }
 
 function activePath(options) {

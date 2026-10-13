@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +9,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '../cli/index.mjs';
 import { createWizardServer } from '../gui/server.mjs';
-import { bootstrapConfig, installService, planRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
+import { bootstrapConfig, configureOwnedService, installService, planRegistration, queryRegistration, removeOwnedRegistration, runServicePhases, startConfiguredViewer, uninstallService, verifyOwnedRegistration } from '../engine/service/install.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
 import { EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
+import { composeCore, stopService } from '../engine/service/service.mjs';
+import { createSetupSession } from '../engine/setup.mjs';
+import { evolve } from '../engine/lifecycle.mjs';
+import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
@@ -22,6 +27,353 @@ const base = {
   localDirectory: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd-service\\key\\DESKTOP',
   sid: 'S-1-5-21-1',
 };
+
+test('the real wizard retries only service startup and opens its authenticated viewer', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const home = path.join(root, 'home');
+  const local = path.join(root, 'local');
+  const cosmic = path.join(root, 'custom', 'Cosmic');
+  const mind = path.join(root, 'OneDrive', 'HIVEM1ND');
+  const origin = path.join(root, 'origin');
+  const aclRunner = stubAclRunner();
+  const env = { PATH: '', HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: local, CODEX_HOME: path.join(home, '.codex') };
+  await mkdir(home, { recursive: true });
+  await mkdir(local, { recursive: true });
+  const socket = createServer();
+  await new Promise((resolve) => socket.listen(0, '127.0.0.1', resolve));
+  const guardPort = socket.address().port;
+  await new Promise((resolve) => socket.close(resolve));
+  const commands = [];
+  const opened = [];
+  let starts = 0;
+  let owned;
+  t.after(async () => { if (owned) await stopService(owned); await rm(root, { recursive: true, force: true }); });
+  const sessionOptions = {
+    kitPath: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
+    mindPath: mind, homeDir: home, cosmicPath: cosmic, hostname: 'TESTBOX', env, language: 'en',
+    originKind: 'folder', originPath: origin,
+    serviceSetup: true, serviceDryRun: false, serviceProtect: false, aclRunner,
+    serviceQuery: async (plan) => {
+      if (commands.length === 0) return { present: false };
+      const file = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'registration.json');
+      const current = await readFile(file, 'utf8').then(JSON.parse, () => null);
+      return { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments, installationId: current?.installationId };
+    },
+    serviceRunner: async (argv) => { commands.push(argv); },
+    serviceStart: async (config) => {
+      starts += 1;
+      assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
+      const ownership = JSON.parse(await readFile(path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'registration.json'), 'utf8'));
+      assert.ok(ownership.installationId);
+      if (starts === 1) throw new Error('temporary service failure');
+      const ready = await startConfiguredViewer(config, { env, homeDir: home, cosmicPath: cosmic, hostname: 'TESTBOX', aclRunner, guardPort, userKey: root, confineRoot: root });
+      if (!ready.handle.attached) owned = ready.handle;
+      return ready;
+    },
+  };
+  const session = await createSetupSession(sessionOptions);
+  const server = await createWizardServer({ session, openCompletedViewer: async (url) => { opened.push(url); } });
+  let wizardClosed = false;
+  t.after(() => wizardClosed ? undefined : server.close());
+  const call = async (route, body) => {
+    const response = await fetch(`${server.origin}/api/v1/${route}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { authorization: `Bearer ${server.token}`, origin: server.origin, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    return (await response.json()).data;
+  };
+  await call('answer', { values: { installMode: 'simple' } });
+  const first = await call('install', { confirm: true, conflicts: {} });
+  assert.equal(first.completed, false);
+  assert.equal(first.service.phase, 'start');
+  const pending = await call('step');
+  assert.equal(pending.number, 7);
+  assert.equal(pending.done, false);
+  assert.match(pending.description, /could not start/);
+  const before = await stat(path.join(mind, 'rules.md'));
+  const registered = commands.length;
+  const finished = await call('install', { confirm: true, conflicts: {} });
+  assert.equal(finished.completed, true);
+  assert.equal((await call('step')).done, true);
+  assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
+  assert.equal(commands.length, registered);
+  assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
+  assert.deepEqual(opened, [finished.viewerUrl]);
+  assert.equal(finished.service.state.configBody.origin.path, origin);
+  const url = new URL(finished.viewerUrl);
+  const token = new URLSearchParams(url.hash.slice(1)).get('session');
+  const view = await fetch(`${url.origin}/api/v1/view`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(view.status, 200, await view.clone().text());
+  assert.equal((await view.json()).contract, 'hivem1nd-gui-v3');
+  await server.close();
+  wizardClosed = true;
+  assert.equal((await fetch(url)).status, 200);
+  await writeFile(path.join(mind, 'user', 'VERSION'), '2.0.0\n');
+  const resumed = await createSetupSession(sessionOptions);
+  assert.equal((await resumed.getStep()).done, true);
+  const resumedOpened = [];
+  const resumedServer = await createWizardServer({ session: resumed, openCompletedViewer: async viewer => { resumedOpened.push(viewer); } });
+  t.after(() => resumedServer.close());
+  for (let index = 0; index < 2; index += 1) {
+    const step = await fetch(`${resumedServer.origin}/api/v1/step`, { headers: { authorization: `Bearer ${resumedServer.token}` } });
+    assert.equal(step.status, 200);
+    assert.equal((await step.json()).data.done, true);
+  }
+  assert.deepEqual(resumedOpened, [resumed.result.viewerUrl]);
+  let failed = true;
+  const retry = await createSetupSession({ ...sessionOptions, serviceStart: async config => {
+    if (failed) { failed = false; throw new Error('existing service temporary failure'); }
+    return sessionOptions.serviceStart(config);
+  } });
+  assert.equal((await retry.getStep()).done, false);
+  assert.equal((await retry.getStep()).number, 7);
+  assert.deepEqual((await retry.preview()).files, []);
+  await retry.answer({ confirm: true });
+  assert.equal((await retry.install()).completed, true);
+  assert.equal(commands.length, registered);
+  assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
+  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '2.0.0\n');
+  const progressFile = path.join(mind, '.migration', 'migration-3.0.0.json');
+  const progress = await readFile(progressFile).catch(error => { if (error?.code === 'ENOENT') return null; throw error; });
+  await mkdir(path.dirname(progressFile), { recursive: true });
+  await writeFile(progressFile, '{broken');
+  const migrationRetry = await createSetupSession(sessionOptions);
+  assert.equal((await migrationRetry.getStep()).done, false);
+  assert.equal(migrationRetry.result.service.phase, 'migration');
+  assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
+  if (progress) await writeFile(progressFile, progress);
+  else await unlink(progressFile);
+  await migrationRetry.answer({ confirm: true });
+  assert.equal((await migrationRetry.install()).completed, true);
+  assert.equal(commands.length, registered);
+  assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
+});
+
+test('evolve keeps its previous completion markers until owned service setup succeeds', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const mind = path.join(root, 'mind');
+  const kit = path.join(root, 'kit');
+  const machine = path.join(mind, 'user', 'machines', 'TESTBOX.md');
+  await mkdir(path.dirname(machine), { recursive: true });
+  await mkdir(kit);
+  await writeFile(path.join(kit, 'package.json'), JSON.stringify({ name: 'fixture', version: '3.0.0' }));
+  await writeFile(path.join(mind, 'user', 'VERSION'), '2.0.0\n');
+  await writeFile(machine, `machine: TESTBOX\nmind: ${mind}\nlast-check: 2029-01-01\nsetup: done\n`);
+  let starts = 0;
+  const runner = async () => {};
+  const start = async () => {};
+  const query = async () => {};
+  const options = {
+    kitPath: kit, mindPath: mind, hostname: 'TESTBOX', homeDir: path.join(root, 'home'), pull: false,
+    now: new Date('2030-01-02T12:00:00Z'), serviceSetup: true, serviceDryRun: false,
+    serviceRunner: runner, serviceStart: start, serviceQuery: query,
+    installAgentAssets: async () => ({ agents: [], baseFiles: [], warnings: [], conflicts: [] }),
+    configureService: async (input) => {
+      assert.equal(input.kitPath, kit);
+      assert.equal(input.run, runner);
+      assert.equal(input.start, start);
+      assert.equal(input.query, query);
+      assert.equal(input.dryRun, false);
+      assert.equal(input.requireOrigin, true);
+      starts += 1;
+      return { status: starts === 1 ? 'failed' : 'started', phase: starts === 1 ? 'registration' : null };
+    },
+  };
+  assert.equal((await evolve(options)).completed, false);
+  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '2.0.0\n');
+  assert.match(await readFile(machine, 'utf8'), /^last-check: 2029-01-01$/m);
+  assert.equal((await evolve(options)).completed, true);
+  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '3.0.0\n');
+  assert.match(await readFile(machine, 'utf8'), /^last-check: 2030-01-02$/m);
+});
+
+test('the completed installer signs into the real HTTP viewer on startup and reattachment', async (t) => {
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [] });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  for (const handle of [core, { attached: true, bootstrap: { ...core.bootstrap.record, secret: core.bootstrap.secret } }]) {
+    const ready = await startConfiguredViewer({}, { start: async () => handle });
+    const url = new URL(ready.viewerUrl);
+    const token = new URLSearchParams(url.hash.slice(1)).get('session');
+    assert.equal(url.origin, `http://127.0.0.1:${core.http.port}`);
+    assert.ok(token);
+    const response = await fetch(`${url.origin}/api/v1/view`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).contract, 'hivem1nd-gui-v3');
+  }
+});
+
+test('owned configuration uses the user SID and retains an installed legacy mind and origin', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const mind = path.join(root, 'OneDrive', 'HIVEM1ND');
+  const cosmic = path.join(root, 'local', 'Cosmic');
+  const origin = path.join(root, 'chosen-origin');
+  const aclRunner = stubAclRunner();
+  const calls = [];
+  let registered;
+  const options = {
+    platform: 'win32', mindPath: mind, cosmicPath: cosmic, hostname: 'TESTBOX', kitPath: path.join(root, 'kit'),
+    env: { LOCALAPPDATA: path.join(root, 'local'), OneDrive: path.join(root, 'OneDrive') },
+    originPath: origin, dryRun: false, protect: false, aclRunner,
+    query: async (plan) => calls.length === 0 ? { present: false } : { present: true, digest: registered?.digest ?? plan.digest, executable: plan.executable, arguments: plan.arguments, installationId: registered?.installationId },
+    run: async (argv) => { calls.push(argv); },
+    start: async () => ({ viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' }),
+  };
+  const first = await configureOwnedService(options);
+  registered = first.state.installed;
+  assert.equal(first.status, 'started');
+  assert.match(first.state.installed.body, /S-1-5-21-1-2-3-1001/);
+  assert.equal(first.state.installed.body.includes('S-1-5-21-current'), false);
+  assert.equal(first.state.configBody.mindPath, mind);
+  assert.equal(first.state.configBody.origin.path, origin);
+  const second = await configureOwnedService({ ...options, originPath: path.join(root, 'wrong-origin') });
+  assert.equal(second.status, 'started');
+  assert.equal(second.state.configBody.origin.path, origin);
+  assert.equal(calls.every((argv) => argv[0] === 'schtasks.exe'), true);
+  const legacy = { ...registered, name: 'HIVEM1ND-legacy-owned' };
+  const retained = await configureOwnedService({ ...options, current: legacy, query: async (plan) => {
+    assert.equal(plan.name, legacy.name);
+    return { present: true, digest: legacy.actualDigest ?? legacy.digest, executable: legacy.executable, arguments: legacy.arguments, installationId: legacy.installationId };
+  } });
+  assert.equal(retained.status, 'started');
+  assert.equal(retained.state.installed.name, legacy.name);
+});
+
+test('registration query preserves the actual scheduler XML and a modified task is never replaced', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const plan = planRegistration({ ...base, platform: 'win32', localDirectory: root });
+  const actualXml = plan.body.replace('<Settings>', '<Settings>\n  ');
+  let actualDigest;
+  const current = { ...plan, installationId: 'owned' };
+  const observe = async () => queryRegistration(plan, { current, run(file, args) {
+    assert.equal(file, 'schtasks.exe');
+    assert.deepEqual(args, ['/Query', '/TN', plan.name, '/XML']);
+    return { status: 0, stdout: Buffer.from(`\uFEFF${actualXml}`, 'utf16le') };
+  } });
+  const actual = await observe();
+  assert.equal(actual.present, true);
+  const unowned = await installService({ ...base, platform: 'win32', localDirectory: root }, {
+    dryRun: false, query: async () => ({ ...actual, digest: plan.digest, executable: plan.executable, arguments: plan.arguments }),
+    run: async () => { throw new Error('unowned'); },
+  });
+  assert.equal(unowned.conflict, true);
+  actualDigest = actual.digest;
+  current.actualDigest = actualDigest;
+  const owned = await observe();
+  assert.equal(owned.installationId, 'owned');
+  assert.deepEqual(owned.arguments, plan.arguments);
+  const unchanged = await installService({ ...base, platform: 'win32', localDirectory: root }, {
+    dryRun: false, current, query: observe, run: async () => { throw new Error('unchanged'); },
+  });
+  assert.equal(unchanged.action, 'unchanged');
+  const modified = await installService({ ...base, platform: 'win32', localDirectory: root, cliPath: 'C:\\changed\\cli.mjs' }, {
+    dryRun: false, current,
+    query: async () => ({ ...owned, digest: 'modified', installationId: 'owned' }),
+    run: async () => { throw new Error('replaced'); },
+  });
+  assert.equal(modified.conflict, true);
+});
+
+test('user manager queries verify loaded registrations and fail closed on unavailable managers', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const platform of ['darwin', 'linux']) {
+    const plan = planRegistration({ ...base, platform, home: root, uid: 501, localDirectory: root });
+    await mkdir(path.dirname(plan.file), { recursive: true });
+    await writeFile(plan.file, plan.body);
+    const current = { ...plan, installationId: 'owned' };
+    let modified = false;
+    const run = (file, args, options) => {
+      assert.equal(options.timeout, 8000);
+      assert.equal(options.shell, false);
+      if (file === 'systemctl') {
+        assert.deepEqual(args, ['--user', 'show', plan.unit, '--no-pager', '--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,UnitFileState']);
+        return { status: 0, stdout: `LoadState=loaded\nFragmentPath=${plan.file}\nDropInPaths=${modified ? '/foreign.conf' : ''}\nNeedDaemonReload=no\nUnitFileState=enabled\n` };
+      }
+      assert.equal(file, 'launchctl');
+      if (args[0] === 'manageruid') return { status: 0, stdout: '501\n' };
+      if (args.length === 1) return { status: 0, stdout: `PID\tStatus\tLabel\n-\t0\t${plan.label}\n` };
+      assert.deepEqual(args, ['list', plan.label]);
+      return { status: 0, stdout: `{\n"Label" = ${JSON.stringify(plan.label)};\n"WorkingDirectory" = ${JSON.stringify(base.workingDirectory)};\n"ProgramArguments" = (\n${(modified ? ['foreign'] : plan.arguments).map(value => JSON.stringify(value)).join(',\n')}\n);\n}` };
+    };
+    const actual = await queryRegistration(plan, { current, run });
+    assert.equal(actual.installationId, 'owned');
+    assert.equal(actual.matchesPlan, true);
+    modified = true;
+    const foreign = await queryRegistration(plan, { current, run });
+    assert.equal(foreign.installationId, null);
+    assert.equal(foreign.matchesPlan, false);
+    await assert.rejects(queryRegistration(plan, { current, run: () => ({ error: new Error('unavailable'), status: null }) }), { code: 'service_unavailable' });
+    await writeFile(plan.file, 'foreign service file');
+    const absent = (_file, args) => ({ status: 0, stdout: args[0] === 'manageruid' ? '501\n' : platform === 'darwin' ? 'PID\tStatus\tLabel\n' : 'LoadState=not-found\n' });
+    const kept = await installService({ ...base, platform, home: root, uid: 501, localDirectory: root }, {
+      dryRun: false, query: candidate => queryRegistration(candidate, { run: absent }),
+      run: async () => { throw new Error('foreign file was replaced'); },
+    });
+    assert.equal(kept.conflict, true);
+    assert.equal(await readFile(plan.file, 'utf8'), 'foreign service file');
+  }
+});
+
+test('an unverified successful registration command does not complete the registration phase', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runServicePhases({
+    config: { mindPath: path.join(root, 'mind'), stagingPath: path.join(root, 'staging'), machine: 'TESTBOX', origin: { kind: 'folder', path: path.join(root, 'origin') } },
+    registration: { ...base, platform: 'win32', localDirectory: root },
+  }, { dryRun: false, run: async () => {}, query: async () => ({ present: false }), start: async () => { throw new Error('must not start'); } });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.phase, 'registration');
+  assert.equal(result.state.registration, false);
+  assert.match(result.error, /could not be verified/);
+});
+
+test('a successful registration with a transient query failure retries verification without replacing the task', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const modified of [false, 'parallel', 'disabled']) {
+    const cosmic = path.join(root, String(modified), 'Cosmic');
+    const mind = path.join(root, String(modified), 'mind');
+    const ownershipFile = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX', 'registration.json');
+    let registered;
+    let unavailable = true;
+    let commands = 0;
+    let starts = 0;
+    const options = {
+      platform: 'win32', mindPath: mind, cosmicPath: cosmic, hostname: 'TESTBOX', kitPath: path.join(root, 'kit'),
+      originPath: path.join(root, String(modified), 'origin'), dryRun: false, protect: false, aclRunner: stubAclRunner(),
+      run: async () => { commands += 1; },
+      start: async () => { starts += 1; return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' }; },
+      query: async plan => {
+        registered ??= plan;
+        if (!commands) return { present: false };
+        const current = JSON.parse(await readFile(ownershipFile, 'utf8'));
+        assert.equal(current.verification, 'pending');
+        if (unavailable) { unavailable = false; throw new Error('temporary scheduler query failure'); }
+        let body = registered.body.replace('<Settings>', '<Settings>\n');
+        if (modified === 'parallel') body = body.replace('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>', '<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>');
+        if (modified === 'disabled') body = body.replace('<Settings>', '<Settings><Enabled>false</Enabled>');
+        return queryRegistration(plan, { current, run: () => ({ status: 0, stdout: Buffer.from(`\uFEFF${body}`, 'utf16le') }) });
+      },
+    };
+    const first = await configureOwnedService(options);
+    assert.equal(first.status, 'failed');
+    assert.equal(first.phase, 'registration');
+    assert.equal(first.state.registration, false);
+    assert.equal(starts, 0);
+    assert.equal(JSON.parse(await readFile(ownershipFile, 'utf8')).verification, 'pending');
+    const second = await configureOwnedService(options);
+    assert.equal(second.status, modified ? 'failed' : 'started');
+    assert.equal(commands, 1);
+    assert.equal(starts, modified ? 0 : 1);
+    assert.equal(JSON.parse(await readFile(ownershipFile, 'utf8')).verification, modified ? 'pending' : 'verified');
+  }
+});
 
 test('registration plans stay dry and quote the current user', async () => {
   const windows = await installService({ ...base, platform: 'win32' });
@@ -162,7 +514,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   });
   assert.equal(same.action, 'unchanged');
   assert.equal(calls.includes('same'), false);
-  assert.equal(planRegistration({ ...base, platform: 'win32' }).name, 'HIVEM1ND-1');
+  assert.notEqual(planRegistration({ ...base, platform: 'win32', sid: 'S-1-5-21-1' }).name, planRegistration({ ...base, platform: 'win32', sid: 'S-1-5-99-1' }).name);
   assert.equal(planRegistration({ ...base, platform: 'win32' }).arguments.includes('--mind'), false);
 });
 
@@ -175,7 +527,7 @@ test('a mismatched operating system registration is left in place', async (conte
   const created = await installService({ ...base, platform: 'win32', localDirectory }, {
     dryRun: false,
     aclRunner: acl,
-    query: async () => ({ present: false }),
+    query: async (plan) => calls.length === 0 ? { present: false } : { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments },
     run: async (argv) => { calls.push(argv); },
   });
   assert.equal(created.action, 'create');
@@ -269,6 +621,34 @@ test('uninstall describes an owned registration and keeps a modified one', async
   });
   assert.equal(kept.kept.path, file);
   assert.match(await readFile(file, 'utf8'), /tampered/);
+});
+
+test('owned macOS removal uses the current UID and removes only the matching launch file', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const mind = path.join(root, 'mind');
+  const cosmic = path.join(root, 'Cosmic');
+  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, 'darwin'), 'TESTBOX');
+  const plan = planRegistration({ ...base, platform: 'darwin', home: root, uid: 731, mindPath: mind });
+  const record = { ...plan, installationId: 'owned', path: plan.file, name: plan.label };
+  await mkdir(directory, { recursive: true });
+  await mkdir(path.dirname(plan.file), { recursive: true });
+  await writeFile(plan.file, plan.body);
+  const file = path.join(directory, 'registration.json');
+  await writeFile(file, JSON.stringify(record));
+  const commands = [];
+  const options = {
+    platform: 'darwin', mindPath: mind, cosmicPath: cosmic, hostname: 'TESTBOX', dryRun: false,
+    query: async () => ({ ...record, present: true }), run: async argv => { commands.push(argv); },
+  };
+  const foreign = await removeOwnedRegistration({ ...options, uid: 501 });
+  assert.match(foreign.kept.reason, /another user/);
+  assert.deepEqual(commands, []);
+  const removed = await removeOwnedRegistration({ ...options, uid: 731 });
+  assert.deepEqual(commands, [['launchctl', 'bootout', 'gui/731', plan.file]]);
+  assert.deepEqual(removed.removedPaths, [plan.file, file]);
+  await assert.rejects(readFile(plan.file), { code: 'ENOENT' });
+  await assert.rejects(readFile(file), { code: 'ENOENT' });
 });
 
 test('service install dry-run is a plan and the wizard opens one viewer', async (context) => {

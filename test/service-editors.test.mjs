@@ -145,7 +145,7 @@ test('a module stays read-only and a board id cannot be registered twice', async
 test('an absent project is unavailable', async (t) => {
   const fixture = await makeCoreFixture();
   t.after(() => dispose(fixture));
-  await assert.rejects(() => createBoard({ store: fixture.store, projects: [] }, { project: 'shop', document: sketch() }), { status: 503, code: 'project_unavailable' });
+  await assert.rejects(() => createBoard({ store: fixture.store, projects: [] }, { project: 'shop', document: sketch() }), { status: 409, code: 'project_unavailable' });
 });
 
 test('attachments can be replaced and a removed node comment stays readable', async (t) => {

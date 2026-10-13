@@ -148,7 +148,7 @@ const BOOLEAN_FLAGS = new Map([
 
 const ALLOWED_FLAGS = {
   init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
-  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath", "dryRun"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
   swarm: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -549,9 +549,10 @@ function formatHumanResult(result) {
   return formatResult(result);
 }
 
-function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
+function setupOptions(options, { env = process.env, lifecycle = false, serviceRunner, serviceStart, serviceQuery, serviceAclRunner, serviceSid } = {}) {
   const homeDir = path.resolve(options.homeDir ?? os.homedir());
   const currentMind = path.join(process.cwd(), "user", "VERSION");
+  const serviceOptions = { env, home: homeDir, homeDir, hostname: options.hostname ?? os.hostname(), cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : undefined, aclRunner: serviceAclRunner };
   return {
     kitPath: path.resolve(options.kitPath ?? KIT_PATH),
     ...(options.mindPath
@@ -566,8 +567,11 @@ function setupOptions(options, { env = process.env, lifecycle = false } = {}) {
     resume: options.resume === true,
     relaySetup: true,
     serviceSetup: true,
-    serviceDryRun: lifecycle ? true : options.dryRun === true,
-    ...(lifecycle || options.dryRun === true ? {} : { serviceRunner: runRegistrationCommand, serviceStart: startUserService }),
+    serviceDryRun: options.dryRun === true,
+    ...(options.dryRun === true ? {} : { serviceRunner: serviceRunner ?? runRegistrationCommand, serviceStart: serviceStart ?? (config => startUserService(config, serviceOptions)) }),
+    ...(serviceQuery ? { serviceQuery } : {}),
+    ...(serviceAclRunner ? { aclRunner: serviceAclRunner } : {}),
+    ...(serviceSid ? { sid: serviceSid } : {}),
     ...(options.originKind ? { originKind: options.originKind } : {}),
     ...(options.originPath ? { originPath: options.originPath } : {}),
     ...(options.cosmicPath ? { cosmicPath: options.cosmicPath } : {}),
@@ -903,6 +907,11 @@ export async function runTerminalSetup(session, prompts) {
       spin.start(labels.installing);
       try {
         const result = await session.install();
+        if (result?.completed === false) {
+          spin.stop(labels.stopped);
+          prompts.log.warn(result.service?.error ?? result.message ?? labels.stopped);
+          continue;
+        }
         spin.stop(labels.installed);
         const completed = await session.getStep();
         reportOutcome(prompts, labels, completed.result ?? result);
@@ -951,8 +960,8 @@ async function runInit(options, dependencies, output) {
   if (options.gui) {
     const { createWizardServer } = dependencies.wizard ?? await import("../gui/server.mjs");
     const server = await createWizardServer({
-      sessionOptions: setupOptions(options, { env: dependencies.env }),
-      openCompletedViewer: dependencies.openCompletedViewer,
+      sessionOptions: setupOptions(options, dependencies),
+      openCompletedViewer: dependencies.openCompletedViewer ?? dependencies.openUrl ?? openLocalUrl,
     });
     await (dependencies.openUrl ?? openLocalUrl)(server.url);
     await (dependencies.waitForServer ?? waitForServer)(server, output);
@@ -960,8 +969,13 @@ async function runInit(options, dependencies, output) {
   }
   const { createSetupSession } = dependencies.setup ?? await import("../engine/setup.mjs");
   const prompts = dependencies.prompts ?? await import("@clack/prompts");
-  const session = await createSetupSession(setupOptions(options, { env: dependencies.env }));
-  return await runTerminalSetup(session, prompts) === null ? 130 : 0;
+  const session = await createSetupSession(setupOptions(options, dependencies));
+  const result = await runTerminalSetup(session, prompts);
+  if (result === null) return 130;
+  if (result?.completed === false) return 1;
+  const viewerUrl = result?.viewerUrl ?? result?.service?.viewerUrl;
+  if (viewerUrl) await (dependencies.openCompletedViewer ?? dependencies.openUrl ?? openLocalUrl)(viewerUrl);
+  return 0;
 }
 
 async function completePylonOptions(options, prompts) {
@@ -991,7 +1005,7 @@ async function completePylonOptions(options, prompts) {
 
 async function runLifecycle(command, options, dependencies, output) {
   const lifecycle = dependencies.lifecycle ?? await import("../engine/lifecycle.mjs");
-  const common = setupOptions(options, { env: dependencies.env, lifecycle: true });
+  const common = setupOptions(options, { ...dependencies, lifecycle: true });
   delete common.language;
   delete common.resume;
   let result;
@@ -1048,7 +1062,8 @@ async function runLifecycle(command, options, dependencies, output) {
 }
 
 async function runService(options, dependencies, output) {
-  const { installService, planRegistration, uninstallService } = dependencies.serviceInstall ?? await import("../engine/service/install.mjs");
+  const installers = dependencies.serviceInstall ?? await import("../engine/service/install.mjs");
+  const { installService } = installers;
   if (!options.mindPath && !options.cosmicPath) {
     output.write("Service commands need --mind-path or --cosmic-path. Nothing was discovered or written.\n");
     return 1;
@@ -1057,19 +1072,49 @@ async function runService(options, dependencies, output) {
     ? path.resolve(options.mindPath)
     : path.join(path.resolve(options.cosmicPath), "hivem1nd");
   const registration = {
-    platform: process.platform,
+    platform: dependencies.platform ?? process.platform,
     nodePath: process.execPath,
     cliPath: path.join(KIT_PATH, "cli", "index.mjs"),
     mindPath,
     workingDirectory: KIT_PATH,
     localDirectory: options.cosmicPath ? path.resolve(options.cosmicPath) : path.dirname(mindPath),
     home: options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
-    sid: dependencies.sid ?? "S-1-5-21-current",
+    sid: dependencies.sid ?? "S-1-5-21-0",
   };
   const dry = options.dryRun === true;
   if (options.action === "status") {
-    output.write("Service status is plan-only here. No login registration was queried on the operating system.\n");
+    const { readOwnedServiceBridge } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
+    const owned = await readOwnedServiceBridge({ mindPath, platform: registration.platform, env: dependencies.env ?? process.env,
+      homeDir: registration.home, cosmicPath: options.cosmicPath, hostname: options.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort });
+    output.write(`${JSON.stringify({ running: Boolean(owned.descriptor), mindPath, machine: owned.descriptor?.machine ?? null, startedAt: owned.descriptor?.startedAt ?? null })}\n`);
     return 0;
+  }
+  const common = {
+    mindPath,
+    platform: registration.platform,
+    env: dependencies.env ?? process.env,
+    homeDir: registration.home,
+    hostname: options.hostname ?? os.hostname(),
+    cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : undefined,
+    kitPath: KIT_PATH,
+    originKind: options.originKind,
+    originPath: options.originPath,
+    dryRun: dry,
+    aclRunner: dependencies.aclRunner,
+    sid: dependencies.sid,
+    query: dependencies.registrationQuery ?? dependencies.queryRegistration,
+    current: dependencies.registrationCurrent,
+    run: dependencies.registrationRunner ?? (dry ? undefined : runRegistrationCommand),
+  };
+  if (options.action === "install" && !dry) {
+    const configured = await installers.configureOwnedService({
+      ...common,
+      requireOrigin: true,
+      start: dependencies.serviceStart ?? (config => startUserService(config, { ...common, home: registration.home })),
+    });
+    output.write(`${JSON.stringify({ status: configured.status, phase: configured.phase, viewerUrl: configured.viewerUrl ?? null, error: configured.error ?? configured.conflict ?? null })}\n`);
+    if (configured.status === "started" && configured.viewerUrl) await (dependencies.openUrl ?? openLocalUrl)(configured.viewerUrl);
+    return configured.status === "started" ? 0 : 1;
   }
   if (options.action === "run") {
     const { runConfiguredService, stopService } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
@@ -1100,19 +1145,14 @@ async function runService(options, dependencies, output) {
     output.write("Service stopped.\n");
     return 0;
   }
-  if (!dry && !dependencies.sid) {
+  if (!dry && registration.platform === 'win32' && !dependencies.sid && options.action !== 'uninstall') {
     const { aclRunnerFrom } = await import("../engine/service/security.mjs");
     registration.sid = (dependencies.aclRunner ?? aclRunnerFrom(dependencies)).userSid();
   }
-  const plan = planRegistration(registration);
   if (options.action === "uninstall") {
-    if (options.dryRun === false && !dependencies.registrationRunner) {
-      output.write("Refusing to delete a login registration without an injected runner.\n");
-      return 1;
-    }
-    const removal = uninstallService(plan);
-    output.write(`${JSON.stringify({ dryRun: true, os: false, commands: removal.commands }, null, 2)}\n`);
-    return 0;
+    const removal = await installers.removeOwnedRegistration(common);
+    output.write(`${JSON.stringify({ dryRun: dry, os: removal.removed === true, commands: removal.commands, kept: removal.kept ?? null }, null, 2)}\n`);
+    return removal.kept ? 1 : 0;
   }
   const installed = await installService(registration, {
     dryRun: dry,
@@ -1124,9 +1164,9 @@ async function runService(options, dependencies, output) {
   return 0;
 }
 
-async function startUserService(config) {
+async function startUserService(config, options = {}) {
   const { startConfiguredViewer } = await import("../engine/service/install.mjs");
-  return startConfiguredViewer(config);
+  return startConfiguredViewer(config, options);
 }
 
 function runRegistrationCommand(argv) {
@@ -1150,11 +1190,18 @@ function waitForServiceStop() {
 
 async function runUninstall(options, dependencies, output) {
   const uninstall = dependencies.uninstall ?? (await import("../engine/uninstall.mjs")).uninstall;
-  const common = setupOptions(options, { env: dependencies.env, lifecycle: true });
+  const common = setupOptions(options, { ...dependencies, lifecycle: true });
   delete common.language;
   delete common.resume;
   delete common.kitPath;
-  const result = await uninstall({ ...common, dryRun: options.dryRun === true, removeMind: options.removeMind === true });
+  const result = await uninstall({
+    ...common,
+    dryRun: options.dryRun === true,
+    removeMind: options.removeMind === true,
+    registrationRunner: dependencies.registrationRunner ?? dependencies.serviceRunner,
+    registrationQuery: dependencies.registrationQuery ?? dependencies.serviceQuery,
+    stopService: dependencies.stopConfiguredService ?? dependencies.serviceStop,
+  });
   output.write(`${options.json ? formatResult(result) : formatHumanResult(result)}\n`);
   return 0;
 }
@@ -1187,6 +1234,25 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
   const adapters = dependencies.wakeAdapters ?? WAKE_ADAPTERS;
   const adapter = getWakeAdapter(client, adapters);
   if (!adapter) throw new CliUsageError('Unsupported Relay wake client.');
+  const shared = await import('../engine/service/client.mjs');
+  const serviceOptions = { mindPath: options.mindPath, env, hostname, homeDir: options.homeDir ?? dependencies.homeDir, cosmicPath: options.cosmicPath,
+    platform: dependencies.platform ?? process.platform, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort };
+  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT || await shared.serviceMind(serviceOptions)) {
+    if (options.wakeAction === 'watch') throw new CliUsageError('The shared service owns this wake binding; a separate watcher cannot be started.');
+    const binding = relayWakeBinding(options, hostname, adapters);
+    const action = options.wakeAction === 'attach' && (options.hours || options.extended || options.unlimited || options.maxHandoffs) ? 'enable' : options.wakeAction;
+    const result = await (dependencies.relayPolicy ?? shared.relayPolicy)(serviceOptions, {
+      action, binding,
+      ...(action === 'enable' ? { consent: {
+        ...(options.hours ? { windowHours: Number(options.hours) } : {}),
+        ...(options.extended ? { extended: true } : {}),
+        ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
+        ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+      } } : {}),
+    });
+    output.write(`${formatResult(result)}\n`);
+    return 0;
+  }
   const { createRelayWakeController } = dependencies.createRelayWakeController
     ? { createRelayWakeController: dependencies.createRelayWakeController }
     : await import('../engine/relay/wake.mjs');
@@ -1342,13 +1408,14 @@ async function runRelay(options, dependencies, output) {
       stdin: dependencies.stdin ?? process.stdin,
       stdout: output,
       stderr: dependencies.stderr ?? process.stderr,
+      env: dependencies.env ?? process.env,
     });
     return 0;
   }
   if (action === 'wake') return runRelayWake(options, dependencies, output, dependencies.stderr ?? process.stderr);
   if (action === "mcp") {
     const { serveRelayMcp } = await import("../engine/relay/mcp.mjs");
-    await serveRelayMcp({ ...options, stdin: dependencies.stdin ?? process.stdin, stdout: output, stderr: dependencies.stderr ?? process.stderr });
+    await serveRelayMcp({ ...options, env: dependencies.env ?? process.env, stdin: dependencies.stdin ?? process.stdin, stdout: output, stderr: dependencies.stderr ?? process.stderr });
     return 0;
   }
   if (action === "reminder" && !options.sessionId && !options.nativeSessionId) throw new CliUsageError("relay reminder requires --session-id or --native-session-id.");
@@ -1361,6 +1428,9 @@ async function runRelay(options, dependencies, output) {
   const { openRelayOperations } = await import("../engine/service/client.mjs");
   const relay = await openRelayOperations({
     mindPath: options.mindPath,
+    env: dependencies.env ?? process.env,
+    homeDir: options.homeDir,
+    platform: dependencies.platform ?? process.platform,
     ...(options.hostname ? { hostname: options.hostname } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     ...(options.client ? { client: options.client } : {}),
@@ -1412,7 +1482,7 @@ async function runTask(options, dependencies, output, errorOutput) {
     return 2;
   }
   const { randomUUID } = await import("node:crypto");
-  const { bindNative, connectService, request } = await import("../engine/service/client.mjs");
+  const { bindNative, connectNativeService, connectService, request } = await import("../engine/service/client.mjs");
   if (dependencies.bridge || dependencies.proof) {
     const bound = bindNative({}, { bridge: dependencies.bridge, proof: dependencies.proof });
     if (!bound.nativeSupport) {
@@ -1420,7 +1490,9 @@ async function runTask(options, dependencies, output, errorOutput) {
       return 1;
     }
   }
-  const service = await connectService({
+  const env = dependencies.env ?? process.env;
+  const native = Boolean(env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT);
+  const service = native ? await connectNativeService({ env }) : await connectService({
     mindPath: options.mindPath,
     platform: dependencies.platform,
     env: dependencies.env,
@@ -1433,9 +1505,9 @@ async function runTask(options, dependencies, output, errorOutput) {
     userKey: dependencies.userKey,
     guardPort: dependencies.guardPort,
   });
-  const caller = { ...service, token: dependencies.agentToken ?? service.token };
+  const caller = { ...service, token: native ? service.token : dependencies.agentToken ?? service.token };
   try {
-    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}` });
+    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}`, timeoutMs: 5000 });
     if (current.status !== 200 || !current.json?.data?.revision) {
       const code = current.json?.error?.code ?? "error";
       errorOutput.write(`${code}: The request failed.\n`);
@@ -1452,6 +1524,7 @@ async function runTask(options, dependencies, output, errorOutput) {
       path: target,
       body,
       headers: { "idempotency-key": randomUUID() },
+      timeoutMs: 5000,
     });
     if (result.status === 200) {
       output.write(`${JSON.stringify(result.json?.data ?? null)}\n`);
@@ -1463,7 +1536,8 @@ async function runTask(options, dependencies, output, errorOutput) {
     if (result.status === 422) return 2;
     return 1;
   } finally {
-    await service.release({ stop: true });
+    if (native) service.close();
+    else await service.release({ stop: true });
   }
 }
 

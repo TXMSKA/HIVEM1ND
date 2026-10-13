@@ -1,39 +1,61 @@
 # HIVEM1ND service
 
-The core service is one process per user. `node cli/index.mjs service run` starts that process from the configured mind and holds it until the process is stopped. It does not search for an unrelated mind.
+`node cli/index.mjs service run` starts the configured mind's shared service.
+The service holds one lock per OS user, serves the bundled `gui/app` interface,
+and owns HTTP, events, sync, native sessions, and wake policies. Another mind
+cannot take over an occupied user lock. A viewer logout closes that viewer;
+closing the setup wizard does not stop the service.
 
-`service install --dry-run` prints the login plan and does not register a task, LaunchAgent, or user unit. `service install` without a dry run writes the registration and runs the platform command, `schtasks.exe` on Windows, only when that registration is absent or already owned by this install. A registration that is present and not owned is left in place. `service status` does not query the operating system. `service uninstall` describes the owned delete command and does not run it unless a runner is injected. A registration whose stored body no longer matches its digest is kept.
+`service install --dry-run` describes login registration without changing the
+OS. An ordinary install queries the platform manager before writing and verifies
+the result afterward. It preserves an existing registration unless its identity
+and digest prove ownership. Uninstall checks the same ownership before removing
+registration. Windows uses Task Scheduler, macOS uses a user LaunchAgent,
+and Linux uses a systemd user unit. Tests inject these managers; their success
+does not certify an actual login trigger.
 
-The mind lives under a Cosmic folder. The default is local Cosmic `hivem1nd`. A custom Cosmic parent appends `hivem1nd`. Staging stays under local Cosmic, in `hivem1nd-service/<mindKey>/<machine>/staging`. A new folder origin defaults to `hivem1nd-origin/<mindKey>` beside the mind, not inside it. OneDrive may hold a mind or an origin. Staging is rejected inside the mind, the origin, or a synced root. An existing config keeps its origin on a later attach or evolve.
+New minds default to the local Cosmic `hivem1nd` folder. An explicitly selected
+existing mind retains its location, including OneDrive. The configured origin
+is preserved during later setup or evolve. Machine-local configuration, staging,
+and import journals remain outside the mind, origin, and synced roots.
 
-Setup accepts `serviceSetup` only when the caller sets it. Library planning stays inert without that flag. When it is set, config is written before a starter runs. A failed start can be retried without copying the mind again and without repeating a registration that already matches. The static wizard page still submits the mind path it already knows. Origin fields are on the session and default when omitted. A completed install opens the viewer URL once when one is returned, and closing the wizard does not stop the service.
+Setup writes configuration before starting the service. A failed service phase
+keeps setup at Install; evolve records the new version only after service setup
+succeeds. Retry resumes the service phases without copying the mind again. A successful start opens an
+authenticated local viewer. Bootstrap credentials are owner-protected and are
+not native-agent credentials.
 
-A second mind does not take the lock held by the first.
+On Windows, `whoami.exe /user` identifies the current owner's SID and
+`icacls.exe` verifies private bootstrap files for that owner and SYSTEM.
+A real login registration was not verified by the injected-manager tests.
 
-Native login is reported only after a verified session. A version probe is not a login. Home access expires twelve hours after it is opened. Offline publication pauses at the hard byte and message limits, and a conflict keeps both copies.
+File watchers observe eligible mind files and registered project resources.
+Local commits and incoming groups share a serialization barrier with observation.
+External Void edits preserve exact document bytes and append outside history in
+one sync group. Own saves and incoming changes do not produce duplicate history
+or outgoing echoes. Local import journals recover before observation starts;
+known files removed while the service was closed become deletion records.
 
-Integrated QA runs the core tests, lint, and build from this kit after the core branch is merged with the interface branch. Do not treat a missing native login or a missing pinned Node archive as a passed smoke.
+Compressed packs reuse verified committed blobs while retaining logical message
+counts. Publication and receipt enforce the rolling message and byte limits.
+Interrupted publication retains staging, missing dependencies remain pending,
+and conflicts preserve losing bytes. Real OneDrive and SMB provider behavior
+requires separate acceptance beyond temporary shared-folder tests.
 
-## Build verification
+Owned native launches register only after the native protocol confirms a session.
+An ephemeral grant binds the unit, client, machine, and owned process to the
+service. Stdio MCP uses the service's HTTP core operations. Fresh role entry may
+initialize its default consent window; retry, attach, and expiry do not renew an
+existing window. Supported hooks use the shared controller and retain the native
+prompt whenever a verified approval cannot be obtained.
 
-Recorded on feat/3.0-core after the standalone checks on 2026-10-10.
+Native protocol fixtures prove protocol handling and local service integration.
+They do not prove signed-in submission to Claude, Codex, or Cursor. Full release
+acceptance also requires an isolated real Windows registration and logon test.
+Neither test may silently reuse a person's live profile or replace a live task.
 
-`npm.cmd run test:core` reported 623 tests, 622 passed, 0 failed, and 1 skipped. The skip is an existing host permission case. It is not a native login or an installer smoke.
-
-`npm.cmd run lint` reported 0 issues in 227 Markdown files. A wake fixture can leave `.work/` behind if another process holds those files. That directory is temporary and was removed before this lint. It is not part of the package.
-
-`npm.cmd run build` wrote `dist/hivem1nd-3.0.0.tgz` with 324 files, 6 roles, 10 commands, and 15 features. SHA-256 `a4c2a710f7d9f6c169e9db4b12300ca508fbe59677dbb82751990bceded67816`. The log line was `browser assets unavailable for standalone packaging` because `gui/app` is not in this worktree. Release packaging fails closed without those assets.
-
-These checks did not register a login task, write the OneDrive mind, or signal a process they did not start.
-
-Limits that are not passes:
-
-- Native login was not verified. With an empty PATH, the supported native clients all report `nativeSupport` false. Creating a session without a verified login throws `client_unavailable`. A fixture transcript only proves the protocol parser.
-- Windows protection of the local bootstrap file discovers the current user with `whoami.exe /user`, caches that SID, and applies it with `icacls.exe` together with SYSTEM. Administrators are not granted. The parent directory and the file are both checked, and a reparse point or an unexpected owner or access list fails closed. PowerShell is not used.
-- The media step did convert a real PNG to WebP with the local ffmpeg.
-- `node-v22.23.3-win-x64.zip` was not on disk. Its pinned SHA-256 is `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`, and `node.exe` inside it is `9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`. ZIP, CRC, and dry-run checks passed without that archive. `node --version` was not run from it.
-- `service install --dry-run` prints a dry plan and does not call schtasks, launchctl, or systemctl. A non-dry install can run the owned registration command. A real login registration was not verified.
-- HTTP MCP serves the eight editor tools. The stdio relay still talks to the relay directly, and the 120-second approval wait is not wrapped around every legacy tool on that path.
-- The static wizard still submits the mind path. Origin fields default when the caller omits them.
-
-After this branch is merged with the interface branch, integrated QA uses this service and the real browser. Cover both looks and both languages, the approved desktop, phone, and editor screens, the static allowlist, a QR scan of the live private URL, phone approve, accept, and send-back, and two temporary machines sharing one temporary origin, including an offline backlog. Exercise a verified native client only when one is actually logged in. Stage the installer only when the pinned Node archive is supplied, and keep operating-system registration injected. A real system registration, a public history rewrite, and a release stay on the owner's separate workflow.
+The current normative interface is [the 3.0 contract](../../docs/3.0/contract.md).
+Integrated verification covers core tests, browser flows, offline packaging,
+temporary-home installation, update, ownership refusal, and rollback. Record the
+actual source identity and outputs for each candidate; earlier branch results
+are historical evidence, not a passing result for a changed tree.

@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
-import { ackPublished, eligibleTargets, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction } from '../engine/sync/store.mjs';
+import { ackPublished, eligibleTargets, observationSnapshot, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction } from '../engine/sync/store.mjs';
+import { withLocalChanges } from '../engine/service/store.mjs';
 import { assertContained, dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
@@ -494,6 +495,18 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   assert.equal(winner.hash, hashBytes(imported));
   const edited = await observeLocalChange(sync, layout, { bytes: Buffer.from('local edit') });
   assert.equal(edited.unchanged, true);
+  await withLocalChanges(fixture.store, async () => {
+    assert.equal(await (await observationSnapshot(sync)).unchanged(layout, Buffer.from('local edit')), true);
+    assert.equal((await observeLocalChange(sync, layout, { bytes: Buffer.from('local edit'), stage: false })).changed, false);
+  });
+  fixture.clock.now += 1000;
+  await observeLocalChange(sync, layout, { bytes: Buffer.from('later edit') });
+  fixture.clock.now += 1000;
+  await withLocalChanges(fixture.store, async () => {
+    assert.equal(await (await observationSnapshot(sync)).unchanged(layout, Buffer.from('local edit')), false);
+    assert.equal((await observeLocalChange(sync, layout, { bytes: Buffer.from('local edit'), stage: false })).changed, true);
+  });
+  assert.equal((await observeLocalChange(sync, layout, { bytes: Buffer.from('local edit') })).staged, true);
   await ackPublished(sync, [staged[0].id, staged[1].id]);
   const names = await readdir(path.join(fixture.paths.localDirectory, 'staging', 'changes'));
   assert.equal(names.includes(`${staged[0].id}.json`), false);
@@ -510,4 +523,45 @@ test('a Brotli object must consume every compressed byte', () => {
   assert.deepEqual(decompressObject(compressed, raw.length), raw);
   const trailing = Buffer.concat([compressed, Buffer.from([0xaa, 0xbb])]);
   assert.throws(() => decompressObject(trailing, raw.length), { code: 'invalid_pack' });
+});
+
+test('import recovery snapshots are excluded from discovery, staging and inbound packs', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const sync = syncOf(fixture);
+  const target = { kind: 'mind', path: 'user/doc.txt.import-hidden' };
+  const raw = Buffer.from('previous bytes from an unfinished import');
+  await writeFile(path.join(fixture.paths.mind, ...target.path.split('/')), raw);
+  assert.equal((await eligibleTargets(sync)).some((item) => item.path === target.path), false);
+  await assert.rejects(() => stageTransaction(sync, [{ target, bytes: raw }]), { code: 'invalid_pack' });
+  const tomb = change({ kind: 'mind', path: 'user/doc.txt' }, null);
+  assert.throws(() => decodePack(finish(emptyIndex([{ ...tomb, target }]))), { code: 'invalid_pack' });
+});
+
+test('observation compares current state rather than historical staged bytes or tombstones', async t => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const sync = syncOf(fixture);
+  const target = { kind: 'mind', path: 'user/reverted.txt' };
+  const first = Buffer.from('A');
+  const second = Buffer.from('B');
+  await observeLocalChange(sync, target, { bytes: first });
+  fixture.clock.now += 1000;
+  await observeLocalChange(sync, target, { bytes: second });
+  for (const options of [{ bytes: first }, { deleted: true }]) {
+    fixture.clock.now += 1000;
+    await withLocalChanges(fixture.store, async () => {
+      const snapshot = await observationSnapshot(sync);
+      assert.equal(await snapshot.unchanged(target, options.bytes ?? null, options.deleted === true), false);
+      assert.equal((await observeLocalChange(sync, target, { ...options, stage: false })).changed, true);
+      assert.equal((await observeLocalChange(sync, target, options)).staged, true);
+    });
+    fixture.clock.now += 1000;
+    await observeLocalChange(sync, target, { bytes: second });
+  }
+  fixture.clock.now += 1000;
+  assert.equal((await observeLocalChange(sync, target, { deleted: true, stage: false })).changed, true);
+  const repeated = await observeLocalChange(sync, target, { deleted: true });
+  assert.equal(repeated.staged, true);
+  assert.equal(repeated.change.baseHash, hashBytes(second));
 });

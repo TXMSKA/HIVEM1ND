@@ -535,7 +535,7 @@ function rejectExcluded(relative) {
 }
 
 export function isTemporaryName(name) {
-  return name.startsWith('.') || name.endsWith('.tmp') || name.endsWith('.partial') || name.endsWith('~');
+  return name.startsWith('.') || name.endsWith('.tmp') || name.endsWith('.partial') || name.endsWith('~') || name.endsWith('.import-hidden');
 }
 
 export function isConflictName(name) {

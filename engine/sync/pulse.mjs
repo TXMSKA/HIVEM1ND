@@ -2,8 +2,8 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes } from '../service/identity.mjs';
 import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
-import { countLogicalMessages, decodePack, encodePack, packFileName } from './pack.mjs';
-import { prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
+import { countLogicalMessages, decodePack, encodePack, packFileName, resolveDependencies, validateHead } from './pack.mjs';
+import { listMachineNames, prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
 import { ackPublished, clearSyncFailure, listStaged, readObject, recordSyncFailure } from './store.mjs';
 
 export function nextDue(now, first, last, limits) {
@@ -87,6 +87,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const remainingBytes = SYNC_BYTES_MAX - limits.syncBytes.used;
     const head = await machineHead();
     const sequence = await nextPreparedSequence(head);
+    const committed = await committedObjects(head, objects);
     const groups = groupChanges(staged);
     const chosen = [];
     const issues = [];
@@ -96,7 +97,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       const count = logical(group, objects);
       let alone;
       try {
-        alone = packFor([group], sequence, head, objects);
+        alone = packFor([group], sequence, head, objects, committed);
       } catch (error) {
         if (error?.code !== 'pack_too_large') throw error;
         issues.push(group);
@@ -108,7 +109,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       }
       let trial = alone;
       try {
-        if (chosen.length > 0) trial = packFor([...chosen, group], sequence, head, objects);
+        if (chosen.length > 0) trial = packFor([...chosen, group], sequence, head, objects, committed);
       } catch (error) {
         if (error?.code !== 'pack_too_large') throw error;
         deferredIndex = index;
@@ -125,12 +126,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const deferred = groups.slice(deferredIndex).filter((group) => !issues.includes(group));
     if (chosen.length === 0) {
       pending = [...deferred.flat().map((change) => change.id), ...pending];
-      if (deferred.length > 0) holdUntil = await holdFor(deferred[0], objects, sequence, head);
+      if (deferred.length > 0) holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
       if (pending.length === 0) { first = null; last = null; }
       else if (first === null) first = now();
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: issues.flat().map((change) => change.id) };
     }
-    const packed = packFor(chosen, sequence, head, objects);
+    const packed = packFor(chosen, sequence, head, objects, committed);
     try {
       await reservePublication(ledger, {
         id: `publication:${packed.hash}`,
@@ -154,7 +155,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     } else if (deferred.length > 0) {
       if (first === null) first = now();
       last = now();
-      holdUntil = await holdFor(deferred[0], objects, sequence, head);
+      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
     } else {
       first = now();
       last = now();
@@ -209,6 +210,44 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return readHead(origin, origin.machine);
   }
 
+  async function committedObjects(head, objects) {
+    const committed = new Map();
+    if (objects.size === 0) return committed;
+    const machines = [origin.machine, ...(await listMachineNames(origin)).filter((machine) => machine !== origin.machine).sort()];
+    const provider = {
+      readHead: (machine) => readHead(origin, machine),
+      readPack: (machine, sequence) => readOriginPack(origin, machine, sequence),
+    };
+    for (const machine of machines) {
+      let published;
+      try {
+        const current = machine === origin.machine ? head : await provider.readHead(machine);
+        if (!current) continue;
+        published = validateHead(current, { machine });
+      } catch (error) {
+        if (error instanceof CoreError) continue;
+        throw error;
+      }
+      for (const entry of [...published.packs].reverse()) {
+        const bytes = await provider.readPack(machine, entry.sequence);
+        if (!bytes || bytes.length !== entry.bytes) continue;
+        try {
+          const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
+          if (decoded.header.sequence !== entry.sequence) continue;
+          const hashes = [...decoded.objects.keys()].filter((hash) => objects.has(hash) && !committed.has(hash));
+          if (hashes.length === 0) continue;
+          const resolved = await resolveDependencies(bytes, provider);
+          if (resolved.status !== 'ready') continue;
+          for (const hash of hashes) committed.set(hash, { hash, machine, sequence: entry.sequence, packHash: entry.hash });
+          if (committed.size === objects.size) return committed;
+        } catch (error) {
+          if (!(error instanceof CoreError)) throw error;
+        }
+      }
+    }
+    return committed;
+  }
+
   function sendPack(bytes) {
     if (typeof origin.publishPack === 'function') return origin.publishPack(bytes);
     return publishPack(origin, bytes);
@@ -243,12 +282,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return { ids, published };
   }
 
-  async function holdFor(group, objects, sequence, head) {
+  async function holdFor(group, objects, sequence, head, committed) {
     if (!group) return now() + 60000;
     const count = logical(group, objects);
     let bytes = 1;
     try {
-      bytes = packFor([group], sequence, head, objects).bytes;
+      bytes = packFor([group], sequence, head, objects, committed).bytes;
     } catch {
       bytes = 1;
     }
@@ -303,13 +342,15 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   return { changed, flush, resume, beat, close };
 }
 
-function packFor(groups, sequence, head, objects) {
+function packFor(groups, sequence, head, objects, committed) {
   const changes = groups.flat();
+  const blobs = objectsFor(changes, objects);
   const body = encodePack({
     machine: changes[0].machine,
     sequence,
     changes,
-    objects: objectsFor(changes, objects),
+    objects: blobs.filter(({ hash }) => !committed.has(hash)),
+    dependencies: blobs.filter(({ hash }) => committed.has(hash)).map(({ hash }) => committed.get(hash)),
     transactions: transactionsOf(changes),
   });
   const nextHead = {

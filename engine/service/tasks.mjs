@@ -7,7 +7,7 @@ import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
 import { readUnitState, readUnitStates } from './state.mjs';
 import { resolveUnit } from './identity.mjs';
-import { atomicWrite, commitTransaction, readBytes, recoverTransactions, revisionOf, withLocks, withReceipt } from './store.mjs';
+import { atomicWrite, commitTransaction, readBytes, recoverTransactions, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const EDGES = new Set(['open>review', 'review>done', 'review>open', 'done>closed', 'closed>open']);
@@ -156,6 +156,10 @@ function permitted(task, authority, actor, next) {
 }
 
 async function commitChange(context, task, change) {
+  return withLocalChanges(context.store, () => commitChangeLocked(context, task, change));
+}
+
+async function commitChangeLocked(context, task, change) {
   const id = randomUUID();
   const after = change.bytes;
   const record = {

@@ -3,10 +3,11 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CoreError, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { createCredentialStore } from './security.mjs';
 
-const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake']);
+const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake', 'policy', 'shutdown']);
 
 export async function openBridge(options = {}) {
   const secret = options.secret ?? randomBytes(32).toString('base64url');
@@ -20,15 +21,18 @@ export async function openBridge(options = {}) {
     secret,
     credentials,
     agents,
+    launches: new Map(),
     adapters: options.adapters ?? {},
     paths: options.paths ?? null,
     now: options.now ?? (() => Date.now()),
     relay: options.relay ?? null,
     operations: options.operations ?? {},
+    ownerShutdown: options.ownerShutdown ?? null,
     settled: new Map(),
+    sockets: new Set(),
     server: null,
   };
-  const server = createServer((socket) => accept(socket, bridge));
+  const server = createServer({ allowHalfOpen: true }, (socket) => accept(socket, bridge));
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(endpoint, () => resolve());
@@ -44,17 +48,200 @@ export async function dispatchLocal(bridge, operation, binding) {
   const id = randomUUID();
   const payload = `${JSON.stringify({ id, operation, secret: bridge.secret, binding })}\n`;
   const response = await new Promise((resolve, reject) => {
-    const socket = createConnection(bridge.endpoint, () => socket.end(payload));
+    const socket = createConnection(bridge.endpoint, () => socket.write(payload));
     let data = '';
+    let answered = false;
+    const timer = setTimeout(() => socket.destroy(new CoreError(503, 'service_unavailable', 'The owner bridge did not answer.')), 3000);
     socket.setEncoding('utf8');
-    socket.on('data', (chunk) => { data += chunk; });
+    socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The owner bridge closed without a complete response.')); });
+    socket.on('data', (chunk) => {
+      data += chunk;
+      if (Buffer.byteLength(data, 'utf8') > 100000) { socket.destroy(new CoreError(422, 'invalid_body', 'The bridge response is too large.')); return; }
+      if (!data.includes('\n')) return;
+      try { const message = JSON.parse(data.slice(0, data.indexOf('\n'))); answered = true; resolve(message); }
+      catch { reject(new CoreError(422, 'invalid_body', 'The bridge response is not JSON.')); }
+      finally { socket.destroy(); }
+    });
     socket.on('error', reject);
     socket.on('end', () => {
-      try { resolve(JSON.parse(data)); } catch { reject(new CoreError(422, 'invalid_body', 'The bridge response is not JSON.')); }
+      if (!answered) reject(new CoreError(503, 'service_unavailable', 'The owner bridge closed without a complete response.'));
+      socket.destroy();
     });
   });
+  if (response.id !== id) throw new CoreError(422, 'invalid_binding', 'The bridge response did not match the request.');
   if (response.error) throw new CoreError(401, response.error, 'The bridge rejected the message.');
   return response.result;
+}
+
+export function createNativeLaunch(bridge, request) {
+  const unitId = parseUnitId(request.unitId).id;
+  if (!['codex', 'cursor', 'claude'].includes(request.client) || !bridge.paths?.machine) {
+    throw new CoreError(422, 'invalid_binding', 'The native launch binding is incomplete.');
+  }
+  const secret = randomBytes(32).toString('base64url');
+  const launch = { unitId, client: request.client, machine: bridge.paths.machine, nativeSessionId: null, token: null };
+  bridge.launches.set(secret, launch);
+  return {
+    env: { HIVEM1ND_SERVICE_BRIDGE: bridge.endpoint, HIVEM1ND_SERVICE_GRANT: secret },
+    mcp: {
+      name: 'hivem1nd-relay',
+      command: process.execPath,
+      args: [fileURLToPath(new URL('../../cli/index.mjs', import.meta.url)), 'relay', 'mcp', '--mind-path', bridge.paths.mind, '--client', request.client],
+      env: [],
+    },
+    ready(nativeSessionId) {
+      if (typeof nativeSessionId !== 'string' || !nativeSessionId || bridge.launches.get(secret) !== launch) {
+        throw new CoreError(422, 'invalid_binding', 'The native launch was not acknowledged.');
+      }
+      launch.nativeSessionId = nativeSessionId;
+    },
+    close() {
+      bridge.launches.delete(secret);
+      if (launch.token) bridge.credentials.revoke(launch.token);
+      launch.token = null;
+    },
+  };
+}
+
+export async function dispatchNative(endpoint, secret, operation, binding = {}) {
+  if (typeof endpoint !== 'string' || typeof secret !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
+    throw new CoreError(503, 'native_login_unverified', 'The native service binding is unavailable.');
+  }
+  const id = randomUUID();
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(endpoint);
+    let data = '';
+    let answered = false;
+    const timer = setTimeout(() => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.')), 3000);
+    socket.setEncoding('utf8');
+    socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
+    socket.on('data', (chunk) => {
+      data += chunk;
+      if (Buffer.byteLength(data, 'utf8') > 100000) socket.destroy(new CoreError(422, 'invalid_body', 'The bridge response is too large.'));
+      if (!data.includes('\n')) return;
+      try {
+        const message = JSON.parse(data.slice(0, data.indexOf('\n')));
+        if (message.id !== id || message.error) throw new CoreError(403, message.error ?? 'invalid_binding', 'The native bridge rejected the binding.');
+        answered = true;
+        resolve(message.result);
+      } catch (error) { reject(error); }
+      finally { socket.destroy(); }
+    });
+    socket.once('error', reject);
+    socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.')); });
+    socket.once('end', () => {
+      if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.'));
+      socket.destroy();
+    });
+  });
+}
+
+export async function handleNativeHook({ controller, credentials, binding }) {
+  const allowed = {
+    claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
+    codex: new Set(['SessionStart', 'UserPromptSubmit']),
+    cursor: new Set(['sessionStart', 'postToolUse', 'stop']),
+  };
+  if (!controller || !allowed[binding.client]?.has(binding.event)) throw new CoreError(503, 'service_unavailable', 'The native hook is unavailable.');
+  const enabled = await controller.findEnabledBinding({ nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine });
+  const unit = parseUnitId(binding.unitId).unit;
+  if (!enabled || enabled.unit.toLowerCase() !== unit.toLowerCase()) throw new CoreError(403, 'forbidden', 'The native wake binding is unavailable.');
+  const exact = { unit, unitId: binding.unitId, nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
+  if (binding.event === 'SessionEnd') {
+    await controller.endSession(exact);
+    credentials?.revokeSession(binding.sessionId);
+  } else {
+    const activity = ['UserPromptSubmit', 'PreToolUse'].includes(binding.event) ? 'busy' : 'idle';
+    await controller.observeActivity(exact, { activity });
+  }
+  return { verified: true };
+}
+
+export async function handleRelayPolicy({ controller, bridge, binding: input }) {
+  if (!controller || !['attach', 'enable', 'disable', 'status'].includes(input.action)) throw new CoreError(422, 'invalid_body', 'The shared wake operation is invalid.');
+  if (Object.keys(input).some(key => !['action', 'binding', 'consent'].includes(key))
+      || input.consent && (typeof input.consent !== 'object' || Array.isArray(input.consent)
+        || Object.keys(input.consent).some(key => !['windowHours', 'extended', 'unlimited', 'manualConsent', 'maxHandoffs'].includes(key)))) {
+    throw new CoreError(422, 'invalid_body', 'The shared wake consent is invalid.');
+  }
+  const binding = input.binding;
+  if (!binding || binding.machine !== bridge.paths.machine) throw new CoreError(403, 'forbidden', 'The wake binding belongs to another machine.');
+  if (input.action === 'status') return controller.status(binding);
+  if (input.action === 'disable') return controller.disable(binding);
+  let policy;
+  if (input.action === 'enable') policy = await controller.enable({ ...binding, ...input.consent });
+  else {
+    policy = await controller.status(binding);
+    if (!policy.enabled) throw new CoreError(409, 'wake_expired', 'An explicit wake enable is required for this binding.');
+  }
+  const worker = controller.start(policy.binding);
+  const ready = await worker.ready;
+  return { binding: policy.binding, policy, service: 'ready', worker: ready.state, ownsLease: ready.ownsLease, delivery: 'not claimed' };
+}
+
+export async function initializeNativeEntry({ controller, bridge, request, registration }) {
+  if (!controller || request.unitId !== registration.unitId || request.client !== registration.client
+      || registration.machine !== bridge.paths.machine) throw new CoreError(503, 'native_login_unverified', 'The native entry could not be verified.');
+  const proof = { unitId: registration.unitId, nativeSessionId: registration.nativeSessionId, client: registration.client, machine: registration.machine };
+  if (await bridge.adapters?.[registration.client]?.confirm?.(proof) !== true) throw new CoreError(503, 'native_login_unverified', 'The native entry could not be verified.');
+  const directory = path.join(bridge.paths.mind, 'user', 'relay', 'wake', 'policies');
+  const matches = [];
+  for (const name of await jsonNames(directory)) {
+    const policy = await readJson(path.join(directory, name));
+    const binding = policy?.binding;
+    if (binding?.nativeSessionId !== proof.nativeSessionId || binding.client !== proof.client || binding.machine !== proof.machine) continue;
+    if (binding.unitId && binding.unitId !== proof.unitId || !binding.unitId && binding.unit !== registration.unit) continue;
+    matches.push(policy);
+  }
+  const exact = { unit: registration.unit, ...proof };
+  if (matches.length) {
+    const now = bridge.now();
+    if (matches.some((policy) => policy.enabled !== true || policy.pausedReason || !Number.isFinite(Date.parse(policy.deadlineAt)) || Date.parse(policy.deadlineAt) <= now)) {
+      throw new CoreError(409, 'wake_expired', 'The previous wake consent is no longer active.');
+    }
+  } else {
+    await controller.enable({ unit: registration.unit, nativeSessionId: proof.nativeSessionId, client: proof.client, machine: proof.machine });
+  }
+  const worker = controller.start(exact);
+  await worker.ready;
+  return { attached: true };
+}
+
+async function nativeOperation(bridge, secret, operation, input) {
+  const launch = bridge.launches.get(secret);
+  if (!launch?.nativeSessionId || !['attach', 'hook', 'policy'].includes(operation)) {
+    throw new CoreError(403, 'native_login_unverified', 'The native launch has not been verified.');
+  }
+  if (input.nativeSessionId != null && input.nativeSessionId !== launch.nativeSessionId
+      || input.client != null && input.client !== launch.client
+      || input.unitId != null && input.unitId !== launch.unitId) {
+    throw new CoreError(403, 'forbidden', 'The native binding cannot be changed.');
+  }
+  const proof = { unitId: launch.unitId, nativeSessionId: launch.nativeSessionId, client: launch.client, machine: launch.machine };
+  const adapter = bridge.adapters?.[proof.client];
+  if (await adapter?.confirm?.(proof) !== true) throw new CoreError(403, 'native_login_unverified', 'The native process is no longer attached.');
+  const bound = await boundSession(bridge, proof, launch.unitId);
+  if (operation === 'policy') {
+    const selected = input.binding ?? {};
+    if (selected.unit !== parseUnitId(proof.unitId).unit || selected.unitId && selected.unitId !== proof.unitId
+        || selected.nativeSessionId !== proof.nativeSessionId || selected.client !== proof.client || selected.machine !== proof.machine) {
+      throw new CoreError(403, 'forbidden', 'The wake binding cannot be changed.');
+    }
+    return perform(bridge, 'policy', { ...input, binding: { ...selected, unitId: proof.unitId } });
+  }
+  if (operation === 'hook') {
+    if (typeof bridge.onNativeHook !== 'function') throw new CoreError(503, 'service_unavailable', 'The native hook is unavailable.');
+    return bridge.onNativeHook({ ...proof, sessionId: bound.sessionId, event: input.event });
+  }
+  if (!bridge.origin) throw new CoreError(503, 'service_unavailable', 'The service is not ready.');
+  if (launch.token) {
+    try { bridge.credentials.verify(launch.token); } catch { launch.token = null; }
+  }
+  if (!launch.token) {
+    const attached = await attachNative(bridge, proof);
+    launch.token = attached.token;
+  }
+  return { origin: bridge.origin, token: launch.token, ...proof, sessionId: bound.sessionId };
 }
 
 export async function attachNative(bridge, proof) {
@@ -91,6 +278,12 @@ export async function attachNative(bridge, proof) {
 }
 
 export async function closeBridge(bridge) {
+  if (bridge?.launches) {
+    for (const launch of bridge.launches.values()) if (launch.token) bridge.credentials.revoke(launch.token);
+    bridge.launches.clear();
+  }
+  for (const socket of bridge?.sockets ?? []) socket.destroy();
+  bridge?.sockets?.clear();
   if (bridge?.close) await bridge.close();
 }
 
@@ -102,6 +295,7 @@ async function boundSession(bridge, proof, unitId) {
   if (!registration || await sessionStopped(mind, sessionId)) {
     throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
   }
+  await bridge.adoptWake?.({ unit: parseUnitId(unitId).unit, unitId, nativeSessionId: proof.nativeSessionId, client: proof.client, machine: proof.machine });
   const wake = await activeWake(bridge, proof, unitId);
   if (!wake) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
   return { sessionId, wakeId: wake.wakeId, generation: wake.generation, expiresAt: wake.expiresAt };
@@ -166,6 +360,9 @@ async function readJson(file) {
 }
 
 function accept(socket, bridge) {
+  bridge.sockets.add(socket);
+  socket.once('close', () => bridge.sockets.delete(socket));
+  socket.on('error', () => socket.destroy());
   let buffer = '';
   socket.setEncoding('utf8');
   socket.on('data', (chunk) => {
@@ -185,12 +382,17 @@ function accept(socket, bridge) {
       socket.end(`${JSON.stringify({ error: 'invalid_body' })}\n`);
       return;
     }
-    if (!isUuid(message.id) || message.secret !== bridge.secret || !OPERATIONS.has(message.operation)) {
+    const native = bridge.launches.has(message.secret);
+    if (!isUuid(message.id) || !native && (message.secret !== bridge.secret || !OPERATIONS.has(message.operation))) {
       socket.end(`${JSON.stringify({ id: message.id ?? null, error: 'unauthorized' })}\n`);
       return;
     }
-    perform(bridge, message.operation, message.binding ?? {}).then((result) => {
-      socket.end(`${JSON.stringify({ id: message.id, result })}\n`);
+    (native ? nativeOperation(bridge, message.secret, message.operation, message.binding ?? {}) : perform(bridge, message.operation, message.binding ?? {})).then((result) => {
+      socket.end(`${JSON.stringify({ id: message.id, result })}\n`, () => {
+        if (!native && message.operation === 'shutdown' && result?.accepted === true) {
+          Promise.resolve(bridge.ownerShutdown?.(message.binding ?? {}, { afterReply: true })).catch(() => {});
+        }
+      });
     }).catch((error) => {
       socket.end(`${JSON.stringify({ id: message.id, error: error?.code || 'delivery_failed' })}\n`);
     });
@@ -198,6 +400,10 @@ function accept(socket, bridge) {
 }
 
 async function perform(bridge, operation, binding) {
+  if (operation === 'shutdown') {
+    if (typeof bridge.ownerShutdown !== 'function') throw new CoreError(503, 'service_unavailable', 'The owner shutdown operation is unavailable.');
+    return bridge.ownerShutdown(binding, { afterReply: false });
+  }
   const deliveryId = typeof binding?.deliveryId === 'string' ? binding.deliveryId : '';
   if (deliveryId && bridge.settled.has(deliveryId)) return bridge.settled.get(deliveryId);
   const handler = bridge.operations?.[operation] ?? bridge.relay?.[operation];

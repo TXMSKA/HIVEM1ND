@@ -16,7 +16,7 @@ import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 describe('service api', { concurrency: false }, () => {
-async function boot(t, { assetDir = null } = {}) {
+async function boot(t, { assetDir = null, missingAssets = false } = {}) {
   const fixture = await makeCoreFixture();
   const origin = path.join(fixture.root, 'origin');
   await mkdir(origin, { recursive: true });
@@ -25,7 +25,7 @@ async function boot(t, { assetDir = null } = {}) {
     store: fixture.store,
     paths,
     now: () => fixture.clock.now,
-    assetDir,
+    assetDir: missingAssets ? path.join(fixture.root, 'absent-browser-shell') : assetDir,
     projects: [],
   });
   t.after(async () => {
@@ -258,7 +258,7 @@ test('receipts replay the same response and reject a different route', async (t)
 });
 
 test('phone writes are rejected and static absence leaves the API usable', async (t) => {
-  const { fixture, core, token } = await boot(t);
+  const { fixture, core, token } = await boot(t, { missingAssets: true });
   const phone = core.credentials.issue({
     audience: 'phone',
     expiresAt: new Date(fixture.clock.now + 60_000).toISOString(),

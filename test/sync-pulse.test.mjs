@@ -2,10 +2,11 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { uuidV8 } from '../engine/service/identity.mjs';
+import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
+import { applyPack } from '../engine/sync/apply.mjs';
 import { admitMessage, chargeMetadata, claimLimitNotice, limitsFor, openLedger, reservePublication, reserveReceipt, retryAtFor } from '../engine/sync/limits.mjs';
 import { openOrigin, publishBeat, publishPack, readHead, readOriginPack } from '../engine/sync/origin.mjs';
-import { decodePack } from '../engine/sync/pack.mjs';
+import { decodePack, encodePack, resolveDependencies } from '../engine/sync/pack.mjs';
 import { createPulse, nextDue } from '../engine/sync/pulse.mjs';
 import { listStaged, openSync, stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -409,6 +410,134 @@ test('a transaction group that does not fit stays together', async (t) => {
   assert.equal(packs.length, 1);
   assert.equal(packs[0].length, 2);
   assert.deepEqual(packs[0].sort(), staged.map((change) => change.id).sort());
+});
+
+test('committed objects become dependencies without losing mutations, atomic groups or quota charges', async (t) => {
+  const { sync, origin, ledger, clock, pulse } = await pulseWorld(t);
+  const raw = Buffer.from('id: shared\nkind: message\nmachine: DESKTOP\n\nHello\n');
+  const hash = hashBytes(raw);
+  const first = await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/inbox/master/shared.md' }, bytes: raw }]);
+  await pulse.changed(first.map((change) => change.id));
+  await pulse.flush();
+  const before = (await limitsFor(ledger, 'publication')).syncBytes.used;
+  const firstBytes = await readOriginPack(origin, origin.machine, 1);
+  const transactionId = uuidV8(['reuse', 'atomic']);
+  const fresh = Buffer.from('new bytes in a mixed pack');
+  const staged = await stageTransaction(sync, [
+    { target: { kind: 'mind', path: 'user/archive/master/shared.md' }, bytes: raw },
+    { target: { kind: 'mind', path: 'user/archive/overseer/shared.md' }, bytes: raw },
+    { target: { kind: 'mind', path: 'user/fresh.txt' }, bytes: fresh },
+    { target: { kind: 'mind', path: 'user/deleted.txt' }, deleted: true },
+  ], { transactionId });
+  await pulse.changed(staged.map((change) => change.id));
+  await pulse.flush();
+  const body = await readOriginPack(origin, origin.machine, 2);
+  const decoded = decodePack(body);
+  assert.deepEqual(decoded.dependencies, [{ hash, machine: origin.machine, sequence: 1, packHash: hashBytes(firstBytes) }]);
+  assert.deepEqual([...decoded.objects.keys()], [hashBytes(fresh)]);
+  assert.deepEqual(decoded.changes.map((change) => change.id).sort(), staged.map((change) => change.id).sort());
+  assert.deepEqual(decoded.transactions, [{ id: transactionId, changeIds: decoded.changes.map((change) => change.id) }]);
+  const head = await readHead(origin, origin.machine);
+  const used = await limitsFor(ledger, 'publication');
+  assert.equal(used.messages.used, 2);
+  assert.equal(used.syncBytes.used - before, body.length + Buffer.byteLength(`${canonicalJson(head)}\n`));
+  const provider = {
+    readHead: (machine) => readHead(origin, machine),
+    readPack: (machine, sequence) => readOriginPack(origin, machine, sequence),
+  };
+  const resolved = await resolveDependencies(body, provider);
+  assert.equal(resolved.status, 'ready');
+  assert.equal(resolved.objects.get(hash).equals(raw), true);
+  const receiver = await makeCoreFixture({ machine: 'LAPTOP' });
+  t.after(() => dispose(receiver));
+  const incoming = openSync({ store: receiver.store, paths: receiver.paths, now: () => clock.now() });
+  await applyPack(incoming, firstBytes, { provider });
+  const applied = await applyPack(incoming, body, { provider });
+  assert.equal(applied.status, 'applied');
+  assert.equal(applied.groups, 1);
+  assert.equal((await readFile(path.join(receiver.paths.mind, 'user', 'archive', 'master', 'shared.md'))).equals(raw), true);
+  assert.equal((await readFile(path.join(receiver.paths.mind, 'user', 'archive', 'overseer', 'shared.md'))).equals(raw), true);
+  const later = await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/fresh-copy.txt' }, bytes: fresh }]);
+  await pulse.changed(later.map((change) => change.id));
+  await pulse.flush();
+  const last = await readOriginPack(origin, origin.machine, 3);
+  assert.deepEqual(decodePack(last).dependencies, [{ hash: hashBytes(fresh), machine: origin.machine, sequence: 2, packHash: hashBytes(body) }]);
+  assert.equal((await resolveDependencies(last, provider)).status, 'ready');
+  assert.equal((await listStaged(sync)).length, 0);
+});
+
+test('publication reuses another machine only after its committed pack and dependency graph validate', async (t) => {
+  for (const kind of ['committed', 'orphan', 'missing', 'digest', 'owner', 'sequence', 'pending', 'cycle']) {
+    await t.test(kind, async (t) => {
+      const { fixture, sync, origin, clock, pulse } = await pulseWorld(t);
+      const raw = Buffer.from('identical bytes from another machine');
+      const hash = hashBytes(raw);
+      const staged = await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/local-copy.txt' }, bytes: raw }]);
+      const machine = kind === 'owner' ? 'OTHER' : 'LAPTOP';
+      const dependencies = kind === 'pending' || kind === 'cycle'
+        ? [{ hash: 'a'.repeat(64), machine: kind === 'cycle' ? 'LAPTOP' : 'OTHER', sequence: 1, packHash: 'b'.repeat(64) }]
+        : [];
+      const bytes = encodePack({
+        machine,
+        sequence: kind === 'sequence' ? 2 : 1,
+        changes: [{ ...staged[0], machine }],
+        objects: [{ hash, raw }],
+        dependencies,
+      });
+      const directory = path.join(fixture.paths.origin, 'machines', 'LAPTOP');
+      await mkdir(path.join(directory, 'packs'), { recursive: true });
+      if (kind !== 'missing') {
+        const placed = Buffer.from(bytes);
+        if (kind === 'digest') placed[placed.length - 1] ^= 1;
+        await writeFile(path.join(directory, 'packs', '000000000001.pack'), placed);
+      }
+      if (kind !== 'orphan') await writeFile(path.join(directory, 'head.json'), JSON.stringify({
+        format: 'hivem1nd-head-v1',
+        machine: 'LAPTOP',
+        sequence: 1,
+        updatedAt: stamp(clock.now()),
+        packs: [{ sequence: 1, file: '000000000001.pack', hash: hashBytes(bytes), bytes: bytes.length }],
+      }));
+      await pulse.changed(staged.map((change) => change.id));
+      const result = await pulse.flush();
+      assert.equal(result.published, true);
+      const decoded = decodePack(await readOriginPack(origin, origin.machine, 1));
+      assert.deepEqual(decoded.dependencies, kind === 'committed' ? [{ hash, machine: 'LAPTOP', sequence: 1, packHash: hashBytes(bytes) }] : []);
+      assert.equal(decoded.objects.has(hash), kind !== 'committed');
+    });
+  }
+});
+
+test('dependency packs recover unchanged across restarted pulses before and after head commit', async (t) => {
+  const { sync, origin, ledger, clock, pulse, fixture } = await pulseWorld(t);
+  const raw = Buffer.from('shared through crash recovery');
+  const first = await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/base.txt' }, bytes: raw }]);
+  await pulse.changed(first.map((change) => change.id));
+  await pulse.flush();
+  const base = await readOriginPack(origin, origin.machine, 1);
+  let current = pulse;
+  let sequence = 1;
+  for (const fault of ['before-head', 'after-head']) {
+    sequence += 1;
+    const staged = await stageTransaction(sync, [{ target: { kind: 'mind', path: `user/${fault}.txt` }, bytes: raw }]);
+    origin.fault = fault;
+    await current.changed(staged.map((change) => change.id));
+    assert.equal((await current.flush()).error, 'injected_crash');
+    assert.equal((await listStaged(sync)).length, 1);
+    const prepared = await readOriginPack(origin, origin.machine, sequence);
+    assert.deepEqual(decodePack(prepared).dependencies, [{ hash: hashBytes(raw), machine: origin.machine, sequence: 1, packHash: hashBytes(base) }]);
+    const used = (await limitsFor(ledger, 'publication')).syncBytes.used;
+    current.close();
+    current = createPulse({ sync, origin, ledger, now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout });
+    await current.resume();
+    await current.flush();
+    assert.equal((await readHead(origin, origin.machine)).sequence, sequence);
+    assert.equal((await listStaged(sync)).length, 0);
+    assert.equal((await readOriginPack(origin, origin.machine, sequence)).equals(prepared), true);
+    assert.equal((await limitsFor(ledger, 'publication')).syncBytes.used, used);
+  }
+  assert.equal((await readdir(path.join(fixture.paths.origin, 'machines', fixture.machine, 'packs'))).filter((name) => name.endsWith('.pack')).length, 3);
+  current.close();
 });
 
 test('an oversized transaction becomes an issue instead of retrying forever', async (t) => {

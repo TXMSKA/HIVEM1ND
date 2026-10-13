@@ -1,12 +1,12 @@
 import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
-import { resolveTarget } from '../service/paths.mjs';
+import { CoreError, canonicalJson, hashBytes, isUuid, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
+import { assertNoLinks, resolveTarget } from '../service/paths.mjs';
 import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
-import { bindProjects, resolveAuthorized } from '../service/store.mjs';
+import { bindProjects, resolveAuthorized, withLocalChanges } from '../service/store.mjs';
 import { writeDurable } from './origin.mjs';
 
 const FUTURE_MS = 30000;
@@ -78,7 +78,63 @@ export async function preserveConflict(sync, target, bytes, change, roots) {
   return { absolute: chosen.absolute, relative: locatedRelative(located, chosen.absolute) };
 }
 
-export async function applyPack(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null } = {}) {
+export async function applyPack(sync, packBytes, options = {}) {
+  return withLocalChanges(sync.store, () => applyPackLocked(sync, packBytes, options));
+}
+
+export async function recoverIncomingGroups(sync) {
+  return withLocalChanges(sync.store, async () => {
+    bindProjects(sync.store, sync.projects ?? []);
+    const directory = path.join(sync.paths.localDirectory, 'received', 'groups');
+    const names = await readdir(directory).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    const recovered = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.json') || !isUuid(name.slice(0, -5))) continue;
+      const progress = await readJsonAbsolute(path.join(directory, name));
+      if (!progress) continue;
+      if (progress.id !== name.slice(0, -5) || !Array.isArray(progress.ops) || !Array.isArray(progress.events)
+        || !Number.isInteger(progress.done) || progress.done < 0 || progress.done > progress.ops.length) {
+        throw new CoreError(422, 'corrupt_resource', 'The incoming transaction journal is not valid.');
+      }
+      if (progress.done === progress.ops.length && progress.emitted === true) continue;
+      for (const op of progress.ops) await validateRecoveryOp(sync, op);
+      await runGroup(sync, progress.id, progress.ops, progress.events, writeRoots(sync, sync.projects));
+      recovered.push(progress.id);
+    }
+    return recovered;
+  });
+}
+
+async function validateRecoveryOp(sync, op) {
+  if (op?.kind === 'marker') {
+    if (!/^[a-f0-9]{64}$/.test(op.key ?? '') || typeof op.bytes !== 'string') {
+      throw new CoreError(422, 'corrupt_resource', 'The incoming marker journal is not valid.');
+    }
+    return;
+  }
+  if (!['write', 'remove'].includes(op?.kind) || typeof op.file !== 'string' || !path.isAbsolute(op.file)
+    || op.kind === 'write' && typeof op.bytes !== 'string') {
+    throw new CoreError(422, 'corrupt_resource', 'The incoming operation journal is not valid.');
+  }
+  const file = await concreteFile(sync, op);
+  const roots = op.target?.kind === 'project'
+    ? (sync.projects ?? []).filter(project => project.eligible !== false).map(project => project.localPath)
+    : [sync.paths.mind, sync.paths.localDirectory];
+  if (!roots.some(root => root && insideRoot(root, file))) {
+    throw new CoreError(422, 'unsafe_path', 'Refusing to recover outside an authorized root.');
+  }
+  await assertNoLinks(file, { root: sync.store.confineRoot });
+}
+
+function insideRoot(root, file) {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function applyPackLocked(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null } = {}) {
   const resolvedProjects = projects ?? sync.projects ?? [];
   const incoming = await resolveIncoming(sync, packBytes, provider);
   const decoded = incoming.decoded;
@@ -447,7 +503,9 @@ async function checkpoint(sync, decoded, packBytes, ledger) {
   };
   validateHead(head, { machine, previous: current ?? undefined, packBytes, sequence: decoded.header.sequence });
   await writeDurable(sync.store, file, Buffer.from(`${canonicalJson(head)}\n`, 'utf8'), writeRoots(sync, sync.projects));
-  await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'received', machine, `${decoded.header.sequence}.applied.json`), Buffer.from(`${canonicalJson({ packHash: decoded.packHash, sequence: decoded.header.sequence })}\n`, 'utf8'), writeRoots(sync, sync.projects));
+  await writeDurable(sync.store, path.join(sync.paths.localDirectory, 'received', machine, `${decoded.header.sequence}.applied.json`), Buffer.from(`${canonicalJson({
+    packHash: decoded.packHash, sequence: decoded.header.sequence, targets: decoded.changes.map(change => change.target),
+  })}\n`, 'utf8'), writeRoots(sync, sync.projects));
   if (!ledger) return;
   const data = await readLedgerFile(ledger);
   data.applied[machine] = Math.max(data.applied[machine] ?? 0, decoded.header.sequence);

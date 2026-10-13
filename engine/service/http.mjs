@@ -305,17 +305,23 @@ export function serveEvents(res, bus, principal, cursor, extras = {}) {
       end();
       return;
     }
-    if (principal.expiresAt && Date.parse(principal.expiresAt) <= (extras.now?.() ?? Date.now())) {
+    const homeClosed = principal.audience === 'phone' && frame.name === 'home.changed' && frame.data?.data?.home?.enabled === false
+      && ['closed', 'expired', 'replaced'].includes(frame.data?.data?.reason);
+    if (!homeClosed && principal.expiresAt && Date.parse(principal.expiresAt) <= (extras.now?.() ?? Date.now())) {
       end();
       return;
     }
     try {
-      extras.credentials?.verify(principal.stableId);
+      if (!homeClosed) extras.credentials?.verify(principal.stableId);
     } catch {
       end();
       return;
     }
     send(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`);
+    if (homeClosed) {
+      cleanup();
+      if (!res.writableEnded) res.end();
+    }
   });
   bus.replay(subscriber, cursor ?? null);
   res.on?.('close', cleanup);

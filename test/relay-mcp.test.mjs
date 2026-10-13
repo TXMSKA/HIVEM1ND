@@ -9,7 +9,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { serveRelayMcp } from '../engine/relay/mcp.mjs';
 import { decidePermission } from '../engine/relay/hooks.mjs';
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
-import { bindNative, closeAttachedServices } from '../engine/service/client.mjs';
+import { bindNative, closeAttachedServices, openRelayOperations } from '../engine/service/client.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { runCli } from '../cli/index.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -27,7 +27,8 @@ async function run(mindPath, requests, client = 'codex') {
   const stderr = new PassThrough();
   const chunks = [];
   stdout.on('data', (chunk) => chunks.push(chunk));
-  const server = serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client, sessionId: 'instance-a', stdin, stdout, stderr });
+  const operations = await openRelayOperations({ mindPath, hostname: 'RELAYTEST', client, sessionId: 'instance-a' });
+  const server = serveRelayMcp({ mindPath, client, sessionId: 'instance-a', operations, env: {}, stdin, stdout, stderr });
   for (const request of requests) stdin.write(`${typeof request === 'string' ? request : JSON.stringify(request)}\n`);
   stdin.end();
   await server;
@@ -120,7 +121,8 @@ test('stdio UTF-8 decoder preserves a code point split across stream chunks', as
   const stdout = new PassThrough();
   const chunks = [];
   stdout.on('data', (chunk) => chunks.push(chunk));
-  await serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client: 'codex', sessionId: 'instance-a', stdin, stdout, stderr: new PassThrough() });
+  const operations = await openRelayOperations({ mindPath, hostname: 'RELAYTEST', client: 'codex', sessionId: 'instance-a' });
+  await serveRelayMcp({ mindPath, client: 'codex', sessionId: 'instance-a', operations, env: {}, stdin, stdout, stderr: new PassThrough() });
   const response = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   assert.equal(response.result.structuredContent.nativeSessionId, 'native-雪');
 });

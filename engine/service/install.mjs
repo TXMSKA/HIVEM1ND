@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError } from './identity.mjs';
-import { localCosmic, mindKeyFor, oneDriveRoots } from './paths.mjs';
-import { protectLocalFile } from './security.mjs';
+import { assertLocalStaging, assertNoLinks, localCosmic, mindKeyFor, oneDriveRoots } from './paths.mjs';
+import { aclRunnerFrom, protectLocalFile } from './security.mjs';
 
 function fail(status, code, message) {
   throw new CoreError(status, code, message);
@@ -51,12 +52,105 @@ export function planRegistration(input) {
 }
 
 function serviceNameFor(sid) {
-  const tail = String(sid ?? '').split('-').filter(Boolean).pop() || 'user';
-  return `HIVEM1ND-${tail}`;
+  return `HIVEM1ND-${createHash('sha256').update(String(sid)).digest('hex').slice(0, 16)}`;
+}
+
+function registrationDigest(body) {
+  return createHash('sha256').update(body.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim()).digest('hex');
+}
+
+function xmlText(body, tag) {
+  const values = [...body.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g'))];
+  if (values.length !== 1) return null;
+  return values[0][1].replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+export async function queryRegistration(plan, { current = null, run = spawnSync } = {}) {
+  if (plan.platform !== 'win32') {
+    await assertNoLinks(plan.file);
+    const bytes = await readFile(plan.file).catch((error) => { if (error?.code === 'ENOENT') return null; throw error; });
+    const digest = bytes ? createHash('sha256').update(bytes).digest('hex') : null;
+    const absent = { present: false, filePresent: bytes !== null, fileDigest: digest };
+    const inspect = (file, args) => {
+      const result = run(file, args, { shell: false, timeout: 8000, maxBuffer: 1024 * 1024, encoding: 'utf8' });
+      if (result?.error || result?.status !== 0) throw new CoreError(503, 'service_unavailable', 'The user service manager could not be queried.');
+      return String(result.stdout ?? '');
+    };
+    let loaded;
+    if (plan.platform === 'darwin') {
+      const uid = inspect('launchctl', ['manageruid']).trim();
+      if (!/^\d+$/.test(uid) || plan.uid !== undefined && Number(uid) !== plan.uid) throw new CoreError(503, 'service_unavailable', 'The launch manager does not belong to the current user.');
+      const listing = inspect('launchctl', ['list']);
+      const labels = listing.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/).slice(2).join(' '));
+      if (!labels.includes(plan.label ?? plan.name)) return absent;
+      const details = inspect('launchctl', ['list', plan.label ?? plan.name]);
+      const stringValue = (key) => {
+        const match = details.match(new RegExp(`"${key}"\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*;`));
+        try { return match ? JSON.parse(match[1]) : null; } catch { return null; }
+      };
+      const block = details.match(/"ProgramArguments"\s*=\s*\(([\s\S]*?)\);/);
+      const strings = block ? [...block[1].matchAll(/"(?:[^"\\]|\\.)*"/g)].map(match => JSON.parse(match[0])) : [];
+      const same = (expected) => stringValue('Label') === (plan.label ?? plan.name)
+        && JSON.stringify(strings) === JSON.stringify(expected.arguments)
+        && (stringValue('Program') === null || stringValue('Program') === expected.executable)
+        && stringValue('WorkingDirectory') === xmlText(expected.body.match(/<key>WorkingDirectory<\/key>([\s\S]*?)<key>/)?.[1] ?? '', 'string');
+      loaded = { current: same(current ?? plan), planned: same(plan) };
+    } else {
+      const details = inspect('systemctl', ['--user', 'show', plan.unit ?? plan.name, '--no-pager', '--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,UnitFileState']);
+      const properties = new Map(details.trim().split(/\r?\n/).map(line => { const index = line.indexOf('='); return [line.slice(0, index), line.slice(index + 1)]; }));
+      if (properties.get('LoadState') === 'not-found') return absent;
+      if (!properties.has('LoadState')) throw new CoreError(503, 'service_unavailable', 'The user service manager response is not valid.');
+      const matches = properties.get('LoadState') === 'loaded' && properties.get('FragmentPath') === plan.file
+        && properties.get('DropInPaths') === '' && properties.get('NeedDaemonReload') === 'no'
+        && properties.get('UnitFileState') === 'enabled';
+      loaded = { current: matches, planned: matches };
+    }
+    const expected = current ?? plan;
+    const match = loaded.current && digest === expected.digest;
+    return { present: true, digest, executable: match ? expected.executable : null, arguments: match ? expected.arguments : [], matchesPlan: loaded.planned && digest === plan.digest, installationId: match ? current?.installationId : null };
+  }
+  const result = run('schtasks.exe', ['/Query', '/TN', plan.name, '/XML'], { windowsHide: true, shell: false, timeout: 8000, maxBuffer: 1024 * 1024 });
+  if (result?.error) throw new CoreError(503, 'service_unavailable', 'The login registration could not be queried.');
+  if (result?.status !== 0) {
+    if (result?.status === 1) return { present: false };
+    throw new CoreError(503, 'service_unavailable', 'The login registration could not be queried.');
+  }
+  const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(String(result.stdout ?? ''));
+  const body = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe || bytes[1] === 0 ? 'utf16le' : 'utf8').replace(/^\uFEFF/, '');
+  if (!body.includes('<Task') || body.includes('<!DOCTYPE') || body.includes('<!ENTITY')) throw new CoreError(503, 'service_unavailable', 'The login registration is not valid.');
+  const expected = current ?? plan;
+  const digest = registrationDigest(body);
+  const executable = xmlText(body, 'Command');
+  const argumentsText = xmlText(body, 'Arguments');
+  const plannedArguments = (plan.arguments ?? []).map(quoteWindows).join(' ');
+  const userIds = [...body.matchAll(/<UserId>([^<]+)<\/UserId>/g)].map(match => match[1]);
+  const logonTrigger = body.match(/<LogonTrigger(?:\s[^>]*)?>([\s\S]*?)<\/LogonTrigger>/)?.[1] ?? '';
+  const settings = body.match(/<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/)?.[1] ?? '';
+  const matchesPlan = executable === plan.executable && argumentsText === plannedArguments
+    && xmlText(body, 'WorkingDirectory') === xmlText(plan.body, 'WorkingDirectory')
+    && userIds.length === 2 && userIds.every(value => value === xmlText(plan.body.match(/<Principals>[\s\S]*?<\/Principals>/)?.[0] ?? '', 'UserId'))
+    && xmlText(body, 'LogonType') === 'InteractiveToken'
+    && xmlText(body, 'RunLevel') === 'LeastPrivilege'
+    && xmlText(body, 'MultipleInstancesPolicy') === 'IgnoreNew'
+    && xmlText(body, 'StartWhenAvailable') === 'true'
+    && xmlText(body, 'ExecutionTimeLimit') === 'PT0S'
+    && (!/<Enabled(?:\s|>)/.test(settings) || xmlText(settings, 'Enabled') === 'true')
+    && (body.match(/<Exec(?:\s|>)/g) ?? []).length === 1
+    && (body.match(/<Principal(?:\s|>)/g) ?? []).length === 1
+    && (body.match(/<LogonTrigger(?:\s|>)/g) ?? []).length === 1
+    && xmlText(logonTrigger, 'Enabled') === 'true'
+    && !/<(?:Repetition|Delay|StartBoundary|EndBoundary)(?:\s|>)/.test(logonTrigger)
+    && !/<(?:ComHandler|CalendarTrigger|BootTrigger|EventTrigger|IdleTrigger|RegistrationTrigger|SessionStateChangeTrigger|TimeTrigger)(?:\s|>)/.test(body);
+  const matches = executable === expected.executable
+    && argumentsText === (expected.arguments ?? []).map(quoteWindows).join(' ')
+    && (digest === (expected.actualDigest ?? registrationDigest(expected.body ?? ''))
+      || expected.verification === 'pending' && expected.digest === plan.digest && matchesPlan);
+  return { present: true, digest, executable, arguments: matches ? expected.arguments : matchesPlan ? plan.arguments : [], matchesPlan, installationId: matches ? current?.installationId : null };
 }
 
 function planWindows(input) {
   const sid = input.sid ?? 'S-1-5-21-0';
+  if (!/^S-\d+-\d+(?:-\d+)+$/.test(sid)) fail(422, 'invalid_path', 'The current user SID is not valid.');
   const name = input.name ?? serviceNameFor(sid);
   const args = [input.cliPath, 'service', 'run', '--mind-path', input.mindPath].map(quoteWindows).join(' ');
   const body = `<?xml version="1.0" encoding="UTF-16"?>
@@ -90,6 +184,7 @@ function planMac(input) {
   const uid = input.uid ?? 501;
   return {
     platform: 'darwin',
+    uid,
     label,
     file,
     body,
@@ -134,7 +229,8 @@ export async function startConfiguredViewer(config, options = {}) {
   const handle = options.start
     ? await options.start(config)
     : await (await import('./service.mjs')).runConfiguredService({ mindPath: config.mindPath, ...options });
-  const port = handle?.http?.port;
+  const bootstrap = handle?.bootstrap?.origin ?? handle?.bootstrapState?.record?.origin;
+  const port = handle?.http?.port ?? (bootstrap ? Number(new URL(bootstrap).port) : null);
   const secret = handle?.bootstrap?.secret ?? handle?.bootstrapState?.secret;
   if (!port || !secret) throw new CoreError(503, 'service_unavailable', 'The service is not ready.');
   const url = options.login
@@ -147,7 +243,7 @@ export async function startConfiguredViewer(config, options = {}) {
 async function loginViewer(port, secret) {
   const response = await fetch(`http://127.0.0.1:${port}/api/v1/auth/local`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${secret}`, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json' },
     body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }),
   });
   if (!response.ok) return null;
@@ -160,10 +256,16 @@ export async function installService(input, options = {}) {
   const dryRun = options.dryRun !== false;
   if (dryRun) return { ...plan, executed: [], dryRun: true, os: false, action: 'plan' };
   const actual = options.query ? await options.query(plan) : null;
+  if (actual?.filePresent && actual.fileDigest !== plan.digest && actual.fileDigest !== options.current?.digest) {
+    return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: 'The existing service file is not owned by this install.' };
+  }
   if (actual?.present) {
-    const ownedId = options.current?.installationId && actual.installationId === options.current.installationId;
-    if (sameActual(actual, plan) && (!options.current?.installationId || ownedId)) {
-      return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged' };
+    const ownedId = options.current?.installationId && actual.installationId === options.current.installationId
+      && (actual.digest === (options.current.actualDigest ?? options.current.digest)
+        || options.current.verification === 'pending' && options.current.digest === plan.digest && actual.matchesPlan === true);
+    const verifiedPending = options.current?.verification === 'pending' && options.current.digest === plan.digest && actual.matchesPlan === true && ownedId;
+    if ((sameActual(actual, plan, options.current) || verifiedPending) && ownedId) {
+      return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged', verification: 'verified', installationId: options.current?.installationId ?? null, ...(actual.digest ? { actualDigest: actual.digest } : {}), persistVerified: verifiedPending };
     }
     if (!ownedId) {
       return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: 'The login registration is not owned by this install.' };
@@ -173,16 +275,33 @@ export async function installService(input, options = {}) {
     if (verdict.owned) return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged' };
     return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: verdict.reason };
   }
+  await assertNoLinks(plan.file);
   await mkdir(path.dirname(plan.file), { recursive: true });
-  await writeFile(plan.file, Buffer.from(`\uFEFF${plan.body}`, 'utf16le'));
+  await writeFile(plan.file, plan.platform === 'win32' ? Buffer.from(`\uFEFF${plan.body}`, 'utf16le') : Buffer.from(plan.body), { mode: 0o600 });
   if (options.aclRunner) await options.aclRunner.protect(plan.file);
   const action = actual?.present ? 'update' : 'create';
   const argv = plan.platform === 'win32'
     ? ['schtasks.exe', '/Create', '/XML', plan.file, '/TN', plan.name, ...(action === 'update' ? ['/F'] : [])]
-    : plan.argv ?? plan.arguments;
-  if (options.run) await options.run(argv);
+    : plan.platform === 'darwin'
+      ? ['launchctl', 'bootstrap', `gui/${input.uid ?? 501}`, plan.file]
+      : ['systemctl', '--user', 'enable', '--now', plan.unit];
+  if (options.run) {
+    if (plan.platform === 'linux') await options.run(['systemctl', '--user', 'daemon-reload']);
+    if (plan.platform === 'darwin' && action === 'update') await options.run(['launchctl', 'bootout', `gui/${input.uid ?? 501}`, plan.file]);
+    await options.run(argv);
+  }
   else throw new CoreError(503, 'service_unavailable', 'No registration runner was provided.');
-  return { ...plan, executed: [argv], dryRun: false, os: true, action, installationId: options.current?.installationId ?? randomUUID() };
+  const installed = { ...plan, executed: [argv], dryRun: false, os: true, action, installationId: options.current?.installationId ?? randomUUID() };
+  if (options.persistPendingRegistration) await options.persistPendingRegistration({ ...installed, verification: 'pending' });
+  if (options.query) {
+    const observed = await options.query(plan);
+    if (!observed?.present || !(observed.matchesPlan ?? sameActual(observed, plan, null))) {
+      throw new CoreError(503, 'service_unavailable', 'The login registration could not be verified after installation.');
+    }
+    installed.actualDigest = observed.digest;
+  }
+  installed.verification = 'verified';
+  return installed;
 }
 
 export function uninstallService(plan, current) {
@@ -206,11 +325,11 @@ export function verifyOwnedRegistration(current, expected) {
   return { owned: true, reason: 'match' };
 }
 
-function sameActual(actual, plan) {
+function sameActual(actual, plan, current) {
   if (!actual?.present) return false;
   return actual.executable === plan.executable
     && JSON.stringify(actual.arguments ?? []) === JSON.stringify(plan.arguments)
-    && actual.digest === plan.digest;
+    && (actual.digest === plan.digest || current?.digest === plan.digest && actual.digest === current.actualDigest);
 }
 
 export function bootstrapConfig(config) {
@@ -253,6 +372,9 @@ export function ownershipRecord(plan) {
     path: plan.file,
     body: plan.body,
     digest: plan.digest,
+    verification: plan.verification ?? 'verified',
+    ...(plan.actualDigest ? { actualDigest: plan.actualDigest } : {}),
+    ...(plan.uid !== undefined ? { uid: plan.uid } : {}),
   };
 }
 
@@ -277,13 +399,28 @@ export async function runServicePhases(input, options = {}) {
     state.configBody = config;
   }
   if (!state.registration) {
-    const installed = await installService(input.registration, {
-      dryRun,
-      run: options.run,
-      current: options.current ?? null,
-    });
+    let installed;
+    try {
+      installed = await installService(input.registration, {
+        dryRun,
+        run: options.run,
+        current: options.current ?? null,
+        query: options.query,
+        aclRunner: options.aclRunner,
+        persistPendingRegistration: options.persistPendingRegistration,
+      });
+    } catch (error) {
+      return { status: 'failed', phase: 'registration', state, os: false, error: error.message, code: error.code ?? 'service_unavailable' };
+    }
     if (installed.conflict) {
       return { status: 'failed', phase: 'registration', state, os: false, conflict: installed.reason };
+    }
+    if (!dryRun && options.persistRegistration && (['create', 'update'].includes(installed.action) || installed.persistVerified)) {
+      try {
+        await options.persistRegistration(installed);
+      } catch (error) {
+        return { status: 'failed', phase: 'registration', state, os: false, error: error.message, code: error.code ?? 'service_unavailable' };
+      }
     }
     state.registration = true;
     state.installed = installed;
@@ -293,6 +430,7 @@ export async function runServicePhases(input, options = {}) {
     if (!options.start) return { status: 'failed', phase: 'start', state, os: false, error: 'No service starter was provided.' };
     try {
       const started = await options.start(state.configBody);
+      if (!started?.viewerUrl) throw new CoreError(503, 'service_unavailable', 'The viewer is not ready.');
       state.start = true;
       state.viewerUrl = started?.viewerUrl ?? null;
     } catch (error) {
@@ -304,7 +442,7 @@ export async function runServicePhases(input, options = {}) {
 
 export async function configureOwnedService(options = {}) {
   const platform = options.platform ?? process.platform;
-  const env = options.env ?? {};
+  const env = options.env ?? process.env;
   const home = options.homeDir ?? options.home;
   const cosmic = options.cosmicPath
     ? path.resolve(options.cosmicPath)
@@ -316,12 +454,15 @@ export async function configureOwnedService(options = {}) {
   const configFile = path.join(localDirectory, 'config.json');
   const ownershipFile = path.join(localDirectory, 'registration.json');
   let existing = null;
+  await assertNoLinks(configFile);
+  await assertNoLinks(ownershipFile);
   try {
     existing = JSON.parse(await readFile(configFile, 'utf8'));
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
   const stagingPath = path.join(localDirectory, 'staging');
+  if (!existing && options.requireOrigin === true && !options.originPath) fail(422, 'invalid_body', 'An existing mind needs an explicit origin folder before service setup.');
   const origin = existing?.origin ?? {
     kind: options.originKind ?? 'folder',
     path: options.originPath ?? path.join(cosmic, 'hivem1nd-origin', mindKey),
@@ -334,8 +475,8 @@ export async function configureOwnedService(options = {}) {
     workingDirectory: options.workingDirectory ?? options.kitPath ?? process.cwd(),
     localDirectory,
     home,
-    configHome: options.configHome ?? (home ? path.join(home, '.config') : undefined),
-    sid: options.sid ?? 'S-1-5-21-current',
+    configHome: options.configHome ?? (env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : home ? path.join(home, '.config') : undefined),
+    sid: options.sid ?? (platform === 'win32' && options.dryRun === false ? aclRunnerFrom(options).userSid() : 'S-1-5-21-0'),
     uid: options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0),
     userManager: options.userManager,
   };
@@ -347,6 +488,20 @@ export async function configureOwnedService(options = {}) {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
+  if (current?.name) {
+    if (platform === 'win32') registration.name = current.name;
+    else if (platform === 'darwin') registration.label = current.name;
+    else if (platform === 'linux') registration.unitName = current.name;
+  }
+  let writtenOwnershipFile = null;
+  const persistRegistration = async (installed) => {
+    await mkdir(localDirectory, { recursive: true });
+    const temporary = `${ownershipFile}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(ownershipRecord(installed), null, 2)}\n`, { mode: 0o600 });
+    await rename(temporary, ownershipFile);
+    if (options.protect !== false) await protectLocalFile(ownershipFile, { aclRunner: options.aclRunner, store: options.store });
+    writtenOwnershipFile = ownershipFile;
+  };
   const result = await runServicePhases({
     config: {
       mindPath,
@@ -360,9 +515,14 @@ export async function configureOwnedService(options = {}) {
     dryRun: options.dryRun !== false,
     state: options.state,
     current,
-    run: options.run,
-    start: options.start,
+    run: options.run ?? options.serviceRunner,
+    start: options.start ?? options.serviceStart,
+    query: options.query ?? options.serviceQuery ?? ((plan) => queryRegistration(plan, { current })),
+    aclRunner: options.aclRunner,
+    persistRegistration,
+    persistPendingRegistration: persistRegistration,
     persistConfig: async (body) => {
+      await assertLocalStaging(body.stagingPath, { platform, origin: body.origin.path, syncedRoots: options.syncedRoots ?? [], env });
       await mkdir(localDirectory, { recursive: true });
       const temporary = `${configFile}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
@@ -370,12 +530,7 @@ export async function configureOwnedService(options = {}) {
       if (options.protect !== false) await protectLocalFile(configFile, { aclRunner: options.aclRunner, store: options.store });
     },
   });
-  if (result.state?.installed?.action === 'create' && options.dryRun === false) {
-    await mkdir(localDirectory, { recursive: true });
-    const record = ownershipRecord(result.state.installed);
-    await writeFile(ownershipFile, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    result.ownershipFile = ownershipFile;
-  }
+  if (writtenOwnershipFile) result.ownershipFile = writtenOwnershipFile;
   result.configFile = configFile;
   result.localDirectory = localDirectory;
   return result;
@@ -389,6 +544,7 @@ export async function removeOwnedRegistration(options = {}) {
   const mindKey = mindKeyFor(path.resolve(options.mindPath), platform);
   const localDirectory = path.join(cosmic, 'hivem1nd-service', mindKey, options.hostname);
   const ownershipFile = path.join(localDirectory, 'registration.json');
+  await assertNoLinks(ownershipFile);
   let current = null;
   try {
     current = JSON.parse(await readFile(ownershipFile, 'utf8'));
@@ -400,11 +556,16 @@ export async function removeOwnedRegistration(options = {}) {
   if (!current.body || actualDigest !== current.digest) {
     return { commands: [], removed: false, kept: { path: ownershipFile, reason: 'The login registration was modified and was left in place.' } };
   }
-  if (options.query) {
-    const actual = await options.query(current);
+  const uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : current.uid);
+  if (platform === 'darwin' && (!Number.isInteger(uid) || current.uid !== undefined && current.uid !== uid)) {
+    return { commands: [], removed: false, kept: { path: ownershipFile, reason: 'The login registration belongs to another user and was left in place.' } };
+  }
+  const query = options.query ?? (!options.dryRun && options.run ? (plan) => queryRegistration({ ...plan, platform, file: plan.path }, { current }) : null);
+  if (query) {
+    const actual = await query(current);
     const same = actual?.executable === current.executable
       && JSON.stringify(actual?.arguments ?? []) === JSON.stringify(current.arguments ?? [])
-      && actual?.digest === current.digest
+      && actual?.digest === (current.actualDigest ?? current.digest)
       && (!current.installationId || actual?.installationId === current.installationId);
     if (!same) {
       return { commands: [], removed: false, kept: { path: ownershipFile, reason: 'The operating system registration does not match and was left in place.' } };
@@ -413,15 +574,27 @@ export async function removeOwnedRegistration(options = {}) {
   const command = platform === 'win32'
     ? `schtasks.exe /Delete /TN ${quoteWindows(current.name)} /F`
     : platform === 'darwin'
-      ? `launchctl bootout gui/${options.uid ?? 501} ${current.path}`
+      ? `launchctl bootout gui/${uid} ${current.path}`
       : `systemctl --user disable --now ${current.name}`;
   const argv = platform === 'win32'
     ? ['schtasks.exe', '/Delete', '/TN', current.name, '/F']
-    : [command];
+    : platform === 'darwin'
+      ? ['launchctl', 'bootout', `gui/${uid}`, current.path]
+      : ['systemctl', '--user', 'disable', '--now', current.name];
   if (!options.dryRun && options.run) {
     await options.run(argv);
+    const removedPaths = [];
+    await assertNoLinks(current.path);
+    const bytes = await readFile(current.path).catch((error) => { if (error?.code === 'ENOENT') return null; throw error; });
+    const body = bytes && (platform === 'win32' ? bytes.toString('utf16le').replace(/^\uFEFF/, '') : bytes.toString('utf8'));
+    if (body !== null && createHash('sha256').update(body).digest('hex') === current.digest) {
+      await unlink(current.path);
+      removedPaths.push(current.path);
+      if (platform === 'linux') await options.run(['systemctl', '--user', 'daemon-reload']);
+    }
     await unlink(ownershipFile);
-    return { commands: [command], argv, removed: true, removedPath: ownershipFile };
+    removedPaths.push(ownershipFile);
+    return { commands: [command], argv, removed: true, removedPath: ownershipFile, removedPaths };
   }
   return { commands: [command], removed: false, described: true };
 }

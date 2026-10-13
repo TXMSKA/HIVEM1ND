@@ -1084,8 +1084,17 @@ function mergeSessions(observed, statuses, wakes) {
     }
   }
   for (const session of byId.values()) {
-    const wake = wakes.find((item) => item.unitId === session.unitId && item.nativeSessionId === session.nativeSessionId);
-    if (wake) session.wake = { enabled: wake.enabled === true, deadlineAt: wake.deadlineAt ?? null, pausedReason: wake.pausedReason ?? null };
+    const matches = wakes.filter((item) => item.unitId === session.unitId
+      && item.nativeSessionId === session.nativeSessionId && item.client === session.client && item.machine === session.machine);
+    if (matches.length) {
+      const deadlineAt = matches.map((item) => item.deadlineAt).filter((value) => Number.isFinite(Date.parse(value)))
+        .sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? null;
+      session.wake = {
+        enabled: matches.every((item) => item.enabled === true && !item.pausedReason && Number.isFinite(Date.parse(item.deadlineAt))),
+        deadlineAt,
+        pausedReason: matches.find((item) => item.pausedReason)?.pausedReason ?? null,
+      };
+    }
     delete session.statusAt;
   }
   return [...byId.values()];
@@ -1120,6 +1129,8 @@ async function readWake(mind, issues) {
       policies.push({
         unitId: binding.unitId ?? null,
         nativeSessionId: binding.nativeSessionId ?? null,
+        client: binding.client ?? null,
+        machine: binding.machine ?? null,
         enabled: record.enabled === true,
         deadlineAt: record.deadlineAt ?? null,
         pausedReason: record.pausedReason ?? null,

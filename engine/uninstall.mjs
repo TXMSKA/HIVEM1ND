@@ -29,6 +29,25 @@ export async function uninstall(options = {}) {
     return { action: 'uninstall', removed, kept, relay: [], warnings };
   }
 
+  let serviceLocationKnown = true;
+  try {
+    const registration = await removeOwnedRegistration({
+      mindPath, hostname, env, homeDir, cosmicPath: options.cosmicPath, platform: options.platform,
+      dryRun, run: options.registrationRunner ?? options.serviceRunner ?? null,
+      query: options.registrationQuery ?? options.serviceQuery,
+      uid: options.uid,
+    });
+    if (registration.kept) kept.push(registration.kept);
+    removed.push(...(registration.removedPaths ?? (registration.removedPath ? [registration.removedPath] : [])));
+  } catch (error) {
+    if (error?.code !== 'invalid_path') throw error;
+    serviceLocationKnown = false;
+  }
+  if (!dryRun && serviceLocationKnown) {
+    const stop = options.stopService ?? (await import('./service/service.mjs')).stopConfiguredService;
+    await stop({ ...options, mindPath, hostname, env, homeDir });
+  }
+
   const managedFiles = record.managedFiles ?? {};
   const cleanupDirectories = new Set();
 
@@ -73,21 +92,6 @@ export async function uninstall(options = {}) {
   }
 
   const relay = await removeRelayEntries({ homeDir, env, mindPath, dryRun });
-  try {
-    const registration = await removeOwnedRegistration({
-      mindPath,
-      hostname,
-      env,
-      homeDir,
-      dryRun,
-      run: options.registrationRunner ?? null,
-    });
-    if (registration.kept) kept.push(registration.kept);
-    if (registration.removedPath) removed.push(registration.removedPath);
-  } catch (error) {
-    if (error?.code !== 'invalid_path') throw error;
-  }
-
   if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases);
 
   const eligibility = removeMindRequested ? await checkMindRemovable(mindPath, hostname, record) : null;
@@ -115,8 +119,7 @@ export async function uninstall(options = {}) {
   return { action: 'uninstall', removed, updated, kept, relay, warnings };
 }
 
-// Install wrote the Relay entry of each client it found. Only an entry that runs the CLI copy inside this
-// mind goes; an entry that runs another kit, and everything else in the client config, stays.
+// A stable kit or legacy mind copy is owned only when its explicit mind argument matches this mind.
 async function removeRelayEntries({ homeDir, env, mindPath, dryRun }) {
   const { RELAY_CLIENTS, relayEntryPointsAt, relayEntryPresent, unconfigureRelayClient } = await import('./relay/config.mjs');
   const results = [];

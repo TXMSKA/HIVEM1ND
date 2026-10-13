@@ -28,11 +28,12 @@ async function enabledWakeUnits(mindPath, now) {
  * The person's channel to agents. Sends as canonical master and registers on the first message,
  * so opening the tool writes nothing. A saved registration is not an agent capability.
  */
-export async function createPersonRelay({ mindPath, tool, hostname = os.hostname(), clock = () => Date.now(), operations = null } = {}) {
+export async function createPersonRelay({ mindPath, tool, hostname = os.hostname(), clock = () => Date.now(), operations = null, serviceOptions = {} } = {}) {
   if (typeof tool !== 'string' || !/^[a-z][a-z0-9-]{0,40}$/.test(tool)) throw new TypeError('tool must be a short lowercase name.');
   const sessionId = `${tool}-${hostname}`;
-  const relay = operations ?? await openRelayOperations({ mindPath, hostname, sessionId, client: 'master' });
+  const relay = operations ?? await openRelayOperations({ ...serviceOptions, mindPath, hostname, sessionId, client: 'master' });
   let registered = false;
+  const destinations = new Map();
 
   async function agentFor(project) {
     const { units } = await relay.status();
@@ -40,8 +41,11 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
       .sort((a, b) => Number(b.unit.startsWith('executor-')) - Number(a.unit.startsWith('executor-'))
         || String(b.date ?? '').localeCompare(String(a.date ?? '')));
     if (!candidates.length) return null;
-    const awake = await enabledWakeUnits(path.resolve(mindPath), clock());
-    return { unit: candidates[0].unit, awake: awake.has(candidates[0].unit.toLowerCase()) };
+    const selected = candidates[0];
+    const id = selected.id ?? selected.unitId ?? selected.unit;
+    destinations.set(project, id);
+    const awake = relay.awake ? await relay.awake(id) : (await enabledWakeUnits(path.resolve(mindPath), clock())).has(selected.unit.toLowerCase());
+    return { unit: selected.unit, awake };
   }
 
   async function send({ project, subject, body, attachments = [] }) {
@@ -51,7 +55,7 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
       await relay.register({ unit: 'master', nativeSessionId: sessionId, client: 'master' });
       registered = true;
     }
-    const result = await relay.send({ to: agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });
+    const result = await relay.send({ to: relay.awake ? destinations.get(project) : agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });
     return { sent: true, to: agent.unit, id: result.id };
   }
 

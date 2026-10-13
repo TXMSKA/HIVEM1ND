@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { openRelayOperations } from '../service/client.mjs';
+import { connectNativeService } from '../service/client.mjs';
 import { toolSchemas } from '../service/mcp.mjs';
 
 const MAX_LINE_CHARS = 1_048_576;
 const SUPPORTED_PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+const MUTATING_TOOLS = new Set(['register', 'send_message', 'read_inbox', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
 
 export const RELAY_TOOLS = [
   tool('register', 'Bind this native agent session to an explicit unit.', {
@@ -137,11 +138,11 @@ async function* boundedLines(stream) {
   else if (pending) yield pending.replace(/\r$/, '');
 }
 
-export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, forwardEditor = null }) {
+export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, client, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env, operations = null, forwardEditor = null }) {
   if (!mindPath) throw new Error('mindPath is required');
-  const relay = await openRelayOperations({ mindPath, hostname, sessionId, client });
+  let service = null;
   const editors = new Set(editorTools().map((entry) => entry.name));
-  if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
+  try {
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }
     if (!line.trim()) continue;
@@ -158,6 +159,7 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') continue;
     let response;
+    let operationId = null;
     try {
       if (method === 'initialize') {
         if (!SUPPORTED_PROTOCOLS.includes(params.protocolVersion)) {
@@ -170,15 +172,22 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
       else if (method === 'tools/call') {
         if (id === undefined) continue;
         const args = validateToolArguments(params.name, params.arguments ?? {});
+        const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
+        operationId = requestId;
+        const forwarded = MUTATING_TOOLS.has(params.name) ? { ...args, requestId } : args;
         if (editors.has(params.name)) {
-          const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
-          const forwarded = { ...args, requestId };
-          response = typeof forwardEditor === 'function'
-            ? await forwardEditor(params.name, forwarded)
-            : { ...result({ code: 'service_unavailable', message: 'The editor tool is served by the shared service.', requestId }), isError: true };
+          if (typeof forwardEditor === 'function') response = await forwardEditor(params.name, forwarded);
+          else {
+            service ??= await connectNativeService({ env, nativeSessionId, client });
+            response = await service.callTool(params.name, forwarded);
+          }
+        } else if (operations) {
+          response = result(await callMethod(operations, params.name, args, { sessionId, client }));
         } else {
-          const value = await callMethod(relay, params.name, args, { sessionId, client });
-          response = result(value);
+          service ??= await connectNativeService({ env, nativeSessionId, client });
+          const received = await service.callTool(params.name, forwarded);
+          const body = JSON.parse(received.content?.find((item) => item.type === 'text')?.text ?? '{}');
+          response = received.isError ? { ...result(body.error ?? body), isError: true } : result(body.data);
         }
       } else {
         if (id === undefined) continue;
@@ -186,7 +195,7 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         continue;
       }
     } catch (error) {
-      if (method === 'tools/call') response = { ...result({ code: error.code ?? 'RELAY_ERROR', message: error.message }), isError: true };
+      if (method === 'tools/call') response = { ...result({ code: error.code ?? 'RELAY_ERROR', message: error.message, ...(operationId ? { requestId: operationId } : {}) }), isError: true };
       else {
         if (id === undefined) { stderr.write(`Relay MCP: ${error.message}\n`); continue; }
         stdout.write(`${JSON.stringify(rpcError(id, -32603, 'Internal error'))}\n`);
@@ -194,5 +203,8 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
       }
     }
     if (id !== undefined) stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: response })}\n`);
+  }
+  } finally {
+    service?.close();
   }
 }

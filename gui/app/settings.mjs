@@ -190,7 +190,6 @@ export function renderHomeGrant(document, grant, index, label) {
 export function renderSettings(document, model, t, actions) {
   const panel = element(document, "section", { class: "settings-panel", "data-settings": "true" });
   const service = model.service ?? {};
-  panel.append(element(document, "h2", { text: t("settings") }));
   panel.append(element(document, "p", { "data-machine": service.machine ?? "", text: t("serviceRunning", { machine: service.machine ?? "" }) }));
   panel.append(element(document, "p", { "data-version": service.version ?? "", text: t("versionLabel", { version: service.version ?? "" }) }));
   panel.append(element(document, "p", { "data-origin": service.originKind ?? "", text: t("originKind", { kind: service.originKind ?? "" }) }));

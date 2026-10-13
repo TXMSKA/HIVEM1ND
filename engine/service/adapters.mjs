@@ -74,19 +74,28 @@ export function createNativeAdapter(client, options = {}) {
       if (request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
       if (fixture) return acceptFixture(client, options.transcript ?? [], request);
+      const nativeLaunch = options.createNativeLaunch?.({ ...request, client }) ?? null;
+      request = { ...request, nativeMcp: nativeLaunch?.mcp ?? null };
       if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
-      const resolved = options.command
-        ? { command: options.command, args: options.args ?? launchArgs(client, request) }
-        : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
-      if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
-      assertNoBypass(resolved.args);
-      const child = (options.spawn ?? spawn)(resolved.command, resolved.args, {
-        shell: false,
-        windowsHide: true,
-        cwd: request.cwd || undefined,
-        env: options.env ?? process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      let child;
+      try {
+        const resolved = options.command
+          ? { command: options.command, args: options.args ?? launchArgs(client, request) }
+          : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
+        if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
+        assertNoBypass(resolved.args);
+        child = (options.spawn ?? spawn)(resolved.command, resolved.args, {
+          shell: false,
+          windowsHide: true,
+          cwd: request.cwd || undefined,
+          env: nativeLaunch ? { ...(options.env ?? process.env), ...nativeLaunch.env } : options.env ?? process.env,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        nativeLaunch?.close();
+        throw error;
+      }
+      child.once?.('exit', () => nativeLaunch?.close());
       if (child?.pid) children.set(child.pid, child);
       let opened = null;
       try {
@@ -99,10 +108,13 @@ export function createNativeAdapter(client, options = {}) {
         record.incoming = opened.incoming;
         record.rpc = opened.rpc;
         record.unitId = request.unitId ?? null;
+        record.nativeLaunch = nativeLaunch;
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
         sessions.set(opened.nativeSessionId, record);
+        nativeLaunch?.ready(opened.nativeSessionId);
         return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true };
       } catch (error) {
+        nativeLaunch?.close();
         opened?.incoming?.close();
         await finishChild(child);
         if (child?.pid) children.delete(child.pid);
@@ -116,6 +128,9 @@ export function createNativeAdapter(client, options = {}) {
       if (!session?.child || session.child.exitCode != null || session.child.killed === true) return false;
       if (proof.unitId && session.unitId && proof.unitId !== session.unitId) return false;
       return true;
+    },
+    async registered(request, registration) {
+      return options.onNativeRegistered?.({ request, registration });
     },
     async send(input = {}) {
       const session = sessions.get(input?.nativeSessionId);
@@ -152,7 +167,10 @@ export function createNativeAdapter(client, options = {}) {
       return { acknowledged: exitCode !== null, exitCode };
     },
     async close() {
-      for (const item of sessions.values()) item.incoming?.close();
+      for (const item of sessions.values()) {
+        item.nativeLaunch?.close();
+        item.incoming?.close();
+      }
       sessions.clear();
       await Promise.all([...children.values()].map((child) => finishChild(child)));
       children.clear();
@@ -388,6 +406,13 @@ async function launch(context, request) {
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId });
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
+  try {
+    await adapter.registered?.(request, registration);
+  } catch (error) {
+    await stopSession(context, registration.sessionId, { confirmed: true });
+    await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
+    return finish(context, request, 'failed', null, { code: error.code ?? 'native_login_unverified', message: 'The native session could not enter Relay.' });
+  }
   await preload(context, request);
   return finish(context, request, 'started', registration.sessionId, null);
 }
@@ -573,7 +598,12 @@ function cleanPath(value) {
 function launchArgs(client, request = {}) {
   if (client === 'codex') return ['app-server', '--listen', 'stdio://'];
   if (client === 'cursor') return ['acp'];
-  return ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--session-id', request.nativeSessionId ?? randomUUID()];
+  const args = ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--session-id', request.nativeSessionId ?? randomUUID()];
+  if (request.nativeMcp) {
+    const { name, command, args: serverArgs } = request.nativeMcp;
+    args.push('--mcp-config', JSON.stringify({ mcpServers: { [name]: { command, args: serverArgs } } }));
+  }
+  return args;
 }
 
 const EXPLICIT_EXECUTABLE = {
@@ -754,6 +784,7 @@ async function openOwnedChannel(client, child, request, timeoutMs) {
 function releaseSession(sessions, pid) {
   for (const [id, item] of sessions) {
     if (item.pid !== pid) continue;
+    item.nativeLaunch?.close();
     item.incoming?.close();
     sessions.delete(id);
   }
@@ -905,6 +936,12 @@ function openRpc(child, incoming, session, timeoutMs) {
         noteTurn(session, message);
         continue;
       }
+      if (typeof message?.method === 'string' && (typeof message.id === 'string' || typeof message.id === 'number')) {
+        // An unimplemented native permission request cannot wait indefinitely or imply approval.
+        try { sendLine(child, { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'This native request is not supported by the attached service.' } }); }
+        catch { failAll(unavailable()); }
+        continue;
+      }
       remember(message);
     }
   };
@@ -972,6 +1009,10 @@ async function codexHandshake(rpc, request) {
   const account = await rpc.call('account/read', {});
   if (!accountReady(account)) throw unavailable();
   const params = { cwd: request.cwd };
+  if (request.nativeMcp) {
+    const { name, command, args } = request.nativeMcp;
+    params.config = { mcp_servers: { [name]: { command, args, env_vars: ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT'] } } };
+  }
   if (request.model) params.model = request.model;
   const thread = await rpc.call('thread/start', params);
   if (!thread.result?.thread?.id) throw unavailable();
@@ -989,7 +1030,7 @@ async function cursorHandshake(rpc, request) {
   if (!method) throw unavailable();
   const auth = await rpc.call('authenticate', { methodId: method.id ?? method });
   if (auth?.error) throw unavailable();
-  const session = await rpc.call('session/new', { cwd: request.cwd, mcpServers: [] });
+  const session = await rpc.call('session/new', { cwd: request.cwd, mcpServers: request.nativeMcp ? [request.nativeMcp] : [] });
   if (!session.result?.sessionId) throw unavailable();
   return session.result.sessionId;
 }

@@ -8,7 +8,7 @@ import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { recordActivity } from './watch.mjs';
-import { atomicWrite, commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
+import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 
 const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
@@ -362,6 +362,10 @@ async function transactLegacy(context, name, args, registration, method, run) {
 }
 
 async function commitMindFile(context, destination, bytes) {
+  return withLocalChanges(context.store, () => commitMindFileLocked(context, destination, bytes));
+}
+
+async function commitMindFileLocked(context, destination, bytes) {
   const relative = path.relative(context.paths.mind, destination);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new CoreError(403, 'forbidden', 'The tool cannot write outside the mind.');

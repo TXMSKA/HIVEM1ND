@@ -48,6 +48,7 @@ const SERVICE_COPY = {
     originPathHelp: 'Leave this empty to use the local Cosmic origin for this mind.',
     folder: 'Folder',
     onedrive: 'OneDrive',
+    serviceFailed: 'The service could not start. Installation can be retried without copying the mind again.',
   },
   es: {
     originKind: 'Origen',
@@ -56,6 +57,7 @@ const SERVICE_COPY = {
     originPathHelp: 'Dejar vacío para usar el origen local de Cosmic de esta mente.',
     folder: 'Carpeta',
     onedrive: 'OneDrive',
+    serviceFailed: 'El servicio no pudo iniciarse. Se puede reintentar la instalación sin volver a copiar la mente.',
   },
 };
 
@@ -101,9 +103,14 @@ export async function createSetupSession(options = {}) {
     serviceDryRun: options.serviceDryRun !== false,
     serviceRunner: options.serviceRunner ?? null,
     serviceStart: options.serviceStart ?? null,
+    serviceQuery: options.serviceQuery ?? null,
+    aclRunner: options.aclRunner ?? null,
+    sid: options.sid ?? null,
     serviceProtect: options.serviceProtect !== false,
     openViewer: options.openViewer ?? null,
     cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : null,
+    originKind: options.originKind ?? 'folder',
+    originPath: options.originPath ?? '',
   });
   await session.initialize();
   return session;
@@ -133,8 +140,8 @@ class SetupSession {
       attach: null,
       conflicts: {},
       confirm: false,
-      originKind: 'folder',
-      originPath: '',
+      originKind: options.originKind,
+      originPath: options.originPath,
     };
     this.machineRecord = null;
     this.result = null;
@@ -159,6 +166,12 @@ class SetupSession {
       this.answers.language = normalizeLanguage(this.answers.language);
       this.currentStep = record.setup === 'done' ? 8 : clampStep(record.setup);
       if (record.setup === 'done') this.result = this.completionResult([], []);
+      if (this.serviceSetup && (record.setup === 'done' || record.draft?.serviceOnly === true)) {
+        this.answers.serviceOnly = true;
+        this.currentStep = record.setup === 'done' ? 7 : this.currentStep;
+        this.result = this.completionResult([], []);
+        if (record.setup === 'done') await this.resumeInstalledService();
+      }
     } else {
       this.answers.agents = record.agents.map((agent) => ({
         id: agent.name,
@@ -381,6 +394,7 @@ class SetupSession {
       for (const [index, conflict] of preview.conflicts.entries()) {
         base.values[`conflict.${index}`] = this.answers.conflicts[conflict.path] ?? conflict.selection ?? null;
       }
+      if (this.result?.service?.status === 'failed') base.description = serviceText(language, 'serviceFailed');
     }
     return base;
   }
@@ -424,6 +438,12 @@ class SetupSession {
       const selected = path.resolve(requireValue(values.mindPath ?? this.mindPath, 'mindPath'));
       validateMindSelection(selected, this.kitPath);
       await validateDestinationType(selected);
+      if (this.answers.serviceOnly) {
+        if (normalizePath(selected) !== normalizePath(this.mindPath)) throw new SetupValidationError('Service setup keeps the installed mind in its existing location.');
+        this.currentStep = 7;
+        await this.persistDraft(7);
+        return this.getStep();
+      }
       const previousMind = this.mindPath;
       await this.selectMind(selected);
       // A path that turns out to hold a mind goes back to this step with the alert, so the
@@ -541,6 +561,12 @@ class SetupSession {
 
   async back() {
     if (this.currentStep <= 1) return this.getStep();
+    if (this.answers.serviceOnly && this.currentStep === 7) {
+      this.currentStep = 2;
+      this.answers.confirm = false;
+      await this.persistDraft(2);
+      return this.getStep();
+    }
     if (this.currentStep === 8) this.currentStep = 7;
     else if (this.currentStep === 7) {
       this.currentStep = this.answers.installMode === 'simple' ? 1 : (this.answers.attach ? 5 : 6);
@@ -552,6 +578,7 @@ class SetupSession {
 
   async preview() {
     if (this.currentStep < 7) throw new Error('Preview is available at step 7');
+    if (this.answers.serviceOnly) return { files: [], kept: [], warnings: [], conflicts: [] };
     const plan = await this.buildPlan();
     const preview = publicPreview(plan, this.answers.language);
     preview.conflicts = preview.conflicts.map((conflict) => ({
@@ -564,6 +591,8 @@ class SetupSession {
   async install() {
     if (this.currentStep !== 7) throw new Error('Install is available at step 7');
     if (!this.answers.confirm) throw new SetupValidationError('Installation must be confirmed');
+    if (this.answers.serviceOnly) return this.resumeInstalledService();
+    if (this.result?.service?.status === 'failed' && this.result.unwritten.length === 0) return this.retryService();
     const plan = await this.buildPlan();
     for (const conflict of plan.conflicts) {
       const choice = this.answers.conflicts[conflict.path];
@@ -584,8 +613,8 @@ class SetupSession {
     // An asset that was neither written nor answered for leaves the setup at the install
     // step, so the next run finishes it instead of reporting an installation that is not there.
     const unwritten = this.unwrittenAssets(plan, applied);
-    const record = this.buildMachineRecord(unwritten.length === 0 ? 'done' : 7);
-    record.draft = unwritten.length === 0 ? {} : { ...this.answers, mindPath: this.mindPath };
+    const record = this.buildMachineRecord(7);
+    record.draft = { ...this.answers, mindPath: this.mindPath };
     record.managedFiles = managedFiles;
     await writeMachineRecord(this.mindPath, this.hostname, record);
     this.machineRecord = record;
@@ -606,13 +635,17 @@ class SetupSession {
         warnings: plan.warnings,
       },
     });
-    // Relay points the clients at the mind's own copy of the CLI, so it waits for a complete install.
-    const relay = this.relaySetup && unwritten.length === 0
-      ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.mindPath, mindPath: this.mindPath })
-      : [];
-    this.currentStep = 8;
-    let service = null;
-    if (this.serviceSetup && unwritten.length === 0) service = await this.configureService();
+    if (unwritten.length === 0) {
+      await (await import('../migrations/3.0.0.mjs')).migrate({
+        userPath: path.join(this.mindPath, 'user'),
+        progressDirectory: path.join(this.mindPath, '.migration'),
+      });
+    }
+    const { relay, failure: relayFailure } = unwritten.length === 0
+      ? await this.configureRelay() : { relay: [], failure: null };
+    this.currentStep = unwritten.length === 0 ? 8 : 7;
+    let service = relayFailure;
+    if (this.serviceSetup && unwritten.length === 0 && !service) service = await this.configureService();
     this.result = this.completionResult(applied.files, plan.warnings, {
       relay,
       omitted: applied.omitted,
@@ -621,41 +654,109 @@ class SetupSession {
       unwritten,
       reportPath,
     });
+    this.result.completed = unwritten.length === 0;
     if (service) {
       this.result.service = service;
       this.result.viewerUrl = service.status === 'started' ? (service.viewerUrl ?? null) : null;
-      if (service.status === 'failed') this.result.completed = false;
+      this.result.completed = unwritten.length === 0 && service.status !== 'failed';
+      if (service.status === 'failed') {
+        this.currentStep = 7;
+        await this.persistDraft(7);
+      }
+    }
+    if (unwritten.length === 0 && service?.status !== 'failed') {
+      const finished = this.buildMachineRecord('done');
+      finished.managedFiles = managedFiles;
+      await writeMachineRecord(this.mindPath, this.hostname, finished);
+      this.machineRecord = finished;
     }
     return this.result;
   }
 
   async retryService() {
     if (!this.serviceSetup || !this.result) return this.result;
-    const service = await this.configureService();
-    this.result = { ...this.result, service, viewerUrl: service.viewerUrl ?? null };
+    let relay = this.result.relay;
+    let service;
+    if (this.result.service?.phase === 'relay') {
+      const retried = await this.configureRelay();
+      relay = retried.relay;
+      service = retried.failure;
+    }
+    service ??= await this.configureService();
+    this.result = { ...this.result, ...this.completionResult(this.result.files, this.result.warnings, { ...this.result, relay }),
+      service, viewerUrl: service.viewerUrl ?? null, completed: service.status !== 'failed' };
+    this.currentStep = service.status === 'failed' ? 7 : 8;
+    const record = this.buildMachineRecord(service.status === 'failed' ? 7 : 'done');
+    record.draft = service.status === 'failed' ? { ...this.answers, mindPath: this.mindPath } : {};
+    await writeMachineRecord(this.mindPath, this.hostname, record);
+    this.machineRecord = record;
     return this.result;
   }
 
+  async resumeInstalledService() {
+    this.currentStep = 7;
+    await this.persistDraft(7);
+    let phase = 'migration';
+    let relay = [];
+    let service;
+    try {
+      await (await import('../migrations/3.0.0.mjs')).migrate({ userPath: path.join(this.mindPath, 'user'), progressDirectory: path.join(this.mindPath, '.migration') });
+      phase = 'relay';
+      const configured = await this.configureRelay();
+      relay = configured.relay;
+      service = configured.failure ?? await this.configureService();
+    } catch (error) {
+      service = { status: 'failed', phase, state: this.serviceState ?? {}, error: error.message, code: error.code ?? 'service_unavailable', viewerUrl: null };
+    }
+    const completed = service.status !== 'failed';
+    this.result = { ...this.completionResult([], [], { relay }), completed, service, viewerUrl: completed ? service.viewerUrl ?? null : null };
+    this.currentStep = completed ? 8 : 7;
+    const record = { ...this.machineRecord, setup: completed ? 'done' : 7,
+      draft: completed ? {} : { ...this.answers, mindPath: this.mindPath } };
+    await writeMachineRecord(this.mindPath, this.hostname, record);
+    this.machineRecord = record;
+    return this.result;
+  }
+
+  async configureRelay() {
+    const relay = this.relaySetup
+      ? await (await import('./relay/config.mjs')).ensureRelayClients({ homeDir: this.homeDir, env: this.env, kitPath: this.kitPath, mindPath: this.mindPath }) : [];
+    const failed = relay.filter(item => item.status === 'failed');
+    const failure = this.serviceSetup && failed.length
+      ? { status: 'failed', phase: 'relay', state: this.serviceState ?? {}, code: 'service_unavailable',
+        error: failed.map(item => `${item.client}: ${item.reason}`).join('\n'), viewerUrl: null } : null;
+    return { relay, failure };
+  }
+
   async configureService() {
-    const service = await configureOwnedService({
-      env: this.env,
-      homeDir: this.homeDir,
-      cosmicPath: this.cosmicPath,
-      mindPath: this.mindPath,
-      hostname: this.hostname,
-      kitPath: this.kitPath,
-      originKind: this.answers.originKind || 'folder',
-      originPath: this.answers.originPath || null,
-      dryRun: this.serviceDryRun !== false,
-      run: this.serviceRunner,
-      start: this.serviceStart,
-      protect: this.serviceProtect !== false,
-      state: this.serviceState,
-      current: this.serviceCurrent,
-    });
+    let service;
+    try {
+      service = await configureOwnedService({
+        env: this.env,
+        homeDir: this.homeDir,
+        cosmicPath: this.cosmicPath,
+        mindPath: this.mindPath,
+        hostname: this.hostname,
+        kitPath: this.kitPath,
+        originKind: this.answers.originKind || 'folder',
+        originPath: this.answers.originPath || null,
+        requireOrigin: Boolean(this.existingMind || this.answers.serviceOnly),
+        dryRun: this.serviceDryRun !== false,
+        run: this.serviceRunner,
+        start: this.serviceStart,
+        query: this.serviceQuery,
+        aclRunner: this.aclRunner,
+        sid: this.sid,
+        protect: this.serviceProtect !== false,
+        state: this.serviceState,
+        current: this.serviceCurrent,
+      });
+    } catch (error) {
+      service = { status: 'failed', phase: 'config', state: this.serviceState ?? {}, error: error.message, code: error.code ?? 'service_unavailable', viewerUrl: null };
+    }
     this.serviceState = service.state;
     if (service.state?.installed?.digest) {
-      this.serviceCurrent = { digest: service.state.installed.digest, executable: service.state.installed.executable };
+      this.serviceCurrent = service.state.installed;
     }
     if (service.status === 'started' && service.viewerUrl && this.openViewer && !this.viewerOpened) {
       this.viewerOpened = true;
@@ -786,7 +887,7 @@ class SetupSession {
   }
 
   async persistDraft(step = this.currentStep) {
-    const record = this.buildMachineRecord(step);
+    const record = this.answers.serviceOnly ? { ...this.machineRecord, setup: step, language: this.answers.language } : this.buildMachineRecord(step);
     record.draft = { ...this.answers, mindPath: this.mindPath };
     record.managedFiles = { ...(this.machineRecord?.managedFiles ?? {}) };
     await writeMachineRecord(this.mindPath, this.hostname, record);
@@ -911,7 +1012,7 @@ class SetupSession {
     });
     const machinePlan = await planDataFile({
       destination: machinePath,
-      content: serializeMachineRecord(finalRecord),
+      content: serializeMachineRecord({ ...finalRecord, setup: 7, draft: { ...this.answers, mindPath: this.mindPath } }),
       root: this.mindPath,
       kind: 'machine',
       allowExisting: true,

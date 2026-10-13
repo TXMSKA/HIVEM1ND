@@ -41,12 +41,6 @@ export function oneDriveRoots({ platform = 'win32', env = {} } = {}) {
   return roots;
 }
 
-function assertCosmicParent(mindPath, platform) {
-  const parent = library(platform).basename(library(platform).dirname(mindPath));
-  const matches = platform === 'win32' ? parent.toLowerCase() === 'cosmic' : parent === 'Cosmic';
-  if (!matches) throw new CoreError(422, 'invalid_mind', 'The mind must stay under a Cosmic folder.');
-}
-
 export function mindKeyFor(mindPath, platform) {
   const lib = library(platform);
   const resolved = lib.resolve(mindPath);
@@ -54,12 +48,11 @@ export function mindKeyFor(mindPath, platform) {
   return createHash('sha256').update(hashed).digest('hex').slice(0, 16);
 }
 
-export function servicePaths({ platform, env = {}, home, mindPath, machine, originPath = null } = {}) {
+export function servicePaths({ platform, env = {}, home, mindPath, machine, originPath = null, cosmicPath = null } = {}) {
   const lib = library(platform);
   const machineName = validateMachineName(machine);
-  const cosmic = localCosmic({ platform, env, home });
+  const cosmic = cosmicPath ? lib.resolve(cosmicPath) : localCosmic({ platform, env, home });
   const mind = lib.resolve(mindPath ?? defaultMind({ platform, env, home }));
-  assertCosmicParent(mind, platform);
   const mindKey = mindKeyFor(mind, platform);
   const serviceRoot = lib.join(cosmic, 'hivem1nd-service');
   const localDirectory = lib.join(serviceRoot, mindKey, machineName);

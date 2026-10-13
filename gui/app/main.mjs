@@ -33,7 +33,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { ApiError, REQUEST_DEADLINE_MS, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
+import { ApiError, REQUEST_DEADLINE_MS, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -67,7 +67,7 @@ import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry,
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceDocument, saveRange, selectedPlainRange, showTools, sourceReplacement, textAnchor, textDraft, textDraftKey } from "./void.mjs";
-import { synchronize } from "./stream.mjs";
+import { close as closeStream, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
@@ -217,8 +217,8 @@ function startOwnEmbed(app) {
   publishReady(app.embed);
 }
 
-async function patchOwnViewer(app, body) {
-  const operation = createOperation({ method: "PATCH", path: "/viewer", body });
+async function patchOwnViewer(app, body, retained = null) {
+  const operation = retained ?? createOperation({ method: "PATCH", path: "/viewer", body });
   const result = await request(app.api, "PATCH", "/viewer", { operation });
   app.store.viewer = { ...app.store.viewer, ...result.data };
   const choice = presentation(app.store.viewer, app.store.settings?.settings);
@@ -279,6 +279,10 @@ export function renderShell(app) {
 
 function paintShell(app) {
   captureInputs(app);
+  if (!app.api.token) {
+    renderSignedOut(app);
+    return;
+  }
   const document = app.root.ownerDocument;
   document.documentElement.lang = app.language;
   document.documentElement.dataset.look = app.look;
@@ -514,7 +518,19 @@ async function onStream(app, event) {
   if (app.disposed || app.bootFailed) return;
   const result = await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed || result?.dropped) return;
-  if (event?.name === "home.changed") noteHome(app, dataOf(event));
+  if (event?.name === "home.changed") {
+    const data = dataOf(event);
+    noteHome(app, data);
+    if (app.store.audience === "phone" && data.home?.enabled === false) {
+      closeStream(app.api.live);
+      clearCredentials(app.api);
+      app.store.signedOut = 410;
+      app.phoneError = data.reason === "expired" ? "homeExpired" : "homeClosed";
+      result?.consume?.();
+      renderSignedOut(app);
+      return;
+    }
+  }
   if (event?.name === "sync.changed") noteSync(app, dataOf(event));
   if (event?.name === "service.changed") noteService(app, dataOf(event));
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
@@ -733,7 +749,7 @@ function renderBar(app, t, counts) {
     type: "button",
     class: "pill",
     "data-action": "waiting",
-    "aria-pressed": String(app.waitingOpen === true || app.mode === "waiting"),
+    "aria-pressed": String(app.mode === "map" && app.waitingOpen === true || app.mode === "waiting"),
     onclick: () => openWaiting(app),
   }, icon(document, "waiting"), cardinal(app.language, "waitingCount", counts.waiting ?? 0));
   const settings = element(document, "button", {
@@ -896,7 +912,8 @@ function renderWorkspace(app, t, view, counts) {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
-  return element(document, "div", { class: "workspace" }, side, phoneHierarchy ? null : stage, inspector);
+  const showSide = app.layout !== "phone" || app.mode !== "waiting";
+  return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
 }
 
 async function loadLists(app) {
@@ -923,7 +940,8 @@ function openWaiting(app) {
     navigate(app, "waiting");
     return;
   }
-  app.waitingOpen = app.waitingOpen !== true;
+  app.waitingOpen = !(app.mode === "map" && app.waitingOpen === true);
+  if (app.waitingOpen) app.mode = "map";
   if (app.waitingOpen && app.waitingList) reloadList(app.waitingList);
   if (!app.disposed) renderShell(app);
 }
@@ -965,7 +983,8 @@ function renderWaitingSurface(app, t) {
   const items = list.items ?? [];
   const range = windowRange(list.scrollTop, list.height || 640, list.rowHeight || 36, items.length);
   if (!items.length && list.status !== "loading") {
-    surface.append(renderWaiting(document, [], t, (item) => openWaitingItem(app, item), showMapButton(app, document, t)));
+    const emptyText = (key) => t(app.layout === "phone" && key === "emptyWaitingNext" ? "phoneNavHint" : key);
+    surface.append(renderWaiting(document, [], emptyText, (item) => openWaitingItem(app, item), showMapButton(app, document, t)));
   } else if (items.length) {
     const visible = items.slice(range.start, range.end);
     if (visible.length) surface.append(renderWaiting(document, visible, t, (item) => openWaitingItem(app, item)));
@@ -1148,7 +1167,7 @@ function showMapButton(app, document, t) {
     type: "button",
     class: "btn",
     "data-action": "show-map",
-    text: t("showMap"),
+    text: t(app.layout === "phone" ? "hierarchy" : "showMap"),
     onclick: () => navigate(app, "hierarchy"),
   });
 }
@@ -2309,7 +2328,7 @@ function appendStructureTools(app, document, editor, t, tools) {
   const canMovePage = (board.pages?.length ?? 0) >= 2;
   const canMoveScreen = (board.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2);
   const canLink = (board.screens?.length ?? 0) >= 2;
-  tools.append(
+  tools.append(...[
     editorField(document, app, t, "width", "screenWidth", "screen-width"),
     editorField(document, app, t, "height", "screenHeight", "screen-height"),
     element(document, "button", { type: "button", class: "btn", "data-action": "resize-screen", onclick: () => resizeBoard(app, editor) }, t("resizeScreen")),
@@ -2319,7 +2338,7 @@ function appendStructureTools(app, document, editor, t, tools) {
     canMoveScreen ? null : element(document, "p", { id: "reason-move-screen", class: "field-hint", "data-disabled-reason": "move-screen", text: t("needTwoScreens") }),
     element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", "aria-describedby": canLink ? null : "reason-add-link", onclick: () => addBoardLink(app, editor) }, t("addLink")),
     canLink ? null : element(document, "p", { id: "reason-add-link", class: "field-hint", "data-disabled-reason": "add-link", text: t("needLinkScreens") }),
-  );
+  ].filter(child => child != null));
 }
 
 function resizeBoard(app, editor) {
@@ -2638,15 +2657,27 @@ function dataOf(event) {
 }
 
 function chooseSetting(app, patch) {
+  let saved = null;
+  let viewerOperation = null;
   return track(app, "settings", text(app.language, "savingSetting"), async (record) => {
     try {
-      const retained = await reuseOrReconcile(app, record, "PATCH", "/settings", (operation) => sameSettingsChoice(operation, patch));
-      const revision = app.store.settings?.revision ?? null;
-      const result = await saveSettings(app.api, revision, patch, retained);
-      record.operation = result.operation;
-      applySettingsResult(app, result);
-      return result;
+      if (!saved) {
+        const retained = await reuseOrReconcile(app, record, "PATCH", "/settings", (operation) => sameSettingsChoice(operation, patch));
+        const revision = app.store.settings?.revision ?? null;
+        saved = await saveSettings(app.api, revision, patch, retained);
+        record.operation = saved.operation;
+        applySettingsResult(app, saved);
+      }
+      const overrides = Object.fromEntries(Object.keys(patch)
+        .filter(key => app.store.viewer?.[key] != null)
+        .map(key => [key, null]));
+      if (viewerOperation || Object.keys(overrides).length > 0) {
+        viewerOperation ??= createOperation({ method: "PATCH", path: "/viewer", body: overrides });
+        await patchOwnViewer(app, overrides, viewerOperation);
+      }
+      return saved;
     } catch (error) {
+      if (saved && viewerOperation) error.operation = saved.operation;
       if (error?.operation) record.operation = error.operation;
       if (error.code === "revision_conflict") {
         try {
@@ -4256,8 +4287,8 @@ function setTaskStatus(app, task, status, note) {
     record.operation = result.operation ?? record.operation;
     if (status === "open") clearInputDraft(app, "note", task.id);
     showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
-    app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
-    refreshWaiting(app);
+    replaceTask(app, result.data.task);
+    await refreshWaiting(app);
     return result;
   });
 }
@@ -4267,10 +4298,18 @@ function undoSelected(app, task) {
     const result = await undoTask(app.api, task, record.operation);
     record.operation = result.operation ?? record.operation;
     showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
-    app.inspectorData.tasks = app.inspectorData.tasks.map((item) => item.id === result.data.task.id ? result.data.task : item);
-    refreshWaiting(app);
+    replaceTask(app, result.data.task);
+    await refreshWaiting(app);
     return result;
   });
+}
+
+function replaceTask(app, task) {
+  if (app.inspectorData?.tasks) {
+    app.inspectorData.tasks = app.inspectorData.tasks.map(item => item.id === task.id ? task : item);
+  }
+  if (app.waitingRecord?.task?.id === task.id) app.waitingRecord.task = task;
+  app.store.indexes.tasks.set(task.id, task);
 }
 
 function refreshWaiting(app) {

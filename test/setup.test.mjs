@@ -10,6 +10,7 @@ import { evolve } from '../engine/lifecycle.mjs';
 import { assertSafePath, hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 import { text } from '../engine/texts.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -928,6 +929,23 @@ test('simple mode attaches to a mind already installed on this machine instead o
   assert.ok(await pathExists(path.join(installed, 'user', 'machines', 'SECOND.md')));
 });
 
+test('a migration failure leaves setup resumable until the remaining work succeeds', async (context) => {
+  const fixture = await makeFixture(context);
+  const session = await createSetupSession({ kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, language: 'en' });
+  await session.answer({ installMode: 'simple' });
+  await session.answer({ confirm: true });
+  const progress = path.join(fixture.mindPath, '.migration', 'migration-3.0.0.json');
+  await mkdir(path.dirname(progress), { recursive: true });
+  await writeFile(progress, '{broken');
+  await assert.rejects(session.install(), SyntaxError);
+  assert.match(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
+  assert.equal((await session.getStep()).done, false);
+  await rm(progress);
+  const completed = await session.install();
+  assert.equal(completed.completed, true);
+  assert.match(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
+});
+
 test('service setup writes config before startup and retries the failed phase once', async (context) => {
   const fixture = await makeFixture(context);
   const env = process.platform === 'win32'
@@ -948,6 +966,8 @@ test('service setup writes config before startup and retries the failed phase on
     serviceSetup: true,
     serviceDryRun: false,
     serviceProtect: false,
+    aclRunner: stubAclRunner(),
+    serviceQuery: async (plan) => commands.length === 0 ? { present: false } : { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments },
     serviceRunner: async (command) => { commands.push(command); },
     serviceStart: async () => {
       starts += 1;
@@ -970,12 +990,17 @@ test('service setup writes config before startup and retries the failed phase on
   const failed = await session.install();
   assert.equal(failed.service.status, 'failed');
   assert.equal(failed.service.phase, 'start');
+  assert.equal((await session.getStep()).number, 7);
+  assert.equal((await session.getStep()).done, false);
+  assert.match((await session.getStep()).description, /could not start/);
   assert.match(await readFile(failed.service.configFile, 'utf8'), /hivem1nd-service-config-v1/);
   assert.equal(opened.length, 0);
   const recorded = commands.length;
   assert.equal(recorded > 0, true);
-  const retried = await session.retryService();
+  const retried = await session.install();
   assert.equal(retried.service.status, 'started');
+  assert.equal(retried.completed, true);
+  assert.equal((await session.getStep()).done, true);
   assert.equal(commands.length, recorded);
   assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
   await session.retryService();

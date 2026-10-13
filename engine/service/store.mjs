@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks, safeRelative } from './paths.mjs';
 
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+const localChanges = new AsyncLocalStorage();
 
 function createLockTable() {
   const tails = new Map();
@@ -197,6 +199,23 @@ export async function withLocks(store, keys, operation) {
   } finally {
     while (releases.length > 0) releases.pop()();
   }
+}
+
+export async function withLocalChanges(store, operation) {
+  const inherited = localChanges.getStore();
+  if (inherited?.get(store)?.active) return operation();
+  return withLocks(store, ['local-observation'], () => {
+    const lease = { active: true };
+    const owners = new Map(inherited ?? []);
+    owners.set(store, lease);
+    return localChanges.run(owners, async () => {
+      try {
+        return await operation();
+      } finally {
+        lease.active = false;
+      }
+    });
+  });
 }
 
 async function readBytesRaw(filePath) {

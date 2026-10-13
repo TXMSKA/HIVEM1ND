@@ -220,7 +220,7 @@ function serializeMessage(message) {
   return Buffer.from(`${fields.map(([key, value]) => `${key}: ${value}`).join('\n')}\n\n${message.body}`, 'utf8');
 }
 
-function parseRoutes(text) {
+export function parseRoutes(text) {
   const sections = new Map();
   let current = '';
   for (const line of String(text).replace(/\r\n/g, '\n').split('\n')) {
@@ -720,7 +720,8 @@ export async function createRelay(options = {}) {
       return { id: scopeId, path: userPath, environment: null, project: null };
     }
     if (!UNIT_PATTERN.test(unit)) return null;
-    const scope = (await routesAndScopes()).scopes.find((item) => item.id === scopeId);
+    const lookupScope = scopeId === 'root' ? 'user' : scopeId;
+    const scope = (await routesAndScopes()).scopes.find((item) => item.id === lookupScope);
     if (!scope) return null;
     const stateFile = path.join(scope.path, 'state', `${unit}.md`);
     await safePath(mindPath, stateFile);

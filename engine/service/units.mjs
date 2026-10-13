@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, validateName, validateRole, canonicalScope } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateName, validateRole, canonicalScope } from './identity.mjs';
 import { answersFor, readDetail } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
-import { commitTransaction, readBytes, revisionOf, withReceipt } from './store.mjs';
+import { commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 export async function createUnit(context, input, options = {}) {
@@ -177,9 +177,16 @@ async function prepareCreate(context, input) {
 }
 
 async function finish(context, prepared, transaction) {
+  return withLocalChanges(context.store, () => finishLocked(context, prepared, transaction));
+}
+
+async function finishLocked(context, prepared, transaction) {
   const result = await commitTransaction(context.store, transaction);
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  const changes = await stageTransaction(sync, prepared.stage);
+  const changes = await stageTransaction(sync, prepared.stage.map((entry) => ({
+    ...entry,
+    id: uuidV8(['unit-change', transaction.id, entry.target.kind, entry.target.path, hashBytes(entry.bytes)]),
+  })), { transactionId: transaction.id });
   noteSync(context, changes.length ? 'pending' : 'local');
   if (context.pulse) {
     const published = await context.pulse.changed(changes.map((item) => item.id));

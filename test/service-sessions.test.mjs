@@ -567,6 +567,40 @@ function rpcMethods(child) {
   return child.written.map((line) => JSON.parse(line));
 }
 
+test('owned native startup passes only its launch capability in the child environment and registers the shared MCP', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const child = liveChild();
+  installHandshake(child, { result: { account: { type: 'chatgpt', email: FIXTURE_EMAIL }, requiresOpenaiAuth: true } });
+  let receivedEnv;
+  let ready = null;
+  let revoked = false;
+  const grant = 'synthetic-launch-capability';
+  const adapter = createNativeAdapter('codex', {
+    command: path.join(fixture.root, 'codex.exe'),
+    env: fixture.env,
+    createNativeLaunch(request) {
+      assert.equal(request.unitId, UNIT);
+      return {
+        env: { HIVEM1ND_SERVICE_BRIDGE: 'synthetic-endpoint', HIVEM1ND_SERVICE_GRANT: grant },
+        mcp: { name: 'hivem1nd-relay', command: process.execPath, args: ['owned-cli.mjs'], env: [] },
+        ready(id) { ready = id; },
+        close() { revoked = true; },
+      };
+    },
+    spawn(_command, _args, options) { receivedEnv = options.env; return child; },
+  });
+  t.after(() => adapter.close());
+  await adapter.create({ cwd: fixture.root, unitId: UNIT });
+  assert.equal(ready, 'thread-1');
+  assert.equal(receivedEnv.HIVEM1ND_SERVICE_GRANT, grant);
+  const started = rpcMethods(child).find((message) => message.method === 'thread/start');
+  assert.deepEqual(started.params.config.mcp_servers['hivem1nd-relay'].env_vars, ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT']);
+  assert.equal(JSON.stringify(rpcMethods(child)).includes(grant), false);
+  await adapter.close();
+  assert.equal(revoked, true);
+});
+
 test('codex account read accepts a signed-in account and an unauthenticated provider', async (t) => {
   const cases = [
     { result: { account: { type: 'chatgpt', email: FIXTURE_EMAIL, planType: 'plus' }, requiresOpenaiAuth: true }, ok: true },
@@ -650,7 +684,8 @@ test('an active codex turn steers once and the next message starts after complet
   child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: 90, method: 'item/commandExecution/requestApproval', params: { id: 'req-1' } })}\n`);
   child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'other-thread', turn: { id: 'turn-1', items: [], status: 'completed' } } })}\n`);
   await tick();
-  assert.equal(child.written.length, beforeNotice);
+  assert.equal(child.written.length, beforeNotice + 1);
+  assert.deepEqual(rpcMethods(child).find(message => message.id === 90), { jsonrpc: '2.0', id: 90, error: { code: -32601, message: 'This native request is not supported by the attached service.' } });
   const steered = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'gamma' });
   assert.equal(steered.submitted, true);
   assert.equal(turnWrites().at(-1).method, 'turn/steer');
@@ -762,6 +797,27 @@ test('closing the owned codex child settles a pending response', async (t) => {
   assert.equal(closeResult.value.submitted, false);
   assert.equal(closeResult.value.ambiguous, true);
   assert.equal(rpcMethods(closed).filter((line) => line.method === 'turn/start').length, 1);
+});
+
+test('an unsupported Cursor native permission request receives a protocol error instead of hanging or allowing', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const child = liveChild();
+  child.onRequest(message => {
+    if (message.method === 'initialize') child.respond(message, { result: { authMethods: [{ id: 'existing-login' }] } });
+    if (message.method === 'authenticate') child.respond(message, { result: {} });
+    if (message.method === 'session/new') child.respond(message, { result: { sessionId: 'cursor-owned' } });
+  });
+  const adapter = createNativeAdapter('cursor', { command: path.join(fixture.root, 'cursor.exe'), env: fixture.env, spawn: () => child });
+  t.after(() => adapter.close());
+  await adapter.create({ cwd: fixture.root, unitId: UNIT });
+  const response = new Promise(resolve => child.onRequest(message => { if (message.id === 'permission-owned') resolve(message); }));
+  child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: 'permission-owned', method: 'session/request_permission', params: { sessionId: 'cursor-owned', options: [{ optionId: 'allow-once', kind: 'allow_once' }] } })}\n`);
+  const completed = await settleOr(response, 500);
+  assert.equal(completed.settled, true);
+  assert.equal(completed.value.error.code, -32601);
+  assert.equal(completed.value.result, undefined);
+  assert.equal(JSON.stringify(completed.value).includes('allow'), false);
 });
 
 function jsonCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

@@ -1,11 +1,5 @@
-import { openRelayOperations } from '../service/client.mjs';
-import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { claudeWakeCapability, sendClaudeWake } from './claude-wake.mjs';
-import { cursorWakeCapability } from './cursor-wake.mjs';
-import { spawnLocalWakeWorker } from './local-wake.mjs';
-
-const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
+import { connectNativeService, openRelayOperations, request, subscribe } from '../service/client.mjs';
+import { randomUUID } from 'node:crypto';
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -42,60 +36,6 @@ export function formatHookResponse(client, event, reminder) {
   return null;
 }
 
-async function runClaudeWakeLifecycle({ event, mindPath, nativeSessionId, env = process.env, stderr = process.stderr,
-  wakeControllerFactory, wakeWorkerSpawner, platform = process.platform }) {
-  if (!['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop', 'SessionEnd'].includes(event)) return null;
-  const sessionId = env.CLAUDE_CODE_SESSION_ID;
-  if (!nativeSessionId || !sessionId || sessionId !== nativeSessionId) {
-    if (event === 'SessionStart' && nativeSessionId) stderr.write('Relay Claude wake unavailable: native session identity does not match the hook environment.\n');
-    return null;
-  }
-  const machine = os.hostname();
-  const { createRelayWakeController } = await import('./wake.mjs');
-  const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: machine, sink: (delivery) => sendClaudeWake({ ...delivery, env, platform }) });
-  const binding = await controller.findEnabledBinding({ nativeSessionId, client: 'claude', machine });
-  if (!binding) return null;
-
-  if (event === 'SessionStart') {
-    await controller.observeActivity(binding, { activity: 'idle' });
-    const capability = claudeWakeCapability({ env, platform });
-    if (!capability.available) {
-      stderr.write(`Relay Claude wake unavailable: ${capability.reason}.\n`);
-      return null;
-    }
-  } else if (event === 'UserPromptSubmit' || event === 'PreToolUse') {
-    await controller.observeActivity(binding, { activity: 'busy' });
-  } else if (event === 'Stop') {
-    await controller.observeActivity(binding, { activity: 'idle' });
-  } else {
-    await controller.endSession(binding);
-  }
-  return binding;
-}
-
-// Nothing else starts the worker of a Cursor chat, so the chat's own session start makes sure the worker of its
-// consent runs; the worker lease keeps a second start from doing anything.
-async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process.env, stderr = process.stderr, wakeControllerFactory, wakeWorkerSpawner }) {
-  const machine = os.hostname();
-  const { createRelayWakeController } = await import('./wake.mjs');
-  const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: machine,
-    sink: async () => ({ status: 'not_submitted' }) });
-  const binding = await controller.findEnabledBinding({ nativeSessionId, client: 'cursor', machine });
-  if (!binding) return null;
-  const capability = cursorWakeCapability({ env });
-  if (!capability.available) {
-    stderr.write(`Relay Cursor wake unavailable: ${capability.reason}.\n`);
-    return null;
-  }
-  try {
-    const child = (wakeWorkerSpawner ?? spawnLocalWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
-    child.ready.catch(() => stderr.write('Relay Cursor wake worker could not start.\n'));
-  } catch {
-    stderr.write('Relay Cursor wake worker could not start.\n');
-  }
-  return binding;
-}
-
 export async function decidePermission({ correlationId = null, binding = null, waitForOwner = null, timeoutMs = 120000 } = {}) {
   if (!correlationId || binding?.expired === true || typeof waitForOwner !== 'function') {
     return { decision: 'ask', reason: 'native_fallback' };
@@ -121,7 +61,7 @@ export async function decidePermission({ correlationId = null, binding = null, w
 }
 
 export async function runRelayHook({ client, event, mindPath, nativeSessionId, unit, stdin = process.stdin, stdout = process.stdout,
-  stderr = process.stderr, env = process.env, wakeControllerFactory, wakeWorkerSpawner, platform = process.platform, waitForOwner = null }) {
+  stderr = process.stderr, env = process.env, serviceConnector = connectNativeService, approvalTimeoutMs = 120000 }) {
   let input = {};
   try {
     const chunks = [];
@@ -143,55 +83,28 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
   if (!context.nativeSessionId && !nativeSessionId) return null;
   const hookEvent = event ?? context.event;
   if (!CLIENT_EVENTS[client]?.has(hookEvent)) return null;
+  let service = null;
   try {
-    if (client === 'cursor' && hookEvent === 'stop') {
-      // Use the conversation identity supplied by Cursor, never a unit override.
-      const id = input.conversation_id;
-      if (typeof id !== 'string' || !id || id.length > 180 || /[\u0000-\u001f\u007f]/.test(id)
-          || nativeSessionId && nativeSessionId !== id) return null;
-      const { createRelayWakeController } = await import('./wake.mjs');
-      const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: os.hostname(),
-        sink: async () => ({ status: 'not_submitted' }) });
-      const binding = await controller.findEnabledBinding({ nativeSessionId: id, client, machine: os.hostname() });
-      if (!binding || unit && unit !== binding.unit) return null;
-      const text = await controller.cursorStop(binding, { loopCount: input.loop_count, generationId: input.generation_id });
-      const response = text ? { followup_message: text } : null;
+    if (env.HIVEM1ND_SERVICE_GRANT || env.HIVEM1ND_SERVICE_BRIDGE) {
+      service = await serviceConnector({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client });
+      await service.hook(hookEvent);
+    }
+    if (client === 'claude' && hookEvent === 'PreToolUse' && typeof input.tool_name === 'string') {
+      const decision = service ? await requestNativeApproval(service, input, approvalTimeoutMs) : 'ask';
+      const response = permissionResponse(decision);
+      stdout.write(`${JSON.stringify(response)}\n`);
+      return response;
+    }
+    if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
+    if (service) {
+      const received = await service.callTool('reminder', {});
+      if (received.isError) return null;
+      const reminder = JSON.parse(received.content?.find((item) => item.type === 'text')?.text ?? '{}').data;
+      const response = formatHookResponse(client, hookEvent, reminder);
       if (response) stdout.write(`${JSON.stringify(response)}\n`);
       return response;
     }
-    if (client === 'cursor' && hookEvent === 'sessionStart') {
-      await ensureCursorWakeWorker({
-        mindPath,
-        nativeSessionId: typeof input.conversation_id === 'string' ? input.conversation_id : nativeSessionId ?? context.nativeSessionId,
-        env,
-        stderr,
-        wakeControllerFactory,
-        wakeWorkerSpawner,
-      }).catch((error) => stderr.write(`Relay Cursor wake unavailable: ${error.message}\n`));
-    }
-    if (client === 'claude') {
-      await runClaudeWakeLifecycle({
-        event: hookEvent,
-        mindPath,
-        nativeSessionId: nativeSessionId ?? context.nativeSessionId,
-        env,
-        stderr,
-        wakeControllerFactory,
-        wakeWorkerSpawner,
-        platform,
-      });
-    }
-    // Reading the inbox is the costly part of a hook, and an event that carries no notice would discard its answer.
-    if (client === 'claude' && hookEvent === 'PreToolUse' && typeof input.tool_name === 'string') {
-      const decision = await decidePermission({
-        correlationId: typeof input.correlation_id === 'string' ? input.correlation_id : null,
-        binding: input.binding ?? null,
-        waitForOwner,
-      });
-      stdout.write(`${JSON.stringify(decision)}\n`);
-      return decision;
-    }
-    if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
+    // Unattached legacy sessions retain read-only bootstrap reminders, never a worker or approval grant.
     const relay = await openRelayOperations({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
     const reminder = await relay.reminder({
       ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),
@@ -204,11 +117,79 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
     });
     if (response) stdout.write(`${JSON.stringify(response)}\n`);
     return response;
-  } catch (error) {
-    // A reminder must never block or alter the agent's normal boundary.
-    stderr.write(`Relay hook unavailable: ${error.message}\n`);
+  } catch {
+    if (client === 'claude' && hookEvent === 'PreToolUse') {
+      const decision = permissionResponse('ask');
+      stdout.write(`${JSON.stringify(decision)}\n`);
+      return decision;
+    }
+    stderr.write('Relay hook unavailable: the native service binding could not be verified.\n');
     return null;
+  } finally {
+    service?.close();
   }
+}
+
+function permissionResponse(decision) {
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: decision === 'ask' ? 'Relay approval unavailable; use the native permission prompt.' : 'The person answered this exact Relay approval.' } };
+}
+
+async function requestNativeApproval(service, input, timeoutMs) {
+  if (input.tool_name !== 'Bash' || typeof input.tool_input?.command !== 'string' || typeof input.cwd !== 'string') return 'ask';
+  let approvalId = null;
+  let settle;
+  let stream = null;
+  let timer = null;
+  let disconnected = false;
+  let checkedDisconnect = false;
+  let readyTimer = null;
+  let markReady;
+  const ready = new Promise((resolve) => { markReady = resolve; });
+  const observed = new Map();
+  const done = new Promise((resolve) => { settle = resolve; });
+  const decisionFor = (approval) => {
+    if (!approval || approval.id !== approvalId || approval.unitId !== service.unitId || approval.sessionId !== service.sessionId) return null;
+    if (approval.state === 'approved') return 'allow';
+    if (approval.state === 'denied') return 'deny';
+    if (approval.state === 'expired') return 'ask';
+    return null;
+  };
+  const check = (approval) => { const decision = decisionFor(approval); if (decision) settle(decision); };
+  const recoverDisconnect = async () => {
+    if (!approvalId || checkedDisconnect) return;
+    checkedDisconnect = true;
+    try {
+      const detail = await request(service, { method: 'GET', path: `/api/v1/approvals/${encodeURIComponent(approvalId)}`, timeoutMs: 3000 });
+      settle(detail.status === 200 ? decisionFor(detail.json?.data) ?? 'ask' : 'ask');
+    } catch { settle('ask'); }
+  };
+  try {
+    timer = setTimeout(() => settle('ask'), Math.min(120000, Math.max(1, timeoutMs)));
+    stream = subscribe(service, (frame) => {
+      if (frame.event === 'stream.ready') markReady(true);
+      if (frame.event === 'error' || frame.event === 'disconnect') { markReady(false); disconnected = true; recoverDisconnect(); return; }
+      const approval = frame.data?.data?.approval;
+      if (approval?.id) { observed.set(approval.id, approval); check(approval); }
+    });
+    readyTimer = setTimeout(() => markReady(false), Math.min(3000, Math.max(1, timeoutMs)));
+    if (await ready !== true) return 'ask';
+    clearTimeout(readyTimer);
+    const response = await request(service, {
+      path: '/api/v1/approvals/request',
+      headers: { 'idempotency-key': randomUUID() },
+      timeoutMs: 3000,
+      body: { action: 'process.run', pattern: { command: input.tool_input.command, cwd: input.cwd }, display: 'Run the requested command', alwaysAllowed: true },
+    });
+    const approval = response.json?.data?.approval;
+    if (![200, 202].includes(response.status) || !approval?.id) return 'ask';
+    approvalId = approval.id;
+    check(approval);
+    check(observed.get(approvalId));
+    if (disconnected) await recoverDisconnect();
+    const result = await done;
+    return result;
+  } catch { return 'ask'; }
+  finally { if (timer) clearTimeout(timer); if (readyTimer) clearTimeout(readyTimer); stream?.close(); }
 }
 
 export function clientHookEvents(client) {

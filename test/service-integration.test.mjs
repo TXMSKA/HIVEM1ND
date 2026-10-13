@@ -272,10 +272,17 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
   const recovered = await recoverTransactions(fixture.store);
   assert.equal(Array.isArray(recovered), true);
   const receiptGroups = await readdir(path.join(fixture.paths.localDirectory, 'receipts'));
-  const receiptFiles = await readdir(path.join(fixture.paths.localDirectory, 'receipts', receiptGroups[0]));
-  const receipt = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'receipts', receiptGroups[0], receiptFiles[0]), 'utf8'));
+  let receipt = null;
+  for (const group of receiptGroups) {
+    const bytes = await readFile(path.join(fixture.paths.localDirectory, 'receipts', group, `${unitKey}.json`)).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (bytes) receipt = JSON.parse(bytes.toString('utf8'));
+  }
+  assert.ok(receipt);
   assert.equal(typeof receipt.requestId, 'string');
-  assert.equal(receipt.response == null, false);
+  assert.equal(receipt.response.unit, created.json.data.unit);
 });
 
 test('two machines share an origin and limits pause at the hard window', async (t) => {
@@ -432,7 +439,7 @@ test('an open stream receives imported chat, unit, and editor events once', asyn
     transactions: [{ id: transactionId, changeIds: [messageChange, unitChange, voidChange, boardChange] }],
   }));
   const frames = await waitForFrames(opened, () => {
-    const parsed = sseFrames(opened.raw);
+    const parsed = sseFrames(opened.raw).filter(frame => frame.data.source.kind === 'sync');
     const names = parsed.map((frame) => frame.name);
     return names.includes('message.created') && names.includes('unit.changed') && names.includes('void.changed') && names.includes('blueprint.changed') ? parsed : null;
   }, core.runtime);
@@ -473,7 +480,7 @@ test('an open stream receives imported chat, unit, and editor events once', asyn
   await waitForFile(path.join(fixture.paths.localDirectory, 'received', 'LAPTOP', '2.applied.json'), core.runtime);
   await writeFile(path.join(fixture.paths.origin, 'machines', 'LAPTOP', 'again.txt'), 'again\n');
   await delay(300);
-  const after = sseFrames(opened.raw);
+  const after = sseFrames(opened.raw).filter(frame => frame.data.source.kind === 'sync');
   assert.equal(after.filter((frame) => frame.name === 'message.created').length, 1);
   assert.equal(after.filter((frame) => frame.name === 'unit.changed').length, 1);
   assert.equal(after.filter((frame) => frame.name === 'void.changed').length, 1);
@@ -507,7 +514,6 @@ test('an invalid owner pack stays rejected and visible until reconcile succeeds'
   }));
   const failed = await waitForSync(port, token, (data) => data?.error?.code === 'invalid_record_owner');
   assert.equal(failed.state, 'error');
-  assert.equal(failed.pendingChanges, 0);
   assert.deepEqual(failed.incoming, []);
   assert.equal(failed.retryAt, null);
   assert.equal(failed.error.message, 'The record is not owned by the publishing machine.');

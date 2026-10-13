@@ -61,16 +61,19 @@ export async function closeHome(context, options = {}) {
   const grant = context.grant;
   if (!grant) return status(context);
   grant.enabled = false;
-  for (const token of grant.tokens) context.credentials?.revoke(token);
-  grant.tokens.clear();
-  await closeAll(grant.listeners ?? []);
-  grant.listeners = [];
   if (grant.expiry) clearTimeout(grant.expiry);
   if (grant.poll) clearTimeout(grant.poll);
   grant.expiry = null;
   grant.poll = null;
   context.grant = null;
-  if (options.quiet !== true) emit(context, options.reason ?? 'closed');
+  try {
+    if (options.quiet !== true) emit(context, options.reason ?? 'closed');
+  } finally {
+    for (const token of grant.tokens) context.credentials?.revoke(token);
+    grant.tokens.clear();
+    await closeAll(grant.listeners ?? []);
+    grant.listeners = [];
+  }
   return status(context);
 }
 
@@ -188,7 +191,7 @@ function closeListener(server, sockets, responses) {
       resolve();
     };
     const timer = setTimeout(() => {
-      endHomeStreams(responses, sockets);
+      for (const socket of sockets) socket.destroy();
       server.close();
       finish();
     }, HOME_CLOSE_MS);
@@ -198,14 +201,17 @@ function closeListener(server, sockets, responses) {
 }
 
 function endHomeStreams(responses, sockets) {
+  const active = new Set();
   for (const response of responses) {
     try {
-      if (!response.writableEnded) response.end();
+      const socket = response.socket;
+      if (socket) active.add(socket);
+      if (!response.writableEnded) response.end(() => socket?.end());
     } catch { /* The response is already finished. */ }
   }
   for (const socket of sockets) {
+    if (active.has(socket)) continue;
     try { socket.end(); } catch { /* The socket is already finished. */ }
-    try { socket.destroy(); } catch { /* The socket is already finished. */ }
   }
 }
 
@@ -222,7 +228,7 @@ function schedulePoll(context, grant) {
   const poll = setTimeout(() => {
     if (context.grant !== grant) return;
     pollHome(context).catch(() => {});
-    schedulePoll(context, grant);
+    if (context.grant === grant) schedulePoll(context, grant);
   }, POLL_MS);
   poll.unref?.();
   grant.poll = poll;

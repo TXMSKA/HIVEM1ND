@@ -5,7 +5,7 @@ import { CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV
 import { publishDomainEvents } from './events.mjs';
 import { readUnitState } from './state.mjs';
 import { admitMessage } from '../sync/limits.mjs';
-import { commitTransaction, readBytes, revisionOf } from './store.mjs';
+import { commitTransaction, readBytes, revisionOf, withLocalChanges } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const RECORD_MAX = 1000000;
@@ -420,9 +420,14 @@ async function commitOne(context, relative, before, bytes, events) {
 }
 
 async function commitMany(context, entries, events) {
+  return withLocalChanges(context.store, () => commitManyLocked(context, entries, events));
+}
+
+async function commitManyLocked(context, entries, events) {
   const receipt = context.receipt && context.receiptBody !== undefined ? context.receipt : null;
+  const id = randomUUID();
   await commitTransaction(context.store, {
-    id: randomUUID(),
+    id,
     entries: entries.map((entry) => ({
       resource: entry.relative,
       recordPath: absolute(context, entry.relative),
@@ -435,7 +440,11 @@ async function commitMany(context, entries, events) {
   context.receiptBody = undefined;
   context.receiptStatus = undefined;
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: () => context.now() });
-  const changes = await stageTransaction(sync, entries.map((entry) => ({ target: { kind: 'mind', path: entry.relative }, bytes: entry.bytes })));
+  const changes = await stageTransaction(sync, entries.map((entry) => ({
+    target: { kind: 'mind', path: entry.relative },
+    bytes: entry.bytes,
+    id: uuidV8(['chat-change', id, entry.relative, hashBytes(entry.bytes)]),
+  })), { transactionId: id });
   noteSync(context, changes.length ? 'pending' : 'local');
   if (context.pulse) {
     const result = await context.pulse.changed(changes.map((change) => change.id));

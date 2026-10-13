@@ -2,7 +2,7 @@ import { lstat, readdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
-import { atomicWrite, exclusiveRecord, readBytes, withLocks } from '../service/store.mjs';
+import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } from '../service/store.mjs';
 import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
@@ -32,11 +32,100 @@ export async function eligibleTargets(sync) {
 }
 
 export async function observeLocalChange(sync, target, options = {}) {
-  return withLocks(sync.store, [LOCK], () => observeUnlocked(sync, target, options));
+  return withLocalChanges(sync.store, () => withLocks(sync.store, [LOCK], () => observeUnlocked(sync, target, options)));
 }
 
 export async function stageTransaction(sync, entries, options = {}) {
-  return withLocks(sync.store, [LOCK], () => stageUnlocked(sync, entries, options));
+  return withLocalChanges(sync.store, () => withLocks(sync.store, [LOCK], () => stageUnlocked(sync, entries, options)));
+}
+
+export async function settleAppliedMarker(sync, target) {
+  return withLocalChanges(sync.store, () => withLocks(sync.store, [LOCK], async () => {
+    const normalized = await prepareTarget(sync, target);
+    const key = targetKey(normalized);
+    return settleMarkerUnlocked(sync, normalized, key);
+  }));
+}
+
+// A watcher keeps this snapshot only within its withLocalChanges callback. Writers
+// share that barrier; publication can acknowledge staged records without changing
+// their bytes or versions. Newly observed changes are added before the next file.
+export async function observationSnapshot(sync) {
+  const versions = (await readVersions(sync)).targets;
+  const directory = path.join(sync.paths.localDirectory, 'staging', 'applied');
+  const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const markers = new Set(names.filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(name => name.slice(0, -5)));
+  let pending = null;
+  return {
+    markers,
+    note(changes) {
+      for (const change of changes) {
+        const key = targetKey(change.target);
+        versions[key] = { hash: change.hash, deleted: change.operation === 'delete', at: change.at, machine: change.machine, id: change.id };
+        if (pending) {
+          const entries = pending.get(key) ?? [];
+          entries.push(change);
+          pending.set(key, entries);
+        }
+      }
+    },
+    async unchanged(target, bytes, deleted = false) {
+      const key = targetKey(target);
+      if (markers.has(key)) return false;
+      let source = bytes;
+      if (!deleted && target.kind === 'mind' && target.path.startsWith('user/relay/sessions/')) {
+        source = sanitizeSessionRecord(bytes);
+        if (!source) return true;
+      }
+      const hash = deleted ? null : hashBytes(source);
+      const current = versions[key];
+      if (current && current.deleted === deleted && current.hash === hash) return true;
+      if (current && !current.retainedLocalId) return false;
+      if (!pending) {
+        pending = new Map();
+        for (const change of await stagedChanges(sync)) {
+          const target = targetKey(change.target);
+          const entries = pending.get(target) ?? [];
+          entries.push(change);
+          pending.set(target, entries);
+        }
+      }
+      return pendingMatch(pending.get(key) ?? [], current, key, hash, deleted) !== null;
+    },
+  };
+}
+
+async function completedMarker(sync, key) {
+  const stored = await readJson(sync, markerPath(sync, key));
+  if (!stored) return null;
+  const marker = await completeMarker(sync, key, stored);
+  const winner = (await readVersions(sync)).targets[key];
+  if (!winner || winner.hash !== (marker.hash ?? null) || winner.at !== marker.at
+    || winner.machine !== marker.machine || winner.deleted !== (marker.deleted === true)) return null;
+  return { marker, winner };
+}
+
+async function settleMarkerUnlocked(sync, target, key) {
+  const completed = await completedMarker(sync, key);
+  if (!completed) return { settled: false };
+  const { marker, winner } = completed;
+  let change = null;
+  if (marker.pendingLocal && marker.pendingLocal.hash !== marker.hash) {
+    const pending = marker.pendingLocal;
+    change = (await stagedChanges(sync)).find(item => targetKey(item.target) === key && item.hash === pending.hash
+      && item.at === pending.at && item.operation === (pending.deleted === true ? 'delete' : 'put')) ?? null;
+    if (!change) {
+      [change] = await stageUnlocked(sync, [{
+        target,
+        bytes: pending.deleted === true ? null : Buffer.from(pending.bytes, 'base64'),
+        deleted: pending.deleted === true,
+        at: pending.at,
+        baseHash: marker.deleted === true ? null : marker.hash,
+      }], {}, winner);
+    } else await writeVersion(sync, key, { ...winner, retainedLocalId: change.id });
+  }
+  await removeFile(sync, markerPath(sync, key));
+  return { settled: true, winner, change };
 }
 
 const SYNC_RANK = { local: 0, pending: 1, published: 2 };
@@ -213,6 +302,17 @@ async function observeUnlocked(sync, target, options) {
   }
   if (!deleted && source == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
   const nextHash = deleted ? null : hashBytes(Buffer.isBuffer(source) ? source : Buffer.from(source));
+  if (options.stage === false) {
+    const marker = await readJson(sync, markerPath(sync, key));
+    if (marker) {
+      const matches = marker.deleted === true ? deleted : marker.hash === nextHash;
+      return { staged: false, changed: false, applied: matches, held: !matches };
+    }
+    const current = (await readVersions(sync)).targets[key] ?? null;
+    if (current && current.deleted === deleted && current.hash === nextHash) return { staged: false, changed: false };
+    const pending = !current || current.retainedLocalId ? pendingMatch(await stagedChanges(sync), current, key, nextHash, deleted) : null;
+    return { staged: false, changed: !pending };
+  }
   if (options.applied === true) {
     const id = typeof options.id === 'string' ? options.id : uuidV8(['applied', sync.machine, key, nextHash ?? 'deleted', at]);
     const machine = typeof options.machine === 'string' ? options.machine : sync.machine;
@@ -254,16 +354,15 @@ async function observeUnlocked(sync, target, options) {
         deleted: pending.deleted === true,
         at: pending.at,
         baseHash: marker.deleted === true ? null : marker.hash,
-      }]);
-      await writeVersion(sync, key, winner);
+      }], {}, winner);
       return { staged: true, cleared: true, change };
     }
     return { staged: false, cleared: true };
   }
-  const pending = (await stagedChanges(sync)).find((change) => targetKey(change.target) === key && change.hash === nextHash && change.operation === (deleted ? 'delete' : 'put'));
-  if (pending) return { staged: false, unchanged: true, change: pending };
   const current = (await readVersions(sync)).targets[key] ?? null;
   if (current && current.deleted === deleted && current.hash === nextHash) return { staged: false, unchanged: true };
+  const pending = !current || current.retainedLocalId ? pendingMatch(await stagedChanges(sync), current, key, nextHash, deleted) : null;
+  if (pending) return { staged: false, unchanged: true, change: pending };
   const [change] = await stageUnlocked(sync, [{
     target: normalized,
     bytes: source,
@@ -276,7 +375,13 @@ async function observeUnlocked(sync, target, options) {
   return { staged: true, change };
 }
 
-async function stageUnlocked(sync, entries, options = {}) {
+function pendingMatch(changes, current, key, hash, deleted) {
+  return changes.find(change => (!current || change.id === current.retainedLocalId)
+    && targetKey(change.target) === key && change.hash === hash
+    && change.operation === (deleted ? 'delete' : 'put')) ?? null;
+}
+
+async function stageUnlocked(sync, entries, options = {}, retainedVersion = null) {
   if (!Array.isArray(entries) || entries.length === 0) throw new CoreError(422, 'invalid_body', 'A transaction needs at least one change.');
   const transactionId = options.transactionId ?? null;
   if (transactionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(transactionId)) {
@@ -307,6 +412,18 @@ async function stageUnlocked(sync, entries, options = {}) {
     }, sync.machine);
     prepared.push({ change, raw });
   }
+  const settledKeys = [];
+  for (const item of prepared) {
+    const key = targetKey(item.change.target);
+    const completed = await completedMarker(sync, key);
+    if (!completed) continue;
+    const pending = completed.marker.pendingLocal;
+    const replacesPending = pending && prepared.some(entry => targetKey(entry.change.target) === key && entry.change.hash === pending.hash
+      && entry.change.operation === (pending.deleted === true ? 'delete' : 'put'));
+    if (pending && pending.hash !== completed.marker.hash && !replacesPending) {
+      await settleMarkerUnlocked(sync, item.change.target, key);
+    } else settledKeys.push(key);
+  }
   for (const item of prepared) {
     if (!item.raw) continue;
     await publishObject(sync, item.change.hash, item.raw);
@@ -318,7 +435,7 @@ async function stageUnlocked(sync, entries, options = {}) {
   }
   const versions = await readVersions(sync);
   for (const item of prepared) {
-    versions.targets[targetKey(item.change.target)] = {
+    versions.targets[targetKey(item.change.target)] = retainedVersion ? { ...retainedVersion, retainedLocalId: item.change.id } : {
       hash: item.change.hash,
       at: item.change.at,
       machine: item.change.machine,
@@ -327,6 +444,7 @@ async function stageUnlocked(sync, entries, options = {}) {
     };
   }
   await atomicWrite(sync.store, versionPath(sync), Buffer.from(`${canonicalJson(versions)}\n`, 'utf8'));
+  for (const key of settledKeys) await removeFile(sync, markerPath(sync, key));
   return prepared.map((item) => item.change);
 }
 

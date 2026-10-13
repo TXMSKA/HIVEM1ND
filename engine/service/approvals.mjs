@@ -6,7 +6,7 @@ import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate, readDetail } from './projection.mjs';
-import { commitTransaction, readBytes, revisionOf, withLocks } from './store.mjs';
+import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
@@ -516,6 +516,10 @@ async function revocationRequests(context) {
 }
 
 async function commitFiles(context, records, events) {
+  return withLocalChanges(context.store, () => commitFilesLocked(context, records, events));
+}
+
+async function commitFilesLocked(context, records, events) {
   const id = randomUUID();
   await commitTransaction(context.store, { id, entries: records, events: [] });
   const sync = context.sync ?? openSync({

@@ -26,7 +26,7 @@ async function fixture(context) {
   await sender.register({ unit: 'overseer', nativeSessionId: 'overseer-native' });
   const receiver = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'executor-chat', client: 'claude' });
   await receiver.register({ unit: 'executor-alpha', nativeSessionId: 'executor-native' });
-  return { mind, sender, receiver, binding: { unit: 'executor-alpha', nativeSessionId: 'executor-native', client: 'claude', machine: 'TESTBOX' } };
+  return { mind, sender, receiver, binding: { unit: 'executor-alpha', unitId: 'project:alpha:executor-alpha', nativeSessionId: 'executor-native', client: 'claude', machine: 'TESTBOX' } };
 }
 
 async function localWake(mind) {
@@ -34,7 +34,7 @@ async function localWake(mind) {
 }
 
 function keyOf(binding) {
-  return createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([binding.unitId ?? binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
 }
 
 async function until(predicate, message = 'condition did not become true') {
@@ -58,7 +58,7 @@ test('wake requires exact registration and explicit bounds; unlimited requires m
   const wake = await controller(mind, async () => ({ status: 'submitted' }));
   const absentPolicyDisable = await wake.disable(binding);
   assert.equal(absentPolicyDisable.enabled, false, 'disabling an absent policy is valid and idempotent');
-  await assert.rejects(wake.enable({ ...binding, unit: 'overseer' }), { code: 'WAKE_REGISTRATION_MISSING' });
+  await assert.rejects(wake.enable({ ...binding, unit: 'overseer', unitId: 'root:overseer' }), { code: 'WAKE_REGISTRATION_MISSING' });
   await assert.rejects(wake.enable({ ...binding, windowHours: 12 }), { code: 'WAKE_EXTENDED_CONSENT_REQUIRED' });
   await assert.rejects(wake.enable({ ...binding, unlimited: true }), { code: 'WAKE_MANUAL_CONSENT_REQUIRED' });
   await assert.rejects(wake.enable({ ...binding, maxHandoffs: 101 }), { code: 'WAKE_INVALID_POLICY' });
@@ -176,7 +176,7 @@ test('ambiguous sink writes are not retried and arbitrary sink errors are never 
   await until(async () => { const state = await wake.status(binding); return state.ambiguousCount === 1 && state.lastError ? true : state; });
   const afterSink = await wake.status(binding);
   assert.equal(afterSink.ambiguousCount, 1, JSON.stringify({ afterSink, sinkCalls }));
-  const persisted = await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${(await import('node:crypto')).createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8');
+  const persisted = await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${(await import('node:crypto')).createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8');
   assert.equal(persisted.includes('TOKEN=must-not-persist'), false);
   assert.equal(persisted.includes('secret body'), false);
   const stored = JSON.parse(persisted);
@@ -200,7 +200,7 @@ test('sink-controlled result reasons are reduced to fixed persisted codes', asyn
   await until(async () => { const state = await wake.status(binding); return sinkCalls === 1 && state.pendingCount === 1 ? true : state; });
   const status = await wake.status(binding);
   assert.equal(status.lastError.code, 'SINK_NOT_SUBMITTED');
-  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
   const stored = await readFile(policyPath, 'utf8');
   assert.equal(stored.includes('RELAYSECRET123CANARY'), false);
   assert.equal(stored.includes('private payload'), false);
@@ -236,7 +236,7 @@ test('expiry is fixed across worker reload and malformed persisted bounds fail c
 
   now = Date.now();
   await wake.enable(binding);
-  const policyHash = createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  const policyHash = createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
   const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${policyHash}.json`);
   const policy = JSON.parse(await readFile(policyPath, 'utf8'));
   policy.deadlineAt = null;
@@ -275,7 +275,7 @@ test('old in-flight sink completion cannot settle a replacement policy generatio
   await firstStarted;
   await newController.disable(binding);
   const replacement = await newController.enable(binding);
-  const replacementGeneration = JSON.parse(await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8')).generation;
+  const replacementGeneration = JSON.parse(await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8')).generation;
   assert.equal(replacement.startedAt !== null, true);
   throwOnNextClockRead = true;
   releaseFirst();
@@ -283,7 +283,7 @@ test('old in-flight sink completion cannot settle a replacement policy generatio
   const final = await newController.status(binding);
   assert.equal(final.wakeCount, 0, 'the replacement remains free of the old generation result');
   assert.equal(final.submittedCount, 0);
-  const replacementPolicy = JSON.parse(await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8'));
+  const replacementPolicy = JSON.parse(await readFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`), 'utf8'));
   assert.equal(replacementPolicy.generation, replacementGeneration);
   assert.equal(replacementPolicy.lastError, null, 'a stale worker catch cannot write its error into a replacement grant');
 });
@@ -312,7 +312,7 @@ test('enabling again keeps the pointers already submitted or ambiguous and renew
   const { mind, binding } = await fixture(context);
   const wake = await controller(mind, async () => ({ status: 'submitted' }));
   await wake.enable(binding);
-  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
+  const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex')}.json`);
   const previous = JSON.parse(await readFile(policyPath, 'utf8'));
   const at = new Date().toISOString();
   previous.wakeCount = 3;
@@ -433,7 +433,7 @@ test('a transient filesystem error in one worker iteration is recorded and retri
   const wake = await controller(mind, async () => ({ status: 'submitted' }));
   context.after(() => wake.stopAll());
   await wake.enable(binding);
-  const policyHash = createHash('sha256').update(JSON.stringify([binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
+  const policyHash = createHash('sha256').update(JSON.stringify([binding.unitId, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
   const policyPath = path.join(mind, 'user', 'relay', 'wake', 'policies', `${policyHash}.json`);
   const handle = wake.start(binding);
   assert.deepEqual(await handle.ready, { state: 'running', ownsLease: true });
@@ -554,7 +554,7 @@ test('another machine reads whether a worker is alive from the liveness note in 
   assert.equal((await remote.status(binding)).worker.state, 'idle', 'an enabled policy with no note yet');
   const handle = wake.start(binding);
   assert.equal((await handle.ready).ownsLease, true);
-  await until(async () => (await remote.status(binding)).worker.state === 'running' || (await remote.status(binding)).worker);
+  await until(async () => (await remote.status(binding)).worker.state === 'running');
   const seen = await remote.status(binding);
   assert.equal(seen.enabled, true);
   assert.equal(seen.registered, null, 'registrations are checked only on the binding machine');

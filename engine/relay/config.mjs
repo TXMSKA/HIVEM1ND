@@ -546,6 +546,7 @@ export async function refreshRelayHooks({ client, homeDir, env = process.env, ki
 
 export async function unconfigureRelayClient({ client, homeDir, env = process.env, mindPath } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
+  if (mindPath !== undefined && !await relayEntryPointsAt({ client, homeDir, env, mindPath })) return { client, paths: [], changed: [] };
   const targets = clientConfigPaths({ client, homeDir, env });
   const mcpText = await readRegular(targets.mcp);
   const hooksText = targets.hooks ? await readRegular(targets.hooks) : '';
@@ -560,7 +561,7 @@ export async function unconfigureRelayClient({ client, homeDir, env = process.en
     if (markerAt >= 0 && markerAt < headerAt && parsed.mcp_servers?.[OWNED_SERVER] && isOwnedMcp(parsed.mcp_servers[OWNED_SERVER])) {
       nextMcp = replaceOwnedTomlBlock(mcpText, markerAt, headerAt, '');
     }
-    nextHooks = removeJsonHooks(hooksText, 'codex');
+    nextHooks = removeJsonHooks(hooksText, 'codex', mindPath);
   } else if (client === 'antigravity') {
     nextMcp = antigravityRemove(mcpText, mindPath);
   } else if (client === 'opencode') {
@@ -568,7 +569,7 @@ export async function unconfigureRelayClient({ client, homeDir, env = process.en
     if (isOwnedOpenCodeMcp(document.mcp?.[OWNED_SERVER])) nextMcp = editJsonc(mcpText, ['mcp', OWNED_SERVER], undefined);
   } else {
     nextMcp = removeJsonMcp(mcpText);
-    nextHooks = removeJsonHooks(hooksText, client);
+    nextHooks = removeJsonHooks(hooksText, client, mindPath);
   }
   const changed = [];
   if (nextMcp !== mcpText) { await atomicConfigWrite(targets.mcp, nextMcp, targets.mcpRoot); changed.push(targets.mcp); }
@@ -586,7 +587,30 @@ function removeJsonMcp(text) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-function removeJsonHooks(text, client) {
+function hookPointsAt(handler, mindPath) {
+  if (mindPath === undefined) return true;
+  if (Array.isArray(handler?.args)) return argumentsPointAt(handler.args, mindPath);
+  let command = typeof handler === 'string' ? handler : handler?.command;
+  if (typeof command !== 'string') return false;
+  const encoded = command.match(/(?:^|\s)-EncodedCommand\s+([A-Za-z0-9+/=]+)/i);
+  if (encoded) command = Buffer.from(encoded[1], 'base64').toString('utf16le');
+  const mind = path.resolve(mindPath);
+  const paths = [...new Set([mind, mind.replaceAll('\\', '/')])];
+  const forms = paths.flatMap(value => [value, shellArg(value, 'linux'), ...(!value.includes('"') ? [`"${value}"`] : [])]);
+  const flag = `(?:'--mind-path'|"--mind-path"|--mind-path)`;
+  if ([...command.matchAll(new RegExp(flag, 'g'))].length !== 1) return false;
+  return new RegExp(`${flag}\\s+(?:${forms.map(escapeRegex).join('|')})(?=\\s|$)`, process.platform === 'win32' ? 'i' : '').test(command);
+}
+
+function argumentsPointAt(items, mindPath) {
+  const indexes = items.map((value, index) => value === '--mind-path' ? index : -1).filter(index => index >= 0);
+  const value = indexes.length === 1 ? items[indexes[0] + 1] : null;
+  if (typeof value !== 'string' || !path.isAbsolute(value)) return false;
+  const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+  return same(path.resolve(value), path.resolve(mindPath));
+}
+
+function removeJsonHooks(text, client, mindPath) {
   if (!text.trim()) return text;
   let doc;
   try { doc = JSON.parse(text); } catch { throw Object.assign(new Error('Client hooks configuration contains invalid JSON; no files were changed.'), { code: 'RELAY_CONFIG_INVALID' }); }
@@ -596,7 +620,7 @@ function removeJsonHooks(text, client) {
     doc.hooks[event] = groups.map((group) => {
       if (client === 'cursor') return group;
       const handlers = group?.hooks ?? [];
-      const retained = handlers.filter((handler) => !isOwnedHookHandler(handler, client, event));
+      const retained = handlers.filter((handler) => !isOwnedHookHandler(handler, client, event) || !hookPointsAt(handler, mindPath));
       if (retained.length !== handlers.length) changed = true;
       return { ...group, hooks: retained };
     }).filter((group) => client === 'cursor' || (group.hooks?.length ?? 0) > 0);
@@ -605,7 +629,7 @@ function removeJsonHooks(text, client) {
   if (client === 'cursor') {
     for (const [event, entries] of Object.entries(doc?.hooks ?? {})) {
       if (!Array.isArray(entries)) continue;
-      doc.hooks[event] = entries.filter((entry) => !isOwnedHookCommand(entry?.command, client, event));
+      doc.hooks[event] = entries.filter((entry) => !isOwnedHookCommand(entry?.command, client, event) || !hookPointsAt(entry, mindPath));
       if (doc.hooks[event].length !== entries.length) changed = true;
       if (!doc.hooks[event].length) delete doc.hooks[event];
     }
@@ -650,20 +674,18 @@ export async function relayEntryPresent({ client, homeDir, env = process.env, mi
   return (await relayMcpEntry({ client, homeDir, env })) !== undefined;
 }
 
-// True when the Relay entry of a client runs the CLI copy inside this mind. An entry that runs another
-// kit, and anything else in the client config, is not this mind's to remove.
+// A Relay CLI may run from a stable installed kit or a legacy mind copy. Ownership follows
+// its explicit mind argument, while entries for another mind stay in the client configuration.
 export async function relayEntryPointsAt({ client, homeDir, env = process.env, mindPath } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   const mind = path.resolve(mindPath);
   if (client === 'antigravity') {
-    const expected = `${antigravityPathPattern(mind)}${String.raw`[\\/]`}${ANTIGRAVITY_CLI_TOKEN_END}`;
-    return (await antigravityOwnedRules({ homeDir, env })).some((match) => match[1] === expected);
+    return (await antigravityOwnedRules({ homeDir, env })).some((match) => match[2] === antigravityPathPattern(mind));
   }
   const entry = await relayMcpEntry({ client, homeDir, env });
   const items = Array.isArray(entry?.args) ? entry.args : Array.isArray(entry?.command) ? entry.command : [];
-  const cli = path.join(mind, 'cli', 'index.mjs');
-  const same = (value) => (process.platform === 'win32' ? value.toLowerCase() === cli.toLowerCase() : value === cli);
-  return items.some((item) => typeof item === 'string' && path.isAbsolute(item) && same(path.resolve(item)));
+  const cli = items.findIndex(item => typeof item === 'string' && path.isAbsolute(item) && /(?:^|[\\/])cli[\\/]index\.mjs$/i.test(item));
+  return cli >= 0 && items[cli + 1] === 'relay' && items[cli + 2] === 'mcp' && argumentsPointAt(items, mind);
 }
 
 export const RELAY_CLIENTS = [...SUPPORTED];

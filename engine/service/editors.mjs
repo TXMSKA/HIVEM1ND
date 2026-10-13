@@ -9,7 +9,7 @@ import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { bindProjects, commitTransaction } from './store.mjs';
+import { bindProjects, commitTransaction, withLocalChanges, withLocks } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { convertMedia, webpPayload } from '../sync/media.mjs';
 import { startResourceWatch } from './watch.mjs';
@@ -27,8 +27,8 @@ function fail(status, code, message) {
 }
 
 function projectOf(context, name) {
-  const found = (context.projects ?? []).find((item) => item.name === name);
-  if (!found?.localPath) fail(503, 'project_unavailable', 'The project is not available on this machine.');
+  const found = (context.projects ?? []).find((item) => item.name === name && item.eligible !== false);
+  if (!found?.localPath) fail(409, 'project_unavailable', 'The project is not available on this machine.');
   return found;
 }
 
@@ -273,6 +273,10 @@ function rewriteEntry(context, entry) {
 }
 
 async function commit(context, entries, events = []) {
+  return withLocalChanges(context.store, () => commitEditor(context, entries, events));
+}
+
+async function commitEditor(context, entries, events) {
   bindProjects(context.store, context.projects ?? []);
   const prepared = entries.map((entry) => rewriteEntry(context, entry));
   for (const entry of prepared) {
@@ -303,6 +307,7 @@ async function commit(context, entries, events = []) {
       projects: context.projects ?? [],
     });
     const changes = await stageTransaction(sync, stage, { transactionId });
+    context.lastEditorChanges = changes;
     noteSync(context, 'pending');
     if (context.pulse) {
       const published = await context.pulse.changed(changes.map((item) => item.id));
@@ -457,8 +462,7 @@ async function resourceOf(context, id) {
   const catalog = await readCatalog(context);
   const entry = entryOf(catalog, id);
   if (!entry) fail(404, 'not_found', 'The resource does not exist.');
-  const project = (context.projects ?? []).find((item) => item.name === entry.project && item.localPath);
-  if (!project) fail(503, 'project_unavailable', 'The project is not available on this machine.');
+  const project = projectOf(context, entry.project);
   return { project, catalog, entry };
 }
 
@@ -1224,10 +1228,20 @@ function textChanges(before, after) {
 }
 
 function rememberExternal(context, id, revision, document) {
-  if (!context.externalHashes) context.externalHashes = new Map();
-  if (!context.snapshots) context.snapshots = new Map();
+  externalState(context);
   context.externalHashes.set(id, revision);
   if (document) context.snapshots.set(id, document);
+}
+
+function externalState(context) {
+  const state = context.store.editorExternal ??= {
+    hashes: context.externalHashes ?? new Map(),
+    snapshots: context.snapshots ?? new Map(),
+    issues: context.externalIssues ?? new Map(),
+  };
+  context.externalHashes ??= state.hashes;
+  context.snapshots ??= state.snapshots;
+  context.externalIssues ??= state.issues;
 }
 
 async function textBundle(context, id) {
@@ -1276,7 +1290,7 @@ function voidEvent(id, revision, rev, operation, k = null, lang = null) {
 }
 
 function connectExternal(context, id, file) {
-  if (!context.watch) return;
+  if (!context.watch || context.store.localChangesWatched) return;
   startResourceWatch(context.watch, id, file);
   context.watch.pending = (resourceId) => {
     observeExternal(context, resourceId).catch(() => {});
@@ -1676,14 +1690,16 @@ export async function setCommentStatus(context, id, threadId, input) {
   return { thread: await presentThread(context, thread, id, revision, null), commentsRevision: revision };
 }
 
-export async function observeExternal(context, id) {
+export async function observeExternal(context, id, options = {}) {
+  return withLocalChanges(context.store, () => withLocks(context.store, [`external-editor:${id}`], () => observeExternalUnlocked(context, id, options)));
+}
+
+async function observeExternalUnlocked(context, id, options) {
   const found = await resourceOf(context, id);
   const file = inside(found.project.localPath, found.entry.path);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) return { changed: false, issue: true };
-  if (!context.externalHashes) context.externalHashes = new Map();
-  if (!context.snapshots) context.snapshots = new Map();
-  if (!context.externalIssues) context.externalIssues = new Map();
+  externalState(context);
   if (context.externalHashes.get(id) === loaded.revision) return { changed: false };
   let document;
   try {
@@ -1696,16 +1712,22 @@ export async function observeExternal(context, id) {
     return { changed: false, issue: true };
   }
   const previous = context.snapshots.get(id);
-  context.externalHashes.set(id, loaded.revision);
-  context.snapshots.set(id, document);
+  if (options.baseline === true) {
+    rememberExternal(context, id, loaded.revision, document);
+    return { changed: false };
+  }
   const changes = previous ? textChanges(previous, document) : [];
-  if (changes.length === 0) return { changed: false };
+  if (changes.length === 0) {
+    rememberExternal(context, id, loaded.revision, document);
+    return { changed: false };
+  }
   const at = clock(context);
   const line = `${changes.map((change) => JSON.stringify({ at, rev: document.rev || 0, ...change, by: 'outside' })).join('\n')}\n`;
   const history = await historyEntry(file, null, line);
   const change = changes[0];
-  await commit(context, [history.entry], [voidEvent(id, loaded.revision, document.rev || 0, 'import', change.k, change.lang)]);
-  return { changed: true };
+  await commit(context, [record(file, loaded.revision, loaded.bytes), history.entry], [voidEvent(id, loaded.revision, document.rev || 0, 'import', change.k, change.lang)]);
+  rememberExternal(context, id, loaded.revision, document);
+  return { changed: true, changes: context.lastEditorChanges ?? [] };
 }
 
 export { findAnchor, place };

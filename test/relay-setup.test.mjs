@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -193,7 +193,7 @@ async function simpleInstall(context, executables, extra = {}) {
   return { ...base, options, result: await session.install() };
 }
 
-test('setup joins the available clients to Relay through the mind copy of the CLI', async (context) => {
+test('setup joins the available clients to Relay through the stable kit CLI', async (context) => {
   const { homeDir, mindPath, result } = await simpleInstall(context, ['claude', 'codex'], { relaySetup: true });
   assert.deepEqual(statuses(result.relay), {
     claude: 'configured', codex: 'configured', cursor: 'not-available', opencode: 'not-available', copilot: 'not-available', antigravity: 'not-available',
@@ -201,7 +201,8 @@ test('setup joins the available clients to Relay through the mind copy of the CL
   assert.ok(result.notices.includes('claude: Relay configured now. Restart it to load Relay.'));
   assert.ok(result.notices.includes('cursor: not available on this machine.'));
   const claude = JSON.parse(await readFile(path.join(homeDir, '.claude.json'), 'utf8'));
-  assert.equal(claude.mcpServers['hivem1nd-relay'].args[0], path.join(mindPath, 'cli', 'index.mjs'));
+  assert.equal(claude.mcpServers['hivem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
+  assert.equal(claude.mcpServers['hivem1nd-relay'].args[4], mindPath);
 });
 
 test('setup leaves every client alone unless Relay setup is asked for', async (context) => {
@@ -209,6 +210,68 @@ test('setup leaves every client alone unless Relay setup is asked for', async (c
   assert.deepEqual(result.relay, []);
   assert.equal(await exists(path.join(homeDir, '.claude.json')), false);
   assert.equal(await exists(path.join(homeDir, '.codex', 'config.toml')), false);
+});
+
+test('service setup keeps Relay failures at Install and retries without copying installed files', async context => {
+  const base = await fixture(context, ['claude']);
+  const config = path.join(base.homeDir, '.claude.json');
+  await writeFile(config, '{ not json');
+  const options = { ...base, kitPath: KIT_PATH, hostname: 'TESTBOX', language: 'en', relaySetup: true,
+    serviceSetup: true, serviceDryRun: true, cosmicPath: path.join(base.root, 'Cosmic'),
+    originPath: path.join(base.root, 'origin'),
+    serviceRunner: async () => { throw new Error('No OS registration is permitted.'); } };
+  const session = await createSetupSession(options);
+  await session.answer({ installMode: 'simple' });
+  await session.answer({ confirm: true });
+  const failed = await session.install();
+  assert.equal(failed.completed, false);
+  assert.equal(failed.service.phase, 'relay');
+  assert.equal((await session.getStep()).number, 7);
+  const machine = path.join(base.mindPath, 'user', 'machines', 'TESTBOX.md');
+  assert.match(await readFile(machine, 'utf8'), /^setup: 7$/m);
+  assert.equal(await readFile(config, 'utf8'), '{ not json');
+  const rules = path.join(base.mindPath, 'rules.md');
+  const before = (await stat(rules)).mtimeMs;
+  await writeFile(config, '{}');
+  const retried = await session.install();
+  assert.equal(retried.completed, true);
+  assert.equal(retried.service.status, 'planned');
+  assert.equal(statuses(retried.relay).claude, 'configured');
+  assert.equal(retried.notices.some(line => line.includes('invalid JSON')), false);
+  assert.equal((await stat(rules)).mtimeMs, before);
+  assert.match(await readFile(machine, 'utf8'), /^setup: done$/m);
+
+  await writeFile(config, '{ invalid again');
+  const resumed = await createSetupSession(options);
+  assert.equal((await resumed.getStep()).number, 7);
+  assert.equal(resumed.result.service.phase, 'relay');
+  await writeFile(config, '{}');
+  await resumed.answer({ confirm: true });
+  assert.equal((await resumed.install()).completed, true);
+  assert.equal((await stat(rules)).mtimeMs, before);
+});
+
+test('evolve does not advance completion markers or service phases while Relay configuration fails', async context => {
+  const installed = await simpleInstall(context, ['claude'], { relaySetup: true });
+  const version = path.join(installed.mindPath, 'user', 'VERSION');
+  const config = path.join(installed.homeDir, '.claude.json');
+  const machine = path.join(installed.mindPath, 'user', 'machines', 'TESTBOX.md');
+  const before = await readFile(machine, 'utf8');
+  await writeFile(version, '2.0.0\n');
+  await writeFile(config, '{ not json');
+  let serviceCalls = 0;
+  const options = { ...installed.options, pull: false, relaySetup: true, serviceSetup: true,
+    configureService: async () => { serviceCalls += 1; return { status: 'planned' }; } };
+  const failed = await evolve(options);
+  assert.equal(failed.completed, false);
+  assert.equal(failed.service.phase, 'relay');
+  assert.equal(serviceCalls, 0);
+  assert.equal(await readFile(version, 'utf8'), '2.0.0\n');
+  assert.equal((await readFile(machine, 'utf8')).match(/^last-check:.*$/m)?.[0], before.match(/^last-check:.*$/m)?.[0]);
+  await writeFile(config, '{}');
+  assert.equal((await evolve(options)).completed, true);
+  assert.equal(serviceCalls, 1);
+  assert.equal(await readFile(version, 'utf8'), '3.0.0\n');
 });
 
 test('evolve configures a client that gained no entry yet, then only reports it', async (context) => {
@@ -220,7 +283,7 @@ test('evolve configures a client that gained no entry yet, then only reports it'
   assert.equal(first.relay.find((item) => item.client === 'claude').restart, true);
   const file = path.join(homeDir, '.claude.json');
   const configured = await readFile(file, 'utf8');
-  assert.equal(JSON.parse(configured).mcpServers['hivem1nd-relay'].args[0], path.join(mindPath, 'cli', 'index.mjs'));
+  assert.equal(JSON.parse(configured).mcpServers['hivem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
 
   const second = await evolve(evolveOptions);
   assert.equal(statuses(second.relay).claude, 'already-configured');
@@ -241,6 +304,8 @@ test('uninstall removes the Relay entries that run this mind and keeps every for
   await writeFile(claudeFile, JSON.stringify(claude, null, 2));
   const settings = JSON.parse(await readFile(settingsFile, 'utf8'));
   settings.hooks.SessionStart.push({ hooks: [{ type: 'command', command: 'echo foreign' }] });
+  const foreignMindHook = JSON.parse(buildClientConfig({ client: 'claude', kitPath: KIT_PATH, mindPath: path.join(installed.root, 'other-mind') }).hooks).hooks.SessionStart[0];
+  settings.hooks.SessionStart.push(foreignMindHook);
   await writeFile(settingsFile, JSON.stringify(settings, null, 2));
 
   const result = await uninstall(uninstallOptions(installed));
@@ -251,7 +316,7 @@ test('uninstall removes the Relay entries that run this mind and keeps every for
   assert.deepEqual(after.mcpServers, { other: { command: 'other-server' } });
   assert.equal(after.theme, 'dark');
   const hooks = JSON.parse(await readFile(settingsFile, 'utf8')).hooks;
-  assert.deepEqual(hooks.SessionStart, [{ hooks: [{ type: 'command', command: 'echo foreign' }] }]);
+  assert.deepEqual(hooks.SessionStart, [{ hooks: [{ type: 'command', command: 'echo foreign' }] }, foreignMindHook]);
   assert.doesNotMatch(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /hivem1nd-relay/);
 });
 

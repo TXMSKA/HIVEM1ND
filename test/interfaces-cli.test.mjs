@@ -458,3 +458,96 @@ test("init gives the setup session the Relay setup option, in the terminal and i
   await runCli(["init"], { stdout: sink().stream, stderr: sink().stream, setup, prompts: new Proxy({}, { get() { throw new Error("stop"); } }) }).catch(() => {});
   assert.equal(sessionOptions.relaySetup, true);
 });
+
+test("ordinary evolve enables the real service phases and preserves injected registration boundaries", async () => {
+  let received;
+  const serviceRunner = async () => {};
+  const serviceStart = async () => ({ viewerUrl: "http://127.0.0.1:1234" });
+  const serviceQuery = async () => ({ present: false });
+  const serviceAclRunner = {};
+  const lifecycle = { async evolve(options) { received = options; return { action: "evolve", completed: true, changed: false }; } };
+  const dependencies = { lifecycle, serviceRunner, serviceStart, serviceQuery, serviceAclRunner, serviceSid: "S-1-5-21-1", stdout: sink().stream, stderr: sink().stream };
+  assert.equal(await runCli(["evolve", "--mind-path", "."], dependencies), 0);
+  assert.equal(received.serviceDryRun, false);
+  assert.equal(received.serviceRunner, serviceRunner);
+  assert.equal(received.serviceStart, serviceStart);
+  assert.equal(received.serviceQuery, serviceQuery);
+  assert.equal(received.aclRunner, serviceAclRunner);
+  assert.equal(received.sid, "S-1-5-21-1");
+  assert.equal(await runCli(["evolve", "--mind-path", ".", "--dry-run"], dependencies), 0);
+  assert.equal(received.serviceDryRun, true);
+  assert.equal(received.serviceRunner, undefined);
+});
+
+test("the ordinary GUI installer opens the completed service viewer through its same injected opener", async () => {
+  const opened = [];
+  let complete;
+  const code = await runCli(["init", "--gui"], {
+    stdout: sink().stream,
+    stderr: sink().stream,
+    wizard: { async createWizardServer(options) { complete = options.openCompletedViewer; return { url: "http://127.0.0.1:1234/setup" }; } },
+    openUrl: async (url) => { opened.push(url); },
+    waitForServer: async () => { await complete("http://127.0.0.1:1234/gui/viewer"); },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(opened, ["http://127.0.0.1:1234/setup", "http://127.0.0.1:1234/gui/viewer"]);
+});
+
+test("service install and uninstall delegate ownership checks and preserve selected setup paths", async () => {
+  let received;
+  const opened = [];
+  const serviceStart = async () => ({ viewerUrl: "http://127.0.0.1:1234/gui/viewer" });
+  const dependencies = {
+    stdout: sink().stream, stderr: sink().stream,
+    serviceStart,
+    registrationRunner: async () => { throw new Error("The fixture cannot run an OS command."); },
+    registrationQuery: async () => ({ present: false }),
+    openUrl: async (url) => { opened.push(url); },
+    serviceInstall: {
+      async configureOwnedService(options) { received = options; return { status: "started", viewerUrl: "http://127.0.0.1:1234/gui/viewer" }; },
+      async removeOwnedRegistration(options) { received = options; return { removed: true, commands: ["owned registration"] }; },
+      planRegistration() { return {}; },
+    },
+    sid: "S-1-5-21-1",
+  };
+  const common = ["--mind-path", ".", "--home-dir", "isolated-home", "--hostname", "QA", "--origin-path", "isolated-origin"];
+  assert.equal(await runCli(["service", "install", ...common], dependencies), 0);
+  assert.equal(received.dryRun, false);
+  assert.equal(received.requireOrigin, true);
+  assert.equal(received.hostname, "QA");
+  assert.equal(received.start, serviceStart);
+  assert.equal(received.query, dependencies.registrationQuery);
+  assert.deepEqual(opened, ["http://127.0.0.1:1234/gui/viewer"]);
+  assert.equal(await runCli(["service", "uninstall", ...common], dependencies), 0);
+  assert.equal(received.dryRun, false);
+  assert.equal(received.run, dependencies.registrationRunner);
+});
+
+test("terminal setup retries a failed service phase and opens the completed viewer only after success", async () => {
+  let installs = 0;
+  let outros = 0;
+  const warnings = [];
+  const opened = [];
+  const stops = [];
+  const session = {
+    async getStep() { return installs < 2 ? { number: 7, title: "Install", language: "en" } : { number: 8, done: true, language: "en", result: { completed: true, message: "Installed" } }; },
+    async preview() { return { files: [], conflicts: [] }; },
+    async answer() {},
+    async install() { installs += 1; return installs === 1 ? { completed: false, service: { error: "Service unavailable" } } : { completed: true, viewerUrl: "http://127.0.0.1:1234/gui/viewer" }; },
+  };
+  const prompts = {
+    intro() {}, note() {}, cancel() {}, isCancel() { return false; },
+    outro() { outros += 1; },
+    log: { step() {}, info() {}, warn(text) { warnings.push(text); } },
+    async confirm() { return true; },
+    spinner() { return { start() {}, stop(text) { stops.push(text); } }; },
+  };
+  const code = await runCli(["init"], { setup: { async createSetupSession() { return session; } }, prompts, stdout: sink().stream, stderr: sink().stream, openUrl: async (url) => { opened.push(url); } });
+  assert.equal(code, 0);
+  assert.equal(installs, 2);
+  assert.equal(outros, 1);
+  assert.deepEqual(warnings, ["Service unavailable"]);
+  assert.equal(stops.length, 2);
+  assert.notEqual(stops[0], stops[1]);
+  assert.deepEqual(opened, ["http://127.0.0.1:1234/gui/viewer"]);
+});

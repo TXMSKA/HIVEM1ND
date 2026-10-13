@@ -224,7 +224,12 @@ export async function createWizardServer({
       }
 
       if (url.pathname === "/api/v1/step" && request.method === "GET") {
-        sendJson(response, 200, { data: withUi(await activeSession.getStep()) });
+        const step = await activeSession.getStep();
+        if (step.done && !viewerOpened && step.result?.viewerUrl && typeof openCompletedViewer === "function") {
+          viewerOpened = true;
+          await openCompletedViewer(step.result.viewerUrl);
+        }
+        sendJson(response, 200, { data: withUi(step) });
         return;
       }
       if (url.pathname === "/api/v1/preview" && request.method === "GET") {

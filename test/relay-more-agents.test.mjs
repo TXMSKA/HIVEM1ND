@@ -331,29 +331,35 @@ async function stopHook(mindPath, input, extra = {}) {
   return result;
 }
 
-test('Cursor stop is quiet without consent or unread, counts handoffs, and never archives content', async (context) => {
+async function legacyStop(wake, binding, input = {}, extra = {}) {
+  if (extra.unit && extra.unit !== binding.unit || extra.nativeSessionId && extra.nativeSessionId !== binding.nativeSessionId) return null;
+  const text = await wake.cursorStop({ ...binding, nativeSessionId: input.conversation_id ?? binding.nativeSessionId }, { loopCount: Object.hasOwn(input, 'loop_count') ? input.loop_count : 0, generationId: input.generation_id });
+  return text ? { followup_message: text } : null;
+}
+
+test('the legacy Cursor controller is quiet without consent or unread, counts handoffs, and never archives content', async (context) => {
   const { mind, binding, relay, wake } = await fixture(context);
   await relay.send({ to: 'overseer', subject: 'private subject', body: 'private body' });
   assert.equal(await stopHook(mind), null);
   await wake.enable({ ...binding, maxHandoffs: 2 });
-  assert.deepEqual(await stopHook(mind, { generation_id: 'g1' }), { followup_message: pointer });
-  assert.equal(await stopHook(mind, { generation_id: 'g1' }), null, 'duplicate generation does not spend twice');
-  assert.deepEqual(await stopHook(mind, { loop_count: 1, generation_id: 'g2' }), { followup_message: pointer });
+  assert.deepEqual(await legacyStop(wake, binding, { generation_id: 'g1' }), { followup_message: pointer });
+  assert.equal(await legacyStop(wake, binding, { generation_id: 'g1' }), null, 'duplicate generation does not spend twice');
+  assert.deepEqual(await legacyStop(wake, binding, { loop_count: 1, generation_id: 'g2' }), { followup_message: pointer });
   assert.equal((await wake.status(binding)).wakeCount, 2); assert.equal((await relay.inbox()).unread, 1);
-  assert.equal(await stopHook(mind, { loop_count: 2 }), null, 'budget exhausted');
+  assert.equal(await legacyStop(wake, binding, { loop_count: 2 }), null, 'budget exhausted');
   await wake.enable(binding); await relay.read(); assert.equal(await stopHook(mind), null, 'quiet inbox');
   await relay.send({ to: 'overseer', subject: 'another', body: 'another' });
   await wake.disable(binding); assert.equal(await stopHook(mind), null, 'disabled');
 });
 
-test('Cursor stop enforces loop bounds, exact identity, unit, expiry and concurrent budget', async (context) => {
+test('the legacy Cursor controller enforces loop bounds, exact identity, unit, expiry and concurrent budget', async (context) => {
   const { mind, binding, relay, wake } = await fixture(context);
   await relay.send({ to: 'overseer', subject: 's', body: 'b' }); await wake.enable({ ...binding, maxHandoffs: 1 });
-  for (const loop_count of [5, -1, '0', 1.5, null]) assert.equal(await stopHook(mind, { loop_count }), null);
-  assert.equal(await stopHook(mind, { conversation_id: 'other' }), null);
-  assert.equal(await stopHook(mind, {}, { unit: 'user' }), null);
-  assert.equal(await stopHook(mind, {}, { nativeSessionId: 'other' }), null);
-  const results = await Promise.all([stopHook(mind, { generation_id: 'g1' }), stopHook(mind, { generation_id: 'g2' })]);
+  for (const loop_count of [5, -1, '0', 1.5, null]) assert.equal(await legacyStop(wake, binding, { loop_count }), null);
+  assert.equal(await legacyStop(wake, binding, { conversation_id: 'other' }), null);
+  assert.equal(await legacyStop(wake, binding, {}, { unit: 'user' }), null);
+  assert.equal(await legacyStop(wake, binding, {}, { nativeSessionId: 'other' }), null);
+  const results = await Promise.all([legacyStop(wake, binding, { generation_id: 'g1' }), legacyStop(wake, binding, { generation_id: 'g2' })]);
   assert.equal(results.filter(Boolean).length, 1); assert.equal((await wake.status(binding)).wakeCount, 1);
   const expired = await createRelayWakeController({ mindPath: mind, sink: async () => ({ status: 'submitted' }),
     clock: { now: () => Date.now() + 5 * 3600_000, sleep: async () => {} } });
@@ -377,33 +383,31 @@ async function startHook(mindPath, input, extra = {}) {
   return { result, err: Buffer.concat(err).toString('utf8') };
 }
 
-test('Cursor session start runs the worker of an enabled consent through the lease, and nothing else', async (context) => {
+test('an unattached Cursor session start never launches a worker or changes consent', async (context) => {
   const { mind, binding, wake } = await fixture(context);
   const spawned = [];
   const wakeWorkerSpawner = (options) => { spawned.push(options); return { ready: Promise.resolve({ state: 'running', ownsLease: true }) }; };
   await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'no consent');
   await wake.enable(binding);
   const started = await startHook(mind, {}, { wakeWorkerSpawner });
-  assert.equal(spawned.length, 1); assert.deepEqual(spawned[0].binding, binding); assert.equal(spawned[0].mindPath, mind);
-  assert.match(spawned[0].cliPath, /cli[\\/]index\.mjs$/); assert.equal(started.err, '');
-  await startHook(mind, { conversation_id: 'other-chat' }, { wakeWorkerSpawner }); assert.equal(spawned.length, 1, 'another chat');
+  assert.equal(spawned.length, 0); assert.equal(started.err, '');
+  await startHook(mind, { conversation_id: 'other-chat' }, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'another chat');
   const invalid = await startHook(mind, {}, { wakeWorkerSpawner, env: { RELAY_CURSOR_CWD: 'relative' } });
-  assert.equal(spawned.length, 1); assert.match(invalid.err, /cursor_cwd_invalid/);
-  // A worker that does not start is told on stderr and never withholds the reminder.
+  assert.equal(spawned.length, 0); assert.equal(invalid.err, '');
   const failing = await startHook(mind, {}, { wakeWorkerSpawner: () => ({ ready: Promise.reject(new Error('fixture')) }) });
-  assert.match(failing.err, /worker could not start/);
+  assert.equal(failing.err, '');
   const throwing = await startHook(mind, {}, { wakeWorkerSpawner: () => { throw new Error('fixture'); } });
-  assert.match(throwing.err, /worker could not start/);
-  await wake.disable(binding); await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 1, 'consent revoked');
+  assert.equal(throwing.err, '');
+  await wake.disable(binding); await startHook(mind, {}, { wakeWorkerSpawner }); assert.equal(spawned.length, 0, 'consent revoked');
 });
 
-test('Cursor stop still follows up after the chat registers again, because the consent names the unit and the chat', async (context) => {
+test('the legacy Cursor controller follows up after the chat registers a new observation', async (context) => {
   const { mind, binding, relay, wake } = await fixture(context);
   await relay.send({ to: 'overseer', subject: 's', body: 'b' }); await wake.enable(binding);
   // A new MCP process of the same chat registers with an observation, which writes a record of its own.
   const next = await createRelay({ mindPath: mind, client: 'cursor', hostname: os.hostname(), sessionId: 'second-process' });
   await next.register({ unit: 'overseer', nativeSessionId: binding.nativeSessionId, client: 'cursor', activity: 'idle' });
-  assert.deepEqual(await stopHook(mind), { followup_message: pointer });
+  assert.deepEqual(await legacyStop(wake, binding), { followup_message: pointer });
 });
 
 test('cursor CLI attach inside the chat takes the conversation from CURSOR_CONVERSATION_ID, and the flag wins', async (context) => {

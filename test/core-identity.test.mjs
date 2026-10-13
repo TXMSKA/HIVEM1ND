@@ -118,13 +118,15 @@ test('local Cosmic paths reject synced staging and Windows device junctions', as
   );
   assert.equal(mindKeyFor('C:\\Cosmic\\Hivem1nd', 'win32'), mindKeyFor('c:\\cosmic\\hivem1nd', 'win32'));
   assert.notEqual(mindKeyFor('/Cosmic/Hivem1nd', 'linux'), mindKeyFor('/Cosmic/hivem1nd', 'linux'));
-  assert.throws(() => servicePaths({
+  const legacy = servicePaths({
     platform: 'win32',
     env: { LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local' },
     home: 'C:\\Users\\example',
     machine: 'DESKTOP',
-    mindPath: 'C:\\Users\\example\\hivem1nd',
-  }), { code: 'invalid_mind' });
+    mindPath: 'C:\\Users\\example\\OneDrive\\HIVEM1ND',
+  });
+  assert.equal(legacy.mind, 'C:\\Users\\example\\OneDrive\\HIVEM1ND');
+  assert.equal(legacy.staging.startsWith('C:\\Users\\example\\AppData\\Local\\Cosmic\\'), true);
 
   const fixture = await makeCoreFixture();
   t.after(() => dispose(fixture));
