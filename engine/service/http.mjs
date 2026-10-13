@@ -9,7 +9,7 @@ import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, setUnitAlias } from './units.mjs';
-import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
+import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
@@ -537,9 +537,15 @@ export async function createHttpServer(options) {
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
     }
-    const outcome = applySync(route.method === 'GET'
+    let outcome = applySync(route.method === 'GET'
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run, domain), domain);
+    if (outcome.replayed && (route.handler === 'postChat' || route.handler === 'postMailbox')) {
+      const original = route.handler === 'postChat' ? outcome.body.message : outcome.body;
+      const notices = await deliverNotifications(domain, original.id);
+      const message = await readDetail(domain, 'messages', original.id, route.handler === 'postChat' ? { chatId: params.chatId } : { mailboxId: params.unitId });
+      outcome = { ...outcome, body: route.handler === 'postChat' ? { ...outcome.body, message, notifications: notices.map(({ unitId, state }) => ({ unitId, state })) } : message };
+    }
     if (credential?.audience === 'agent') await agentScope(route, domain, credential, params, body);
     if (outcome.status === 204) {
       respond(res, 204);
@@ -982,6 +988,7 @@ function domainContext(options, credential, bus) {
     bus,
     projects: options.projects ?? [],
     watch: options.watch ?? null,
+    wake: options.wake ?? null,
     ownedPids: options.ownedPids ?? new Set(),
     aliases: Array.isArray(options.aliases) ? options.aliases : null,
     adapters: options.adapters ?? null,

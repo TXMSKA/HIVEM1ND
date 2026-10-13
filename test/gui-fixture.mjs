@@ -569,15 +569,22 @@ async function loadChats(fx, issues) {
       const bytes = await readFile(file);
       const parsed = parseRecord(bytes.toString("utf8"));
       const readIds = new Set();
-      for (const receipt of await walkJson(join(root, entry.name, "read"))) {
-        for (const id of receipt.messageIds ?? []) readIds.add(id);
+      const receipts = await walkJson(join(root, entry.name, "read"));
+      for (const receipt of receipts) {
+        if (receipt.unitId === "root:master") for (const id of receipt.messageIds ?? []) readIds.add(id);
       }
       const ownMessages = [];
       for (const child of await listDir(join(root, entry.name))) {
         if (!child.isFile() || !child.name.endsWith(".md") || child.name === "chat.md") continue;
         const messageFile = join(root, entry.name, child.name);
         const messageBytes = await readFile(messageFile);
-        ownMessages.push(messageFrom(parseRecord(messageBytes.toString("utf8")), sha256(messageBytes), readIds));
+        const message = messageFrom(parseRecord(messageBytes.toString("utf8")), sha256(messageBytes), readIds);
+        const fanout = await readFile(join(fx.tree.user, "relay", "fanout", `${message.id}.json`), "utf8").then(JSON.parse).catch((error) => {
+          if (error.code === "ENOENT") return { notices: [] };
+          throw error;
+        });
+        message.delivery = fixtureDelivery(message, parsed.fields.get("members") ?? [], fanout.notices, receipts);
+        ownMessages.push(message);
       }
       ownMessages.sort(messageOrder);
       messages.push(...ownMessages.map((message) => ({ ...message, chatId: field(parsed.fields, "id") })));
@@ -630,6 +637,16 @@ function messageOrder(left, right) {
   return leftTime.localeCompare(rightTime) || left.id.localeCompare(right.id, "en");
 }
 
+function fixtureDelivery(message, members, notices, receipts) {
+  const recipients = members.filter((id) => id !== message.fromId);
+  const submitted = recipients.map((unitId) => notices.find((notice) => notice.unitId === unitId && notice.state === "submitted")?.submittedAt);
+  const read = recipients.map((unitId) => receipts.filter((receipt) => receipt.unitId === unitId && receipt.messageIds?.includes(message.id)).map((receipt) => receipt.at).sort()[0]);
+  const valid = (at) => typeof at === "string" && Number.isFinite(Date.parse(at));
+  const deliveredAt = recipients.length && submitted.every(valid) ? submitted.sort().at(-1) : null;
+  const readAt = recipients.length && read.every(valid) ? read.sort().at(-1) : null;
+  return { state: readAt ? "read" : deliveredAt ? "delivered" : "stored", deliveredAt, readAt };
+}
+
 function messageFrom(parsed, hash, readIds) {
   const id = field(parsed.fields, "id");
   const kind = field(parsed.fields, "kind") ?? "message";
@@ -649,6 +666,8 @@ function messageFrom(parsed, hash, readIds) {
     replyRequested: boolField(field(parsed.fields, "reply-requested")),
     attachments: Array.isArray(parsed.fields.get("attachments")) ? parsed.fields.get("attachments") : [],
     kind,
+    operationId: field(parsed.fields, "operation-id"),
+    delivery: { state: "stored", deliveredAt: null, readAt: null },
     read: readIds.has(id),
     notice: resourceId ? { resourceId, key: field(parsed.fields, "notice-key") } : null,
     hash,
@@ -1342,7 +1361,7 @@ async function mutate(fx, request, route, body, principal, requestId) {
       return { status: previous.status, response: previous.response };
     }
     await route.checkPreconditions(body);
-    const prepared = await route.prepare(body, principal);
+    const prepared = await route.prepare(body, principal, key);
     const response = prepared.status === 204 ? null : success(fx, prepared.data, requestId, planCursor(fx, prepared.events.length), prepared.sync ?? "local");
     const createdAt = clock(fx).toISOString();
     const expiresAt = new Date(fx.nowMs + DAY_MS).toISOString();
@@ -1569,7 +1588,7 @@ function validateRead(body) {
   }
 }
 
-async function prepareChatPost(fx, body, principal, chatId) {
+async function prepareChatPost(fx, body, principal, chatId, operationId) {
   const snap = await projection(fx);
   const chat = snap.chats.find((item) => item.id === chatId);
   if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
@@ -1580,6 +1599,7 @@ async function prepareChatPost(fx, body, principal, chatId) {
     id, from: "master", "from-id": principal.unitId, to: `chat:${chatId}`, "to-id": `chat:${chatId}`,
     machine: LOCAL_MACHINE, timestamp: now, priority: body.priority ?? "normal", subject: body.subject ?? "",
     "thread-id": chatId, "reply-to": body.replyTo ?? null, "reply-requested": "false", attachments: body.attachments ?? [], kind: "message",
+    "operation-id": operationId,
   }, body.body);
   const bytes = Buffer.from(document);
   const writes = [{ path: join(fx.tree.user, "relay", "chats", chatId, `${id}.md`), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }];
@@ -1587,7 +1607,11 @@ async function prepareChatPost(fx, body, principal, chatId) {
     id, fromId: principal.unitId, toId: `chat:${chatId}`, machine: LOCAL_MACHINE, timestamp: now, date: null,
     priority: body.priority ?? "normal", subject: body.subject ?? "", body: body.body, threadId: chatId,
     replyTo: body.replyTo ?? null, replyRequested: false, attachments: body.attachments ?? [], kind: "message", read: false, notice: null,
+    operationId, delivery: { state: "stored", deliveredAt: null, readAt: null },
   };
+  const notices = chat.members.filter((unitId) => unitId !== principal.unitId).map((unitId) => ({ key: `${id}:${unitId}`, unitId, resourceId: id, state: fx.noticeFailure === unitId ? "failed" : "pending" }));
+  const fanoutBytes = Buffer.from(stableJson({ format: "hivem1nd-fanout-v1", messageId: id, notices }));
+  writes.push({ path: join(fx.tree.user, "relay", "fanout", `${id}.json`), beforeRevision: null, afterRevision: sha256(fanoutBytes), afterBytesBase64: fanoutBytes.toString("base64") });
   return {
     status: 201,
     data: {
@@ -1625,14 +1649,23 @@ async function prepareChatRead(fx, body, principal, chatId) {
   const bytes = Buffer.from(stableJson(record));
   const encoded = Buffer.from(principal.unitId).toString("base64url");
   const unread = snap.messages.filter((message) => message.chatId === chatId && !message.read && !body.messageIds.includes(message.id)).length;
+  const receipts = [...await walkJson(join(fx.tree.user, "relay", "chats", chatId, "read")), record];
+  const deliveries = await Promise.all(body.messageIds.map(async (messageId) => {
+    const message = snap.messages.find((item) => item.id === messageId);
+    const fanout = await readFile(join(fx.tree.user, "relay", "fanout", `${messageId}.json`), "utf8").then(JSON.parse).catch((error) => {
+      if (error.code === "ENOENT") return { notices: [] };
+      throw error;
+    });
+    return { messageId, delivery: fixtureDelivery(message, chat.members, fanout.notices, receipts) };
+  }));
   return {
     status: 200,
-    data: { chatId, readIds: body.messageIds, unread },
+    data: { chatId, readIds: body.messageIds, unread, deliveries },
     writes: [{
       path: join(fx.tree.user, "relay", "chats", chatId, "read", encoded, LOCAL_MACHINE, `${receiptId}.json`),
       beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64"),
     }],
-    events: body.messageIds.length ? [{ name: "message.read", chatId, data: { chatId, mailboxId: null, readerId: principal.unitId, messageIds: body.messageIds, unread } }] : [],
+    events: body.messageIds.length ? [{ name: "message.read", chatId, data: { chatId, mailboxId: null, readerId: principal.unitId, messageIds: body.messageIds, unread, deliveries } }] : [],
   };
 }
 
@@ -2033,6 +2066,7 @@ function publicMessage(message) {
     date: message.date, priority: message.priority, subject: message.subject, body: message.body, threadId: message.threadId,
     replyTo: message.replyTo, replyRequested: message.replyRequested, attachments: message.attachments, kind: message.kind,
     read: message.read, notice: message.notice,
+    operationId: message.operationId ?? null, delivery: message.delivery,
   };
 }
 
@@ -2272,7 +2306,7 @@ async function handleApi(fx, request, response, audience) {
     mailboxUnit: matched.params.unitId,
     validate: spec.validate,
     checkPreconditions: async (input) => checkMutation(fx, spec.pattern, matched.params, input),
-    prepare: async (input, actor) => prepareMutation(fx, spec.pattern, matched.params, input, actor),
+    prepare: async (input, actor, operationId) => prepareMutation(fx, spec.pattern, matched.params, input, actor, operationId),
     runtime: Boolean(spec.runtime),
     homeGrant: spec.pattern === "/settings/home-network",
     apply: spec.pattern === "/auth/logout" ? () => revokeViewer(fx, principal.viewerId) : undefined,
@@ -3927,7 +3961,7 @@ async function checkMutation(fx, pattern, params, body) {
   }
 }
 
-async function prepareMutation(fx, pattern, params, body, principal) {
+async function prepareMutation(fx, pattern, params, body, principal, operationId) {
   if (pattern === "/units/:unitId") return prepareUnitRemoval(fx, params.unitId, body);
   if (pattern === "/groups") return prepareGroup(fx, null, body);
   if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);
@@ -3971,7 +4005,7 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/layout") return prepareLayout(fx, body);
   if (pattern === "/settings") return prepareSettings(fx, body);
   if (pattern === "/settings/home-network") return prepareHomeNetwork(fx, body, principal);
-  if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId);
+  if (pattern === "/chats/:chatId/messages") return prepareChatPost(fx, body, principal, params.chatId, operationId);
   if (pattern === "/chats/:chatId/read") return prepareChatRead(fx, body, principal, params.chatId);
   if (pattern === "/mailboxes/:unitId/read") return prepareMailboxRead(fx, body, params.unitId);
   if (pattern === "/mailboxes/:unitId/messages") return prepareMailboxPost(fx, body, principal, params.unitId);
@@ -4320,6 +4354,25 @@ export async function createGuiFixture(options = {}) {
       },
       setFault(fault) { fx.fault = fault; },
       setNoticeFailure(unitId) { fx.noticeFailure = unitId; },
+      acknowledgeChat(chatId, messageId, unitId, { state = "submitted", read = false } = {}) {
+        return enqueue(fx, async () => {
+          const snap = await projection(fx);
+          const chat = snap.chats.find((item) => item.id === chatId);
+          if (!chat?.members.includes(unitId)) throw new Error("Unknown fixture recipient.");
+          const file = join(fx.tree.user, "relay", "fanout", `${messageId}.json`);
+          const fanout = JSON.parse(await readFile(file, "utf8"));
+          const notice = fanout.notices.find((item) => item.unitId === unitId);
+          if (notice) Object.assign(notice, { state, submittedAt: state === "submitted" ? clock(fx).toISOString() : null });
+          await writeAtomic(file, Buffer.from(stableJson(fanout)));
+          if (read) {
+            const receipt = { format: "hivem1nd-chat-read-v1", chatId, unitId, messageIds: [messageId], at: clock(fx).toISOString() };
+            await writeAtomic(join(fx.tree.user, "relay", "chats", chatId, "read", Buffer.from(unitId).toString("base64url"), LOCAL_MACHINE, `${uuid()}.json`), Buffer.from(stableJson(receipt)));
+          }
+          invalidate(fx);
+          const message = publicMessage((await projection(fx)).messages.find((item) => item.id === messageId));
+          publish(fx, [{ name: "notification.changed", chatId, data: { chatId, messageId, message, state: "updated" } }], fx.primary);
+        });
+      },
       openDesktop() {
         return enqueue(fx, async () => createViewer(fx, { embedded: false, hostOrigin: null, look: null, language: null, audience: "desktop" }).url);
       },

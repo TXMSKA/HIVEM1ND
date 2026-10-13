@@ -99,6 +99,21 @@ function openingText(app, key, variables = {}) {
   return OPENING_COPY[key][app.language === "es" ? 1 : 0].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
 }
 
+const SEND_COPY = {
+  sending: ["Sending", "Enviando"],
+  deliveredReceipt: ["Delivered {time}", "Entregado {time}"],
+  readReceipt: ["Read {time}", "Leído {time}"],
+  storedReceipt: ["Sent, awaiting delivery", "Enviado, pendiente de entrega"],
+  notConfirmed: ["Not confirmed: the service did not answer in 10 s.", "Sin confirmar: el servicio no respondió en 10 s."],
+  retryHint: ["Retry sends the same message once; it is never sent twice", "Reintentar envía el mismo mensaje una sola vez, sin duplicarlo"],
+  takingLonger: ["Taking longer than usual", "Está tardando más de lo habitual"],
+  waiting: ["The service has not answered for {seconds} s. It stops waiting at 30 s and offers Retry.", "El servicio no respondió durante {seconds} s. La espera termina a los 30 s y permite reintentar."],
+};
+
+function sendText(app, key, variables = {}) {
+  return SEND_COPY[key][app.language === "es" ? 1 : 0].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ""));
+}
+
 export function presentation(viewer, settings) {
   return {
     look: viewer?.look ?? settings?.look ?? "modern",
@@ -397,6 +412,7 @@ function editorFormsDirty(editor) {
 }
 
 function aggregateDirty(app) {
+  if ([...(app.chatThreads?.values() ?? [])].some((thread) => thread.pendingSends.size)) return true;
   const drafts = inputDrafts(app);
   for (const name of ["chats", "notes", "nodes", "resources", "mail"]) {
     for (const value of drafts[name]?.values() ?? []) {
@@ -543,6 +559,7 @@ export function dispose(app) {
   app.disposed = true;
   clearTimeout(app.readyTimer);
   clearTimeout(app.mapToastTimer);
+  for (const record of app.activity?.values() ?? []) record.cancel?.();
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.api.live && (app.api.live.stopped = true);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
@@ -600,6 +617,7 @@ async function onStream(app, event) {
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
     if (app.unitList) await reloadList(app.unitList);
     if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
+    if (event?.name === "view.changed" && app.thread?.chat) await loadMessages(app.api, app.thread);
     if (event?.name === "unit.changed" && dataOf(event).unit?.removed) {
       const id = dataOf(event).unit.id;
       if (app.pendingChat?.unitId === id) app.pendingChat = null;
@@ -624,13 +642,19 @@ async function onStream(app, event) {
   if (event?.name === "approval.requested" || event?.name === "approval.answered") await noteApproval(app, dataOf(event));
   if (event?.name === "approval.grant.changed") await noteGrant(app, dataOf(event));
   if (event?.name === "message.read") {
-    applyMessageRead(app.thread, dataOf(event));
+    const data = dataOf(event);
+    applyMessageRead(app.chatThreads?.get(data.chatId) ?? app.thread, data);
+    const thread = app.chatThreads?.get(data.chatId) ?? app.thread;
+    if (thread?.chat?.id === data.chatId && data.readerId !== "root:master" && !data.deliveries) await loadMessages(app.api, thread);
     noteMailboxRead(app, dataOf(event));
   }
-  if (event?.name === "message.created" && app.thread?.chat?.id === dataOf(event).chatId) {
+  if (event?.name === "message.created") {
+    const data = dataOf(event);
+    const thread = app.chatThreads?.get(data.chatId) ?? (app.thread?.chat?.id === data.chatId ? app.thread : null);
     const host = app.root.querySelector?.(".transcript");
-    if (host) updateNearBottom(app.thread, host);
-    incomingMessage(app.thread, dataOf(event).message);
+    if (host && thread === app.thread) updateNearBottom(thread, host);
+    if (thread) incomingMessage(thread, data.message);
+    if (data.message?.operationId) app.api.uncertain.delete(data.message.operationId);
   }
   const editors = app.editors;
   const data = event?.envelope?.data ?? {};
@@ -648,7 +672,7 @@ async function onStream(app, event) {
   }
   if (editors && event?.name === "editor.attachments.changed") noteAttachmentEvent(editors, data);
   if (editors && event?.name === "editor.asset.created") await noteAssetEvent(app, data);
-  if (editors && event?.name === "notification.changed") noteDelivery(app, editors, data);
+  if (event?.name === "notification.changed") noteDelivery(app, editors, data);
   if (event?.name === "sync.conflict") noteSyncConflict(app, data);
   if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
     noteRemote(editors, data);
@@ -723,7 +747,9 @@ async function noteAssetEvent(app, data) {
 }
 
 function noteDelivery(app, editors, data) {
-  const current = editors.current;
+  const thread = app.chatThreads?.get(data?.chatId) ?? (app.thread?.chat?.id === data?.chatId ? app.thread : null);
+  if (thread && data.message) incomingMessage(thread, data.message, true);
+  const current = editors?.current;
   if (!current || data?.resourceId !== current.resourceId || !data.state) return;
   const notices = [...(current.notices ?? [])];
   const index = notices.findIndex((item) => item.noticeKey === data.noticeKey && item.unitId === data.unitId);
@@ -3007,9 +3033,10 @@ function settle(app, key, label, work, onError = null) {
 
 function track(app, key, label, work, onError = null) {
   if (!app.activity) app.activity = new Map();
+  const previous = app.activity.get(key);
   return runAction(app.activity, key, {
     label,
-    work,
+    work: (record) => waitForActivity(app, record, work, previous),
     render(record) {
       record.action = label;
       if (!record.scope) record.scope = noteScope(app);
@@ -3024,6 +3051,47 @@ function track(app, key, label, work, onError = null) {
       if (app.rendering) queueMicrotask(paint);
       else paint();
     },
+  });
+}
+
+function waitForActivity(app, record, work, previous) {
+  record.startedAt = app.api.now();
+  record.elapsed = 0;
+  const running = previous?.localPending ? previous.localWork : Promise.resolve().then(() => work(record));
+  record.localWork = running;
+  record.localPending = true;
+  let deadline;
+  let tick;
+  const waiting = new Promise((_, reject) => {
+    record.cancel = () => reject(new ApiError(0, "wait_canceled", "The local wait was canceled."));
+    deadline = setTimeout(() => reject(new ApiError(0, "timeout", "The request timed out.")), 30000);
+    const update = () => {
+      record.elapsed = Math.max(0, Math.floor((app.api.now() - record.startedAt) / 1000));
+      if (!app.disposed && record.phase === "pending") renderShell(app);
+      tick = setTimeout(update, 1000);
+      tick.unref?.();
+    };
+    tick = setTimeout(update, 1000);
+    tick.unref?.();
+    deadline.unref?.();
+  });
+  running.then((result) => {
+    record.localPending = false;
+    if (app.activity.get(record.key) === record && record.phase === "error" && ["wait_canceled", "timeout"].includes(record.error?.code)) {
+      record.phase = "success";
+      record.result = result;
+      record.error = null;
+      clearMatchedError(app, record.key);
+      if (!app.disposed) renderShell(app);
+    }
+  }, (error) => {
+    record.localPending = false;
+    if (error?.operation) record.operation = error.operation;
+  });
+  return Promise.race([running, waiting]).finally(() => {
+    clearTimeout(deadline);
+    clearTimeout(tick);
+    record.cancel = null;
   });
 }
 
@@ -3052,7 +3120,14 @@ function paintActivity(app, shell) {
   const document = app.root.ownerDocument;
   const region = element(document, "div", { class: "activity", "aria-live": "polite", "data-activity-region": "true" });
   if (pending.length) shell.setAttribute("aria-busy", "true");
-  for (const record of pending) region.append(progressMark(document, record.label, { "data-activity": record.key }));
+  for (const record of pending) {
+    const notice = element(document, "div", { "data-activity": record.key, style: "display:flex;align-items:center;background:var(--waiting-soft);padding:10px 12px;border-radius:14px;gap:10px" });
+    notice.append(element(document, "span", { class: "spinner", "aria-hidden": "true", style: "width:15px;height:15px" }), element(document, "div", {},
+      element(document, "strong", { style: "font-size:13px;font-weight:700", text: sendText(app, "takingLonger") }),
+      element(document, "p", { style: "font-size:12px", text: sendText(app, "waiting", { seconds: record.elapsed ?? 0 }) }),
+    ), element(document, "button", { type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": record.key, text: text(app.language, "cancel"), onclick: () => record.cancel?.() }));
+    region.append(notice);
+  }
   for (const record of failed) {
     region.append(element(document, "p", { "data-activity": record.key, text: activityMessage(app, record) }));
     region.append(element(document, "button", {
@@ -4609,7 +4684,7 @@ function chatPanel(app, t) {
     transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
   }
   for (const message of windowed.items) {
-    const own = unitById(app, message.fromId)?.role === "master";
+    const own = message.fromId === "root:master" || unitById(app, message.fromId)?.role === "master";
     const article = element(document, "article", { class: own ? "bubble own" : "bubble", "data-from": message.fromId ?? "", "data-own": own ? "true" : "false" });
     const when = formatWhen(app.language, message.timestamp || message.date || "");
     article.append(element(document, "p", {
@@ -4623,15 +4698,31 @@ function chatPanel(app, t) {
       text: message.body || message.subject || "",
     });
     article.append(row);
-    if (message.pending && !message.failed) article.append(progressMark(document, t("sending")));
+    if (own) {
+      Object.assign(article.style, { background: "transparent", color: "var(--text)", padding: "0 0 0 28px", gap: "4px" });
+      Object.assign(row.style, { background: "var(--me)", color: "var(--me-text)", padding: "10px 14px", borderRadius: "18px", fontSize: "14.5px", ...(message.failed ? { border: "1px solid var(--error)" } : {}) });
+      const meta = article.querySelector(".bubble-meta");
+      Object.assign(meta.style, { fontFamily: "var(--mono)", fontSize: "12px", fontWeight: "700", color: "var(--mute)" });
+      const state = message.failed ? "notConfirmed" : message.pending ? "sending" : message.delivery?.state === "read" ? "readReceipt" : message.delivery?.state === "delivered" ? "deliveredReceipt" : "storedReceipt";
+      const at = state === "readReceipt" ? message.delivery.readAt : state === "deliveredReceipt" ? message.delivery.deliveredAt : null;
+      const label = sendText(app, state, { time: at ? formatClock(app.language, at) : "" });
+      const status = message.pending && !message.failed ? progressMark(document, label) : element(document, "span", { text: label });
+      status.setAttribute("data-send-state", state);
+      Object.assign(status.style, { fontSize: "12px", color: message.failed ? "var(--error)" : "var(--mute)" });
+      if (!message.pending && !message.failed) status.prepend?.(element(document, "span", { "aria-hidden": "true", text: "✓", style: "font-size:12px;margin-right:6px" }));
+      article.append(status);
+    }
     if (message.failed) {
       article.append(element(document, "button", {
         type: "button",
         class: "btn",
         "data-action": "retry-message",
+        "data-operation": message.operationId,
+        title: sendText(app, "retryHint"),
+        style: "font-size:12px;font-weight:700;color:var(--accent);min-height:32px",
         text: t("retry"),
         onclick: () => {
-          const task = retryMessage(app.api, thread);
+          const task = retryMessage(app.api, thread, message.operationId);
           const chatKey = `chat:${thread.chat.id}`;
           if (!app.disposed) renderShell(app);
           task?.then(() => {
@@ -4694,16 +4785,13 @@ function chatPanel(app, t) {
       thread.composer = draft.value;
       syncViewerDirty(app);
     });
-    const sending = Boolean(thread.pending);
     const send = element(document, "button", {
       type: "button",
       class: "btn primary",
       "data-action": "send",
-      "aria-busy": sending ? "true" : "false",
-      disabled: sending ? "" : null,
+      style: "min-height:32px",
       onclick: () => submitComposer(app, composer),
-    }, sending ? progressMark(document, t("sending")) : t("send"));
-    if (sending) send.disabled = true;
+    }, t("send"));
     const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
     const hint = group ? t("everyReply") : directUnit && !directUnit.sessionIds?.length ? t("finalComposerWait") : t("composerHint");
     composer.setAttribute("aria-label", name);
@@ -4885,11 +4973,15 @@ function showChat(app, chat) {
     app.mapState.selectedGroupId = app.store.selected.groupId;
     if (group) app.mapState.selection.clear();
   }
-  app.thread = createThread(chat);
+  app.chatThreads ??= new Map();
+  app.thread = app.chatThreads.get(chat.id) ?? createThread(chat);
+  app.thread.chat = chat;
+  app.chatThreads.set(chat.id, app.thread);
+  const thread = app.thread;
   const saved = inputDrafts(app).chats.get(chat.id);
   if (saved) app.thread.composer = saved.value;
   return settle(app, `chat-load:${chat.id}`, text(app.language, "loadingConversation"), async () => {
-    await loadMessages(app.api, app.thread);
+    await loadMessages(app.api, thread);
   });
 }
 
@@ -5010,14 +5102,17 @@ function sendMailbox(app, compose) {
 }
 
 function submitComposer(app, composer) {
-  const chatId = app.thread?.chat?.id;
+  const thread = app.thread;
+  const chatId = thread?.chat?.id;
   const draft = composer.value;
-  app.thread.composer = draft;
-  if (chatId) inputDrafts(app).chats.set(chatId, fieldDraft(composer));
-  const task = postMessage(app.api, app.thread, { body: draft });
+  if (!chatId || !draft.trim()) return;
+  const task = postMessage(app.api, thread, { body: draft });
+  composer.value = "";
+  clearInputDraft(app, "chat", chatId);
+  inputDrafts(app).focus = { kind: "field", id: keepId("chat", chatId), start: 0, end: 0 };
   if (!app.disposed) renderShell(app);
   task.then(() => {
-    if (chatId) clearInputDraft(app, "chat", chatId);
+    syncViewerDirty(app);
     clearMatchedError(app, chatId ? `chat:${chatId}` : null);
     if (!app.disposed) renderShell(app);
   }).catch((error) => noteAction(app, error, chatId ? `chat:${chatId}` : null));
@@ -5285,6 +5380,14 @@ async function refreshOwnerSurface(app, unitId) {
 
 async function recheckTracked(app) {
   const jobs = [];
+  for (const thread of app.chatThreads?.values() ?? []) {
+    for (const entry of thread.pendingSends.values()) {
+      if (entry.error && app.api.uncertain.has(entry.operation.id)) jobs.push(retryMessage(app.api, thread, entry.operation.id));
+    }
+  }
+  for (const record of app.activity?.values() ?? []) {
+    if (record.phase === "error" && record.error?.code !== "wait_canceled" && record.operation && app.api.uncertain.has(record.operation.id)) jobs.push(record.retry?.());
+  }
   if (app.sessionRequestId) {
     jobs.push(request(app.api, "GET", "/session-requests/:requestId", {
       params: { requestId: app.sessionRequestId },

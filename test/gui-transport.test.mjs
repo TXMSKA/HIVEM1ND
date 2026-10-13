@@ -854,3 +854,23 @@ test('send timeout and general response timeout remain distinct', () => {
   assert.equal(REQUEST_DEADLINE_MS, 30000);
   assert.ok(SEND_DEADLINE_MS < REQUEST_DEADLINE_MS);
 });
+
+test('actual chat and mailbox posts time out at ten seconds and ordinary bodies at thirty seconds', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const [route, deadline] of [['/chats/chat-1/messages', 10000], ['/mailboxes/root%3Amaster/messages', 10000], ['/units', 30000]]) {
+    const api = harness({ fetch: async () => new Response(new ReadableStream({ start() {} }), { status: 200 }) }).api;
+    const operation = createOperation({ method: 'POST', path: route, body: { body: 'Retained' } });
+    let settled = false;
+    const pending = request(api, operation.method, operation.path, { operation });
+    const rejected = assert.rejects(pending.finally(() => { settled = true; }), (error) => error.code === 'timeout');
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    t.mock.timers.tick(deadline - 1);
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    assert.equal(settled, false, route);
+    t.mock.timers.tick(1);
+    await rejected;
+    assert.equal(api.uncertain.get(operation.id).operation, operation);
+    assert.equal(api.controllers.size, 0);
+    dispose(api);
+  }
+});

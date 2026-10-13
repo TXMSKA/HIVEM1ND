@@ -884,7 +884,7 @@ test("session, approval and grant outcomes use the contract events", async (t) =
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
   await waitFor(() => desktop.app.inspectorData?.unitId === executor.id, "The inspector did not open.");
   const overseer = (await request(desktop.app.api, "GET", "/units/:unitId", { params: { unitId: "root:overseer" } })).data;
-  const started = await startSession(desktop.app.api, overseer, "cursor", null);
+  const started = await startSession(desktop.app.api, overseer, "cursor", null, null, { runMode: "chat" });
   await waitFor(() => desktop.app.sessionRequestId === started.data.requestId && noteText(desktop) === "The session is queued.", "The session request event did not arrive.");
   await fixture.control.patchSession(started.data.requestId, "failed", "launch_ambiguous");
   const beforeReset = urls.length;
@@ -4307,6 +4307,187 @@ test('a working chat offers the confirmed Stop boundary and preserves the thread
   assert.equal(desktop.app.thread.chat.id, chatId);
   dialog.close();
   assert.equal(desktop.app.thread.chat.id, chatId);
+});
+
+test('two optimistic sends leave the composer free and preserve text typed while either settles', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const calls = [];
+  const gates = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method !== 'POST' || !new URL(input).pathname.endsWith('/messages') || !String(input).includes('/chats/')) return;
+    calls.push({ body: JSON.parse(init.body), key: init.headers['Idempotency-Key'] });
+    await new Promise((resolve) => gates.push(resolve));
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, 'The chats did not load.');
+  navigate(desktop.app, 'chats');
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The composer did not open.');
+  for (const body of ['First draft', 'Second draft']) {
+    typeInput(desktop.root.querySelector('[data-composer]'), body, 0, body.length);
+    click(desktop.root.querySelector('[data-action="send"]'));
+    assert.equal(desktop.root.querySelector('[data-composer]').value, '');
+    assert.equal(Boolean(desktop.root.querySelector('[data-action="send"]').disabled), false);
+  }
+  await waitFor(() => calls.length === 2, 'The independent sends did not start.');
+  assert.notEqual(calls[0].key, calls[1].key);
+  assert.equal(desktop.root.querySelectorAll('[data-send-state="sending"]').length, 2);
+  assert.equal(desktop.app.thread.pendingSends.size, 2);
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Third draft', 2, 5);
+  gates[1]();
+  await waitFor(() => desktop.app.thread.pendingSends.size === 1, 'The second send did not settle.');
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Third draft');
+  gates[0]();
+  await waitFor(() => desktop.app.thread.pendingSends.size === 0, 'The first send did not settle.');
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Third draft');
+  assert.equal(desktop.root.querySelector('[data-composer]').selectionStart, 2);
+  const own = desktop.app.thread.messages.filter((message) => calls.some((call) => call.key === message.operationId));
+  assert.equal(own.length, 2);
+  assert.equal(new Set(own.map((message) => message.id)).size, 2);
+  const message = own[0];
+  const members = chat.members.filter((id) => id !== 'root:master');
+  assert.equal(message.delivery.state, 'stored');
+  assert.ok(desktop.root.querySelector('[data-send-state="storedReceipt"]'));
+  for (const unitId of members) await fixture.control.acknowledgeChat(chat.id, message.id, unitId);
+  await waitFor(() => message.delivery.state === 'delivered', 'The recipient submissions did not update delivery.');
+  assert.ok(desktop.root.querySelector('[data-send-state="deliveredReceipt"]').textContent.includes('Delivered'));
+  for (const unitId of members) await fixture.control.acknowledgeChat(chat.id, message.id, unitId, { read: true });
+  await waitFor(() => message.delivery.state === 'read', 'The recipient reads did not update delivery.');
+  desktop.app.language = 'es';
+  renderShell(desktop.app);
+  assert.ok(desktop.root.querySelector('[data-send-state="readReceipt"]').textContent.includes('Leído'));
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Third draft');
+});
+
+test('an unconfirmed row retries its own payload once while preserving the next composer draft', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const calls = [];
+  let release;
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method !== 'POST' || !new URL(input).pathname.endsWith('/messages') || !String(input).includes('/chats/')) return;
+    calls.push({ body: init.body, key: init.headers['Idempotency-Key'] });
+    if (calls.length > 1) await new Promise((resolve) => { release = resolve; });
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, 'The chats did not load.');
+  navigate(desktop.app, 'chats');
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The composer did not open.');
+  fixture.control.setFault({ method: 'POST', path: `/api/v1/chats/${chat.id}/messages`, status: 503, code: 'timeout' });
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Original message', 0, 16);
+  click(desktop.root.querySelector('[data-action="send"]'));
+  await waitFor(() => desktop.root.querySelector('[data-send-state="notConfirmed"]'), 'The unconfirmed line did not appear.');
+  assert.equal(desktop.root.querySelector('[data-send-state="notConfirmed"]').textContent, 'Not confirmed: the service did not answer in 10 s.');
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Next draft', 0, 10);
+  const retry = desktop.root.querySelector('[data-action="retry-message"]');
+  assert.equal(retry.getAttribute('title'), 'Retry sends the same message once; it is never sent twice');
+  click(retry);
+  click(retry);
+  await waitFor(() => calls.length === 2, 'Retry did not start.');
+  assert.deepEqual(calls[1], calls[0]);
+  release();
+  await waitFor(() => desktop.app.thread.pendingSends.size === 0, 'The retry did not settle.');
+  assert.equal(calls.length, 2);
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Next draft');
+  assert.equal(desktop.app.thread.messages.filter((message) => message.operationId === calls[0].key).length, 1);
+});
+
+test('reconnection resumes an uncertain send under its original identity and retains the next draft', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const calls = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method !== 'POST' || !new URL(input).pathname.endsWith('/messages') || !String(input).includes('/chats/')) return;
+    calls.push({ body: init.body, key: init.headers['Idempotency-Key'] });
+    if (calls.length === 1) throw new Error('Connection lost');
+  });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, 'The chats did not load.');
+  navigate(desktop.app, 'chats');
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The composer did not open.');
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Resume once', 0, 11);
+  click(desktop.root.querySelector('[data-action="send"]'));
+  await waitFor(() => desktop.app.api.uncertain.has(calls[0]?.key), 'The uncertain send was not retained.');
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Unsent draft', 0, 12);
+  await fixture.control.emit('stream.ready', { capabilities: desktop.app.store.capabilities, readAt: '2026-10-13T00:00:00.000Z' });
+  await waitFor(() => desktop.app.thread.pendingSends.size === 0, 'Reconnection did not reconcile the send.');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Unsent draft');
+  assert.equal(desktop.app.thread.chat.id, chat.id);
+  assert.equal(desktop.app.api.uncertain.has(calls[0].key), false);
+  assert.equal(desktop.app.thread.messages.filter((message) => message.operationId === calls[0].key).length, 1);
+});
+
+for (const end of ['Cancel', 'timeout']) test(`ordinary waiting reports elapsed time and ${end} preserves a committed operation and drafts`, async (t) => {
+  t.after(() => t.mock.timers.reset());
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, 'The chats did not load.');
+  navigate(desktop.app, 'chats');
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The composer did not open.');
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Unsent text', 0, 11);
+  navigate(desktop.app, 'settings');
+  await waitFor(() => desktop.root.querySelector('[data-look="high-contrast"]'), 'Settings did not open.');
+  const fetchRequest = desktop.app.api.fetch;
+  const commits = new Map();
+  const requests = [];
+  let finish;
+  let now = 1000;
+  desktop.app.api.now = () => now;
+  desktop.app.api.fetch = async (input, init) => {
+    if (init.method !== 'PATCH' || !new URL(input).pathname.endsWith('/settings')) return fetchRequest(input, init);
+    const key = init.headers['Idempotency-Key'];
+    requests.push(key);
+    const data = commits.get(key) ?? { settings: { ...desktop.app.store.settings.settings, look: 'high-contrast' }, revision: 'b'.repeat(64) };
+    commits.set(key, data);
+    const payload = JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: key, readAt: '2026-10-13T00:00:00.000Z', eventCursor: 'fixture:1', sync: 'local' } });
+    if (requests.length > 1) return new Response(payload, { status: 200 });
+    return new Response(new ReadableStream({ start(controller) { finish = () => { controller.enqueue(new TextEncoder().encode(payload)); controller.close(); }; } }), { status: 200 });
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  click(desktop.root.querySelector('[data-look="high-contrast"]'));
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  assert.match(desktop.root.querySelector('[data-activity="settings"]').querySelector('strong').textContent, /Taking longer than usual/);
+  now += 12000;
+  t.mock.timers.tick(12000);
+  assert.match(desktop.root.querySelector('[data-activity="settings"]').querySelector('p').textContent, /12 s/);
+  assert.ok(desktop.root.querySelector('[data-action="cancel-activity"]'));
+  if (end === 'Cancel') click(desktop.root.querySelector('[data-action="cancel-activity"]'));
+  else {
+    now += 18000;
+    t.mock.timers.tick(18000);
+  }
+  for (let turn = 0; turn < 30; turn += 1) await Promise.resolve();
+  assert.equal(desktop.app.activity.get('settings').phase, 'error');
+  assert.equal(desktop.root.querySelector('[data-action="cancel-activity"]'), null);
+  assert.ok(desktop.root.querySelector('[data-action="retry-activity"]'));
+  assert.equal(commits.size, 1);
+  assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, 'Unsent text');
+  if (end === 'Cancel') {
+    click(desktop.root.querySelector('[data-action="retry-activity"]'));
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    assert.equal(requests.length, 1);
+    finish();
+  } else click(desktop.root.querySelector('[data-action="retry-activity"]'));
+  for (let turn = 0; turn < 40; turn += 1) await Promise.resolve();
+  assert.equal(desktop.app.activity.get('settings').phase, 'success');
+  assert.equal(commits.size, 1);
+  if (end === 'timeout') {
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0], requests[1]);
+  }
+  t.mock.timers.reset();
 });
 
 async function assertAbsent(root, secret) {

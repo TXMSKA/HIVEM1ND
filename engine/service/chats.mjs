@@ -94,6 +94,8 @@ export async function postChat(context, chatId, input) {
   const fanout = `user/relay/fanout/${message.id}.json`;
   const fanoutBytes = Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`);
   await charge(context, message.id, message.bytes);
+  context.receiptBody = { message: message.projected, notifications: notices.map(({ unitId, state }) => ({ unitId, state })) };
+  context.receiptStatus = 201;
   await commitMany(context, [
     { relative, before: null, bytes: message.bytes },
     { relative: fanout, before: null, bytes: fanoutBytes },
@@ -102,9 +104,10 @@ export async function postChat(context, chatId, input) {
     ...notices.map((notice) => ({ name: 'notification.changed', data: { noticeKey: notice.key, unitId: notice.unitId, resourceId: message.id, state: 'pending', error: null } })),
     { name: 'chat.changed', data: { chat: await storedChat(context, chatId) } },
   ]);
-  const delivered = await deliverNotifications(context);
+  const delivered = await deliverNotifications(context, message.id);
   const mine = delivered.filter((notice) => notice.key?.startsWith(`${message.id}:`));
-  return { message: message.projected, notifications: mine.map((notice) => ({ unitId: notice.unitId, state: notice.state, error: notice.error ?? null })) };
+  const { readDetail } = await import('./projection.mjs');
+  return { message: await readDetail(context, 'messages', message.id, { chatId }), notifications: mine.map((notice) => ({ unitId: notice.unitId, state: notice.state, error: notice.error ?? null })) };
 }
 
 export async function postMailbox(context, unitId, input) {
@@ -128,10 +131,16 @@ export async function postMailbox(context, unitId, input) {
     context.receiptStatus = 201;
     context.receiptBody = message.projected;
   }
-  await commitOne(context, file, null, message.bytes, [
+  const notices = fanoutFor(message, [unitId], author(context));
+  await commitMany(context, [
+    { relative: file, before: null, bytes: message.bytes },
+    { relative: `user/relay/fanout/${message.id}.json`, before: null, bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`) },
+  ], [
     { name: 'message.created', data: { chatId: null, mailboxId: unitId, message: message.projected } },
   ]);
-  return { message: message.projected };
+  if (notices.length) await deliverNotifications(context, message.id);
+  const { readDetail } = await import('./projection.mjs');
+  return { message: await readDetail(context, 'messages', message.id, { mailboxId: unitId }) };
 }
 
 export async function readChat(context, chatId, input) {
@@ -150,10 +159,15 @@ export async function readChat(context, chatId, input) {
   const receiptId = randomUUID();
   const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: context.paths.machine, messageIds: ids, at: stamp(context) };
   const relative = `user/relay/chats/${chatId}/read/${Buffer.from(reader).toString('base64url')}/${context.paths.machine}/${receiptId}.json`;
-  await commitOne(context, relative, null, Buffer.from(`${canonicalJson(record)}\n`), [
-    { name: 'message.read', data: { chatId, mailboxId: null, readerId: reader, messageIds: ids, unread: await unreadChat(context, chatId, reader, ids) } },
-  ]);
-  return { chatId, readIds: ids, unread: await unreadChat(context, chatId, reader, ids) };
+  let deliveries;
+  const unread = await unreadChat(context, chatId, reader, ids);
+  await commitOne(context, relative, null, Buffer.from(`${canonicalJson(record)}\n`), async () => {
+    const { readProjection } = await import('./projection.mjs');
+    const messages = (await readProjection(context)).messages;
+    deliveries = ids.map((messageId) => ({ messageId, delivery: messages.find((message) => message.id === messageId).delivery }));
+    return [{ name: 'message.read', data: { chatId, mailboxId: null, readerId: reader, messageIds: ids, unread, deliveries } }];
+  });
+  return { chatId, readIds: ids, unread, deliveries };
 }
 
 export async function readMailbox(context, unitId, input) {
@@ -192,6 +206,8 @@ export async function readMailbox(context, unitId, input) {
     archives: entries.map((item) => item.relative),
   };
   entries.push({ relative: `user/relay/mailbox-reads/${batchId}.json`, before: null, bytes: Buffer.from(`${canonicalJson(journal)}\n`) });
+  const receipt = { format: 'hivem1nd-mailbox-receipt-v1', unitId: author(context), mailboxId: parsed.id, messageIds: moving.map((item) => item.id), at: stamp(context) };
+  entries.push({ relative: `user/relay/archive/by-unit/${Buffer.from(parsed.id).toString('base64url')}/read/${batchId}.json`, before: null, bytes: Buffer.from(`${canonicalJson(receipt)}\n`) });
   for (const item of moving) {
     entries.push({
       relative: `user/relay/tombstones/${item.id}.json`,
@@ -242,7 +258,11 @@ export async function recoverNotifications(context) {
   return pending;
 }
 
-export async function deliverNotifications(context) {
+export async function deliverNotifications(context, messageId = null) {
+  return withLocalChanges(context.store, () => deliverNotificationsLocked(context, messageId));
+}
+
+async function deliverNotificationsLocked(context, messageId) {
   const directory = path.join(context.paths.mind, 'user', 'relay', 'fanout');
   let names = [];
   try {
@@ -254,29 +274,44 @@ export async function deliverNotifications(context) {
   const results = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
+    if (messageId && name !== `${messageId}.json`) continue;
     const relative = `user/relay/fanout/${name}`;
     const bytes = await readBytes(context.store, absolute(context, relative));
     if (!bytes) continue;
     const parsed = JSON.parse(bytes.toString('utf8'));
     let changed = false;
     for (const notice of parsed.notices ?? []) {
+      const priorBytes = await readBytes(context.store, absolute(context, noticePath(notice)));
+      const prior = priorBytes ? JSON.parse(priorBytes.toString('utf8')) : null;
+      if (prior?.key === notice.key && ['submitted', 'ambiguous'].includes(prior.state) && prior.state !== notice.state) {
+        Object.assign(notice, { state: prior.state, error: prior.error ?? null, submittedAt: prior.submittedAt ?? null });
+        changed = true;
+      }
       if (notice.state === 'submitted' || notice.state === 'ambiguous') {
         results.push(notice);
         continue;
       }
+      if (typeof context.wake?.notify === 'function') await rememberNotice(context, { ...notice, state: 'ambiguous', error: 'submission_unconfirmed' });
       const outcome = await attemptNotice(context, notice);
       if (outcome.state !== notice.state || outcome.error !== (notice.error ?? null)) {
         notice.state = outcome.state;
         notice.error = outcome.error;
+        if (outcome.state === 'submitted') notice.submittedAt = stamp(context);
         changed = true;
       }
       await rememberNotice(context, notice);
       results.push({ ...notice });
     }
     if (changed) {
-      await commitOne(context, relative, revisionOf(bytes), Buffer.from(`${canonicalJson(parsed)}\n`), [
-        { name: 'notification.changed', data: { messageId: parsed.messageId, state: 'updated' } },
-      ]);
+      await commitOne(context, relative, revisionOf(bytes), Buffer.from(`${canonicalJson(parsed)}\n`), async () => {
+        const { readDetail } = await import('./projection.mjs');
+        const message = await readDetail(context, 'messages', parsed.messageId).catch((error) => {
+          if (error.code !== 'resource_not_found' && error.code !== 'message_not_found') throw error;
+          return null;
+        });
+        const chatId = message?.toId?.startsWith('chat:') ? message.toId.slice(5) : null;
+        return [{ name: 'notification.changed', data: { messageId: parsed.messageId, state: 'updated', ...(message ? { chatId, message } : {}) } }];
+      });
     }
   }
   return results;
@@ -289,26 +324,34 @@ async function attemptNotice(context, notice) {
     if (outcome?.state === 'submitted' || outcome?.state === 'ambiguous' || outcome?.state === 'failed' || outcome?.state === 'pending') {
       return { state: outcome.state, error: outcome.error ?? null };
     }
-    return { state: 'failed', error: 'delivery_failed' };
+    return { state: 'ambiguous', error: 'delivery_failed' };
   } catch (error) {
-    return { state: 'failed', error: error?.code || 'delivery_failed' };
+    return { state: 'ambiguous', error: error?.code || 'delivery_failed' };
   }
 }
 
 async function rememberNotice(context, notice) {
-  const relative = `user/relay/notices/${Buffer.from(notice.key).toString('base64url')}.json`;
-  if (await readBytes(context.store, absolute(context, relative))) return;
+  const relative = noticePath(notice);
+  const current = await readBytes(context.store, absolute(context, relative));
   const record = {
+    ...(current ? JSON.parse(current.toString('utf8')) : {}),
     format: 'hivem1nd-notice-v1',
     key: notice.key,
     messageId: notice.resourceId ?? notice.key.split(':')[0],
     recipientId: notice.unitId,
     state: notice.state,
     error: notice.error ?? null,
+    submittedAt: notice.submittedAt ?? null,
   };
-  await commitOne(context, relative, null, Buffer.from(`${canonicalJson(record)}\n`), [
+  const bytes = Buffer.from(`${canonicalJson(record)}\n`);
+  if (current?.equals(bytes)) return;
+  await commitOne(context, relative, revisionOf(current), bytes, [
     { name: 'notification.changed', unitId: notice.unitId, data: { noticeKey: notice.key, unitId: notice.unitId, state: notice.state, error: notice.error ?? null } },
   ]);
+}
+
+function noticePath(notice) {
+  return `user/relay/notices/${Buffer.from(notice.key).toString('base64url')}.json`;
 }
 
 export async function recoverMailboxReads(context) {
@@ -358,6 +401,7 @@ async function buildMessage(context, input, target) {
     `reply-requested: ${replyRequested ? 'true' : 'false'}`,
     `attachments: ${canonicalJson(attachments)}`,
     'kind: message',
+    ...(context.receipt ? [`operation-id: ${context.receipt.key}`] : []),
   ];
   const bytes = Buffer.from(`${lines.join('\n')}\n\n${body}`);
   if (bytes.length > RECORD_MAX) throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');

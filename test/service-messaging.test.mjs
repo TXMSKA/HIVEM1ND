@@ -153,7 +153,7 @@ test('mailbox reads are atomic, collide on different bytes, and resume after a c
   const left = await readdir(inbox).catch(() => []);
   assert.equal(left.length, 0);
   const archived = await readdir(path.dirname(archive));
-  assert.equal(archived.length, 2);
+  assert.equal(archived.filter((name) => name.endsWith('.md')).length, 2);
 });
 
 test('concurrent mailbox posts return only created or limited results and replay the same key', async (t) => {
@@ -251,7 +251,147 @@ test('a partial mailbox commit replays the same message for the same key', async
   assert.equal(names[0].includes(replay.json.data.id), true);
 });
 
-function httpCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
+test('delivery and read receipts require every current recipient, excluding the author and replies', async (t) => {
+  const { fixture, context } = await world(t);
+  const recipients = ['project:shop:executor-shop', 'env:web:overlord-web'];
+  const calls = [];
+  context.wake = { notify: async (notice) => { calls.push(notice.key); return { state: 'submitted' }; } };
+  const { chat } = await createChat(context, { members: recipients });
+  const posted = await postChat(context, chat.id, { body: 'Both recipients' });
+  const deliveredAt = new Date(fixture.clock.now).toISOString();
+  assert.deepEqual(posted.message.delivery, { state: 'delivered', deliveredAt, readAt: null });
+  await readChat(context, chat.id, { messageIds: [posted.message.id] });
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'delivered');
+  fixture.clock.now += 1000;
+  const agent = (unitId) => ({ ...context, principal: { audience: 'agent', unitId } });
+  await postChat(agent(recipients[0]), chat.id, { body: 'Reply', replyTo: posted.message.id });
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.readAt, null);
+  const first = await readChat(agent(recipients[0]), chat.id, { messageIds: [posted.message.id] });
+  assert.equal(first.deliveries[0].delivery.state, 'delivered');
+  fixture.clock.now += 1000;
+  const last = await readChat(agent(recipients[1]), chat.id, { messageIds: [posted.message.id] });
+  assert.deepEqual(last.deliveries[0].delivery, { state: 'read', deliveredAt, readAt: new Date(fixture.clock.now).toISOString() });
+  fixture.clock.now += 1000;
+  await readChat(agent(recipients[0]), chat.id, { messageIds: [posted.message.id] });
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.readAt, last.deliveries[0].delivery.readAt);
+  const notice = JSON.parse(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'fanout', `${posted.message.id}.json`), 'utf8'));
+  assert.equal(notice.notices.length, 2);
+  assert.equal(calls.filter((key) => key.startsWith(posted.message.id)).length, 2);
+});
+
+test('pending, failed and ambiguous recipient notices remain stored and ambiguous notices are never resubmitted', async (t) => {
+  const { context, fixture } = await world(t);
+  const { chat } = await createChat(context, { members: ['project:shop:executor-shop', 'env:web:overlord-web'] });
+  let uncertain = 'pending';
+  const calls = [];
+  context.wake = { notify: async (notice) => { calls.push(notice.key); return { state: notice.unitId.startsWith('env:') ? uncertain : 'submitted' }; } };
+  const posted = await postChat(context, chat.id, { body: 'Receipt uncertainty' });
+  assert.equal(posted.message.delivery.state, 'stored');
+  for (const state of ['failed', 'ambiguous']) {
+    uncertain = state;
+    await Promise.all([deliverNotifications(context), deliverNotifications(context)]);
+    assert.deepEqual((await readDetail(context, 'messages', posted.message.id)).delivery, { state: 'stored', deliveredAt: null, readAt: null });
+  }
+  const count = calls.length;
+  await deliverNotifications(context);
+  assert.equal(calls.length, count);
+  assert.equal(calls.filter((key) => key.endsWith('project:shop:executor-shop')).length, 1);
+  const files = await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'notices'));
+  assert.equal(files.length, 2);
+});
+
+test('a saved submission survives a crash before fanout update and an unacknowledged transport is not retried', async (t) => {
+  const { context, fixture } = await world(t);
+  const { chat } = await createChat(context, { members: ['project:shop:executor-shop'] });
+  let calls = 0;
+  context.wake = { notify: async () => {
+    calls += 1;
+    fixture.store.fault = { afterRenames: 1 };
+    return { state: 'submitted' };
+  } };
+  await assert.rejects(postChat(context, chat.id, { body: 'Durable submission' }), { code: 'injected_crash' });
+  await recoverTransactions(fixture.store);
+  await deliverNotifications(context);
+  assert.equal(calls, 1);
+  const messages = (await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.id))).filter((name) => name.endsWith('.md') && name !== 'chat.md');
+  assert.equal(messages.length, 1);
+  const id = messages[0].slice(0, -3);
+  assert.equal((await readDetail(context, 'messages', id)).delivery.state, 'delivered');
+  context.wake = { notify: async () => { calls += 1; throw new Error('No acknowledgment'); } };
+  const unconfirmed = await postChat(context, chat.id, { body: 'Unacknowledged submission' });
+  assert.equal(unconfirmed.message.delivery.state, 'stored');
+  assert.equal(unconfirmed.notifications[0].state, 'ambiguous');
+  await deliverNotifications(context);
+  assert.equal(calls, 2);
+});
+
+test('aggregate receipts follow current group recipients while preserving the author exclusion', async (t) => {
+  const { context, fixture } = await world(t);
+  const unitId = 'project:shop:executor-shop';
+  const { chat } = await createChat(context, { members: [unitId, 'env:web:overlord-web'] });
+  context.wake = { notify: async () => ({ state: 'submitted' }) };
+  const posted = await postChat(context, chat.id, { body: 'Current membership' });
+  await readChat({ ...context, principal: { audience: 'agent', unitId } }, chat.id, { messageIds: [posted.message.id] });
+  const file = path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.id, 'chat.md');
+  const bytes = await readFile(file, 'utf8');
+  await writeFile(file, bytes.replace(/^members:.*$/m, `members: ${JSON.stringify(['root:master', unitId])}`));
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'read');
+  await writeFile(file, bytes);
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'delivered');
+});
+
+test('mailbox delivery uses recipient submission and only the recipient can produce aggregate Read', async (t) => {
+  const { context, fixture } = await world(t);
+  context.wake = { notify: async () => ({ state: 'submitted' }) };
+  const unitId = 'project:shop:executor-shop';
+  const own = await postMailbox(context, unitId, { body: 'Read by desktop' });
+  await readMailbox(context, unitId, { messageIds: [own.message.id] });
+  assert.equal((await readDetail(context, 'messages', own.message.id)).delivery.state, 'delivered');
+  const other = await postMailbox(context, unitId, { body: 'Read by recipient' });
+  fixture.clock.now += 1000;
+  await readMailbox({ ...context, principal: { audience: 'agent', unitId } }, unitId, { messageIds: [other.message.id] });
+  assert.equal((await readDetail(context, 'messages', other.message.id)).delivery.state, 'read');
+});
+
+for (const failure of ['response loss', 'partial transaction']) test(`a chat ${failure} replays one durable message and one recipient notice`, async (t) => {
+  const { fixture } = await world(t);
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const notices = [];
+  const core = await composeCore({ store: fixture.store, paths: { ...fixture.paths, origin }, now: () => fixture.clock.now,
+    wake: { notify: async (notice) => { notices.push(notice.key); return { state: 'submitted' }; } } });
+  t.after(() => core.http.close());
+  const local = await httpCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  assert.equal(local.status, 201);
+  const token = local.json.data.token;
+  const opened = await httpCall(core.http.port, 'POST', '/api/v1/chats', { token, body: { members: ['project:shop:executor-shop'] }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(opened.status, 201);
+  const chatId = opened.json.data.id;
+  const target = `/api/v1/chats/${chatId}/messages`;
+  const key = randomUUID();
+  const options = { token, body: { body: 'Only once', subject: 'Receipt' }, headers: { 'idempotency-key': key } };
+  if (failure === 'partial transaction') {
+    fixture.store.fault = { afterRenames: 1 };
+    assert.equal((await httpCall(core.http.port, 'POST', target, options)).status, 500);
+  } else {
+    await assert.rejects(httpCall(core.http.port, 'POST', target, { ...options, loseResponse: true }), { code: 'response_lost' });
+  }
+  const [first, second] = await Promise.all([httpCall(core.http.port, 'POST', target, options), httpCall(core.http.port, 'POST', target, options)]);
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 201);
+  assert.equal(first.json.data.message.id, second.json.data.message.id);
+  assert.equal(first.json.data.message.operationId, key);
+  assert.equal(first.json.data.message.delivery.state, 'delivered');
+  assert.deepEqual(first.json.data.notifications, [{ unitId: 'project:shop:executor-shop', state: 'submitted' }]);
+  const messages = (await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chatId))).filter((name) => name.endsWith('.md') && name !== 'chat.md');
+  assert.equal(messages.length, 1);
+  assert.equal(notices.length, 1);
+  const fanout = JSON.parse(await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'fanout', `${first.json.data.message.id}.json`), 'utf8'));
+  assert.equal(fanout.notices.length, 1);
+  assert.equal((await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'notices'))).length, 1);
+});
+
+function httpCall(port, method, target, { token = null, body = undefined, headers = {}, loseResponse = false } = {}) {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
     const req = request({
@@ -267,6 +407,11 @@ function httpCall(port, method, target, { token = null, body = undefined, header
         ...headers,
       },
     }, (res) => {
+      if (loseResponse) {
+        req.destroy();
+        reject(Object.assign(new Error('The response was lost.'), { code: 'response_lost' }));
+        return;
+      }
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {

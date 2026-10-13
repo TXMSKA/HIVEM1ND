@@ -474,7 +474,7 @@ test("older pages prepend once and a late message stays unread until it is visib
   assert.equal(late.read, true);
 });
 
-test("a lost chat post retries the same operation and a rate limit keeps the composer", async (context) => {
+test("a lost chat post retries the retained message and a rate limit leaves the next draft independent", async (context) => {
   const fixture = await createGuiFixture();
   context.after(() => fixture.close());
   const api = fixtureApi(fixture);
@@ -482,17 +482,18 @@ test("a lost chat post retries the same operation and a rate limit keeps the com
   const thread = createThread(opened.data);
   fixture.control.setFault({ method: "POST", path: `/api/v1/chats/${opened.data.id}/messages`, dropAfterCommit: true });
   await assert.rejects(postMessage(api, thread, { body: "Keep this draft" }));
-  assert.equal(thread.composer, "Keep this draft");
-  const operation = thread.operation;
-  await retryMessage(api, thread);
   assert.equal(thread.composer, "");
+  const operation = [...thread.pendingSends.values()][0].operation;
+  thread.composer = "A new draft";
+  await retryMessage(api, thread);
+  assert.equal(thread.composer, "A new draft");
   assert.equal(thread.messages[0].body, "Keep this draft");
   assert.equal(operation.id, thread.messages[0] && operation.id);
   const limited = createThread(opened.data);
   const slowing = apiWith(async () => ({ status: 429, error: { code: "rate_limited", message: "Slow down." } }));
   await assert.rejects(postMessage(slowing, limited, { body: "Still typing" }));
-  assert.equal(limited.composer, "Still typing");
-  assert.equal(limited.operation.body.body, "Still typing");
+  assert.equal(limited.composer, "");
+  assert.equal([...limited.pendingSends.values()][0].operation.body.body, "Still typing");
   const mailbox = await openMailbox(api, "project:blog:executor-shop", "all");
   assert.equal(mailbox.status, 200);
 });
@@ -506,19 +507,20 @@ test("a chat send keeps an optimistic row until the same operation settles", asy
   });
   const thread = createThread({ id: "chat-1" });
   const pending = postMessage(api, thread, { body: "hello" });
-  assert.equal(thread.pending, pending);
+  const entry = [...thread.pendingSends.values()][0];
+  assert.equal(entry.promise, pending);
   assert.equal(thread.messages.length, 1);
   assert.equal(thread.messages[0].pending, true);
   assert.equal(thread.messages[0].body, "hello");
-  assert.equal(thread.messages[0].operationId, thread.operation.id);
-  const again = postMessage(api, thread, { body: "hello" });
+  assert.equal(thread.messages[0].operationId, entry.operation.id);
+  const again = retryMessage(api, thread, entry.operation.id);
   assert.equal(again, pending);
   assert.equal(thread.messages.length, 1);
   release();
   await pending;
   assert.equal(thread.messages.length, 1);
   assert.equal(thread.messages[0].id, "m1");
-  assert.equal(thread.operation, null);
+  assert.equal(thread.pendingSends.size, 0);
 });
 
 test("a busy session and a tracked action show progress before settlement", async () => {
@@ -579,21 +581,72 @@ function walk(node, found = []) {
   return found;
 }
 
-test("a second submit joins the in-flight post", async () => {
+test("a second submit has its own key and settles without clearing the next draft", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const api = apiWith(async () => {
+  const calls = [];
+  const api = apiWith(async (call) => {
+    calls.push(call);
     await gate;
-    return { data: { message: { id: "m1", body: "one", timestamp: "2026-10-10T12:00:00.000Z" }, notifications: [] } };
+    return { data: { message: { id: call.body.body, body: call.body.body, timestamp: "2026-10-10T12:00:00.000Z" }, notifications: [] } };
   });
   const thread = createThread({ id: "chat-1" });
   const first = postMessage(api, thread, { body: "one" });
   const second = postMessage(api, thread, { body: "two" });
-  assert.equal(first, second);
+  assert.notEqual(first, second);
+  assert.equal(thread.pendingSends.size, 2);
+  assert.notEqual(calls[0].headers["Idempotency-Key"], calls[1].headers["Idempotency-Key"]);
+  thread.composer = "Still typing";
   release();
+  await Promise.all([first, second]);
+  assert.equal(thread.messages.length, 2);
+  assert.deepEqual(new Set(thread.messages.map((message) => message.body)), new Set(["one", "two"]));
+  assert.equal(thread.composer, "Still typing");
+  assert.equal(thread.pendingSends.size, 0);
+});
+
+test("consecutive Retry joins the failed operation and a late receipt merges one row without clearing a newer draft", async () => {
+  const calls = [];
+  const gate = deferred();
+  const api = apiWith(async (call) => {
+    calls.push(call);
+    if (calls.length === 1) throw new Error("Response lost");
+    await gate.promise;
+    return { data: { message: { id: "committed", body: call.body.body, delivery: { state: "stored", deliveredAt: null, readAt: null } }, notifications: [] } };
+  });
+  const thread = createThread({ id: "chat-1", members: ["root:master", "root:adjutant"] });
+  await assert.rejects(postMessage(api, thread, { body: "Original text", subject: "Original subject" }));
+  const operationId = thread.messages[0].operationId;
+  thread.composer = "Keep typing";
+  const first = retryMessage(api, thread, operationId);
+  const second = retryMessage(api, thread, operationId);
+  assert.equal(first, second);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body, calls[0].body);
+  assert.equal(calls[1].headers["Idempotency-Key"], calls[0].headers["Idempotency-Key"]);
+  const deliveredAt = "2026-10-13T12:00:00.000Z";
+  incomingMessage(thread, { id: "committed", operationId, fromId: "root:master", body: "Original text", delivery: { state: "read", deliveredAt, readAt: deliveredAt } });
+  assert.equal(thread.messages.length, 1);
+  assert.equal(thread.pendingSends.size, 0);
+  gate.resolve();
   await first;
   assert.equal(thread.messages.length, 1);
-  assert.equal(thread.messages[0].body, "one");
+  assert.equal(thread.messages[0].delivery.state, "read");
+  assert.equal(thread.composer, "Keep typing");
+  assert.equal(thread.error, null);
+});
+
+test("the author's viewport read and an incoming reply never fabricate recipient Read", () => {
+  const thread = createThread({ id: "chat-1", members: ["root:master", "root:adjutant"] });
+  const own = { id: "own", fromId: "root:master", delivery: { state: "delivered", deliveredAt: "2026-10-13T12:00:00.000Z", readAt: null } };
+  incomingMessage(thread, own);
+  applyMessageRead(thread, { chatId: "chat-1", readerId: "root:master", messageIds: ["own"], unread: 0 });
+  incomingMessage(thread, { id: "reply", fromId: "root:adjutant", replyTo: "own", body: "Reply" });
+  assert.equal(own.read, true);
+  assert.equal(own.delivery.state, "delivered");
+  applyMessageRead(thread, { chatId: "chat-1", readerId: "root:adjutant", messageIds: ["own"], unread: 9, deliveries: [{ messageId: "own", delivery: { ...own.delivery, state: "read", readAt: "2026-10-13T12:01:00.000Z" } }] });
+  assert.equal(own.delivery.state, "read");
+  assert.equal(thread.unread, 0);
 });
 
 test("accept omits a null note and send back keeps its note", async (context) => {

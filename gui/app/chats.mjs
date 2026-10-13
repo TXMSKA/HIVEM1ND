@@ -9,8 +9,7 @@ export function createThread(chat = null) {
     anchorId: null,
     anchorOffset: 0,
     composer: "",
-    pending: null,
-    operation: null,
+    pendingSends: new Map(),
     error: null,
     nearBottom: true,
     unseen: 0,
@@ -48,14 +47,30 @@ export async function loadMessages(api, thread, older = false) {
   if (older) {
     thread.anchorId = thread.messages[0]?.id ?? null;
     thread.messages = [...fresh, ...thread.messages];
-  } else thread.messages = mergeChronological(thread.messages, fresh);
+  } else {
+    for (const message of incoming) incomingMessage(thread, message, true);
+  }
   thread.nextCursor = result.data.nextCursor ?? null;
   thread.total = result.data.total ?? thread.messages.length;
   return thread;
 }
 
-export function incomingMessage(thread, message) {
-  if (!message?.id || thread.messages.some((item) => item.id === message.id)) return thread;
+export function incomingMessage(thread, message, authoritative = false) {
+  if (!message?.id) return thread;
+  const entry = thread.pendingSends.get(message.operationId);
+  if (entry) {
+    entry.result = { data: { message, notifications: [] } };
+    thread.pendingSends.delete(entry.operation.id);
+    thread.messages = thread.messages.filter((item) => item.operationId !== entry.operation.id || item.id === message.id);
+    thread.error = [...thread.pendingSends.values()].find((item) => item.error)?.error ?? null;
+  }
+  const current = thread.messages.find((item) => item.id === message.id);
+  if (current) {
+    const rank = { stored: 0, delivered: 1, read: 2 };
+    const delivery = !authoritative && (rank[current.delivery?.state] ?? 0) > (rank[message.delivery?.state] ?? 0) ? current.delivery : message.delivery;
+    Object.assign(current, message, { pending: false, failed: false, read: Boolean(current.read || message.read), ...(delivery ? { delivery } : {}) });
+    return thread;
+  }
   thread.messages = mergeChronological(thread.messages, [message]);
   if (thread.nearBottom) thread.unseen = 0;
   else thread.unseen += 1;
@@ -114,7 +129,11 @@ export function messageWindow(messages, { nearBottom = true, anchorId = null, st
 
 export function applyMessageRead(thread, data, readerId = "root:master") {
   if (!thread?.chat || !data || data.chatId !== thread.chat.id) return false;
-  if (data.readerId && data.readerId !== readerId) return false;
+  for (const receipt of data.deliveries ?? []) {
+    const message = thread.messages.find((item) => item.id === receipt.messageId);
+    if (message) message.delivery = receipt.delivery;
+  }
+  if (data.readerId && data.readerId !== readerId) return Boolean(data.deliveries?.length);
   const ids = new Set(data.messageIds ?? []);
   for (const message of thread.messages) {
     if (ids.has(message.id)) message.read = true;
@@ -142,6 +161,7 @@ export async function postVisibleReads(api, thread) {
       readerId: "root:master",
       messageIds: readIds,
       unread: result.data?.unread,
+      deliveries: result.data?.deliveries,
     });
     return result;
   } catch (error) {
@@ -151,9 +171,7 @@ export async function postVisibleReads(api, thread) {
 }
 
 export function postMessage(api, thread, draft) {
-  if (thread.pending) return thread.pending;
-  thread.composer = draft.body ?? "";
-  const operation = thread.operation ?? createOperation({
+  const operation = createOperation({
     method: "POST",
     path: "/chats/:chatId/messages",
     params: { chatId: thread.chat.id },
@@ -165,61 +183,59 @@ export function postMessage(api, thread, draft) {
       priority: draft.priority ?? "normal",
     },
   });
-  thread.operation = operation;
-  markOptimistic(thread, operation);
-  const task = request(api, "POST", operation.path, { operation }).then((result) => {
-    settleMessage(thread, operation, result);
+  thread.composer = "";
+  const entry = { operation, promise: null, error: null, result: null };
+  thread.pendingSends.set(operation.id, entry);
+  return sendPending(api, thread, entry);
+}
+
+export function retryMessage(api, thread, operationId = null) {
+  const entry = operationId ? thread.pendingSends.get(operationId) : [...thread.pendingSends.values()].find((item) => item.error);
+  if (!entry) return null;
+  if (entry.promise) return entry.promise;
+  return sendPending(api, thread, entry, true);
+}
+
+function sendPending(api, thread, entry, retry = false) {
+  const { operation } = entry;
+  entry.error = null;
+  markOptimistic(thread, operation, api.now());
+  const task = (retry ? retryOperation(api, operation) : request(api, "POST", operation.path, { operation })).then((result) => {
+    const message = { ...result.data.message, operationId: operation.id, pending: false, failed: false };
+    entry.result = result;
+    thread.messages = thread.messages.filter((item) => item.operationId !== operation.id || item.id === message.id);
+    thread.pendingSends.delete(operation.id);
+    thread.notifications = result.data.notifications ?? [];
+    incomingMessage(thread, message);
+    thread.error = [...thread.pendingSends.values()].find((item) => item.error)?.error ?? null;
     return result;
   }).catch((error) => {
-    failMessage(thread, operation, error);
+    if (entry.result) {
+      api.uncertain.delete(operation.id);
+      return entry.result;
+    }
+    entry.error = error;
+    thread.error = error;
+    const row = thread.messages.find((item) => item.operationId === operation.id);
+    if (row) row.failed = true;
     throw error;
+  }).finally(() => {
+    entry.promise = null;
   });
-  thread.pending = task;
+  entry.promise = task;
   return task;
 }
 
-export async function retryMessage(api, thread) {
-  if (!thread.operation) return null;
-  const operation = thread.operation;
-  markOptimistic(thread, operation);
-  const task = retryOperation(api, operation).then((result) => {
-    settleMessage(thread, operation, result);
-    return result;
-  }).catch((error) => {
-    failMessage(thread, operation, error);
-    throw error;
-  });
-  thread.pending = task;
-  return task;
-}
-
-function markOptimistic(thread, operation) {
+function markOptimistic(thread, operation, now) {
   const body = operation.body?.body ?? "";
   let row = thread.messages.find((message) => message.operationId === operation.id);
   if (!row) {
-    row = { id: `pending:${operation.id}`, body, pending: true, failed: false, operationId: operation.id };
+    row = { id: `pending:${operation.id}`, body, fromId: "root:master", timestamp: new Date(now).toISOString(), pending: true, failed: false, operationId: operation.id };
     thread.messages = [...thread.messages, row];
   }
   row.body = body;
   row.pending = true;
   row.failed = false;
-}
-
-function settleMessage(thread, operation, result) {
-  thread.composer = "";
-  thread.operation = null;
-  thread.pending = null;
-  thread.error = null;
-  thread.notifications = result.data.notifications ?? [];
-  thread.messages = thread.messages.filter((message) => message.operationId !== operation.id);
-  incomingMessage(thread, result.data.message);
-}
-
-function failMessage(thread, operation, error) {
-  thread.pending = null;
-  thread.error = error;
-  const row = thread.messages.find((message) => message.operationId === operation.id);
-  if (row) row.failed = true;
 }
 
 export async function manageChat(api, chat, change, retained = null) {
@@ -290,5 +306,5 @@ async function openConversation(api, memberIds, title, retained = null) {
 function mergeChronological(current, incoming) {
   const byId = new Map(current.map((message) => [message.id, message]));
   for (const message of incoming) if (!byId.has(message.id)) byId.set(message.id, message);
-  return [...byId.values()].sort((left, right) => String(left.timestamp ?? left.date ?? "").localeCompare(String(right.timestamp ?? right.date ?? "")) || left.id.localeCompare(right.id, "en"));
+  return [...byId.values()].sort((left, right) => Number(Boolean(left.pending)) - Number(Boolean(right.pending)) || String(left.timestamp ?? left.date ?? "").localeCompare(String(right.timestamp ?? right.date ?? "")) || left.id.localeCompare(right.id, "en"));
 }

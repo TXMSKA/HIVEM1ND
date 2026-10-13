@@ -277,7 +277,8 @@ async function loadMind(context) {
   for (const unit of units) {
     unit.sessionIds = sessions.filter((session) => session.unitId === unit.id && session.state !== 'stopped').map((session) => session.id);
   }
-  const receipts = (await readReceipts(mind, issues)).get(context.principal?.unitId || 'root:master') ?? new Set();
+  const allReceipts = await readReceipts(mind, issues);
+  const receipts = allReceipts.get(context.principal?.unitId || 'root:master') ?? new Map();
   const messages = [];
   for (const scope of scopes) {
     for (const bucket of [scope.inbox, scope.archive]) {
@@ -310,6 +311,24 @@ async function loadMind(context) {
   const approvals = await readPendingApprovals(mind, issues, now);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
   const chats = await readChats(mind, messages, issues);
+  for (const message of messages) {
+    const chatId = chatIdFromPath(message.path);
+    const members = chatId ? chats.find((chat) => chat.id === chatId)?.members ?? [] : [message.toId];
+    const recipients = members.filter((id) => id && id !== message.fromId);
+    const relative = `user/relay/fanout/${message.id}.json`;
+    let notices = [];
+    try {
+      const bytes = await readSafe(mind, relative);
+      if (bytes) notices = JSON.parse(bytes.toString('utf8')).notices ?? [];
+    } catch {
+      issues.push({ path: relative, code: 'corrupt_resource', message: 'The delivery receipt could not be projected.' });
+    }
+    const submitted = recipients.map((id) => notices.find((notice) => notice.unitId === id && notice.state === 'submitted')?.submittedAt);
+    const read = recipients.map((id) => allReceipts.get(`${chatId ?? 'mailbox'}:${id}`)?.get(message.id));
+    const deliveredAt = recipients.length && submitted.every(validReceiptTime) ? submitted.sort().at(-1) : null;
+    const readAt = recipients.length && read.every(validReceiptTime) ? read.sort().at(-1) : null;
+    message.delivery = { state: readAt ? 'read' : deliveredAt ? 'delivered' : 'stored', deliveredAt, readAt };
+  }
   const groups = [];
   for (const relative of await filesUnder(mind, 'user/gui/groups')) {
     if (!relative.endsWith('.json') || relative.includes('.conflict-')) continue;
@@ -683,6 +702,8 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
       replyRequested: headers.get('reply-requested') === 'true',
       attachments: parseList(headers.get('attachments'), relative, issues),
       kind: headers.get('kind') || 'message',
+      operationId: headers.get('operation-id') || null,
+      delivery: { state: 'stored', deliveredAt: null, readAt: null },
       read: headers.get('read') === 'true' || receipts.has(id),
       notice: headers.get('notice-key') ? { key: headers.get('notice-key'), resourceId: headers.get('resource-id') || null } : null,
       path: relative,
@@ -1206,19 +1227,32 @@ async function readReceipts(mind, issues) {
     try {
       const record = JSON.parse(bytes.toString('utf8'));
       const reader = typeof record.unitId === 'string' ? record.unitId : 'root:master';
-      const ids = byReader.get(reader) ?? new Set();
-      if (typeof record.messageId === 'string') ids.add(record.messageId);
+      const ids = byReader.get(reader) ?? new Map();
+      if (typeof record.messageId === 'string') ids.set(record.messageId, record.at ?? null);
       if (Array.isArray(record.messageIds)) {
         for (const id of record.messageIds) {
-          if (typeof id === 'string') ids.add(id);
+          if (typeof id === 'string') ids.set(id, record.at ?? null);
         }
       }
       byReader.set(reader, ids);
+      const scope = record.format === 'hivem1nd-chat-read-v1' && record.chatId && relative.startsWith(`user/relay/chats/${record.chatId}/read/${Buffer.from(reader).toString('base64url')}/`)
+        ? record.chatId : record.format === 'hivem1nd-mailbox-receipt-v1' && record.mailboxId === reader ? 'mailbox' : null;
+      if (scope && validReceiptTime(record.at)) {
+        const times = byReader.get(`${scope}:${reader}`) ?? new Map();
+        for (const id of record.messageIds ?? []) {
+          if (typeof id === 'string' && (!times.has(id) || record.at < times.get(id))) times.set(id, record.at);
+        }
+        byReader.set(`${scope}:${reader}`, times);
+      }
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The read receipt could not be projected.' });
     }
   }
   return byReader;
+}
+
+function validReceiptTime(at) {
+  return typeof at === 'string' && Number.isFinite(Date.parse(at));
 }
 
 async function readPendingApprovals(mind, issues, now) {
