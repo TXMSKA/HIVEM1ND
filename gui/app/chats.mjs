@@ -308,3 +308,11 @@ function mergeChronological(current, incoming) {
   for (const message of incoming) if (!byId.has(message.id)) byId.set(message.id, message);
   return [...byId.values()].sort((left, right) => Number(Boolean(left.pending)) - Number(Boolean(right.pending)) || String(left.timestamp ?? left.date ?? "").localeCompare(String(right.timestamp ?? right.date ?? "")) || left.id.localeCompare(right.id, "en"));
 }
+
+export function sentLineState(message) {
+  if (message.failed) return { key: 'notConfirmed', at: null };
+  if (message.pending) return { key: 'sending', at: null };
+  if (message.delivery?.state === 'read') return { key: 'readReceipt', at: message.delivery.readAt };
+  if (message.delivery?.state === 'delivered') return { key: 'deliveredReceipt', at: message.delivery.deliveredAt };
+  return { key: 'storedReceipt', at: null };
+}
