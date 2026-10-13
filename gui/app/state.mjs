@@ -4,9 +4,9 @@ const CURSOR = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):
 
 export function createStore() {
   return {
-    indexes: { units: new Map(), chats: new Map(), tasks: new Map(), editors: new Map() },
+    indexes: { units: new Map(), groups: new Map(), chats: new Map(), tasks: new Map(), editors: new Map() },
     messages: new Map(),
-    selected: { unitId: null, chatId: null, taskId: null, resourceId: null },
+    selected: { unitId: null, groupId: null, chatId: null, taskId: null, resourceId: null },
     viewport: { x: 0, y: 0, scale: 1 },
     drafts: new Map(),
     conflicts: new Map(),
@@ -231,6 +231,8 @@ function indexView(store, data) {
   store.indexes.units.clear();
   store.indexes.chats.clear();
   store.indexes.tasks.clear();
+  store.indexes.groups.clear();
+  for (const group of data?.groups ?? []) store.indexes.groups.set(group.id, group);
   for (const unit of data?.units ?? []) store.indexes.units.set(unit.id, unit);
   for (const chat of data?.chats ?? []) store.indexes.chats.set(chat.id, chat);
   for (const task of data?.tasks ?? []) store.indexes.tasks.set(task.id, task);
@@ -267,6 +269,15 @@ function currentRevision(store, resource) {
 
 function resourceOf(event) {
   const data = event.envelope?.data ?? {};
+  if (event.name === "group.changed" && data.group?.id) {
+    return { key: `group:${data.group.id}`, revision: data.group.revision, apply: (store) => {
+      store.indexes.groups.set(data.group.id, data.group);
+      if (data.group.deleted && store.selected.groupId === data.group.id) {
+        store.selected.groupId = null;
+        store.selected.chatId = null;
+      }
+    } };
+  }
   if (event.name === "unit.changed" && data.unit?.id) {
     return { key: `unit:${data.unit.id}`, id: data.unit.id, revision: data.unit.revision ?? null, path: `/units/${encodeURIComponent(data.unit.id)}`, apply: (store) => store.indexes.units.set(data.unit.id, data.unit) };
   }

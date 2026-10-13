@@ -1,4 +1,4 @@
-export function buildHierarchy(units, issues = []) {
+export function buildHierarchy(units, issues = [], groups = []) {
   const list = Array.isArray(units) ? units : [];
   const byId = new Map(list.map((unit) => [unit.id, unit]));
   const canonical = list.find((unit) => unit.role === "overseer" && unit.unit === "overseer" && unit.scope?.kind === "root") ?? null;
@@ -59,6 +59,7 @@ export function buildHierarchy(units, issues = []) {
   }
 
   return {
+    groups: groups.filter((group) => !group.deleted).map((group) => ({ ...group, units: group.members.map((id) => byId.get(id)).filter(Boolean) })),
     command: [...masters, ...(canonical ? [canonical] : []), ...beside],
     overlords: overlordOrder.map((unit) => ({ unit, members: membersOf.get(unit.id) ?? [] })),
     loose,
@@ -72,6 +73,15 @@ export function buildHierarchy(units, issues = []) {
 export function flattenVisibleHierarchy(tree, state, query = "") {
   const rows = [];
   const fold = state ?? { shown: new Map(), collapsed: new Set() };
+  rows.push(heading("section:personal", "myGroups"));
+  for (const group of tree.groups ?? []) {
+    if (query && !group.title.toLowerCase().includes(query.toLowerCase()) && !group.units.some((unit) => matches(unit, query))) continue;
+    const key = `personal:${group.id}`;
+    rows.push({ id: key, kind: "personal", groupId: group.id, group, label: group.title, count: group.members.length, depth: 0, expanded: !fold.collapsed.has(key) });
+    if (!fold.collapsed.has(key) || query) {
+      for (const unit of group.units) rows.push({ ...unitRow(unit, 1), id: `${key}:${unit.id}`, personalMember: true });
+    }
+  }
   if (tree.command.length || tree.overlords.length) {
     rows.push(heading("section:command", "command"));
     for (const unit of tree.command) rows.push(unitRow(unit, unit.role === "master" || unit.role === "overseer" ? 0 : 1));
@@ -121,6 +131,11 @@ export function revealGroup(state, groupId, count) {
 export function activateUnit(app, unit, kind) {
   if (!unit?.id) return;
   app.store.selected.unitId = unit.id;
+  app.store.selected.groupId = null;
+  if (app.mapState) {
+    app.mapState.selectedGroupId = null;
+    app.mapState.selection = new Set([unit.id]);
+  }
   app.activated = { id: unit.id, kind };
   if (kind === "double") {
     app.pendingCenter = unit.id;

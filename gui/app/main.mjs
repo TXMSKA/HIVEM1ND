@@ -5,6 +5,11 @@ import {
   changeTaskStatus,
   connectUnits,
   createUnit,
+  createGroup,
+  patchGroup,
+  removeGroup,
+  setUnitAlias,
+  undoChange,
   revokeGrant,
   startSession,
   stopSession,
@@ -57,7 +62,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
@@ -137,6 +142,12 @@ export async function mount(root, env = globalThis) {
   };
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
+  root.addEventListener("keydown", (event) => {
+    if (event.key !== "F2" || app.layout === "phone" || event.target?.closest?.("input, textarea")) return;
+    const row = app.activeRows?.find((item) => item.id === event.target?.closest?.("[data-id]")?.getAttribute("data-id"));
+    const id = row?.unit?.id ?? app.store.selected.unitId;
+    if (id && !app.aliasEdit) { event.preventDefault?.(); beginAlias(app, id, row?.id); }
+  });
   const revealFocusTools = () => {
     if (app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
     showTools(app.voidState);
@@ -530,6 +541,7 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   clearTimeout(app.readyTimer);
+  clearTimeout(app.mapToastTimer);
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.api.live && (app.api.live.stopped = true);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
@@ -589,6 +601,13 @@ async function onStream(app, event) {
     if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
   }
   if (event?.name === "chat.changed") {
+    if (app.chatList) await reloadList(app.chatList);
+    const changed = dataOf(event).chat;
+    if (changed?.id === app.thread?.chat?.id) app.thread.chat = app.store.indexes.chats.get(changed.id) ?? changed;
+  }
+  if (event?.name === "group.changed") {
+    if (app.mapState) app.mapState.selectedGroupId = app.store.selected.groupId;
+    if (dataOf(event).group?.deleted && app.thread?.chat?.id === dataOf(event).group.chatId) app.thread = null;
     if (app.chatList) await reloadList(app.chatList);
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
@@ -859,7 +878,7 @@ function renderWorkspace(app, t, view, counts) {
   const summary = element(document, "section", { class: "summary" },
     element(document, "h2", { text: t("summaryTitle") }),
     element(document, "div", { class: "counts" },
-      element(document, "span", { text: cardinal(app.language, "unitCount", counts.units ?? app.unitList?.catalog?.length ?? 0) }),
+      element(document, "span", { text: cardinal(app.language, "unitCount", app.unitList?.catalog?.length || counts.units || 0) }),
       element(document, "span", { text: t("unreadCount", { count: formatNumber(app.language, counts.unread ?? 0) }) }),
       element(document, "span", { text: cardinal(app.language, "issueCount", counts.issues ?? 0) }),
     ),
@@ -926,9 +945,9 @@ function renderWorkspace(app, t, view, counts) {
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
   }
-  const inspectorBody = element(document, "div", { class: "inspector-body" },
-    element(document, "h2", { text: selected ? `${selected.unit} ${t(statusKey(selected.status))}` : t("emptyInspector") }),
-  );
+  const group = app.store.indexes.groups.get(app.store.selected.groupId);
+  const selection = [...(app.mapState?.selection ?? [])].map((id) => unitById(app, id)).filter((unit) => unit && unit.role !== "master");
+  const inspectorBody = element(document, "div", { class: "inspector-body" });
   if (outcomeVisible(app) && app.actionScope !== "editor") {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
@@ -946,11 +965,20 @@ function renderWorkspace(app, t, view, counts) {
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
-  inspectorBody.append(actionControls(app, t, selected));
-  if (app.layout !== "phone") {
-    inspectorBody.append(chatPanel(app, t));
-    inspectorBody.append(renderInspector(app, t, selected));
+  if (app.layout !== "phone" && group && !group.deleted) {
+    inspectorBody.append(groupInspector(app, t, group), chatPanel(app, t));
+  } else if (app.layout !== "phone" && selection.length > 1) {
+    inspectorBody.append(selectionInspector(app, t, selection));
+  } else {
+    const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
+    if (selected) heading.replaceChildren(unitNameNode(document, selected), element(document, "span", { class: "unit-state", text: t(statusKey(selected.status)) }));
+    inspectorBody.append(heading, actionControls(app, t, selected));
+    if (app.layout !== "phone") {
+      if (!selected && !app.thread?.chat) inspectorBody.append(emptySelection(app, t));
+      inspectorBody.append(chatPanel(app, t), renderInspector(app, t, selected));
+    }
   }
+  if (app.mapToast) inspectorBody.append(mapToast(app, t));
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
@@ -1265,13 +1293,21 @@ function renderCollection(app, t) {
   const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
   const rows = collectionRows(app, t, list);
   const handlers = {
-    selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.unitId,
+    selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `personal:${app.store.selected.groupId}` : app.store.selected.unitId,
     onActivate: (row, kind) => {
-      if (row.kind === "chat") {
+      if (row.kind === "personal") {
+        selectGroup(app, row.groupId);
+        if (kind !== "double") toggleGroup(app.hierarchy, row.id);
+      } else if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
         app.activated = { id: row.id, kind };
       } else if (row.unit) {
+        if (app.layout !== "phone") {
+          if (kind === "single" && app.lastUnitClick?.id === row.unit.id && app.api.now() - app.lastUnitClick.at < 500) kind = "double";
+          app.lastUnitClick = kind === "single" ? { id: row.unit.id, at: app.api.now() } : null;
+        }
         activateUnit(app, row.unit, kind);
+        if (app.layout !== "phone" && app.tab === "hierarchy") app.pendingChat = { unitId: row.unit.id, create: true };
         if (app.layout === "phone") takePendingChat(app);
         loadInspector(app, row.unit.id);
       }
@@ -1294,6 +1330,13 @@ function renderCollection(app, t) {
   app.activeRows = rows;
   app.activeHandlers = handlers;
   block.append(search, total, host);
+  if (app.tab === "chats" && app.layout !== "phone") {
+    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
+      app.archivedChats = !app.archivedChats;
+      list.filters = app.archivedChats ? { archived: "true" } : { listed: "true" };
+      reloadList(list);
+    } }));
+  }
   if (list.status === "empty" && list.query) block.append(clearSearchButton(document, t, list));
   if (list.status === "empty" && !list.query) {
     const next = emptyCollectionAction(app, document, t, list);
@@ -2586,19 +2629,42 @@ function ensureMap(app) {
   else {
     app.mapState.units = units;
     adoptInitialLayout(app.mapState, saved);
+    const placed = createMap({ units, saved: { nodes: app.mapState.positions, groups: app.mapState.saved.groups } });
+    for (const unit of units) if (!app.mapState.positions[unit.id]) app.mapState.positions[unit.id] = placed.positions[unit.id];
   }
   app.mapState.api = app.api;
+  app.mapState.groups = [...app.store.indexes.groups.values()];
+  app.mapState.selectedGroupId = app.store.selected.groupId;
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
   app.mapState.onSelect = (id) => {
-    app.store.selected.unitId = id;
-    loadInspector(app, id);
+    app.store.selected.groupId = null;
+    app.store.selected.unitId = app.mapState.selection.size === 1 ? id : null;
+    if (app.store.selected.unitId) {
+      loadInspector(app, id);
+      app.pendingChat = { unitId: id, create: true };
+    }
     if (!app.disposed) renderShell(app);
   };
+  app.mapState.onSelection = (ids) => {
+    app.store.selected.groupId = null;
+    app.store.selected.unitId = ids.length === 1 ? ids[0] : null;
+    if (ids.length === 1) {
+      app.pendingChat = { unitId: ids[0], create: true };
+      loadInspector(app, ids[0]);
+    } else app.thread = null;
+    renderShell(app);
+  };
+  app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
+  app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
-  app.mapState.onGroupConnect = (pending) => confirmConnection(app, pending.source, pending.targets ?? []);
+  app.mapState.onGroupConnect = () => chooseSelectionLead(app);
   app.mapState.onGroupMessage = (ids) => {
     settle(app, "group-chat", text(app.language, "loadingConversation"), async (record) => {
       const result = await openGroupChat(app.api, ids, undefined, record.operation);
+      app.mapState.selection.clear();
+      app.store.selected.unitId = null;
+      app.store.selected.groupId = null;
+      app.store.selected.chatId = result.data.id;
       await showChat(app, result.data);
     });
   };
@@ -2647,11 +2713,13 @@ function finishList(app) {
   const host = app.root.querySelector?.("[data-collection]");
   if (!host || !app.activeList) return;
   renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
+  decorateHierarchy(app, host);
   const view = app.root.ownerDocument.defaultView;
   if (!host.clientHeight && view?.requestAnimationFrame) {
     view.requestAnimationFrame(() => {
       if (app.disposed || !host.isConnected) return;
       renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
+      decorateHierarchy(app, host);
     });
   }
   if (app.restoreSearch) app.root.querySelector?.(".search")?.focus?.();
@@ -2693,7 +2761,7 @@ function collectionRows(app, t, list) {
     return rows;
   }
   const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
-  const tree = buildHierarchy(source, list.issues);
+  const tree = buildHierarchy(source, list.issues, [...app.store.indexes.groups.values()]);
   const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
@@ -3394,8 +3462,12 @@ function actionControls(app, t, selected) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "new-unit", text: t("newUnit"), onclick: () => openUnitForm(app) }));
   }
   if (selected && caps.includes("session.start")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), onclick: () => openSessionForm(app, selected) }));
+    const machine = app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null;
+    const offline = machine?.answers === false;
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), disabled: offline ? "" : null, "aria-describedby": offline ? "reason-session-machine" : null, onclick: () => openSessionForm(app, selected) }));
+    if (offline) row.append(element(document, "p", { class: "field-hint", id: "reason-session-machine", "data-disabled-reason": "machine", text: t("finalNeedsOnline", { machine: selected.machine }) }));
   }
+  if (selected && caps.includes("unit.create") && app.layout !== "phone") row.append(unitMenu(app, selected));
   const sessionId = selected?.sessionIds?.[0];
   if (sessionId && caps.includes("session.stop")) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId) }));
@@ -3407,21 +3479,376 @@ function actionControls(app, t, selected) {
   return row;
 }
 
+function unitNameNode(document, unit) {
+  const name = element(document, "span", { class: "unit-name" });
+  if (unit.alias) name.append(element(document, "strong", { class: "unit-alias", text: unit.alias }));
+  name.append(element(document, "span", { class: "unit-original", text: unit.unit }));
+  return name;
+}
+
+function folderIcon(document, plus = false) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", `M3 7V4h7l2 3h9v13H3z${plus ? "M12 11v6M9 14h6" : ""}`);
+  svg.append(path);
+  return svg;
+}
+
+function mapButton(app, action, label, onClick, attributes = {}) {
+  return element(app.root.ownerDocument, "button", { type: "button", class: "btn", "data-action": action, text: label, onclick: onClick, ...attributes });
+}
+
+function decorateHierarchy(app, host) {
+  const document = host.ownerDocument;
+  const t = (key, variables) => text(app.language, key, variables);
+  const decorate = () => {
+    for (const node of host.querySelectorAll("[data-row]")) {
+      const row = app.activeRows?.find((item) => item.id === node.getAttribute("data-id"));
+      if (!row) continue;
+      if (row.unit) {
+        node.setAttribute("aria-label", row.text);
+        node.style.paddingLeft = `${8 + (row.personalMember ? 24 : row.depth * 14)}px`;
+        node.replaceChildren(unitNameNode(document, row.unit), element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) }));
+        if (app.aliasEdit?.rowId === row.id) {
+          const editor = aliasField(app, row.unit);
+          if (host.insertBefore) host.insertBefore(editor, node);
+          else {
+            editor.parent = host;
+            editor.parentNode = host;
+            host.children.splice(host.children.indexOf(node), 0, editor);
+          }
+          node.remove();
+        }
+      } else if (row.kind === "personal") {
+        node.setAttribute("data-personal-folder", row.groupId);
+        node.setAttribute("aria-expanded", String(row.expanded));
+        node.replaceChildren(element(document, "span", { "aria-hidden": "true", text: row.expanded ? "⌄" : "›" }), folderIcon(document), element(document, "span", { class: "group-title", text: row.label }), element(document, "span", { class: "group-count", text: row.count }));
+      } else if (row.id === "section:personal") {
+        const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: t("myGroups") }));
+        if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
+          const add = mapButton(app, "new-group", t("newGroup"), () => openGroupForm(app), { class: "icon-button", "aria-label": t("newGroup"), title: t("newGroup") });
+          add.replaceChildren(folderIcon(document, true));
+          heading.append(add);
+        }
+        if (host.insertBefore) host.insertBefore(heading, node);
+        else { heading.parent = host; heading.parentNode = host; host.children.splice(host.children.indexOf(node), 0, heading); }
+        node.remove();
+      }
+    }
+  };
+  decorate();
+  // The shared virtual list replaces rows when it scrolls or moves focus.
+  host.addEventListener("scroll", decorate);
+  host.addEventListener("keydown", (event) => {
+    decorate();
+    const row = app.activeRows?.find((item) => item.id === app.activeList.focusId);
+    if (row?.kind === "personal" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+      if (event.key === "ArrowLeft") app.hierarchy.collapsed.add(row.id);
+      else app.hierarchy.collapsed.delete(row.id);
+      event.preventDefault?.();
+      renderShell(app);
+    }
+  });
+  if (app.aliasEdit?.focus) {
+    const input = host.querySelector("[data-alias-input]");
+    input?.focus?.();
+    input?.setSelectionRange?.(input.value.length, input.value.length);
+    app.aliasEdit.focus = false;
+  }
+}
+
+function beginAlias(app, id, rowId = null) {
+  if (app.layout === "phone" || !app.store.capabilities.includes("unit.create")) return;
+  const unit = unitById(app, id);
+  if (!unit?.revision) return;
+  app.tab = "hierarchy";
+  app.store.selected.unitId = id;
+  app.store.selected.groupId = null;
+  ensureMap(app).selection = new Set([id]);
+  if (unit.leadId) app.hierarchy.collapsed.delete(`lead:${unit.leadId}`);
+  if (unit.scope.kind === "project") app.hierarchy.collapsed.delete(`project:${unit.scope.name}`);
+  if (unit.scope.kind === "environment") app.hierarchy.collapsed.delete(`env:${unit.scope.name}`);
+  const rows = collectionRows(app, (key, values) => text(app.language, key, values), app.unitList);
+  const index = rows.findIndex((row) => rowId ? row.id === rowId : row.unit?.id === id);
+  app.aliasEdit = { id, rowId: rows[index]?.id ?? id, value: unit.alias ?? "", previous: unit.alias ?? null, revision: unit.revision, focus: true };
+  if (index >= 0) app.unitList.scrollTop = index * app.unitList.rowHeight;
+  renderShell(app);
+}
+
+function aliasField(app, unit) {
+  const edit = app.aliasEdit;
+  const document = app.root.ownerDocument;
+  const t = (key, variables) => text(app.language, key, variables);
+  const field = element(document, "div", { class: "alias-edit", "data-alias-edit": unit.id });
+  const input = element(document, "input", { "data-alias-input": unit.id, "data-keep": keepId("alias", unit.id), "aria-label": t("alias"), "aria-describedby": "alias-hint", maxlength: "128", disabled: edit.saving ? "" : null });
+  input.value = edit.value;
+  input.addEventListener("input", () => { edit.value = input.value; });
+  input.addEventListener("keydown", (event) => {
+    if (!["Enter", "Escape"].includes(event.key)) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    if (event.key === "Escape" && !edit.saving) {
+      app.aliasEdit = null;
+      renderShell(app);
+      focusUnitRow(app, unit.id);
+    } else if (event.key === "Enter") saveAlias(app, edit);
+  });
+  field.append(input, mapButton(app, "save-alias", t("save"), () => saveAlias(app, edit), { disabled: edit.saving ? "" : null }), element(document, "small", { class: "unit-original", text: unit.unit }), element(document, "p", { id: "alias-hint", class: "field-hint", text: t("aliasHint", { unit: unit.unit }) }));
+  if (edit.error) field.append(element(document, "p", { role: "alert", text: edit.error }));
+  return field;
+}
+
+function focusUnitRow(app, id) {
+  const row = app.activeRows?.find((item) => item.unit?.id === id);
+  if (row) app.root.querySelector(`[data-id="${row.id}"]`)?.focus?.();
+}
+
+async function saveAlias(app, edit) {
+  if (edit.saving || app.aliasEdit !== edit) return;
+  const input = app.root.querySelector(`[data-alias-input="${edit.id}"]`);
+  if (input) edit.value = input.value;
+  if (edit.value.length > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(edit.value)) {
+    edit.error = text(app.language, "invalidAlias");
+    edit.focus = true;
+    renderShell(app);
+    return;
+  }
+  edit.saving = true;
+  edit.error = null;
+  renderShell(app);
+  try {
+    const result = await setUnitAlias(app.api, { id: edit.id, revision: edit.revision }, edit.value.trim() || null, edit.operation);
+    app.store.indexes.units.set(edit.id, result.data);
+    app.aliasEdit = null;
+    await reloadList(app.unitList);
+    showMapToast(app, text(app.language, "aliasSaved", { unit: result.data.unit, alias: result.data.alias || result.data.unit }), async (record) => {
+      const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: edit.id } })).data;
+      await setUnitAlias(app.api, current, edit.previous, record.operation);
+      await reloadList(app.unitList);
+    });
+    renderShell(app);
+    focusUnitRow(app, edit.id);
+  } catch (error) {
+    edit.operation = error.operation;
+    edit.error = actionText(app.language, error.code);
+    if (error.code === "revision_conflict") {
+      try {
+        const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: edit.id } })).data;
+        edit.revision = current.revision;
+        edit.previous = current.alias ?? null;
+        edit.operation = null;
+        await reloadList(app.unitList);
+      } catch (refreshError) { edit.error = actionText(app.language, refreshError.code); }
+    }
+    edit.saving = false;
+    edit.focus = true;
+    renderShell(app);
+  }
+}
+
+function unitMenu(app, unit) {
+  const document = app.root.ownerDocument;
+  const menu = trackDisclosure(app, element(document, "details", { class: "map-menu", "data-unit-menu": unit.id }), keepId("unit-menu", unit.id));
+  menu.append(element(document, "summary", { "aria-label": text(app.language, "finalMore"), title: text(app.language, "finalMore"), text: text(app.language, "finalMore") }), mapButton(app, "rename-unit", text(app.language, "rename"), () => beginAlias(app, unit.id)));
+  return menu;
+}
+
+function selectionInspector(app, t, units) {
+  const document = app.root.ownerDocument;
+  const panel = element(document, "section", { class: "selection-inspector", "data-selection-count": units.length });
+  panel.append(element(document, "header", { class: "selection-heading" }, element(document, "span", { class: "selection-avatar" }, icon(document, "hierarchy")), element(document, "h2", { text: t("finalSelection", { count: units.length }) }), element(document, "p", { class: "field-hint", text: t("finalSelectionHint") })));
+  for (const unit of units) panel.append(element(document, "div", { class: "selection-member" }, unitNameNode(document, unit), element(document, "span", { text: t(statusKey(unit.status)) })));
+  const actions = element(document, "div", { class: "selection-actions" });
+  if (app.store.capabilities.includes("chat.manage")) actions.append(mapButton(app, "save-group", t("saveAsGroup"), () => openGroupForm(app, null, units.map((unit) => unit.id)), { class: "btn primary" }), mapButton(app, "message-all", t("messageAll", { count: units.length }), () => app.mapState.onGroupMessage(units.map((unit) => unit.id))));
+  if (app.store.capabilities.includes("unit.connect")) actions.append(mapButton(app, "connect-lead", t("connectToLead"), () => chooseSelectionLead(app)));
+  actions.append(mapButton(app, "clear-selection", t("clearSelection"), () => { app.mapState.selection.clear(); app.store.selected.unitId = null; app.thread = null; renderShell(app); }));
+  panel.append(actions, element(document, "p", { class: "field-hint", text: t("finalGroupHint") }));
+  return panel;
+}
+
+function chooseSelectionLead(app) {
+  const ids = [...app.mapState.selection].filter((id) => unitById(app, id)?.role !== "master");
+  let leadId;
+  openChoiceForm(app, "selection-lead", text(app.language, "connectToLead"), (form) => {
+    appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), leadChoices(app).filter((unit) => !ids.includes(unit.id)).map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), "");
+  }, async (form) => { leadId = fieldValue(form, "leadId"); if (!leadId) return false; return true; }, "connect-lead");
+  const dialog = app.root.ownerDocument.querySelector("[data-form='selection-lead']");
+  dialog?.addEventListener("close", () => { if (leadId) confirmConnection(app, leadId, ids); });
+}
+
+function emptySelection(app, t) {
+  const document = app.root.ownerDocument;
+  const counts = { ...app.store.view?.counts, working: [...app.store.indexes.units.values()].filter((unit) => unit.status === "working").length };
+  return element(document, "section", { class: "empty-selection" }, icon(document, "map"), element(document, "p", { text: t("selectionHelp") }), ...["working", "waiting", "unread", "groups"].map((key) => element(document, "p", { text: t("mapSummary", { label: t(key === "working" ? "statusWorking" : key === "groups" ? "myGroups" : key), count: key === "groups" ? [...app.store.indexes.groups.values()].filter((group) => !group.deleted).length : counts[key] ?? 0 }) })));
+}
+
+function selectGroup(app, id) {
+  const group = app.store.indexes.groups.get(id);
+  if (!group || group.deleted) return;
+  app.store.selected.groupId = id;
+  app.store.selected.unitId = null;
+  app.store.selected.chatId = group.chatId;
+  const map = ensureMap(app);
+  map.selectedGroupId = id;
+  map.selection.clear();
+  const chat = app.store.indexes.chats.get(group.chatId) ?? app.chatList?.catalog?.find((item) => item.id === group.chatId);
+  if (chat && app.thread?.chat?.id !== chat.id) showChat(app, chat);
+  else if (!chat) settle(app, `group-chat:${id}`, text(app.language, "loadingConversation"), async () => {
+    const result = await request(app.api, "GET", "/chats/:chatId", { params: { chatId: group.chatId } });
+    await showChat(app, result.data);
+  });
+  renderShell(app);
+}
+
+function groupInspector(app, t, group) {
+  const document = app.root.ownerDocument;
+  const panel = element(document, "section", { class: "group-inspector", "data-group-inspector": group.id });
+  const avatars = element(document, "div", { class: "group-avatars" });
+  for (const id of group.members.slice(0, 3)) avatars.append(element(document, "span", { class: "group-avatar", title: unitDisplayName(unitById(app, id)) }, icon(document, unitById(app, id)?.role === "overlord" ? "hierarchy" : "executor")));
+  panel.append(element(document, "header", { class: "group-heading" }, folderIcon(document), element(document, "h2", { text: group.title }), avatars), element(document, "p", { text: t("finalGroupSummary", { count: group.members.length }) }));
+  if (app.store.capabilities.includes("chat.manage")) {
+    const menu = trackDisclosure(app, element(document, "details", { class: "map-menu" }, element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: t("finalMore") })), keepId("group-menu", group.id));
+    menu.append(mapButton(app, "rename-group", t("rename"), () => openGroupForm(app, group)), mapButton(app, "group-members", t("members"), () => openGroupForm(app, group)), mapButton(app, "delete-group", t("deleteGroup"), () => deletePersonalGroup(app, group)));
+    panel.append(menu);
+  }
+  panel.append(element(document, "p", { text: `${t("members")}: ${group.members.map((id) => unitDisplayName(unitById(app, id))).join(", ")}` }), element(document, "p", { text: `${t("created")}: ${formatWhen(app.language, group.createdAt)}` }));
+  return panel;
+}
+
+async function refreshGroups(app) {
+  const result = await collectPages(app.api, "/groups");
+  app.store.indexes.groups = new Map(result.items.map((group) => [group.id, group]));
+  if (app.store.view) app.store.view.groups = result.items;
+  if (app.chatList) await reloadList(app.chatList);
+}
+
+function openGroupForm(app, group = null, ids = []) {
+  if (app.root.ownerDocument.querySelector("[data-form='group']")) return;
+  const members = new Set(group?.members ?? ids);
+  let operation = null;
+  openChoiceForm(app, "group", text(app.language, group ? "rename" : "newGroup"), (form, confirm) => {
+    const document = form.ownerDocument;
+    confirm.textContent = text(app.language, group ? "save" : "createGroup");
+    form.append(element(document, "p", { class: "field-hint", text: text(app.language, "finalNewGroupHint") }));
+    appendInput(document, form, "title", text(app.language, "name"), group?.title ?? "");
+    const chips = element(document, "div", { class: "group-chips", "data-group-chips": "true" });
+    const choices = element(document, "div", { class: "group-choices", "data-member-choices": "true" });
+    const paint = () => {
+      chips.replaceChildren(...[...members].map((id) => {
+        const chip = mapButton(app, "remove-member", unitDisplayName(unitById(app, id)), () => { members.delete(id); paint(); (chips.querySelector("button") ?? form.querySelector("[data-action='add-group-member']"))?.focus?.(); }, { class: "member-chip", "data-member": id, "aria-label": text(app.language, "removeMember", { unit: unitDisplayName(unitById(app, id)) }) });
+        chip.replaceChildren(icon(document, "executor"), element(document, "span", { text: unitDisplayName(unitById(app, id)) }), icon(document, "close"));
+        return chip;
+      }));
+      choices.replaceChildren(...leadChoices(app).filter((unit) => unit.role !== "master" && !members.has(unit.id)).map((unit) => mapButton(app, "add-member", unitDisplayName(unit), () => { members.add(unit.id); paint(); chips.querySelector(`[data-member="${unit.id}"]`)?.focus?.(); }, { "data-member-choice": unit.id })));
+    };
+    choices.hidden = true;
+    form.append(element(document, "h3", { text: text(app.language, "members") }), chips, mapButton(app, "add-group-member", text(app.language, "add"), () => { choices.hidden = !choices.hidden; }), choices);
+    paint();
+    form.problems = () => {
+      const problems = [];
+      const title = fieldValue(form, "title");
+      if (!title.trim() || title.trim().length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) problems.push({ name: "title", message: text(app.language, "groupNameRequired") });
+      if (!members.size || members.size > 255) problems.push({ name: "title", message: text(app.language, "groupMembersRequired") });
+      return problems;
+    };
+  }, async (form) => {
+    try {
+      const result = group ? await patchGroup(app.api, group, { title: fieldValue(form, "title").trim(), members: [...members] }, operation) : await createGroup(app.api, fieldValue(form, "title").trim(), [...members], operation);
+      operation = null;
+      app.store.indexes.groups.set(result.data.id, result.data);
+      await refreshGroups(app);
+      app.hierarchy.collapsed.delete(`personal:${result.data.id}`);
+      selectGroup(app, result.data.id);
+      showMapToast(app, text(app.language, group ? "saved" : "groupCreated", { title: result.data.title }), group ? null : async (record) => {
+        const current = app.store.indexes.groups.get(result.data.id);
+        await removeGroup(app.api, current, record.operation);
+        app.store.selected.groupId = null;
+        app.thread = null;
+        await refreshGroups(app);
+      });
+      return true;
+    } catch (error) {
+      operation = error.operation ?? operation;
+      if (group && error.code === "revision_conflict") {
+        await refreshGroups(app);
+        group = app.store.indexes.groups.get(group.id) ?? group;
+        operation = null;
+      }
+      throw error;
+    }
+  }, group ? "group-members" : "new-group");
+}
+
+function deletePersonalGroup(app, group) {
+  let operation = null;
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: text(app.language, "finalDeleteGroupTitle", { title: group.title }),
+    body: text(app.language, "finalDeleteGroupScope", { count: group.members.length }),
+    confirm: text(app.language, "deleteGroup"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+    onConfirm: async () => {
+      try {
+        const result = await removeGroup(app.api, group, operation);
+        operation = null;
+        app.store.selected.groupId = null;
+        if (app.thread?.chat?.id === group.chatId) app.thread = null;
+        await refreshGroups(app);
+        showMapToast(app, text(app.language, "groupDeleted", { title: group.title }), async (record) => {
+          await undoChange(app.api, result.data.changeId, record.operation);
+          await refreshGroups(app);
+          selectGroup(app, group.id);
+        }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
+        renderShell(app);
+      } catch (error) { operation = error.operation ?? operation; throw error; }
+    },
+  });
+  dialog.className += " connection-dialog";
+}
+
+function showMapToast(app, label, undo, until = null) {
+  clearTimeout(app.mapToastTimer);
+  const toast = { key: `map-undo:${operationId()}`, label, undo, until: typeof until === "number" ? until : app.api.now() + 10000 };
+  app.mapToast = toast;
+  app.mapToastTimer = setTimeout(() => {
+    if (app.mapToast === toast) { app.mapToast = null; if (!app.disposed) renderShell(app); }
+  }, Math.max(0, toast.until - app.api.now()));
+}
+
+function mapToast(app, t) {
+  const toast = app.mapToast;
+  const node = element(app.root.ownerDocument, "div", { class: "map-toast", role: "status", "data-map-toast": "true", text: toast.label });
+  if (toast.undo && app.api.now() < toast.until) node.append(mapButton(app, "map-undo", t("undo"), () => settle(app, toast.key, t("working"), async (record) => {
+    await toast.undo(record);
+    if (app.mapToast === toast) app.mapToast = null;
+    renderShell(app);
+  })));
+  return node;
+}
+
 function confirmConnection(app, sourceId, targetIds) {
   const source = unitById(app, sourceId);
   const targets = targetIds.map((id) => unitById(app, id)).filter(Boolean);
   if (!source || !targets.length) return;
   const operations = new Map();
   const done = new Set();
-  const body = targets.map((target) => text(app.language, "confirmConnect", { member: target.unit, lead: source.unit })).join(" ");
-  showDialog(app.root.ownerDocument, {
-    title: text(app.language, "connect"),
+  const previous = targets.map((target) => ({ id: target.id, leadId: target.leadId ?? null }));
+  const body = targets.map((target) => text(app.language, "finalConnectScope", { unit: unitDisplayName(target), lead: unitDisplayName(source) })).join(" ");
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: text(app.language, "finalConnectTitle", { unit: targets.map(unitDisplayName).join(", ") }),
     body,
     confirm: text(app.language, "connect"),
     cancel: text(app.language, "cancel"),
     retry: text(app.language, "retry"),
     onConfirm: async () => {
       const pending = targets.filter((target) => !done.has(target.id));
+      app.connectionSaving = { leadId: source.id, targets: targets.map((target) => target.id) };
+      app.store.selected.unitId = targets[0].id;
+      app.store.selected.groupId = null;
+      app.mapState.selection = new Set([targets[0].id]);
+      app.mapState.pendingConnect = { source: source.id, target: targets[0].id };
+      renderShell(app);
       const results = await connectUnits(app.api, source, pending, operations);
       const failed = [];
       for (const result of results) {
@@ -3430,14 +3857,41 @@ function confirmConnection(app, sourceId, targetIds) {
         else done.add(result.id);
       }
       if (failed.length) {
+        app.connectionSaving = null;
+        app.mapState.pendingConnect = null;
+        if (app.unitList) await reloadList(app.unitList);
+        renderShell(app);
         const error = new Error(failed.map((result) => connectCause(app, targets.find((item) => item.id === result.id), result)).join(" "));
         error.code = failed.some((result) => result.uncertain) ? "unknown_result" : (failed[0].error?.code ?? "request_failed");
         throw error;
       }
       showOutcome(app, targets.map((target) => text(app.language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
+      app.connectionSaving = null;
+      app.mapState.pendingConnect = null;
+      const undoOperations = new Map();
+      const undone = new Set();
+      showMapToast(app, text(app.language, "saved"), async () => {
+        for (const before of previous) {
+          if (undone.has(before.id)) continue;
+          let operation = undoOperations.get(before.id);
+          if (!operation) {
+            const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: before.id } })).data;
+            if (current.leadId !== source.id) throw new ApiError(409, "revision_conflict", text(app.language, "revisionConflict"));
+            operation = createOperation({ method: "PUT", path: "/units/:unitId/lead", params: { unitId: before.id }, body: { leadId: before.leadId, confirmed: true, expectedRevision: current.revision } });
+            undoOperations.set(before.id, operation);
+          }
+          await request(app.api, operation.method, operation.path, { operation });
+          undone.add(before.id);
+        }
+        await reloadList(app.unitList);
+      });
       if (app.unitList) await reloadList(app.unitList);
       if (!app.disposed) renderShell(app);
     },
+  });
+  dialog.className += " connection-dialog";
+  dialog.addEventListener("close", () => {
+    if (!app.connectionSaving && app.mapState) { app.mapState.pendingConnect = null; if (!app.disposed) renderShell(app); }
   });
 }
 
@@ -3507,7 +3961,9 @@ function markChoiceError(form, name, message) {
 function restoreInvoker(app, opener) {
   if (!opener || app.disposed) return;
   const live = app.root.querySelector?.(`[data-action="${opener}"]`);
-  live?.focus?.();
+  if (live) live.focus?.();
+  else if (app.store.selected.groupId) app.root.querySelector(`[data-personal-folder="${app.store.selected.groupId}"]`)?.focus?.();
+  else if (app.store.selected.unitId) focusUnitRow(app, app.store.selected.unitId);
 }
 
 function openUnitForm(app, firstRun = false) {
@@ -3521,10 +3977,10 @@ function openUnitForm(app, firstRun = false) {
     appendInput(document, form, "unit", text(app.language, "unitName"), "");
     appendSelect(document, form, "role", text(app.language, "role"), UNIT_ROLES.map((role) => ({ value: role, label: role })), "executor");
     appendScope(document, form, text(app.language, "scopeKind"), "project");
-    appendInput(document, form, "scopeName", text(app.language, "scopeName"), "shop");
+    appendInput(document, form, "scopeName", text(app.language, "scopeProject"), "shop");
     appendSelect(document, form, "machine", text(app.language, "machine"), machines.map((machine) => ({
       value: machine.id,
-      label: `${machine.id}: ${machine.answers ? text(app.language, "machineAnswers") : text(app.language, "machineSilent")}`,
+      label: `${machine.id}: ${machine.answers ? text(app.language, "machineAnswers") : text(app.language, "finalMachineOffline", { time: formatWhen(app.language, machine.heartbeatAt) || text(app.language, "unknown") })}`,
       disabled: !machine.answers,
     })), machines.find((machine) => machine.answers)?.id ?? "");
     for (const machine of machines) {
@@ -3535,7 +3991,8 @@ function openUnitForm(app, firstRun = false) {
         }));
       }
     }
-    appendLeadSearch(document, form, text(app.language, "lead"), leads);
+    appendLeadSearch(document, form, text(app.language, "finalReportsTo"), leads);
+    appendSelect(document, form, "groupId", text(app.language, "group"), [{ value: "", label: text(app.language, "none") }, ...[...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ value: group.id, label: group.title }))], "");
     appendInput(document, form, "job", text(app.language, "job"), "");
     appendInput(document, form, "model", text(app.language, "model"), "");
     appendInput(document, form, "positionX", text(app.language, "positionX"), "", { inputMode: "numeric", describedBy: "position-hint" });
@@ -3575,15 +4032,36 @@ function openUnitForm(app, firstRun = false) {
       ...(input.position ? { position: input.position } : {}),
     };
     try {
-      const created = await createUnit(app.api, input, retainedOperation(app.unitOperation, "POST", "/units", body));
+      const created = form.created ?? await createUnit(app.api, input, retainedOperation(app.unitOperation, "POST", "/units", body));
+      form.created = created;
       app.unitOperation = null;
-      const unit = created.data?.unit?.unit ?? fieldValue(form, "unit").trim();
+      const createdUnit = created.data?.unit?.id ? created.data.unit : created.data;
+      const groupId = fieldValue(form, "groupId");
+      if (groupId) {
+        const group = app.store.indexes.groups.get(groupId);
+        if (!group || group.deleted) throw new ApiError(404, "group_not_found", text(app.language, "missingRecord"));
+        if (!group.members.includes(createdUnit.id)) {
+          const retained = form.groupOperation?.path === `/groups/${group.id}` ? form.groupOperation : null;
+          const result = await patchGroup(app.api, group, { members: [...group.members, createdUnit.id] }, retained);
+          app.store.indexes.groups.set(groupId, result.data);
+          form.groupOperation = null;
+        }
+      }
+      const unit = createdUnit.unit ?? fieldValue(form, "unit").trim();
+      app.store.indexes.units.set(createdUnit.id, createdUnit);
+      app.store.selected.unitId = createdUnit.id;
+      app.store.selected.groupId = null;
       showOutcome(app, text(app.language, "unitCreated", { unit }));
       if (app.unitList) await reloadList(app.unitList);
+      const map = ensureMap(app);
+      map.selection = new Set([createdUnit.id]);
+      app.pendingChat = { unitId: createdUnit.id, create: true };
+      await loadInspector(app, createdUnit.id);
       if (!app.disposed) renderShell(app);
       return true;
     } catch (error) {
-      app.unitOperation = error?.operation ?? app.unitOperation ?? null;
+      if (error?.operation?.path === "/groups/:groupId") form.groupOperation = error.operation;
+      else app.unitOperation = error?.operation ?? app.unitOperation ?? null;
       showOutcome(app, error?.code === "machine_unavailable"
         ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? machineId })
         : actionText(app.language, error?.code), error?.code ?? null);
@@ -3723,9 +4201,38 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   form.append(heading);
   const confirm = element(document, "button", { type: "button", class: "btn primary", "data-action": "confirm-form", text: title });
   build(form, confirm);
+  if (kind === "unit") {
+    confirm.textContent = text(app.language, "createUnit");
+    const pairs = [["unit", "role"], ["scopeName", "machine"], ["leadId", "groupId"]];
+    const fields = new Set(pairs.flat());
+    const extra = element(document, "details", { class: "unit-options" }, element(document, "summary", { text: text(app.language, "details") }));
+    for (const child of [...form.children].slice(1)) {
+      if ([...child.querySelectorAll("input, select")].some((node) => fields.has(node.getAttribute("name")))) continue;
+      child.remove();
+      extra.append(child);
+    }
+    for (const pair of pairs) {
+      const row = element(document, "div", { class: "unit-pair" });
+      for (const name of pair) {
+        const field = form.querySelector(`[name="${name}"]`)?.closest("label");
+        if (field) { field.remove(); row.append(field); }
+      }
+      form.append(row);
+    }
+    form.append(extra);
+  }
   const actions = element(document, "div", { class: "dialog-actions" });
   const cancel = element(document, "button", { type: "button", class: "btn", "data-action": "cancel-form", text: text(app.language, "cancel") });
   let sending = false;
+  const inputs = [...form.querySelectorAll("input, select, textarea")];
+  const enabled = inputs.filter((control) => !control.disabled);
+  const setFieldsBusy = (busy) => {
+    if (!["unit", "group", "selection-lead"].includes(kind)) return;
+    for (const control of enabled) {
+      const immutable = kind === "unit" && form.created && control.getAttribute("name") !== "groupId";
+      control.disabled = busy || Boolean(immutable);
+    }
+  };
   cancel.addEventListener("click", () => dialog.close());
   confirm.addEventListener("click", async () => {
     if (sending || confirm.disabled) return;
@@ -3742,13 +4249,15 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
       return;
     }
     sending = true;
+    setFieldsBusy(true);
     confirm.setAttribute("aria-busy", "true");
     const label = confirm.textContent;
-    confirm.replaceChildren(progressMark(document, label));
+    confirm.replaceChildren(progressMark(document, kind === "unit" ? text(app.language, "creatingUnit") : label));
     try {
       const accepted = await onConfirm(form);
       if (accepted !== true) {
         sending = false;
+        setFieldsBusy(false);
         confirm.removeAttribute("aria-busy");
         confirm.textContent = label;
         confirm.replaceChildren(document.createTextNode(label));
@@ -3757,6 +4266,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
       dialog.close();
     } catch (error) {
       sending = false;
+      setFieldsBusy(false);
       confirm.removeAttribute("aria-busy");
       const retry = text(app.language, "retry");
       confirm.textContent = retry;
@@ -3778,8 +4288,21 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
     dialog.remove();
     restoreInvoker(app, opener);
   });
+  if (["group", "unit", "selection-lead"].includes(kind)) {
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault?.(); dialog.close(); return; }
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll("button, input, select, textarea, summary")].filter((node) => !node.disabled && !node.closest("[hidden]"));
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault?.(); last?.focus?.(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault?.(); first?.focus?.(); }
+    });
+    form.addEventListener("submit", (event) => { event.preventDefault?.(); confirm.click?.(); });
+  }
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") dialog.showModal();
+  if (["group", "unit", "selection-lead"].includes(kind)) enabled[0]?.focus?.();
 }
 
 function appendInput(document, form, name, label, value, options = {}) {
@@ -3838,13 +4361,22 @@ function appendLeadSearch(document, form, label, leads) {
       text: `${unit.unit} · ${unit.id}`,
       onclick: () => {
         input.value = unit.id;
+        input.focus?.();
         input.setAttribute("aria-expanded", "false");
+        list.hidden = true;
       },
     })));
   };
-  input.addEventListener("input", paint);
+  input.addEventListener("input", () => { list.hidden = false; paint(); });
+  input.addEventListener("focus", () => { list.hidden = false; paint(); });
   paint();
-  form.append(element(document, "label", { class: "field", text: label }, input), list);
+  list.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+  const field = element(document, "label", { class: "field lead-field", text: label }, input, list);
+  field.addEventListener("focusout", () => queueMicrotask(() => {
+    if (!field.contains(document.activeElement)) { list.hidden = true; input.setAttribute("aria-expanded", "false"); }
+  }));
+  form.append(field);
   return input;
 }
 
@@ -3904,7 +4436,8 @@ function noteSessionRequest(app, data) {
 
 function messageSender(app, message) {
   if (!message?.fromId) return text(app.language, "unknown");
-  return unitById(app, message.fromId)?.unit || message.fromId;
+  const unit = unitById(app, message.fromId);
+  return unit ? unitDisplayName(unit) : message.fromId;
 }
 
 function chatPanel(app, t) {
@@ -3916,8 +4449,11 @@ function chatPanel(app, t) {
   const heading = element(document, "header", { class: "chat-heading" },
     element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
   );
+  const group = app.store.indexes.groups.get(thread.chat.id);
+  const directUnit = thread.chat.kind === "direct" ? unitById(app, members.find((id) => id !== "root:master")) : null;
+  if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
-    const names = members.map((id) => unitById(app, id)?.unit || id).join(", ");
+    const names = members.map((id) => unitById(app, id) ? unitDisplayName(unitById(app, id)) : id).join(", ");
     heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
   }
   panel.append(heading);
@@ -3996,7 +4532,7 @@ function chatPanel(app, t) {
   });
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes("chat.manage")) {
+  if (caps.includes("chat.manage") && !group) {
     const managing = activityPending(app, `chat-manage:${thread.chat.id}`);
     const manageButton = (action, label, change) => element(document, "button", {
       type: "button",
@@ -4035,7 +4571,10 @@ function chatPanel(app, t) {
       onclick: () => submitComposer(app, composer),
     }, sending ? progressMark(document, t("sending")) : t("send"));
     if (sending) send.disabled = true;
-    panel.append(labeledField(document, t("composerLabel"), t("composerHint"), composer), send);
+    const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
+    const hint = group ? t("everyReply") : directUnit && !directUnit.sessionIds?.length ? t("finalComposerWait") : t("composerHint");
+    composer.setAttribute("aria-label", name);
+    panel.append(labeledField(document, name, hint, composer), send);
   }
   if (app.mailbox) panel.append(renderMailbox(app, t));
   else if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
@@ -4205,6 +4744,14 @@ function openExistingDirect(app, unitId) {
 
 function showChat(app, chat) {
   captureInputs(app);
+  const group = app.store.indexes.groups.get(chat.id);
+  app.store.selected.chatId = chat.id;
+  app.store.selected.groupId = group && !group.deleted ? group.id : null;
+  if (group) app.store.selected.unitId = null;
+  if (app.mapState) {
+    app.mapState.selectedGroupId = app.store.selected.groupId;
+    if (group) app.mapState.selection.clear();
+  }
   app.thread = createThread(chat);
   const saved = inputDrafts(app).chats.get(chat.id);
   if (saved) app.thread.composer = saved.value;
@@ -4354,6 +4901,15 @@ function renderInspector(app, t, selected) {
   const data = app.inspectorData;
   if (selected) {
     const card = renderUnit(document, selected, t, app.language);
+    card.querySelector("h3")?.replaceChildren(unitNameNode(document, selected));
+    const extra = trackDisclosure(app, element(document, "details", { class: "unit-metadata" }, element(document, "summary", { text: t("details") })), keepId("unit-metadata", selected.id));
+    for (const child of [...card.children].slice(1)) { child.remove(); extra.append(child); }
+    const session = data?.unitId === selected.id ? data.sessions?.find((item) => item.state !== "stopped") : app.store.view?.sessions?.find((item) => item.unitId === selected.id && item.state !== "stopped");
+    const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: session.client }) : session?.launchKind === "cli" ? t("runsCli", { client: session.client }) : session?.client ?? t("unknown");
+    const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
+    for (const [key, value] of [["machine", selected.machine], ["finalRunsIn", runs], ["model", selected.model ?? t("finalDefaultModel")], ["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}` }));
+    card.append(facts, extra);
+    if (app.connectionSaving?.targets.includes(selected.id)) card.append(progressMark(document, `${t("savingLayout")} ${t("finalReportsTo")}: ${unitDisplayName(unitById(app, app.connectionSaving.leadId))}`));
     const folded = card.querySelector?.("details");
     if (folded) trackDisclosure(app, folded, keepId("unit", selected.id));
     panel.append(card);

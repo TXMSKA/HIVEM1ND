@@ -1,5 +1,6 @@
 import { createOperation, request as apiRequest, retryOperation } from "./api.mjs";
 import { icon } from "./components.mjs";
+import { unitDisplayName } from "./hierarchy.mjs";
 import {
   edgeEndpoints,
   groupKeyForUnit,
@@ -7,6 +8,7 @@ import {
   hitNode,
   marqueeIds,
   placeUnits,
+  personalGroupBounds,
   scopeCollapsed,
   toScreen,
   toWorld,
@@ -20,13 +22,16 @@ function layoutRecord(saved) {
   return { layout: saved ?? { nodes: {}, groups: {} }, revision: null };
 }
 
-export function createMap({ units = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
+export function createMap({ units = [], groups = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
   const wrapped = layoutRecord(saved);
   const layout = wrapped.layout ?? { nodes: {}, groups: {} };
   const placed = placeUnits(units, layout);
   return {
     api,
     units,
+    groups,
+    selectedGroupId: null,
+    labelSizes: new Map(),
     saved: layout,
     positions: placed.positions,
     origins: placed.origins,
@@ -81,6 +86,23 @@ export function renderMap(document, host, map, labels = {}) {
   const nodes = visibleNodes(map);
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", "map-edges");
+  if (map.gesture?.kind === "marquee" && map.gesture.dragging) {
+    const { start, current } = map.gesture;
+    const from = toScreen({ x: Math.min(start.x, current.x), y: Math.min(start.y, current.y) }, rect, map.view);
+    const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    for (const [key, value] of Object.entries({ x: from.x - rect.left, y: from.y - rect.top, width: Math.abs(start.x - current.x) * map.view.zoom, height: Math.abs(start.y - current.y) * map.view.zoom })) box.setAttribute(key, String(value));
+    box.setAttribute("class", "map-marquee");
+    svg.append(box);
+  }
+  const zones = personalZones(map);
+  for (const zone of zones) {
+    const screen = toScreen(zone.bounds, rect, map.view);
+    const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: zone.bounds.w * map.view.zoom, height: zone.bounds.h * map.view.zoom })) box.setAttribute(key, String(value));
+    box.setAttribute("class", `map-personal-zone${map.selectedGroupId === zone.group.id ? " is-selected" : ""}`);
+    box.setAttribute("data-group-zone", zone.group.id);
+    svg.append(box);
+  }
   for (const outline of outlines(map, nodes)) {
     const screen = toScreen(outline, rect, map.view);
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -89,6 +111,20 @@ export function renderMap(document, host, map, labels = {}) {
     circle.setAttribute("r", String(outline.radius * map.view.zoom));
     circle.setAttribute("class", "map-outline");
     svg.append(circle);
+  }
+  if (map.pendingConnect?.target) {
+    const source = nodes.find((node) => node.id === map.pendingConnect.source);
+    const target = nodes.find((node) => node.id === map.pendingConnect.target);
+    if (source && target) {
+      const edge = edgeEndpoints(source, target);
+      const start = toScreen({ x: edge.x1, y: edge.y1 }, rect, map.view);
+      const end = toScreen({ x: edge.x2, y: edge.y2 }, rect, map.view);
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      for (const [key, value] of Object.entries({ x1: start.x - rect.left, y1: start.y - rect.top, x2: end.x - rect.left, y2: end.y - rect.top })) line.setAttribute(key, String(value));
+      line.setAttribute("class", "map-edge map-pending-edge");
+      line.setAttribute("data-pending-edge", `${source.id}:${target.id}`);
+      svg.append(line);
+    }
   }
   for (const edge of edges(map, nodes)) {
     const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -104,6 +140,32 @@ export function renderMap(document, host, map, labels = {}) {
   }
   const layer = document.createElement("div");
   layer.className = "map-nodes";
+  for (const zone of zones) {
+    const screen = toScreen({ x: zone.bounds.x + 14, y: zone.bounds.y - 11 }, rect, map.view);
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "map-group-label";
+    label.setAttribute("data-group-id", zone.group.id);
+    label.setAttribute("aria-pressed", String(map.selectedGroupId === zone.group.id));
+    label.style.left = `${screen.x - rect.left}px`;
+    label.style.top = `${screen.y - rect.top}px`;
+    const folder = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    folder.setAttribute("viewBox", "0 0 24 24");
+    folder.setAttribute("class", "icon");
+    folder.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3 7V4h7l2 3h9v13H3z");
+    folder.append(path);
+    const title = document.createElement("span");
+    title.textContent = zone.group.title;
+    const caption = document.createElement("span");
+    caption.className = "map-group-caption";
+    caption.append(folder, title);
+    label.append(caption);
+    label.setAttribute("aria-label", zone.group.title);
+    label.addEventListener("click", () => selectPersonalGroup(map, zone.group.id));
+    layer.append(label);
+  }
   for (const node of nodes) {
     const screen = toScreen(node, rect, map.view);
     const button = document.createElement("button");
@@ -112,6 +174,9 @@ export function renderMap(document, host, map, labels = {}) {
     button.setAttribute("data-unit-id", node.id);
     button.style.left = `${screen.x - rect.left}px`;
     button.style.top = `${screen.y - rect.top}px`;
+    button.style.width = button.style.height = `${node.radius * 2}px`;
+    button.style.marginLeft = button.style.marginTop = `${-node.radius}px`;
+    button.setAttribute("aria-label", node.label);
     const selected = map.selection.has(node.id);
     button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : ""].filter(Boolean).join(" ");
     button.setAttribute("aria-pressed", String(selected));
@@ -128,7 +193,15 @@ export function renderMap(document, host, map, labels = {}) {
     const name = document.createElement("span");
     name.className = "map-label";
     name.setAttribute("data-map-label", node.label);
-    name.textContent = node.label;
+    if (node.alias) {
+      const alias = document.createElement("strong");
+      alias.className = "unit-alias";
+      alias.textContent = node.alias;
+      const original = document.createElement("small");
+      original.className = "unit-original";
+      original.textContent = node.original;
+      name.append(alias, original);
+    } else name.textContent = node.label;
     button.append(mark, marker, name);
     layer.append(button);
     const handle = document.createElement("button");
@@ -139,7 +212,7 @@ export function renderMap(document, host, map, labels = {}) {
     handle.setAttribute("data-unit-id", node.id);
     handle.setAttribute("data-handle", "connect");
     handle.setAttribute("aria-label", `${labels.connect ?? "Connect"} ${node.label}`);
-    handle.style.left = `${screen.x - rect.left + 28}px`;
+    handle.style.left = `${screen.x - rect.left + node.radius + 20}px`;
     handle.style.top = `${screen.y - rect.top}px`;
     layer.append(handle);
   }
@@ -193,6 +266,18 @@ export function renderMap(document, host, map, labels = {}) {
     children.push(status);
   }
   host.replaceChildren(...children);
+  for (const node of nodes) {
+    const label = host.querySelector(`[data-unit-id="${node.id}"]`)?.querySelector?.(".map-label");
+    const size = label?.getBoundingClientRect?.();
+    if (size?.width) map.labelSizes.set(node.id, { width: size.width, height: size.height });
+  }
+  for (const zone of personalZones(map)) {
+    const box = svg.querySelector(`[data-group-zone="${zone.group.id}"]`);
+    const screen = toScreen(zone.bounds, rect, map.view);
+    for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: zone.bounds.w * map.view.zoom, height: zone.bounds.h * map.view.zoom })) box?.setAttribute(key, String(value));
+    const label = layer.querySelector(`[data-group-id="${zone.group.id}"]`);
+    if (label) { label.style.left = `${screen.x - rect.left + 14 * map.view.zoom}px`; label.style.top = `${screen.y - rect.top - 11 * map.view.zoom}px`; }
+  }
   bindMap(host, map);
   return nodes.map((node) => node.id);
 }
@@ -214,6 +299,7 @@ function focusedUnitId(event) {
 }
 
 export function pointerDown(map, event) {
+  if (event.target?.closest?.("[data-action], [data-group-id]") || event.target?.closest?.("input")) return;
   const rect = event.rect ?? hostRect(map.host);
   const target = readTarget(event);
   const world = toWorld({ x: event.clientX, y: event.clientY }, rect, map.view);
@@ -249,6 +335,7 @@ export function pointerDown(map, event) {
       pointerId: event.pointerId,
       rect,
       previous: new Set(map.selection),
+      groupId: hitPersonalGroup(map, world)?.id ?? null,
     };
     return;
   }
@@ -321,6 +408,12 @@ export function pointerUp(map, event) {
     if (gesture.kind === "move") {
       selectOne(map, gesture.id, gesture.shift);
       map.onSelect?.(gesture.id);
+    } else if (gesture.groupId) {
+      selectPersonalGroup(map, gesture.groupId);
+    } else {
+      map.selection.clear();
+      map.selectedGroupId = null;
+      map.onSelection?.([]);
     }
     map.gesture = null;
     refresh(map);
@@ -330,6 +423,8 @@ export function pointerUp(map, event) {
     gesture.current = world;
     const ids = marqueeIds(gesture.start, gesture.current, paintNodes(map));
     map.selection = gesture.shift ? new Set([...gesture.previous, ...ids]) : new Set(ids);
+    map.selectedGroupId = null;
+    map.onSelection?.([...map.selection]);
   }
   if (gesture.kind === "move" && gesture.dragging && map.persist) {
     for (const id of gesture.ids) queueLayoutPatch(map, id, map.positions[id]);
@@ -360,6 +455,7 @@ export function centerUnit(map, id, rect) {
   const point = map.positions[id];
   if (!point) return false;
   map.selection = new Set([id]);
+  map.selectedGroupId = null;
   map.focusId = id;
   map.centered = id;
   map.view.x = rect.width / 2 - point.x * map.view.zoom;
@@ -368,11 +464,17 @@ export function centerUnit(map, id, rect) {
 }
 
 export function keyDown(map, event) {
+  if (event.target?.closest?.("input")) return;
   if (event.key === "Escape") {
     cancelGesture(map);
     return;
   }
   const id = map.focusId ?? [...map.selection][0] ?? null;
+  if (event.key === "F2" && id) {
+    event.preventDefault?.();
+    map.onRename?.(id);
+    return;
+  }
   if (event.key === "Enter" && id) {
     map.inspectorId = id;
     map.selection = new Set([id]);
@@ -383,6 +485,8 @@ export function keyDown(map, event) {
   }
   if (event.key === " " && id) {
     selectOne(map, id, true);
+    map.onSelection?.([...map.selection]);
+    event.preventDefault?.();
     return;
   }
   if (!id || !map.positions[id]) return;
@@ -432,7 +536,42 @@ export function requestGroupMessage(map) {
 }
 
 export function paintNodes(map) {
-  return visibleNodes(map).map((node) => ({ ...node, radius: map.radius }));
+  return visibleNodes(map);
+}
+
+export function personalZones(map) {
+  const nodes = paintNodes(map);
+  return (map.groups ?? []).filter((group) => !group.deleted).flatMap((group) => {
+    const bounds = personalGroupBounds(group.members, nodes);
+    if (bounds) {
+      let right = bounds.x + bounds.w;
+      let bottom = bounds.y + bounds.h;
+      for (const node of nodes.filter((node) => group.members.includes(node.id))) {
+        const label = map.labelSizes.get(node.id);
+        if (!label) continue;
+        bounds.x = Math.min(bounds.x, node.x - label.width / (2 * map.view.zoom) - 24);
+        right = Math.max(right, node.x + label.width / (2 * map.view.zoom) + 24);
+        bottom = Math.max(bottom, node.y + (node.radius + 6 + label.height) / map.view.zoom + 24);
+      }
+      bounds.w = right - bounds.x;
+      bounds.h = bottom - bounds.y;
+    }
+    return bounds ? [{ group, bounds }] : [];
+  });
+}
+
+export function hitPersonalGroup(map, point) {
+  // Prefer the smallest enclosing zone; equal overlaps use stable IDs. Circles win before zones.
+  return personalZones(map).filter(({ bounds: b }) => point.x >= b.x && point.x <= b.x + b.w && point.y >= b.y && point.y <= b.y + b.h)
+    .sort((a, b) => a.bounds.w * a.bounds.h - b.bounds.w * b.bounds.h || a.group.id.localeCompare(b.group.id))[0]?.group ?? null;
+}
+
+export function selectPersonalGroup(map, id) {
+  map.selectedGroupId = id;
+  map.selection.clear();
+  map.focusId = null;
+  map.onPersonalGroup?.(id);
+  refresh(map);
 }
 
 function visibleNodes(map) {
@@ -451,8 +590,10 @@ function visibleNodes(map) {
       id: unit.id,
       x: map.positions[unit.id].x,
       y: map.positions[unit.id].y,
-      radius: map.radius,
-      label: unit.unit,
+      radius: unit.role === "master" ? 20 : unit.role === "overseer" ? 32 : unit.role === "overlord" ? 28 : 23,
+      label: unitDisplayName(unit),
+      original: unit.unit,
+      alias: unit.alias,
       leadId: unit.leadId ?? null,
       role: unit.role ?? "",
       status: unit.status ?? "unknown",
@@ -518,9 +659,13 @@ function bindMap(host, map) {
     if (id) map.focusId = id;
   });
   host.addEventListener("pointerdown", (event) => pointerDown(map, event));
-  host.addEventListener("pointermove", (event) => pointerMove(map, event));
+  host.addEventListener("pointermove", (event) => { pointerMove(map, event); if (map.gesture?.dragging || map.gesture?.kind === "connect") refresh(map); });
   host.addEventListener("pointerup", (event) => pointerUp(map, event));
   host.addEventListener("pointercancel", () => cancelGesture(map));
+  host.addEventListener("dblclick", (event) => {
+    const id = focusedUnitId(event);
+    if (id) { centerUnit(map, id, hostRect(host)); map.onSelect?.(id); refresh(map); }
+  });
   host.addEventListener("keydown", (event) => {
     keyDown(map, event);
     refresh(map);
@@ -532,10 +677,18 @@ function bindMap(host, map) {
 }
 
 function refresh(map) {
-  if (map.document && map.host) renderMap(map.document, map.host, map, map.labels ?? {});
+  if (map.document && map.host) {
+    const active = map.document.activeElement;
+    const id = active?.getAttribute?.("data-unit-id");
+    const groupId = active?.getAttribute?.("data-group-id");
+    renderMap(map.document, map.host, map, map.labels ?? {});
+    if (id) map.host.querySelector(`[data-unit-id="${id}"]`)?.focus?.();
+    if (groupId) map.host.querySelector(`[data-group-id="${groupId}"]`)?.focus?.();
+  }
 }
 
 function selectOne(map, id, shift) {
+  map.selectedGroupId = null;
   if (shift) {
     if (map.selection.has(id)) map.selection.delete(id);
     else map.selection.add(id);

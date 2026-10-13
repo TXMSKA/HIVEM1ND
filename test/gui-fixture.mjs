@@ -268,6 +268,7 @@ async function buildProjection(fx) {
       units.push({
         id,
         unit: field(parsed.fields, "unit") ?? entry.name.replace(/\.md$/, ""),
+        alias: field(parsed.fields, "alias")?.trim() || null,
         role: ROLES.has(role) ? role : role,
         scope: scope.kind === "root" ? { kind: "root", name: null } : { kind: scope.kind, name: scope.name },
         leadId: field(parsed.fields, "lead-id"),
@@ -340,6 +341,7 @@ function publicUnit(unit) {
   return {
     id: unit.id,
     unit: unit.unit,
+    alias: unit.alias ?? null,
     role: unit.role,
     scope: unit.scope,
     leadId: unit.leadId,
@@ -1382,7 +1384,7 @@ function intentIdPlaceholder() {
 }
 
 function authorize(principal, route) {
-  if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo"].includes(route.pattern)) {
+  if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias"].includes(route.pattern)) {
     throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
   }
   const names = [route.capability, ...(route.allow ?? [])].filter(Boolean);
@@ -1709,6 +1711,7 @@ function routeTable() {
     { pattern: "/units", POST: { capability: "unit.create", validate: validateUnit } },
     { pattern: "/units/:unitId", GET: { query: [] } },
     { pattern: "/units/:unitId/lead", PUT: { capability: "unit.connect", validate: validateLead } },
+    { pattern: "/units/:unitId/alias", PATCH: { capability: "unit.create", validate: validateAlias } },
     { pattern: "/units/:unitId/session", POST: { capability: "session.start", validate: validateSession, runtime: true } },
     { pattern: "/session-requests/:requestId", GET: { query: [] } },
     { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
@@ -1819,7 +1822,7 @@ async function readData(fx, snap, spec, params, query) {
     return data;
   }
   if (pattern === "/units") {
-    return page(filterUnits(snap.units, query), query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.job, q) || includes(unit.context, q), snap.issues.filter((issue) => issue.path?.includes("/state/")));
+    return page(filterUnits(snap.units, query), query, spec.GET.query, (unit, q) => includes(unit.unit, q) || includes(unit.alias, q) || includes(unit.job, q) || includes(unit.context, q), snap.issues.filter((issue) => issue.path?.includes("/state/")));
   }
   if (pattern === "/units/:unitId") {
     noneQuery(query);
@@ -2592,6 +2595,31 @@ function validateGroup(body) {
   requireObject(body, ["title", "members"]);
   groupTitle(body.title);
   validateGroupMembers(body.members);
+}
+
+function validateAlias(body) {
+  requireObject(body, ["alias", "expectedRevision"]);
+  requireKeys(body, ["alias", "expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (body.alias !== null && (typeof body.alias !== "string" || body.alias.length > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(body.alias))) throw new HttpError(422, "invalid_alias", "The alias must be a single line of at most 128 characters.");
+}
+
+async function prepareAlias(fx, unitId, body) {
+  const snap = await projection(fx);
+  const target = snap.units.find((unit) => unit.id === unitId);
+  if (!target) throw new HttpError(404, "unit_not_found", "The unit does not exist.");
+  if (target.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The unit changed elsewhere.");
+  const file = snap.files.units.get(unitId);
+  const before = await readFile(file);
+  const lines = before.toString("utf8").split(/\r?\n/);
+  const end = lines.findIndex((line) => line === "");
+  const index = lines.findIndex((line, at) => at < end && line.startsWith("alias:"));
+  const alias = body.alias?.trim() || null;
+  if (index >= 0) lines[index] = `alias: ${alias ?? ""}`;
+  else lines.splice(end, 0, `alias: ${alias ?? ""}`);
+  const bytes = Buffer.from(lines.join("\n"));
+  const unit = { ...publicUnit(target), alias, revision: sha256(bytes) };
+  return { status: 200, data: unit, writes: [fixtureWrite(file, before, bytes)], events: [{ name: "unit.changed", unitId, data: { unit } }] };
 }
 
 function validateGroupPatch(body) {
@@ -3803,6 +3831,7 @@ async function prepareMutation(fx, pattern, params, body, principal) {
   if (pattern === "/changes/:changeId/undo") return prepareChangeUndo(fx, params.changeId);
   if (pattern === "/units") return prepareUnit(fx, body);
   if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
+  if (pattern === "/units/:unitId/alias") return prepareAlias(fx, params.unitId, body);
   if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);
   if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
   if (pattern === "/approvals/:approvalId/answer") return prepareAnswer(fx, params.approvalId, body);
