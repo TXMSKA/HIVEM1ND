@@ -139,7 +139,11 @@ export function bar(L, mode, waiting = 2, { gear = false } = {}) {
     fill(),
     row({ name: "modes", label: "Modes", gap: 4, pad: L.m ? 4 : 0, radius: 14, fill: L.m ? "panel" : undefined, stroke: L.m ? "line" : undefined }, ...modes),
     fill(),
-    row({ gap: 10 }, waiting ? waitingPill(L, `${waiting} waiting on you`) : null, ibtn(L, "phone", "phone", "Open on the phone"), ibtn(L, "bell", "notifications", "Notifications"), gear ? ibtn(L, "settings", "settings", "Settings") : null),
+    row(
+      { gap: 10 },
+      // Add to M1ND: one button, the same in every mode, opens the window that brings in skills, repositories and docs.
+      row({ name: "add", label: "Add to M1ND", gap: 6, pad: [7, 13], radius: L.m ? 11 : 8, fill: "acc" }, ic("plus", 15, "accInk"), t("Add", 13, { weight: 700, color: "accInk" })),
+      waiting ? waitingPill(L, `${waiting} waiting on you`) : null, ibtn(L, "phone", "phone", "Open on the phone"), ibtn(L, "bell", "notifications", "Notifications"), gear ? ibtn(L, "settings", "settings", "Settings") : null),
   );
 }
 

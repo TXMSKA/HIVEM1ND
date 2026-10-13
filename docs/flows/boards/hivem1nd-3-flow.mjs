@@ -728,6 +728,90 @@ const mapRemoveUnit = () =>
     ],
   });
 
+// ---- Add to M1ND: one + in the bar brings in skills, repositories and docs -----------------------------
+
+const foundRow = (name, what, kind, on) =>
+  row({ name: `found-${name}`, label: name, gap: 12, pad: [10, 12], radius: 12, fill: on ? "card2" : "card", stroke: on ? "acc" : undefined },
+    tick(on, 18), t(name, 14, { weight: 700 }), t(what, 13, { color: "mute", lines: 1 }), fill(), row({ pad: [2, 9], radius: "pill", fill: "card2" }, t(kind, 12, { color: "body" })));
+
+const mapAddWindow = () =>
+  mapScreen({
+    inspector: emptyInspector({ groups: 2 }),
+    over: [
+      scrim(),
+      dialog({
+        title: "Add to M1ND",
+        sub: "Paste a link to a repository or a registry, or drop a folder.",
+        kids: [
+          row({ name: "add-link", label: "Link", pad: [11, 13], radius: 12, fill: "card", stroke: "acc" }, mono("https://github.com/acme/agent-skills", 13, { color: "text" })),
+          col(
+            { gap: 6 },
+            label("Found in acme/agent-skills, commit 4f2c9e1"),
+            foundRow("pdf", "Reads, fills and merges PDF files", "Skill", true),
+            foundRow("docx", "Word documents", "Skill", false),
+            foundRow("acme-files", "Reads and writes cloud files", "Tool server", false),
+          ),
+        ],
+        actions: [button(L, "Cancel", "ghost", null, "cancel"), button(L, "Continue", "pri", null, "add-continue")],
+        w: 600,
+      }),
+    ],
+  });
+
+const checkLine = (ok, value, note = null) =>
+  row({ gap: 10 }, ok ? box({ w: 12, h: 12, radius: "pill", fill: "acc" }) : box({ w: 12, h: 12, radius: "pill", stroke: "wait", strokeWidth: 2 }), t(value, 13.5, { color: "text" }), fill(), note ? t(note, 12, { color: "mute" }) : null);
+
+const mapAddCheck = () =>
+  mapScreen({
+    inspector: emptyInspector({ groups: 2 }),
+    over: [
+      scrim(),
+      dialog({
+        title: "Add pdf",
+        sub: "Skill from acme/agent-skills. Nothing is copied until you press Add pdf.",
+        kids: [
+          col({ name: "add-check", label: "Check", gap: 8, pad: [12, 14], radius: 14, fill: "card" },
+            checkLine(true, "Pinned to commit 4f2c9e1", "updates wait for your yes"),
+            checkLine(true, "MIT license"),
+            checkLine(true, "Older than 7 days, no install scripts"),
+            checkLine(false, "Its scripts run Python", "only in the units below"),
+          ),
+          col(
+            { gap: 6 },
+            label("Who can use it"),
+            row({ gap: 12, pad: [10, 12], radius: 12, fill: "card" }, tick(false, 18), t("Every unit", 13.5)),
+            row({ gap: 12, pad: [10, 12], radius: 12, fill: "card2", stroke: "acc" }, tick(true, 18), t("Checkout launch", 13.5, { weight: 700 }), fill(), row({ pad: [2, 9], radius: "pill", fill: "card2" }, t("Group, 3 units", 12, { color: "body" }))),
+            row({ gap: 12, pad: [10, 12], radius: 12, fill: "card2", stroke: "acc" }, tick(true, 18), mono("adjutant", 13, { weight: 700 })),
+          ),
+        ],
+        actions: [button(L, "Back", "ghost", "back", "back"), button(L, "Add pdf", "pri", null, "add-confirm")],
+        w: 600,
+      }),
+    ],
+  });
+
+const LANDING = { id: "landing-site", count: "0", x: 320, y: 575, sz: 46 };
+const projectPanel = () =>
+  panel(
+    L, "left", { name: "inspector", label: "Inspector", w: 366 },
+    inspectorHead(L, { glyph: "grid", title: "landing-site", sub: t("Project from github.com/acme/landing-site", 12.5, { color: "mute" }) }),
+    col(
+      { grow: 1, align: "center", justify: "center", gap: 12, pad: 32 },
+      t("No units yet", 16, { weight: 700 }),
+      t("The repository is pinned at commit 91be0c2. Add its first unit to start working on it.", 13.5, { color: "mute", align: "center" }),
+      button(L, "New unit in landing-site", "pri", "plus", "new-unit-landing"),
+    ),
+  );
+
+const mapRepoAdded = () =>
+  mapScreen({
+    sel: "landing-site",
+    sideOpts: { projects: { site: "1", data: "2", mobile: "4", "landing-site": "new" } },
+    field: { nodes: [...NODES_AFTER, LANDING], sel: "landing-site" },
+    inspector: projectPanel(),
+    over: [toast("landing-site added", "New unit")],
+  });
+
 // ---- chats and what waits on the person ------------------------------------------------------------
 
 const chatScreen = (convo, rest = {}) =>
@@ -1610,7 +1694,7 @@ function contentGroup(title, items) {
   );
 }
 
-const settingsContent = () =>
+const settingsContent = (added = false) => () =>
   shell("Settings", settingsFrame(
     "content",
     row(
@@ -1624,7 +1708,8 @@ const settingsContent = () =>
             contentGroup("Quality", [["QA", true], ["Tribunal", false], ["Cyberattack", true]]),
             contentGroup("Continuity", [["Relay", true], ["Catchup", true], ["Docs", false]]),
           ),
-        ]),
+          ...(added ? [row({ name: "content-pdf", label: "pdf", gap: 10, pad: [9, 12], radius: 10, fill: "card2", stroke: "acc" }, tick(true), t("pdf", 13, { weight: 700 }), fill(), t("from acme/agent-skills, 4 units", 12.5, { color: "acc" }), button(L, "Remove", "ghost", null, "remove-pdf"))] : []),
+        ], button(L, "Add", "pri", "plus", "add-content")),
         section("Knowledge packs", [row({ gap: 12 }, ...[["Security", true], ["Design", true], ["Copy", true], ["Coding", false]].map(([value, on]) => row({ grow: 1, gap: 10, pad: [8, 10], radius: 10, fill: "card" }, tick(on), t(value, 13, { color: on ? "text" : "body" }))))]),
       ),
       col(
@@ -1638,7 +1723,7 @@ const settingsContent = () =>
         ]),
       ),
     ),
-  ), {});
+  ), added ? { over: [toast("pdf added for 4 units", "Undo")] } : {});
 
 function settingsBody() {
   return settingsFrame(
@@ -1857,6 +1942,10 @@ const DESK = {
     ["start-failed", "It did not start", mapStartFailed, "Every wait has a limit: after 30 s it says what happened and offers Retry."],
     ["stop", "Stop a session", mapStop, "Stopping asks first and says what stops and what stays."],
     ["remove-unit", "Remove a unit", mapRemoveUnit, "Removing a unit asks first and archives its chat and mailbox; the notice offers Undo."],
+    ["add", "Add to M1ND", mapAddWindow, "+ Add sits in the bar of every mode, before Waiting. It takes a link to a repository or a registry, or a dropped folder, reads the files behind it and lists what it found; a repository with several parts offers each one."],
+    ["add-check", "Check and who uses it", mapAddCheck, "Nothing is copied before this window: the pinned version, the license, its age, what it needs to run, then the units or groups that get it. Updates later go through the same check and wait for a yes."],
+    ["add-skill", "A skill in Content", settingsContent(true), "An added skill sits in Settings, Content, next to the ones the kit ships, with its origin and Remove. Content has its own Add, which opens the same window."],
+    ["add-repo", "A repository on the Map", mapRepoAdded, "An added repository is a project without an Overlord, on the Map and in Hierarchy, ready for its first unit."],
   ],
   chat: [
     ["chat", "A chat", chatList, "Chats lists pinned and recent conversations, the groups' chats among them; the chat opens in the inspector."],
@@ -1908,7 +1997,7 @@ const DESK = {
     ["permissions", "Permissions", settingsPermissions, "Every standing approval and agent permission, with Revoke. Nothing here is given without the person's answer in a chat or in Connect an agent."],
     ["projects", "Projects", settingsProjects, "The project folders setup found, each with its optional environment and its repositories; a folder is added or a repository removed here."],
     ["remove-repo", "Remove a repository", projectsRemove, "Removing a repository asks first; the files on disk are never touched."],
-    ["content", "Content", settingsContent, "The features and knowledge packs included in the M1ND, and the preferences every agent reads."],
+    ["content", "Content", settingsContent(false), "The features and knowledge packs included in the M1ND, and the preferences every agent reads."],
     ["home", "Open on the phone", homeQr, "A QR code and a short code for 12 hours; a new code replaces the old one."],
     ["reconnecting", "Reconnecting", reconnecting, "If the service stops answering, work is kept and sent when it answers again."],
     ["service-down", "Service stopped", serviceDown, "A stopped service is said plainly, with a way to restart it."],
