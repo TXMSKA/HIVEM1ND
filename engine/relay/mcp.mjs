@@ -1,4 +1,5 @@
 import { createRelay } from './store.mjs';
+import { carryClaudeSession, carryClaudeWake, hostSessionOf } from './carry-over.mjs';
 import { StringDecoder } from 'node:string_decoder';
 
 const MAX_LINE_CHARS = 1_048_576;
@@ -55,6 +56,8 @@ async function callMethod(relay, name, args, defaults = {}) {
   const input = { ...(args ?? {}) };
   if (method === 'register') {
     input.client ??= defaults.client;
+    // A Claude session records the conversation that hosts it, so a later session of the same conversation finds it.
+    if (input.client === 'claude' && defaults.hostSessionId && input.nativeSessionId === defaults.nativeSessionId) input.hostSessionId ??= defaults.hostSessionId;
   }
   if (method === 'reminder') {
     input.client ??= defaults.client;
@@ -136,6 +139,14 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
   if (!mindPath) throw new Error('mindPath is required');
   const relay = await createRelay({ mindPath, hostname, sessionId, client });
   if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
+  // Every Claude session starts this server, so the same conversation under a new native session ID gets its unit and its
+  // wake back here, before any tool call and before a message arrives. Tool calls wait for it; initialize does not.
+  const ownSession = client === 'claude' && typeof env.CLAUDE_CODE_SESSION_ID === 'string' ? env.CLAUDE_CODE_SESSION_ID : null;
+  const carrying = ownSession
+    ? carryClaudeSession({ mindPath, nativeSessionId: ownSession, env, ...(hostname ? { hostname } : {}), startWorker: true })
+      .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; })
+    : Promise.resolve(null);
+  const defaults = { sessionId, client, nativeSessionId: ownSession, hostSessionId: ownSession ? hostSessionOf(env) : null };
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }
     if (!line.trim()) continue;
@@ -160,12 +171,18 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
       else if (method === 'tools/call') {
         if (id === undefined) continue;
         const args = validateToolArguments(params.name, params.arguments ?? {});
+        await carrying;
         let value;
         try {
-          value = await callMethod(relay, params.name, args, { sessionId, client });
+          value = await callMethod(relay, params.name, args, defaults);
         } catch (error) {
           if (error.code !== 'NOT_REGISTERED' || !(await adoptClaudeSession(relay, { client, env }))) throw error;
-          value = await callMethod(relay, params.name, args, { sessionId, client });
+          value = await callMethod(relay, params.name, args, defaults);
+        }
+        if (params.name === 'register' && ownSession && value?.nativeSessionId === ownSession && value?.client === 'claude') {
+          // A hand registration of the same conversation takes the wake it still holds under an earlier session ID.
+          await carryClaudeWake({ mindPath, nativeSessionId: ownSession, unit: value.unit, env, ...(hostname ? { hostname } : {}), startWorker: true })
+            .catch((error) => stderr.write(`Relay wake carry-over unavailable: ${error.message}\n`));
         }
         response = result(value);
       } else {

@@ -171,11 +171,23 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       }).catch((error) => stderr.write(`Relay Cursor wake unavailable: ${error.message}\n`));
     }
     let carried = null;
+    let early = null;
+    const reminderArgs = {
+      ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),
+      ...(nativeSessionId ?? context.nativeSessionId ? { nativeSessionId: nativeSessionId ?? context.nativeSessionId } : {}),
+      client,
+    };
     if (client === 'claude' && (hookEvent === 'SessionStart' || hookEvent === 'UserPromptSubmit')) {
-      // The same conversation under a new native session ID keeps its unit and its wake.
-      carried = await carryClaudeSession({ mindPath, nativeSessionId: nativeSessionId ?? context.nativeSessionId,
-        transcriptPath: input.transcript_path, env, wakeControllerFactory })
-        .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; });
+      // The notice is read first, so a registered session pays nothing more; only an unregistered one looks for the
+      // same conversation under its earlier native session ID, to keep its unit and its wake.
+      const relay = await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
+      early = await relay.reminder(reminderArgs);
+      if (early.registered === false) {
+        carried = await carryClaudeSession({ mindPath, nativeSessionId: nativeSessionId ?? context.nativeSessionId,
+          transcriptPath: input.transcript_path, env, wakeControllerFactory, assumeUnregistered: true })
+          .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; });
+        if (carried) early = null;
+      }
       if (carried?.binding && hookEvent !== 'SessionStart') {
         startClaudeWakeWorker({ binding: carried.binding, mindPath, env, stderr, platform, wakeWorkerSpawner });
       }
@@ -194,12 +206,7 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
     }
     // Reading the inbox is the costly part of a hook, and an event that carries no notice would discard its answer.
     if (!REMINDER_EVENTS[client]?.has(hookEvent)) return null;
-    const relay = await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client });
-    const reminder = await relay.reminder({
-      ...(unit ?? context.unit ? { unit: unit ?? context.unit } : {}),
-      ...(nativeSessionId ?? context.nativeSessionId ? { nativeSessionId: nativeSessionId ?? context.nativeSessionId } : {}),
-      client,
-    });
+    const reminder = early ?? await (await createRelay({ mindPath, sessionId: nativeSessionId ?? context.nativeSessionId, client })).reminder(reminderArgs);
     const notice = carried
       ? `Relay moved this conversation's registration as ${carried.unit} from native session ${carried.previous} to this one${carried.binding ? ', with its wake' : ''}.`
       : '';
