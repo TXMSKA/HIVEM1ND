@@ -420,6 +420,28 @@ export async function registerResource(context, input) {
   return created;
 }
 
+export function editorSearchText(editor) {
+  const values = [editor.title, editor.path, editor.id];
+  for (const screen of editor.document?.screens ?? []) {
+    values.push(screen.title);
+    const walk = (node) => {
+      if (!node) return;
+      values.push(node.name, node.value);
+      for (const child of node.kids ?? []) walk(child);
+    };
+    walk(screen.root);
+  }
+  for (const page of editor.document?.pages ?? []) {
+    for (const [key, value] of Object.entries(page)) {
+      if (key !== 'k' && typeof value === 'string') values.push(value);
+    }
+  }
+  for (const thread of editor.threads ?? []) {
+    for (const message of thread.messages ?? []) values.push(message.text);
+  }
+  return values.filter((value) => typeof value === 'string').join('\n').toLowerCase();
+}
+
 export async function list(context, query = {}) {
   if (query.q != null && String(query.q).length > 200) fail(422, 'invalid_query', 'The search is longer than 200 characters.');
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
@@ -446,7 +468,7 @@ export async function list(context, query = {}) {
   editors.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
   const matched = needle
-    ? editors.filter((item) => `${item.title} ${item.path} ${item.id}`.toLowerCase().includes(needle))
+    ? editors.filter((item) => editorSearchText(item).includes(needle))
     : editors;
   const snapshot = hashText(canonicalJson(matched.map((item) => [item.id, item.revision, item.attachmentRevision, item.commentsRevision, item.openThreads, item.attached, item.activity])));
   return paginate(matched.map(summaryOf), {

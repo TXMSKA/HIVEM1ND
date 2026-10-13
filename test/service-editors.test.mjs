@@ -8,7 +8,7 @@ import { crc32 } from 'node:zlib';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
@@ -917,3 +917,12 @@ function call(port, method, target, { token = null, body = undefined, headers = 
     else req.end();
   });
 }
+
+test('editor search includes screen labels nested text pages and comments', () => {
+  const value = editorSearchText({ title: 'Cart page', path: 'docs/cart.json', document: {
+    screens: [{ title: 'Empty cart', root: { name: 'Root', kids: [{ name: 'Continue button', value: 'Return to shop', kids: [] }] } }],
+    pages: [{ k: 'intro', en: 'Relay manual', es: 'Manual de Relay' }],
+  }, threads: [{ messages: [{ text: 'Add checkout errors' }] }] });
+  for (const query of ['cart page', 'empty cart', 'continue button', 'return to shop', 'relay manual', 'manual de relay', 'checkout errors']) assert.ok(value.includes(query));
+  assert.equal(editorSearchText({ document: { screens: [{ root: { kids: [] } }], pages: [] } }), '');
+});
