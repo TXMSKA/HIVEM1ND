@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { helpText, runCli } from '../cli/index.mjs';
 import { text } from '../engine/texts.mjs';
+import { DICTIONARIES } from '../gui/app/i18n.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 
@@ -52,6 +55,20 @@ function forbiddenForms(value) {
   return [...value.matchAll(FORMS)].map((match) => match[1]);
 }
 
+// Only product templates enter this check. Mounted callers remove record data by
+// element identity; no replacement is applied to a document, command or path.
+export function assertVisibleCopy(language, entries) {
+  const failures = [];
+  for (const [where, value] of entries) {
+    const productWords = [...String(value).matchAll(/(?<![\p{L}\p{N}_./\\-])(mind|mente)(?![\p{L}\p{N}_./\\-])/giu)];
+    for (const match of productWords) failures.push(`${where}: forbidden product word "${match[1]}"`);
+    if (language === 'es') {
+      for (const word of forbiddenForms(String(value))) failures.push(`${where}: "${word}" (${KIND_BY_WORD.get(word.toLowerCase())})`);
+    }
+  }
+  assert.equal(failures.length, 0, `Visible ${language} copy:\n${failures.join('\n')}`);
+}
+
 const read = async (file) => (await readFile(new URL(file, ROOT), 'utf8')).replaceAll('\r\n', '\n');
 const literals = (source) => [...source.matchAll(/"(?:[^"\\\n]|\\.)*"/g)].map((match) => JSON.parse(match[0]));
 const plain = (value) => value.replace(/<\/?[a-z][^>]*>/gi, '');
@@ -76,6 +93,42 @@ async function terminalCopy() {
     (match, index) => literals(match[1]).map((value) => [`cli/index.mjs inline Spanish ${index + 1}`, value]),
   );
   return [...entries, ...inline];
+}
+
+async function copyTable(file, name) {
+  const source = await read(file);
+  const block = source.match(new RegExp(`const ${name} = (\\{[\\s\\S]*?\\n\\});`))?.[1];
+  assert.ok(block, `${file}: ${name} was not extracted`);
+  return runInNewContext(`(${block})`, Object.create(null), { timeout: 1000 });
+}
+
+async function serviceCopy(language) {
+  const table = await copyTable('engine/setup.mjs', 'SERVICE_COPY');
+  assert.deepEqual(Object.keys(table.en), Object.keys(table.es));
+  assert.equal(Object.keys(table[language]).length, 7);
+  return Object.entries(table[language]).map(([key, value]) => [`engine/setup.mjs SERVICE_COPY.${language}.${key}`, value]);
+}
+
+async function guiSourceCopy(language) {
+  const opening = await copyTable('gui/app/main.mjs', 'OPENING_COPY');
+  return [
+    ...Object.entries(DICTIONARIES[language]).map(([key, value]) => [`gui/app/i18n.mjs COPY.${language}.${key}`, value]),
+    ...Object.entries(opening).map(([key, values]) => [`gui/app/main.mjs OPENING_COPY.${language}.${key}`, values[language === 'es' ? 1 : 0]]),
+  ];
+}
+
+async function safeCoreCopy() {
+  const entries = [];
+  for (const file of ['engine/service/identity.mjs', 'engine/service/paths.mjs', 'engine/service/projection.mjs', 'engine/service/service.mjs', 'engine/service/http.mjs']) {
+    const source = await read(file);
+    const errors = [...source.matchAll(/new CoreError\([^,\n]+,\s*'([^']+)',\s*(['"`])((?:\\.|(?!\2)[^\\])*?)\2/g)];
+    assert.ok(errors.length > 5, `${file}: safe error messages were not extracted`);
+    for (const match of errors) {
+      const line = source.slice(0, match.index).split('\n').length;
+      entries.push([`${file}:${line} ${match[1]}`, match[3].replace(/\$\{[^}]*\}/g, '')]);
+    }
+  }
+  return entries;
 }
 
 async function htmlFiles(directory) {
@@ -141,6 +194,8 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
   const sources = {
     'the installer texts': [await installerCopy(), 100],
     'the terminal setup': [await terminalCopy(), 25],
+    'the setup service': [await serviceCopy('es'), 7],
+    'the GUI source templates': [await guiSourceCopy('es'), 400],
     'the Void pages': [await htmlCopy(), 4],
     'the Void document sample': [await voidDocumentCopy(), 1],
     'the Void board sample': [await boardCopy(), 8],
@@ -154,4 +209,36 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
     }
   }
   assert.equal(failures.length, 0, `Spanish copy must be neutral and impersonal, with no voseo and no tuteo:\n${failures.join('\n')}`);
+});
+
+test('the finite product inventory uses M1ND before interpolation in both languages', async () => {
+  for (const language of ['en', 'es']) {
+    assertVisibleCopy(language, [...await serviceCopy(language), ...await guiSourceCopy(language)]);
+    const setup = await copyTable('engine/setup.mjs', 'SETUP_COPY');
+    assertVisibleCopy(language, Object.entries(setup[language]).map(([key, value]) => [`engine/setup.mjs SETUP_COPY.${language}.${key}`, value]));
+    const terminal = await copyTable('cli/index.mjs', 'terminalCopy');
+    assertVisibleCopy(language, Object.entries(terminal[language]).map(([key, value]) => [`cli/index.mjs terminalCopy.${language}.${key}`, value]));
+  }
+  assertVisibleCopy('en', await safeCoreCopy());
+  const help = helpText();
+  assertVisibleCopy('en', help.split('\n').map((line, index) => [`cli/index.mjs helpText line ${index + 1}`, line]));
+  for (const spelling of ['--mind-path', '--remove-mind']) assert.ok(help.includes(spelling), spelling);
+  assert.ok(help.includes('The M1ND folder .m1nd'));
+
+  let output = '';
+  const location = 'C:/fixtures/mind/mente';
+  const result = { action: 'status', machine: 'FIXTURE', machineRecord: false, mind: { count: 1, largest: { path: location, bytes: 42 } } };
+  assert.equal(await runCli(['check', '--mind-path', location], {
+    env: {}, stdout: { write(value) { output += value; } }, stderr: { write() { assert.fail('CLI copy fixture failed'); } },
+    lifecycle: { async check(options) { assert.ok(options.mindPath.endsWith('mind\\mente') || options.mindPath.endsWith('mind/mente')); return result; } },
+  }), 0);
+  assert.ok(output.includes(location));
+  assert.ok(output.includes('M1ND: 1 item'));
+  assertVisibleCopy('en', [['cli/index.mjs check findings', output.replace(location, '')]]);
+});
+
+test('copy failures identify the element or key without reporting record values', () => {
+  assert.throws(() => assertVisibleCopy('en', [['COPY.en.example', 'The mind is unavailable.']]), /COPY.en.example: forbidden product word "mind"/);
+  assert.throws(() => assertVisibleCopy('es', [['button[data-action=retry]', 'Revisá tu carpeta.']]), /button\[data-action=retry\]: "Revisá"/);
+  assertVisibleCopy('es', [['COPY.es.example', 'Revisar la carpeta del M1ND.']]);
 });

@@ -183,10 +183,10 @@ export async function runConfiguredService(options = {}) {
     originPath: located.config.origin.path,
   });
   if (path.resolve(paths.localDirectory) !== path.dirname(located.configFile)) {
-    throw new CoreError(422, 'invalid_path', 'The configured machine directory does not match the mind.');
+    throw new CoreError(422, 'invalid_path', 'The configured machine directory does not match the M1ND.');
   }
   if (path.resolve(paths.staging) !== path.resolve(located.config.stagingPath)) {
-    throw new CoreError(422, 'invalid_path', 'The configured staging path does not match the mind.');
+    throw new CoreError(422, 'invalid_path', 'The configured staging path does not match the M1ND.');
   }
   const projects = options.projects ?? await configuredProjects(paths);
   const store = options.store ?? createRuntimeStore(paths, { ...options, projects });
@@ -218,7 +218,7 @@ async function configuredProjects(paths) {
   const machineText = await readRecord(machineRecordPath(paths.mind, paths.machine));
   const machine = machineText === null ? null : parseMachineRecord(machineText);
   if (machine && (machine.machine !== paths.machine || !path.isAbsolute(machine.mind) || path.resolve(machine.mind) !== path.resolve(paths.mind))) {
-    throw new CoreError(422, 'invalid_body', 'The project registry does not match the configured machine and mind.');
+    throw new CoreError(422, 'invalid_body', 'The project registry does not match the configured machine and M1ND.');
   }
   const names = new Set();
   const projects = [];
@@ -259,7 +259,7 @@ export async function attachOrStart(options, port = options.guardPort) {
     await new Promise((resolve) => setTimeout(resolve, 15));
   }
   if (!bootstrap || !active) throw new CoreError(503, options.attachTimeoutMs == null ? 'service_start_timeout' : 'service_unavailable', 'The guard is occupied by something else.');
-  if (active.mindPath !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
+  if (active.mindPath !== options.paths.mind) throw new CoreError(409, 'service_mind_conflict', 'Another M1ND owns the service lock.');
   if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
     throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
   }
@@ -1165,7 +1165,7 @@ async function readJsonTree(directory, visit) {
 }
 
 function assertReady(options) {
-  if (!options?.paths?.mind || !options?.store) throw new CoreError(503, 'service_unavailable', 'The service needs a configured mind.');
+  if (!options?.paths?.mind || !options?.store) throw new CoreError(503, 'service_unavailable', 'The service needs a configured M1ND.');
 }
 
 async function publishBootstrap(options, httpPort, state) {
@@ -1301,7 +1301,7 @@ async function resolveUserKey(options) {
 }
 
 async function readConfiguredMind(options) {
-  if (!options.mindPath) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  if (!options.mindPath) throw new CoreError(503, 'mind_not_configured', 'The M1ND has no service configuration.');
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const home = options.home ?? options.homeDir ?? os.homedir();
@@ -1312,7 +1312,7 @@ async function readConfiguredMind(options) {
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (error?.code === 'ENOENT') throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+    if (error?.code === 'ENOENT') throw new CoreError(503, 'mind_not_configured', 'The M1ND has no service configuration.');
     throw error;
   }
   const found = [];
@@ -1328,14 +1328,14 @@ async function readConfiguredMind(options) {
     }
     found.push({ machine: entry.name, file, parsed });
   }
-  if (found.length === 0) throw new CoreError(503, 'mind_not_configured', 'The mind has no service configuration.');
+  if (found.length === 0) throw new CoreError(503, 'mind_not_configured', 'The M1ND has no service configuration.');
   const wanted = options.hostname ?? options.machine ?? null;
   const chosen = wanted ? found.find((item) => item.machine === wanted || item.parsed?.machine === wanted) : found.length === 1 ? found[0] : null;
   if (!chosen) throw new CoreError(409, 'service_mind_conflict', 'The configured machine does not match.');
   if (chosen.parsed?.format !== 'hivem1nd-service-config-v1') throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
   const config = bootstrapConfig(chosen.parsed);
   if (path.resolve(config.mindPath) !== mindPath || config.machine !== chosen.machine) {
-    throw new CoreError(422, 'invalid_body', 'The configured mind does not match.');
+    throw new CoreError(422, 'invalid_body', 'The configured M1ND does not match.');
   }
   return { cosmic, mindPath, config, configFile: chosen.file };
 }

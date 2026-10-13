@@ -230,13 +230,13 @@ export function collectIssues(issues) {
 
 async function loadMind(context) {
   const mind = context.paths?.mind;
-  if (!mind) throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+  if (!mind) throw new CoreError(503, 'mind_unavailable', 'The M1ND is not available.');
   try {
     const stats = await lstat(mind);
-    if (!stats.isDirectory()) throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+    if (!stats.isDirectory()) throw new CoreError(503, 'mind_unavailable', 'The M1ND is not available.');
   } catch (error) {
     if (error instanceof CoreError) throw error;
-    throw new CoreError(503, 'mind_unavailable', 'The mind is not available.');
+    throw new CoreError(503, 'mind_unavailable', 'The M1ND is not available.');
   }
   const now = context.now();
   const issues = [];

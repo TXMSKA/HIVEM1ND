@@ -42,10 +42,10 @@ Usage:
   hivem1nd task undo <project> <id>
 
 Commands:
-  init       Configure this machine in eight guided steps
-  evolve     Update the mind and apply pending migrations
+  init       Configure this machine in four guided steps
+  evolve     Update the M1ND and apply pending migrations
   check      Report what a new chat should know, without writing
-  pylon      Attach a repository to the shared mind
+  pylon      Attach a repository to the shared M1ND
   swarm      Show units, tasks and unread messages
   view       Show chats, squads, what waits on the person, tasks, inbox and products
   relay     Send and read messages, register sessions, or configure Relay clients
@@ -54,7 +54,7 @@ Commands:
   task       Change a task status or undo the last change through the service
 
 Relay options:
-  --mind-path <path>       Path to the private mind
+  --mind-path <path>       Path to the private M1ND
   --kit-path <path>        Path to the HIVEM1ND kit
   --session-id <id>        Stable Relay instance identifier
   --native-session-id <id> Native client session identifier
@@ -89,13 +89,13 @@ Evolve options:
 
 Uninstall options:
   --dry-run             Report the plan without removing anything
-  --remove-mind         Also delete the mind folder when it is safe to
+  --remove-mind         Also delete the M1ND folder when it is safe to
 
 Service options:
   service install --dry-run    Print the login plan. This does not register a task.
   --origin-kind <folder|onedrive>
   --origin-path <path>         Explicit origin folder
-  --cosmic-path <path>         Cosmic parent. The mind folder hivem1nd is appended when no mind path is set.
+  --cosmic-path <path>         Cosmic parent. The M1ND folder ${MIND_DIRECTORY_NAME} is appended when no M1ND path is set.
 
 Pylon options:
   --state <branch|main> Store team state on its own branch or on main
@@ -110,7 +110,7 @@ View options:
 
 Shared path options:
   --kit-path <path>     Path to the HIVEM1ND kit (default: installed kit)
-  --mind-path <path>    Path to the private mind
+  --mind-path <path>    Path to the private M1ND
   --home-dir <path>     Agent configuration home
   --hostname <name>     Machine name
 
@@ -476,7 +476,7 @@ function waitingText({ unread, open }) {
 
 function mindText(mind) {
   if (!mind?.count) return "";
-  return `Mind: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
+  return `M1ND: ${mind.count} item${mind.count === 1 ? "" : "s"} to clean (${mind.largest.path}, ${formatBytes(mind.largest.bytes)}); /cleaner offers the cleanup.`;
 }
 
 // A seat is told about its own project only. A session that resolves to no project, such as an
@@ -503,7 +503,7 @@ function modelTexts(mind) {
 
 function formatStatus(result) {
   const lines = [];
-  if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the mind. Run hivem1nd init to set it up.`);
+  if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the M1ND. Run hivem1nd init to set it up.`);
   if (result.missing?.length) {
     lines.push(`Not installed on this machine: ${result.missing.map((asset) => asset.name).join(", ")}. Run /evolve to install.`);
   }

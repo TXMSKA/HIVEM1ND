@@ -56,21 +56,21 @@ const SETUP_COPY = {
 const SERVICE_COPY = {
   en: {
     originKind: 'Origin',
-    originKindHelp: 'A folder origin stays outside the mind. OneDrive is allowed for the origin. Staging stays on the local disk.',
+    originKindHelp: 'A folder origin stays outside the M1ND. OneDrive is allowed for the origin. Staging stays on the local disk.',
     originPath: 'Origin folder',
-    originPathHelp: 'Leave this empty to use the local Cosmic origin for this mind.',
+    originPathHelp: 'Leave this empty to use the local Cosmic origin for this M1ND.',
     folder: 'Folder',
     onedrive: 'OneDrive',
-    serviceFailed: 'The service could not start. Installation can be retried without copying the mind again.',
+    serviceFailed: 'The service could not start. Installation can be retried without copying the M1ND again.',
   },
   es: {
     originKind: 'Origen',
-    originKindHelp: 'Un origen de carpeta queda fuera de la mente. OneDrive se permite como origen. El staging queda en el disco local.',
+    originKindHelp: 'Un origen de carpeta queda fuera del M1ND. OneDrive se permite como origen. El staging queda en el disco local.',
     originPath: 'Carpeta de origen',
-    originPathHelp: 'Dejar vacío para usar el origen local de Cosmic de esta mente.',
+    originPathHelp: 'Dejar vacío para usar el origen local de Cosmic de este M1ND.',
     folder: 'Carpeta',
     onedrive: 'OneDrive',
-    serviceFailed: 'El servicio no pudo iniciarse. Se puede reintentar la instalación sin volver a copiar la mente.',
+    serviceFailed: 'El servicio no pudo iniciarse. Se puede reintentar la instalación sin volver a copiar el M1ND.',
   },
 };
 
@@ -1666,8 +1666,8 @@ async function isDirectoryPath(value) {
 async function validateDestinationType(destination) {
   try {
     const state = await lstat(destination);
-    if (state.isSymbolicLink()) throw new SetupValidationError('The mind path cannot be a symbolic link');
-    if (!state.isDirectory()) throw new SetupValidationError('The mind path must be a directory');
+    if (state.isSymbolicLink()) throw new SetupValidationError('The M1ND path cannot be a symbolic link');
+    if (!state.isDirectory()) throw new SetupValidationError('The M1ND path must be a directory');
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
@@ -1676,10 +1676,10 @@ async function validateDestinationType(destination) {
 function validateMindSelection(mindPath, kitPath) {
   const resolved = path.resolve(mindPath);
   if (normalizePath(resolved) === normalizePath(path.parse(resolved).root)) {
-    throw new SetupValidationError('A filesystem root cannot be used as the mind');
+    throw new SetupValidationError('A filesystem root cannot be used as the M1ND');
   }
   const fixtures = path.join(path.resolve(kitPath), 'fixtures');
-  if (isWithin(fixtures, resolved)) throw new SetupValidationError('The kit fixtures folder cannot be used as a mind');
+  if (isWithin(fixtures, resolved)) throw new SetupValidationError('The kit fixtures folder cannot be used as a M1ND');
 }
 
 async function requireDirectory(value, label) {

@@ -1021,12 +1021,12 @@ async function chooseOpeningFolder(app) {
     else {
       // A second setup window keeps the current host, credential and drafts alive.
       const window = app.root.ownerDocument.defaultView?.open?.("", "_blank");
-      if (!window) throw new ApiError(0, "folder_unavailable", app.language === "es" ? "No se pudo abrir la selección de carpeta." : "The folder selection could not be opened.");
+      if (!window) throw new ApiError(0, "folder_unavailable", text(app.language, "folderUnavailable"));
       try {
         window.opener = null;
         const result = await request(app.api, "POST", "/viewer/folder", { body: {} });
         const target = new URL(result.data.url);
-        if (target.protocol !== "http:" || target.hostname !== "127.0.0.1" || target.pathname !== "/" || target.username || target.password || target.search) throw new ApiError(0, "invalid_url", "The folder selection could not be opened.");
+        if (target.protocol !== "http:" || target.hostname !== "127.0.0.1" || target.pathname !== "/" || target.username || target.password || target.search) throw new ApiError(0, "invalid_url", text(app.language, "folderUnavailable"));
         window.location.replace(target.href);
       } catch (error) {
         window.close();
@@ -1055,7 +1055,7 @@ function emptyWorkspace(app, t) {
   const side = element(document, "aside", { class: "panel side" }, tabs, search,
     element(document, "div", { class: "empty-side" }, element(document, "h2", { text: openingText(app, "noUnits") }), element(document, "p", { text: openingText(app, "first") })),
   );
-  const master = element(document, "div", { class: "empty-master", "data-unit": "root:master" }, icon(document, "person"), element(document, "span", { class: "map-label", text: app.language === "es" ? "Usted" : "You" }));
+  const master = element(document, "div", { class: "empty-master", "data-unit": "root:master" }, icon(document, "person"), element(document, "span", { class: "map-label", text: t("person") }));
   const stage = element(document, "section", { class: "panel stage empty-stage" }, master,
     element(document, "div", { class: "empty-overseer", "aria-hidden": "true" }),
     element(document, "p", { class: "empty-placeholder", text: openingText(app, "goesHere") }),
@@ -3163,7 +3163,7 @@ function renderFailure(app, error) {
   releaseBootstrapAnnouncement(app, message);
 }
 
-const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the mind.", "Leyendo la mente."]);
+const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the M1ND.", "Leyendo el M1ND."]);
 
 function renderStatus(app, key) {
   if (app.api.token && app.layout !== "phone") {

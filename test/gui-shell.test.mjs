@@ -24,6 +24,7 @@ import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-da
 import { createGuiFixture } from "./gui-fixture.mjs";
 import { closeGuiHost, createFolderReopen, startGui } from "../gui/index.mjs";
 import { dispose as disposeCoreFixture, makeCoreFixture } from "./core-fixture.mjs";
+import { assertVisibleCopy } from "./spanish-register.test.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
@@ -37,7 +38,7 @@ test("English and Spanish use the same copy keys", () => {
   assert.equal(text("en", "chats"), "Chats");
   assert.equal(text("es", "chats"), "Chats");
   assert.equal(text("es", "waiting"), "Pendientes");
-  assert.equal(text("es", "approveAlways"), "Aprobar siempre");
+  assert.equal(text("es", "approveAlways"), "Siempre para esta unidad");
   assert.equal(text("es", "sendBack"), "Devolver");
   assert.equal(text("es", "watch"), "Seguir");
   assert.equal(text("es", "document"), "Documento");
@@ -1459,6 +1460,161 @@ function textNodes(node, found = []) {
   for (const child of node?.children ?? []) textNodes(child, found);
   return found;
 }
+
+// This is the current mounted inventory, not a sweep over arbitrary DOM data.
+// Record content and technical commands are exceptions at their owning elements;
+// buttons, hints, accessible names and live regions still enter the copy gate.
+function mountedVisibleCopy(booted) {
+  const { document, app } = booted;
+  const ownData = new Set();
+  const prefixes = new Set();
+  const own = (selector) => { for (const node of document.querySelectorAll(selector)) ownData.add(node); };
+  own("[data-message], [data-mailbox-message], [data-mailbox-detail], .comment-text, .comment-author, .bubble-meta, .chat-members, [data-grant-action], [data-grant-pattern], [data-chip], [data-board-target], [data-lead-choice], [data-mailbox-unit]");
+  own(".row-unit, .row-chat, .row-group, .row-issue, .row-editor, .unit-card h3");
+  // The fixture selector implements single element selectors, so relational
+  // exceptions are resolved from each actual record container.
+  for (const card of document.querySelectorAll(".unit-card")) {
+    for (const node of card.children) {
+      if (node.tag === "h3") ownData.add(node);
+      if (node.tag === "p") prefixes.add(node);
+    }
+  }
+  for (const facts of document.querySelectorAll("[data-unit-facts]")) {
+    facts.children.forEach((node, index) => (index < 6 ? prefixes : ownData).add(node));
+  }
+  for (const card of document.querySelectorAll("[data-approval], [data-task], [data-task-detail]")) {
+    for (const node of card.children) {
+      if (node.tag === "h3" || node.tag === "p" && !node.getAttribute("data-requirements") && !node.getAttribute("data-approved-by")) ownData.add(node);
+    }
+  }
+  for (const node of document.querySelectorAll("[data-requirements], [data-approved-by]")) prefixes.add(node);
+  for (const node of document.querySelectorAll(".map-label")) {
+    if (!String(node.parent?.className).includes("empty-master")) ownData.add(node);
+  }
+  const entries = [];
+  const visit = (node, identity, recordText = false) => {
+    if (node.getAttribute?.("aria-hidden") === "true" || node.getAttribute?.("hidden") != null) return;
+    if (node.getAttribute?.("data-secret") != null || node.getAttribute?.("data-void") != null || node.getAttribute?.("data-screen") != null) return;
+    const action = node.getAttribute?.("data-action");
+    const where = action ? `${identity}[data-action=${action}]` : identity;
+    let value = node.textContent ?? "";
+    if (ownData.has(node) || recordText && node.tag === "#text") value = "";
+    if (prefixes.has(node)) value = value.split(": ")[0];
+    if (node.getAttribute?.("data-opening-cause") != null && app?.selectedFolder) value = value.replace(app.selectedFolder, "");
+    const title = node.getAttribute?.("data-editor-title");
+    if (title) value = value.replace(title, "");
+    if (value.trim()) entries.push([`${where}.text`, value]);
+    for (const name of ["aria-label", "title", "placeholder", "alt"]) {
+      const label = node.getAttribute?.(name);
+      if (label) entries.push([`${where}.${name}`, label]);
+    }
+    (node.children ?? []).forEach((child, index) => visit(child, `${where}/${child.tag}[${index}]`, ownData.has(node)));
+  };
+  visit(document.body, "body");
+  return entries;
+}
+
+test("mounted copy exceptions belong to records and never hide nearby product labels", () => {
+  const { document, root } = createTestDocument(1440);
+  const command = document.createElement("p");
+  command.setAttribute("data-grant-pattern", "true");
+  command.textContent = "printf 'tu mente' --mind-path C:/fixtures/mind/keep";
+  root.append(command);
+  const content = document.createElement("div");
+  content.setAttribute("data-void", "true");
+  content.textContent = "Tu mente: vos podés escribir esto.";
+  root.append(content);
+  const booted = { document, app: {} };
+  assertVisibleCopy("es", mountedVisibleCopy(booted));
+  const button = document.createElement("button");
+  button.setAttribute("data-action", "retry");
+  button.textContent = "Revisá tu mente";
+  root.append(button);
+  assert.throws(() => assertVisibleCopy("es", mountedVisibleCopy(booted)), /data-action=retry/);
+  assert.equal(command.textContent, "printf 'tu mente' --mind-path C:/fixtures/mind/keep");
+  assert.equal(content.textContent, "Tu mente: vos podés escribir esto.");
+});
+
+for (const language of ["en", "es"]) test(`current mounted ${language} states use M1ND and neutral product copy`, async (t) => {
+  const fixture = await createGuiFixture({ scenario: language === "es" ? "spanish" : "standard" });
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  const inventory = new Map();
+  const capture = (state, booted = desktop) => {
+    booted.app.language = language;
+    renderShell(booted.app);
+    const entries = mountedVisibleCopy(booted);
+    assert.ok(entries.length > 3, `${state}: the mounted copy inventory was empty`);
+    assertVisibleCopy(language, entries.map(([where, value]) => [`${state} ${where}`, value]));
+    inventory.set(state, entries.length);
+  };
+  capture("Map and Hierarchy");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === executor.id && desktop.app.thread?.messages?.length, "The copy inventory did not open the unit and its chat.");
+  const message = desktop.app.thread.messages[0];
+  const userContent = "Tu mente: vos podés usar mind y --mind-path C:/fixtures/mind/keep.";
+  message.body = userContent;
+  capture("Chat, unit, session, approvals and task review");
+  assert.equal(message.body, userContent);
+  const always = desktop.root.querySelector("[data-action='approve-always']");
+  assert.ok(always);
+  assert.equal(always.textContent, text(language, "approveAlways"));
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  capture("Waiting");
+  click(desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The copy inventory did not open the unit form.");
+  capture("New unit form");
+  desktop.document.querySelector("dialog[open]").close();
+  click(desktop.root.querySelector("[data-action='start-session']"));
+  await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The copy inventory did not open the session form.");
+  capture("Session form");
+  desktop.document.querySelector("dialog[open]").close();
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.root.querySelector("[data-settings]"), "The copy inventory did not open Settings.");
+  capture("Settings and service");
+  for (const [mode, kind] of [["blueprint", "blueprint"], ["document", "void"]]) {
+    navigate(desktop.app, mode);
+    await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.kind === kind && item.title === (kind === "blueprint" ? "Cart" : "Release notes")), "The copy inventory did not load the library.");
+    capture(`${mode} library`);
+    const item = desktop.app.editors.catalog.find((item) => item.kind === kind && item.title === (kind === "blueprint" ? "Cart" : "Release notes"));
+    desktop.app.editors.catalogWindow.height = 4000;
+    renderShell(desktop.app);
+    click(desktop.root.querySelector(`[data-id='${item.id}']`));
+    await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector(kind === "blueprint" ? ".board-host" : "[data-void]"), "The copy inventory did not open the resource.");
+    capture(`${mode} content and comments`);
+  }
+  navigate(desktop.app, "focus");
+  capture("Focus");
+  desktop.root.listeners.get("pointermove")[0]();
+  capture("Focus tools");
+  const phone = await bootApp(fixture.phoneUrl, 390, []);
+  t.after(() => dispose(phone.app));
+  capture("Phone Hierarchy", phone);
+  const phoneUnit = phone.app.unitList.catalog.find((unit) => unit.id === executor.id);
+  phone.app.activeHandlers.onActivate({ id: phoneUnit.id, kind: "unit", unit: phoneUnit }, "double");
+  await waitFor(() => phone.app.thread?.messages?.length, "The copy inventory did not open the phone chat.");
+  capture("Phone chat", phone);
+  navigate(phone.app, "waiting");
+  capture("Phone Waiting", phone);
+  await fixture.control.emit("home.changed", { reason: "expired", home: { enabled: false } });
+  await waitFor(() => phone.root.querySelector("[data-home-code]"), "The copy inventory did not end phone access.");
+  capture("Phone access ended and pairing", phone);
+  const first = await createGuiFixture({ scenario: "first-run" });
+  t.after(() => first.close());
+  const empty = await bootApp(first.desktopUrl, 1440, []);
+  t.after(() => dispose(empty.app));
+  capture("Empty M1ND", empty);
+  empty.app.bootReading = true;
+  capture("Reading M1ND", empty);
+  empty.app.bootReading = false;
+  empty.app.bootFailed = true;
+  empty.app.selectedFolder = "C:/fixtures/mind/keep";
+  empty.app.bootError = new ApiError(0, "timeout", text(language, "requestTimeout"));
+  capture("Unreadable M1ND", empty);
+  assert.equal(inventory.size, 19);
+});
 
 test("unit and session forms use machines and clients, and the inspector shows the contract facts", async (t) => {
   const fixture = await createGuiFixture();
