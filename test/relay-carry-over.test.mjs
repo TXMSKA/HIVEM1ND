@@ -1,6 +1,6 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -236,4 +236,70 @@ test('registering by hand in the same host conversation takes the wake the earli
   assert.notEqual(again.isError, true);
   assert.equal((await controller.status({ ...old, nativeSessionId: 'session-b' })).enabled, true);
   assert.equal((await controller.status(old)).enabled, false);
+});
+
+async function serveOnce(mindPath, env, request, spawns) {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const chunks = [];
+  stdout.on('data', (chunk) => chunks.push(chunk));
+  const server = serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client: 'claude', sessionId: `mcp-${Math.random()}`, stdin, stdout, stderr: new PassThrough(), env, platform: 'win32',
+    wakeWorkerSpawner(options) { spawns.push(options.binding); return { ready: Promise.resolve({ state: 'running' }) }; } });
+  stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: request })}\n`);
+  await server;
+  return JSON.parse(Buffer.concat(chunks).toString('utf8').trim()).result;
+}
+
+const pipeEnv = (config, nativeSessionId) => ({ CLAUDE_CONFIG_DIR: config, CLAUDE_CODE_SESSION_ID: nativeSessionId,
+  CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\carry', CLAUDE_CODE_MESSAGING_TOKEN: 'ephemeral' });
+
+test('a chat that registers a unit takes the consent an earlier session of the unit holds, and starts its worker', async (context) => {
+  const { mindPath, config } = await fixture(context);
+  const relay = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'old-mcp', client: 'claude' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'session-a', client: 'claude' });
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: 'RELAYTEST', sink: async () => ({ status: 'submitted' }) });
+  const old = { unit: 'overseer', nativeSessionId: 'session-a', client: 'claude', machine: 'RELAYTEST' };
+  await controller.enable({ ...old, windowHours: 5 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const spawns = [];
+  const registered = await serveOnce(mindPath, pipeEnv(config, 'session-z'),
+    { name: 'register', arguments: { unit: 'overseer', nativeSessionId: 'session-z', client: 'claude', activity: 'active' } }, spawns);
+  assert.notEqual(registered.isError, true);
+  const moved = { ...old, nativeSessionId: 'session-z' };
+  assert.equal((await controller.status(moved)).enabled, true);
+  assert.equal((await controller.status(moved)).durationHours, 5);
+  assert.equal((await controller.status(old)).enabled, false);
+  assert.deepEqual(spawns, [moved]);
+});
+
+test('a session whose process starts again under the same ID gets its wake back from the new process, also after the old pipe paused it', async (context) => {
+  const { mindPath, config } = await fixture(context);
+  const relay = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'old-mcp', client: 'claude' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'session-a', client: 'claude', activity: 'active' });
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: 'RELAYTEST', sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'session-a', client: 'claude', machine: 'RELAYTEST' };
+  await controller.enable({ ...binding, windowHours: 7 });
+  // The worker of the earlier process could not reach the session through its gone pipe and stopped after five errors.
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const policy = JSON.parse(await readFile(path.join(policies, file), 'utf8'));
+  await writeFile(path.join(policies, file), JSON.stringify({ ...policy, pausedReason: 'error-budget-exhausted', consecutiveErrors: 5,
+    lastError: { code: 'SINK_NOT_SUBMITTED', at: new Date().toISOString() } }));
+  assert.equal((await controller.status(binding)).enabled, false);
+
+  const spawns = [];
+  const inbox = await serveOnce(mindPath, pipeEnv(config, 'session-a'), { name: 'list_inbox', arguments: {} }, spawns);
+  assert.equal(inbox.structuredContent.unit, 'overseer');
+  const status = await controller.status(binding);
+  assert.equal(status.enabled, true);
+  assert.equal(status.pausedReason, null);
+  assert.equal(status.durationHours, 7);
+  assert.deepEqual(spawns, [binding]);
+
+  await controller.disable(binding);
+  await serveOnce(mindPath, pipeEnv(config, 'session-a'), { name: 'list_inbox', arguments: {} }, spawns);
+  assert.equal(spawns.length, 1, 'a consent the person ended is not started again');
+  assert.equal((await controller.status(binding)).enabled, false);
 });

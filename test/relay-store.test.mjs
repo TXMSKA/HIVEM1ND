@@ -687,3 +687,23 @@ test('a chat that registers again as the same unit keeps its record, and a chang
   const other = await (await instance('process-c', 'codex')).register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
   assert.notEqual(other.registrationId, back.registrationId, 'another client never shares a record');
 });
+
+test('a chat that registers its unit again after another chat registered it becomes the newest registration of the unit', async (context) => {
+  const { mind } = await fixture(context);
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const instance = async (sessionId) => createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId, client: 'claude' });
+  const newest = async (relay) => (await relay.wakePersistence.latestUnitRegistration({ unit: 'overseer', client: 'claude', machine: 'TESTBOX' })).nativeSessionId;
+  const chatA = await instance('process-a');
+  const first = await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' });
+  await tick();
+  const chatB = await instance('process-b');
+  await chatB.register({ unit: 'overseer', nativeSessionId: 'chat-b' });
+  assert.equal(await newest(chatA), 'chat-b');
+  await tick();
+  const again = await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' });
+  assert.notEqual(again.registrationId, first.registrationId);
+  assert.equal(await newest(chatB), 'chat-a');
+  assert.equal((await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' })).registrationId, again.registrationId, 'the newest one keeps its record');
+  assert.equal(await (await createRelay({ mindPath: mind, hostname: 'OTHERBOX', client: 'claude' })).wakePersistence.latestUnitRegistration({ unit: 'overseer', client: 'claude', machine: 'TESTBOX' }), null,
+    'another machine never answers for this one');
+});

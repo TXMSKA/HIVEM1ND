@@ -743,3 +743,32 @@ test('delivery status shows the state the recipient worker recorded, then the re
   assert.equal(replied.replied.id, reply.id);
   await handle.stop();
 });
+
+test('a worker whose session a newer registration of the unit replaced hands the consent over instead of waking it', async (context) => {
+  const { mind, sender, binding } = await fixture(context);
+  const notices = [];
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  context.after(() => wake.stopAll());
+  await wake.enable({ ...binding, windowHours: 6, maxHandoffs: 9 });
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const successor = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'executor-chat-2', client: 'claude' });
+  await successor.register({ unit: 'executor-alpha', nativeSessionId: 'executor-native-2' });
+  const message = await sender.send({ to: 'executor-alpha', subject: 'Work', body: 'body' });
+  assert.equal((await handle.done).reason, 'superseded');
+  assert.equal(notices.length, 0, 'the replaced session is never woken');
+  const moved = { ...binding, nativeSessionId: 'executor-native-2' };
+  const status = await wake.status(moved);
+  assert.equal(status.enabled, true);
+  assert.equal(status.durationHours, 6);
+  assert.equal(status.wakeBudget, 9);
+  assert.equal((await wake.status(binding)).enabled, false);
+  assert.equal(await wake.takeOver(binding), null, 'a session that is not the newest registration of its unit takes nothing');
+  const next = wake.start(moved);
+  assert.equal((await next.ready).ownsLease, true);
+  await until(() => notices.length === 1);
+  assert.deepEqual(notices[0].messageIds, [message.id]);
+  assert.equal(notices[0].binding.nativeSessionId, 'executor-native-2');
+  await next.stop();
+});

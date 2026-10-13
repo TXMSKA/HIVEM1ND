@@ -75,6 +75,8 @@ So that another machine can still see whether the worker of a binding is alive, 
 
 `workers/` and `locks/` files that earlier versions wrote under `user/relay/wake/` are ignored. When it starts, the worker of a machine removes its own old lease files and the old locks that are over ten minutes old.
 
+A consent follows the newest registration of its unit on the machine. When a chat registers a unit through the MCP server, the enabled consent that an earlier session of the same unit and client holds on this machine moves to it with the same window and handoff budget, and the earlier one ends as `superseded`. A chat that registers its unit again after another chat did gets a new record and becomes the newest. A worker checks before every attempt and once a minute: when a newer registration of its unit exists, it moves the consent the same way and ends instead of waking a session that was replaced. The Claude MCP server starts the worker of its own consent after such a move, and when its session's process starts again under the same ID, it enables that consent again with the same window, also one that the errors of the earlier process's pipe paused, so the worker uses the new pipe.
+
 ## Claude Code Desktop wake
 
 On native Windows, Claude Code must be v2.1.234 or later for same-machine session messages; sessions using third-party providers or with feature-flag fetching disabled require v2.1.248. The target must expose `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` to its own Bash/PowerShell child process. The supported attachment command reads those values from that process environment and never accepts a guessed or copied native session ID:

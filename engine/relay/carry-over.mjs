@@ -139,6 +139,34 @@ async function moveWake({ mindPath, from, nativeSessionId, unit, env, hostname, 
 }
 
 /**
+ * Keeps the wake of this Claude session served from the current process. A worker reaches the session through the pipe of
+ * the process that started it, so after the session's process starts again (`restart`), its consent is enabled again with
+ * the same window, which ends the old worker, also one paused by the errors of the gone pipe; otherwise a worker is started
+ * only when none runs. Returns the binding whose worker was started, or null.
+ */
+export async function resumeClaudeWake({ mindPath, nativeSessionId, env = process.env, hostname = os.hostname(), wakeControllerFactory,
+  wakeWorkerSpawner, platform = process.platform, restart = false }) {
+  if (!SAFE_ID.test(nativeSessionId ?? '') || env.CLAUDE_CODE_SESSION_ID !== nativeSessionId || !claudeWakeCapability({ env, platform }).available) return null;
+  const relay = await createRelay({ mindPath, hostname, sessionId: nativeSessionId, client: 'claude' });
+  const registration = await relay.wakePersistence.latestRegistration({ nativeSessionId, client: 'claude', machine: hostname });
+  if (!registration) return null;
+  const binding = { unit: registration.unit, nativeSessionId, client: 'claude', machine: hostname };
+  const { createRelayWakeController } = await import('./wake.mjs');
+  const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname, sink: async () => ({ status: 'not_submitted' }) });
+  const status = await controller.status(binding);
+  const consented = !['disabled', 'expired'].includes(status.worker.state);
+  if (restart && consented && (status.enabled || status.pausedReason === 'error-budget-exhausted')) {
+    await controller.enable({
+      ...binding, maxHandoffs: status.wakeBudget,
+      ...(status.unlimited ? { unlimited: true, manualConsent: true } : { windowHours: status.durationHours, ...(status.extended ? { extended: true } : {}) }),
+    });
+  } else if (!status.enabled || status.worker.state === 'running') return null;
+  const child = (wakeWorkerSpawner ?? spawnClaudeWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
+  child.ready.catch(() => {});
+  return binding;
+}
+
+/**
  * After a session registers by hand as a unit, moves the wake that the same host conversation still holds under an
  * earlier native session ID of that unit. Returns the new binding or null.
  */

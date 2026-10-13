@@ -698,6 +698,30 @@ export async function createRelay(options = {}) {
       client: scalar(args.client, 'client', 80), machine: safeMachine(args.machine) });
   }
 
+  // The newest registration of a unit for a client on this machine, among the native sessions whose newest registration names
+  // that unit. A wake follows it, because a chat that registered the unit again replaced the session an older consent names.
+  async function latestUnitRegistration(args) {
+    validateArgs(args, 'latestUnitRegistration', ['unit', 'client', 'machine']);
+    const unit = validUnit(args.unit);
+    const client = scalar(args.client, 'client', 80);
+    if (safeMachine(args.machine) !== hostname) return null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const records = Object.values((await currentRegistrationIndex()).latest).flat()
+        .filter((record) => record.machine === hostname && record.client === client && record.unit.toLowerCase() === unit.toLowerCase());
+      if (!records.length) return null;
+      const [latest] = records.sort((a, b) => b.registeredAt.localeCompare(a.registeredAt) || b.registrationId.localeCompare(a.registrationId));
+      if (!verifiedRegistrations.has(latest.registrationId)) {
+        let stored = null;
+        try { stored = await readJsonSafe(mindPath, path.join(sessionsPath, `${latest.registrationId}.json`)); }
+        catch (error) { if (!isSkippableRecordError(error)) throw error; }
+        if (JSON.stringify(stored) !== JSON.stringify(latest)) { registrationIndex = emptyRegistrationIndex(); continue; }
+        verifiedRegistrations.add(latest.registrationId);
+      }
+      return toPublicRegistration(latest);
+    }
+    return null;
+  }
+
   const wakeRoot = path.join(relayPath, 'wake');
   const localRoot = relayLocalStatePath(canonicalMind);
   const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index']);
@@ -875,7 +899,8 @@ export async function createRelay(options = {}) {
     throw relayError('WAKE_STORE_BUSY', 'Wake storage is temporarily busy; retry later.');
   }
 
-  const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, latestRegistration: latestWakeRegistration, read: readWakeRecord, list: listWakeRecords,
+  const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, latestRegistration: latestWakeRegistration,
+    latestUnitRegistration, read: readWakeRecord, list: listWakeRecords,
     write: writeWakeRecord, remove: removeWakeRecord, withLock: withWakeLock, removeLegacy: removeLegacyWakeRecords });
 
   // The newest registration of the native session this instance serves. The registration may come from an earlier process of
@@ -1062,12 +1087,14 @@ export async function createRelay(options = {}) {
       // The conversation a client hosts the session in, when it has one that outlives the native session ID.
       const hostSessionId = args.hostSessionId === undefined || args.hostSessionId === null ? null : scalar(args.hostSessionId, 'hostSessionId', 180);
       // A chat registers again whenever its client starts a new MCP process. When it is still registered as the same unit, that
-      // record stays, so the consent that names the chat is not outdated and the registrations do not pile up.
+      // record stays, so the consent that names the chat is not outdated and the registrations do not pile up. A chat that is
+      // no longer the newest registration of its unit gets a new record, since a wake follows the newest one.
       if (activity === null && quota === null) {
         const latest = (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
           .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
         if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id
-          && (hostSessionId === null || latest.hostSessionId === hostSessionId)) {
+          && (hostSessionId === null || latest.hostSessionId === hostSessionId)
+          && (client === null || (await latestUnitRegistration({ unit, client, machine: hostname }))?.nativeSessionId === nativeSessionId)) {
           currentRegistration = latest;
           return toPublicRegistration(latest);
         }

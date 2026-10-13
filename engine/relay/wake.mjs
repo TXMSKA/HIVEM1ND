@@ -301,7 +301,7 @@ export async function createRelayWakeController(options = {}) {
       lastError: policy?.lastError ?? null,
     };
   }
-  async function disablePolicy(binding, reason = 'manual') {
+  async function disablePolicy(binding, reason = 'manual', { wait = true } = {}) {
     const key = bindingHash(binding);
     const now = nowMs(clock);
     const policy = await mutatePolicy(binding, key, async (current) => {
@@ -315,7 +315,11 @@ export async function createRelayWakeController(options = {}) {
       return { ...current, enabled: false, disabledAt: iso(now), disabledReason: reason };
     });
     const worker = workers.get(key);
-    if (worker) await worker.stop(reason);
+    if (worker) {
+      const stopped = worker.stop(reason);
+      // A worker that hands its own consent over cannot wait for itself to end.
+      if (wait) await stopped;
+    }
     return policy;
   }
 
@@ -346,6 +350,37 @@ export async function createRelayWakeController(options = {}) {
   async function disable(bindingValue) {
     const binding = makeBinding(bindingValue);
     await disablePolicy(binding, 'manual');
+    return inspect(binding);
+  }
+
+  // A consent follows the newest registration of its unit on this machine. When the binding is that registration, the
+  // enabled consent of an earlier session of the same unit and client moves to it with the same window and budget, and the
+  // earlier one ends as superseded. Returns the status of the binding, or null when there was nothing to take.
+  async function takeOver(bindingValue) {
+    const binding = makeBinding(bindingValue);
+    const newest = await persistence.latestUnitRegistration({ unit: binding.unit, client: binding.client, machine: binding.machine });
+    if (!newest || newest.nativeSessionId !== binding.nativeSessionId) return null;
+    const now = nowMs(clock);
+    const earlier = [];
+    for (const { value: policy } of await persistence.list('policies')) {
+      const other = policy?.binding;
+      if (policy?.kind !== 'relay-wake-policy' || policy.enabled !== true || !plainObject(other) || other.machine !== hostname
+        || other.client !== binding.client || String(other.unit).toLowerCase() !== binding.unit.toLowerCase()
+        || other.nativeSessionId === binding.nativeSessionId) continue;
+      if (policy.unlimited !== true && !(Date.parse(policy.deadlineAt) > now)) continue;
+      earlier.push(policy);
+    }
+    if (!earlier.length) return null;
+    const [latest] = earlier.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+    if (!freshPolicy(await readPolicy(binding, bindingHash(binding)), now)) {
+      await enable({
+        ...binding, maxHandoffs: latest.maxHandoffs,
+        ...(latest.unlimited ? { unlimited: true, manualConsent: true } : { windowHours: latest.durationHours, ...(latest.extended ? { extended: true } : {}) }),
+      });
+    }
+    for (const policy of earlier) {
+      try { await disablePolicy(makeBinding(policy.binding), 'superseded', { wait: false }); } catch { /* a malformed policy is reported by status */ }
+    }
     return inspect(binding);
   }
 
@@ -513,6 +548,15 @@ export async function createRelayWakeController(options = {}) {
         consecutiveErrors: (policy.consecutiveErrors ?? 0) + 1,
       } : policy);
     }
+    // A chat of the unit that registered under another native session after this one replaced it: the consent moves to the
+    // newest registration, whose own worker wakes it, and this worker ends instead of waking a session that is gone.
+    async function superseded(registration) {
+      const newest = await persistence.latestUnitRegistration({ unit: binding.unit, client: binding.client, machine: binding.machine });
+      if (!newest || newest.nativeSessionId === binding.nativeSessionId || newest.registeredAt <= registration.registeredAt) return false;
+      try {
+        return Boolean(await takeOver({ unit: newest.unit, nativeSessionId: newest.nativeSessionId, client: binding.client, machine: binding.machine }));
+      } catch { return false; }
+    }
     async function absorbError(error, fallback, generation) {
       const current = await recordError(stableCode(error.code, fallback), generation);
       if ((current?.consecutiveErrors ?? 0) >= 5) {
@@ -642,6 +686,7 @@ export async function createRelayWakeController(options = {}) {
         notedAt = now;
         // The note is advisory, so a policy that OneDrive is still syncing skips this minute's note instead of counting against the error budget.
         await noteWorker('running').catch(() => {});
+        if (await superseded(registration)) return 'superseded';
       }
       let inbox;
       try { inbox = await relay.inbox({ unit: binding.unit, limit: MAX_INBOX_MESSAGES }); }
@@ -669,6 +714,8 @@ export async function createRelayWakeController(options = {}) {
         return entry.state === 'not_submitted' && Date.parse(entry.retryAt) <= nowMs(clock);
       });
       if (!candidates.length) return 'continue';
+      // Every attempt checks again, so a session replaced between two attempts is not woken in vain until its retries run out.
+      if (await superseded(registration)) return 'superseded';
       await deliverBatch(policy, registration, candidates);
       return controller.signal.aborted ? stopReason ?? 'stopped' : 'continue';
     }
@@ -745,7 +792,7 @@ export async function createRelayWakeController(options = {}) {
     return handle;
   }
 
-  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop });
+  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver });
 }
 
 async function isProcessAlive(pid) {

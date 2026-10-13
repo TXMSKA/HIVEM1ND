@@ -1,5 +1,5 @@
 import { createRelay } from './store.mjs';
-import { carryClaudeSession, carryClaudeWake, hostSessionOf } from './carry-over.mjs';
+import { carryClaudeSession, carryClaudeWake, hostSessionOf, resumeClaudeWake } from './carry-over.mjs';
 import { StringDecoder } from 'node:string_decoder';
 
 const MAX_LINE_CHARS = 1_048_576;
@@ -128,7 +128,8 @@ function validSessionId(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 180 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
-export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env }) {
+export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env,
+  wakeControllerFactory, wakeWorkerSpawner, platform = process.platform }) {
   if (!mindPath) throw new Error('mindPath is required');
   const ownSession = client === 'claude' && validSessionId(env.CLAUDE_CODE_SESSION_ID) ? env.CLAUDE_CODE_SESSION_ID : null;
   // A client starts this server again after a restart or a reconnect, and the new process is a new instance. The native
@@ -136,12 +137,36 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
   const served = ownSession ?? (validSessionId(nativeSessionId) ? nativeSessionId : null);
   const relay = await createRelay({ mindPath, hostname, sessionId, client, ...(served ? { nativeSessionId: served } : {}) });
   if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
+  const wakeOptions = { mindPath, env, ...(hostname ? { hostname } : {}), wakeControllerFactory, wakeWorkerSpawner, platform };
+  let controller = null;
+  async function wakeController() {
+    const { createRelayWakeController } = await import('./wake.mjs');
+    controller ??= await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, ...(hostname ? { hostname } : {}), sink: async () => ({ status: 'not_submitted' }) });
+    return controller;
+  }
   // Every Claude session starts this server, so the same conversation under a new native session ID gets its unit and its
-  // wake back here, before any tool call and before a message arrives. Tool calls wait for it; initialize does not.
-  const carrying = ownSession
-    ? carryClaudeSession({ mindPath, nativeSessionId: ownSession, env, ...(hostname ? { hostname } : {}), startWorker: true })
-      .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; })
-    : Promise.resolve(null);
+  // wake back here, before any tool call and before a message arrives. Tool calls wait for it; initialize does not. A session
+  // whose process started again under the same ID gets its wake back from this process, whose pipe the old worker lacks.
+  const carrying = ownSession ? (async () => {
+    const carried = await carryClaudeSession({ ...wakeOptions, nativeSessionId: ownSession, startWorker: true })
+      .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; });
+    if (!carried?.binding) {
+      await resumeClaudeWake({ ...wakeOptions, nativeSessionId: ownSession, restart: true })
+        .catch((error) => stderr.write(`Relay wake resume unavailable: ${error.message}\n`));
+    }
+    return carried;
+  })() : Promise.resolve(null);
+  // A registration takes the consent that an earlier session of the same unit holds on this machine, so a message wakes the
+  // chat that registered last instead of a session it replaced.
+  async function followWake(registration) {
+    const own = Boolean(ownSession && registration.nativeSessionId === ownSession && registration.client === 'claude');
+    // A hand registration of the same conversation takes the wake it still holds under an earlier session ID.
+    if (own && await carryClaudeWake({ ...wakeOptions, nativeSessionId: ownSession, unit: registration.unit, startWorker: true })) return;
+    if (!registration.client) return;
+    await (await wakeController()).takeOver({ unit: registration.unit, nativeSessionId: registration.nativeSessionId,
+      client: registration.client, machine: registration.machine });
+    if (own) await resumeClaudeWake({ ...wakeOptions, nativeSessionId: ownSession });
+  }
   const defaults = { sessionId, client, nativeSessionId: ownSession, hostSessionId: ownSession ? hostSessionOf(env) : null };
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }
@@ -169,11 +194,7 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         const args = validateToolArguments(params.name, params.arguments ?? {});
         await carrying;
         const value = await callMethod(relay, params.name, args, defaults);
-        if (params.name === 'register' && ownSession && value?.nativeSessionId === ownSession && value?.client === 'claude') {
-          // A hand registration of the same conversation takes the wake it still holds under an earlier session ID.
-          await carryClaudeWake({ mindPath, nativeSessionId: ownSession, unit: value.unit, env, ...(hostname ? { hostname } : {}), startWorker: true })
-            .catch((error) => stderr.write(`Relay wake carry-over unavailable: ${error.message}\n`));
-        }
+        if (params.name === 'register') await followWake(value).catch((error) => stderr.write(`Relay wake carry-over unavailable: ${error.message}\n`));
         response = result(value);
       } else {
         if (id === undefined) continue;
