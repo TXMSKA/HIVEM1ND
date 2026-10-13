@@ -1364,6 +1364,59 @@ export async function createRelay(options = {}) {
       return { units: units.sort((a, b) => a.unit.localeCompare(b.unit) || a.scope.localeCompare(b.scope)) };
     },
 
+    // The status a chat asks for through MCP, whose tool output is bounded: by default counts, the caller's own unit and the
+    // units with unread messages, and the full entries of `status` only with `detail`, a page at a time.
+    async overview(args = {}) {
+      validateArgs(args, 'overview', ['unit', 'machine', 'detail', 'limit', 'offset']);
+      const machine = args.machine === undefined ? null : safeMachine(args.machine);
+      if (args.detail !== undefined && typeof args.detail !== 'boolean') throw relayError('INVALID_INPUT', 'detail must be a boolean.');
+      const limit = args.limit === undefined ? (args.detail ? 10 : 20) : args.limit;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw relayError('INVALID_LIMIT', 'limit must be an integer from 1 to 100.');
+      const offset = args.offset ?? 0;
+      if (!Number.isInteger(offset) || offset < 0) throw relayError('INVALID_INPUT', 'offset must be a whole number.');
+      let { units } = await relay.status(args.unit === undefined ? {} : { unit: validUnit(args.unit) });
+      if (machine !== null) {
+        units = units.map((item) => ({ ...item, registeredSessions: item.registeredSessions.filter((record) => record.machine === machine) }))
+          .filter((item) => item.registeredSessions.length || item.machine === machine);
+      }
+      const page = (items) => ({ total: items.length, offset, limit, nextOffset: offset + limit < items.length ? offset + limit : null });
+      if (args.detail) return { units: units.slice(offset, offset + limit), ...page(units) };
+      const { scopes } = await routesAndScopes();
+      let self = null;
+      try { self = await currentIdentity(); } catch { /* a session with simultaneous registrations has no single unit to show */ }
+      const summaries = [];
+      for (const item of units) {
+        const scope = scopes.find((candidate) => candidate.id === item.scope);
+        let inbox = { messages: [], unread: 0 };
+        if (scope && item.state !== null) {
+          try { inbox = await unreadInbox(item.unit, scope, MAX_LIST_LIMIT); } catch (error) { if (!isTransientFsError(error)) throw error; }
+        }
+        const [newest] = [...item.registeredSessions].sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)));
+        summaries.push({
+          unit: item.unit, scope: item.scope, state: item.state, machine: item.machine, unread: inbox.unread,
+          // A message that asks for a reply waits for this unit.
+          waiting: inbox.messages.filter((message) => message.replyRequested).length,
+          sessions: item.registeredSessions.length,
+          newest: newest ? { nativeSessionId: newest.nativeSessionId, client: newest.client, machine: newest.machine, registeredAt: newest.registeredAt } : null,
+        });
+      }
+      const machines = {};
+      for (const item of units) for (const record of item.registeredSessions) machines[record.machine] = (machines[record.machine] ?? 0) + 1;
+      const attention = summaries.filter((item) => item.unread || item.waiting)
+        .sort((a, b) => b.waiting - a.waiting || b.unread - a.unread || a.unit.localeCompare(b.unit));
+      const own = self && summaries.find((item) => item.unit.toLowerCase() === self.unit.toLowerCase() && item.scope === self.scopeId);
+      return {
+        counts: {
+          units: units.length, registeredUnits: units.filter((item) => item.registeredSessions.length).length,
+          registrations: Object.values(machines).reduce((sum, count) => sum + count, 0), machines,
+          unread: summaries.reduce((sum, item) => sum + item.unread, 0), waiting: summaries.reduce((sum, item) => sum + item.waiting, 0),
+        },
+        self: own ? { ...own, registration: toPublicRegistration(self) } : null,
+        attention: attention.slice(offset, offset + limit), ...page(attention),
+        more: 'Pass detail: true for every unit with its registrations, a page at a time through limit and offset, and unit or machine to narrow it.',
+      };
+    },
+
     async events(args = {}) {
       validateArgs(args, 'events', ['limit']);
       const limit = parseLimit(args.limit, 200);

@@ -1,11 +1,12 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
 import { serveRelayMcp } from '../engine/relay/mcp.mjs';
+import { createRelay } from '../engine/relay/store.mjs';
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
@@ -142,4 +143,43 @@ test('delivery_status answers for messages the registered unit sent and rejects 
     assert.equal(line.result.isError, true);
     assert.equal(line.result.structuredContent.code, 'INVALID_ARGUMENTS');
   }
+});
+
+test('status answers with counts, the caller and the units waiting by default, and lists every unit only in pages on request', async (context) => {
+  const mindPath = await fixture(context);
+  for (const unit of ['executor-app', 'executor-web', 'executor-db']) {
+    await writeFile(path.join(mindPath, 'user', 'state', `${unit}.md`), `unit: ${unit}\nstate: in\nmachine: RELAYTEST\n\nWorking.\n`);
+  }
+  const elsewhere = await createRelay({ mindPath, hostname: 'OTHERBOX', sessionId: 'other-box', client: 'codex' });
+  await elsewhere.register({ unit: 'executor-web', nativeSessionId: 'web-native' });
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  const { lines } = await run(mindPath, [
+    call(1, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' }),
+    call(2, 'send_message', { to: 'executor-app', subject: 'Question', body: 'Answer this.', replyRequested: true }),
+    call(3, 'send_message', { to: 'executor-db', subject: 'Note', body: 'For the record.' }),
+    call(4, 'status'),
+    call(5, 'status', { detail: true, limit: 2 }),
+    call(6, 'status', { detail: true, limit: 2, offset: 2 }),
+    call(7, 'status', { machine: 'OTHERBOX', detail: true }),
+    call(8, 'status', { unit: 'executor-app' }),
+    call(9, 'status', { limit: 0 }),
+  ]);
+  const summary = lines[3].result.structuredContent;
+  assert.equal(summary.units, undefined, 'the default answer lists no unit entries');
+  assert.deepEqual(summary.counts, { units: 4, registeredUnits: 2, registrations: 2, machines: { OTHERBOX: 1, RELAYTEST: 1 }, unread: 2, waiting: 1 });
+  assert.equal(summary.self.unit, 'overseer');
+  assert.equal(summary.self.registration.nativeSessionId, 'native-1');
+  assert.deepEqual(summary.attention.map((item) => [item.unit, item.unread, item.waiting]), [['executor-app', 1, 1], ['executor-db', 1, 0]]);
+  assert.equal(summary.total, 2);
+  const first = lines[4].result.structuredContent;
+  assert.deepEqual(first.units.map((item) => item.unit), ['executor-app', 'executor-db']);
+  assert.deepEqual([first.total, first.nextOffset], [4, 2]);
+  const second = lines[5].result.structuredContent;
+  assert.deepEqual(second.units.map((item) => item.unit), ['executor-web', 'overseer']);
+  assert.equal(second.nextOffset, null);
+  const other = lines[6].result.structuredContent;
+  assert.deepEqual(other.units.map((item) => [item.unit, item.registeredSessions.map((record) => record.machine)]), [['executor-web', ['OTHERBOX']]]);
+  assert.deepEqual(lines[7].result.structuredContent.attention.map((item) => item.unit), ['executor-app']);
+  assert.equal(lines[7].result.structuredContent.self, null, 'the caller is shown only when its unit is selected');
+  assert.equal(lines[8].result.isError, true);
 });
