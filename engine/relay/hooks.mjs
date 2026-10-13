@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { claudeWakeCapability, spawnClaudeWakeWorker, sendClaudeWake } from './claude-wake.mjs';
 import { cursorWakeCapability } from './cursor-wake.mjs';
 import { spawnLocalWakeWorker } from './local-wake.mjs';
+import { carryClaudeSession } from './carry-over.mjs';
 
 const CLIENT_EVENTS = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Stop', 'SessionEnd']),
@@ -81,6 +82,22 @@ async function runClaudeWakeLifecycle({ event, mindPath, nativeSessionId, env = 
   return binding;
 }
 
+// A wake carried to a new session during a turn other than SessionStart needs its worker started here.
+function startClaudeWakeWorker({ binding, mindPath, env, stderr, platform, wakeWorkerSpawner }) {
+  if (env.CLAUDE_CODE_SESSION_ID !== binding.nativeSessionId) return;
+  const capability = claudeWakeCapability({ env, platform });
+  if (!capability.available) {
+    stderr.write(`Relay Claude wake unavailable: ${capability.reason}.\n`);
+    return;
+  }
+  try {
+    const child = (wakeWorkerSpawner ?? spawnClaudeWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
+    child.ready.catch(() => stderr.write('Relay Claude wake worker could not start.\n'));
+  } catch {
+    stderr.write('Relay Claude wake worker could not start.\n');
+  }
+}
+
 // Nothing else starts the worker of a Cursor chat, so the chat's own session start makes sure the worker of its
 // consent runs; the worker lease keeps a second start from doing anything.
 async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process.env, stderr = process.stderr, wakeControllerFactory, wakeWorkerSpawner }) {
@@ -153,6 +170,16 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
         wakeWorkerSpawner,
       }).catch((error) => stderr.write(`Relay Cursor wake unavailable: ${error.message}\n`));
     }
+    let carried = null;
+    if (client === 'claude' && (hookEvent === 'SessionStart' || hookEvent === 'UserPromptSubmit')) {
+      // The same conversation under a new native session ID keeps its unit and its wake.
+      carried = await carryClaudeSession({ mindPath, nativeSessionId: nativeSessionId ?? context.nativeSessionId,
+        transcriptPath: input.transcript_path, env, wakeControllerFactory })
+        .catch((error) => { stderr.write(`Relay session carry-over unavailable: ${error.message}\n`); return null; });
+      if (carried?.binding && hookEvent !== 'SessionStart') {
+        startClaudeWakeWorker({ binding: carried.binding, mindPath, env, stderr, platform, wakeWorkerSpawner });
+      }
+    }
     if (client === 'claude') {
       await runClaudeWakeLifecycle({
         event: hookEvent,
@@ -173,7 +200,11 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       ...(nativeSessionId ?? context.nativeSessionId ? { nativeSessionId: nativeSessionId ?? context.nativeSessionId } : {}),
       client,
     });
-    const response = formatHookResponse(client, hookEvent, reminder?.text ? reminder : {
+    const notice = carried
+      ? `Relay moved this conversation's registration as ${carried.unit} from native session ${carried.previous} to this one${carried.binding ? ', with its wake' : ''}.`
+      : '';
+    const text = [notice, reminder?.text].filter(Boolean).join(' ');
+    const response = formatHookResponse(client, hookEvent, text ? { text } : {
       unregistered: reminder?.registered === false,
       nativeSessionId: nativeSessionId ?? context.nativeSessionId,
     });

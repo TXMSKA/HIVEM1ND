@@ -121,7 +121,18 @@ async function* boundedLines(stream) {
   else if (pending) yield pending.replace(/\r$/, '');
 }
 
-export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr }) {
+// A Claude chat that continues under a new native session ID gets a new MCP process, which holds no registration yet.
+// When the chat's hook has already carried the unit to that ID, the process adopts it instead of failing the call.
+async function adoptClaudeSession(relay, { client, env }) {
+  const id = env.CLAUDE_CODE_SESSION_ID;
+  if (client !== 'claude' || typeof id !== 'string' || !id || id.length > 180 || /[\u0000-\u001f\u007f]/.test(id)) return false;
+  const known = await relay.reminder({ nativeSessionId: id, client });
+  if (!known.registered) return false;
+  await relay.register({ unit: known.unit, nativeSessionId: id, client });
+  return true;
+}
+
+export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessionId, client, unit, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env }) {
   if (!mindPath) throw new Error('mindPath is required');
   const relay = await createRelay({ mindPath, hostname, sessionId, client });
   if (unit && sessionId && nativeSessionId) await relay.register({ unit, nativeSessionId, client });
@@ -149,7 +160,13 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
       else if (method === 'tools/call') {
         if (id === undefined) continue;
         const args = validateToolArguments(params.name, params.arguments ?? {});
-        const value = await callMethod(relay, params.name, args, { sessionId, client });
+        let value;
+        try {
+          value = await callMethod(relay, params.name, args, { sessionId, client });
+        } catch (error) {
+          if (error.code !== 'NOT_REGISTERED' || !(await adoptClaudeSession(relay, { client, env }))) throw error;
+          value = await callMethod(relay, params.name, args, { sessionId, client });
+        }
         response = result(value);
       } else {
         if (id === undefined) continue;
