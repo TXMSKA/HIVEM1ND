@@ -8,6 +8,7 @@ import { helpText, parseArgs, runCli, runTerminalSetup } from "../cli/index.mjs"
 import { createWindowOptions, parseElectronOptions, secureWebPreferences } from "../gui/electron.mjs";
 import { createSetupSession } from "../engine/setup.mjs";
 import { defaultMind } from "../engine/service/paths.mjs";
+import { stubAclRunner } from "../engine/service/security.mjs";
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -525,6 +526,38 @@ test("service install and uninstall delegate ownership checks and preserve selec
   assert.equal(await runCli(["service", "uninstall", ...common], dependencies), 0);
   assert.equal(received.dryRun, false);
   assert.equal(received.run, dependencies.registrationRunner);
+});
+
+test("service install starts the runtime without a logon registration", async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-cli-startup-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const platform of ["win32", "linux"]) {
+    const home = path.join(root, platform, "home");
+    const cosmic = path.join(root, platform, "Cosmic");
+    const mind = path.join(root, platform, "mind");
+    const origin = path.join(root, platform, "origin");
+    const output = sink();
+    const errors = sink();
+    const opened = [];
+    let starts = 0;
+    const code = await runCli(["service", "install", "--mind-path", mind, "--cosmic-path", cosmic,
+      "--home-dir", home, "--hostname", "TESTBOX", "--origin-path", origin], {
+      platform, env: {}, stdout: output.stream, stderr: errors.stream, aclRunner: stubAclRunner(),
+      registrationRunner: async () => assert.fail("Setup must not register startup"),
+      registrationQuery: async () => assert.fail("Setup must not query startup"),
+      async serviceStart(config) {
+        starts += 1;
+        assert.equal(config.startWithWindows, false);
+        return { viewerUrl: "http://127.0.0.1:9/gui/viewer" };
+      },
+      async openUrl(url) { opened.push(url); },
+    });
+    assert.equal(code, 0);
+    assert.equal(errors.read(), "");
+    assert.equal(JSON.parse(output.read()).status, "started");
+    assert.equal(starts, 1);
+    assert.deepEqual(opened, ["http://127.0.0.1:9/gui/viewer"]);
+  }
 });
 
 test("terminal setup retries a failed service phase and opens the completed viewer only after success", async () => {

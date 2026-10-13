@@ -31,6 +31,170 @@ const base = {
   sid: 'S-1-5-21-1',
 };
 
+async function startupFixture(t, platform) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-startup-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const mindPath = path.join(root, 'mind');
+  const cosmicPath = path.join(root, 'Cosmic');
+  const directory = path.join(cosmicPath, 'hivem1nd-service', mindKeyFor(mindPath, platform), 'TESTBOX');
+  const commands = [];
+  const aclRunner = stubAclRunner();
+  let plan = null;
+  let registered = false;
+  let enabled = false;
+  let foreign = false;
+  let failure = false;
+  let starts = 0;
+  let queries = 0;
+  const options = {
+    platform, mindPath, cosmicPath, hostname: 'TESTBOX', homeDir: path.join(root, 'home'),
+    kitPath: path.join(root, 'kit'), originPath: path.join(root, 'origin'), dryRun: false, aclRunner,
+    async run(argv) {
+      if (failure) throw new Error('The user service manager refused the operation.');
+      commands.push(argv);
+      if (argv.includes('/Create') || argv.includes('enable') || argv.includes('bootstrap')) { registered = true; enabled = true; }
+      if (argv.includes('/Delete') || argv.includes('disable') || argv.includes('bootout')) {
+        enabled = false;
+        if (platform === 'win32') registered = false;
+      }
+    },
+    async query(candidate) {
+      queries += 1;
+      plan ??= candidate;
+      if (!registered) return { present: false };
+      if (foreign) return { present: true, digest: 'foreign', executable: 'foreign', arguments: [], installationId: 'foreign' };
+      const current = JSON.parse(await readFile(path.join(directory, 'registration.json'), 'utf8').catch(() => 'null'));
+      return { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments,
+        matchesPlan: enabled, enabled, installationId: current?.installationId };
+    },
+    async start() { starts += 1; return { viewerUrl: 'http://127.0.0.1:9/gui/viewer' }; },
+  };
+  return { options, commands, aclRunner, directory, starts: () => starts, queries: () => queries,
+    fail: value => { failure = value; }, makeForeign: () => { foreign = true; } };
+}
+
+test('default setup records zero logon registration runner calls', async t => {
+  for (const platform of ['win32', 'linux', 'darwin']) {
+    const fixture = await startupFixture(t, platform);
+    const result = await configureOwnedService({ ...fixture.options, userManager: false });
+    assert.equal(result.status, 'started');
+    assert.equal(result.state.registration, true);
+    assert.equal(result.state.configBody.startWithWindows, false);
+    assert.equal(fixture.starts(), 1);
+    assert.equal(fixture.queries(), 0);
+    assert.deepEqual(fixture.commands, []);
+    assert.equal(JSON.parse(await readFile(result.configFile, 'utf8')).startWithWindows, false);
+    assert.equal(fixture.aclRunner.calls.some(call => call.op === 'protect'), true);
+    await assert.rejects(readFile(path.join(fixture.directory, 'registration.json')), { code: 'ENOENT' });
+    const resumed = await configureOwnedService({ ...fixture.options, resumeSetup: true });
+    assert.equal(resumed.status, 'started');
+    assert.deepEqual(fixture.commands, []);
+    assert.equal(fixture.queries(), 0);
+  }
+  assert.throws(() => bootstrapConfig({ startWithWindows: 'true' }), { code: 'invalid_body' });
+});
+
+test('enable startup records exactly one owned registration', async t => {
+  for (const platform of ['win32', 'linux']) {
+    const fixture = await startupFixture(t, platform);
+    const initial = await configureOwnedService(fixture.options);
+    const enabled = await configureOwnedService({ ...fixture.options, state: initial.state, startWithWindows: true });
+    assert.equal(enabled.status, 'started');
+    assert.equal(enabled.state.configBody.startWithWindows, true);
+    assert.equal(fixture.starts(), 1);
+    const registrations = fixture.commands.filter(argv => argv.includes('/Create') || argv.includes('enable'));
+    assert.equal(registrations.length, 1);
+    const record = JSON.parse(await readFile(path.join(fixture.directory, 'registration.json'), 'utf8'));
+    assert.equal(record.verification, 'verified');
+    assert.ok(record.installationId);
+    const repeated = await configureOwnedService({ ...fixture.options, state: enabled.state, startWithWindows: true });
+    assert.equal(repeated.status, 'started');
+    assert.equal(fixture.commands.filter(argv => argv.includes('/Create') || argv.includes('enable')).length, 1);
+    assert.equal(JSON.parse(await readFile(enabled.configFile, 'utf8')).startWithWindows, true);
+    const disabled = await configureOwnedService({ ...fixture.options, state: repeated.state, startWithWindows: false });
+    assert.equal(disabled.status, 'started');
+    assert.equal(disabled.state.configBody.startWithWindows, false);
+    assert.equal(fixture.starts(), 1);
+    assert.equal(disabled.state.start, true);
+    if (platform === 'linux') assert.deepEqual(fixture.commands.find(argv => argv.includes('disable')), ['systemctl', '--user', 'disable', record.name]);
+    if (platform === 'win32') await assert.rejects(readFile(path.join(fixture.directory, 'registration.json')), { code: 'ENOENT' });
+    else assert.equal(JSON.parse(await readFile(path.join(fixture.directory, 'registration.json'), 'utf8')).installationId, record.installationId);
+    assert.equal(JSON.parse(await readFile(disabled.configFile, 'utf8')).startWithWindows, false);
+    const restored = await configureOwnedService({ ...fixture.options, state: disabled.state, startWithWindows: true });
+    assert.equal(restored.status, 'started');
+    assert.equal(restored.state.configBody.startWithWindows, true);
+    assert.equal(fixture.starts(), 1);
+  }
+});
+
+test('disable startup preserves foreign registrations', async t => {
+  for (const platform of ['win32', 'linux']) {
+    const fixture = await startupFixture(t, platform);
+    const initial = await configureOwnedService({ ...fixture.options, startWithWindows: true });
+    const before = await readFile(initial.configFile);
+    const ownershipFile = path.join(fixture.directory, 'registration.json');
+    const ownership = await readFile(ownershipFile);
+    const commands = fixture.commands.length;
+    fixture.makeForeign();
+    const result = await configureOwnedService({ ...fixture.options, state: initial.state, startWithWindows: false });
+    assert.equal(result.status, 'failed');
+    assert.equal(result.phase, 'registration');
+    assert.match(result.conflict, /left in place/);
+    assert.equal(fixture.commands.length, commands);
+    assert.equal((await readFile(initial.configFile)).equals(before), true);
+    assert.equal((await readFile(ownershipFile)).equals(ownership), true);
+    assert.equal(result.state.configBody.startWithWindows, true);
+    assert.equal(result.state.start, true);
+    assert.equal(fixture.starts(), 1);
+  }
+});
+
+test('registration failure preserves the prior startup setting', async t => {
+  for (const platform of ['win32', 'linux']) {
+    const fixture = await startupFixture(t, platform);
+    const initial = await configureOwnedService(fixture.options);
+    const before = await readFile(initial.configFile);
+    fixture.fail(true);
+    const failed = await configureOwnedService({ ...fixture.options, state: initial.state, startWithWindows: true });
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.phase, 'registration');
+    assert.equal(failed.state.configBody.startWithWindows, false);
+    assert.equal(failed.state.start, true);
+    assert.equal(initial.state.configBody.startWithWindows, false);
+    assert.equal((await readFile(initial.configFile)).equals(before), true);
+    fixture.fail(false);
+    const enabled = await configureOwnedService({ ...fixture.options, state: failed.state, startWithWindows: true });
+    assert.equal(enabled.status, 'started');
+    const enabledBytes = await readFile(enabled.configFile);
+    fixture.fail(true);
+    const removal = await configureOwnedService({ ...fixture.options, state: enabled.state, startWithWindows: false });
+    assert.equal(removal.status, 'failed');
+    assert.equal(removal.state.configBody.startWithWindows, true);
+    assert.equal(removal.state.start, true);
+    assert.equal((await readFile(enabled.configFile)).equals(enabledBytes), true);
+    assert.equal(fixture.starts(), 1);
+  }
+});
+
+test('macOS startup toggles keep the loaded owned runtime', async t => {
+  const fixture = await startupFixture(t, 'darwin');
+  const initial = await configureOwnedService(fixture.options);
+  const enabled = await configureOwnedService({ ...fixture.options, state: initial.state, startWithWindows: true });
+  assert.equal(enabled.status, 'started');
+  const record = JSON.parse(await readFile(path.join(fixture.directory, 'registration.json'), 'utf8'));
+  const disabled = await configureOwnedService({ ...fixture.options, state: enabled.state, startWithWindows: false });
+  assert.equal(disabled.status, 'started');
+  assert.equal(disabled.state.configBody.startWithWindows, false);
+  assert.deepEqual(fixture.commands[1], ['launchctl', 'disable', `gui/${record.uid}/${record.name}`]);
+  assert.equal(JSON.parse(await readFile(path.join(fixture.directory, 'registration.json'), 'utf8')).installationId, record.installationId);
+  const restored = await configureOwnedService({ ...fixture.options, state: disabled.state, startWithWindows: true });
+  assert.equal(restored.status, 'started');
+  assert.deepEqual(fixture.commands[2], ['launchctl', 'enable', `gui/${record.uid}/${record.name}`]);
+  assert.equal(restored.state.installed.os, true);
+  assert.deepEqual(restored.state.installed.executed, [fixture.commands[2]]);
+  assert.equal(fixture.starts(), 1);
+});
+
 test('offline legacy ownership blocks wake adoption until closure', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-closure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -102,7 +266,7 @@ test('the real wizard retries only service startup and opens its authenticated v
   const opened = [];
   let starts = 0;
   let owned;
-  t.after(async () => { if (owned) await stopService(owned); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { if (owned) await stopService(owned, { force: true }); await rm(root, { recursive: true, force: true }); });
   const sessionOptions = {
     kitPath: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
     mindPath: mind, homeDir: home, cosmicPath: cosmic, hostname: 'TESTBOX', env, language: 'en',
@@ -118,8 +282,10 @@ test('the real wizard retries only service startup and opens its authenticated v
     serviceStart: async (config) => {
       starts += 1;
       assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
-      const ownership = JSON.parse(await readFile(path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'registration.json'), 'utf8'));
-      assert.ok(ownership.installationId);
+      const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX');
+      assert.equal(JSON.parse(await readFile(path.join(directory, 'config.json'), 'utf8')).startWithWindows, false);
+      await assert.rejects(readFile(path.join(directory, 'registration.json')), { code: 'ENOENT' });
+      assert.equal(commands.length, 0);
       if (starts === 1) throw new Error('temporary service failure');
       const ready = await startConfiguredViewer(config, { env, homeDir: home, cosmicPath: cosmic, hostname: 'TESTBOX', aclRunner, guardPort, userKey: root, confineRoot: root });
       if (!ready.handle.attached) owned = ready.handle;
@@ -272,6 +438,7 @@ test('owned configuration uses the user SID and retains an installed legacy mind
     platform: 'win32', mindPath: mind, cosmicPath: cosmic, hostname: 'TESTBOX', kitPath: path.join(root, 'kit'),
     env: { LOCALAPPDATA: path.join(root, 'local'), OneDrive: path.join(root, 'OneDrive') },
     originPath: origin, dryRun: false, protect: false, aclRunner,
+    startWithWindows: true,
     query: async (plan) => calls.length === 0 ? { present: false } : { present: true, digest: registered?.digest ?? plan.digest, executable: plan.executable, arguments: plan.arguments, installationId: registered?.installationId },
     run: async (argv) => { calls.push(argv); },
     start: async () => ({ viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' }),
@@ -341,12 +508,13 @@ test('user manager queries verify loaded registrations and fail closed on unavai
     await writeFile(plan.file, plan.body);
     const current = { ...plan, installationId: 'owned' };
     let modified = false;
+    let disabled = false;
     const run = (file, args, options) => {
       assert.equal(options.timeout, 8000);
       assert.equal(options.shell, false);
       if (file === 'systemctl') {
         assert.deepEqual(args, ['--user', 'show', plan.unit, '--no-pager', '--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,UnitFileState']);
-        return { status: 0, stdout: `LoadState=loaded\nFragmentPath=${plan.file}\nDropInPaths=${modified ? '/foreign.conf' : ''}\nNeedDaemonReload=no\nUnitFileState=enabled\n` };
+        return { status: 0, stdout: `LoadState=loaded\nFragmentPath=${plan.file}\nDropInPaths=${modified ? '/foreign.conf' : ''}\nNeedDaemonReload=no\nUnitFileState=${disabled ? 'disabled' : 'enabled'}\n` };
       }
       assert.equal(file, 'launchctl');
       if (args[0] === 'manageruid') return { status: 0, stdout: '501\n' };
@@ -357,6 +525,21 @@ test('user manager queries verify loaded registrations and fail closed on unavai
     const actual = await queryRegistration(plan, { current, run });
     assert.equal(actual.installationId, 'owned');
     assert.equal(actual.matchesPlan, true);
+    if (platform === 'linux') {
+      disabled = true;
+      const dormant = await queryRegistration(plan, { current, run });
+      assert.equal(dormant.enabled, false);
+      assert.equal(dormant.matchesPlan, false);
+      assert.equal(dormant.installationId, current.installationId);
+      const commands = [];
+      const restored = await installService({ ...base, platform, home: root, uid: 501, localDirectory: root }, {
+        dryRun: false, current, query: candidate => queryRegistration(candidate, { current, run }),
+        run: async argv => { commands.push(argv); disabled = false; },
+      });
+      assert.deepEqual(commands, [['systemctl', '--user', 'enable', plan.unit]]);
+      assert.equal(restored.os, true);
+      assert.deepEqual(restored.executed, commands);
+    }
     modified = true;
     const foreign = await queryRegistration(plan, { current, run });
     assert.equal(foreign.installationId, null);
@@ -377,12 +560,13 @@ test('an unverified successful registration command does not complete the regist
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runServicePhases({
-    config: { mindPath: path.join(root, 'mind'), stagingPath: path.join(root, 'staging'), machine: 'TESTBOX', origin: { kind: 'folder', path: path.join(root, 'origin') } },
+    config: { mindPath: path.join(root, 'mind'), stagingPath: path.join(root, 'staging'), machine: 'TESTBOX', origin: { kind: 'folder', path: path.join(root, 'origin') }, startWithWindows: true },
     registration: { ...base, platform: 'win32', localDirectory: root },
   }, { dryRun: false, run: async () => {}, query: async () => ({ present: false }), start: async () => { throw new Error('must not start'); } });
   assert.equal(result.status, 'failed');
   assert.equal(result.phase, 'registration');
-  assert.equal(result.state.registration, false);
+  assert.equal(result.state.registration, true);
+  assert.equal(result.state.configBody.startWithWindows, false);
   assert.match(result.error, /could not be verified/);
 });
 
@@ -400,6 +584,7 @@ test('a successful registration with a transient query failure retries verificat
     const options = {
       platform: 'win32', mindPath: mind, cosmicPath: cosmic, hostname: 'TESTBOX', kitPath: path.join(root, 'kit'),
       originPath: path.join(root, String(modified), 'origin'), dryRun: false, protect: false, aclRunner: stubAclRunner(),
+      startWithWindows: true,
       run: async () => { commands += 1; },
       start: async () => { starts += 1; return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' }; },
       query: async plan => {
@@ -417,7 +602,8 @@ test('a successful registration with a transient query failure retries verificat
     const first = await configureOwnedService(options);
     assert.equal(first.status, 'failed');
     assert.equal(first.phase, 'registration');
-    assert.equal(first.state.registration, false);
+    assert.equal(first.state.registration, true);
+    assert.equal(first.state.configBody.startWithWindows, false);
     assert.equal(starts, 0);
     assert.equal(JSON.parse(await readFile(ownershipFile, 'utf8')).verification, 'pending');
     const second = await configureOwnedService(options);
@@ -508,6 +694,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
       machine: 'DESKTOP',
       stagingPath: 'C:\\local\\staging',
       origin: { kind: 'folder', path: 'D:\\origin' },
+      startWithWindows: true,
     },
     registration: { ...base, platform: 'win32', localDirectory: path.join(root, 'local') },
   };
@@ -528,7 +715,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   assert.equal(Array.isArray(calls[0]), true);
   assert.equal(calls[0][0], 'schtasks.exe');
   assert.equal(calls[0].includes('--mind'), false);
-  assert.equal(persisted, 1);
+  assert.equal(persisted, 2);
   assert.equal(calls.length, 1);
   const second = await runServicePhases(input, {
     dryRun: false,
@@ -540,7 +727,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   });
   assert.equal(second.status, 'started');
   assert.equal(second.viewerUrl, 'http://127.0.0.1/gui/v#/');
-  assert.equal(persisted, 1);
+  assert.equal(persisted, 2);
   assert.equal(calls.length, 1);
   const third = await runServicePhases(input, {
     dryRun: false,
@@ -1023,19 +1210,23 @@ test('release packaging uses the served browser modules', async (t) => {
   await assert.rejects(() => assertReleaseAssets(app), /browser asset main\.mjs/);
 });
 
-test('the generated installer entry activates a temporary kit and a dry-run does not', async (t) => {
+test('runtime ownership survives absent registration.json', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const local = path.join(root, 'local');
   const payload = path.join(root, 'payload');
   await mkdir(path.join(payload, 'cli'), { recursive: true });
   await mkdir(path.join(payload, 'runtime'), { recursive: true });
+  await mkdir(path.join(payload, 'engine', 'service'), { recursive: true });
   const cli = "process.stdout.write('setup');\n";
+  const security = "export async function verifyBootstrapFiles() { if (process.env.FIXTURE_UNPROTECTED === '1') throw new Error('Unprotected fixture'); }\nexport function aclRunnerFrom() { return { userSid() { return 'S-1-5-21-1-2-3-1001'; } }; }\n";
   await writeFile(path.join(payload, 'cli', 'index.mjs'), cli);
+  await writeFile(path.join(payload, 'engine', 'service', 'security.mjs'), security);
   await writeFile(path.join(payload, 'runtime', 'node.exe'), Buffer.from('runtime'));
   const files = [
     { name: 'cli/index.mjs', data: Buffer.from(cli) },
     { name: 'runtime/node.exe', data: Buffer.from('runtime') },
+    { name: 'engine/service/security.mjs', data: Buffer.from(security) },
   ];
   const manifest = manifestDocument(files);
   assert.equal(manifest.identity, undefined);
@@ -1089,14 +1280,17 @@ test('the generated installer entry activates a temporary kit and a dry-run does
     stagingPath: path.join(ownedDirectory, 'staging'),
     port: 0,
   })}\n`);
-  await writeFile(path.join(ownedDirectory, 'registration.json'), `${JSON.stringify({
-    format: 'hivem1nd-registration-v1',
-    installationId: 'owned',
-    executable: process.execPath,
-    arguments: [],
-    digest: 'owned-digest',
+  await writeFile(path.join(ownedDirectory, 'service.json'), `${JSON.stringify({
+    format: 'hivem1nd-service-local-v1', pid: 9, origin: 'http://127.0.0.1:43123', startedAt: '2026-10-10T12:00:00.000Z',
   })}\n`);
+  await assert.rejects(readFile(path.join(ownedDirectory, 'registration.json')), { code: 'ENOENT' });
   await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  const userKey = process.platform === 'win32' ? 'S-1-5-21-1-2-3-1001' : String(process.getuid());
+  const port = 49152 + (createHash('sha256').update(userKey).digest().readUInt16BE(0) % 16384);
+  const lockFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'service.lock');
+  const descriptor = { format: 'hivem1nd-service-descriptor-v1', machine, mind: path.resolve(mindPath), pid: 9, port, userKey };
+  const lock = { nonce: 'fixture-owner', pid: 9, digest: createHash('sha256').update(JSON.stringify(descriptor)).digest('hex') };
+  await writeFile(lockFile, JSON.stringify(lock));
   const activeFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json');
   await writeFile(activeFile, JSON.stringify({
     pid: 9,
@@ -1118,6 +1312,14 @@ test('the generated installer entry activates a temporary kit and a dry-run does
   const matched = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.equal(matched.status, 0, matched.stderr);
   assert.match(matched.stdout, /installed:/);
+  const unprotected = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
+    env: { ...env, FIXTURE_UNPROTECTED: '1' }, shell: false, windowsHide: true, encoding: 'utf8',
+  });
+  assert.notEqual(unprotected.status, 0);
+  await writeFile(lockFile, JSON.stringify({ ...lock, digest: '0'.repeat(64) }));
+  const tampered = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
+  assert.notEqual(tampered.status, 0);
+  await writeFile(lockFile, JSON.stringify(lock));
   assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
   await writeFile(activeFile, JSON.stringify({ pid: 9 }));
   const malformed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });

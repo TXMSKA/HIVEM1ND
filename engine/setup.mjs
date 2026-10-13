@@ -1154,9 +1154,7 @@ class SetupSession {
       service = { status: 'failed', phase: 'config', state: this.serviceState ?? {}, error: error.message, code: error.code ?? 'service_unavailable', viewerUrl: null };
     }
     this.serviceState = service.state;
-    if (service.state?.installed?.digest) {
-      this.serviceCurrent = service.state.installed;
-    }
+    this.serviceCurrent = service.state?.installed ?? null;
     return service;
   }
 

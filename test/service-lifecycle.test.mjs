@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attachNative, closeBridge, dispatchLocal, openBridge } from '../engine/service/bridge.mjs';
+import { attachNative, closeBridge, createNativeLaunch, dispatchLocal, openBridge } from '../engine/service/bridge.mjs';
 import { request as httpRequest } from 'node:http';
 import { createChat, postChat } from '../engine/service/chats.mjs';
 import { canonicalJson, uuidV8 } from '../engine/service/identity.mjs';
@@ -16,7 +16,7 @@ import { stubAclRunner } from '../engine/service/security.mjs';
 import { createRelay } from '../engine/relay/store.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
-import { adoptWake, composeCore, guardPortFor, startService, stopService } from '../engine/service/service.mjs';
+import { adoptWake, composeCore, guardPortFor, startService, stopConfiguredService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -47,6 +47,67 @@ async function optionsFor(t, port) {
   };
   return { fixture, options, listeners: () => listeners };
 }
+
+test('one active host prevents owned runtime shutdown', async t => {
+  const { fixture, options } = await optionsFor(t, await freePort());
+  const started = await startService({ ...options, retainHosts: true });
+  t.after(async () => { if (!started.runtime.closed) await stopService(started, { force: true }); });
+  const auth = () => jsonCall(started.http.port, 'POST', '/api/v1/auth/local', {
+    token: started.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  const first = await auth();
+  const second = await auth();
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 201);
+  assert.equal((await jsonCall(started.http.port, 'POST', '/api/v1/auth/logout', { token: second.json.data.token, body: {} })).status, 204);
+  const lock = await readFile(fixture.paths.lockFile);
+  const beat = await readFile(path.join(fixture.root, 'origin', 'machines', fixture.machine, 'service.json'));
+  const pulse = started.runtime.pulse;
+  const beatTimer = started.runtime.beatTimer;
+  assert.deepEqual(await stopService(started), { stopped: false, inUse: true });
+  await assert.rejects(stopConfiguredService({
+    platform: fixture.platform, env: fixture.env, cosmicPath: fixture.paths.cosmic, mindPath: fixture.paths.mind,
+    hostname: fixture.machine, userKey: options.userKey, guardPort: options.guardPort, aclRunner: fixture.store.aclRunner,
+  }), { code: 'service_in_use' });
+  assert.equal((await readFile(fixture.paths.lockFile)).equals(lock), true);
+  assert.equal((await readFile(path.join(fixture.root, 'origin', 'machines', fixture.machine, 'service.json'))).equals(beat), true);
+  assert.equal(started.runtime.pulse, pulse);
+  assert.equal(started.runtime.beatTimer, beatTimer);
+  assert.equal(started.runtime.closed, false);
+  assert.equal((await jsonCall(started.http.port, 'GET', '/api/v1/viewer', { token: first.json.data.token })).status, 200);
+  assert.equal((await jsonCall(started.http.port, 'POST', '/api/v1/auth/logout', { token: first.json.data.token, body: {} })).status, 204);
+  const native = createNativeLaunch(started.bridge, { unitId: 'root:overseer', client: 'codex' });
+  assert.deepEqual(await stopService(started), { stopped: false, inUse: true });
+  native.close();
+  const stopped = await stopService(started);
+  assert.equal(stopped.stopped, true);
+  assert.equal(started.runtime.closed, true);
+  assert.equal(JSON.parse(await readFile(path.join(fixture.root, 'origin', 'machines', fixture.machine, 'service.json'), 'utf8')).state, 'stopped');
+});
+
+test('owned shutdown closes host admission before awaiting controller cleanup', async t => {
+  const { options } = await optionsFor(t, await freePort());
+  const started = await startService({ ...options, retainHosts: true });
+  const close = started.adopted.controller.close.bind(started.adopted.controller);
+  let release;
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  started.adopted.controller.close = async () => { entered(); await gate; await close(); };
+  const stopping = stopService(started);
+  t.after(async () => { release(); await stopping; });
+  await ready;
+  assert.equal(started.stopping, true);
+  assert.throws(() => started.credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID() }), { code: 'service_unavailable' });
+  assert.throws(() => started.credentials.issue({ audience: 'agent', unitId: 'root:overseer' }), { code: 'service_unavailable' });
+  const attempted = await jsonCall(started.http.port, 'POST', '/api/v1/auth/local', {
+    token: started.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  assert.equal(attempted.status, 503);
+  assert.equal(started.http.viewers.size, 0);
+  release();
+  assert.equal((await stopping).stopped, true);
+});
 
 test('one guard serves one mind and a second contender attaches without replacing it', async (t) => {
   assert.equal(guardPortFor('same-user'), guardPortFor('same-user'));
@@ -487,7 +548,9 @@ test('the HTTP event stream stays up beside the service guard', async (t) => {
 test('two GUI hosts share one service and keep separate viewers', async (t) => {
   const fixture = await makeCoreFixture();
   const { startGui, closeGuiHost } = await import('../gui/index.mjs');
+  const hosts = [];
   t.after(async () => {
+    for (const host of hosts) await host.stop();
     await closeGuiHost();
     await dispose(fixture);
   });
@@ -508,7 +571,9 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
   await assert.rejects(startGui({ ...input, mindPath: path.join(fixture.root, 'missing') }), { code: 'mind_not_configured' });
   await assert.rejects(startGui({ ...input, embedded: true, hostOrigin: 'file://local' }), { code: 'invalid_body' });
   const first = await startGui({ ...input, look: 'modern' });
+  hosts.push(first);
   const second = await startGui({ ...input, embedded: true, hostOrigin: 'http://embed.example' });
+  hosts.push(second);
   assert.equal(first.origin, second.origin);
   assert.notEqual(first.token, second.token);
   assert.equal(first.url, `${first.origin}/gui/${first.viewerId}/#session=${first.token}`);

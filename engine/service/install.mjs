@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError } from './identity.mjs';
 import { assertLocalStaging, assertNoLinks, localCosmic, mindKeyFor, oneDriveRoots } from './paths.mjs';
-import { aclRunnerFrom, protectLocalFile } from './security.mjs';
+import { aclRunnerFrom, protectBootstrapFiles, protectLocalFile } from './security.mjs';
 import { assertLegacyWakeClosure, requireLegacyClosure } from '../relay/local-wake.mjs';
 
 function fail(status, code, message) {
@@ -102,13 +102,13 @@ export async function queryRegistration(plan, { current = null, run = spawnSync 
       if (properties.get('LoadState') === 'not-found') return absent;
       if (!properties.has('LoadState')) throw new CoreError(503, 'service_unavailable', 'The user service manager response is not valid.');
       const matches = properties.get('LoadState') === 'loaded' && properties.get('FragmentPath') === plan.file
-        && properties.get('DropInPaths') === '' && properties.get('NeedDaemonReload') === 'no'
-        && properties.get('UnitFileState') === 'enabled';
-      loaded = { current: matches, planned: matches };
+        && properties.get('DropInPaths') === '' && properties.get('NeedDaemonReload') === 'no';
+      const enabled = properties.get('UnitFileState') === 'enabled';
+      loaded = { current: matches, planned: matches && enabled, enabled };
     }
     const expected = current ?? plan;
     const match = loaded.current && digest === expected.digest;
-    return { present: true, digest, executable: match ? expected.executable : null, arguments: match ? expected.arguments : [], matchesPlan: loaded.planned && digest === plan.digest, installationId: match ? current?.installationId : null };
+    return { present: true, digest, executable: match ? expected.executable : null, arguments: match ? expected.arguments : [], matchesPlan: loaded.planned && digest === plan.digest, installationId: match ? current?.installationId : null, ...(loaded.enabled !== undefined ? { enabled: loaded.enabled } : {}) };
   }
   const result = run('schtasks.exe', ['/Query', '/TN', plan.name, '/XML'], { windowsHide: true, shell: false, timeout: 8000, maxBuffer: 1024 * 1024 });
   if (result?.error) throw new CoreError(503, 'service_unavailable', 'The login registration could not be queried.');
@@ -266,7 +266,23 @@ export async function installService(input, options = {}) {
         || options.current.verification === 'pending' && options.current.digest === plan.digest && actual.matchesPlan === true);
     const verifiedPending = options.current?.verification === 'pending' && options.current.digest === plan.digest && actual.matchesPlan === true && ownedId;
     if ((sameActual(actual, plan, options.current) || verifiedPending) && ownedId) {
-      return { ...plan, executed: [], dryRun: false, os: false, action: 'unchanged', verification: 'verified', installationId: options.current?.installationId ?? null, ...(actual.digest ? { actualDigest: actual.digest } : {}), persistVerified: verifiedPending };
+      const executed = [];
+      if (plan.platform === 'darwin' && options.preserveRuntime) {
+        if (!options.run) throw new CoreError(503, 'service_unavailable', 'No registration runner was provided.');
+        const argv = ['launchctl', 'enable', `gui/${plan.uid}/${plan.label}`];
+        await options.run(argv);
+        executed.push(argv);
+      }
+      if (plan.platform === 'linux' && actual.enabled === false) {
+        if (!options.run) throw new CoreError(503, 'service_unavailable', 'No registration runner was provided.');
+        const argv = ['systemctl', '--user', 'enable', plan.unit];
+        await options.run(argv);
+        executed.push(argv);
+        const enabled = await options.query(plan);
+        if (enabled?.matchesPlan !== true || !sameActual(enabled, plan, options.current)
+            || enabled.installationId !== options.current.installationId) throw new CoreError(503, 'service_unavailable', 'The login registration could not be verified after installation.');
+      }
+      return { ...plan, executed, dryRun: false, os: executed.length > 0, action: 'unchanged', verification: 'verified', installationId: options.current?.installationId ?? null, ...(actual.digest ? { actualDigest: actual.digest } : {}), persistVerified: verifiedPending };
     }
     if (!ownedId) {
       return { ...plan, commands: [], executed: [], dryRun: false, os: false, action: 'conflict', conflict: true, reason: 'The login registration is not owned by this install.' };
@@ -335,6 +351,9 @@ function sameActual(actual, plan, current) {
 
 export function bootstrapConfig(config) {
   if (!config || typeof config !== 'object') fail(422, 'invalid_body', 'Config is required.');
+  if (config.startWithWindows !== undefined && typeof config.startWithWindows !== 'boolean') {
+    fail(422, 'invalid_body', 'startWithWindows must be a boolean.');
+  }
   if (config.encryption || config.preset === 'quantum' || config.quantum || config.algorithm) {
     fail(422, 'unsupported_origin', 'Unsupported encryption is refused.');
   }
@@ -361,6 +380,7 @@ export function bootstrapConfig(config) {
     origin: { kind: origin.kind, path: path.resolve(origin.path) },
     stagingPath: path.resolve(config.stagingPath),
     port: 0,
+    startWithWindows: config.startWithWindows ?? false,
   };
 }
 
@@ -383,49 +403,67 @@ export function ownershipRecord(plan) {
 export async function runServicePhases(input, options = {}) {
   const dryRun = options.dryRun !== false;
   const state = { config: false, registration: false, start: false, ...(options.state ?? {}) };
+  let config;
+  try {
+    config = bootstrapConfig(input.config);
+  } catch (error) {
+    return { status: 'failed', phase: 'config', state, os: false, error: error.message, code: error.code ?? 'invalid_body' };
+  }
   if (!state.config) {
-    let config;
-    try {
-      config = bootstrapConfig(input.config);
-    } catch (error) {
-      return { status: 'failed', phase: 'config', state, os: false, error: error.message, code: error.code ?? 'invalid_body' };
-    }
+    const prior = { ...config, startWithWindows: options.previousStartWithWindows ?? false };
     if (!dryRun && options.persistConfig) {
       try {
-        await options.persistConfig(config);
+        await options.persistConfig(prior);
       } catch (error) {
         return { status: 'failed', phase: 'config', state, os: false, error: error.message };
       }
     }
     state.config = true;
-    state.configBody = config;
+    state.configBody = prior;
   }
-  if (!state.registration) {
+  // Runtime ownership is the protected configuration, independent of logon startup.
+  state.registration = true;
+  const configureStartup = options.configureStartup ?? Object.hasOwn(input.config, 'startWithWindows');
+  if (configureStartup) {
     let installed;
     try {
-      installed = await installService(input.registration, {
+      if (config.startWithWindows) installed = await installService(input.registration, {
         dryRun,
         run: options.run,
         current: options.current ?? null,
         query: options.query,
         aclRunner: options.aclRunner,
         persistPendingRegistration: options.persistPendingRegistration,
+        preserveRuntime: true,
       });
+      else if (!dryRun && options.removeRegistration) {
+        const removed = await options.removeRegistration();
+        if (removed.kept || removed.described) {
+          return { status: 'failed', phase: 'registration', state, os: false, conflict: removed.kept?.reason ?? 'The login registration was not removed.' };
+        }
+      }
     } catch (error) {
       return { status: 'failed', phase: 'registration', state, os: false, error: error.message, code: error.code ?? 'service_unavailable' };
     }
-    if (installed.conflict) {
+    if (installed?.conflict) {
       return { status: 'failed', phase: 'registration', state, os: false, conflict: installed.reason };
     }
-    if (!dryRun && options.persistRegistration && (['create', 'update'].includes(installed.action) || installed.persistVerified)) {
+    if (!dryRun && options.persistRegistration && (['create', 'update'].includes(installed?.action) || installed?.persistVerified)) {
       try {
         await options.persistRegistration(installed);
       } catch (error) {
         return { status: 'failed', phase: 'registration', state, os: false, error: error.message, code: error.code ?? 'service_unavailable' };
       }
     }
-    state.registration = true;
-    state.installed = installed;
+    if (!dryRun && options.persistConfig && config.startWithWindows !== state.configBody.startWithWindows) {
+      try {
+        await options.persistConfig(config);
+      } catch (error) {
+        return { status: 'failed', phase: 'config', state, os: false, error: error.message, code: error.code ?? 'service_unavailable' };
+      }
+    }
+    state.configBody = config;
+    state.installed = installed ?? null;
   }
   if (dryRun) return { status: 'planned', phase: null, state, os: false, viewerUrl: null };
   if (!state.start) {
@@ -471,6 +509,9 @@ export async function configureOwnedService(options = {}) {
     kind: options.originKind ?? 'folder',
     path: options.originPath ?? path.join(cosmic, 'hivem1nd-origin', mindKey),
   };
+  const config = bootstrapConfig({ mindPath, machine, origin, stagingPath,
+    startWithWindows: Object.hasOwn(options, 'startWithWindows') ? options.startWithWindows : existing?.startWithWindows ?? false,
+    syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }) });
   const registration = {
     platform,
     nodePath: options.nodePath ?? process.execPath,
@@ -499,20 +540,12 @@ export async function configureOwnedService(options = {}) {
   }
   let resumedState = options.state;
   if (options.resumeSetup && existing) {
-    const expected = bootstrapConfig({ mindPath, machine, origin, stagingPath,
-      syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }) });
-    if (JSON.stringify(existing) !== JSON.stringify(expected)) fail(409, 'checkpoint_changed', 'The saved service configuration changed.');
-    resumedState = { config: true, configBody: existing, registration: false, start: false };
-    if (current) {
-      const plan = planRegistration(registration);
-      const actual = await (options.query ?? options.serviceQuery ?? (value => queryRegistration(value, { current })))(plan);
-      if (!verifyOwnedRegistration(current, plan).owned || !sameActual(actual, plan, current)
-        || current.installationId && actual.installationId !== current.installationId) {
-        fail(409, 'checkpoint_changed', 'The saved service registration could not be verified.');
-      }
-      resumedState.registration = true;
-      resumedState.installed = current;
-    }
+    if (JSON.stringify(bootstrapConfig(existing)) !== JSON.stringify(config)) fail(409, 'checkpoint_changed', 'The saved service configuration changed.');
+    resumedState = { config: true, configBody: config, registration: true, installed: current, start: false };
+  } else if (!resumedState && existing) {
+    const prior = bootstrapConfig(existing);
+    if (prior.mindPath !== mindPath || prior.machine !== machine || prior.stagingPath !== stagingPath) fail(409, 'service_mind_conflict', 'The saved service configuration does not match this installation.');
+    resumedState = { config: true, configBody: prior, registration: true, installed: current, start: false };
   }
   let writtenOwnershipFile = null;
   const persistRegistration = async (installed) => {
@@ -524,31 +557,34 @@ export async function configureOwnedService(options = {}) {
     writtenOwnershipFile = ownershipFile;
   };
   const result = await runServicePhases({
-    config: {
-      mindPath,
-      machine,
-      origin,
-      stagingPath,
-      syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }),
-    },
+    config,
     registration,
   }, {
     dryRun: options.dryRun !== false,
     state: resumedState,
     current,
+    configureStartup: Object.hasOwn(options, 'startWithWindows'),
+    previousStartWithWindows: existing?.startWithWindows ?? false,
     run: options.run ?? options.serviceRunner,
     start: options.configureOnly ? null : options.start ?? options.serviceStart,
     query: options.query ?? options.serviceQuery ?? ((plan) => queryRegistration(plan, { current })),
     aclRunner: options.aclRunner,
     persistRegistration,
     persistPendingRegistration: persistRegistration,
+    removeRegistration: () => removeOwnedRegistration({ ...options, hostname: machine, cosmicPath: cosmic,
+      dryRun: false, preserveRuntime: true, run: options.run ?? options.serviceRunner,
+      query: options.query ?? options.serviceQuery }),
     persistConfig: async (body) => {
       await assertLocalStaging(body.stagingPath, { platform, origin: body.origin.path, syncedRoots: options.syncedRoots ?? [], env });
       await mkdir(localDirectory, { recursive: true });
       const temporary = `${configFile}.${process.pid}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
-      await rename(temporary, configFile);
-      if (options.protect !== false) await protectLocalFile(configFile, { aclRunner: options.aclRunner, store: options.store });
+      try {
+        await writeFile(temporary, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+        if (options.protect !== false) await protectBootstrapFiles(localDirectory, temporary, { aclRunner: options.aclRunner, store: options.store });
+        await rename(temporary, configFile);
+      } finally {
+        await unlink(temporary).catch(error => { if (error?.code !== 'ENOENT') throw error; });
+      }
     },
   });
   if (options.configureOnly && result.phase === 'start' && result.state.config && result.state.registration) {
@@ -600,15 +636,16 @@ export async function removeOwnedRegistration(options = {}) {
   const command = platform === 'win32'
     ? `schtasks.exe /Delete /TN ${quoteWindows(current.name)} /F`
     : platform === 'darwin'
-      ? `launchctl bootout gui/${uid} ${current.path}`
-      : `systemctl --user disable --now ${current.name}`;
+      ? options.preserveRuntime ? `launchctl disable gui/${uid}/${current.name}` : `launchctl bootout gui/${uid} ${current.path}`
+      : `systemctl --user disable ${options.preserveRuntime ? '' : '--now '}${current.name}`;
   const argv = platform === 'win32'
     ? ['schtasks.exe', '/Delete', '/TN', current.name, '/F']
     : platform === 'darwin'
-      ? ['launchctl', 'bootout', `gui/${uid}`, current.path]
-      : ['systemctl', '--user', 'disable', '--now', current.name];
+      ? options.preserveRuntime ? ['launchctl', 'disable', `gui/${uid}/${current.name}`] : ['launchctl', 'bootout', `gui/${uid}`, current.path]
+      : ['systemctl', '--user', 'disable', ...(options.preserveRuntime ? [] : ['--now']), current.name];
   if (!options.dryRun && options.run) {
     await options.run(argv);
+    if (platform !== 'win32' && options.preserveRuntime) return { commands: [command], argv, removed: true, removedPaths: [] };
     const removedPaths = [];
     await assertNoLinks(current.path);
     const bytes = await readFile(current.path).catch((error) => { if (error?.code === 'ENOENT') return null; throw error; });

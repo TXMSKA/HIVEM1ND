@@ -57,8 +57,17 @@ export async function startService(options) {
     listener: null,
     bridge: null,
     beat: null,
+    stopping: false,
     credentials: options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) }),
     bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
+  };
+  const credentials = handle.credentials;
+  handle.credentials = {
+    ...credentials,
+    issue(input) {
+      if (handle.stopping) throw new CoreError(503, 'service_unavailable', 'The service is stopping.');
+      return credentials.issue(input);
+    },
   };
   try {
     await acquireServiceLock(handle);
@@ -99,12 +108,16 @@ export async function startService(options) {
         if (lock?.nonce !== handle.nonce || lock.digest !== handle.lock.digest) {
           throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
         }
+        if (serviceInUse(handle)) throw new CoreError(409, 'service_in_use', 'An active host or native session still needs the service.');
         if (afterReply) return stopService(handle);
         return { accepted: true };
       },
     });
     handle.adapters = openNativeAdapters(options.env ?? process.env, {
-      createNativeLaunch: request => createNativeLaunch(handle.bridge, request),
+      createNativeLaunch: request => {
+        if (handle.stopping) throw new CoreError(503, 'service_unavailable', 'The service is stopping.');
+        return createNativeLaunch(handle.bridge, request);
+      },
       onNativeRegistered: ({ request, registration }) => initializeNativeEntry({
         controller: handle.adopted?.controller?.wake, bridge: handle.bridge, request, registration,
       }),
@@ -185,6 +198,7 @@ export async function runConfiguredService(options = {}) {
     port: located.config.port,
     userKey: options.userKey,
     guardPort: options.guardPort,
+    retainHosts: true,
   });
 }
 
@@ -519,8 +533,16 @@ export async function composeCore(options) {
   return { bus, credentials, http, bootstrap, runtime };
 }
 
-export async function stopService(handle) {
+function serviceInUse(handle) {
+  // Viewer logout and native launch closure release the existing host/session leases.
+  return (handle.http?.viewers?.size ?? 0) > 0 || (handle.bridge?.launches?.size ?? 0) > 0;
+}
+
+export async function stopService(handle, { force = false } = {}) {
   if (!handle || handle.attached) return { stopped: false };
+  if (!force && handle.options.retainHosts && serviceInUse(handle)) return { stopped: false, inUse: true };
+  handle.stopping = true;
+  if (handle.bootstrapState) handle.bootstrapState.valid = false;
   handle.credentials?.revokeAudience('agent');
   await closeOwned(handle, { beat: true });
   const raw = await readFile(lockPath(handle.options)).catch(() => null);
