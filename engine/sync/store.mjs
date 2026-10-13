@@ -431,7 +431,14 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
   for (const item of prepared) await publishChange(sync, item.change);
   if (transactionId) {
     const record = { id: transactionId, changeIds: prepared.map((item) => item.change.id) };
-    await exclusiveRecord(sync.store, path.join(sync.paths.localDirectory, 'staging', 'transactions', `${transactionId}.json`), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'));
+    const file = path.join(sync.paths.localDirectory, 'staging', 'transactions', `${transactionId}.json`);
+    const bytes = Buffer.from(`${canonicalJson(record)}\n`, 'utf8');
+    try { await exclusiveRecord(sync.store, file, bytes); }
+    catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const existing = await readBytes(sync.store, file);
+      if (!existing?.equals(bytes)) throw new CoreError(409, 'revision_conflict', 'The staged transaction changed.');
+    }
   }
   const versions = await readVersions(sync);
   for (const item of prepared) {

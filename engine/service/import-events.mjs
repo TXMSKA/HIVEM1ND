@@ -3,6 +3,7 @@ import path from 'node:path';
 import { canonicalTaskId, parseTaskId } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { projectChat, readCollection, readDetail } from './projection.mjs';
+import { projectGroup } from './groups.mjs';
 import { readApproval } from './approvals.mjs';
 import { projectSessionRequest, readStartRequest } from './adapters.mjs';
 import { readAsset, readAttachments, readComments } from './editors.mjs';
@@ -43,6 +44,18 @@ export async function importedSidecarEvents(context, change) {
     return changed([event(`${name}.changed`, value)], name === 'layout' ? ['units'] : []);
   }
   if (file === 'user/gui/resources.json') return changed([], ['editors']);
+  const group = /^user\/gui\/groups\/([^/]+)\.json$/.exec(file);
+  if (group) {
+    if (change.operation === 'delete') return changed([], ['groups', 'chats']);
+    const value = projectGroup(await bytesAt(context.paths.mind, file), group[1]);
+    return changed([event('group.changed', { group: value }, { chatId: value.chatId })], ['groups', 'chats']);
+  }
+  const metadata = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
+  if (metadata) {
+    if (change.operation === 'delete') return changed([], ['chats']);
+    const chat = await projectChat(context, metadata[1]);
+    return changed([event('chat.changed', { chat }, { chatId: chat.id })], ['chats']);
+  }
   const binding = /^user\/relay\/editors\/([^/.]+)\.json$/.exec(file);
   if (binding) {
     const value = await readAttachments(context, binding[1]);

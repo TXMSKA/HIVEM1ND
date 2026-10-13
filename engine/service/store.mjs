@@ -1,9 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, hashText, isUuid } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from './identity.mjs';
 import { assertNoLinks, safeRelative } from './paths.mjs';
+import { protectLocalFile } from './security.mjs';
 
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const localChanges = new AsyncLocalStorage();
@@ -402,6 +403,7 @@ async function commitLocked(store, prepared) {
       afterBytesBase64: afterBytes.toString('base64'),
       recordPath,
       record: entry.record ?? null,
+      private: entry.private === true,
       current,
     };
     if (canonical) saved.target = canonical;
@@ -429,6 +431,7 @@ async function commitLocked(store, prepared) {
     events: prepared.events ?? [],
     emitted: false,
     staged: false,
+    sync: prepared.sync ?? null,
     conflicts: [],
   };
   if (entries.length === 1) {
@@ -446,6 +449,7 @@ async function commitLocked(store, prepared) {
     for (const entry of entries) {
       const destination = entry.target?.kind === 'project' ? entry.target : entry.recordPath;
       await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
+      if (entry.private) await protectLocalFile(entry.recordPath, { store });
       renamed += 1;
       if (store.fault?.afterRenames === renamed) {
         store.fault = null;
@@ -456,11 +460,13 @@ async function commitLocked(store, prepared) {
       store.fault = null;
       throw new CoreError(500, 'injected_crash', 'Injected crash before the receipt was published.');
     }
+    await stageJournal(store, journal);
     if (receipt) await writeReceipt(store, receipt);
     const committed = { ...journal, phase: 'committed', emitted: true, staged: true };
     await atomicWrite(store, journalFile(store, prepared.id), journalBytes(committed));
     for (const entry of entries) store.hidden.delete(entry.recordPath);
     emit(store, journal.events);
+    if (journal.sync) for (const event of journal.events) store.changeBus?.emit(event);
     return { status: receipt?.status ?? prepared.response?.status ?? 200, body: receipt?.response ?? prepared.response?.body ?? null, id: prepared.id };
   } catch (error) {
     store.recovered = false;
@@ -469,6 +475,10 @@ async function commitLocked(store, prepared) {
 }
 
 export async function recoverTransactions(store) {
+  return withLocalChanges(store, () => recoverTransactionsLocked(store));
+}
+
+async function recoverTransactionsLocked(store) {
   if (store.recovering) return [];
   store.recovering = true;
   try {
@@ -542,16 +552,100 @@ async function recoverOne(store, id) {
         const destination = item.entry.target?.kind === 'project' ? item.entry.target : item.recordPath;
         await atomicWrite(store, destination, Buffer.from(item.entry.afterBytesBase64, 'base64'));
       }
+      if (item.entry.private) await protectLocalFile(item.recordPath, { store });
       store.hidden.delete(item.recordPath);
     }
+    await stageJournal(store, fresh);
     if (fresh.receipt) {
       const existing = await readReceipt(store, fresh.receipt.principalHash, fresh.receipt.key);
       if (!existing) await writeReceipt(store, fresh.receipt);
     }
     const finished = { ...fresh, phase: 'committed', conflicts: [], emitted: true, staged: true };
     await atomicWrite(store, file, journalBytes(finished));
-    if (!fresh.emitted) emit(store, fresh.events ?? []);
+    if (!fresh.emitted) {
+      emit(store, fresh.events ?? []);
+      if (fresh.sync) for (const event of fresh.events ?? []) store.changeBus?.emit(event);
+    }
     return finished.id;
+  });
+}
+
+async function stageJournal(store, journal) {
+  if (!journal.sync) return [];
+  const { openSync, stageTransaction } = await import('../sync/store.mjs');
+  const sync = openSync({ store, paths: { mind: store.mindPath, localDirectory: store.localDirectory, machine: journal.sync.machine }, now: store.now, projects: store.projects });
+  const entries = journal.entries.filter((entry) => !entry.private).map((entry) => ({
+    target: entry.target ?? { kind: 'mind', path: safeRelative(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')) },
+    bytes: Buffer.from(entry.afterBytesBase64, 'base64'),
+    baseHash: entry.beforeRevision,
+    id: uuidV8(['journal-change', journal.id, entry.resource, entry.afterRevision]),
+  }));
+  return stageTransaction(sync, entries, { transactionId: journal.id, at: journal.sync.at });
+}
+
+export async function commitChange(context, prepared) {
+  if (context.bus) context.store.changeBus = context.bus;
+  const events = (prepared.events ?? []).map((event) => ({ ...event,
+    source: { kind: 'gui', id: context.paths.machine, unitId: context.principal?.unitId ?? 'root:master' },
+  }));
+  const result = await commitTransaction(context.store, { ...prepared, events,
+    receipt: context.receipt ?? null,
+    sync: { machine: context.paths.machine, at: new Date(context.now()).toISOString() },
+  });
+  const { noteSync } = await import('../sync/store.mjs');
+  noteSync(context, 'pending');
+  if (context.pulse) {
+    const ids = prepared.entries.filter((entry) => !entry.private).map((entry) => uuidV8(['journal-change', prepared.id, entry.resource, revisionOf(entry.afterBytes)]));
+    if ((await context.pulse.changed(ids))?.published === true) noteSync(context, 'published');
+  }
+  return result.body;
+}
+
+export async function prepareChangeUndo(context, { id, permission, resourceIds, entries, events }) {
+  const directory = path.join(context.store.localDirectory, 'change-undo');
+  await assertNoLinks(directory, { root: context.store.confineRoot });
+  await mkdir(directory, { recursive: true });
+  await protectLocalFile(directory, { store: context.store });
+  const transactions = path.join(context.store.localDirectory, 'transactions');
+  await mkdir(transactions, { recursive: true });
+  await protectLocalFile(transactions, { store: context.store });
+  const undoUntil = new Date(context.now() + 10000).toISOString();
+  const record = { format: 'hivem1nd-change-undo-v1', id, permission, resourceIds, undoUntil, undone: false,
+    entries: entries.map((entry) => ({ resource: entry.resource, recordPath: entry.recordPath, target: entry.target ?? null,
+      afterRevision: revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes.toString('base64') })), events };
+  return { undoUntil, entry: { resource: `change-undo:${id}`, recordPath: path.join(directory, `${id}.json`),
+    beforeRevision: null, afterBytes: journalBytes(record), private: true } };
+}
+
+export async function undoChange(context, changeId) {
+  if (!isUuid(changeId)) throw new CoreError(404, 'change_not_found', 'The change does not exist.');
+  if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Only the desktop can undo a change.');
+  return withLocalChanges(context.store, async () => {
+    const recordPath = path.join(context.store.localDirectory, 'change-undo', `${changeId}.json`);
+    const bytes = await readBytes(context.store, recordPath);
+    if (!bytes) throw new CoreError(404, 'change_not_found', 'The change does not exist.');
+    const record = JSON.parse(bytes);
+    if (record.format !== 'hivem1nd-change-undo-v1' || record.id !== changeId) throw new CoreError(409, 'undo_conflict', 'The undo record is not valid.');
+    if (context.principal.capabilities && !context.principal.capabilities.includes(record.permission)) throw new CoreError(403, 'forbidden', 'The originating change permission is required.');
+    if (context.now() >= Date.parse(record.undoUntil)) throw new CoreError(410, 'undo_expired', 'The ten-second undo period ended.');
+    if (record.undone) throw new CoreError(409, 'undo_conflict', 'The change was already undone.');
+    const entries = [];
+    for (const entry of record.entries) {
+      const destination = entry.target ?? entry.recordPath;
+      if (revisionOf(await readBytes(context.store, resolveAuthorized(context.store, destination))) !== entry.afterRevision) throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
+      entries.push({ resource: entry.resource, recordPath: entry.recordPath, ...(entry.target ? { target: entry.target } : {}),
+        beforeRevision: entry.afterRevision, afterBytes: Buffer.from(entry.beforeBytesBase64, 'base64') });
+    }
+    const id = randomUUID();
+    entries.push({ resource: `change-undo:${changeId}`, recordPath, beforeRevision: revisionOf(bytes),
+      afterBytes: journalBytes({ ...record, undone: true, undoOf: id }), private: true });
+    try {
+      return await commitChange(context, { id, entries, events: record.events,
+        response: { status: 200, body: { changeId: id, undoOf: changeId, resourceIds: record.resourceIds } } });
+    } catch (error) {
+      if (error?.code === 'revision_conflict') throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
+      throw error;
+    }
   });
 }
 

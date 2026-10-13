@@ -293,6 +293,7 @@ async function buildProjection(fx) {
   const sessions = await loadSessions(fx, byId);
   const tasks = await loadTasks(fx, byId, issues);
   const chats = await loadChats(fx, issues);
+  const groups = await loadGroups(fx, issues);
   const mailboxes = await loadMail(fx, byId, issues);
   const approvals = await loadApprovals(fx, issues);
   const editors = await loadEditors(fx, issues);
@@ -319,6 +320,7 @@ async function buildProjection(fx) {
     sessions,
     tasks,
     chats: chats.chats,
+    groups,
     messages: chats.messages,
     mailboxes,
     approvals,
@@ -580,6 +582,7 @@ async function loadChats(fx, issues) {
         members: parsed.fields.get("members") ?? [],
         pinned: boolField(field(parsed.fields, "pinned")),
         listed: boolField(field(parsed.fields, "listed"), true),
+        archived: boolField(field(parsed.fields, "archived")),
         createdAt: field(parsed.fields, "created"),
         revision: sha256(bytes),
         lastMessage: last ? publicMessage(last) : null,
@@ -591,6 +594,27 @@ async function loadChats(fx, issues) {
     }
   }
   return { chats, messages };
+}
+
+async function loadGroups(fx, issues) {
+  const groups = [];
+  const directory = join(fx.tree.user, "gui", "groups");
+  for (const entry of await listDir(directory)) {
+    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.includes(".conflict-")) continue;
+    try {
+      const bytes = await readFile(join(directory, entry.name));
+      const record = JSON.parse(bytes);
+      if (record.format !== "hivem1nd-group-v1" || `${record.id}.json` !== entry.name || record.chatId !== record.id) throw new Error("format");
+      groups.push(publicGroup(record, sha256(bytes)));
+    } catch {
+      issues.push({ path: relMind(fx.tree.mind, join(directory, entry.name)), code: "corrupt_resource", message: "The group could not be read." });
+    }
+  }
+  return groups.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+}
+
+function publicGroup(record, revision) {
+  return { id: record.id, title: record.title, members: record.members, chatId: record.chatId, createdAt: record.createdAt, deleted: record.deleted, revision };
 }
 
 function messageOrder(left, right) {
@@ -1083,7 +1107,8 @@ function viewData(fx, snap, project) {
     units = units.filter((unit) => local.has(unit.id) || leads.has(unit.id) || unit.id === "root:master" || unit.role === "overseer");
     tasks = tasks.filter((task) => task.scope.kind === "project" && task.scope.name === project);
   }
-  const chats = snap.chats.filter((chat) => chat.listed);
+  const chats = snap.chats.filter((chat) => chat.listed && !chat.archived);
+  const groups = snap.groups.filter((group) => !group.deleted);
   const counts = {
     units: units.length,
     leads: snap.leads.length,
@@ -1092,6 +1117,7 @@ function viewData(fx, snap, project) {
     machines: snap.machines.length,
     sessions: snap.sessions.length,
     chats: chats.length,
+    groups: groups.length,
     waiting: snap.waiting.length,
     open: snap.tasks.filter((task) => task.status === "open").length,
     review: snap.tasks.filter((task) => task.status === "review").length,
@@ -1103,7 +1129,7 @@ function viewData(fx, snap, project) {
   return {
     mind: { version: "3.0.0", machine: LOCAL_MACHINE, project: project ?? null },
     units, leads: snap.leads, squads: snap.squads, projects: snap.projects, machines: snap.machines,
-    sessions: snap.sessions, chats: chats.map(publicChat), tasks: tasks.map(publicTask), waiting: snap.waiting, counts, issues: snap.issues,
+    sessions: snap.sessions, chats: chats.map(publicChat), groups, tasks: tasks.map(publicTask), waiting: snap.waiting, counts, issues: snap.issues,
   };
 }
 
@@ -1356,6 +1382,9 @@ function intentIdPlaceholder() {
 }
 
 function authorize(principal, route) {
+  if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo"].includes(route.pattern)) {
+    throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
+  }
   const names = [route.capability, ...(route.allow ?? [])].filter(Boolean);
   if (names.length && !names.some((name) => principal.capabilities.includes(name))) {
     if (principal.audience === "phone") throw new HttpError(403, "phone_read_only", "The phone cannot change this.");
@@ -1690,7 +1719,10 @@ function routeTable() {
     { pattern: "/sessions", GET: { query: ["q", "limit", "cursor", "unitId", "machine", "state"] } },
     { pattern: "/sync", GET: { query: [] } },
     { pattern: "/layout", GET: { query: [] }, PATCH: { capability: "layout.write", validate: validateLayout } },
-    { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned"] }, POST: { capability: "chat.manage", validate: validateChat } },
+    { pattern: "/chats", GET: { query: ["q", "limit", "cursor", "unitId", "listed", "pinned", "archived"] }, POST: { capability: "chat.manage", validate: validateChat } },
+    { pattern: "/groups", GET: { query: ["q", "limit", "cursor"] }, POST: { capability: "chat.manage", validate: validateGroup } },
+    { pattern: "/groups/:groupId", PATCH: { capability: "chat.manage", validate: validateGroupPatch }, DELETE: { capability: "chat.manage", validate: validateGroupRemoval } },
+    { pattern: "/changes/:changeId/undo", POST: { capability: "chat.manage", validate: validateEmpty } },
     { pattern: "/chats/:chatId", PATCH: { capability: "chat.manage", validate: validateChatPatch } },
     { pattern: "/chats/:chatId", GET: { query: [] } },
     { pattern: "/chats/:chatId/messages", GET: { query: ["q", "limit", "cursor", "before"] }, POST: { capability: "chat.post", validate: validateMessage } },
@@ -1826,12 +1858,16 @@ async function readData(fx, snap, spec, params, query) {
     let items = snap.chats;
     const listed = query.get("listed");
     if (listed !== undefined && listed !== "true" && listed !== "false") throw new HttpError(400, "invalid_query", "The query is not valid.");
-    items = items.filter((chat) => chat.listed === (listed === undefined ? true : listed === "true"));
+    const archived = query.get("archived");
+    if (archived !== undefined && archived !== "true" && archived !== "false") throw new HttpError(422, "invalid_query", "The archive filter is not valid.");
+    items = items.filter((chat) => chat.archived === (archived === "true"));
+    if (listed !== undefined || archived !== "true") items = items.filter((chat) => chat.listed === (listed === undefined ? true : listed === "true"));
     if (query.get("pinned") !== undefined) items = items.filter((chat) => chat.pinned === (query.get("pinned") === "true"));
     if (query.get("unitId")) items = items.filter((chat) => chat.members.includes(query.get("unitId")));
     items = [...items].sort((left, right) => Number(right.pinned) - Number(left.pinned) || String(right.lastMessage?.timestamp ?? "").localeCompare(String(left.lastMessage?.timestamp ?? "")) || left.id.localeCompare(right.id, "en"));
     return page(items.map(publicChat), query, spec.GET.query, (chat, q) => includes(chat.title, q) || chat.members.some((id) => includes(id, q)), []);
   }
+  if (pattern === "/groups") return page(snap.groups.filter((group) => !group.deleted), query, spec.GET.query, (group, q) => includes(group.title, q), []);
   if (pattern === "/chats/:chatId") {
     noneQuery(query);
     const chat = snap.chats.find((item) => item.id === params.chatId);
@@ -2552,6 +2588,101 @@ function sessionRequestData(record) {
   };
 }
 
+function validateGroup(body) {
+  requireObject(body, ["title", "members"]);
+  groupTitle(body.title);
+  validateGroupMembers(body.members);
+}
+
+function validateGroupPatch(body) {
+  requireObject(body, ["title", "members", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (!("title" in body) && !("members" in body)) throw new HttpError(422, "invalid_body", "A group patch needs a title or members.");
+  if ("title" in body) groupTitle(body.title);
+  if ("members" in body) validateGroupMembers(body.members);
+}
+
+function validateGroupRemoval(body) {
+  requireObject(body, ["confirmed", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
+  revisionField(body.expectedRevision);
+  if (body.confirmed !== true) throw new HttpError(422, "confirmation_required", "Deleting a group requires confirmation.");
+}
+
+function groupTitle(value) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 240 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) throw new HttpError(422, "invalid_title", "A group title must be one nonblank line of at most 240 characters.");
+  return value.trim();
+}
+
+function validateGroupMembers(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 255 || new Set(value).size !== value.length || value.some((id) => typeof id !== "string" || id === "root:master")) throw new HttpError(422, "invalid_members", "Group members must be distinct non-master units.");
+}
+
+function fixtureWrite(file, before, after) {
+  return { path: file, beforeRevision: before === null ? null : sha256(before), afterRevision: sha256(after), afterBytesBase64: after.toString("base64") };
+}
+
+async function prepareGroup(fx, groupId, body) {
+  const snap = await projection(fx);
+  const existing = groupId ? snap.groups.find((group) => group.id === groupId && !group.deleted) : null;
+  if (groupId && !existing) throw new HttpError(404, "group_not_found", "The group does not exist.");
+  if (existing && existing.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The group changed.");
+  const members = [...(body.members ?? existing?.members ?? [])].sort();
+  if (members.some((id) => !snap.units.some((unit) => unit.id === id && unit.role !== "master" && unit.revision))) throw new HttpError(422, "invalid_members", "A group member does not exist.");
+  const title = "title" in body ? groupTitle(body.title) : existing.title;
+  const id = groupId ?? uuid();
+  const file = join(fx.tree.user, "gui", "groups", `${id}.json`);
+  let record;
+  let groupBefore = null;
+  let chatBefore = null;
+  let prepared;
+  if (existing) {
+    groupBefore = await readFile(file);
+    record = JSON.parse(groupBefore);
+    const chat = snap.chats.find((item) => item.id === id);
+    if (!chat || record.chatRevision !== chat.revision) throw new HttpError(409, "chat_changed", "The linked chat changed.");
+    chatBefore = await readFile(chat.file);
+    prepared = await rewriteChat(fx, chat, body.confirmed ? { archived: true, listed: false } : { title, members: ["root:master", ...members].sort() });
+  } else {
+    record = { format: "hivem1nd-group-v1", id, chatId: id, createdAt: clock(fx).toISOString(), deleted: false };
+    prepared = writeNewChat(fx, { id, title, members: ["root:master", ...members].sort(), kind: "group", pinned: false, listed: true });
+  }
+  const next = { ...record, title, members, deleted: body.confirmed === true, chatRevision: prepared.data.revision };
+  const bytes = Buffer.from(stableJson(next));
+  const group = publicGroup(next, sha256(bytes));
+  prepared.writes.unshift(fixtureWrite(file, groupBefore, bytes));
+  const events = [{ name: "group.changed", chatId: id, data: { group } }, ...prepared.events];
+  if (body.confirmed) {
+    const changeId = uuid();
+    const undoUntil = new Date(fx.nowMs + 10000).toISOString();
+    const undo = { id: changeId, undoUntil, undone: false, resourceIds: [id],
+      entries: prepared.writes.map((write, index) => ({ path: write.path, afterRevision: write.afterRevision, beforeBytesBase64: (index === 0 ? groupBefore : chatBefore).toString("base64") })),
+      events: [{ name: "group.changed", chatId: id, data: { group: existing } }, { name: "chat.changed", chatId: id, data: { chat: publicChat(snap.chats.find((chat) => chat.id === id)) } }] };
+    prepared.writes.push(fixtureWrite(join(fx.local, "change-undo", `${changeId}.json`), null, Buffer.from(stableJson(undo))));
+    return { status: 200, data: { groupId: id, changeId, undoUntil }, writes: prepared.writes, events };
+  }
+  return { status: existing ? 200 : 201, data: group, writes: prepared.writes, events };
+}
+
+async function prepareChangeUndo(fx, changeId) {
+  const file = join(fx.local, "change-undo", `${changeId}.json`);
+  let bytes;
+  try { bytes = await readFile(file); }
+  catch (error) { if (error.code === "ENOENT") throw new HttpError(404, "change_not_found", "The change does not exist."); throw error; }
+  const record = JSON.parse(bytes);
+  if (fx.nowMs >= Date.parse(record.undoUntil)) throw new HttpError(410, "undo_expired", "The ten-second undo period ended.");
+  if (record.undone) throw new HttpError(409, "undo_conflict", "The change was already undone.");
+  const writes = [];
+  for (const entry of record.entries) {
+    if (await hashExisting(entry.path) !== entry.afterRevision) throw new HttpError(409, "undo_conflict", "A changed record prevents Undo.");
+    writes.push({ path: entry.path, beforeRevision: entry.afterRevision, afterBytesBase64: entry.beforeBytesBase64, afterRevision: sha256(Buffer.from(entry.beforeBytesBase64, "base64")) });
+  }
+  const id = uuid();
+  writes.push(fixtureWrite(file, bytes, Buffer.from(stableJson({ ...record, undone: true }))));
+  return { status: 200, data: { changeId: id, undoOf: changeId, resourceIds: record.resourceIds }, writes, events: record.events };
+}
+
 function validateChat(body) {
   requireObject(body, ["members", "title"]);
   requireKeys(body, ["members"]);
@@ -2595,18 +2726,30 @@ async function prepareChatPatch(fx, chatId, body) {
   const chat = snap.chats.find((item) => item.id === chatId);
   if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
   if (chat.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The chat was changed elsewhere.", { currentRevision: chat.revision });
-  return rewriteChat(fx, chat, {
+  const prepared = await rewriteChat(fx, chat, {
     pinned: body.pinned ?? chat.pinned,
     listed: body.listed ?? chat.listed,
   });
+  const group = snap.groups.find((item) => item.id === chatId);
+  if (group) {
+    if (group.deleted && body.listed === true) throw new HttpError(409, "chat_changed", "Restore the archived group with Undo.");
+    const file = join(fx.tree.user, "gui", "groups", `${chatId}.json`);
+    const before = await readFile(file);
+    const record = JSON.parse(before);
+    if (record.chatRevision !== chat.revision) throw new HttpError(409, "chat_changed", "The linked chat changed.");
+    const bytes = Buffer.from(stableJson({ ...record, chatRevision: prepared.data.revision }));
+    prepared.writes.push(fixtureWrite(file, before, bytes));
+    prepared.events.push({ name: "group.changed", chatId, data: { group: publicGroup(JSON.parse(bytes), sha256(bytes)) } });
+  }
+  return prepared;
 }
 
 function writeNewChat(fx, chat) {
   const createdAt = clock(fx).toISOString();
-  const text = `id: ${chat.id}\ntitle: ${chat.title}\nmembers: ${JSON.stringify(chat.members)}\npinned: ${chat.pinned}\nlisted: ${chat.listed}\ncreated: ${createdAt}\ncreated-by: root:master\nkind: ${chat.kind}\n\n`;
+  const text = `id: ${chat.id}\ntitle: ${chat.title}\nmembers: ${JSON.stringify(chat.members)}\npinned: ${chat.pinned}\nlisted: ${chat.listed}\narchived: false\ncreated: ${createdAt}\ncreated-by: root:master\nkind: ${chat.kind}\n\n`;
   const bytes = Buffer.from(text);
   const revision = sha256(bytes);
-  const data = { ...chat, createdAt, revision, lastMessage: null, unread: 0 };
+  const data = { ...chat, archived: false, createdAt, revision, lastMessage: null, unread: 0 };
   return {
     status: 201,
     data,
@@ -2631,9 +2774,10 @@ async function rewriteChat(fx, chat, changes) {
 function replaceChatFields(text, changes) {
   const rows = text.replace(/\s*$/, "").split("\n");
   for (const [key, value] of Object.entries(changes)) {
-    const line = `${key}: ${value}`;
+    const line = `${key}: ${Array.isArray(value) ? JSON.stringify(value) : value}`;
     const index = rows.findIndex((row) => row.startsWith(`${key}:`));
     if (index >= 0) rows[index] = line;
+    else rows.push(line);
   }
   return `${rows.join("\n")}\n`;
 }
@@ -3654,6 +3798,9 @@ async function checkMutation(fx, pattern, params, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal) {
+  if (pattern === "/groups") return prepareGroup(fx, null, body);
+  if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);
+  if (pattern === "/changes/:changeId/undo") return prepareChangeUndo(fx, params.changeId);
   if (pattern === "/units") return prepareUnit(fx, body);
   if (pattern === "/units/:unitId/lead") return prepareLead(fx, params.unitId, body);
   if (pattern === "/units/:unitId/session") return prepareSession(fx, params.unitId, body);

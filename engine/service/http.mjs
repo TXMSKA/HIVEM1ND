@@ -5,11 +5,12 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { atomicWrite, withReceipt } from './store.mjs';
+import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, setUnitAlias } from './units.mjs';
 import { createChat, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
+import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
 import { enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
@@ -53,6 +54,11 @@ const ROUTES = [
   ['GET', '/layout', 'read', 'DP', 'layout'],
   ['PATCH', '/layout', 'layout.write', 'D', 'patchLayout'],
   ['GET', '/chats', 'read', 'DPA', 'collection', 'chats'],
+  ['GET', '/groups', 'read', 'DPA', 'listGroups'],
+  ['POST', '/groups', 'chat.manage', 'D', 'createGroup'],
+  ['PATCH', '/groups/:groupId', 'chat.manage', 'D', 'patchGroup'],
+  ['DELETE', '/groups/:groupId', 'chat.manage', 'D', 'removeGroup'],
+  ['POST', '/changes/:changeId/undo', 'read', 'D', 'undoChange'],
   ['GET', '/chats/:chatId', 'read', 'DPA', 'detail', 'chats'],
   ['GET', '/chats/:chatId/messages', 'read', 'DPA', 'collection', 'messages'],
   ['POST', '/chats', 'chat.manage', 'D', 'createChat'],
@@ -769,7 +775,8 @@ function allowedQuery(route) {
     '/projects': list,
     '/machines': list,
     '/sessions': [...list, 'unitId', 'machine', 'state'],
-    '/chats': [...list, 'unitId', 'listed', 'pinned'],
+    '/chats': [...list, 'unitId', 'listed', 'pinned', 'archived'],
+    '/groups': list,
     '/chats/:chatId/messages': [...list, 'before'],
     '/mailboxes': list,
     '/mailboxes/:unitId/messages': [...list, 'state'],
@@ -922,6 +929,10 @@ function allowedBody(route) {
     'POST /sessions/:sessionId/stop': ['confirmed'],
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
     'POST /chats': ['members', 'title'],
+    'POST /groups': ['title', 'members'],
+    'PATCH /groups/:groupId': ['title', 'members', 'expectedRevision'],
+    'DELETE /groups/:groupId': ['confirmed', 'expectedRevision'],
+    'POST /changes/:changeId/undo': [],
     'POST /chats/:chatId/messages': ['body', 'subject', 'replyTo', 'attachments', 'priority'],
     'POST /chats/:chatId/read': ['messageIds'],
     'PATCH /chats/:chatId': ['pinned', 'listed', 'expectedRevision'],
@@ -979,6 +990,7 @@ function domainContext(options, credential, bus) {
     principal: {
       unitId: audience === 'agent' ? credential.unitId : 'root:master',
       audience,
+      capabilities: credential?.capabilities,
       stableId: credential?.token ?? null,
       viewerId: credential?.viewerId ?? null,
       sessionId: credential?.sessionId ?? null,
@@ -1089,6 +1101,11 @@ async function invoke(route, scope) {
   if (route.template === '/grant-revocations/:requestId') return { status: 200, body: await readRevocation(domain, params.requestId) };
   if (route.template === '/session-requests/:requestId') return { status: 200, body: projectSessionRequest(await readStartRequest(domain, params.requestId)) };
   if (route.handler === 'view') return { status: 200, body: await readProjection(domain, numbers(query)) };
+  if (route.handler === 'listGroups') return { status: 200, body: await listGroups(domain, numbers(query)) };
+  if (route.handler === 'createGroup') return { status: 201, body: await createGroup(domain, body) };
+  if (route.handler === 'patchGroup') return { status: 200, body: await patchGroup(domain, params.groupId, body) };
+  if (route.handler === 'removeGroup') return { status: 200, body: await removeGroup(domain, params.groupId, body) };
+  if (route.handler === 'undoChange') return { status: 200, body: await undoChange(domain, params.changeId) };
   if (route.template === '/sync' && route.method === 'GET') return { status: 200, body: await readSync(domain) };
   if (route.handler === 'collection') {
     const next = numbers(query);

@@ -6,12 +6,16 @@ import assert from 'node:assert/strict';
 import { hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
 import { createStore } from '../engine/service/store.mjs';
+import { undoChange } from '../engine/service/store.mjs';
+import { createGroup, patchGroup, removeGroup } from '../engine/service/groups.mjs';
+import { readCollection, readProjection } from '../engine/service/projection.mjs';
+import { importedSidecarEvents } from '../engine/service/import-events.mjs';
 import { applyPack, compareVersions, recoverIncomingGroups } from '../engine/sync/apply.mjs';
 import { limitsFor, openLedger } from '../engine/sync/limits.mjs';
 import { closeOrigin, openOrigin, publishBeat, publishPack, readHead, watchOrigin } from '../engine/sync/origin.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
 import { startService, stopService } from '../engine/service/service.mjs';
-import { listStaged, observeLocalChange, openSync, settleAppliedMarker, stageBaselines, stageTransaction, targetKey } from '../engine/sync/store.mjs';
+import { ackPublished, eligibleTargets, listStaged, observeLocalChange, openSync, readObject, settleAppliedMarker, stageBaselines, stageTransaction, targetKey } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
@@ -739,6 +743,64 @@ test('an applied marker that cannot name its publisher is quarantined without re
   assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'orphan.txt'), 'utf8'), 'kept');
   const again = await stageBaselines(desktop);
   assert.equal(again.some((change) => change.target?.path === 'user/orphan.txt'), false);
+});
+
+test('personal group creation, edits, archive and Undo sync as identical group-chat transactions on two machines', async (t) => {
+  const { fixture, desktop, laptop, laptopOrigin } = await world(t);
+  laptop.store.aclRunner = fixture.store.aclRunner;
+  const source = { store: laptop.store, paths: laptop.paths, sync: laptop, now: () => fixture.clock.now, projects: [], principal: { audience: 'desktop', unitId: 'root:master' } };
+  const destination = { ...source, store: desktop.store, paths: desktop.paths, sync: desktop };
+  const state = Buffer.from('unit: one\nunit-id: root:one\nrole: executor\nstate: out\nmachine: LAPTOP\nlead-id: root:overseer\n\nOriginal context.\n');
+  await mkdir(path.join(laptop.paths.mind, 'user', 'state'), { recursive: true });
+  await mkdir(path.join(desktop.paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(path.join(laptop.paths.mind, 'user', 'state', 'one.md'), state);
+  await writeFile(path.join(desktop.paths.mind, 'user', 'state', 'one.md'), state);
+  let sequence = 0;
+  async function transfer(groupId, crash = false) {
+    const changes = await listStaged(laptop);
+    const pair = changes.filter((change) => change.target.path === `user/gui/groups/${groupId}.json` || change.target.path === `user/relay/chats/${groupId}/chat.md`);
+    assert.equal(pair.length, 2);
+    assert.equal(pair[0].transactionId, pair[1].transactionId);
+    assert.ok(pair[0].transactionId);
+    assert.equal(changes.some((change) => change.target.path.includes('change-undo')), false);
+    const objects = await Promise.all([...new Set(changes.map((change) => change.hash))].map(async (hash) => ({ hash, raw: await readObject(laptop, hash) })));
+    const body = encodePack({ machine: 'LAPTOP', sequence: ++sequence, changes, objects,
+      transactions: [{ id: pair[0].transactionId, changeIds: pair.map((change) => change.id) }] });
+    await publishPack(laptopOrigin, body);
+    if (crash) {
+      desktop.applyFault = { afterWrites: 1 };
+      await assert.rejects(applyPack(desktop, body), { code: 'injected_crash' });
+      await recoverIncomingGroups(desktop);
+    }
+    const applied = await applyPack(desktop, body);
+    assert.ok(['applied', 'duplicate'].includes(applied.status), applied.status);
+    for (const change of pair) {
+      const relative = change.target.path.split('/');
+      assert.deepEqual(await readFile(path.join(desktop.paths.mind, ...relative)), await readFile(path.join(laptop.paths.mind, ...relative)));
+      const sidecar = await importedSidecarEvents(destination, change);
+      assert.equal(sidecar.events[0].name, change.target.path.startsWith('user/gui/') ? 'group.changed' : 'chat.changed');
+    }
+    await ackPublished(laptop, changes.map((change) => change.id));
+    assert.deepEqual(await readFile(path.join(desktop.paths.mind, 'user', 'state', 'one.md')), state);
+    assert.deepEqual(await readFile(path.join(laptop.paths.mind, 'user', 'state', 'one.md')), state);
+  }
+  const created = await createGroup(source, { title: 'Shared', members: ['root:one'] });
+  assert.ok((await eligibleTargets(laptop)).some((target) => target.path === `user/gui/groups/${created.id}.json`));
+  await transfer(created.id, true);
+  assert.deepEqual((await readProjection(destination)).groups, (await readProjection(source)).groups);
+  fixture.clock.now += 1;
+  const patched = await patchGroup(source, created.id, { title: 'Shared renamed', expectedRevision: created.revision });
+  await transfer(created.id);
+  fixture.clock.now += 1;
+  const removed = await removeGroup(source, created.id, { confirmed: true, expectedRevision: patched.revision });
+  await transfer(created.id);
+  assert.equal((await readProjection(destination)).counts.groups, 0);
+  assert.deepEqual((await readCollection(destination, 'chats', { archived: true })).items, (await readCollection(source, 'chats', { archived: true })).items);
+  fixture.clock.now += 1;
+  await undoChange(source, removed.changeId);
+  await transfer(created.id);
+  assert.deepEqual((await readProjection(destination)).groups, (await readProjection(source)).groups);
+  assert.equal((await readCollection(destination, 'chats', { archived: true })).total, 0);
 });
 
 async function freePort() {

@@ -49,6 +49,10 @@ export async function createChat(context, input) {
 }
 
 export async function patchChat(context, chatId, input) {
+  if (await readBytes(context.store, absolute(context, `user/gui/groups/${chatId}.json`))) {
+    const { patchGroupChat } = await import('./groups.mjs');
+    return patchGroupChat(context, chatId, input);
+  }
   const hasPinned = Object.prototype.hasOwnProperty.call(input ?? {}, 'pinned');
   const hasListed = Object.prototype.hasOwnProperty.call(input ?? {}, 'listed');
   if (!hasPinned && !hasListed) throw new CoreError(422, 'invalid_body', 'A chat patch needs pinned or listed.');
@@ -474,6 +478,7 @@ function parseChat(bytes, id) {
     members: JSON.parse(headers.get('members') || '[]'),
     pinned: headers.get('pinned') === 'true',
     listed: headers.get('listed') !== 'false',
+    archived: headers.get('archived') === 'true',
     createdAt: headers.get('created') || null,
     revision: hashBytes(bytes),
   };
@@ -608,8 +613,22 @@ function fileStamp(context) {
 
 function replaceLine(bytes, name, value) {
   const text = bytes.toString('utf8');
-  const next = text.replace(new RegExp(`^${name}:.*$`, 'm'), `${name}: ${value}`);
+  const pattern = new RegExp(`^${name}:.*$`, 'm');
+  const next = pattern.test(text) ? text.replace(pattern, () => `${name}: ${value}`) : `${name}: ${value}\n${text}`;
   return Buffer.from(next);
+}
+
+export function groupChatBytes(context, { id, title, members, createdAt }) {
+  return Buffer.from(`id: ${id}\ntitle: ${title}\nmembers: ${canonicalJson(['root:master', ...members].sort())}\npinned: false\nlisted: true\narchived: false\ncreated: ${createdAt}\ncreated-by: ${author(context)}\nkind: group\n\n`);
+}
+
+export function editChatMetadata(bytes, changes) {
+  for (const [name, value] of Object.entries(changes)) bytes = replaceLine(bytes, name, name === 'members' ? canonicalJson(value) : String(value));
+  return bytes;
+}
+
+export function projectChatBytes(bytes, id, previous = {}) {
+  return { lastMessage: previous.lastMessage ?? null, unread: previous.unread ?? 0, ...parseChat(bytes, id) };
 }
 
 function headerMap(bytes) {

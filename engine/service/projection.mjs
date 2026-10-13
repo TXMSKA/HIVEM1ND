@@ -3,6 +3,8 @@ import path from 'node:path';
 import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 import { stateUnitId } from './state.mjs';
+import { projectGroup } from './groups.mjs';
+import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 
 const VIEW_LIMIT = 16000000;
@@ -121,19 +123,31 @@ export async function readCollection(context, name, query = {}) {
 }
 
 async function projectRecords(context, query) {
-  const aliases = await resolveAliases(context);
-  const scoped = { ...context, aliases };
-  const loaded = await loadMind(scoped);
-  const editors = await completeEditorSummaries(scoped, loaded.catalog);
-  return assemble(loaded, query, aliases, scoped.paths?.machine ?? null, editors);
+  return projectionRead(context, async () => {
+    const aliases = await resolveAliases(context);
+    const scoped = { ...context, aliases };
+    const loaded = await loadMind(scoped);
+    const editors = await completeEditorSummaries(scoped, loaded.catalog);
+    return assemble(loaded, query, aliases, scoped.paths?.machine ?? null, editors);
+  });
 }
 
 export async function projectChat(context, id) {
-  const aliases = await resolveAliases(context);
-  const loaded = await loadMind({ ...context, aliases });
-  const chat = loaded.chats.find((item) => item.id === id);
-  if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
-  return chat;
+  return projectionRead(context, async () => {
+    const aliases = await resolveAliases(context);
+    const loaded = await loadMind({ ...context, aliases });
+    const chat = loaded.chats.find((item) => item.id === id);
+    if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
+    return chat;
+  });
+}
+
+async function projectionRead(context, operation) {
+  if (!context.store) return operation();
+  return withLocalChanges(context.store, async () => {
+    await readBytes(context.store, path.join(context.paths.mind, 'user', 'gui', 'layout.json'));
+    return operation();
+  });
 }
 
 export async function loadPersonAliases(mind) {
@@ -180,6 +194,11 @@ async function completeEditorSummaries(context, catalog) {
 }
 
 export async function readDetail(context, name, id, scope = {}) {
+  if (name === 'chats') {
+    const chat = await projectChat(context, id);
+    if (context.principal?.audience === 'agent' && !chatMember(chat, context.principal.unitId)) throw new CoreError(404, 'chat_not_found', 'The record does not exist.');
+    return chat;
+  }
   const view = await readProjection(context);
   if (name === 'layout') return { layout: view.layout, revision: view.layoutRevision };
   if (name === 'settings') return { settings: view.settings, revision: view.settingsRevision };
@@ -197,8 +216,9 @@ function visibleToPrincipal(items, name, view, principal) {
   if (principal?.audience !== 'agent') return items;
   const unitId = principal.unitId;
   if (name === 'chats') return items.filter((chat) => chatMember(chat, unitId));
+  if (name === 'groups') return items.filter((group) => group.members.includes(unitId));
   if (name === 'messages') {
-    const allowed = new Set(view.chats.filter((chat) => chatMember(chat, unitId)).map((chat) => chat.id));
+    const allowed = new Set((view.allChats ?? view.chats).filter((chat) => chatMember(chat, unitId)).map((chat) => chat.id));
     return items.filter((message) => {
       const chatId = chatIdFromPath(message.path);
       return chatId ? allowed.has(chatId) : true;
@@ -290,6 +310,13 @@ async function loadMind(context) {
   const approvals = await readPendingApprovals(mind, issues);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
   const chats = await readChats(mind, messages, issues);
+  const groups = [];
+  for (const relative of await filesUnder(mind, 'user/gui/groups')) {
+    if (!relative.endsWith('.json') || relative.includes('.conflict-')) continue;
+    try { groups.push(projectGroup(await readSafe(mind, relative), path.posix.basename(relative, '.json'))); }
+    catch { issues.push({ path: relative, code: 'corrupt_resource', message: 'The group could not be projected.' }); }
+  }
+  groups.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   const machines = await readMachines(context, now, issues);
   const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues);
   const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
@@ -300,7 +327,7 @@ async function loadMind(context) {
     projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
   }
   projects.sort((left, right) => left.id.localeCompare(right.id));
-  return { units, sessions, messages, tasks, chats, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
+  return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
 }
 
 function assemble(loaded, query, aliases = [], machine = null, editors = []) {
@@ -350,6 +377,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     machines: loaded.machines,
     sessions: [...loaded.sessions].sort((left, right) => String(right.registeredAt ?? '').localeCompare(String(left.registeredAt ?? '')) || String(left.id).localeCompare(String(right.id))),
     chats: listedChats,
+    groups: loaded.groups.filter((group) => !group.deleted),
     tasks: loaded.tasks,
     waiting,
     counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
@@ -361,6 +389,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     messages: loaded.messages,
     editors,
   };
+  Object.defineProperty(view, 'allChats', { value: loaded.chats });
   return view;
 }
 
@@ -374,12 +403,13 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     machines: loaded.machines.length,
     sessions: loaded.sessions.length,
     chats: chats.length,
+    groups: loaded.groups.filter((group) => !group.deleted).length,
     waiting: waiting.length,
     open: tasks.filter((task) => task.status === 'open').length,
     review: tasks.filter((task) => task.status === 'review').length,
     done: tasks.filter((task) => task.status === 'done').length,
     closed: tasks.filter((task) => task.status === 'closed').length,
-    unread: loaded.messages.filter((message) => message.read === false).length,
+    unread: loaded.messages.filter((message) => message.read === false && !loaded.chats.some((chat) => chat.archived && chatIdFromPath(message.path) === chat.id)).length,
     issues: issues.length,
   };
 }
@@ -723,6 +753,7 @@ async function readChats(mind, messages, issues) {
         members,
         pinned: headers.get('pinned') === 'true',
         listed: headers.get('listed') !== 'false',
+        archived: headers.get('archived') === 'true',
         createdAt: headers.get('created') || headers.get('created-at') || null,
         revision: hashBytes(bytes),
         lastMessage: own[own.length - 1] ?? null,
@@ -814,6 +845,7 @@ function collectionItems(view, name, query = {}) {
   if (name === 'projects') return view.projects;
   if (name === 'sessions') return view.sessions;
   if (name === 'chats') return view.chats;
+  if (name === 'groups') return view.groups;
   if (name === 'tasks') return view.tasks;
   if (name === 'waiting') return view.waiting;
   if (name === 'mailboxes') return mailboxSummaries(view.messages);
@@ -850,6 +882,10 @@ function queryFlag(value) {
 }
 
 function chatListed(chat, query) {
+  if (query.archived != null && query.archived !== '') {
+    if (chat.archived !== queryFlag(query.archived)) return false;
+    if (queryFlag(query.archived)) return query.listed == null || query.listed === '' || chat.listed === queryFlag(query.listed);
+  } else if (chat.archived) return false;
   if (query.listed == null || query.listed === '') return chat.listed !== false;
   return chat.listed === queryFlag(query.listed);
 }

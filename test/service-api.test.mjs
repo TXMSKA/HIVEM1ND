@@ -1331,6 +1331,28 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(aliasUnknown, 400, 'alias unknown field');
   assert.equal(aliasUnknown.json.error.code, 'unknown_field');
   hit('PATCH', '/units/:unitId/alias');
+  const groupCreated = await call(port, 'POST', '/api/v1/groups', { token,
+    body: { title: 'Route group', members: ['root:executor'] }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(groupCreated, 201, 'create group');
+  hit('POST', '/groups');
+  const groupList = await call(port, 'GET', '/api/v1/groups', { token });
+  expectStatus(groupList, 200, 'group list');
+  assert.equal(groupList.json.data.items.some((item) => item.id === groupCreated.json.data.id), true);
+  expectStatus(await call(port, 'GET', '/api/v1/groups?unknown=true', { token }), 400, 'group query');
+  hit('GET', '/groups');
+  const groupPath = `/api/v1/groups/${groupCreated.json.data.id}`;
+  const groupPatched = await call(port, 'PATCH', groupPath, { token,
+    body: { title: 'Route group renamed', expectedRevision: groupCreated.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(groupPatched, 200, 'patch group');
+  hit('PATCH', '/groups/:groupId');
+  const groupRemoved = await call(port, 'DELETE', groupPath, { token,
+    body: { confirmed: true, expectedRevision: groupPatched.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(groupRemoved, 200, 'delete group');
+  hit('DELETE', '/groups/:groupId');
+  const groupUndone = await call(port, 'POST', `/api/v1/changes/${groupRemoved.json.data.changeId}/undo`, {
+    token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(groupUndone, 200, 'undo group deletion');
+  hit('POST', '/changes/:changeId/undo');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');
@@ -1612,5 +1634,63 @@ test('alias HTTP writes return a complete unit and replay the same receipt', asy
     body: { ...body, name: 'changed-id' }, headers: { 'idempotency-key': randomUUID() } });
   assert.equal(unknown.status, 400);
   assert.equal(unknown.json.error.code, 'unknown_field');
+});
+
+test('group HTTP receipts survive a partial write and enforce desktop authority and exact bodies', async (t) => {
+  const { core, paths, fixture, token } = await boot(t);
+  await mkdir(path.join(paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(path.join(paths.mind, 'user', 'state', 'one.md'), 'unit: one\nunit-id: root:one\nrole: executor\nstate: out\nlead-id: root:overseer\n\n');
+  const port = core.http.port;
+  const body = { title: 'Recovered group', members: ['root:one'] };
+  const key = randomUUID();
+  fixture.store.fault = { afterRenames: 1 };
+  const failed = await call(port, 'POST', '/api/v1/groups', { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(failed.status, 500);
+  const recovered = await call(port, 'POST', '/api/v1/groups', { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(recovered.status, 201);
+  assert.equal(recovered.json.meta.replayed, true);
+  const group = recovered.json.data;
+  const groupFile = path.join(paths.mind, 'user', 'gui', 'groups', `${group.id}.json`);
+  const { revisionOf } = await import('../engine/service/store.mjs');
+  assert.equal(group.revision, revisionOf(await readFile(groupFile)));
+  const again = await call(port, 'POST', '/api/v1/groups', { token, body, headers: { 'idempotency-key': key } });
+  assert.deepEqual(again.json.data, group);
+  assert.equal((await call(port, 'GET', '/api/v1/groups', { token })).json.data.total, 1);
+  assert.equal((await call(port, 'GET', '/api/v1/chats', { token })).json.data.total, 1);
+  const target = `/api/v1/groups/${group.id}`;
+  const patchBody = { title: 'Current group', expectedRevision: group.revision };
+  const patchKey = randomUUID();
+  const patched = await call(port, 'PATCH', target, { token, body: patchBody, headers: { 'idempotency-key': patchKey } });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.json.data.revision, revisionOf(await readFile(groupFile)));
+  assert.deepEqual((await call(port, 'PATCH', target, { token, body: patchBody, headers: { 'idempotency-key': patchKey } })).json.data, patched.json.data);
+  const removeBody = { confirmed: true, expectedRevision: patched.json.data.revision };
+  const removeKey = randomUUID();
+  const removed = await call(port, 'DELETE', target, { token, body: removeBody, headers: { 'idempotency-key': removeKey } });
+  assert.equal(removed.status, 200);
+  assert.deepEqual((await call(port, 'DELETE', target, { token, body: removeBody, headers: { 'idempotency-key': removeKey } })).json.data, removed.json.data);
+  const archives = await call(port, 'GET', '/api/v1/chats?archived=true', { token });
+  assert.deepEqual(archives.json.data.items.map((item) => item.id), [group.id]);
+  assert.equal((await call(port, 'GET', `/api/v1/chats/${group.id}`, { token })).status, 200);
+  assert.equal((await call(port, 'GET', '/api/v1/chats?archived=wrong', { token })).status, 422);
+  const undoTarget = `/api/v1/changes/${removed.json.data.changeId}/undo`;
+  const phone = core.credentials.issue({ audience: 'phone', expiresAt: '2027-01-01T00:00:00.000Z' });
+  const agent = core.credentials.issue({ audience: 'agent', unitId: 'root:one', capabilities: ['read', 'chat.manage'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  for (const denied of [phone, agent]) {
+    for (const [method, route, requestBody] of [['POST', '/api/v1/groups', body], ['PATCH', target, patchBody], ['DELETE', target, removeBody], ['POST', undoTarget, {}]]) {
+      const response = await call(port, method, route, { token: denied.token, body: requestBody, headers: { 'idempotency-key': randomUUID() } });
+      assert.equal(response.status, 403);
+    }
+  }
+  for (const [method, route, requestBody] of [['POST', '/api/v1/groups', body], ['PATCH', target, patchBody], ['DELETE', target, removeBody], ['POST', undoTarget, {}]]) {
+    const response = await call(port, method, route, { token, body: { ...requestBody, unknown: true }, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error.code, 'unknown_field');
+  }
+  const undoKey = randomUUID();
+  const restored = await call(port, 'POST', undoTarget, { token, body: {}, headers: { 'idempotency-key': undoKey } });
+  assert.equal(restored.status, 200);
+  assert.deepEqual((await call(port, 'POST', undoTarget, { token, body: {}, headers: { 'idempotency-key': undoKey } })).json.data, restored.json.data);
+  assert.equal((await call(port, 'GET', '/api/v1/groups', { token })).json.data.items[0].revision, patched.json.data.revision);
 });
 });
