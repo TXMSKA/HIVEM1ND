@@ -1013,7 +1013,10 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
         throw new CliUsageError(adapter.label + ' wake requires an existing exact registration for the selected target and unit.');
       }
     } else {
-      await relay.register({ unit: options.unit, nativeSessionId, client });
+      // A Claude session records its host conversation, so the same conversation under a new session ID finds its unit again.
+      const hostSessionId = client === 'claude' && typeof env.CLAUDE_CODE_HOST_SESSION_ID === 'string' && env.CLAUDE_CODE_HOST_SESSION_ID
+        ? env.CLAUDE_CODE_HOST_SESSION_ID : null;
+      await relay.register({ unit: options.unit, nativeSessionId, client, ...(hostSessionId ? { hostSessionId } : {}) });
     }
     const policy = await controller.enable({
       ...binding,

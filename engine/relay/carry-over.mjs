@@ -1,14 +1,22 @@
 // A Claude conversation can continue under a new native session ID: the desktop app starts a new session when it
-// restarts or recovers, and copies the conversation into the new session's transcript. Relay registrations and wake
-// consents name the old ID, so the chat would stop receiving its messages. This module carries them over, and only
-// when the link is certain: the transcript belongs to the current session (its file is named by that ID) and it
-// holds the conversation's own last Relay registration, made under the old ID for the same unit, which is still the
-// newest registration of that ID on this machine. Nothing is ever guessed from a unit name or a working directory.
+// restarts or recovers. Relay registrations and wake consents name the old ID, so the chat would stop receiving its
+// messages. This module carries them over, and only when the link is certain:
+// - the host conversation ID (CLAUDE_CODE_HOST_SESSION_ID), which the desktop app keeps for the whole conversation, is the
+//   one recorded with the old registration; or
+// - the transcript of the current session (a .jsonl named by its ID inside the Claude projects folder) holds the
+//   conversation's own last Relay registration, made under the old ID.
+// In both cases the old ID must still be the newest registration of the same unit on this machine. Nothing is ever
+// guessed from a unit name or a working directory. It runs from the Relay MCP server, which every session starts, and
+// from the turn hooks where a client runs them.
 
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRelay } from './store.mjs';
+import { claudeWakeCapability, spawnClaudeWakeWorker } from './claude-wake.mjs';
+
+const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
 
 const MAX_TRANSCRIPT_BYTES = 128 * 1024 * 1024;
 const MAX_CANDIDATES = 500;
@@ -56,28 +64,63 @@ export function lastRegistration(text) {
   return null;
 }
 
+/** Finds this session's transcript in any project folder of Claude Code, one level deep. */
+export async function findSessionTranscript(nativeSessionId, env = process.env) {
+  if (!SAFE_ID.test(nativeSessionId ?? '') || /[\\/]/.test(nativeSessionId)) return null;
+  const root = claudeProjectsPath(env);
+  const folders = await readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const folder of folders) {
+    if (!folder.isDirectory()) continue;
+    const found = await sessionTranscript(path.join(root, folder.name, `${nativeSessionId}.jsonl`), nativeSessionId, env);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** A host conversation ID that can be recorded, or null. */
+export function hostSessionOf(env = process.env) {
+  const id = env.CLAUDE_CODE_HOST_SESSION_ID;
+  return typeof id === 'string' && SAFE_ID.test(id) ? id : null;
+}
+
 /**
  * Carries this conversation's Relay registration, and its wake consent when one is enabled, from the native ID it was
  * made under to the current one. Returns null when there is nothing certain to carry, or
- * `{ unit, previous, binding }` where binding is the new wake binding or null.
+ * `{ unit, previous, binding }` where binding is the new wake binding or null. `startWorker` starts the wake worker of
+ * the new binding when the environment can reach this session's inbox.
  */
-export async function carryClaudeSession({ mindPath, nativeSessionId, transcriptPath, env = process.env, hostname = os.hostname(),
-  wakeControllerFactory }) {
-  const transcript = await sessionTranscript(transcriptPath, nativeSessionId, env);
-  if (!transcript) return null;
+export async function carryClaudeSession({ mindPath, nativeSessionId, transcriptPath = null, env = process.env, hostname = os.hostname(),
+  wakeControllerFactory, startWorker = false, wakeWorkerSpawner, platform = process.platform, assumeUnregistered = false }) {
+  if (!SAFE_ID.test(nativeSessionId ?? '')) return null;
+  const hostSessionId = hostSessionOf(env);
   const relay = await createRelay({ mindPath, hostname, sessionId: nativeSessionId, client: 'claude' });
-  const current = await relay.reminder({ nativeSessionId, client: 'claude' });
-  if (current.registered) return null;
-  const last = lastRegistration(await readFile(transcript, 'utf8'));
+  if (!assumeUnregistered && (await relay.reminder({ nativeSessionId, client: 'claude' })).registered) return null;
+
+  let last = null;
+  if (hostSessionId) {
+    const known = await relay.hostRegistration({ hostSessionId, client: 'claude' });
+    if (known && known.nativeSessionId !== nativeSessionId) last = { unit: known.unit, nativeSessionId: known.nativeSessionId };
+  }
+  if (!last) {
+    const transcript = transcriptPath ? await sessionTranscript(transcriptPath, nativeSessionId, env) : await findSessionTranscript(nativeSessionId, env);
+    if (transcript) last = lastRegistration(await readFile(transcript, 'utf8'));
+  }
   if (!last || last.nativeSessionId === nativeSessionId) return null;
   const previous = await relay.reminder({ nativeSessionId: last.nativeSessionId, client: 'claude' });
   if (!previous.registered || previous.unit.toLowerCase() !== last.unit.toLowerCase()) return null;
-  await relay.register({ unit: previous.unit, nativeSessionId, client: 'claude' });
+  await relay.register({ unit: previous.unit, nativeSessionId, client: 'claude', ...(hostSessionId ? { hostSessionId } : {}) });
 
+  const binding = await moveWake({ mindPath, from: last.nativeSessionId, nativeSessionId, unit: previous.unit, env, hostname,
+    wakeControllerFactory, startWorker, wakeWorkerSpawner, platform });
+  return { unit: previous.unit, previous: last.nativeSessionId, binding };
+}
+
+/** Moves an enabled wake consent of a unit from one native session to another on this machine, with the same window. */
+async function moveWake({ mindPath, from, nativeSessionId, unit, env, hostname, wakeControllerFactory, startWorker, wakeWorkerSpawner, platform }) {
   const { createRelayWakeController } = await import('./wake.mjs');
   const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname, sink: async () => ({ status: 'not_submitted' }) });
-  const old = await controller.findEnabledBinding({ nativeSessionId: last.nativeSessionId, client: 'claude', machine: hostname });
-  if (!old) return { unit: previous.unit, previous: last.nativeSessionId, binding: null };
+  const old = await controller.findEnabledBinding({ nativeSessionId: from, client: 'claude', machine: hostname });
+  if (!old || old.unit.toLowerCase() !== unit.toLowerCase()) return null;
   const policy = await controller.status(old);
   const binding = { unit: old.unit, nativeSessionId, client: 'claude', machine: hostname };
   // The same consent continues: same window length, extended or unlimited as the person gave it.
@@ -88,5 +131,23 @@ export async function carryClaudeSession({ mindPath, nativeSessionId, transcript
     ...(policy?.extended ? { extended: true } : {}),
   });
   await controller.disable(old);
-  return { unit: previous.unit, previous: last.nativeSessionId, binding };
+  if (startWorker && env.CLAUDE_CODE_SESSION_ID === nativeSessionId && claudeWakeCapability({ env, platform }).available) {
+    const child = (wakeWorkerSpawner ?? spawnClaudeWakeWorker)({ cliPath: CLI_PATH, mindPath, binding, env });
+    await child.ready.catch(() => {});
+  }
+  return binding;
+}
+
+/**
+ * After a session registers by hand as a unit, moves the wake that the same host conversation still holds under an
+ * earlier native session ID of that unit. Returns the new binding or null.
+ */
+export async function carryClaudeWake({ mindPath, nativeSessionId, unit, env = process.env, hostname = os.hostname(),
+  wakeControllerFactory, startWorker = false, wakeWorkerSpawner, platform = process.platform }) {
+  const hostSessionId = hostSessionOf(env);
+  if (!hostSessionId || !SAFE_ID.test(nativeSessionId ?? '')) return null;
+  const relay = await createRelay({ mindPath, hostname, sessionId: nativeSessionId, client: 'claude' });
+  const earlier = await relay.hostRegistration({ hostSessionId, client: 'claude', excludeNativeSessionId: nativeSessionId });
+  if (!earlier || earlier.unit.toLowerCase() !== String(unit).toLowerCase()) return null;
+  return moveWake({ mindPath, from: earlier.nativeSessionId, nativeSessionId, unit, env, hostname, wakeControllerFactory, startWorker, wakeWorkerSpawner, platform });
 }

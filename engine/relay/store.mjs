@@ -516,6 +516,7 @@ function toPublicRegistration(record) {
     activityObservedAt: record.activityObservedAt ?? null,
     quota: record.quota ?? null,
     quotaObservedAt: record.quotaObservedAt ?? null,
+    hostSessionId: record.hostSessionId ?? null,
   };
 }
 
@@ -1027,19 +1028,22 @@ export async function createRelay(options = {}) {
   const relay = {
     wakePersistence,
     async register(args = {}) {
-      validateArgs(args, 'register', ['unit', 'nativeSessionId', 'client', 'activity', 'quota']);
+      validateArgs(args, 'register', ['unit', 'nativeSessionId', 'client', 'activity', 'quota', 'hostSessionId']);
       const unit = validUnit(args.unit);
       const identity = await resolveUnit(unit);
       const nativeSessionId = args.nativeSessionId === undefined ? instanceId : scalar(args.nativeSessionId, 'nativeSessionId', 180);
       const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
       const activity = safeActivity(args.activity);
       const quota = safeQuota(args.quota);
+      // The conversation a client hosts the session in, when it has one that outlives the native session ID.
+      const hostSessionId = args.hostSessionId === undefined || args.hostSessionId === null ? null : scalar(args.hostSessionId, 'hostSessionId', 180);
       // A chat registers again whenever its client starts a new MCP process. When it is still registered as the same unit, that
       // record stays, so the consent that names the chat is not outdated and the registrations do not pile up.
       if (activity === null && quota === null) {
         const latest = (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
           .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
-        if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id) {
+        if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id
+          && (hostSessionId === null || latest.hostSessionId === hostSessionId)) {
           currentRegistration = latest;
           return toPublicRegistration(latest);
         }
@@ -1050,6 +1054,7 @@ export async function createRelay(options = {}) {
         scopeId: identity.scope.id, nativeSessionId, client, machine: hostname,
         registeredAt: observedAt, activity, activityObservedAt: activity === null ? null : observedAt,
         quota, quotaObservedAt: quota === null ? null : observedAt,
+        ...(hostSessionId === null ? {} : { hostSessionId }),
       };
       await publishExclusive(mindPath, path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
       currentRegistration = record;
@@ -1335,6 +1340,18 @@ export async function createRelay(options = {}) {
       }
       const events = [...byId.values()].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
       return { events: events.slice(-limit) };
+    },
+
+    /** The newest registration on this machine of a client's host conversation, or null. */
+    async hostRegistration(args = {}) {
+      validateArgs(args, 'hostRegistration', ['hostSessionId', 'client', 'excludeNativeSessionId']);
+      const hostSessionId = scalar(args.hostSessionId, 'hostSessionId', 180);
+      const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
+      const exclude = args.excludeNativeSessionId === undefined ? null : scalar(args.excludeNativeSessionId, 'excludeNativeSessionId', 180);
+      const newest = (await registrations()).filter((record) => record.hostSessionId === hostSessionId && record.client === client && record.machine === hostname
+        && record.nativeSessionId !== exclude)
+        .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
+      return newest ? toPublicRegistration(newest) : null;
     },
 
     async reminder(args = {}) {
