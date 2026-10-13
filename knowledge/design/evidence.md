@@ -42,6 +42,8 @@ Findings are ranked so that a long list stays usable. The test for the boundary 
 | P2 | An annoyance with a workaround | In the next pass |
 | P3 | Polish, no practical impact | When there is time |
 
+Within one rank, a finding met by more people or on the primary flow goes first, and between two of equal reach the cheaper fix goes first.
+
 Every finding carries the location, the impact in one line, and the fix. A finding without a fix is an observation, and a list of observations is not a report.
 
 ## Tool limits
