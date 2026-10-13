@@ -48,6 +48,7 @@ export async function publishPack(origin, packBytes) {
     return { sequence: journal.sequence, hash: digest, bytes: bytes.length, replayed: true };
   }
   const decoded = decodePack(bytes);
+  await validateProjectPublication(origin, decoded.changes);
   if (decoded.header.machine !== origin.machine) {
     throw new CoreError(422, 'invalid_record_owner', 'The pack machine does not match the origin.');
   }
@@ -94,6 +95,22 @@ export async function publishPack(origin, packBytes) {
     throw new CoreError(500, 'injected_crash', 'Injected crash after the head was committed.');
   }
   return { sequence, hash: digest, bytes: bytes.length, replayed: false };
+}
+
+async function validateProjectPublication(origin, changes) {
+  const { projectPathSet } = await import('./store.mjs');
+  for (const change of changes) {
+    if (change.target.kind !== 'project') continue;
+    const project = (origin.store.projects ?? []).find((item) => item.name === change.target.project);
+    if (!project) continue;
+    const allowed = await projectPathSet(project, { mind: origin.store.mindPath });
+    if (allowed.has(change.target.path)) continue;
+    const bytes = change.transactionId ? await readFileIfRegular(path.join(origin.paths.localDirectory, 'transactions', `${change.transactionId}.json`)) : null;
+    const journal = bytes ? JSON.parse(bytes) : null;
+    const verified = journal?.entries?.some((entry) => entry.target?.project === change.target.project && entry.target.path === change.target.path
+      && (entry.operation ?? 'put') === change.operation && entry.afterRevision === change.hash && entry.beforeRevision === change.baseHash);
+    if (!verified) throw new CoreError(422, 'invalid_pack', 'The publication target is not an eligible record.');
+  }
 }
 
 export function prepareServiceBeat(machine, beat) {

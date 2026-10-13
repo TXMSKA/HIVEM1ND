@@ -390,7 +390,7 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
   const atDefault = options.at ? requireTime(options.at) : timestamp(sync.now());
   const prepared = [];
   for (const entry of entries) {
-    const normalized = await prepareTarget(sync, entry.target);
+    const normalized = await prepareTarget(sync, entry.target, options.authorizedTargets);
     const deleted = entry.deleted === true;
     const raw = deleted ? null : Buffer.isBuffer(entry.bytes) ? entry.bytes : Buffer.from(entry.bytes ?? '');
     if (!deleted && entry.bytes == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
@@ -479,13 +479,13 @@ async function publishChange(sync, change) {
   }
 }
 
-async function prepareTarget(sync, target) {
+async function prepareTarget(sync, target, authorizedTargets = []) {
   const normalized = normalizeTarget(target);
   if (normalized.kind === 'project') {
     const project = sync.projects.find((item) => item.name === normalized.project && item.localPath && item.eligible !== false);
     if (!project) throw new CoreError(409, 'project_unavailable', 'The project is not registered on this machine.');
     const allowed = await projectPathSet(project, { mind: sync.paths.mind });
-    if (!allowed.has(normalized.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
+    if (!allowed.has(normalized.path) && !authorizedTargets.some((item) => item.kind === 'project' && item.project === normalized.project && item.path === normalized.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
   }
   await resolveTarget(sync.paths, normalized, { projects: sync.projects });
   return normalized;
@@ -554,6 +554,7 @@ export async function projectPathSet(project, options = {}) {
     }
   };
   const resources = await readCatalog(options.mind, project.name);
+  add('docs/flows/library.json');
   if (Array.isArray(options.resources)) {
     for (const resource of options.resources) {
       if (resource?.project === project.name) resources.push(resource);
@@ -563,11 +564,22 @@ export async function projectPathSet(project, options = {}) {
     if (resource?.project !== project.name || typeof resource.path !== 'string') continue;
     add(resource.path);
     for (const sidecar of sidecars(resource)) add(sidecar);
+    const history = path.join(project.localPath, 'docs', 'flows', 'history', resource.id ?? '');
+    if (/^[0-9a-f-]{36}$/.test(resource.id ?? '')) {
+      for (const name of await readdir(history).catch((error) => { if (error.code === 'ENOENT') return []; throw error; })) {
+        if (/^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(name)) add(`docs/flows/history/${resource.id}/${name}`);
+      }
+    }
     const absolute = path.join(project.localPath, ...String(resource.path).split('/'));
     if (await isRegular(absolute)) {
       for (const asset of referencedAssets(await readFile(absolute))) add(asset);
     }
   }
+  for (const relative of options.historyPaths ?? []) {
+    if (resources.some((resource) => relative.startsWith(`docs/flows/history/${resource.id}/`))
+      && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.split('/').at(-1))) add(relative);
+  }
+  for (const bytes of options.documents ?? []) for (const asset of referencedAssets(bytes)) add(asset);
   await addRegisteredAssets(options.mind, resources, add);
   if (Array.isArray(options.registries)) {
     const ids = new Set(resources.map((item) => item?.id).filter((id) => typeof id === 'string'));
@@ -632,7 +644,7 @@ function referencedAssets(bytes) {
   const found = [];
   const visit = (value, depth) => {
     if (depth > 40) return;
-    if (typeof value === 'string' && value.startsWith('docs/flows/assets/')) found.push(value);
+    if (typeof value === 'string' && /^(?:docs\/flows\/)?assets\/[^/]+$/.test(value)) found.push(value.startsWith('assets/') ? `docs/flows/${value}` : value);
     else if (Array.isArray(value)) value.forEach((item) => visit(item, depth + 1));
     else if (value && typeof value === 'object') Object.values(value).forEach((item) => visit(item, depth + 1));
   };

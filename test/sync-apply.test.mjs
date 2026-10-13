@@ -8,6 +8,7 @@ import { servicePaths } from '../engine/service/paths.mjs';
 import { createStore } from '../engine/service/store.mjs';
 import { undoChange } from '../engine/service/store.mjs';
 import { createGroup, patchGroup, removeGroup } from '../engine/service/groups.mjs';
+import { createFolder, createText, moveEditor, readEditor, removeEditor } from '../engine/service/editors.mjs';
 import { readCollection, readProjection } from '../engine/service/projection.mjs';
 import { importedSidecarEvents } from '../engine/service/import-events.mjs';
 import { applyPack, compareVersions, recoverIncomingGroups } from '../engine/sync/apply.mjs';
@@ -81,6 +82,119 @@ async function world(t) {
   const ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, machine: 'DESKTOP' });
   return { fixture, desktop, laptop, desktopOrigin, laptopOrigin, ledger };
 }
+
+test('library empty folders physical moves deletion tombstones and Undo replicate as recoverable whole transactions', async (t) => {
+  const { fixture, desktop, laptop, laptopOrigin } = await world(t);
+  laptop.store.aclRunner = fixture.store.aclRunner;
+  for (const sync of [desktop, laptop]) {
+    sync.projects = [];
+    for (const name of ['shop', 'api']) {
+      const localPath = path.join(fixture.root, `${sync.machine}-${name}`);
+      await mkdir(localPath, { recursive: true });
+      sync.projects.push({ name, localPath });
+    }
+  }
+  const context = { store: laptop.store, paths: laptop.paths, sync: laptop, projects: laptop.projects,
+    now: () => fixture.clock.now, principal: { audience: 'desktop', unitId: 'root:master' } };
+  let sequence = 0;
+  async function transfer({ offline = false, crash = false } = {}) {
+    const changes = await listStaged(laptop);
+    const objects = await Promise.all([...new Set(changes.map((change) => change.hash).filter(Boolean))].map(async (hash) => ({ hash, raw: await readObject(laptop, hash) })));
+    const groups = new Map();
+    for (const change of changes) {
+      const ids = groups.get(change.transactionId) ?? [];
+      ids.push(change.id);
+      groups.set(change.transactionId, ids);
+    }
+    const bytes = encodePack({ machine: 'LAPTOP', sequence: ++sequence, changes, objects,
+      transactions: [...groups].map(([id, changeIds]) => ({ id, changeIds })) });
+    await publishPack(laptopOrigin, bytes);
+    if (offline) {
+      const projects = desktop.projects;
+      desktop.projects = projects.filter((project) => project.name !== 'api');
+      const catalogBefore = await readFile(path.join(desktop.paths.mind, 'user/gui/resources.json'));
+      assert.equal((await applyPack(desktop, bytes)).status, 'pending');
+      assert.deepEqual(await readFile(path.join(desktop.paths.mind, 'user/gui/resources.json')), catalogBefore);
+      desktop.projects = projects;
+    }
+    if (crash) {
+      desktop.applyFault = { afterWrites: 2 };
+      await assert.rejects(() => applyPack(desktop, bytes), { code: 'injected_crash' });
+      await recoverIncomingGroups(desktop);
+    }
+    assert.equal((await applyPack(desktop, bytes)).status, 'applied');
+    await ackPublished(laptop, changes.map((change) => change.id));
+    return changes;
+  }
+  const folder = await createFolder(context, { project: 'shop', kind: 'void', title: 'Empty folder', parentId: null, expectedRevision: null });
+  assert.ok((await eligibleTargets(laptop)).some((target) => target.kind === 'project' && target.path === 'docs/flows/library.json'));
+  await transfer();
+  fixture.clock.now += 1;
+  const text = await createText(context, { project: 'shop', path: 'docs/source.json', folderId: folder.folder.id,
+    document: { title: 'Source', foreign: { nested: [1, { kept: true }] }, pages: [{ k: 'A', en: 'Exact text' }] } });
+  await transfer();
+  fixture.clock.now += 1;
+  const current = await readEditor(context, text.id);
+  const moved = await moveEditor(context, text.id, { project: 'api', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: true,
+    expectedRevision: current.revision, expectedCommentsRevision: current.commentsRevision, expectedAttachmentRevision: current.attachmentRevision, expectedLibraryRevision: current.libraryRevision });
+  const moveChanges = await transfer({ offline: true, crash: true });
+  assert.ok(moveChanges.some((change) => change.operation === 'delete' && change.target.path === 'docs/source.json' && change.hash === null && change.size === 0));
+  const sourceRoot = desktop.projects.find((project) => project.name === 'shop').localPath;
+  const targetRoot = desktop.projects.find((project) => project.name === 'api').localPath;
+  await assert.rejects(() => readFile(path.join(sourceRoot, 'docs/source.json')), { code: 'ENOENT' });
+  assert.deepEqual(JSON.parse(await readFile(path.join(targetRoot, 'docs/moved.json'))).foreign, text.document.foreign);
+  fixture.clock.now += 1;
+  await undoChange(context, moved.changeId);
+  await transfer();
+  assert.equal(JSON.parse(await readFile(path.join(sourceRoot, 'docs/source.json'))).title, 'Source');
+  await assert.rejects(() => readFile(path.join(targetRoot, 'docs/moved.json')), { code: 'ENOENT' });
+  fixture.clock.now += 1;
+  const restored = await readEditor(context, text.id);
+  const deletion = await removeEditor(context, text.id, { confirmed: true, expectedRevision: restored.revision, expectedCommentsRevision: restored.commentsRevision,
+    expectedAttachmentRevision: restored.attachmentRevision, expectedLibraryRevision: restored.libraryRevision });
+  const deletes = await transfer({ crash: true });
+  assert.ok(deletes.filter((change) => change.operation === 'delete').length >= 5);
+  await assert.rejects(() => readFile(path.join(sourceRoot, 'docs/source.json')), { code: 'ENOENT' });
+  const imported = await importedSidecarEvents({ ...context, paths: desktop.paths, store: desktop.store, projects: desktop.projects }, deletes.find((change) => change.target.path === 'docs/source.json'));
+  assert.equal(imported.events[0].name, 'editor.removed');
+  fixture.clock.now += 1;
+  await undoChange(context, deletion.changeId);
+  await transfer();
+  assert.deepEqual(await readFile(path.join(sourceRoot, 'docs/source.json')), await readFile(path.join(laptop.projects[0].localPath, 'docs/source.json')));
+});
+
+test('a newer source revision prevents every logical write in an incoming library move', async (t) => {
+  const { fixture, desktop } = await world(t);
+  const localPath = path.join(fixture.root, 'shop');
+  await mkdir(path.join(localPath, 'docs/flows'), { recursive: true });
+  desktop.projects = [{ name: 'shop', localPath }];
+  const sourceId = uuidV8(['editor', 'void', 'shop', 'docs/source.json']);
+  const destinationId = uuidV8(['editor', 'void', 'shop', 'docs/destination.json']);
+  const catalogPath = path.join(desktop.paths.mind, 'user/gui/resources.json');
+  const catalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: sourceId, project: 'shop', kind: 'void', path: 'docs/source.json' }] }));
+  const library = Buffer.from(JSON.stringify({ format: 'hivem1nd-library-v1', folders: [], items: {} }));
+  const current = Buffer.from('Newer source');
+  await mkdir(path.dirname(catalogPath), { recursive: true });
+  await writeFile(catalogPath, catalog);
+  await writeFile(path.join(localPath, 'docs/flows/library.json'), library);
+  await writeFile(path.join(localPath, 'docs/source.json'), current);
+  await observeLocalChange(desktop, { kind: 'project', project: 'shop', path: 'docs/source.json' }, { bytes: current, at: LATER });
+  const transactionId = uuidV8(['conflicting-library-move']);
+  const incoming = Buffer.from('Older source');
+  const nextCatalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: destinationId, project: 'shop', kind: 'void', path: 'docs/destination.json' }] }));
+  const records = [
+    put({ kind: 'mind', path: 'user/gui/resources.json' }, nextCatalog, { transactionId }),
+    { ...put({ kind: 'project', project: 'shop', path: 'docs/source.json' }, incoming, { transactionId }), operation: 'delete', hash: null, size: 0 },
+    put({ kind: 'project', project: 'shop', path: 'docs/destination.json' }, incoming, { transactionId }),
+    put({ kind: 'project', project: 'shop', path: 'docs/flows/library.json' }, library, { transactionId }),
+  ];
+  const bytes = pack(records, [nextCatalog, incoming, library].map((raw) => ({ hash: hashBytes(raw), raw })), { transactions: [{ id: transactionId, changeIds: records.map((change) => change.id) }] });
+  assert.equal((await applyPack(desktop, bytes)).status, 'applied');
+  assert.deepEqual(await readFile(catalogPath), catalog);
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/source.json')), current);
+  await assert.rejects(() => readFile(path.join(localPath, 'docs/destination.json')), { code: 'ENOENT' });
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/flows/library.json')), library);
+});
 
 test('version order keeps both conflict bytes and breaks equal-time ties', async (t) => {
   const { fixture, desktop, laptopOrigin } = await world(t);

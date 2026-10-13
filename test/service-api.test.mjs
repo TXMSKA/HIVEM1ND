@@ -715,6 +715,58 @@ function sketch(id, title) {
   return document;
 }
 
+test('library routes reject exact schema violations and foreign writes then replay a recovered deletion once', async (t) => {
+  const fixture = await makeCoreFixture();
+  const projects = [];
+  for (const name of ['shop', 'api']) {
+    const localPath = path.join(fixture.root, name);
+    await mkdir(localPath, { recursive: true });
+    projects.push({ name, localPath });
+  }
+  const origin = path.join(fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const core = await composeCore({ store: fixture.store, paths: { ...fixture.paths, origin }, projects, now: () => fixture.clock.now });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  const login = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = login.json.data.token, port = core.http.port;
+  const folder = await call(port, 'POST', '/api/v1/library/folders', { token,
+    body: { project: 'shop', kind: 'void', title: 'Texts', parentId: null, expectedRevision: null }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(folder.status, 201);
+  const created = await call(port, 'POST', '/api/v1/void/texts', { token,
+    body: { project: 'shop', path: 'docs/test.json', folderId: folder.json.data.folder.id, document: { title: 'Exact content', pages: [{ k: 'A', en: 'Preserved' }] } }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(created.status, 201);
+  const editor = created.json.data;
+  const revisions = { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision, expectedAttachmentRevision: editor.attachmentRevision, expectedLibraryRevision: editor.libraryRevision };
+  const routes = [
+    ['POST', '/library/folders', { project: 'shop', kind: 'void', title: 'Folder', parentId: null, expectedRevision: editor.libraryRevision }],
+    ['PATCH', `/library/folders/${folder.json.data.folder.id}`, { project: 'shop', title: 'Renamed', expectedRevision: editor.libraryRevision }],
+    ['DELETE', `/library/folders/${folder.json.data.folder.id}`, { project: 'shop', confirmed: true, expectedRevision: editor.libraryRevision }],
+    ['PATCH', `/editors/${editor.id}/library`, { title: 'Title', expectedRevision: editor.revision, expectedLibraryRevision: editor.libraryRevision }],
+    ['POST', `/editors/${editor.id}/duplicate`, { project: 'api', folderId: null, path: 'docs/copy.json', title: 'Copy', expectedRevision: editor.revision }],
+    ['POST', `/editors/${editor.id}/move`, { project: 'api', folderId: null, path: 'docs/moved.json', confirmedRepositoryChange: true, ...revisions }],
+    ['DELETE', `/editors/${editor.id}`, { confirmed: true, ...revisions }],
+  ];
+  const denied = ['phone', 'agent'].map((audience) => core.credentials.issue({ audience, unitId: 'root:master', sessionId: randomUUID(), viewerId: randomUUID(), expiresAt: new Date(fixture.clock.now + 60000).toISOString() }));
+  for (const [method, route, body] of routes) {
+    const unknown = await call(port, method, `/api/v1${route}`, { token, body: { ...body, unknown: true }, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(unknown.status, 400, route);
+    assert.equal(unknown.json.error.code, 'unknown_field');
+    for (const credential of denied) assert.equal((await call(port, method, `/api/v1${route}`, { token: credential.token, body, headers: { 'idempotency-key': randomUUID() } })).status, 403, route);
+  }
+  for (const route of ['/library/folders?kind=void&unknown=true', '/void/texts?unknown=true', '/blueprint/boards?unknown=true']) assert.equal((await call(port, 'GET', `/api/v1${route}`, { token })).status, 400);
+  assert.equal((await call(port, 'GET', '/api/v1/void/texts?openComments=yes', { token })).status, 422);
+  const key = randomUUID(), body = { confirmed: true, ...revisions };
+  fixture.store.fault = { afterRenames: 2 };
+  assert.equal((await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } })).status, 500);
+  const recovered = await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(recovered.status, 200);
+  const replayed = await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } });
+  assert.deepEqual(replayed.json.data, recovered.json.data);
+  assert.equal(fixture.store.events.filter((event) => event.name === 'editor.removed' && event.resourceId === editor.id).length, 1);
+  assert.equal((await call(port, 'POST', `/api/v1/changes/${recovered.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } })).status, 200);
+  assert.equal((await call(port, 'GET', `/api/v1/void/texts/${editor.id}`, { token })).status, 200);
+});
+
 test('every contract route has a success result and an authority or boundary failure', async (t) => {
   const fixture = await makeCoreFixture();
   const origin = path.join(fixture.root, 'origin');
@@ -809,12 +861,17 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(connected, 200, 'connect lead');
   hit('PUT', '/units/:unitId/lead');
   const led = await call(port, 'GET', '/api/v1/units/root:executor', { token });
-  const started = await call(port, 'POST', '/api/v1/units/root:executor/session', {
+  let started = await call(port, 'POST', '/api/v1/units/root:executor/session', {
     token,
     body: { client: 'codex', model: 'strong', expectedRevision: led.json.data.revision, prompt: 'Say ok.' },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(started, 202, 'start session');
+  const launchDeadline = Date.now() + 5000;
+  while (['queued', 'starting'].includes(started.json.data.state) && Date.now() < launchDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    started = await call(port, 'GET', `/api/v1/session-requests/${started.json.data.requestId}`, { token });
+  }
   assert.equal(started.json.data.state, 'started');
   assert.equal(started.json.data.request, undefined);
   hit('POST', '/units/:unitId/session');
@@ -838,6 +895,9 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(stopped.json.data.sessionId, sessionId);
   assert.equal(stopped.json.data.state, 'stopping');
   hit('POST', '/sessions/:sessionId/stop');
+  const canceledStart = await call(port, 'POST', `/api/v1/session-requests/${requestId}/cancel`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  assert.ok([200, 202].includes(canceledStart.status));
+  hit('POST', '/session-requests/:requestId/cancel');
 
   const currentLayout = await call(port, 'GET', '/api/v1/layout', { token });
   const layout = await call(port, 'PATCH', '/api/v1/layout', {
@@ -1360,6 +1420,45 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(port, 'DELETE', '/api/v1/units/root:reviewer', { token,
     body: removalBody, headers: { 'idempotency-key': randomUUID() } }), 200, 'unit removal');
   hit('DELETE', '/units/:unitId');
+  const folderCreated = await call(port, 'POST', '/api/v1/library/folders', { token,
+    body: { project: 'shop', kind: 'void', title: 'Route folder', parentId: null, expectedRevision: (await call(port, 'GET', `/api/v1/void/texts/${textId}`, { token })).json.data.libraryRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(folderCreated, 201, 'create library folder');
+  hit('POST', '/library/folders');
+  expectStatus(await call(port, 'GET', '/api/v1/library/folders?project=shop&kind=void', { token }), 200, 'list library folders');
+  expectStatus(await call(port, 'GET', '/api/v1/library/folders?kind=void&unknown=true', { token }), 400, 'folder query boundary');
+  hit('GET', '/library/folders');
+  const folderPath = `/api/v1/library/folders/${folderCreated.json.data.folder.id}`;
+  const folderPatched = await call(port, 'PATCH', folderPath, { token,
+    body: { project: 'shop', title: 'Renamed folder', expectedRevision: folderCreated.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(folderPatched, 200, 'patch library folder');
+  hit('PATCH', '/library/folders/:folderId');
+  const librarySource = (await call(port, 'GET', `/api/v1/void/texts/${textId}`, { token })).json.data;
+  const libraryRenamed = await call(port, 'PATCH', `/api/v1/editors/${textId}/library`, { token,
+    body: { title: 'Library title', expectedRevision: librarySource.revision, expectedLibraryRevision: librarySource.libraryRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(libraryRenamed, 200, 'rename library item');
+  hit('PATCH', '/editors/:resourceId/library');
+  const copied = await call(port, 'POST', `/api/v1/editors/${textId}/duplicate`, { token,
+    body: { project: 'shop', folderId: null, title: 'Copy', path: 'docs/route-copy.json', expectedRevision: librarySource.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(copied, 201, 'duplicate editor');
+  hit('POST', '/editors/:resourceId/duplicate');
+  const copyId = copied.json.data.id;
+  const movedCopy = await call(port, 'POST', `/api/v1/editors/${copyId}/move`, { token,
+    body: { project: 'shop', folderId: folderCreated.json.data.folder.id, path: 'docs/ignored-logical-path.json', confirmedRepositoryChange: false,
+      expectedRevision: copied.json.data.revision, expectedCommentsRevision: copied.json.data.commentsRevision,
+      expectedAttachmentRevision: copied.json.data.attachmentRevision, expectedLibraryRevision: copied.json.data.libraryRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(movedCopy, 200, 'move editor to folder');
+  assert.equal(movedCopy.json.data.editor.path, 'docs/route-copy.json');
+  hit('POST', '/editors/:resourceId/move');
+  const copy = movedCopy.json.data.editor;
+  const deleteCopy = await call(port, 'DELETE', `/api/v1/editors/${copyId}`, { token,
+    body: { confirmed: true, expectedRevision: copy.revision, expectedCommentsRevision: copy.commentsRevision,
+      expectedAttachmentRevision: copy.attachmentRevision, expectedLibraryRevision: copy.libraryRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(deleteCopy, 200, 'delete editor');
+  hit('DELETE', '/editors/:resourceId');
+  const latestFolder = (await call(port, 'GET', '/api/v1/library/folders?kind=void&project=shop', { token })).json.data.items.find((item) => item.id === folderCreated.json.data.folder.id);
+  expectStatus(await call(port, 'DELETE', folderPath, { token,
+    body: { project: 'shop', confirmed: true, expectedRevision: latestFolder.revision }, headers: { 'idempotency-key': randomUUID() } }), 200, 'delete library folder');
+  hit('DELETE', '/library/folders/:folderId');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');

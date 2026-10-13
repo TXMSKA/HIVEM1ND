@@ -982,7 +982,8 @@ async function loadEditors(fx, issues) {
       revision = sha256(bytes);
       if (!readOnly) document = JSON.parse(bytes.toString("utf8"));
     } catch {
-      issues.push({ path: `${resource.project}/${resource.path}`, code: "malformed_record", message: "The editor resource could not be read." });
+      const available = await lstat(repo).then((stats) => stats.isDirectory()).catch(() => false);
+      issues.push({ project: resource.project, resourceId: resource.id, path: `${resource.project}/${resource.path}`, code: available ? "malformed_record" : "project_unavailable", message: "The editor resource could not be read." });
     }
     const commentsFile = resource.kind === "void"
       ? file.replace(/\.json$/, ".comments.json")
@@ -1019,7 +1020,10 @@ async function loadEditors(fx, issues) {
     } catch (error) {
       if (error.code !== "ENOENT") attachmentRevision = null;
     }
-    const title = document?.title ?? resource.legacyId ?? resource.path;
+    const library = await fixtureLibrary(fx, resource.project).catch(() => null);
+    const item = library?.value.items[resource.id];
+    const times = await Promise.all([file, commentsFile].map((path) => lstat(path).then((stats) => stats.mtimeMs).catch(() => 0)));
+    const title = item?.title ?? document?.title ?? resource.legacyId ?? resource.path;
     editors.push({
       id: resource.id,
       kind: resource.kind,
@@ -1037,6 +1041,9 @@ async function loadEditors(fx, issues) {
       commentsRevision,
       threads,
       corrupt,
+      folderId: item?.folderId ?? null,
+      updatedAt: item?.updatedAt ?? (Math.max(...times) ? new Date(Math.max(...times)).toISOString() : null),
+      libraryRevision: library?.revision ?? null,
       proposals: threads.flatMap((thread) => (thread.messages ?? []).flatMap((message) => (message.proposal ? [{ ...message.proposal, resourceId: resource.id, threadId: thread.id, commentsRevision }] : []))),
     });
   }
@@ -1224,8 +1231,16 @@ async function saveIntent(fx, intent) {
 async function finishIntent(fx, intent) {
   for (const write of intent.writes) {
     const current = await hashExisting(write.path);
+    if (current !== write.afterRevision && current !== write.beforeRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
+  }
+  for (const write of intent.writes) {
+    const current = await hashExisting(write.path);
     if (current === write.afterRevision) continue;
     if (current !== write.beforeRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
+    if (write.operation === "delete") {
+      await rm(write.path, { force: true });
+      continue;
+    }
     const bytes = Buffer.from(write.afterBytesBase64, "base64");
     if (sha256(bytes) !== write.afterRevision) throw new HttpError(500, "fixture_journal_conflict", "Fixture journal conflict.");
     await writeAtomic(write.path, bytes);
@@ -1362,6 +1377,7 @@ async function mutate(fx, request, route, body, principal, requestId) {
     }
     await route.checkPreconditions(body);
     const prepared = await route.prepare(body, principal, key);
+    await fixtureTouchLibrary(fx, prepared);
     const response = prepared.status === 204 ? null : success(fx, prepared.data, requestId, planCursor(fx, prepared.events.length), prepared.sync ?? "local");
     const createdAt = clock(fx).toISOString();
     const expiresAt = new Date(fx.nowMs + DAY_MS).toISOString();
@@ -1789,12 +1805,18 @@ function routeTable() {
     { pattern: "/settings/home-network", POST: { capability: "home.manage", validate: validateHome, runtime: true } },
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
     { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
-    { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateBoard } },
+    { pattern: "/library/folders", GET: { query: ["q", "limit", "cursor", "project", "kind"] }, POST: { capability: "editor.write", validate: libraryValidator("create-folder") } },
+    { pattern: "/library/folders/:folderId", PATCH: { capability: "editor.write", validate: libraryValidator("patch-folder") }, DELETE: { capability: "editor.write", validate: libraryValidator("delete-folder") } },
+    { pattern: "/editors/:resourceId/library", PATCH: { capability: "editor.write", validate: libraryValidator("patch") } },
+    { pattern: "/editors/:resourceId/duplicate", POST: { capability: "editor.write", validate: libraryValidator("duplicate") } },
+    { pattern: "/editors/:resourceId/move", POST: { capability: "editor.write", validate: libraryValidator("move") } },
+    { pattern: "/editors/:resourceId", DELETE: { capability: "editor.write", validate: libraryValidator("delete") } },
+    { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project", "folderId", "openComments", "attachedAgents", "changedThisWeek"] }, POST: { capability: "editor.write", validate: validateBoard } },
     { pattern: "/blueprint/boards/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateBoardPut } },
     { pattern: "/blueprint/boards/:resourceId/nodes", POST: { capability: "editor.write", validate: validateAddNode } },
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", PATCH: { capability: "editor.write", validate: validatePatchNode } },
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", DELETE: { capability: "editor.write", validate: validateDeleteNode } },
-    { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project"] }, POST: { capability: "editor.write", validate: validateText } },
+    { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project", "folderId", "openComments", "attachedAgents", "changedThisWeek"] }, POST: { capability: "editor.write", validate: validateText } },
     { pattern: "/void/texts/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateTextPut } },
     { pattern: "/void/texts/:resourceId/ranges", POST: { capability: "editor.write", validate: validateRange } },
     { pattern: "/void/texts/:resourceId/proposals/:proposalId/answer", POST: { capability: "proposal.answer", validate: validateProposalAnswer } },
@@ -2009,8 +2031,33 @@ async function readData(fx, snap, spec, params, query) {
     const kind = pattern.startsWith("/blueprint") ? "blueprint" : "void";
     let items = snap.editors.filter((editor) => editor.kind === kind);
     if (query.get("project")) items = items.filter((editor) => editor.project === query.get("project"));
+    if (query.has("folderId")) items = items.filter((editor) => editor.folderId === query.get("folderId"));
+    const monday = clock(fx);
+    monday.setUTCHours(0, 0, 0, 0);
+    monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+    for (const key of ["openComments", "attachedAgents", "changedThisWeek"]) {
+      if (!query.has(key)) continue;
+      if (!["true", "false"].includes(query.get(key))) throw new HttpError(422, "invalid_query", "Library filters must be boolean.");
+      if (query.get(key) === "true") items = items.filter((editor) => key === "openComments" ? editor.openThreads > 0 : key === "attachedAgents" ? editor.attached.length > 0 : Date.parse(editor.updatedAt) >= monday.getTime());
+    }
     items = [...items].sort((left, right) => left.project.localeCompare(right.project, "en") || left.title.localeCompare(right.title, "en") || left.id.localeCompare(right.id, "en"));
-    return page(items.map(summary), query, spec.GET.query, (editor, q) => includes(editor.title, q) || includes(editor.project, q) || includes(editor.path, q), []);
+    const result = page(items, query, spec.GET.query, (editor, q) => includes(JSON.stringify([editor.title, editor.document, editor.threads]), q), snap.issues.filter((issue) => issue.code === "project_unavailable"));
+    return { ...result, items: result.items.map(summary) };
+  }
+  if (pattern === "/library/folders") {
+    const kind = query.get("kind");
+    if (!["blueprint", "void"].includes(kind)) throw new HttpError(422, "invalid_query", "The editor kind is required.");
+    const items = [], issues = [];
+    for (const project of snap.projects.filter((item) => !query.get("project") || item.id === query.get("project"))) {
+      try {
+        const library = await fixtureLibrary(fx, project.id);
+        for (const folder of library.value.folders.filter((item) => item.kind === kind)) {
+          const children = fixtureFolderTree(library.value, folder.id);
+          items.push({ ...folder, project: project.id, revision: library.revision, count: snap.editors.filter((editor) => editor.project === project.id && children.has(editor.folderId)).length });
+        }
+      } catch { issues.push({ project: project.id, code: "project_unavailable", message: "The project library is not available." }); }
+    }
+    return page(items, query, spec.GET.query, (folder, q) => includes(folder.title, q), issues);
   }
   if (pattern === "/blueprint/boards/:resourceId" || pattern === "/void/texts/:resourceId") {
     noneQuery(query);
@@ -2097,6 +2144,7 @@ function summary(editor) {
   return {
     id: editor.id, kind: editor.kind, project: editor.project, title: editor.title, path: editor.path, readOnly: editor.readOnly,
     revision: editor.revision, attached: editor.attached, openThreads: editor.openThreads, activity: editor.activity,
+    folderId: editor.folderId, updatedAt: editor.updatedAt,
   };
 }
 
@@ -2783,7 +2831,8 @@ function validateGroupMembers(value) {
 }
 
 function fixtureWrite(file, before, after) {
-  return { path: file, beforeRevision: before === null ? null : sha256(before), afterRevision: sha256(after), afterBytesBase64: after.toString("base64") };
+  return { path: file, beforeRevision: before === null ? null : sha256(before), afterRevision: after === null ? null : sha256(after),
+    afterBytesBase64: after?.toString("base64") ?? null, ...(after === null ? { operation: "delete" } : {}) };
 }
 
 async function prepareGroup(fx, groupId, body) {
@@ -2839,7 +2888,8 @@ async function prepareChangeUndo(fx, changeId) {
   const writes = [];
   for (const entry of record.entries) {
     if (await hashExisting(entry.path) !== entry.afterRevision) throw new HttpError(409, "undo_conflict", "A changed record prevents Undo.", { path: relMind(fx.tree.mind, entry.path) });
-    writes.push({ path: entry.path, beforeRevision: entry.afterRevision, afterBytesBase64: entry.beforeBytesBase64, afterRevision: sha256(Buffer.from(entry.beforeBytesBase64, "base64")) });
+    writes.push({ path: entry.path, beforeRevision: entry.afterRevision, afterBytesBase64: entry.beforeBytesBase64,
+      afterRevision: entry.beforeBytesBase64 === null ? null : sha256(Buffer.from(entry.beforeBytesBase64, "base64")), ...(entry.beforeBytesBase64 === null ? { operation: "delete" } : {}) });
   }
   const id = uuid();
   writes.push(fixtureWrite(file, bytes, Buffer.from(stableJson({ ...record, undone: true }))));
@@ -3247,7 +3297,7 @@ function validateRegister(body) {
 }
 
 function validateBoard(body) {
-  requireObject(body, ["project", "path", "document", "attached"]);
+  requireObject(body, ["project", "path", "document", "attached", "folderId"]);
   requireKeys(body, ["project", "document"]);
   assertDocument(body.document);
   if (body.path !== undefined) assertEditorPath(body.project, body.path);
@@ -3255,7 +3305,7 @@ function validateBoard(body) {
 }
 
 function validateText(body) {
-  requireObject(body, ["project", "path", "document", "attached"]);
+  requireObject(body, ["project", "path", "document", "attached", "folderId"]);
   requireKeys(body, ["project", "path", "document"]);
   assertDocument(body.document);
   assertEditorPath(body.project, body.path);
@@ -3299,6 +3349,8 @@ async function prepareRegister(fx, body) {
 }
 
 async function prepareCreateEditor(fx, kind, body) {
+  const library = await fixtureLibrary(fx, body.project);
+  fixtureFolder(library, body.folderId ?? null, kind);
   const path = body.path ?? (kind === "blueprint" ? `docs/flows/boards/${body.document.id}.json` : null);
   if (!path?.endsWith(".json")) throw new HttpError(422, "invalid_path", "The path is not valid.");
   assertEditorPath(body.project, path);
@@ -3322,6 +3374,14 @@ async function prepareCreateEditor(fx, kind, body) {
     { path: file, beforeRevision: null, afterRevision: revision, afterBytesBase64: docBytes.toString("base64") },
     { path: join(fx.tree.user, "gui", "resources.json"), beforeRevision: catalog.hash, afterRevision: sha256(catalogBytes), afterBytesBase64: catalogBytes.toString("base64") },
   ];
+  library.value.items[id] = { title: document.title, folderId: body.folderId ?? null, updatedAt: clock(fx).toISOString() };
+  writes.push(fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value))));
+  const historyId = uuid();
+  const historyRoot = editorFile(fx, body.project, `docs/flows/history/${id}/${historyId}`);
+  writes.push(fixtureWrite(`${historyRoot}.json`, null, Buffer.from(stableJson({ format: "hivem1nd-editor-history-v1", id: historyId,
+    resourceId: id, at: clock(fx).toISOString(), by: "root:master", operation: "create", documentPath: path, commentsPath: null, revision, commentsRevision: null }))),
+    fixtureWrite(`${historyRoot}.document.json`, null, docBytes));
+  if (kind === "void") writes.push(fixtureWrite(file.replace(/\.json$/, ".orig.json"), null, docBytes));
   let attachmentRevision = null;
   if (attached.length) {
     const binding = { format: "hivem1nd-editor-binding-v1", resourceId: id, kind, attached, updatedAt: clock(fx).toISOString() };
@@ -3331,7 +3391,8 @@ async function prepareCreateEditor(fx, kind, body) {
   }
   return {
     status: 201,
-    data: { id, kind, project: body.project, title: document.title ?? document.id, path, readOnly: false, revision, document, legacy: null, attached, threads: [], commentsRevision: null, attachmentRevision, proposals: [] },
+    data: { id, kind, project: body.project, title: document.title ?? document.id, path, readOnly: false, revision, document, legacy: null, attached, threads: [], commentsRevision: null, attachmentRevision, proposals: [],
+      folderId: body.folderId ?? null, updatedAt: clock(fx).toISOString(), libraryRevision: sha256(Buffer.from(stableJson(library.value))) },
     writes,
     events: [{
       name: kind === "void" ? "void.changed" : "blueprint.changed",
@@ -3961,7 +4022,242 @@ async function checkMutation(fx, pattern, params, body) {
   }
 }
 
+function libraryValidator(operation) {
+  const common = ["expectedRevision", "expectedCommentsRevision", "expectedAttachmentRevision", "expectedLibraryRevision"];
+  const fields = {
+    "create-folder": ["project", "kind", "title", "parentId", "expectedRevision"],
+    "patch-folder": ["project", "title", "parentId", "expectedRevision"],
+    "delete-folder": ["project", "confirmed", "expectedRevision"],
+    patch: ["title", "folderId", "expectedRevision", "expectedLibraryRevision"],
+    duplicate: ["project", "folderId", "title", "path", "expectedRevision"],
+    move: ["project", "folderId", "path", "confirmedRepositoryChange", ...common],
+    delete: ["confirmed", ...common],
+  }[operation];
+  return (body) => {
+    requireObject(body, fields);
+    requireKeys(body, fields.filter((key) => !(operation === "patch-folder" && ["title", "parentId"].includes(key)) && !(operation === "patch" && ["title", "folderId"].includes(key))));
+    for (const key of fields.filter((key) => key.startsWith("expected"))) if (key in body) revisionField(body[key]);
+    if ("title" in body) groupTitle(body.title);
+    if (["delete", "delete-folder"].includes(operation) && body.confirmed !== true) throw new HttpError(422, "confirmation_required", "Deleting requires confirmation.");
+    if (operation === "move" && typeof body.confirmedRepositoryChange !== "boolean") throw new HttpError(422, "invalid_body", "Confirmation must be boolean.");
+  };
+}
+
+async function fixtureLibrary(fx, project) {
+  if (typeof project !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(project)) throw new HttpError(422, "invalid_body", "The project is not valid.");
+  const repository = join(fx.tree.root, "repositories", project);
+  const stats = await lstat(repository).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+  if (!stats?.isDirectory() || stats.isSymbolicLink()) throw new HttpError(409, "project_unavailable", "The repository is not available.");
+  const file = editorFile(fx, project, "docs/flows/library.json");
+  const bytes = await readFile(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+  return { file, bytes, revision: bytes ? sha256(bytes) : null, value: bytes ? JSON.parse(bytes) : { format: "hivem1nd-library-v1", folders: [], items: {} } };
+}
+
+async function fixtureTouchLibrary(fx, prepared) {
+  const edits = prepared.events.filter((event) => ["blueprint.changed", "void.changed", "comment.changed"].includes(event.name));
+  for (const id of new Set(edits.map((event) => event.resourceId))) {
+    const editor = prepared.data?.id === id ? prepared.data : (await projection(fx)).editors.find((item) => item.id === id);
+    if (!editor) continue;
+    const library = await fixtureLibrary(fx, editor.project);
+    const planned = prepared.writes.find((write) => write.path === library.file);
+    if (planned) library.value = JSON.parse(Buffer.from(planned.afterBytesBase64, "base64"));
+    const item = library.value.items[id];
+    library.value.items[id] = { ...item, title: item?.title ?? editor.title, folderId: item?.folderId ?? null, updatedAt: clock(fx).toISOString() };
+    const write = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
+    if (planned) Object.assign(planned, write);
+    else prepared.writes.push(write);
+    prepared.events.push(fixtureLibraryEvent(editor.project, editor.kind, write));
+    if (prepared.data?.id === id) Object.assign(prepared.data, { libraryRevision: write.afterRevision, updatedAt: clock(fx).toISOString() });
+  }
+}
+
+function fixtureRemapResource(value, before, after) {
+  if (Array.isArray(value)) return value.map((item) => fixtureRemapResource(item, before, after));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === "resourceId" && item === before ? after : fixtureRemapResource(item, before, after)]));
+}
+
+function fixtureFolder(library, id, kind) {
+  if (id !== null && !library.value.folders.some((folder) => folder.id === id && folder.kind === kind)) throw new HttpError(422, "invalid_folder", "The folder is not in the selected library.");
+}
+
+function fixtureFolderTree(library, id) {
+  const children = new Set([id]);
+  let size;
+  do {
+    size = children.size;
+    for (const folder of library.folders) if (children.has(folder.parentId)) children.add(folder.id);
+  } while (size !== children.size);
+  return children;
+}
+
+function fixtureLibraryEvent(project, kind, write) {
+  return { name: "library.changed", global: true, data: { project, kind, revision: write.afterRevision } };
+}
+
+async function fixtureBundle(fx, editor) {
+  const paths = [editorFile(fx, editor.project, editor.path), commentsPath(fx, editor),
+    join(fx.tree.user, "relay", "editors", `${editor.id}.json`), join(fx.tree.user, "relay", "editors", `${editor.id}.assets.json`)];
+  if (editor.kind === "void") for (const suffix of [".orig.json", ".versions.jsonl"]) paths.push(editorFile(fx, editor.project, editor.path.replace(/\.json$/, suffix)));
+  const history = editorFile(fx, editor.project, `docs/flows/history/${editor.id}`);
+  for (const entry of await listDir(history)) if (entry.isFile()) paths.push(join(history, entry.name));
+  const entries = [];
+  for (const file of paths) {
+    const bytes = await readFile(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+    if (bytes) entries.push({ file, bytes });
+  }
+  return entries;
+}
+
+function fixtureAssets(document) {
+  const names = new Set();
+  const visit = (value) => {
+    if (typeof value === "string" && /^(?:docs\/flows\/)?assets\/[^/]+$/.test(value)) names.add(value.split("/").at(-1));
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") Object.values(value).forEach(visit);
+  };
+  visit(document);
+  return names;
+}
+
+async function fixtureLibraryUndo(fx, writes, ids, events) {
+  const changeId = uuid(), undoUntil = new Date(fx.nowMs + 10000).toISOString();
+  const entries = [];
+  for (const write of writes) {
+    const bytes = await readFile(write.path).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+    entries.push({ path: write.path, afterRevision: write.afterRevision, beforeBytesBase64: bytes?.toString("base64") ?? null });
+  }
+  const record = { id: changeId, undoUntil, undone: false, resourceIds: ids, entries, events };
+  writes.push(fixtureWrite(join(fx.local, "change-undo", `${changeId}.json`), null, Buffer.from(stableJson(record))));
+  return { changeId, undoUntil };
+}
+
+async function prepareFixtureFolder(fx, id, body) {
+  const library = await fixtureLibrary(fx, body.project);
+  if (library.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The library changed.");
+  if (body.confirmed) {
+    const snap = await projection(fx);
+    const folder = library.value.folders.find((item) => item.id === id);
+    if (!folder) throw new HttpError(404, "folder_not_found", "The folder does not exist.");
+    const children = fixtureFolderTree(library.value, id);
+    const editors = snap.editors.filter((editor) => editor.project === body.project && children.has(editor.folderId));
+    return fixtureDeleteEditors(fx, editors, library, children, folder.kind);
+  }
+  const folder = id ? library.value.folders.find((item) => item.id === id) : { id: uuid(), kind: body.kind, title: groupTitle(body.title), parentId: body.parentId };
+  if (!folder) throw new HttpError(404, "folder_not_found", "The folder does not exist.");
+  if (!id) library.value.folders.push(folder);
+  if ("title" in body) folder.title = groupTitle(body.title);
+  if ("parentId" in body) folder.parentId = body.parentId;
+  if (!["blueprint", "void"].includes(folder.kind)) throw new HttpError(422, "invalid_body", "The editor kind is not valid.");
+  const seen = new Set([folder.id]);
+  let parent = folder.parentId;
+  while (parent !== null) {
+    const entry = library.value.folders.find((item) => item.id === parent && item.kind === folder.kind);
+    if (!entry || seen.has(parent)) throw new HttpError(422, "invalid_parent", "The parent creates a cycle or is not in this library.");
+    seen.add(parent);
+    parent = entry.parentId;
+  }
+  const write = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
+  return { status: id ? 200 : 201, data: { folder: { ...folder, project: body.project, count: 0, revision: write.afterRevision }, revision: write.afterRevision }, writes: [write], events: [fixtureLibraryEvent(body.project, folder.kind, write)] };
+}
+
+async function fixtureDeleteEditors(fx, editors, library, folders = new Set(), kind = editors[0]?.kind) {
+  const snap = await projection(fx);
+  const catalog = await readJsonFile(join(fx.tree.user, "gui", "resources.json"));
+  const ids = editors.map((editor) => editor.id), writes = [];
+  for (const editor of editors) {
+    for (const entry of await fixtureBundle(fx, editor)) writes.push(fixtureWrite(entry.file, entry.bytes, null));
+    for (const name of fixtureAssets(editor.document)) {
+      if (snap.editors.some((other) => other.project === editor.project && !ids.includes(other.id) && fixtureAssets(other.document).has(name))) continue;
+      const file = editorFile(fx, editor.project, `docs/flows/assets/${name}`), bytes = await readFile(file);
+      if (!writes.some((write) => write.path === file)) writes.push(fixtureWrite(file, bytes, null));
+    }
+    delete library.value.items[editor.id];
+  }
+  library.value.folders = library.value.folders.filter((folder) => !folders.has(folder.id));
+  const project = editors[0]?.project ?? snap.projects.find((item) => library.file.startsWith(join(fx.tree.root, "repositories", item.id)))?.id;
+  const libraryWrite = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
+  writes.push(libraryWrite, fixtureWrite(join(fx.tree.user, "gui", "resources.json"), catalog.bytes ?? Buffer.from(stableJson(catalog.value)), Buffer.from(stableJson({ ...catalog.value, resources: catalog.value.resources.filter((item) => !ids.includes(item.id)) }))));
+  const undo = await fixtureLibraryUndo(fx, writes, ids, [{ name: "view.changed", global: true, data: { collections: ["editors"] } }]);
+  const events = [fixtureLibraryEvent(project, kind, libraryWrite), ...ids.map((resourceId) => ({ name: "editor.removed", resourceId, data: { resourceId, ...undo } }))];
+  return { status: 200, data: folders.size ? { ...undo, removedResourceIds: ids } : { ...undo, resourceId: ids[0] }, writes, events };
+}
+
+async function prepareFixtureEditorLibrary(fx, operation, id, body) {
+  const editor = requireEditor(await projection(fx), id);
+  const library = await fixtureLibrary(fx, editor.project);
+  if (editor.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The document changed.");
+  if (["delete", "move"].includes(operation) && (editor.commentsRevision !== body.expectedCommentsRevision || editor.attachmentRevision !== body.expectedAttachmentRevision)) throw new HttpError(409, "revision_conflict", "The editor sidecar changed.");
+  if (operation !== "duplicate" && library.revision !== body.expectedLibraryRevision) throw new HttpError(409, "revision_conflict", "The library changed.");
+  if (operation === "delete") return fixtureDeleteEditors(fx, [editor], library);
+  if (operation === "duplicate") {
+    const document = { ...structuredClone(editor.document), id: uuid(), title: groupTitle(body.title) };
+    return prepareCreateEditor(fx, editor.kind, { ...body, document, attached: [] });
+  }
+  const destination = body.project && body.project !== editor.project ? await fixtureLibrary(fx, body.project) : library;
+  fixtureFolder(destination, "folderId" in body ? body.folderId : editor.folderId ?? null, editor.kind);
+  const item = { ...library.value.items[id], title: body.title === undefined ? editor.title : groupTitle(body.title),
+    folderId: "folderId" in body ? body.folderId : editor.folderId, updatedAt: clock(fx).toISOString() };
+  const writes = [], events = [];
+  let moved = { ...editor, ...item };
+  if (destination !== library) {
+    if (!body.confirmedRepositoryChange) throw new HttpError(422, "confirmation_required", "The file changes repository.");
+    assertEditorPath(body.project, body.path);
+    const nextId = deterministicUuid(["editor", editor.kind, body.project, body.path]);
+    const catalog = await readJsonFile(join(fx.tree.user, "gui", "resources.json"));
+    if (catalog.value.resources.some((resource) => resource.id === nextId)) throw new HttpError(409, "resource_exists", "The destination already exists.");
+    moved = { ...moved, id: nextId, project: body.project, path: body.path };
+    for (const entry of await fixtureBundle(fx, editor)) {
+      let target;
+      if (entry.file === editorFile(fx, editor.project, editor.path)) target = editorFile(fx, body.project, body.path);
+      else if (entry.file === commentsPath(fx, editor)) target = commentsPath(fx, moved);
+      else if (entry.file.startsWith(join(fx.tree.user, "relay", "editors"))) target = entry.file.replace(id, nextId);
+      else if (entry.file.includes(`${id}${process.platform === "win32" ? "\\" : "/"}`)) target = editorFile(fx, body.project, `docs/flows/history/${nextId}/${entry.file.split(/[\\/]/).at(-1)}`);
+      else target = editorFile(fx, body.project, body.path.replace(/\.json$/, entry.file.slice(entry.file.lastIndexOf(".", entry.file.lastIndexOf(".") - 1))));
+      if (await hashExisting(target) !== null) throw new HttpError(409, "resource_exists", "A destination bundle file exists.");
+      let bytes = entry.bytes;
+      if (entry.file === commentsPath(fx, editor) || entry.file.startsWith(join(fx.tree.user, "relay", "editors"))
+        || entry.file.includes("history") && !entry.file.endsWith(".document.json") && !entry.file.endsWith(".comments.json")) {
+        const value = fixtureRemapResource(JSON.parse(bytes), id, nextId);
+        if (value.format === "hivem1nd-editor-history-v1") { value.documentPath = body.path; value.commentsPath = editor.kind === "void" ? body.path.replace(/\.json$/, ".comments.json") : value.commentsPath; }
+        if (entry.file === commentsPath(fx, editor) && editor.kind === "void") value.path = body.path.split("/").at(-1);
+        bytes = Buffer.from(stableJson(value));
+      }
+      if (entry.file === commentsPath(fx, editor)) moved.commentsRevision = sha256(bytes);
+      if (entry.file === join(fx.tree.user, "relay", "editors", `${id}.json`)) moved.attachmentRevision = sha256(bytes);
+      writes.push(fixtureWrite(entry.file, entry.bytes, null), fixtureWrite(target, null, bytes));
+    }
+    for (const name of fixtureAssets(editor.document)) {
+      const source = editorFile(fx, editor.project, `docs/flows/assets/${name}`), bytes = await readFile(source);
+      const target = editorFile(fx, body.project, `docs/flows/assets/${name}`), before = await readFile(target).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (before && !before.equals(bytes)) throw new HttpError(409, "resource_exists", "A destination asset exists.");
+      writes.push(fixtureWrite(target, before, bytes));
+      if (!(await projection(fx)).editors.some((other) => other.id !== id && other.project === editor.project && fixtureAssets(other.document).has(name))) writes.push(fixtureWrite(source, bytes, null));
+    }
+    delete library.value.items[id];
+    destination.value.items[nextId] = item;
+    const catalogWrite = fixtureWrite(join(fx.tree.user, "gui", "resources.json"), catalog.bytes, Buffer.from(stableJson({ ...catalog.value,
+      resources: catalog.value.resources.map((resource) => resource.id === id ? { ...resource, id: nextId, project: body.project, path: body.path } : resource) })));
+    writes.push(catalogWrite);
+    const destinationWrite = fixtureWrite(destination.file, destination.bytes, Buffer.from(stableJson(destination.value)));
+    writes.push(destinationWrite);
+    events.push(fixtureLibraryEvent(body.project, editor.kind, destinationWrite), { name: "editor.removed", resourceId: id, data: { resourceId: id } });
+  } else library.value.items[id] = item;
+  const write = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
+  writes.push(write);
+  events.push(fixtureLibraryEvent(editor.project, editor.kind, write));
+  moved.libraryRevision = destination === library ? write.afterRevision : sha256(Buffer.from(stableJson(destination.value)));
+  const undo = operation === "move" ? await fixtureLibraryUndo(fx, writes, [id, moved.id], [{ name: "view.changed", global: true, data: { collections: ["editors"] } }]) : null;
+  return { status: 200, data: operation === "move" ? { editor: moved, previousId: id, ...undo } : moved, writes, events };
+}
+
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/library/folders") return prepareFixtureFolder(fx, null, body);
+  if (pattern === "/library/folders/:folderId") return prepareFixtureFolder(fx, params.folderId, body);
+  if (pattern === "/editors/:resourceId/library") return prepareFixtureEditorLibrary(fx, "patch", params.resourceId, body);
+  if (pattern === "/editors/:resourceId/duplicate") return prepareFixtureEditorLibrary(fx, "duplicate", params.resourceId, body);
+  if (pattern === "/editors/:resourceId/move") return prepareFixtureEditorLibrary(fx, "move", params.resourceId, body);
+  if (pattern === "/editors/:resourceId") return prepareFixtureEditorLibrary(fx, "delete", params.resourceId, body);
   if (pattern === "/units/:unitId") return prepareUnitRemoval(fx, params.unitId, body);
   if (pattern === "/groups") return prepareGroup(fx, null, body);
   if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);

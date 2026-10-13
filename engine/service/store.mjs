@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from './identity.mjs';
 import { assertNoLinks, safeRelative } from './paths.mjs';
 import { protectLocalFile } from './security.mjs';
+import { clearResource } from './watch.mjs';
 
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const localChanges = new AsyncLocalStorage();
@@ -117,6 +118,8 @@ function sidecarsOf(resource, normalized) {
 }
 
 function catalogAllows(catalog, projectName, relative) {
+  if (relative === 'docs/flows/library.json') return true;
+  if (relative === 'docs/flows/boards/index.json') return true;
   const resources = Array.isArray(catalog?.resources) ? catalog.resources : [];
   const mine = resources.filter((item) => item?.project === projectName && typeof item.path === 'string');
   if (mine.length === 0) return false;
@@ -134,10 +137,12 @@ function catalogAllows(catalog, projectName, relative) {
     for (const sidecar of sidecarsOf(resource, normalized)) allowed.add(sidecar);
   }
   if (allowed.has(relative)) return true;
-  return blueprint && /^docs\/flows\/assets\/[^/]+$/.test(relative);
+  if (mine.some((resource) => relative.startsWith(`docs/flows/history/${resource.id}/`)
+    && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.split('/').at(-1)))) return true;
+  return (blueprint || mine.some((item) => item.kind === 'void')) && /^docs\/flows\/assets\/[^/]+$/.test(relative);
 }
 
-async function catalogSnapshot(store, entries) {
+async function catalogSnapshot(store, entries = []) {
   const catalogPath = path.resolve(store.mindPath, 'user', 'gui', 'resources.json');
   let parsed = null;
   const current = await readBytesRaw(catalogPath);
@@ -366,10 +371,22 @@ async function readReceipt(store, principalHash, key) {
 }
 
 function emit(store, events) {
-  for (const event of events ?? []) store.events.push(structuredClone(event));
+  for (const event of events ?? []) {
+    if (event.name === 'editor.removed') {
+      const id = event.resourceId ?? event.data?.resourceId;
+      const watch = store.changeWatch;
+      if (watch) {
+        clearResource(watch, id);
+        watch.handles.get(id)?.close?.();
+        watch.handles.delete(id);
+      }
+    }
+    store.events.push(structuredClone(event));
+  }
 }
 
 export async function commitTransaction(store, prepared) {
+  await ensureRecovered(store);
   if (!isUuid(prepared?.id)) throw new CoreError(422, 'invalid_body', 'The transaction id must be a UUID.');
   const source = prepared.entries ?? [];
   if (source.length === 0) throw new CoreError(422, 'invalid_body', 'A transaction needs at least one record.');
@@ -380,27 +397,35 @@ export async function commitTransaction(store, prepared) {
 
 async function commitLocked(store, prepared) {
   const checked = [];
+  const beforeCatalog = await catalogSnapshot(store);
   const catalog = await catalogSnapshot(store, prepared.entries);
+  const destinations = new Set();
   for (const entry of prepared.entries) {
     if (typeof entry.resource !== 'string' || entry.resource === '') throw new CoreError(422, 'invalid_body', 'A transaction entry needs a resource key.');
     const canonical = entry.target?.kind === 'project' ? canonicalTarget(entry.target) : null;
-    if (canonical && !catalogAllows(catalog, canonical.project, canonical.path)) refuseProject();
+    const operation = entry.operation ?? 'put';
+    if (!['put', 'delete'].includes(operation)) throw new CoreError(422, 'invalid_body', 'The journal operation is not valid.');
+    if (canonical && !catalogAllows(operation === 'delete' ? beforeCatalog : catalog, canonical.project, canonical.path)) refuseProject();
     const destination = canonical ?? entry.recordPath;
     const recordPath = assertAllowed(store, destination);
+    if (destinations.has(recordPath)) throw new CoreError(422, 'invalid_body', 'A transaction cannot change one path twice.');
+    destinations.add(recordPath);
     await assertNoLinks(path.dirname(recordPath), { root: store.confineRoot });
     await assertNoLinks(recordPath, { root: store.confineRoot });
     const current = await readBytesRaw(recordPath);
     checkRevision(current, entry.beforeRevision ?? null);
-    const afterBytes = Buffer.isBuffer(entry.afterBytes) ? entry.afterBytes : Buffer.from(entry.afterBytesBase64 ?? '', 'base64');
-    const afterRevision = hashBytes(afterBytes);
-    if (entry.afterRevision && entry.afterRevision !== afterRevision) {
+    const afterBytes = operation === 'delete' ? null : Buffer.isBuffer(entry.afterBytes) ? entry.afterBytes : Buffer.from(entry.afterBytesBase64 ?? '', 'base64');
+    const afterRevision = revisionOf(afterBytes);
+    if (Object.hasOwn(entry, 'afterRevision') && entry.afterRevision !== undefined && entry.afterRevision !== afterRevision) {
       throw new CoreError(409, 'revision_conflict', 'The prepared bytes do not match the declared revision.', { currentRevision: revisionOf(current) });
     }
     const saved = {
       resource: canonical ? `project:${canonical.project}:${canonical.path}` : entry.resource,
       beforeRevision: entry.beforeRevision ?? null,
+      beforeBytesBase64: current?.toString('base64') ?? null,
+      operation,
       afterRevision,
-      afterBytesBase64: afterBytes.toString('base64'),
+      afterBytesBase64: afterBytes?.toString('base64') ?? null,
       recordPath,
       record: entry.record ?? null,
       private: entry.private === true,
@@ -433,6 +458,7 @@ async function commitLocked(store, prepared) {
     staged: false,
     sync: prepared.sync ?? null,
     conflicts: [],
+    catalogs: { before: beforeCatalog, after: catalog },
   };
   if (entries.length === 1) {
     journal.resource = entries[0].resource;
@@ -445,11 +471,15 @@ async function commitLocked(store, prepared) {
   for (const entry of checked) store.hidden.set(entry.recordPath, entry.current);
   await atomicWrite(store, journalFile(store, prepared.id), journalBytes(journal));
   try {
+    if (entries.some((entry) => entry.operation === 'delete')) await protectLocalFile(journalFile(store, prepared.id), { store });
+    if (store.fault?.afterPrepared) {
+      store.fault = null;
+      throw new CoreError(500, 'injected_crash', 'Injected crash after journal preparation.');
+    }
     let renamed = 0;
     for (const entry of entries) {
       const destination = entry.target?.kind === 'project' ? entry.target : entry.recordPath;
-      await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
-      if (entry.private) await protectLocalFile(entry.recordPath, { store });
+      await applyJournalEntry(store, entry, destination);
       renamed += 1;
       if (store.fault?.afterRenames === renamed) {
         store.fault = null;
@@ -461,7 +491,15 @@ async function commitLocked(store, prepared) {
       throw new CoreError(500, 'injected_crash', 'Injected crash before the receipt was published.');
     }
     await stageJournal(store, journal);
+    if (store.fault?.afterStage) {
+      store.fault = null;
+      throw new CoreError(500, 'injected_crash', 'Injected crash after sync staging.');
+    }
     if (receipt) await writeReceipt(store, receipt);
+    if (store.fault?.afterReceipt) {
+      store.fault = null;
+      throw new CoreError(500, 'injected_crash', 'Injected crash after receipt publication.');
+    }
     const committed = { ...journal, phase: 'committed', emitted: true, staged: true };
     await atomicWrite(store, journalFile(store, prepared.id), journalBytes(committed));
     for (const entry of entries) store.hidden.delete(entry.recordPath);
@@ -476,6 +514,18 @@ async function commitLocked(store, prepared) {
 
 export async function recoverTransactions(store) {
   return withLocalChanges(store, () => recoverTransactionsLocked(store));
+}
+
+async function applyJournalEntry(store, entry, destination) {
+  if (entry.operation === 'delete') {
+    const file = assertAllowed(store, destination);
+    await assertNoLinks(file, { root: store.confineRoot });
+    await unlink(file).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+    store.writes.push(file);
+  } else {
+    await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
+    if (entry.private) await protectLocalFile(entry.recordPath, { store });
+  }
 }
 
 async function recoverTransactionsLocked(store) {
@@ -515,6 +565,10 @@ async function recoverOne(store, id) {
     }
     const classified = [];
     for (const entry of fresh.entries ?? []) {
+      if (!['put', 'delete'].includes(entry.operation ?? 'put') || entry.operation === 'delete' && entry.afterRevision !== null) {
+        throw new CoreError(422, 'corrupt_resource', 'The journal operation is not valid.');
+      }
+      if (entry.target && fresh.catalogs && !catalogAllows(entry.operation === 'delete' ? fresh.catalogs.before : fresh.catalogs.after, entry.target.project, entry.target.path)) refuseProject();
       const recordPath = materialize(store, entry);
       const current = await readBytesRaw(recordPath);
       const revision = revisionOf(current);
@@ -550,9 +604,9 @@ async function recoverOne(store, id) {
     for (const item of classified) {
       if (item.state === 'pending') {
         const destination = item.entry.target?.kind === 'project' ? item.entry.target : item.recordPath;
-        await atomicWrite(store, destination, Buffer.from(item.entry.afterBytesBase64, 'base64'));
+        await applyJournalEntry(store, item.entry, destination);
       }
-      if (item.entry.private) await protectLocalFile(item.recordPath, { store });
+      if (item.entry.private && item.entry.operation !== 'delete') await protectLocalFile(item.recordPath, { store });
       store.hidden.delete(item.recordPath);
     }
     await stageJournal(store, fresh);
@@ -576,17 +630,20 @@ async function stageJournal(store, journal) {
   const sync = openSync({ store, paths: { mind: store.mindPath, localDirectory: store.localDirectory, machine: journal.sync.machine }, now: store.now, projects: store.projects });
   const entries = journal.entries.filter((entry) => !entry.private).map((entry) => ({
     target: entry.target ?? { kind: 'mind', path: safeRelative(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')) },
-    bytes: Buffer.from(entry.afterBytesBase64, 'base64'),
+    bytes: entry.operation === 'delete' ? null : Buffer.from(entry.afterBytesBase64, 'base64'),
+    deleted: entry.operation === 'delete',
     baseHash: entry.beforeRevision,
     id: uuidV8(['journal-change', journal.id, entry.resource, entry.afterRevision]),
   }));
-  return stageTransaction(sync, entries, { transactionId: journal.id, at: journal.sync.at });
+  return stageTransaction(sync, entries, { transactionId: journal.id, at: journal.sync.at,
+    authorizedTargets: journal.entries.filter((entry) => entry.target).map((entry) => entry.target) });
 }
 
 export async function commitChange(context, prepared) {
   if (context.bus) context.store.changeBus = context.bus;
+  if (context.watch) context.store.changeWatch = context.watch;
   const events = (prepared.events ?? []).map((event) => ({ ...event,
-    source: { kind: 'gui', id: context.paths.machine, unitId: context.principal?.unitId ?? 'root:master' },
+    source: { kind: context.principal?.audience === 'agent' ? 'mcp' : 'gui', id: context.paths.machine, unitId: context.principal?.unitId ?? 'root:master' },
   }));
   const result = await commitTransaction(context.store, { ...prepared, events,
     receipt: context.receipt ?? null,
@@ -602,6 +659,7 @@ export async function commitChange(context, prepared) {
 }
 
 export async function prepareChangeUndo(context, { id, permission, resourceIds, entries, events }) {
+  if (context.projects) bindProjects(context.store, context.projects);
   const directory = path.join(context.store.localDirectory, 'change-undo');
   await assertNoLinks(directory, { root: context.store.confineRoot });
   await mkdir(directory, { recursive: true });
@@ -611,8 +669,12 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
   await protectLocalFile(transactions, { store: context.store });
   const undoUntil = new Date(context.now() + 10000).toISOString();
   const record = { format: 'hivem1nd-change-undo-v1', id, permission, resourceIds, undoUntil, undone: false,
-    entries: entries.map((entry) => ({ resource: entry.resource, recordPath: entry.recordPath, target: entry.target ?? null,
-      afterRevision: revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes.toString('base64') })), events };
+    entries: entries.map((entry) => {
+      const project = entry.recordPath ? context.store.projects.find((item) => isInside(item.localPath, entry.recordPath)) : null;
+      const target = entry.target ?? (project ? { kind: 'project', project: project.name, path: path.relative(project.localPath, entry.recordPath).replaceAll('\\', '/') } : null);
+      return { resource: target ? `project:${target.project}:${target.path}` : entry.resource, recordPath: entry.recordPath, target,
+        afterRevision: entry.operation === 'delete' ? null : revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null };
+    }), events };
   return { undoUntil, entry: { resource: `change-undo:${id}`, recordPath: path.join(directory, `${id}.json`),
     beforeRevision: null, afterBytes: journalBytes(record), private: true } };
 }
@@ -634,7 +696,8 @@ export async function undoChange(context, changeId) {
       const destination = entry.target ?? entry.recordPath;
       if (revisionOf(await readBytes(context.store, resolveAuthorized(context.store, destination))) !== entry.afterRevision) throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
       entries.push({ resource: entry.resource, recordPath: entry.recordPath, ...(entry.target ? { target: entry.target } : {}),
-        beforeRevision: entry.afterRevision, afterBytes: Buffer.from(entry.beforeBytesBase64, 'base64') });
+        beforeRevision: entry.afterRevision, operation: entry.beforeBytesBase64 === null ? 'delete' : 'put',
+        afterBytes: entry.beforeBytesBase64 === null ? null : Buffer.from(entry.beforeBytesBase64, 'base64') });
     }
     const id = randomUUID();
     entries.push({ resource: `change-undo:${changeId}`, recordPath, beforeRevision: revisionOf(bytes),

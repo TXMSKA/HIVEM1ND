@@ -17,6 +17,7 @@ import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readSta
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
+import { createFolder, duplicateEditor, listFolders, moveEditor, patchEditorLibrary, patchFolder, removeEditor, removeFolder } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
@@ -94,6 +95,14 @@ const ROUTES = [
   ['GET', '/blueprint/boards', 'editor.read', 'DPA', 'editor'],
   ['GET', '/blueprint/boards/:resourceId', 'editor.read', 'DPA', 'editor'],
   ['POST', '/editors/register', 'editor.write', 'D', 'editor'],
+  ['GET', '/library/folders', 'editor.read', 'DP', 'editor'],
+  ['POST', '/library/folders', 'editor.write', 'D', 'editor'],
+  ['PATCH', '/library/folders/:folderId', 'editor.write', 'D', 'editor'],
+  ['DELETE', '/library/folders/:folderId', 'editor.write', 'D', 'editor'],
+  ['PATCH', '/editors/:resourceId/library', 'editor.write', 'D', 'editor'],
+  ['POST', '/editors/:resourceId/duplicate', 'editor.write', 'D', 'editor'],
+  ['POST', '/editors/:resourceId/move', 'editor.write', 'D', 'editor'],
+  ['DELETE', '/editors/:resourceId', 'editor.write', 'D', 'editor'],
   ['POST', '/blueprint/boards', 'editor.write', 'D', 'editor'],
   ['PUT', '/blueprint/boards/:resourceId', 'editor.write', 'DA', 'editor'],
   ['POST', '/blueprint/boards/:resourceId/nodes', 'editor.write', 'DA', 'editor'],
@@ -792,8 +801,9 @@ function allowedQuery(route) {
     '/units/:unitId/approval-grants': list,
     '/tasks': [...list, 'project', 'unitId', 'status'],
     '/waiting': [...list, 'unitId', 'kind'],
-    '/blueprint/boards': [...list, 'project'],
-    '/void/texts': [...list, 'project'],
+    '/blueprint/boards': [...list, 'project', 'folderId', 'openComments', 'attachedAgents', 'changedThisWeek'],
+    '/void/texts': [...list, 'project', 'folderId', 'openComments', 'attachedAgents', 'changedThisWeek'],
+    '/library/folders': [...list, 'project', 'kind'],
     '/void/texts/:resourceId/proposals': [...list, 'state'],
     '/editors/:resourceId/comments': [...list, 'status'],
     '/events': ['unitId', 'chatId', 'resourceId'],
@@ -921,6 +931,32 @@ function rejectUnknown(route, body) {
   if (Object.hasOwn(body, 'changes')) boundRecord(body.changes, 'changes', 64_000);
   if (Object.hasOwn(body, 'node')) boundRecord(body.node, 'node', 64_000);
   if (Object.hasOwn(body, 'pattern')) boundRecord(body.pattern, 'pattern', 16_000);
+  validateLibraryBody(route, body);
+}
+
+function validateLibraryBody(route, body) {
+  const signature = `${route.method} ${route.template}`;
+  const required = {
+    'POST /library/folders': ['project', 'kind', 'title', 'parentId', 'expectedRevision'],
+    'PATCH /library/folders/:folderId': ['project', 'expectedRevision'],
+    'DELETE /library/folders/:folderId': ['project', 'confirmed', 'expectedRevision'],
+    'PATCH /editors/:resourceId/library': ['expectedRevision', 'expectedLibraryRevision'],
+    'POST /editors/:resourceId/duplicate': ['project', 'folderId', 'title', 'path', 'expectedRevision'],
+    'POST /editors/:resourceId/move': ['project', 'folderId', 'path', 'confirmedRepositoryChange', 'expectedRevision', 'expectedCommentsRevision', 'expectedAttachmentRevision', 'expectedLibraryRevision'],
+    'DELETE /editors/:resourceId': ['confirmed', 'expectedRevision', 'expectedCommentsRevision', 'expectedAttachmentRevision', 'expectedLibraryRevision'],
+  }[signature];
+  if (!required) {
+    if (Object.hasOwn(body, 'folderId') && body.folderId !== null && !isUuid(body.folderId)) throw new CoreError(422, 'invalid_body', 'The folder id must be a UUID or null.');
+    return;
+  }
+  if (required.some((key) => !Object.hasOwn(body, key))) throw new CoreError(422, 'invalid_body', 'The library body is missing a required field.');
+  for (const [key, value] of Object.entries(body)) {
+    if (key.startsWith('expected') && value !== null && !/^[0-9a-f]{64}$/.test(value ?? '')) throw new CoreError(422, 'invalid_body', 'The expected revision must be a byte revision.');
+    if ((key === 'folderId' || key === 'parentId') && value !== null && !isUuid(value)) throw new CoreError(422, 'invalid_body', 'The folder id must be a UUID or null.');
+    if (['project', 'path', 'title'].includes(key) && (typeof value !== 'string' || !value.trim())) throw new CoreError(422, 'invalid_body', 'The library field must be a nonblank string.');
+    if (['confirmed', 'confirmedRepositoryChange'].includes(key) && typeof value !== 'boolean') throw new CoreError(422, 'invalid_body', 'Confirmation must be boolean.');
+  }
+  if (signature !== 'POST /library/folders' && body.expectedRevision === null) throw new CoreError(422, 'invalid_body', 'An existing resource revision is required.');
 }
 
 function boundRecord(value, label, limit) {
@@ -958,12 +994,19 @@ function allowedBody(route) {
     'POST /auth/local': ['embedded', 'hostOrigin', 'look', 'language'],
     'POST /auth/home': ['key', 'code'],
     'POST /editors/register': ['project', 'path', 'kind'],
-    'POST /blueprint/boards': ['project', 'document', 'path', 'attached'],
+    'POST /blueprint/boards': ['project', 'document', 'path', 'attached', 'folderId'],
+    'POST /library/folders': ['project', 'kind', 'title', 'parentId', 'expectedRevision'],
+    'PATCH /library/folders/:folderId': ['project', 'title', 'parentId', 'expectedRevision'],
+    'DELETE /library/folders/:folderId': ['project', 'confirmed', 'expectedRevision'],
+    'PATCH /editors/:resourceId/library': ['title', 'folderId', 'expectedRevision', 'expectedLibraryRevision'],
+    'POST /editors/:resourceId/duplicate': ['project', 'folderId', 'title', 'path', 'expectedRevision'],
+    'POST /editors/:resourceId/move': ['project', 'folderId', 'path', 'confirmedRepositoryChange', 'expectedRevision', 'expectedCommentsRevision', 'expectedAttachmentRevision', 'expectedLibraryRevision'],
+    'DELETE /editors/:resourceId': ['confirmed', 'expectedRevision', 'expectedCommentsRevision', 'expectedAttachmentRevision', 'expectedLibraryRevision'],
     'PUT /blueprint/boards/:resourceId': ['document', 'expectedRevision'],
     'POST /blueprint/boards/:resourceId/nodes': ['screenId', 'parentId', 'node', 'expectedRevision'],
     'PATCH /blueprint/boards/:resourceId/nodes/:nodeId': ['changes', 'expectedRevision'],
     'DELETE /blueprint/boards/:resourceId/nodes/:nodeId': ['expectedRevision'],
-    'POST /void/texts': ['project', 'path', 'document', 'attached'],
+    'POST /void/texts': ['project', 'path', 'document', 'attached', 'folderId'],
     'PUT /void/texts/:resourceId': ['document', 'expectedRevision'],
     'POST /void/texts/:resourceId/ranges': ['k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'mode', 'threadId', 'expectedCommentsRevision'],
     'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'expectedRevision', 'expectedCommentsRevision'],
@@ -1020,6 +1063,14 @@ function noteActivity(domain, resourceId, kind = 'blueprint', focus = null) {
 
 async function editorRoute(route, domain, params, query, body) {
   const id = params.resourceId;
+  if (route.template === '/library/folders' && route.method === 'GET') return { status: 200, body: await listFolders(domain, query) };
+  if (route.template === '/library/folders' && route.method === 'POST') return { status: 201, body: await createFolder(domain, body) };
+  if (route.template === '/library/folders/:folderId' && route.method === 'PATCH') return { status: 200, body: await patchFolder(domain, params.folderId, body) };
+  if (route.template === '/library/folders/:folderId' && route.method === 'DELETE') return { status: 200, body: await removeFolder(domain, params.folderId, body) };
+  if (route.template === '/editors/:resourceId/library') return { status: 200, body: await patchEditorLibrary(domain, id, body) };
+  if (route.template === '/editors/:resourceId/duplicate') return { status: 201, body: await duplicateEditor(domain, id, body) };
+  if (route.template === '/editors/:resourceId/move') return { status: 200, body: await moveEditor(domain, id, body) };
+  if (route.template === '/editors/:resourceId' && route.method === 'DELETE') return { status: 200, body: await removeEditor(domain, id, body) };
   if (route.template === '/blueprint/boards' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'blueprint' }) };
   if (route.template === '/void/texts' && route.method === 'GET') return { status: 200, body: await listBoards(domain, { ...query, kind: 'void' }) };
   if ((route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId') && route.method === 'GET') return { status: 200, body: await readEditor(domain, id) };

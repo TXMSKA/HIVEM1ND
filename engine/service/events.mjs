@@ -11,7 +11,7 @@ export const EVENT_NAMES = [
   'task.changed', 'layout.changed', 'settings.changed', 'home.changed', 'blueprint.changed',
   'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed',
   'editor.asset.created', 'viewer.changed', 'editor.activity', 'watch.changed', 'sync.changed',
-  'sync.conflict', 'issue.changed',
+  'sync.conflict', 'issue.changed', 'library.changed', 'editor.removed',
 ];
 
 const SOURCE_KINDS = new Set(['gui', 'phone', 'cli', 'mcp', 'hook', 'sync', 'service']);
@@ -207,6 +207,7 @@ function present(principal, record) {
 function visible(principal, record, mind) {
   if (principal.audience !== 'agent') return true;
   if (record.name === 'settings.changed' || record.name === 'sync.changed' || record.name === 'sync.conflict' || record.name === 'service.changed') return false;
+  if (record.name === 'library.changed' || record.name === 'editor.removed') return false;
   if (EDITOR_EVENTS.has(record.name)) return liveAttached(mind, record.resourceId).includes(principal.unitId);
   if (record.name.startsWith('session') || record.name.startsWith('approval')) return record.unitId === principal.unitId;
   if (record.chatId) return liveChatMember(mind, record.chatId, principal.unitId);

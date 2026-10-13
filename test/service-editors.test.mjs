@@ -9,6 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
+import { createFolder, duplicateEditor, listFolders, moveEditor, patchEditorLibrary, patchFolder, removeEditor, removeFolder } from '../engine/service/editors.mjs';
+import { undoChange } from '../engine/service/store.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
@@ -75,6 +77,205 @@ async function shop(t) {
   t.after(() => dispose(fixture));
   return { fixture, context, localPath };
 }
+
+async function seedAttachedUnits(context, ids) {
+  for (const id of ids) {
+    const parts = id.split(':');
+    const relative = parts[0] === 'root' ? `user/state/${parts[1]}.md` : `user/projects/${parts[1]}/state/${parts[2]}.md`;
+    const file = path.join(context.paths.mind, ...relative.split('/'));
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `unit: ${parts.at(-1)}\nunit-id: ${id}\nrole: executor\nscope: ${parts[0] === 'root' ? 'root' : `project:${parts[1]}`}\nmachine: DESKTOP\n\n`);
+  }
+}
+
+function managementRevisions(editor) {
+  return { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+    expectedAttachmentRevision: editor.attachmentRevision, expectedLibraryRevision: editor.libraryRevision };
+}
+
+test('library folders validate ancestry and create resources atomically in the selected kind', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const parent = await createFolder(context, { project: 'shop', kind: 'blueprint', title: 'Parent', parentId: null, expectedRevision: null });
+  const child = await createFolder(context, { project: 'shop', kind: 'blueprint', title: 'Child', parentId: parent.folder.id, expectedRevision: parent.revision });
+  const before = fixture.store.writes.length;
+  await assert.rejects(() => patchFolder(context, parent.folder.id, { project: 'shop', parentId: child.folder.id, expectedRevision: child.revision }), { code: 'invalid_parent' });
+  await assert.rejects(() => createText(context, { project: 'shop', path: 'docs/wrong.json', folderId: child.folder.id, document: release() }), { code: 'invalid_folder' });
+  assert.equal(fixture.store.writes.length, before);
+  await assert.rejects(() => readFile(path.join(localPath, 'docs/wrong.json')), { code: 'ENOENT' });
+  const board = await createBoard(context, { project: 'shop', document: sketch('folder-board'), folderId: child.folder.id });
+  assert.equal(board.folderId, child.folder.id);
+  assert.equal((await listFolders(context, { project: 'shop', kind: 'blueprint' })).items.find((item) => item.id === parent.folder.id).count, 1);
+  const oldBytes = await readFile(path.join(localPath, board.path));
+  const renamed = await patchEditorLibrary(context, board.id, { title: 'Logical title', folderId: null, expectedRevision: board.revision, expectedLibraryRevision: board.libraryRevision });
+  assert.equal(renamed.title, 'Logical title');
+  assert.equal(renamed.id, board.id);
+  assert.deepEqual(await readFile(path.join(localPath, board.path)), oldBytes);
+  const moved = await moveEditor(context, board.id, { project: 'shop', folderId: child.folder.id, path: 'docs/ignored.json', confirmedRepositoryChange: false, ...managementRevisions(renamed) });
+  assert.equal(moved.editor.path, board.path);
+  await undoChange({ ...context, principal: { audience: 'desktop' } }, moved.changeId);
+  assert.equal((await readEditor(context, board.id)).folderId, null);
+});
+
+test('library search filters AND over every folder and report one offline project', async (t) => {
+  const { context, fixture } = await shop(t);
+  await seedAttachedUnits(context, ['root:worker']);
+  const folder = await createFolder(context, { project: 'shop', kind: 'void', title: 'Notes', parentId: null, expectedRevision: null });
+  const text = await createText(context, { project: 'shop', path: 'docs/filter.json', folderId: folder.folder.id, document: release(), attached: ['root:worker'] });
+  await createComment(context, text.id, { text: 'Search inside folded folders', expectedRevision: text.revision, expectedCommentsRevision: text.commentsRevision,
+    anchor: { k: text.document.pages[0].k, lang: 'en', start: 0, end: 4, quote: plain(text.document.pages[0].en).slice(0, 4) } });
+  context.projects.push({ name: 'offline' });
+  const found = await list(context, { kind: 'void', q: 'folded folders', openComments: true, attachedAgents: true, changedThisWeek: true, folderId: folder.folder.id });
+  assert.deepEqual(found.items.map((item) => item.id), [text.id]);
+  assert.equal(found.issues[0].code, 'project_unavailable');
+  fixture.clock.now += 7 * 86400000;
+  assert.equal((await list(context, { changedThisWeek: true })).items.length, 0);
+  await assert.rejects(() => list(context, { openComments: 'yes' }), { code: 'invalid_query' });
+});
+
+test('duplicate preserves real unknown content and starts fresh comments original and history', async (t) => {
+  const { context, localPath } = await shop(t);
+  const original = await createText(context, { project: 'shop', path: 'docs/source.json', document: release() });
+  const duplicate = await duplicateEditor(context, original.id, { project: 'shop', folderId: null, title: 'Duplicate', path: 'docs/copy.json', expectedRevision: original.revision });
+  assert.notEqual(duplicate.document.id, original.document.id);
+  assert.deepEqual(duplicate.document.pages, original.document.pages);
+  assert.equal(duplicate.document.note, 'keep');
+  assert.deepEqual(duplicate.attached, []);
+  assert.deepEqual(duplicate.threads, []);
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/copy.orig.json')), await readFile(path.join(localPath, 'docs/copy.json')));
+  assert.equal((await readdir(path.join(localPath, 'docs/flows/history', duplicate.id))).length, 3);
+});
+
+test('cross repository move preserves comments binding history original and shared assets then Undo restores exact bytes', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const api = path.join(fixture.root, 'api');
+  await mkdir(api, { recursive: true });
+  context.projects.push({ name: 'api', localPath: api });
+  await seedAttachedUnits(context, ['root:worker']);
+  const document = release();
+  const asset = `${randomUUID()}.png`;
+  document.cover = `assets/${asset}`;
+  await mkdir(path.join(localPath, 'docs/flows/assets'), { recursive: true });
+  await writeFile(path.join(localPath, 'docs/flows/assets', asset), PNG);
+  const original = await createText(context, { project: 'shop', path: 'docs/source.json', document, attached: ['root:worker'] });
+  await createText(context, { project: 'shop', path: 'docs/shared.json', document: { ...release(), cover: document.cover } });
+  await writeAttachments(context, original.id, { attached: ['root:worker'], expectedRevision: null });
+  const commentsFile = path.join(localPath, 'docs/source.comments.json');
+  const comments = { path: 'source.json', foreign: { value: ['kept'] }, threads: [{ id: 't1', anchor: { resourceId: original.id, k: 'A' }, messages: [{ author: 'old-agent', at: '2020-01-01T00:00:00.000Z', text: 'Historical author', foreign: 4 }] }] };
+  await writeFile(commentsFile, JSON.stringify(comments));
+  const current = await readEditor(context, original.id);
+  const source = await readFile(path.join(localPath, current.path));
+  const beforeWrites = fixture.store.writes.length;
+  await assert.rejects(() => moveEditor(context, current.id, { project: 'api', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: false, ...managementRevisions(current) }), { code: 'confirmation_required' });
+  await assert.rejects(() => moveEditor(context, current.id, { project: 'api', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: true, ...managementRevisions(current), expectedCommentsRevision: '0'.repeat(64) }), { code: 'revision_conflict' });
+  assert.equal(fixture.store.writes.length, beforeWrites);
+  const moved = await moveEditor(context, current.id, { project: 'api', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: true, ...managementRevisions(current) });
+  assert.notEqual(moved.editor.id, current.id);
+  await assert.rejects(() => readFile(path.join(localPath, current.path)), { code: 'ENOENT' });
+  assert.deepEqual(await readFile(path.join(api, 'docs/moved.json')), source);
+  assert.deepEqual(await readFile(path.join(api, 'docs/moved.orig.json')), source);
+  assert.deepEqual(await readFile(path.join(api, 'docs/flows/assets', asset)), PNG);
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/flows/assets', asset)), PNG);
+  const movedComments = JSON.parse(await readFile(path.join(api, 'docs/moved.comments.json')));
+  assert.deepEqual(movedComments.foreign, comments.foreign);
+  assert.equal(movedComments.threads[0].messages[0].author, 'old-agent');
+  assert.equal(movedComments.threads[0].anchor.resourceId, moved.editor.id);
+  assert.deepEqual((await readAttachments(context, moved.editor.id)).attached, ['root:worker']);
+  assert.equal((await readdir(path.join(api, 'docs/flows/history', moved.editor.id))).length, 3);
+  await undoChange({ ...context, principal: { audience: 'desktop' } }, moved.changeId);
+  assert.deepEqual(await readFile(path.join(localPath, current.path)), source);
+  assert.deepEqual(JSON.parse(await readFile(commentsFile)), comments);
+  await assert.rejects(() => readFile(path.join(api, 'docs/moved.json')), { code: 'ENOENT' });
+});
+
+test('folder deletion removes complete nested bundles gives one notice per attached agent and supports conflict and expiry', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  await seedAttachedUnits(context, ['root:worker']);
+  const folder = await createFolder(context, { project: 'shop', kind: 'void', title: 'Texts', parentId: null, expectedRevision: null });
+  const text = await createText(context, { project: 'shop', path: 'docs/deleted.json', folderId: folder.folder.id, document: release(), attached: ['root:worker'] });
+  const removed = await removeFolder(context, folder.folder.id, { project: 'shop', confirmed: true, expectedRevision: text.libraryRevision });
+  assert.deepEqual(removed.removedResourceIds, [text.id]);
+  for (const suffix of ['.json', '.orig.json', '.comments.json']) await assert.rejects(() => readFile(path.join(localPath, `docs/deleted${suffix}`)), { code: 'ENOENT' });
+  assert.equal(fixture.store.events.filter((event) => event.name === 'notification.changed' && event.resourceId === text.id).length, 1);
+  await writeFile(path.join(localPath, 'docs/deleted.json'), 'foreign file');
+  await assert.rejects(() => undoChange({ ...context, principal: { audience: 'desktop' } }, removed.changeId), { code: 'undo_conflict' });
+  assert.equal(await readFile(path.join(localPath, 'docs/deleted.json'), 'utf8'), 'foreign file');
+  fixture.clock.now += 10000;
+  await assert.rejects(() => undoChange({ ...context, principal: { audience: 'desktop' } }, removed.changeId), { code: 'undo_expired' });
+});
+
+test('deletion interruption at every journal phase recovers a true tombstone and its durable Undo copy', async (t) => {
+  for (const fault of [{ afterPrepared: true }, { afterRenames: 1 }, { afterRenames: 4 }, { beforeReceipt: true }, { afterStage: true }, { afterReceipt: true }]) {
+    await t.test(JSON.stringify(fault), async (sub) => {
+      const { context, fixture, localPath } = await shop(sub);
+      const text = await createText(context, { project: 'shop', path: 'docs/crash.json', document: release() });
+      fixture.store.fault = fault;
+      await assert.rejects(() => removeEditor(context, text.id, { confirmed: true, ...managementRevisions(text) }), { code: 'injected_crash' });
+      const restarted = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind,
+        localDirectory: fixture.paths.localDirectory, projects: context.projects, now: context.now });
+      await recoverTransactions(restarted);
+      await assert.rejects(() => readFile(path.join(localPath, text.path)), { code: 'ENOENT' });
+      const undoNames = await readdir(path.join(fixture.paths.localDirectory, 'change-undo'));
+      const undone = await undoChange({ ...context, store: restarted, principal: { audience: 'desktop' } }, undoNames[0].slice(0, -5));
+      assert.deepEqual(undone.resourceIds, [text.id]);
+      assert.equal(JSON.parse(await readFile(path.join(localPath, text.path))).title, text.title);
+    });
+  }
+});
+
+test('board moves recover each journal phase and preserve index history comments and owned assets', async (t) => {
+  for (const fault of [{ afterPrepared: true }, { afterRenames: 1 }, { afterRenames: 5 }, { beforeReceipt: true }, { afterStage: true }, { afterReceipt: true }]) {
+    await t.test(JSON.stringify(fault), async (sub) => {
+      const { context, fixture, localPath } = await shop(sub);
+      const api = path.join(fixture.root, 'api');
+      await mkdir(api, { recursive: true });
+      context.projects.push({ name: 'api', localPath: api });
+      const document = sketch('move-crash');
+      document.foreign = { nested: ['preserved'] };
+      const board = await createBoard(context, { project: 'shop', document });
+      const asset = await createAsset({ ...context, converter: null }, board.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
+      const current = await readEditor(context, board.id);
+      const original = await readFile(path.join(localPath, board.path));
+      fixture.store.fault = fault;
+      await assert.rejects(() => moveEditor(context, board.id, { project: 'api', path: 'docs/flows/boards/moved.json', folderId: null,
+        confirmedRepositoryChange: true, ...managementRevisions(current) }), { code: 'injected_crash' });
+      const restarted = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind,
+        localDirectory: fixture.paths.localDirectory, projects: context.projects, now: context.now });
+      await recoverTransactions(restarted);
+      await assert.rejects(() => readFile(path.join(localPath, board.path)), { code: 'ENOENT' });
+      assert.deepEqual(await readFile(path.join(api, 'docs/flows/boards/moved.json')), original);
+      assert.equal(JSON.parse(await readFile(path.join(api, 'docs/flows/boards/index.json')))[0].id, document.id);
+      assert.deepEqual(JSON.parse(await readFile(path.join(localPath, 'docs/flows/boards/index.json'))), []);
+      assert.deepEqual(await readFile(path.join(api, 'docs/flows/assets', asset.id)), PNG);
+      await assert.rejects(() => readFile(path.join(localPath, 'docs/flows/assets', asset.id)), { code: 'ENOENT' });
+      const undoNames = await readdir(path.join(fixture.paths.localDirectory, 'change-undo'));
+      await undoChange({ ...context, store: restarted, principal: { audience: 'desktop' } }, undoNames[0].slice(0, -5));
+      assert.deepEqual(await readFile(path.join(localPath, board.path)), original);
+      assert.deepEqual(await readFile(path.join(localPath, 'docs/flows/assets', asset.id)), PNG);
+    });
+  }
+});
+
+test('a stale bundle entry rejects every write and destination collisions and removed attachments block moves', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const api = path.join(fixture.root, 'api');
+  await mkdir(path.join(api, 'docs'), { recursive: true });
+  context.projects.push({ name: 'api', localPath: api });
+  await seedAttachedUnits(context, ['root:worker']);
+  const text = await createText(context, { project: 'shop', path: 'docs/stale.json', document: release(), attached: ['root:worker'] });
+  const original = await readFile(path.join(localPath, text.path));
+  const before = fixture.store.writes.length;
+  await assert.rejects(() => commitTransaction(fixture.store, { id: randomUUID(), entries: [
+    { resource: 'project:shop:docs/stale.json', target: { kind: 'project', project: 'shop', path: text.path }, operation: 'delete', beforeRevision: text.revision },
+    { resource: 'stale-library', target: { kind: 'project', project: 'shop', path: 'docs/flows/library.json' }, beforeRevision: '0'.repeat(64), afterBytes: Buffer.from('{}') },
+  ] }), { code: 'revision_conflict' });
+  assert.equal(fixture.store.writes.length, before);
+  assert.deepEqual(await readFile(path.join(localPath, text.path)), original);
+  await writeFile(path.join(api, 'docs/moved.json'), 'Collision');
+  await assert.rejects(() => moveEditor(context, text.id, { project: 'api', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: true, ...managementRevisions(text) }), { code: 'resource_exists' });
+  await writeFile(path.join(context.paths.mind, 'user/state/worker.md'), 'unit: worker\nunit-id: root:worker\nremoved: true\n\n');
+  await assert.rejects(() => moveEditor(context, text.id, { project: 'api', path: 'docs/free.json', folderId: null, confirmedRepositoryChange: true, ...managementRevisions(text) }), { code: 'unknown_unit' });
+  assert.deepEqual(await readFile(path.join(localPath, text.path)), original);
+});
 
 test('unknown fields survive a full save and a dropped field is refused', async (t) => {
   const { context } = await shop(t);
@@ -150,6 +351,7 @@ test('an absent project is unavailable', async (t) => {
 
 test('attachments can be replaced and a removed node comment stays readable', async (t) => {
   const { context, localPath } = await shop(t);
+  await seedAttachedUnits(context, ['root:builder']);
   const document = sketch();
   const box = rectangleNode(document, { x: 4, y: 4, w: 30, h: 20 }, { stroke: '#111111', fill: 'none' });
   document.screens[0].root.kids.push(box);
@@ -473,6 +675,7 @@ function release() {
 
 test('a Void document keeps orig, one history step and unknown fields', async (t) => {
   const { context, localPath } = await shop(t);
+  await seedAttachedUnits(context, ['project:shop:executor']);
   const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release(), attached: ['project:shop:executor'] });
   assert.equal(created.document.note, 'keep');
   const orig = await readFile(path.join(localPath, 'docs', 'release.orig.json'), 'utf8');
@@ -557,6 +760,7 @@ test('ranges reject split characters and tags, and a proposal accepts once', asy
 
 test('comments keep a corrupt sidecar, relocate anchors and notify once', async (t) => {
   const { context, fixture, localPath } = await shop(t);
+  await seedAttachedUnits(context, ['project:shop:executor', 'project:shop:other']);
   context.paths = fixture.paths;
   const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release(), attached: ['project:shop:executor', 'project:shop:other'] });
   const commentsFile = path.join(localPath, 'docs', 'release.comments.json');

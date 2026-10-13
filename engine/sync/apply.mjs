@@ -101,7 +101,7 @@ export async function recoverIncomingGroups(sync) {
       }
       if (progress.done === progress.ops.length && progress.emitted === true) continue;
       for (const op of progress.ops) await validateRecoveryOp(sync, op);
-      await runGroup(sync, progress.id, progress.ops, progress.events, writeRoots(sync, sync.projects));
+      await runGroup(sync, progress.id, progress.ops, progress.events, writeRoots(sync, sync.projects), progress.changes);
       recovered.push(progress.id);
     }
     return recovered;
@@ -208,8 +208,12 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
       missingProject = true;
       continue;
     }
-    const allowed = await projectPathSet(project, { mind: sync.paths.mind, resources: packedResources, registries: packedRegistries });
-    if (!allowed.has(item.change.target.path)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
+    const projectChanges = prepared.filter((entry) => entry.change.target.kind === 'project' && entry.change.target.project === project.name);
+    const allowed = await projectPathSet(project, { mind: sync.paths.mind,
+      resources: item.change.operation === 'delete' ? [] : packedResources, registries: packedRegistries,
+      historyPaths: projectChanges.map((entry) => entry.change.target.path),
+      documents: projectChanges.filter((entry) => entry.raw && packedResources.some((resource) => resource.project === project.name && resource.path === entry.change.target.path)).map((entry) => entry.raw) });
+    if (!allowed.has(item.change.target.path) && !await recordedChange(sync, item.change)) throw new CoreError(422, 'invalid_pack', 'The target is not an eligible record.');
   }
   if (missingProject) {
     await writePending(sync, decoded, incoming.packHash, 'project_unavailable');
@@ -223,16 +227,33 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
   }
   const staged = await readStaged(sync);
   const plans = [];
+  const prior = [];
   for (const item of prepared) {
     const key = targetKey(item.change.target);
     const localVersion = competitor(versions.targets[key], staged.get(key));
     const located = await resolveTarget(sync.paths, item.change.target, { projects: resolvedProjects });
     const localBytes = await readRegular(located.absolute);
+    prior.push({ localVersion, localBytes, located });
     if (isImmutable(item) && localBytes && item.raw && !localBytes.equals(item.raw)) {
       throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
     }
     plans.push(planChange(item, localBytes, localVersion, located, tombstones));
     if (plans[plans.length - 1].version) versions.targets[key] = plans[plans.length - 1].version;
+  }
+  const libraryGroups = new Set(prepared.filter((item) => item.change.transactionId && item.change.target.path === 'docs/flows/library.json').map((item) => item.change.transactionId));
+  for (const id of libraryGroups) {
+    const indexes = prepared.map((item, index) => item.change.transactionId === id ? index : -1).filter((index) => index >= 0);
+    const loses = indexes.some((index) => plans[index].version?.id !== prepared[index].change.id
+      && !(prepared[index].raw ? prior[index].localBytes?.equals(prepared[index].raw) : prior[index].localBytes === null));
+    if (!loses) continue;
+    for (const index of indexes) {
+      const item = prepared[index], previous = prior[index];
+      const ops = item.raw && !previous.localBytes?.equals(item.raw) ? [conflictOp(previous.located, item.raw, item.change)] : [];
+      plans[index] = { version: previous.localVersion, ops, events: conflictEvents(item, ops) };
+      const key = targetKey(item.change.target);
+      if (previous.localVersion) versions.targets[key] = previous.localVersion;
+      else delete versions.targets[key];
+    }
   }
   if (plans.some((plan) => plan.corrupt)) throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
   await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
@@ -246,7 +267,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     if (tombstones.size > 0) {
       ops.push({ kind: 'write', file: grantPath(sync), bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones].sort() })}\n`, 'utf8').toString('base64') });
     }
-    await runGroup(sync, group.id, ops, group.events, roots);
+    await runGroup(sync, group.id, ops, group.events, roots, group.changes);
     completed += 1;
   }
   await checkpoint(sync, decoded, packBytes, ledger);
@@ -373,7 +394,8 @@ function groupPlans(prepared, plans) {
   const groups = new Map();
   prepared.forEach((item, index) => {
     const id = item.change.transactionId ?? item.change.id;
-    const group = groups.get(id) ?? { id, ops: [], events: [], version: false };
+    const group = groups.get(id) ?? { id, ops: [], events: [], version: false, changes: [] };
+    group.changes.push(item.change);
     group.ops.push(...plans[index].ops);
     group.events.push(...plans[index].events);
     if (plans[index].version) group.version = true;
@@ -382,7 +404,13 @@ function groupPlans(prepared, plans) {
   return [...groups.values()];
 }
 
-async function runGroup(sync, id, ops, events, roots) {
+async function recordedChange(sync, change) {
+  if (!change.transactionId) return false;
+  const record = await readJsonAbsolute(path.join(sync.paths.localDirectory, 'received', 'groups', `${change.transactionId}.json`));
+  return record?.id === change.transactionId && record.changes?.some((item) => canonicalJson(item) === canonicalJson(change));
+}
+
+async function runGroup(sync, id, ops, events, roots, changes = []) {
   const file = path.join(sync.paths.localDirectory, 'received', 'groups', id + '.json');
   const existing = await readJsonAbsolute(file);
   if (!existing) {
@@ -397,7 +425,7 @@ async function runGroup(sync, id, ops, events, roots) {
       }
     }
   }
-  const progress = existing ?? { id, done: 0, emitted: false, ops, events };
+  const progress = existing ?? { id, done: 0, emitted: false, ops, events, changes };
   if (!existing) await writeDurable(sync.store, file, Buffer.from(`${JSON.stringify(progress)}\n`, 'utf8'), roots);
   while (progress.done < progress.ops.length) {
     await perform(sync, progress.ops[progress.done], roots);

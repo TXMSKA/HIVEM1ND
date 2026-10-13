@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -42,6 +42,58 @@ async function filesUnder(directory, found = []) {
   }
   return found;
 }
+
+test("library fixture carries folders exact copies repository moves and true deletion Undo", async (context) => {
+  const fixture = await open(context);
+  await mkdir(path.join(fixture.root, "repositories", "api"), { recursive: true });
+  const mutate = (method, route, body) => request(fixture, method, `/api/v1${route}`, { body, key: randomUUID() });
+  const folder = await mutate("POST", "/library/folders", { project: "shop", kind: "void", title: "Texts", parentId: null, expectedRevision: null });
+  assert.equal(folder.status, 201);
+  const folderId = folder.body.data.folder.id;
+  const created = await mutate("POST", "/void/texts", { project: "shop", path: "docs/library-source.json", folderId,
+    document: { formatVersion: 1, id: "library-source", title: "Source", pages: [{ k: "A", en: "Original content", foreign: { nested: [1, 2] } }], foreign: { kept: true } } });
+  assert.equal(created.status, 201);
+  const editor = created.body.data;
+  assert.equal(editor.folderId, folderId);
+  const folders = await request(fixture, "GET", "/api/v1/library/folders?project=shop&kind=void");
+  assert.equal(folders.body.data.items[0].count, 1);
+  const renamedFolder = await mutate("PATCH", `/library/folders/${folderId}`, { project: "shop", title: "Renamed folder", expectedRevision: editor.libraryRevision });
+  assert.equal(renamedFolder.status, 200);
+  const current = (await request(fixture, "GET", `/api/v1/void/texts/${editor.id}`)).body.data;
+  const copied = await mutate("POST", `/editors/${editor.id}/duplicate`, { project: "shop", folderId, title: "Copy", path: "docs/library-copy.json", expectedRevision: editor.revision });
+  assert.equal(copied.status, 201);
+  assert.notEqual(copied.body.data.document.id, editor.document.id);
+  assert.deepEqual(copied.body.data.document.pages, editor.document.pages);
+  assert.deepEqual(copied.body.data.threads, []);
+  const copy = copied.body.data;
+  const moved = await mutate("POST", `/editors/${copy.id}/move`, { project: "api", folderId: null, path: "docs/moved.json", confirmedRepositoryChange: true,
+    expectedRevision: copy.revision, expectedCommentsRevision: copy.commentsRevision, expectedAttachmentRevision: copy.attachmentRevision, expectedLibraryRevision: copy.libraryRevision });
+  assert.equal(moved.status, 200);
+  await assert.rejects(() => readFile(path.join(fixture.root, "repositories", "shop", copy.path)), { code: "ENOENT" });
+  assert.deepEqual(JSON.parse(await readFile(path.join(fixture.root, "repositories", "api", "docs/moved.json"))).foreign, editor.document.foreign);
+  assert.equal((await mutate("POST", `/changes/${moved.body.data.changeId}/undo`, {})).status, 200);
+  await assert.rejects(() => readFile(path.join(fixture.root, "repositories", "api", "docs/moved.json")), { code: "ENOENT" });
+  const source = (await request(fixture, "GET", `/api/v1/void/texts/${editor.id}`)).body.data;
+  const renamed = await mutate("PATCH", `/editors/${source.id}/library`, { title: "Logical name", expectedRevision: source.revision, expectedLibraryRevision: source.libraryRevision });
+  assert.equal(renamed.status, 200);
+  assert.equal(JSON.parse(await readFile(path.join(fixture.root, "repositories", "shop", source.path))).title, "Source");
+  const invalid = await mutate("PATCH", `/editors/${source.id}/library`, { title: "Invalid", expectedRevision: source.revision, expectedLibraryRevision: renamed.body.data.libraryRevision, unknown: true });
+  assert.equal(invalid.status, 400);
+  const key = randomUUID(), body = { confirmed: true, expectedRevision: source.revision, expectedCommentsRevision: source.commentsRevision,
+    expectedAttachmentRevision: source.attachmentRevision, expectedLibraryRevision: renamed.body.data.libraryRevision };
+  const removed = await request(fixture, "DELETE", `/api/v1/editors/${source.id}`, { key, body });
+  assert.equal(removed.status, 200);
+  assert.deepEqual((await request(fixture, "DELETE", `/api/v1/editors/${source.id}`, { key, body })).body.data, removed.body.data);
+  await assert.rejects(() => readFile(path.join(fixture.root, "repositories", "shop", source.path)), { code: "ENOENT" });
+  assert.equal((await mutate("POST", `/changes/${removed.body.data.changeId}/undo`, {})).status, 200);
+  const latestFolder = (await request(fixture, "GET", "/api/v1/library/folders?project=shop&kind=void")).body.data.items[0];
+  const removedFolder = await mutate("DELETE", `/library/folders/${folderId}`, { project: "shop", confirmed: true, expectedRevision: latestFolder.revision });
+  assert.equal(removedFolder.status, 200);
+  assert.equal(removedFolder.body.data.removedResourceIds.length, 2);
+  assert.equal((await mutate("POST", `/changes/${removedFolder.body.data.changeId}/undo`, {})).status, 200);
+  assert.equal((await request(fixture, "GET", "/api/v1/void/texts?q=Original%20content&folderId=" + folderId)).body.data.total, 2);
+  assert.equal(current.document.foreign.kept, true);
+});
 
 test("fixture trees stay inside their root and reject outside cleanup", async () => {
   const tree = await createFixtureTree();

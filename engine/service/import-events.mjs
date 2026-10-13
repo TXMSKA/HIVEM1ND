@@ -7,6 +7,7 @@ import { projectGroup } from './groups.mjs';
 import { readApproval } from './approvals.mjs';
 import { projectSessionRequest, readStartRequest } from './adapters.mjs';
 import { readAsset, readAttachments, readComments } from './editors.mjs';
+import { clearResource } from './watch.mjs';
 
 const PRIVATE_FIELDS = new Set(['nativeSessionId', 'endpoint', 'endpoints', 'token', 'authorization', 'secret', 'secrets', 'pipe', 'password', 'credential', 'credentials', 'pid', 'lease', 'bootstrap']);
 
@@ -58,6 +59,10 @@ export async function importedSidecarEvents(context, change) {
   }
   const binding = /^user\/relay\/editors\/([^/.]+)\.json$/.exec(file);
   if (binding) {
+    if (change.operation === 'delete') {
+      if (context.watch) clearResource(context.watch, binding[1]);
+      return changed([{ name: 'editor.removed', resourceId: binding[1], data: { resourceId: binding[1], changeId: change.transactionId, undoUntil: null } }], ['editors']);
+    }
     const value = await readAttachments(context, binding[1]);
     return changed([event('editor.attachments.changed', { resourceId: binding[1], ...value }, { resourceId: binding[1] })], ['editors']);
   }
@@ -106,10 +111,25 @@ export async function importedSidecarEvents(context, change) {
 async function projectSidecar(context, change, file) {
   const project = (context.projects ?? []).find(item => item.name === change.target.project && item.localPath);
   if (!project) return null;
+  if (file === 'docs/flows/library.json') return { events: ['blueprint', 'void'].map((kind) => ({ name: 'library.changed',
+    data: { project: project.name, kind, revision: change.hash ?? null } })), collections: ['editors'] };
+  if (file.startsWith('docs/flows/history/')) return { events: [], collections: ['editors'] };
+  if (file.endsWith('.orig.json') || file.endsWith('.versions.jsonl')) return { events: [], collections: ['editors'] };
   const isComments = file.endsWith('.comments.json') || /^docs\/flows\/comments\/[^/]+\.json$/.test(file);
   const isAsset = /^docs\/flows\/assets\/[^/]+\.(png|jpg|webp)$/.test(file);
   if (file === 'docs/flows/boards/index.json') return { events: [], collections: ['editors'] };
-  if (!isComments && !isAsset) return null;
+  if (!isComments && !isAsset) {
+    if (change.operation !== 'delete') return null;
+    const { uuidV8 } = await import('./identity.mjs');
+    const kind = file.startsWith('docs/flows/boards/') ? 'blueprint' : 'void';
+    const resourceId = uuidV8(['editor', kind, project.name, file]);
+    if (context.watch) {
+      clearResource(context.watch, resourceId);
+      context.watch.handles.get(resourceId)?.close?.();
+      context.watch.handles.delete(resourceId);
+    }
+    return { events: [{ name: 'editor.removed', resourceId, data: { resourceId, changeId: change.transactionId, undoUntil: null } }], collections: ['editors'] };
+  }
   if (change.operation === 'delete') return { events: [], collections: ['editors'] };
   const catalog = await jsonAt(context.paths.mind, 'user/gui/resources.json');
   const entries = (catalog.resources ?? []).filter(item => item.project === project.name);

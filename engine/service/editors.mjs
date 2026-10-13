@@ -9,10 +9,10 @@ import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { bindProjects, commitTransaction, withLocalChanges, withLocks } from './store.mjs';
-import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
+import { bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
+import { openSync } from '../sync/store.mjs';
 import { convertMedia, webpPayload } from '../sync/media.mjs';
-import { startResourceWatch } from './watch.mjs';
+import { clearResource, startResourceWatch } from './watch.mjs';
 import { readUnitState } from './state.mjs';
 
 const ASSET_LIMIT = 10000000;
@@ -46,8 +46,12 @@ function jsonBytes(value) {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function loadBytes(file) {
+async function loadBytes(file, store = null) {
   await assertNoLinks(file);
+  if (store) {
+    const bytes = await readBytes(store, file);
+    return { bytes, revision: revisionOf(bytes) };
+  }
   try {
     const stats = await lstat(file);
     if (stats.isSymbolicLink()) fail(422, 'unsafe_path', 'Refusing to follow a link.');
@@ -108,7 +112,7 @@ function commentsFile(project, legacyId) {
 }
 
 async function readCatalog(context) {
-  const loaded = await loadBytes(catalogFile(context));
+  const loaded = await loadBytes(catalogFile(context), context.store);
   const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-resources-v1', resources: [] };
   if (!value || typeof value !== 'object' || !Array.isArray(value.resources)) fail(409, 'corrupt_resource', 'The resource could not be read.');
   return { ...loaded, value };
@@ -170,6 +174,8 @@ function catalogSummary(entry) {
     attached: [],
     openThreads: 0,
     activity: null,
+    folderId: null,
+    updatedAt: null,
   };
 }
 
@@ -185,6 +191,8 @@ function summaryOf(editor) {
     attached: editor.attached,
     openThreads: editor.openThreads,
     activity: editor.activity,
+    folderId: editor.folderId,
+    updatedAt: editor.updatedAt,
   };
 }
 
@@ -192,11 +200,14 @@ async function projectEditor(context, entry, document, revision) {
   const binding = await readAttachments(context, entry.id);
   const comments = await loadComments(await resourceOf(context, entry.id));
   const threads = comments.bytes ? (projectComments(comments.value, entry.id).threads ?? []) : [];
+  const library = await loadLibrary(context, entry.project);
+  const item = library.value.items[entry.id];
+  const times = await Promise.all([inside(library.project.localPath, entry.path), comments.file].map((file) => lstat(file).then((stat) => stat.mtimeMs).catch((error) => { if (error.code === 'ENOENT') return 0; throw error; })));
   return {
     id: entry.id,
     kind: entry.kind,
     project: entry.project,
-    title: document?.title || entry.legacyId || '',
+    title: item?.title ?? document?.title ?? entry.title ?? entry.legacyId ?? '',
     path: entry.path,
     legacyId: entry.legacyId,
     readOnly: entry.readOnly === true,
@@ -209,6 +220,9 @@ async function projectEditor(context, entry, document, revision) {
     attachmentRevision: binding.revision,
     commentsRevision: comments.revision,
     threads,
+    folderId: item?.folderId ?? null,
+    updatedAt: item?.updatedAt ?? (Math.max(...times) ? new Date(Math.max(...times)).toISOString() : null),
+    libraryRevision: library.revision,
   };
 }
 
@@ -267,17 +281,21 @@ function rewriteEntry(context, entry) {
       afterBytesBase64: entry.afterBytesBase64,
       afterRevision: entry.afterRevision,
       record: entry.record ?? null,
+      recordPath: resolved,
+      beforeBytes: entry.beforeBytes,
+      operation: entry.operation,
     };
   }
   return entry;
 }
 
-async function commit(context, entries, events = []) {
-  return withLocalChanges(context.store, () => commitEditor(context, entries, events));
+async function commit(context, entries, events = [], response) {
+  return withLocalChanges(context.store, () => commitEditor(context, entries, events, response));
 }
 
-async function commitEditor(context, entries, events) {
+async function commitEditor(context, entries, events, response) {
   bindProjects(context.store, context.projects ?? []);
+  await libraryEdits(context, entries, events);
   const prepared = entries.map((entry) => rewriteEntry(context, entry));
   for (const entry of prepared) {
     const file = entry.target
@@ -285,61 +303,12 @@ async function commitEditor(context, entries, events) {
       : entry.recordPath;
     if (file) await assertNoLinks(file);
   }
-  const transactionId = randomUUID();
-  const result = await commitTransaction(context.store, { id: transactionId, entries: prepared, events });
-  const stage = [];
-  for (const entry of prepared) {
-    const target = syncTarget(context, entry);
-    if (!target) continue;
-    const bytes = entryBytes(entry);
-    if (!bytes) continue;
-    stage.push({
-      target,
-      bytes,
-      id: uuidV8(['editor-change', transactionId, target.kind, target.project ?? '', target.path, hashBytes(bytes)]),
-    });
-  }
-  if (stage.length > 0) {
-    const sync = context.sync ?? openSync({
-      store: context.store,
-      paths: context.paths,
-      now: () => context.now?.() ?? Date.now(),
-      projects: context.projects ?? [],
-    });
-    const changes = await stageTransaction(sync, stage, { transactionId });
-    context.lastEditorChanges = changes;
-    noteSync(context, 'pending');
-    if (context.pulse) {
-      const published = await context.pulse.changed(changes.map((item) => item.id));
-      if (published?.published === true) noteSync(context, 'published');
-    }
-  } else {
-    noteSync(context, 'local');
-  }
-  if (context.bus) {
-    for (const event of events) context.bus.emit(event);
-  }
+  const id = randomUUID();
+  const result = await commitChange(context, { id, entries: prepared, events, response });
+  const { listStaged } = await import('../sync/store.mjs');
+  const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: context.now, projects: context.projects ?? [] });
+  context.lastEditorChanges = (await listStaged(sync)).filter((change) => change.transactionId === id);
   return result;
-}
-
-function syncTarget(context, entry) {
-  if (entry?.target?.kind === 'project' && entry.target.project && entry.target.path) return entry.target;
-  const file = entry?.recordPath;
-  const mind = context.paths?.mind;
-  if (!file || !mind) return null;
-  const relative = path.relative(path.resolve(mind), path.resolve(file));
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
-  const slash = relative.split(path.sep).join('/');
-  if (!slash.startsWith('user/')) return null;
-  if (slash.startsWith('user/relay/leases/') || slash.startsWith('user/relay/credentials/') || slash.startsWith('user/relay/endpoints/')) return null;
-  return { kind: 'mind', path: slash };
-}
-
-function entryBytes(entry) {
-  if (Buffer.isBuffer(entry?.afterBytes)) return entry.afterBytes;
-  if (typeof entry?.afterBytes === 'string') return Buffer.from(entry.afterBytes);
-  if (typeof entry?.afterBytesBase64 === 'string') return Buffer.from(entry.afterBytesBase64, 'base64');
-  return null;
 }
 
 function record(file, before, bytes) {
@@ -363,7 +332,7 @@ export async function discoverResources(context, projectName) {
       return;
     }
     for (const name of names) {
-      if (voidSidecar(name) || name === 'index.json') continue;
+      if (voidSidecar(name) || name === 'index.json' || name === 'library.json' || relative === 'flows' && name === 'history') continue;
       const next = relative ? `${relative}/${name}` : name;
       const full = path.join(dir, name);
       const stat = await lstat(full);
@@ -447,36 +416,57 @@ export async function list(context, query = {}) {
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
   const catalog = await readCatalog(context);
   const editors = [];
+  const issues = [];
   for (const name of names) {
-    const project = projectOf(context, name);
+    let project;
+    try { project = (await loadLibrary(context, name)).project; }
+    catch (error) { issues.push({ project: name, code: error.code ?? 'project_unavailable', message: 'The project library is not available.' }); continue; }
     for (const entry of catalog.value.resources) {
       if (entry.project !== project.name) continue;
       if (query.kind && entry.kind !== query.kind) continue;
-      const file = inside(project.localPath, entry.path);
-      const loaded = await loadBytes(file);
-      let document = null;
-      if (!entry.readOnly && loaded.bytes) {
-        try {
-          document = JSON.parse(loaded.bytes.toString('utf8'));
-        } catch {
-          document = null;
+      try {
+        const file = inside(project.localPath, entry.path);
+        const loaded = await loadBytes(file, context.store);
+        let document = null;
+        if (!entry.readOnly && loaded.bytes) {
+          try {
+            document = JSON.parse(loaded.bytes.toString('utf8'));
+          } catch {
+            document = null;
+          }
         }
+        if (!loaded.bytes) issues.push({ project: name, resourceId: entry.id, code: 'corrupt_resource', message: 'The library document is not available.' });
+        editors.push(await projectEditor(context, entry, document, loaded.revision));
+      } catch (error) {
+        issues.push({ project: name, resourceId: entry.id, code: error.code ?? 'corrupt_resource', message: 'The library item is not available.' });
       }
-      editors.push(await projectEditor(context, entry, document, loaded.revision));
     }
   }
   editors.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
-  const matched = needle
+  let matched = needle
     ? editors.filter((item) => editorSearchText(item).includes(needle))
     : editors;
-  const snapshot = hashText(canonicalJson(matched.map((item) => [item.id, item.revision, item.attachmentRevision, item.commentsRevision, item.openThreads, item.attached, item.activity])));
-  return paginate(matched.map(summaryOf), {
+  if (query.folderId !== undefined) {
+    if (!isUuid(query.folderId)) fail(422, 'invalid_query', 'The folder id must be a UUID.');
+    matched = matched.filter((item) => item.folderId === query.folderId);
+  }
+  const monday = new Date(context.now?.() ?? Date.now());
+  monday.setUTCHours(0, 0, 0, 0);
+  monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+  for (const key of ['openComments', 'attachedAgents', 'changedThisWeek']) {
+    if (query[key] === undefined) continue;
+    if (![true, false, 'true', 'false'].includes(query[key])) fail(422, 'invalid_query', 'Library filters must be boolean.');
+    if (query[key] === true || query[key] === 'true') matched = matched.filter((item) => key === 'openComments' ? item.openThreads > 0 : key === 'attachedAgents' ? item.attached.length > 0 : Date.parse(item.updatedAt) >= monday.getTime());
+  }
+  const snapshot = hashText(canonicalJson(matched.map((item) => [item.id, item.revision, item.libraryRevision, item.attachmentRevision, item.commentsRevision, item.openThreads, item.attached, item.activity])));
+  return { ...paginate(matched.map(summaryOf), {
     limit: query.limit,
     cursor: query.cursor || null,
-    filters: { project: query.project ?? null, kind: query.kind ?? null, q: query.q ?? null },
+    filters: { project: query.project ?? null, kind: query.kind ?? null, q: query.q ?? null, folderId: query.folderId ?? null,
+      openComments: query.openComments ?? null, attachedAgents: query.attachedAgents ?? null, changedThisWeek: query.changedThisWeek ?? null },
     snapshot,
-  });
+  }), issues };
 }
 
 async function resourceOf(context, id) {
@@ -485,7 +475,7 @@ async function resourceOf(context, id) {
   const entry = entryOf(catalog, id);
   if (!entry) fail(404, 'not_found', 'The resource does not exist.');
   const project = projectOf(context, entry.project);
-  return { project, catalog, entry };
+  return { project, catalog, entry, store: context.store };
 }
 
 export async function readEditor(context, id) {
@@ -580,6 +570,8 @@ function deepMerge(target, changes, root = true) {
 export async function createBoard(context, input) {
   const document = validateBoard(input.document);
   const project = projectOf(context, input.project);
+  const library = await loadLibrary(context, project.name);
+  validateFolder(library, input.folderId ?? null, 'blueprint');
   const relative = input.path ?? `docs/flows/boards/${document.id}.json`;
   if (relative.endsWith('.mjs')) fail(409, 'read_only_resource', 'A module board cannot be overwritten.');
   const full = inside(project.localPath, relative);
@@ -597,19 +589,25 @@ export async function createBoard(context, input) {
     path: relative,
     legacyId: document.id,
     readOnly: false,
-    attached: Array.isArray(input.attached) ? [...input.attached] : [],
+    attached: await canonicalAttachments(context, input.attached ?? []),
   };
   const nextCatalog = { ...catalog.value, resources: [...catalog.value.resources, entry] };
   const nextIndex = mergeIndex(index.bytes ? parseJson(index.bytes) : null, document);
   const sidecar = { board: document.id, threads: [] };
   const bytes = jsonBytes(document);
+  library.value.items[entry.id] = { folderId: input.folderId ?? null, title: document.title, updatedAt: clock(context) };
+  const editor = createdEditor(context, entry, document, bytes, jsonBytes(sidecar), library);
   await commit(context, [
+    ...(context.createGuards ?? []),
+    ...(context.initialAssets ?? []),
     record(full, null, bytes),
     record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
     record(indexFile(project), index.revision, jsonBytes(nextIndex)),
     record(commentsFile(project, document.id), null, jsonBytes(sidecar)),
-  ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null));
-  return shown(context, entry, document, hashBytes(bytes));
+    record(library.file, library.revision, jsonBytes(library.value)),
+    ...await initialHistory(context, entry, bytes, jsonBytes(sidecar)),
+  ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null), { status: 201, body: editor });
+  return editor;
 }
 
 async function boardFile(context, id) {
@@ -708,7 +706,7 @@ export async function readComments(context, id) {
 
 export async function readAttachments(context, id) {
   const found = await resourceOf(context, id);
-  const loaded = await loadBytes(bindingFile(context, id));
+  const loaded = await loadBytes(bindingFile(context, id), context.store);
   if (!loaded.bytes) return { attached: [...(found.entry.attached ?? [])], revision: null };
   const value = parseJson(loaded.bytes);
   return { attached: [...(value.attached ?? [])], revision: loaded.revision };
@@ -759,7 +757,8 @@ async function canonicalAttachments(context, list) {
 
 async function unitOnMind(context, parsed) {
   if (parsed.id === 'root:master') return true;
-  return Boolean(await readUnitState(context, parsed));
+  const state = await readUnitState(context, parsed);
+  return Boolean(state && !/^removed: true\r?$/m.test(state.bytes.toString('utf8')));
 }
 
 function sniff(bytes) {
@@ -1174,7 +1173,7 @@ function commentsPath(found) {
 
 async function loadComments(found) {
   const file = commentsPath(found);
-  const loaded = await loadBytes(file);
+  const loaded = await loadBytes(file, found.store);
   if (!loaded.bytes) {
     const value = found.entry.kind === 'void'
       ? { path: path.basename(found.entry.path), threads: [] }
@@ -1280,6 +1279,8 @@ export async function createText(context, input) {
   const document = validateText(input.document);
   document.rev = Number.isInteger(document.rev) ? document.rev : 0;
   const project = projectOf(context, input.project);
+  const library = await loadLibrary(context, project.name);
+  validateFolder(library, input.folderId ?? null, 'void');
   const relative = input.path;
   const full = inside(project.localPath, relative);
   if (relative.endsWith('.orig.json') || relative.endsWith('.comments.json') || relative.endsWith('.versions.jsonl')) {
@@ -1291,20 +1292,26 @@ export async function createText(context, input) {
   if (catalog.value.resources.some((item) => item.id === id || (item.project === project.name && item.path === relative))) fail(409, 'resource_exists', 'That path is already registered.');
   const entry = {
     id, kind: 'void', project: project.name, path: relative, legacyId: path.basename(relative, '.json'), readOnly: false,
-    attached: Array.isArray(input.attached) ? [...input.attached] : [],
+    attached: await canonicalAttachments(context, input.attached ?? []),
   };
   const bytes = jsonBytes(document);
   const comments = { path: path.basename(relative), threads: [] };
   const nextCatalog = { ...catalog.value, resources: [...catalog.value.resources, entry] };
+  library.value.items[id] = { folderId: input.folderId ?? null, title: document.title, updatedAt: clock(context) };
+  const editor = createdEditor(context, entry, document, bytes, jsonBytes(comments), library);
   await commit(context, [
+    ...(context.createGuards ?? []),
+    ...(context.initialAssets ?? []),
     record(full, null, bytes),
     record(`${stemOf(full)}.orig.json`, null, bytes),
     record(`${stemOf(full)}.comments.json`, null, jsonBytes(comments)),
     record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
-  ], [voidEvent(id, hashBytes(bytes), document.rev, 'create')]);
+    record(library.file, library.revision, jsonBytes(library.value)),
+    ...await initialHistory(context, entry, bytes, jsonBytes(comments)),
+  ], [voidEvent(id, hashBytes(bytes), document.rev, 'create')], { status: 201, body: editor });
   rememberExternal(context, id, hashBytes(bytes), document);
   connectExternal(context, id, full);
-  return shown(context, entry, document, hashBytes(bytes));
+  return editor;
 }
 
 function voidEvent(id, revision, rev, operation, k = null, lang = null) {
@@ -1753,4 +1760,480 @@ async function observeExternalUnlocked(context, id, options) {
 }
 
 export { findAnchor, place };
+
+function libraryTitle(value) {
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value) || !value.trim() || value.trim().length > 240) fail(422, 'invalid_title', 'The title must be one nonblank line of at most 240 characters.');
+  return value.trim();
+}
+
+function desktopLibrary(context) {
+  if (context.principal?.audience && context.principal.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop can manage the library.');
+}
+
+async function loadLibrary(context, name) {
+  const project = projectOf(context, name);
+  await assertNoLinks(project.localPath);
+  const stats = await lstat(project.localPath).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!stats?.isDirectory()) fail(409, 'project_unavailable', 'The project repository is not available on this machine.');
+  const file = inside(project.localPath, 'docs/flows/library.json');
+  const loaded = await loadBytes(file, context.store);
+  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-library-v1', folders: [], items: {} };
+  if (value.format !== 'hivem1nd-library-v1' || !Array.isArray(value.folders) || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail(409, 'corrupt_resource', 'The library metadata is not valid.');
+  const ids = new Set();
+  for (const folder of value.folders) {
+    if (!isUuid(folder.id) || ids.has(folder.id) || !['blueprint', 'void'].includes(folder.kind) || libraryTitle(folder.title) !== folder.title) fail(409, 'corrupt_resource', 'The library folder is not valid.');
+    ids.add(folder.id);
+  }
+  for (const folder of value.folders) validateParent(value.folders, folder);
+  return { project, file, ...loaded, value };
+}
+
+function validateParent(folders, folder) {
+  const seen = new Set([folder.id]);
+  let parentId = folder.parentId;
+  while (parentId !== null) {
+    const parent = folders.find((item) => item.id === parentId && item.kind === folder.kind);
+    if (!parent || seen.has(parentId)) fail(422, 'invalid_parent', 'The parent must be a folder of the same kind without a cycle.');
+    seen.add(parentId);
+    parentId = parent.parentId;
+  }
+}
+
+function validateFolder(library, id, kind) {
+  if (id !== null && (!isUuid(id) || !library.value.folders.some((item) => item.id === id && item.kind === kind))) fail(422, 'invalid_folder', 'The folder must exist in the selected project and editor library.');
+}
+
+function libraryEvent(library, kind, bytes = jsonBytes(library.value)) {
+  return { name: 'library.changed', data: { project: library.project.name, kind, revision: hashBytes(bytes) } };
+}
+
+async function libraryEdits(context, entries, events) {
+  const edits = events.filter((event) => ['blueprint.changed', 'void.changed', 'comment.changed'].includes(event.name));
+  if (!edits.length) return;
+  const catalogEntry = entries.find((entry) => entry.recordPath === catalogFile(context));
+  const catalog = catalogEntry ? parseJson(catalogEntry.afterBytes) : (await readCatalog(context)).value;
+  const libraries = new Map();
+  const kinds = new Map();
+  for (const event of edits) {
+    const resource = catalog.resources.find((item) => item.id === event.resourceId);
+    if (!resource) continue;
+    let library = libraries.get(resource.project);
+    if (!library) {
+      library = await loadLibrary(context, resource.project);
+      const planned = entries.find((entry) => entry.recordPath === library.file);
+      if (planned) library.value = parseJson(planned.afterBytes);
+      libraries.set(resource.project, library);
+    }
+    const file = inside(library.project.localPath, resource.path);
+    const planned = entries.find((entry) => entry.recordPath === file);
+    const document = planned?.afterBytes ? parseJson(planned.afterBytes) : null;
+    const previous = library.value.items[resource.id];
+    const current = document ? await loadBytes(file) : null;
+    const changedTitle = document && (!current.bytes || parseJson(current.bytes).title !== document.title);
+    library.value.items[resource.id] = { ...previous, folderId: previous?.folderId ?? null,
+      title: changedTitle ? document.title : previous?.title ?? document?.title ?? resource.title ?? resource.legacyId, updatedAt: clock(context) };
+    kinds.set(`${resource.project}:${resource.kind}`, { library, kind: resource.kind });
+  }
+  for (const library of libraries.values()) {
+    const planned = entries.find((entry) => entry.recordPath === library.file);
+    if (planned) planned.afterBytes = jsonBytes(library.value);
+    else entries.push(record(library.file, library.revision, jsonBytes(library.value)));
+  }
+  for (const { library, kind } of kinds.values()) events.unshift(libraryEvent(library, kind));
+}
+
+async function initialHistory(context, entry, document, comments) {
+  const project = projectOf(context, entry.project);
+  const id = randomUUID();
+  const relative = `docs/flows/history/${entry.id}/${id}`;
+  const metadata = { format: 'hivem1nd-editor-history-v1', id, resourceId: entry.id, at: clock(context),
+    by: context.principal?.unitId ?? 'root:master', operation: 'create', documentPath: entry.path,
+    commentsPath: path.relative(project.localPath, commentsPath({ project, entry })).replaceAll('\\', '/'),
+    revision: hashBytes(document), commentsRevision: revisionOf(comments) };
+  return [record(inside(project.localPath, `${relative}.json`), null, jsonBytes(metadata)),
+    record(inside(project.localPath, `${relative}.document.json`), null, document),
+    ...(comments ? [record(inside(project.localPath, `${relative}.comments.json`), null, comments)] : [])];
+}
+
+function createdEditor(context, entry, document, bytes, comments, library) {
+  return { id: entry.id, kind: entry.kind, project: entry.project, title: document.title, path: entry.path, legacyId: entry.legacyId,
+    readOnly: false, revision: hashBytes(bytes), attached: entry.attached, openThreads: 0, activity: currentActivity(context, entry.id),
+    document, legacy: null, attachmentRevision: null, commentsRevision: revisionOf(comments), threads: [],
+    folderId: library.value.items[entry.id].folderId, updatedAt: library.value.items[entry.id].updatedAt, libraryRevision: hashBytes(jsonBytes(library.value)) };
+}
+
+export async function listFolders(context, query = {}) {
+  if (!['blueprint', 'void'].includes(query.kind)) fail(422, 'invalid_query', 'The editor kind is required.');
+  const items = [], issues = [];
+  for (const name of query.project ? [query.project] : (context.projects ?? []).map((item) => item.name)) {
+    try {
+      const library = await loadLibrary(context, name);
+      const catalog = await readCatalog(context);
+      for (const folder of library.value.folders.filter((item) => item.kind === query.kind)) {
+        const descendants = folderTree(library, folder.id);
+        const count = catalog.value.resources.filter((entry) => entry.project === name && entry.kind === folder.kind && descendants.has(library.value.items[entry.id]?.folderId)).length;
+        items.push({ ...folder, project: name, count, revision: library.revision });
+      }
+    } catch (error) { issues.push({ project: name, code: error.code ?? 'project_unavailable', message: 'The project library is not available.' }); }
+  }
+  items.sort((left, right) => `${left.project}:${left.id}`.localeCompare(`${right.project}:${right.id}`));
+  const needle = String(query.q ?? '').toLowerCase();
+  return { ...paginate(items.filter((item) => item.title.toLowerCase().includes(needle)), { limit: query.limit, cursor: query.cursor,
+    filters: { project: query.project ?? null, kind: query.kind, q: query.q ?? null }, snapshot: hashText(canonicalJson(items)) }), issues };
+}
+
+export async function createFolder(context, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const library = await loadLibrary(context, input.project);
+    checkRevision(library.bytes, input.expectedRevision);
+    if (!['blueprint', 'void'].includes(input.kind)) fail(422, 'invalid_body', 'The editor kind is not valid.');
+    const folder = { id: randomUUID(), title: libraryTitle(input.title), kind: input.kind, parentId: input.parentId };
+    validateParent([...library.value.folders, folder], folder);
+    library.value.folders.push(folder);
+    const bytes = jsonBytes(library.value);
+    const response = { folder: { ...folder, project: input.project, count: 0, revision: hashBytes(bytes) }, revision: hashBytes(bytes) };
+    await libraryCommit(context, [record(library.file, library.revision, bytes)], [libraryEvent(library, folder.kind, bytes)], { status: 201, body: response });
+    return response;
+  });
+}
+
+export async function patchFolder(context, id, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const library = await loadLibrary(context, input.project);
+    checkRevision(library.bytes, input.expectedRevision);
+    const folder = library.value.folders.find((item) => item.id === id);
+    if (!folder) fail(404, 'folder_not_found', 'The library folder does not exist.');
+    if (!Object.hasOwn(input, 'title') && !Object.hasOwn(input, 'parentId')) fail(422, 'invalid_body', 'A folder patch needs a title or parent.');
+    if (Object.hasOwn(input, 'title')) folder.title = libraryTitle(input.title);
+    if (Object.hasOwn(input, 'parentId')) folder.parentId = input.parentId;
+    validateParent(library.value.folders, folder);
+    const bytes = jsonBytes(library.value);
+    const response = { folder: { ...folder, project: input.project, revision: hashBytes(bytes) }, revision: hashBytes(bytes) };
+    await libraryCommit(context, [record(library.file, library.revision, bytes)], [libraryEvent(library, folder.kind, bytes)], { status: 200, body: response });
+    return response;
+  });
+}
+
+async function libraryCommit(context, entries, events, response, id = randomUUID()) {
+  bindProjects(context.store, context.projects ?? []);
+  return commitChange(context, { id, entries: entries.map((entry) => rewriteEntry(context, entry)), events, response });
+}
+
+function folderTree(library, id) {
+  const ids = new Set([id]);
+  let size;
+  do {
+    size = ids.size;
+    for (const folder of library.value.folders) if (ids.has(folder.parentId)) ids.add(folder.id);
+  } while (size !== ids.size);
+  return ids;
+}
+
+async function managementBundle(context, id, input = null) {
+  const found = await resourceOf(context, id);
+  const library = await loadLibrary(context, found.entry.project);
+  const file = inside(found.project.localPath, found.entry.path);
+  const loaded = await loadBytes(file);
+  if (!loaded.bytes) fail(409, 'corrupt_resource', 'The document is not available.');
+  const comments = await loadComments(found);
+  const binding = await loadBytes(bindingFile(context, id));
+  if (input) {
+    checkRevision(loaded.bytes, input.expectedRevision);
+    checkRevision(comments.bytes, input.expectedCommentsRevision);
+    checkRevision(binding.bytes, input.expectedAttachmentRevision);
+    checkRevision(library.bytes, input.expectedLibraryRevision);
+  }
+  const files = new Map([[file, loaded], [comments.file, comments], [bindingFile(context, id), binding]]);
+  if (found.entry.kind === 'void') for (const suffix of ['.orig.json', '.versions.jsonl']) files.set(`${stemOf(file)}${suffix}`, await loadBytes(`${stemOf(file)}${suffix}`));
+  const registry = assetRegistryFile(context, id);
+  files.set(registry, await loadBytes(registry));
+  const directory = inside(found.project.localPath, `docs/flows/history/${id}`);
+  await assertNoLinks(directory);
+  for (const name of await readdir(directory).catch((error) => { if (error.code === 'ENOENT') return []; throw error; })) {
+    if (!/^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(name)) fail(409, 'corrupt_resource', 'An editor history entry is not valid.');
+    files.set(path.join(directory, name), await loadBytes(path.join(directory, name)));
+  }
+  return { ...found, file, loaded, comments, binding, library, files };
+}
+
+function byteEntry(file, beforeBytes, afterBytes) {
+  return { ...record(file, revisionOf(beforeBytes), afterBytes), beforeBytes, ...(afterBytes === null ? { operation: 'delete' } : {}) };
+}
+
+function assetNames(bytes) {
+  const names = new Set();
+  const visit = (value) => {
+    if (typeof value === 'string' && /^(?:(?:docs\/flows\/)?assets\/)?[0-9a-f-]{36}\.(png|jpg|webp)$/.test(value)) names.add(value.split('/').at(-1));
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object') Object.values(value).forEach(visit);
+  };
+  if (bytes) { try { visit(JSON.parse(bytes)); } catch { /* Legacy module content is not JSON. */ } }
+  return names;
+}
+
+async function ownedAssets(context, bundles, entries) {
+  const removed = new Set(bundles.map((bundle) => bundle.entry.id));
+  const owned = new Set();
+  const first = bundles[0];
+  for (const bundle of bundles) {
+    for (const name of assetNames(bundle.loaded.bytes)) owned.add(name);
+    for (const name of assetNames(bundle.files.get(assetRegistryFile(context, bundle.entry.id))?.bytes)) owned.add(name);
+  }
+  const shared = new Set();
+  for (const resource of first.catalog.value.resources.filter((entry) => entry.project === first.project.name && !removed.has(entry.id))) {
+    for (const file of [inside(first.project.localPath, resource.path), assetRegistryFile(context, resource.id)]) {
+      const loaded = await loadBytes(file);
+      if (!loaded.bytes) continue;
+      for (const name of assetNames(loaded.bytes)) shared.add(name);
+      entries.push(byteEntry(file, loaded.bytes, loaded.bytes));
+    }
+  }
+  const assets = [];
+  for (const name of owned) {
+    const file = inside(first.project.localPath, `docs/flows/assets/${name}`);
+    const loaded = await loadBytes(file);
+    if (!loaded.bytes) fail(409, 'corrupt_resource', 'A referenced editor asset is not available.');
+    assets.push({ name, file, ...loaded, shared: shared.has(name) });
+  }
+  return assets;
+}
+
+function removeIndex(value, ids) {
+  if (Array.isArray(value)) return value.filter((entry) => !ids.has(entry.id));
+  return { ...value, boards: (value?.boards ?? []).filter((entry) => !ids.has(entry.id)) };
+}
+
+async function removeBundlePlan(context, bundles, entries) {
+  const first = bundles[0];
+  if (!first) return;
+  for (const bundle of bundles) for (const [file, loaded] of bundle.files) if (loaded.bytes) entries.push(byteEntry(file, loaded.bytes, null));
+  for (const asset of await ownedAssets(context, bundles, entries)) if (!asset.shared) entries.push(byteEntry(asset.file, asset.bytes, null));
+  const ids = new Set(bundles.filter((bundle) => bundle.entry.kind === 'blueprint').map((bundle) => bundle.entry.legacyId));
+  if (ids.size) {
+    const file = indexFile(first.project), loaded = await loadBytes(file);
+    if (loaded.bytes) entries.push(byteEntry(file, loaded.bytes, jsonBytes(removeIndex(parseJson(loaded.bytes), ids))));
+  }
+}
+
+function invalidateEditor(context, id) {
+  if (context.watch) {
+    clearResource(context.watch, id);
+    context.watch.handles.get(id)?.close?.();
+    context.watch.handles.delete(id);
+  }
+  const state = context.store.editorExternal;
+  state?.hashes.delete(id);
+  state?.snapshots.delete(id);
+  state?.issues.delete(id);
+}
+
+async function finishRemoval(context, bundles, library, entries, resourceIds, kinds) {
+  const id = randomUUID();
+  const undoEvents = [...kinds].map((kind) => libraryEvent(library, kind, library.bytes ?? jsonBytes({ format: 'hivem1nd-library-v1', folders: [], items: {} })));
+  const unique = uniqueEntries(entries);
+  const undo = await prepareChangeUndo(context, { id, permission: 'editor.write', resourceIds, entries: unique, events: [...undoEvents,
+    { name: 'view.changed', data: { collections: ['editors'], revision: id } }] });
+  const events = [...kinds].map((kind) => libraryEvent(library, kind));
+  for (const bundle of bundles) {
+    events.push({ name: 'editor.removed', resourceId: bundle.entry.id, data: { resourceId: bundle.entry.id, changeId: id, undoUntil: undo.undoUntil } });
+    const attached = (await readAttachments(context, bundle.entry.id)).attached;
+    const notices = await noticePlan(context, uuidV8(['editor-deletion', id, bundle.entry.id]), bundle.entry.id, attached);
+    unique.push(...notices.entries);
+    events.push(...notices.events);
+  }
+  const response = resourceIds.length === 1 && bundles.length === 1 ? { resourceId: resourceIds[0], changeId: id, undoUntil: undo.undoUntil }
+    : { changeId: id, undoUntil: undo.undoUntil, removedResourceIds: resourceIds };
+  await libraryCommit(context, [...unique, undo.entry], events, { status: 200, body: response }, id);
+  for (const bundle of bundles) invalidateEditor(context, bundle.entry.id);
+  return response;
+}
+
+function uniqueEntries(entries) {
+  const files = new Map();
+  for (const entry of entries) {
+    const previous = files.get(entry.recordPath);
+    if (previous && (previous.beforeRevision !== entry.beforeRevision || revisionOf(previous.afterBytes) !== revisionOf(entry.afterBytes))) fail(409, 'revision_conflict', 'The bundle changed while it was prepared.');
+    files.set(entry.recordPath, entry);
+  }
+  return [...files.values()];
+}
+
+export async function removeEditor(context, id, input) {
+  desktopLibrary(context);
+  if (input.confirmed !== true) fail(422, 'confirmation_required', 'Deleting an editor requires confirmation.');
+  return withLocalChanges(context.store, async () => {
+    const bundle = await managementBundle(context, id, input);
+    const entries = [];
+    await removeBundlePlan(context, [bundle], entries);
+    const catalog = { ...bundle.catalog.value, resources: bundle.catalog.value.resources.filter((entry) => entry.id !== id) };
+    const library = bundle.library;
+    delete library.value.items[id];
+    entries.push(byteEntry(catalogFile(context), bundle.catalog.bytes, jsonBytes(catalog)), byteEntry(library.file, library.bytes, jsonBytes(library.value)));
+    return finishRemoval(context, [bundle], library, entries, [id], new Set([bundle.entry.kind]));
+  });
+}
+
+export async function removeFolder(context, id, input) {
+  desktopLibrary(context);
+  if (input.confirmed !== true) fail(422, 'confirmation_required', 'Deleting a folder requires confirmation.');
+  return withLocalChanges(context.store, async () => {
+    const library = await loadLibrary(context, input.project);
+    checkRevision(library.bytes, input.expectedRevision);
+    const folder = library.value.folders.find((entry) => entry.id === id);
+    if (!folder) fail(404, 'folder_not_found', 'The library folder does not exist.');
+    const descendants = folderTree(library, id);
+    const catalog = await readCatalog(context);
+    const resources = catalog.value.resources.filter((entry) => entry.project === input.project && descendants.has(library.value.items[entry.id]?.folderId));
+    const bundles = [];
+    for (const entry of resources) bundles.push(await managementBundle(context, entry.id));
+    const entries = [];
+    await removeBundlePlan(context, bundles, entries);
+    const ids = resources.map((entry) => entry.id);
+    for (const resourceId of ids) delete library.value.items[resourceId];
+    library.value.folders = library.value.folders.filter((entry) => !descendants.has(entry.id));
+    entries.push(byteEntry(library.file, library.bytes, jsonBytes(library.value)),
+      byteEntry(catalogFile(context), catalog.bytes, jsonBytes({ ...catalog.value, resources: catalog.value.resources.filter((entry) => !ids.includes(entry.id)) })));
+    const response = await finishRemoval(context, bundles, library, entries, ids, new Set([folder.kind]));
+    return { changeId: response.changeId, undoUntil: response.undoUntil, removedResourceIds: ids };
+  });
+}
+
+export async function patchEditorLibrary(context, id, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    if (!Object.hasOwn(input, 'title') && !Object.hasOwn(input, 'folderId')) fail(422, 'invalid_body', 'A library patch needs a title or folder.');
+    const bundle = await managementBundle(context, id);
+    checkRevision(bundle.loaded.bytes, input.expectedRevision);
+    checkRevision(bundle.library.bytes, input.expectedLibraryRevision);
+    const item = bundle.library.value.items[id] ?? { title: parseJson(bundle.loaded.bytes).title ?? bundle.entry.legacyId, folderId: null };
+    if (Object.hasOwn(input, 'title')) item.title = libraryTitle(input.title);
+    if (Object.hasOwn(input, 'folderId')) { validateFolder(bundle.library, input.folderId, bundle.entry.kind); item.folderId = input.folderId; }
+    item.updatedAt = clock(context);
+    bundle.library.value.items[id] = item;
+    const entries = [byteEntry(bundle.library.file, bundle.library.bytes, jsonBytes(bundle.library.value)), byteEntry(bundle.file, bundle.loaded.bytes, bundle.loaded.bytes)];
+    const editor = { ...await readEditor(context, id), ...item, libraryRevision: hashBytes(jsonBytes(bundle.library.value)) };
+    await libraryCommit(context, entries, [libraryEvent(bundle.library, bundle.entry.kind)], { status: 200, body: editor });
+    return editor;
+  });
+}
+
+export async function duplicateEditor(context, id, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const bundle = await managementBundle(context, id);
+    checkRevision(bundle.loaded.bytes, input.expectedRevision);
+    if (bundle.entry.readOnly) fail(409, 'read_only_resource', 'Export the module board before duplicating it.');
+    const document = parseJson(bundle.loaded.bytes);
+    document.id = randomUUID();
+    document.title = libraryTitle(input.title);
+    const library = await loadLibrary(context, input.project);
+    validateFolder(library, input.folderId, bundle.entry.kind);
+    const assets = [];
+    for (const name of assetNames(bundle.loaded.bytes)) {
+      const source = await loadBytes(inside(bundle.project.localPath, `docs/flows/assets/${name}`));
+      if (!source.bytes) fail(409, 'corrupt_resource', 'A referenced editor asset is not available.');
+      const file = inside(library.project.localPath, `docs/flows/assets/${name}`), loaded = await loadBytes(file);
+      if (loaded.bytes && !loaded.bytes.equals(source.bytes)) fail(409, 'resource_exists', 'A destination asset already exists.');
+      if (!loaded.bytes) assets.push(byteEntry(file, null, source.bytes));
+    }
+    return createManagedCopy({ ...context, createGuards: [byteEntry(bundle.file, bundle.loaded.bytes, bundle.loaded.bytes)] }, bundle.entry.kind, { ...input, document, attached: [] }, assets);
+  });
+}
+
+async function createManagedCopy(context, kind, input, assets) {
+  return (kind === 'blueprint' ? createBoard : createText)({ ...context, initialAssets: assets }, input);
+}
+
+function remapResource(value, before, after) {
+  if (Array.isArray(value)) return value.map((item) => remapResource(item, before, after));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'resourceId' && item === before ? after : remapResource(item, before, after)]));
+}
+
+export async function moveEditor(context, id, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const bundle = await managementBundle(context, id, input);
+    if (input.project === bundle.project.name) {
+      validateFolder(bundle.library, input.folderId, bundle.entry.kind);
+      const editor = await readEditor(context, id);
+      const item = { ...bundle.library.value.items[id], title: editor.title, folderId: input.folderId, updatedAt: clock(context) };
+      bundle.library.value.items[id] = item;
+      const changeId = randomUUID();
+      const entries = [byteEntry(bundle.library.file, bundle.library.bytes, jsonBytes(bundle.library.value)),
+        ...[...bundle.files].filter(([, loaded]) => loaded.bytes).map(([file, loaded]) => byteEntry(file, loaded.bytes, loaded.bytes))];
+      const undo = await prepareChangeUndo(context, { id: changeId, permission: 'editor.write', resourceIds: [id], entries,
+        events: [libraryEvent(bundle.library, bundle.entry.kind, bundle.library.bytes)] });
+      const response = { editor: { ...editor, ...item, libraryRevision: hashBytes(jsonBytes(bundle.library.value)) }, previousId: id, changeId, undoUntil: undo.undoUntil };
+      await libraryCommit(context, [...entries, undo.entry], [libraryEvent(bundle.library, bundle.entry.kind)], { status: 200, body: response }, changeId);
+      return response;
+    }
+    if (input.confirmedRepositoryChange !== true) fail(422, 'confirmation_required', 'Moving the file to another repository requires confirmation.');
+    const destination = await loadLibrary(context, input.project);
+    validateFolder(destination, input.folderId, bundle.entry.kind);
+    const file = inside(destination.project.localPath, input.path);
+    const newId = editorId(bundle.entry.kind, input.project, input.path);
+    if (bundle.catalog.value.resources.some((entry) => entry.id === newId || entry.project === input.project && (entry.path === input.path || bundle.entry.kind === 'blueprint' && entry.legacyId === bundle.entry.legacyId))) fail(409, 'resource_exists', 'The destination resource already exists.');
+    const entry = { ...bundle.entry, id: newId, project: input.project, path: input.path, attached: await canonicalAttachments(context, (await readAttachments(context, id)).attached) };
+    const targetFound = { project: destination.project, entry };
+    const entries = [];
+    for (const [source, loaded] of bundle.files) {
+      if (!loaded.bytes) continue;
+      let target;
+      if (source === bundle.file) target = file;
+      else if (source === bundle.comments.file) target = commentsPath(targetFound);
+      else if (source === bindingFile(context, id)) target = bindingFile(context, newId);
+      else if (source === assetRegistryFile(context, id)) target = assetRegistryFile(context, newId);
+      else if (source.startsWith(`${stemOf(bundle.file)}.`)) target = `${stemOf(file)}${source.slice(stemOf(bundle.file).length)}`;
+      else target = inside(destination.project.localPath, `docs/flows/history/${newId}/${path.basename(source)}`);
+      const existing = await loadBytes(target);
+      if (existing.bytes) fail(409, 'resource_exists', 'A destination bundle file already exists.');
+      let bytes = loaded.bytes;
+      if (source === bundle.comments.file || source === bindingFile(context, id) || source === assetRegistryFile(context, id)
+        || source.includes(`${path.sep}history${path.sep}`) && !source.endsWith('.document.json') && !source.endsWith('.comments.json')) {
+        const value = remapResource(parseJson(bytes), id, newId);
+        if (source === bundle.comments.file && entry.kind === 'void') value.path = path.basename(input.path);
+        if (value.format === 'hivem1nd-editor-history-v1') {
+          value.documentPath = input.path;
+          value.commentsPath = path.relative(destination.project.localPath, commentsPath(targetFound)).replaceAll('\\', '/');
+        }
+        bytes = jsonBytes(value);
+      }
+      entries.push(byteEntry(source, loaded.bytes, null), byteEntry(target, null, bytes));
+    }
+    for (const asset of await ownedAssets(context, [bundle], entries)) {
+      const target = inside(destination.project.localPath, `docs/flows/assets/${asset.name}`), loaded = await loadBytes(target);
+      if (loaded.bytes && !loaded.bytes.equals(asset.bytes)) fail(409, 'resource_exists', 'A destination asset already exists.');
+      entries.push(byteEntry(target, loaded.bytes, asset.bytes));
+      if (!asset.shared) entries.push(byteEntry(asset.file, asset.bytes, null));
+    }
+    if (entry.kind === 'blueprint') {
+      const sourceIndex = await loadBytes(indexFile(bundle.project)), targetIndex = await loadBytes(indexFile(destination.project));
+      if (sourceIndex.bytes) entries.push(byteEntry(indexFile(bundle.project), sourceIndex.bytes, jsonBytes(removeIndex(parseJson(sourceIndex.bytes), new Set([entry.legacyId])))));
+      entries.push(byteEntry(indexFile(destination.project), targetIndex.bytes, jsonBytes(mergeIndex(targetIndex.bytes ? parseJson(targetIndex.bytes) : null, parseJson(bundle.loaded.bytes)))));
+    }
+    const sourceLibrary = bundle.library;
+    const item = sourceLibrary.value.items[id] ?? { folderId: null, title: entry.legacyId };
+    delete sourceLibrary.value.items[id];
+    destination.value.items[newId] = { ...item, folderId: input.folderId, updatedAt: clock(context) };
+    const catalog = { ...bundle.catalog.value, resources: bundle.catalog.value.resources.map((resource) => resource.id === id ? entry : resource) };
+    entries.push(byteEntry(sourceLibrary.file, sourceLibrary.bytes, jsonBytes(sourceLibrary.value)), byteEntry(destination.file, destination.bytes, jsonBytes(destination.value)),
+      byteEntry(catalogFile(context), bundle.catalog.bytes, jsonBytes(catalog)));
+    const changeId = randomUUID();
+    const unique = uniqueEntries(entries);
+    const undo = await prepareChangeUndo(context, { id: changeId, permission: 'editor.write', resourceIds: [id, newId], entries: unique,
+      events: [libraryEvent(sourceLibrary, entry.kind, sourceLibrary.bytes ?? jsonBytes(sourceLibrary.value)), libraryEvent(destination, entry.kind, destination.bytes ?? jsonBytes(destination.value)),
+        { name: 'editor.removed', resourceId: newId, data: { resourceId: newId, changeId, undoUntil: null } }, { name: 'view.changed', data: { collections: ['editors'], revision: changeId } }] });
+    const response = { editor: { ...await projectEditor(context, bundle.entry, bundle.entry.readOnly ? null : parseJson(bundle.loaded.bytes), bundle.loaded.revision),
+      id: newId, project: entry.project, path: entry.path, folderId: input.folderId, updatedAt: destination.value.items[newId].updatedAt,
+      attachmentRevision: revisionOf(unique.find((item) => item.recordPath === bindingFile(context, newId))?.afterBytes),
+      commentsRevision: revisionOf(unique.find((item) => item.recordPath === commentsPath(targetFound))?.afterBytes), libraryRevision: hashBytes(jsonBytes(destination.value)) }, previousId: id, changeId, undoUntil: undo.undoUntil };
+    await libraryCommit(context, [...unique, undo.entry], [libraryEvent(sourceLibrary, entry.kind), libraryEvent(destination, entry.kind),
+      { name: 'editor.removed', resourceId: id, data: { resourceId: id, changeId, undoUntil: undo.undoUntil } }, { name: 'view.changed', data: { collections: ['editors'], revision: changeId } }], { status: 200, body: response }, changeId);
+    invalidateEditor(context, id);
+    return response;
+  });
+}
 
