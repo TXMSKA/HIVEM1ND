@@ -223,3 +223,31 @@ test('the registration index is built by the first hook, extended by the names t
   const extended = await countReads(() => invokeClaudeLifecycle('Stop', mindPath, nativeSessionId));
   assert.ok(extended.registrations >= 1 && extended.registrations <= 3, `a new record cost ${extended.registrations} reads`);
 });
+
+test('the first hook turn after a wake window ended says so once, and a turn inside the window starts it again', async (context) => {
+  const mindPath = await fixture(context);
+  const machine = os.hostname();
+  const relay = await createRelay({ mindPath, hostname: machine, sessionId: 'registering', client: 'claude' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'native-ended', client: 'claude' });
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: machine, sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'native-ended', client: 'claude', machine };
+  await controller.enable(binding);
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const shift = async (startedAt) => {
+    const policy = JSON.parse(await fsPromises.readFile(path.join(policies, file), 'utf8'));
+    await writeFile(path.join(policies, file), JSON.stringify({ ...policy, startedAt: new Date(startedAt).toISOString(), deadlineAt: new Date(startedAt + 4 * 3600_000).toISOString() }));
+  };
+  await shift(Date.now() - 2 * 3600_000);
+  const before = Date.now();
+  await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-ended');
+  assert.ok(Date.parse((await controller.status(binding)).deadlineAt) >= before + 4 * 3600_000, 'the turn starts the window again');
+
+  await shift(Date.now() - 5 * 3600_000);
+  const first = await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-ended');
+  assert.match(first.output, /Relay wake for overseer ended at /);
+  assert.match(first.output, /relay wake attach/);
+  const second = await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-ended');
+  assert.equal(second.output, '', 'the notice is given once and a quiet inbox says nothing');
+});

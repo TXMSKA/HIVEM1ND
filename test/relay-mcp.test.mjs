@@ -1,6 +1,6 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
@@ -182,4 +182,31 @@ test('status answers with counts, the caller and the units waiting by default, a
   assert.deepEqual(lines[7].result.structuredContent.attention.map((item) => item.unit), ['executor-app']);
   assert.equal(lines[7].result.structuredContent.self, null, 'the caller is shown only when its unit is selected');
   assert.equal(lines[8].result.isError, true);
+});
+
+test('a Relay tool call keeps the wake window of its session open, and the first call after the window ended carries the notice once', async (context) => {
+  const mindPath = await fixture(context);
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  await run(mindPath, [call(1, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' })]);
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: 'RELAYTEST', sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex', machine: 'RELAYTEST' };
+  await controller.enable(binding);
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const shift = async (startedAt) => {
+    const policy = JSON.parse(await readFile(path.join(policies, file), 'utf8'));
+    await writeFile(path.join(policies, file), JSON.stringify({ ...policy, startedAt: new Date(startedAt).toISOString(), deadlineAt: new Date(startedAt + 4 * 3600_000).toISOString() }));
+  };
+  await shift(Date.now() - 3600_000);
+  const before = Date.now();
+  const used = await run(mindPath, [call(1, 'list_inbox')]);
+  assert.equal(used.lines[0].result.structuredContent.wakeNotice, undefined);
+  assert.ok(Date.parse((await controller.status(binding)).deadlineAt) >= before + 4 * 3600_000, 'the window starts again from the call');
+
+  await shift(Date.now() - 5 * 3600_000);
+  const { lines } = await run(mindPath, [call(1, 'list_inbox'), call(2, 'list_inbox')]);
+  assert.match(lines[0].result.structuredContent.wakeNotice, /^Relay wake for overseer ended at .+ relay wake attach .+--client codex --unit overseer --native-session-id native-1$/);
+  assert.equal(lines[0].result.structuredContent.unit, 'overseer');
+  assert.equal(lines[1].result.structuredContent.wakeNotice, undefined, 'the notice is given once');
 });

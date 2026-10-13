@@ -800,3 +800,31 @@ test('a wake pointer names up to five messages by id, sender and subject on one 
   assert.ok(long.includes(`subject "${'x'.repeat(80)}..."`));
   await handle.stop();
 });
+
+test('activity of the session starts its window again, and the first call after a window that passed says so once', async (context) => {
+  const { mind, binding } = await fixture(context);
+  let now = Date.parse('2026-10-13T07:44:00.000Z');
+  const wake = await controller(mind, async () => ({ status: 'submitted' }), { clock: { now: () => now, sleep: async () => {} } });
+  await wake.enable(binding);
+  now += 60_000;
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null }, 'a window that just started is not written again');
+  now += 3 * 3600_000;
+  assert.deepEqual(await wake.touch(binding), { renewed: true, notice: null }, 'a Relay call renews the window');
+  assert.equal((await wake.status(binding)).deadlineAt, new Date(now + 4 * 3600_000).toISOString());
+  now += 3600_000 + 10 * 60_000;
+  await wake.observeActivity(binding, { activity: 'busy' });
+  assert.equal((await wake.status(binding)).deadlineAt, new Date(now + 4 * 3600_000).toISOString(), 'a hook turn renews the window');
+  now += 4 * 3600_000 + 1000;
+  const ended = await wake.touch(binding);
+  assert.equal(ended.renewed, false);
+  assert.ok(ended.notice.startsWith('Relay wake for executor-alpha ended at '), ended.notice);
+  assert.ok(ended.notice.includes('relay wake attach'), ended.notice);
+  assert.ok(ended.notice.includes('--client claude --unit executor-alpha --native-session-id executor-native'), ended.notice);
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null }, 'the notice is given once');
+  assert.equal((await wake.status(binding)).enabled, false);
+  await wake.enable({ ...binding, windowHours: 6 });
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null });
+  await wake.disable(binding);
+  now += 7 * 3600_000;
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null }, 'a consent the person ended says nothing');
+});

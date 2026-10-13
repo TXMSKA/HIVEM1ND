@@ -98,6 +98,14 @@ function startClaudeWakeWorker({ binding, mindPath, env, stderr, platform, wakeW
   }
 }
 
+async function touchWake({ mindPath, client, nativeSessionId, unit, wakeControllerFactory }) {
+  const machine = os.hostname();
+  const { createRelayWakeController } = await import('./wake.mjs');
+  const controller = await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, hostname: machine, sink: async () => ({ status: 'not_submitted' }) });
+  if (typeof controller.touch !== 'function') return null;
+  return (await controller.touch({ unit, nativeSessionId, client, machine })).notice;
+}
+
 // Nothing else starts the worker of a Cursor chat, so the chat's own session start makes sure the worker of its
 // consent runs; the worker lease keeps a second start from doing anything.
 async function ensureCursorWakeWorker({ mindPath, nativeSessionId, env = process.env, stderr = process.stderr, wakeControllerFactory, wakeWorkerSpawner }) {
@@ -192,8 +200,9 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
         startClaudeWakeWorker({ binding: carried.binding, mindPath, env, stderr, platform, wakeWorkerSpawner });
       }
     }
+    let observed = null;
     if (client === 'claude') {
-      await runClaudeWakeLifecycle({
+      observed = await runClaudeWakeLifecycle({
         event: hookEvent,
         mindPath,
         nativeSessionId: nativeSessionId ?? context.nativeSessionId,
@@ -210,7 +219,13 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
     const notice = carried
       ? `Relay moved this conversation's registration as ${carried.unit} from native session ${carried.previous} to this one${carried.binding ? ', with its wake' : ''}.`
       : '';
-    const text = [notice, reminder?.text].filter(Boolean).join(' ');
+    // A turn is activity of the session: it keeps the wake window open, and hears once that the window ended. A Claude
+    // event whose enabled consent the lifecycle just marked has had its window started again there.
+    const wakeNotice = reminder?.registered && reminder.unit && !observed
+      ? await touchWake({ mindPath, client, nativeSessionId: nativeSessionId ?? context.nativeSessionId, unit: reminder.unit, wakeControllerFactory })
+        .catch((error) => { stderr.write(`Relay wake renewal unavailable: ${error.message}\n`); return null; })
+      : null;
+    const text = [notice, wakeNotice, reminder?.text].filter(Boolean).join(' ');
     const response = formatHookResponse(client, hookEvent, text ? { text } : {
       unregistered: reminder?.registered === false,
       nativeSessionId: nativeSessionId ?? context.nativeSessionId,

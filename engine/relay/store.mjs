@@ -1446,6 +1446,14 @@ export async function createRelay(options = {}) {
       return { events: events.slice(-limit) };
     },
 
+    /** The registration this instance answers for, or null when it has none or more than one. */
+    async identity() {
+      try {
+        const registration = await currentIdentity();
+        return registration ? toPublicRegistration(registration) : null;
+      } catch (error) { if (error?.code === 'AMBIGUOUS_SESSION') return null; throw error; }
+    },
+
     /** The newest registration on this machine of a client's host conversation, or null. */
     async hostRegistration(args = {}) {
       validateArgs(args, 'hostRegistration', ['hostSessionId', 'client', 'excludeNativeSessionId']);

@@ -1,8 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createRelayWakePersistence, createRelay, isTransientFsError } from './store.mjs';
 import { WAKE_ADAPTERS, getWakeAdapter } from './wake-adapters.mjs';
 import { wakePointer } from './local-wake.mjs';
+
+const CLI_PATH = fileURLToPath(new URL('../../cli/index.mjs', import.meta.url));
+// A session in use starts its window again at most this often, since each renewal replaces a file of the synced mind.
+const RENEW_EVERY_MS = 5 * 60 * 1000;
 
 const DEFAULT_WINDOW_HOURS = 4;
 const ALLOWED_STANDARD_HOURS = new Set([4, 5, 6, 7, 8]);
@@ -154,6 +159,15 @@ function stableReasonCode(reason) {
 function freshPolicy(policy, now) {
   return Boolean(policy?.enabled === true && (policy.unlimited === true || Number.isFinite(Date.parse(policy.deadlineAt)) && Date.parse(policy.deadlineAt) > now)
     && !policy.pausedReason);
+}
+
+// A bounded window that has run for a while starts again when its session shows activity; an unlimited one has no window.
+function renewalDue(policy, now) {
+  return freshPolicy(policy, now) && policy.unlimited !== true && now - Date.parse(policy.startedAt) >= RENEW_EVERY_MS;
+}
+
+function renewedWindow(policy, now) {
+  return { startedAt: iso(now), deadlineAt: iso(now + policy.durationHours * 60 * 60 * 1000) };
 }
 
 function expectedPolicy(policy, binding, key) {
@@ -396,12 +410,42 @@ export async function createRelayWakeController(options = {}) {
     // Every tool call of a turn repeats the mark the turn already set. The write takes the policy lock and replaces a file of the synced mind, so a mark that is still the same and recent is left alone.
     const stored = await readPolicy(binding, key);
     const age = now - Date.parse(stored?.activity?.observedAt);
-    if (freshPolicy(stored, now) && stored.activity.value === activity && age >= 0 && age < ACTIVITY_REFRESH_MS) return stored.activity;
+    if (freshPolicy(stored, now) && stored.activity.value === activity && age >= 0 && age < ACTIVITY_REFRESH_MS && !renewalDue(stored, now)) return stored.activity;
     const next = await mutatePolicy(binding, key, async (policy) => {
       if (!freshPolicy(policy, now)) throw wakeError('WAKE_NOT_ENABLED', 'Activity can be observed only for an enabled, unexpired wake policy.');
-      return { ...policy, activity: { value: activity, observedAt: iso(now) } };
+      // A turn is activity of the session, so it also starts the window again.
+      return { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), activity: { value: activity, observedAt: iso(now) } };
     });
     return next.activity;
+  }
+
+  // Activity of the session keeps its consent: a Relay tool call or a hook turn of the session starts its bounded window
+  // again. A window that passed without any ends the wake, and the first call after it is told once, with how to renew it.
+  async function touch(bindingValue) {
+    const binding = makeBinding(bindingValue);
+    const key = bindingHash(binding);
+    const now = nowMs(clock);
+    let stored;
+    try { stored = await readPolicy(binding, key); }
+    catch (error) { if (error?.code === 'MALFORMED_RECORD' || isTransientFsError(error)) return { renewed: false, notice: null }; throw error; }
+    if (stored?.enabled !== true || stored.unlimited === true) return { renewed: false, notice: null };
+    if (Date.parse(stored.deadlineAt) > now) {
+      if (!renewalDue(stored, now)) return { renewed: false, notice: null };
+      const renewed = await mutatePolicy(binding, key, async (policy) => renewalDue(policy, nowMs(clock)) && policy.generation === stored.generation
+        ? { ...policy, ...renewedWindow(policy, now) } : policy);
+      return { renewed: renewed.startedAt === iso(now), notice: null };
+    }
+    if (stored.endNoticeAt) return { renewed: false, notice: null };
+    const told = await mutatePolicy(binding, key, async (policy) => policy?.enabled === true && policy.unlimited !== true && !policy.endNoticeAt
+      && policy.generation === stored.generation && Date.parse(policy.deadlineAt) <= nowMs(clock) ? { ...policy, endNoticeAt: iso(now) } : policy);
+    if (told.endNoticeAt !== iso(now)) return { renewed: false, notice: null };
+    const window = `${told.durationHours}-hour`;
+    const hours = told.durationHours === DEFAULT_WINDOW_HOURS ? '' : ` --hours ${told.durationHours}${told.extended ? ' --extended' : ''}`;
+    return {
+      renewed: false,
+      notice: `Relay wake for ${binding.unit} ended at ${told.deadlineAt}: its ${window} window passed without activity of this chat, so new messages no longer wake it. `
+        + `To renew it, run from this chat's own shell: node "${CLI_PATH}" relay wake attach --mind-path "${options.mindPath}" --client ${binding.client} --unit ${binding.unit} --native-session-id ${binding.nativeSessionId}${hours}`,
+    };
   }
 
   async function endSession(bindingValue) {
@@ -794,7 +838,7 @@ export async function createRelayWakeController(options = {}) {
     return handle;
   }
 
-  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver });
+  return Object.freeze({ enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver, touch });
 }
 
 async function isProcessAlive(pid) {

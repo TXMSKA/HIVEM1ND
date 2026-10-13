@@ -147,6 +147,8 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
     controller ??= await (wakeControllerFactory ?? createRelayWakeController)({ mindPath, ...(hostname ? { hostname } : {}), sink: async () => ({ status: 'not_submitted' }) });
     return controller;
   }
+  // When this server last made sure that the worker of its Claude session runs.
+  let ensuredAt = 0;
   // Every Claude session starts this server, so the same conversation under a new native session ID gets its unit and its
   // wake back here, before any tool call and before a message arrives. Tool calls wait for it; initialize does not. A session
   // whose process started again under the same ID gets its wake back from this process, whose pipe the old worker lacks.
@@ -157,18 +159,33 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
       await resumeClaudeWake({ ...wakeOptions, nativeSessionId: ownSession, restart: true })
         .catch((error) => stderr.write(`Relay wake resume unavailable: ${error.message}\n`));
     }
+    ensuredAt = Date.now();
     return carried;
   })() : Promise.resolve(null);
   // A registration takes the consent that an earlier session of the same unit holds on this machine, so a message wakes the
   // chat that registered last instead of a session it replaced.
   async function followWake(registration) {
     const own = Boolean(ownSession && registration.nativeSessionId === ownSession && registration.client === 'claude');
+    if (own) ensuredAt = Date.now();
     // A hand registration of the same conversation takes the wake it still holds under an earlier session ID.
     if (own && await carryClaudeWake({ ...wakeOptions, nativeSessionId: ownSession, unit: registration.unit, startWorker: true })) return;
     if (!registration.client) return;
     await (await wakeController()).takeOver({ unit: registration.unit, nativeSessionId: registration.nativeSessionId,
       client: registration.client, machine: registration.machine });
     if (own) await resumeClaudeWake({ ...wakeOptions, nativeSessionId: ownSession });
+  }
+  // A tool call is activity of the session this server answers for: it keeps that session's wake window open, makes sure a
+  // Claude session's worker runs, and returns once the notice that the window ended.
+  async function touchWake() {
+    const registration = await relay.identity();
+    if (!registration?.client) return null;
+    const { notice } = await (await wakeController()).touch({ unit: registration.unit, nativeSessionId: registration.nativeSessionId,
+      client: registration.client, machine: registration.machine });
+    if (ownSession && registration.nativeSessionId === ownSession && registration.client === 'claude' && Date.now() - ensuredAt >= 60_000) {
+      ensuredAt = Date.now();
+      await resumeClaudeWake({ ...wakeOptions, nativeSessionId: ownSession }).catch((error) => stderr.write(`Relay wake resume unavailable: ${error.message}\n`));
+    }
+    return notice;
   }
   const defaults = { sessionId, client, nativeSessionId: ownSession, hostSessionId: ownSession ? hostSessionOf(env) : null };
   for await (const line of boundedLines(stdin)) {
@@ -198,7 +215,8 @@ export async function serveRelayMcp({ mindPath, hostname, sessionId, nativeSessi
         await carrying;
         const value = await callMethod(relay, params.name, args, defaults);
         if (params.name === 'register') await followWake(value).catch((error) => stderr.write(`Relay wake carry-over unavailable: ${error.message}\n`));
-        response = result(value);
+        const wakeNotice = await touchWake().catch((error) => { stderr.write(`Relay wake renewal unavailable: ${error.message}\n`); return null; });
+        response = result(wakeNotice ? { ...value, wakeNotice } : value);
       } else {
         if (id === undefined) continue;
         stdout.write(`${JSON.stringify(rpcError(id, -32601, 'Method not found'))}\n`);
