@@ -101,10 +101,10 @@ async function voidDocumentCopy() {
 }
 
 async function boardCopy() {
-  const source = await read('docs/flows/boards/void.mjs');
+  const source = await read('docs/flows/archive/boards/void.mjs');
   const lantern = source.match(/\n  es: \{\n([\s\S]*?)\n  \},\n\};/)?.[1] ?? '';
   const table = [...source.matchAll(/^\s+\["ui\.[\w.]+", "[^"]*", ("(?:[^"\\\n]|\\.)*")\],$/gm)].map((match) => JSON.parse(match[1]));
-  return [...literals(lantern), ...table].map((value, index) => [`docs/flows/boards/void.mjs Spanish ${index + 1}`, value]);
+  return [...literals(lantern), ...table].map((value, index) => [`docs/flows/archive/boards/void.mjs Spanish ${index + 1}`, value]);
 }
 
 async function genesisCopy() {

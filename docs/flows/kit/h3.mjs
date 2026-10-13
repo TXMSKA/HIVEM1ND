@@ -1,7 +1,6 @@
-// The parts the HIVEM1ND 3.0 boards are drawn with: the two looks, the window, the Map, the inspector,
-// the editors, the phone and the approved screens themselves. Shared by hivem1nd-3.mjs (the approved
-// screens) and hivem1nd-3-flow.mjs (every step of the GUI). The looks come from
-// projects/HIVEM1ND/screens-3.0/index.html of the mind.
+// The parts the HIVEM1ND 3.0 board (hivem1nd-3-flow.mjs) is drawn with: the two looks, the window, the
+// Map, the inspector, the library shared by Blueprint and Void, the editors and the phone. The looks come
+// from projects/HIVEM1ND/screens-3.0/index.html of the mind.
 
 import { box, col, row, stack, text, icon, vector, space, fill, ELLIPSE } from "blueprint/kit.mjs";
 
@@ -20,7 +19,7 @@ export const MODERN = {
   zone: "rgba(164,138,175,0.35)", zoneFill: "rgba(164,138,175,0.04)", zoneLab: "#120d16", ground: "#130e17",
 };
 
-// Source: the same file, the base `.scr` variables (the High contrast set).
+// Source: the same file, the base `.scr` variables (the Nocturne look, formerly High contrast).
 export const CONTRAST = {
   bg: "#050505", panel: "#0b0b0b", card: "#141414", card2: "#1b1b1b", line: "#2a2a2a", line2: "#3a3a3a",
   text: "#f1efe9", body: "#c9c6bf", mute: "#8f8b85",
@@ -33,7 +32,31 @@ export const CONTRAST = {
 
 export const LOOKS = [
   { id: "modern", m: true, name: "Modern", theme: MODERN },
-  { id: "contrast", m: false, name: "High contrast", theme: CONTRAST },
+  { id: "contrast", m: false, name: "Nocturne", theme: CONTRAST },
+];
+
+// The family looks every Cosmic app offers, each in its own brand palette, mapped onto the roles of
+// Modern: Nebula, Waves (TXMSKA), Toxic (Coffee Cat Studios) and Kinetic (NTK). Sources: Nebula docs/flows/kit/skins.mjs (the Nebula
+// skin), TXMSKA src/styles/tokens.css (the default sheet), coffee-cat-page app/globals.css, NTK
+// src/styles/ntk-tokens.css. All four are dark.
+const family = (id, name, roles) => ({ id, m: true, name, theme: { ...MODERN, ...roles } });
+export const FAMILY = [
+  family("nebula", "Nebula", {
+    bg: "#020102", panel: "#0a0708", card: "#171113", card2: "#21191b", line: "#2a1e21", line2: "#3d2b2f",
+    text: "#f7f0f1", body: "#f7f0f1", mute: "#a38f92", acc: "#ff2d48", accInk: "#0a0708", ring: "#c8203a", ground: "#050304", me: "#21191b",
+  }),
+  family("txmska", "Waves", {
+    bg: "#09060f", panel: "#11081e", card: "#1c1138", card2: "#201a52", line: "#1c1138", line2: "#381a72",
+    text: "#f2e0ff", body: "#d4a8f5", mute: "#a493c2", acc: "#a855f7", accInk: "#09060f", ring: "#381a72", ground: "#0b0714", me: "#201a52",
+  }),
+  family("coffee-cat", "Toxic", {
+    bg: "#2c1c40", panel: "#3e2761", card: "#3d2860", card2: "#6942af", line: "rgba(105,66,175,0.55)", line2: "#6942af",
+    text: "#f7f7f7", body: "rgba(247,247,247,0.88)", mute: "#d6d2dc", acc: "#a8f205", accInk: "#2c1c40", ring: "#a8f205", ground: "#26183a", me: "#6942af",
+  }),
+  family("ntk", "Kinetic", {
+    bg: "#100e0c", panel: "#1a1714", card: "#26221e", card2: "#332e29", line: "#332e29", line2: "#4a433b",
+    text: "#f5f1ec", body: "#cec5b9", mute: "#a79e93", acc: "#ff6b1a", accInk: "#120c06", ring: "#ff6b1a", ground: "#13110e", me: "#332e29",
+  }),
 ];
 
 // ---- parts ----------------------------------------------------------------------------------------
@@ -53,9 +76,11 @@ export function mark(w = 26) {
 }
 
 /** A status dot: working is filled green, waiting on the person is a ring, idle is grey. */
+/** A status dot told apart by shape as well as colour: working is filled, waiting on the person is a thick ring, idle is a thin ring. */
 export function dot(status, size = 8) {
   if (status === "wait") return box({ w: size, h: size, radius: "pill", stroke: "wait", strokeWidth: 2 });
-  return box({ w: size, h: size, radius: "pill", fill: status === "work" ? "ok" : "idle" });
+  if (status === "work") return box({ w: size, h: size, radius: "pill", fill: "ok" });
+  return box({ w: size, h: size, radius: "pill", stroke: "idle", strokeWidth: 1.5 });
 }
 
 export const circle = (d, props = {}) => box({ w: d, h: d, radius: "pill", place: "center", ...props });
@@ -118,7 +143,7 @@ export function bar(L, mode, waiting = 2, { gear = false } = {}) {
   );
 }
 
-export function statusLine(L, { service = "work", serviceText = "Relay service running on DESKTOP", read = "Mind read 4 s ago" } = {}) {
+export function statusLine(L, { service = "work", serviceText = "Relay service running on DESKTOP", read = "M1ND read 4 s ago" } = {}) {
   const note = (value) => t(value, 12.5, { color: "mute" });
   return row(
     { name: "status", label: "Status line", h: 30, pad: [0, L.m ? 22 : 16], justify: "between", fill: L.m ? undefined : "panel", edge: L.m ? undefined : { side: "top", color: "line" } },
@@ -128,7 +153,7 @@ export function statusLine(L, { service = "work", serviceText = "Relay service r
   );
 }
 
-/** A side panel: floating with large radii in Modern, ruled on one side in High contrast. */
+/** A side panel: floating with large radii in Modern, ruled on one side in Nocturne. */
 export const panel = (L, side, props, ...kids) =>
   col({ ...props, fill: "panel", clip: true, ...(L.m ? { radius: 20, stroke: "line" } : { edge: { side, color: "line" } }) }, ...kids);
 
@@ -177,35 +202,67 @@ export const heading = (L, label) =>
   );
 
 /** A row of the Hierarchy: the role icon, the unit, then what it waits for and its status. */
-export function unitRow(L, { id, glyph, level = 0, status, sub, sel = false, plain = false, phone = false, name = `row-${id}` }) {
+export function unitRow(L, { id, glyph, level = 0, status, sub, sel = false, plain = false, phone = false, alias = null, name = `row-${id}` }) {
   const v = phone ? 11 : 6;
   const h = phone ? 10 : 8;
   return row(
     {
-      name, label: id, gap: 8, pad: [v, h, v, [h, 24, 42][level]], radius: L.m ? 10 : 7,
+      name, label: alias ?? id, gap: 8, pad: [v, h, v, [h, 24, 42][level]], radius: L.m ? 10 : 7,
       fill: sel ? (L.m ? "card2" : "accSoft") : undefined,
       edge: sel && !L.m ? { side: "left", color: "acc", width: 2 } : undefined,
     },
     ic(glyph, 15, "body"),
-    plain ? t(id, phone ? 14 : 13.5, { color: "body" }) : mono(id, phone ? 13.5 : 12.5, { color: sel && L.m ? "acc" : "text" }),
+    // An alias is the person's own name for a unit; the real id stays beside it, smaller.
+    alias
+      ? row({ gap: 6 }, t(alias, phone ? 14 : 13.5, { weight: 700, color: sel && L.m ? "acc" : "text" }), mono(id, 11, { color: "mute", lines: 1 }))
+      : plain ? t(id, phone ? 14 : 13.5, { color: "body" }) : mono(id, phone ? 13.5 : 12.5, { color: sel && L.m ? "acc" : "text" }),
     fill(),
     sub ? t(sub, 12, { color: "mute" }) : null,
     status ? dot(status) : null,
   );
 }
 
-export function hierarchy(L, sel) {
+/** A group of the person's own: one folder in Hierarchy, one zone on the Map, one group chat. */
+export const GROUPS = [
+  { id: "checkout-launch", title: "Checkout launch", members: [["executor-shop", "term", "work"], ["overlord-web", "net", "work"], ["executor-blog", "term", "idle"]] },
+  { id: "api-work", title: "API work", members: [["executor-api", "term", "work"], ["executor-api-2", "term", "idle"]] },
+];
+
+export function groupRow(L, { group, open = false, sel = false, editing = null }) {
+  return row(
+    {
+      name: `group-${group.id}`, label: group.title, gap: 8, pad: [6, 8], radius: L.m ? 10 : 7,
+      fill: sel ? (L.m ? "card2" : "accSoft") : undefined,
+    },
+    ic(open ? "chevron" : "right", 14, "mute"),
+    ic("folder", 15, sel ? "acc" : "body"),
+    editing ?? t(group.title, 13.5, { weight: 600, color: sel ? "acc" : "text" }),
+    fill(),
+    t(String(group.members.length), 12, { color: "mute" }),
+  );
+}
+
+export function hierarchy(L, sel, { open = null, groupSel = null, alias = {}, groups = GROUPS, renaming = null, projects = { site: "1", data: "2", mobile: "4" } } = {}) {
   const chain = [
-    ["overseer", "crown", 0, "idle"], ["adjutant", "adj", 1, "work"], ["overlord-web", "net", 1, "wait"],
+    ["overseer", "crown", 0, "idle"], ["adjutant", "adj", 1, "work"], ["overlord-web", "net", 1, "work"],
     ["executor-shop", "term", 2, "work"], ["executor-blog", "term", 2, "idle"], ["executor-docs", "term", 2, "idle"],
-    ["overlord-api", "net", 1, "work"], ["builder-codex", "term", 2, "work"], ["builder-codex-2", "term", 2, "idle"],
+    ["overlord-api", "net", 1, "work"], ["executor-api", "term", 2, "work"], ["executor-api-2", "term", 2, "idle"],
   ];
+  const named = (id, glyph, level, status) =>
+    renaming && renaming.id === id ? renaming.node : unitRow(L, { id, glyph, level, status, alias: alias[id] ?? null, sel: id === sel });
   return col(
     { name: "hierarchy", label: "Hierarchy", pad: [0, 6, 10] },
+    groups.length
+      ? row({ pad: [12, 8, 6] }, L.m ? t("My groups", 12.5, { weight: 600, color: "mute", track: 0.04 }) : t("My groups", 11.5, { color: "mute", upper: true, track: 0.08 }), fill(), row({ name: "new-group", label: "New group", gap: 4 }, ic("folder-plus", 14, "mute")))
+      : null,
+    ...groups.flatMap((group) => [
+      groupRow(L, { group, open: open === group.id, sel: groupSel === group.id }),
+      ...(open === group.id ? group.members.map(([id, glyph, status]) => named(id, glyph, 1, status)) : []),
+    ]),
     heading(L, "Chain of command"),
-    ...chain.map(([id, glyph, level, status]) => unitRow(L, { id, glyph, level, status, sel: id === sel })),
+    ...chain.map(([id, glyph, level, status]) => named(id, glyph, level, status)),
     heading(L, "Without an Overlord"),
-    ...[["site", "1"], ["data", "2"], ["mobile", "4"]].map(([id, n]) => unitRow(L, { id, glyph: "task", sub: n, plain: true })),
+    ...Object.entries(projects).map(([id, n]) => unitRow(L, { id, glyph: "task", sub: n, plain: true })),
     heading(L, "Services"),
     unitRow(L, { id: "incubator", glyph: "bulb", status: "idle" }),
     unitRow(L, { id: "genesis", glyph: "sliders" }),
@@ -235,18 +292,18 @@ export const chats = (L, sel) =>
     heading(L, "Pinned"),
     chatRow(L, { name: "chat-executor-shop", title: "executor-shop", glyph: "term", when: "23:40", preview: "Task 029 is ready for review.", sel: sel === "shop" }),
     heading(L, "Recent"),
-    chatRow(L, { name: "chat-cart-release", title: "Cart release", glyph: "users", badge: "3", preview: "executor-blog: The announcement post is drafted.", sel: sel === "cart" }),
-    chatRow(L, { name: "chat-overlord-api", title: "overlord-api", glyph: "net", when: "22:15", preview: "Squad rules applied to builder-codex-2." }),
+    chatRow(L, { name: "chat-checkout-launch", title: "Checkout launch", glyph: "folder", badge: "3", preview: "executor-blog: The announcement post is drafted.", sel: sel === "cart" }),
+    chatRow(L, { name: "chat-overlord-api", title: "overlord-api", glyph: "net", when: "22:15", preview: "Squad rules applied to executor-api-2." }),
     chatRow(L, { name: "chat-adjutant", title: "adjutant", glyph: "adj", when: "21:02", preview: "The release notes draft is in Void." }),
     chatRow(L, { name: "chat-overseer", title: "overseer", glyph: "crown", when: "Yesterday", preview: "Two seats are waiting on you." }),
   );
 
-export const side = (L, tab, sel) =>
+export const side = (L, tab, sel, options = {}) =>
   panel(
     L, "right", { name: "side", label: "Side panel", w: L.m ? 266 : 290 },
     tabs(L, [["Hierarchy", "net", tab === "h", "tab-hierarchy"], ["Chats", "users", tab === "c", "tab-chats"]]),
     search(L),
-    tab === "h" ? hierarchy(L, sel) : chats(L, sel),
+    tab === "h" ? hierarchy(L, sel, options) : chats(L, sel),
   );
 
 // ---- the Map: free circles on an open field --------------------------------------------------------
@@ -263,13 +320,13 @@ export const NODES = [
   { id: "master", glyph: "person", x: 380, y: 56, sz: 40, person: true, lab: "You" },
   { id: "overseer", glyph: "crown", x: 372, y: 178, sz: 64, status: "idle", boss: true },
   { id: "adjutant", glyph: "adj", x: 548, y: 118, sz: 46, status: "work" },
-  { id: "overlord-web", glyph: "net", x: 196, y: 330, sz: 56, status: "wait", lead: true },
+  { id: "overlord-web", glyph: "net", x: 196, y: 330, sz: 56, status: "work", lead: true },
   { id: "executor-shop", glyph: "term", x: 84, y: 246, sz: 46, status: "work" },
   { id: "executor-blog", glyph: "term", x: 96, y: 430, sz: 46, status: "idle" },
   { id: "executor-docs", glyph: "term", x: 262, y: 470, sz: 46, status: "idle" },
   { id: "overlord-api", glyph: "net", x: 566, y: 352, sz: 56, status: "work", lead: true },
-  { id: "builder-codex", glyph: "term", x: 676, y: 262, sz: 46, status: "work" },
-  { id: "builder-codex-2", glyph: "term", x: 664, y: 470, sz: 46, status: "idle" },
+  { id: "executor-api", glyph: "term", x: 676, y: 262, sz: 46, status: "work" },
+  { id: "executor-api-2", glyph: "term", x: 664, y: 470, sz: 46, status: "idle" },
   { id: "executor-site", glyph: "term", x: 214, y: 664, sz: 46, status: "idle" },
   { id: "executor-data", glyph: "term", x: 446, y: 602, sz: 46, status: "work" },
   { id: "reader-data", glyph: "term", x: 530, y: 690, sz: 46, status: "idle" },
@@ -279,7 +336,7 @@ export const NODES = [
 export const LINKS = [
   ["master", "overseer"], ["overseer", "adjutant", "dash"], ["overseer", "overlord-web"], ["overseer", "overlord-api"],
   ["overlord-web", "executor-shop"], ["overlord-web", "executor-blog"], ["overlord-web", "executor-docs"],
-  ["overlord-api", "builder-codex"], ["overlord-api", "builder-codex-2"], ["overseer", "executor-data", "dash"],
+  ["overlord-api", "executor-api"], ["overlord-api", "executor-api-2"], ["overseer", "executor-data", "dash"],
   ["executor-data", "reader-data", "dash"],
 ];
 
@@ -293,7 +350,9 @@ export const lines = (list, props) => (list.length ? vector({ w: MID_W, h: MID_H
 export function rimDot(status) {
   const inner = status === "wait"
     ? box({ w: 11, h: 11, radius: "pill", place: "center", stroke: "wait", strokeWidth: 2.5 })
-    : box({ w: 11, h: 11, radius: "pill", place: "center", fill: status === "work" ? "ok" : "idle" });
+    : status === "work"
+      ? box({ w: 11, h: 11, radius: "pill", place: "center", fill: "ok" })
+      : box({ w: 11, h: 11, radius: "pill", place: "center", stroke: "idle", strokeWidth: 2 });
   return stack({ w: 15, h: 15, radius: "pill", fill: "bg" }, inner);
 }
 
@@ -328,6 +387,25 @@ export function unitNode(L, n, { sel, group }) {
     col(
       { w: 200, align: "center", place: { x: n.x - 100, y: n.y + n.sz / 2 + 6 } },
       row({ pad: [1, 6], radius: 6, fill: "labBg" }, mono(label, 11.5, { weight: 700, color: "text" })),
+    ),
+  ];
+}
+
+/** Where each group of the person's own sits on the Map, around its members. */
+export const GROUP_AREA = {
+  "checkout-launch": { x: 30, y: 196, w: 202, h: 294 },
+  "api-work": { x: 618, y: 206, w: 118, h: 322 },
+};
+
+/** A group of the person's own on the Map: a rounded dashed frame around its members, named on its top edge. */
+export function groupZone(L, id, title, { sel = false } = {}) {
+  const a = GROUP_AREA[id];
+  return [
+    box({ name: `zone-${id}`, label: title, w: a.w, h: a.h, radius: L.m ? 22 : 10, stroke: sel ? "acc" : "ring", strokeWidth: sel ? 2 : 1.4, dash: "7 5", fill: sel ? "accSoft" : "ringSoft", place: { x: a.x, y: a.y } }),
+    row(
+      { gap: 5, pad: [2, 8], radius: 7, fill: "zoneLab", place: { x: a.x + 14, y: a.y - 11 } },
+      ic("folder", 12, sel ? "acc" : "ring"),
+      t(title, 11.5, { weight: 700, color: sel ? "acc" : "body" }),
     ),
   ];
 }
@@ -368,7 +446,7 @@ export function services(L) {
   );
 }
 
-export function mapField(L, { sel = null, group = [], mode = "connect", extra = [], nodes = NODES, links = LINKS, zones = true, hints: showHints = true }) {
+export function mapField(L, { sel = null, group = [], mode = "connect", extra = [], nodes = NODES, links = LINKS, zones = true, groups = GROUPS, groupSel = null, hints: showHints = true }) {
   const at = Object.fromEntries(nodes.map((n) => [n.id, n]));
   const hot = ([a, b]) => (sel && (a === sel || b === sel)) || (group.includes(a) && group.includes(b));
   const seg = ([a, b]) => segment(at[a], at[b]);
@@ -383,11 +461,12 @@ export function mapField(L, { sel = null, group = [], mode = "connect", extra = 
       ]
     : [
         box({ name: "selection", label: "Selection", w: 206, h: 252, radius: L.m ? 14 : 6, stroke: "acc", strokeWidth: 1.5, dash: "6 5", fill: "accSoft", place: { x: 40, y: 206 } }),
-        tip(L, null, "3 selected: Message, Group chat, Connect", { x: 256, y: 214 }),
+        tip(L, null, "3 selected: Save as group, Message all 3, Connect", { x: 256, y: 214 }),
       ];
   return stack(
     { name: "map", label: "Map", w: MID_W, fill: L.m ? "ground" : "bg", clip: true, ...(L.m ? { radius: 20, stroke: "line" } : {}) },
     showHints ? row({ gap: 14, place: { x: 14, y: 12 } }, ...hints.map((hint) => t(hint, 12, { color: "mute" }))) : null,
+    ...groups.flatMap((g) => groupZone(L, g.id, g.title, { sel: g.id === groupSel })),
     ...(zones ? zone(214, 664, 120, 120, "site") : []),
     ...(zones ? zone(488, 646, 220, 200, "data") : []),
     lines(links.filter((e) => !e[2] && !hot(e)).map(seg), { stroke: "edge", strokeWidth: width }),
@@ -442,11 +521,12 @@ export function ask(L, question, buttons) {
   return col({ name: "ask", label: "Ask", gap: 8, pad: [11, 12], radius: 12, fill: "card", stroke: "wait" }, ...kids);
 }
 
-export const buildAsk = (L, always = "Approve always", deny = true) =>
+/** An ask to run a command. `always` names the standing approval for this unit and this command; the phone passes null, since standing approvals are given on the computer. */
+export const buildAsk = (L, always = "Always for this unit", deny = true) =>
   ask(
     L,
     [ic("hand", 15, "text"), t("Asks to run", 13, { color: "text" }), code("npm run build")],
-    [button(L, "Approve", "pri", "check", "approve"), button(L, always, "plain", null, "approve-always"), deny ? button(L, "Deny", "ghost", null, "deny") : null],
+    [button(L, "Approve", "pri", "check", "approve"), always ? button(L, always, "plain", null, "approve-always") : null, deny ? button(L, "Deny", "ghost", null, "deny") : null],
   );
 
 export const reviewAsk = (L, open = true) =>
@@ -456,7 +536,19 @@ export const reviewAsk = (L, open = true) =>
     [button(L, "Accept", "pri", null, "accept"), button(L, "Send back", "plain", null, "send-back"), open ? button(L, "Open task", "ghost", null, "open-task") : null],
   );
 
-export function composer(L, placeholder, note = null, noteGlyph = null, ruled = false) {
+/** A checkbox, ticked or not. */
+export const tick = (on, size = 16) =>
+  stack(
+    { w: size, h: size },
+    box({ w: size, h: size, radius: 4, fill: on ? "acc" : undefined, stroke: on ? undefined : "line2", strokeWidth: 2, place: "center" }),
+    on ? centered(ic("check", size - 4, "accInk")) : null,
+  );
+
+/**
+ * The composer. On a board or a text, `agent` adds the Send to agent box: on by default, and it keeps
+ * the value the person leaves it at until it is changed again.
+ */
+export function composer(L, placeholder, note = null, noteGlyph = null, ruled = false, agent = null) {
   const send = L.m ? 34 : 30;
   return col(
     { name: "composer", label: "Composer", gap: 7, pad: L.m ? [12, 14, 16] : [12, 16, 14], edge: !L.m || ruled ? { side: "top", color: "line" } : undefined },
@@ -466,6 +558,13 @@ export function composer(L, placeholder, note = null, noteGlyph = null, ruled = 
       fill(),
       stack({ name: "send", label: "Send", w: send, h: send, radius: L.m ? "pill" : 8, fill: "acc" }, centered(ic("send", 15, "accInk"))),
     ),
+    agent
+      ? row(
+          { gap: 8, opacity: agent.none ? 0.55 : undefined },
+          row({ name: "send-to-agent", label: "Send to agent", gap: 7 }, tick(agent.on && !agent.none), t("Send to agent", 12.5, { weight: 600, color: "text" })),
+          t(agent.none ? "No agents attached" : agent.on ? agent.who : "Kept as a note, not sent", 12, { color: "mute", lines: 1 }),
+        )
+      : null,
     note ? row({ gap: 6 }, ic(noteGlyph, 13, "mute"), t(note, 12, { color: "mute" })) : null,
   );
 }
@@ -484,7 +583,7 @@ export const unitInspector = (L) =>
     }),
     facts(L, [
       ["Machine", row({ gap: 6 }, ic("desk", 14, "text"), t("DESKTOP", 13, { color: "text" }))],
-      ["Client", t("Claude Code", 13, { color: "text" })],
+      ["Runs in", t("Claude Code, command line", 13, { color: "text" })],
       ["Model", t("Sonnet 5.5, high", 13, { color: "text" })],
       ["Reports to", t("overlord-web", 13, { color: "text" })],
     ]),
@@ -556,6 +655,73 @@ export function listSide(L, tab, glyph, items) {
   );
 }
 
+/**
+ * The library: the one side panel Blueprint and Void share for boards and texts. Search, filters, new
+ * item, new folder, collapsible folders, and each item's own menu (rename, duplicate, move, delete).
+ * `folders` is a list of { name, open, items: [[label, meta, state]] }, where state is "sel", "menu"
+ * (its menu button shown), "hit" (a search match) or a node drawn in place of the label (renaming).
+ */
+export function library(L, { title, glyph, folders, query = null, filters = [], w = null }) {
+  const width = w ?? (L.m ? 228 : 240);
+  const tool = (g, name, label, on = false) =>
+    stack({ name, label, w: 32, h: 32, radius: 8, fill: on ? "card2" : undefined }, centered(ic(g, 15, on ? "acc" : "body")));
+  const item = ([label, meta, state]) => {
+    const sel = state === "sel";
+    const renaming = state && typeof state === "object";
+    return row(
+      {
+        name: `item-${String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, label, gap: 8, pad: [7, 8, 7, 28], radius: L.m ? 10 : 7,
+        fill: sel ? (L.m ? "card2" : "accSoft") : state === "menu" ? "card" : undefined,
+        edge: sel && !L.m ? { side: "left", color: "acc", width: 2 } : undefined,
+      },
+      ic(glyph, 14, sel ? "acc" : "body"),
+      renaming ? state : t(label, 13, { color: sel ? "text" : "body", weight: sel ? 700 : 400, lines: 1 }),
+      fill(),
+      state === "menu" ? ic("dots", 15, "text") : meta ? row({ pad: [1, 6], radius: "pill", fill: "waitSoft" }, t(meta, 11, { weight: 700, color: "wait" })) : null,
+    );
+  };
+  return panel(
+    L, "right", { name: "library", label: title, w: width },
+    row(
+      { gap: 2, pad: [14, 10, 4, 14] },
+      ic(glyph, 16, "text"),
+      space(4),
+      t(title, 15, { weight: 700 }),
+      fill(),
+      tool("filter", "filter", "Filters", filters.length > 0),
+      tool("folder-plus", "new-folder", "New folder"),
+      tool("plus", "new-item", `New ${title === "Boards" ? "board" : "text"}`),
+    ),
+    col(
+      { pad: [6, 10, 4] },
+      row(
+        { name: "library-search", label: "Search", gap: 8, pad: [8, 10], radius: L.m ? 11 : 8, fill: "card", stroke: query ? "acc" : L.m ? undefined : "line" },
+        ic("search", 14, "mute"),
+        t(query ?? `Search ${title.toLowerCase()}`, 13, { color: query ? "text" : "mute" }),
+        fill(),
+        query ? ic("x", 13, "mute") : null,
+      ),
+    ),
+    filters.length
+      ? row({ gap: 6, pad: [4, 10, 2] }, ...filters.map((f) => row({ gap: 5, pad: [3, 8], radius: "pill", fill: "accSoft" }, t(f, 11.5, { weight: 700, color: "acc" }), ic("x", 11, "acc"))))
+      : null,
+    col(
+      { name: "folders", label: "Folders", pad: [6, 6, 10], gap: 1 },
+      ...folders.flatMap((f) => [
+        row(
+          { name: `folder-${f.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, label: f.name, gap: 7, pad: [7, 8], radius: L.m ? 10 : 7 },
+          ic(f.open ? "chevron" : "right", 13, "mute"),
+          ic("folder", 14, "body"),
+          t(f.name, 13, { weight: 600, color: "text" }),
+          fill(),
+          t(String(f.count ?? f.items.length), 11.5, { color: "mute" }),
+        ),
+        ...(f.open ? f.items.map(item) : []),
+      ]),
+    ),
+  );
+}
+
 export const editorGround = (L, name, label, ...kids) =>
   stack({ name, label, w: EDITOR_W(L), fill: L.m ? "ground" : "bg", clip: true, ...(L.m ? { radius: 20, stroke: "line" } : {}) }, ...kids);
 
@@ -613,12 +779,12 @@ export function comment(L, { who, when, body, reply = false, pinLabel = null, li
   return reply ? col({ pad: [0, 0, 0, 18] }, card) : card;
 }
 
-export const commentsPanel = (L, { glyph, sub, thread, reply, note, noteGlyph }) =>
+export const commentsPanel = (L, { glyph, sub, thread, reply, note = null, noteGlyph = null, agent = { on: true, who: "Notifies 2 attached agents" } }) =>
   panel(
     L, "left", { name: "comments", label: "Comments", w: L.m ? 368 : 380 },
     inspectorHead(L, { glyph, title: "Comments", monoTitle: false, sub: t(sub, 12.5, { color: "mute" }) }),
     col({ name: "thread", label: "Thread", grow: 1, gap: 10, pad: [14, 16], clip: true }, ...thread),
-    composer(L, reply, note, noteGlyph),
+    composer(L, reply, note, noteGlyph, false, agent),
   );
 
 export const editorBody = (L, ...kids) => row({ h: 818, gap: L.m ? 12 : 0, pad: L.m ? [0, 12] : 0, align: "stretch" }, ...kids);
@@ -644,8 +810,8 @@ export function blueprintCanvas(L) {
 }
 
 export const DOC = {
-  intro: "HIVEM1ND 3.0 brings every agent of the mind onto one Map. Units are created where they run, and every conversation is kept.",
-  service: "Each machine runs one Relay service, started at login. It wakes the sessions on that machine and starts new ones from the Map.",
+  intro: "HIVEM1ND 3.0 brings every agent of the M1ND onto one Map. Units are created where they run, and every conversation is kept.",
+  service: "Each machine runs one Relay service while HIVEM1ND needs it. It wakes the sessions on that machine and starts new ones from the Map.",
   mail: "Every unit has a mailbox for messages left while it is not running. A chat opens its own inbox, so a conversation with one unit or a group stays in one place.",
   live: "Agents draw in Blueprint and write in Void through the service. The person watches a step at a time, or lets the work run off screen.",
 };
@@ -792,11 +958,11 @@ export const phoneHierarchy = (L) => () =>
       { name: "hierarchy", label: "Hierarchy", grow: 1, pad: [6, 10], clip: true },
       heading(L, "Chain of command"),
       unitRow(L, { id: "overseer", glyph: "crown", status: "idle", phone: true }),
-      unitRow(L, { id: "overlord-web", glyph: "net", level: 1, sub: "waiting", status: "wait", phone: true }),
+      unitRow(L, { id: "overlord-web", glyph: "net", level: 1, status: "work", phone: true }),
       unitRow(L, { id: "executor-shop", glyph: "term", level: 2, sub: "2 asks", status: "work", sel: true, phone: true }),
       unitRow(L, { id: "executor-blog", glyph: "term", level: 2, status: "idle", phone: true }),
       unitRow(L, { id: "overlord-api", glyph: "net", level: 1, status: "work", phone: true }),
-      unitRow(L, { id: "builder-codex", glyph: "term", level: 2, status: "work", phone: true }),
+      unitRow(L, { id: "executor-api", glyph: "term", level: 2, status: "work", phone: true }),
       heading(L, "Without an Overlord"),
       unitRow(L, { id: "data", glyph: "task", sub: "2", plain: true, phone: true }),
       unitRow(L, { id: "mobile", glyph: "task", sub: "4", plain: true, phone: true }),
@@ -813,8 +979,9 @@ export const phoneChat = (L) => () =>
     col(
       { name: "conversation", label: "Conversation", grow: 1, gap: 12, pad: 14, clip: true },
       message(L, { who: "executor-shop", when: "23:31", body: "Done on feat/cart-empty. The page and its test pass." }),
-      buildAsk(L, "Always"),
+      buildAsk(L, null),
       reviewAsk(L, false),
+      row({ gap: 6 }, ic("desk", 13, "mute"), t("Standing approvals and pushes are answered on the computer.", 12, { color: "mute" })),
       message(L, { who: "You", when: "23:42", body: "Approved. Merge after overlord-web reviews.", me: true }),
     ),
     composer(L, "Message executor-shop", null, null, true),

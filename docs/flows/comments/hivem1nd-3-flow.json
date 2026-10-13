@@ -1,0 +1,605 @@
+{
+  "board": "hivem1nd-3-flow",
+  "threads": [
+    {
+      "id": "t-mv6343w9-48d35c",
+      "anchor": {
+        "screen": "setup-welcome",
+        "screenTitle": "1.1 Setup and first run: Install",
+        "element": "setup",
+        "label": "Install HIVEM1ND",
+        "path": [
+          "1.1 Setup and first run: Install",
+          "Install HIVEM1ND"
+        ],
+        "point": {
+          "x": 791,
+          "y": 391
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T02:51:30.105Z",
+          "text": "Cambiar oración: \"Setup takes about a minute.\""
+        },
+        {
+          "author": "User",
+          "at": "2026-10-13T03:18:24.352Z",
+          "text": "Cambiar lista:\n1. [Icon: GRAPH] Control the Swarm from the Map. \n2. [Icon: Hierarchy] Organize agents to reach objectives faster and better\n3. [Icon: Ray] Relay is used for inter-session communication"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done on 1.1. The sentence is now \"Setup takes about a minute.\" and the list reads: Control the Swarm from the Map (graph icon), Organize agents to reach objectives faster and better (hierarchy icon), Relay is used for inter-session communication (ray icon)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv63idjo-1033b9",
+      "anchor": {
+        "screen": null,
+        "screenTitle": null,
+        "element": null,
+        "label": "Board",
+        "path": [
+          "Board"
+        ],
+        "point": {
+          "x": 3113,
+          "y": 294
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T03:02:35.796Z",
+          "text": "Fusionar 1.2 y 1.3\nWhere the M1ND lives\nSegunda oración:\n\"Relay is optimized to run in cloud storage services for free syncing of your preferences\"\nDirectory - que la default sea la de Cosmic (App data creo, fijarse donde escribe: Pathfinder.cs en Vigilum). Se puede cambiar la dirección. como ahí está el Change.\nEn vez de los dos botones New mind y Existing mind, si detecta una mind instalada, mostrar un banner con un checkbox que diga \"Migrate legacy M1ND\"."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. 1.2 Where the M1ND lives joins the folder and the sync in one step, so setup has 4 steps. The second sentence is the one given. The folder defaults to the Cosmic root with Change; the board shows AppData\\Local\\Cosmic\\.m1nd until the common Cosmic root is settled with the Overseer (Vigilum's Pathfinder writes to Unity's persistentDataPath\\Cosmic, the Cosmic apps use %LOCALAPPDATA%\\Cosmic). New mind and Existing mind are gone: when a 2.x M1ND is found, a banner with the Migrate legacy M1ND checkbox appears."
+        }
+      ]
+    },
+    {
+      "id": "t-mv643inn-a8ac5c",
+      "anchor": {
+        "screen": "setup-service",
+        "screenTitle": "1.4 Setup and first run: Relay service",
+        "element": "back",
+        "label": "Back",
+        "path": [
+          "1.4 Setup and first run: Relay service",
+          "Starting the Relay service",
+          "Back"
+        ],
+        "point": {
+          "x": 473,
+          "y": 610
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T03:19:02.195Z",
+          "text": "Remove back option, could potentially break installation"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. 1.3 Relay service has no Back, and neither has 1.4 Ready."
+        }
+      ]
+    },
+    {
+      "id": "t-mv645aqp-3b1b35",
+      "anchor": {
+        "screen": "map-idle",
+        "screenTitle": "2.1 The Map: Map",
+        "element": "side",
+        "label": "Side panel",
+        "path": [
+          "2.1 The Map: Map",
+          "Side panel"
+        ],
+        "point": {
+          "x": 184,
+          "y": 778
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T03:20:25.249Z",
+          "text": "Permitir crear grupos propios.\nPermitir rename (alias, no cambia el verdadero id)."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. Hierarchy opens with My groups (2.1). A group is one thing in three places: a folder in Hierarchy, a zone on the Map and its group chat, created from a selection (2.7 to 2.9). Rename sets an alias and the real id stays beside it (2.3 and 2.4)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv64a3b1-33ae89",
+      "anchor": {
+        "screen": null,
+        "screenTitle": null,
+        "element": null,
+        "label": "Board",
+        "path": [
+          "Board"
+        ],
+        "point": {
+          "x": -180,
+          "y": 4185
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T03:24:08.893Z",
+          "text": "Blueprint me debería permitir:\n- CRUD also Edit boards.\n- Agruparlos (analizar mejores opciones para esto y proponerme en chat).\n- Crear mis propios bocetos a mano (integrado, nada de flujos separados)."
+        },
+        {
+          "author": "User",
+          "at": "2026-10-13T04:22:48.908Z",
+          "text": "Buscador"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done in 4.1 to 4.7: New board (empty, a copy, or an imported 2.x board), each board's menu with Rename, Duplicate, Move to folder and Delete, Delete with confirmation, folders like Void's (the option chosen in chat), search with filters, editing the board in place with its tools, and hand sketches drawn on the same board."
+        }
+      ]
+    },
+    {
+      "id": "t-mv66067t-c45642",
+      "anchor": {
+        "screen": "blueprint-conflict",
+        "screenTitle": "4.6 Blueprint: Changed while editing",
+        "element": "composer",
+        "label": "Composer",
+        "path": [
+          "4.6 Blueprint: Changed while editing",
+          "Comments",
+          "Composer"
+        ],
+        "point": {
+          "x": 1189,
+          "y": 840
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T04:12:25.337Z",
+          "text": "Checkbox: Send to agent. On by default. Remains the same value until changed."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. The comment composer of Blueprint and Void has Send to agent, on by default and kept at the value it is left at; 4.9 shows it on, 4.12 shows it turned off."
+        }
+      ]
+    },
+    {
+      "id": "t-mv662yz9-836593",
+      "anchor": {
+        "screen": "void-document",
+        "screenTitle": "5.1 Void: Document",
+        "element": "side",
+        "label": "Texts",
+        "path": [
+          "5.1 Void: Document",
+          "Texts"
+        ],
+        "point": {
+          "x": 163,
+          "y": 421
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T04:14:35.925Z",
+          "text": "Features expected:\n* CRUD.\n* Edit/Rename.\n* Search bar\n* Collapsable groups\n* Filters"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. Void uses the same library as Blueprint: create, rename in place, delete, search, collapsible folders and filters (5.1 and 5.2; the menu and the filters are drawn on 4.2 and 4.4)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv66e9vw-c9cbc3",
+      "anchor": {
+        "screen": "void-stale",
+        "screenTitle": "5.4 Void: An old suggestion",
+        "element": "document",
+        "label": "Document",
+        "path": [
+          "5.4 Void: An old suggestion",
+          "Text",
+          "Document"
+        ],
+        "point": {
+          "x": 589,
+          "y": 429
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T04:23:23.276Z",
+          "text": "Falta la parte de edit. Con funciones de Void editor"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. 5.3 Editing with Void's format bar over the selection and continuous saving, 5.4 Find and replace, 5.5 Source. A suggestion can be edited (5.6) and an old one offers Edit passage (5.7)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv66ev7g-e9ec39",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": null,
+        "label": "6.1 Settings, the phone link and the service: Settings",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings"
+        ],
+        "point": {
+          "x": 196,
+          "y": 139
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T04:23:50.908Z",
+          "text": "Show preview of the Themes."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:18:53.000Z",
+          "text": "Done. 6.1 Look shows both looks as previews drawn in their own palettes."
+        }
+      ]
+    },
+    {
+      "id": "t-mv691bc7-74c7d5",
+      "anchor": {
+        "screen": "setup-mind",
+        "screenTitle": "1.2 Setup and first run: Where the M1ND lives",
+        "element": "setup",
+        "label": "Where the M1ND lives",
+        "path": [
+          "1.2 Setup and first run: Where the M1ND lives",
+          "Where the M1ND lives"
+        ],
+        "point": {
+          "x": 452,
+          "y": 354
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:37:17.480Z",
+          "text": "La parte de Sync pedí que se sacara.\nNo entiendo porqué haríamos una diferenciación en eso, tipo... el directorio que el user elija ya está bien ycontemplado, no hay que avisar nada de eso.\nPuede ser, sí, que haya otro banner como el de migrate que diga Use Relay+ (ahora en coming soon) que explique igual que puede usar el mismo servicio de Nebula+ para syncear sus preferencias en cualquier dispositivo. Como un aviso que a futuro ofreceremos ese servicio. Lo tenemos que hablar con el Overseer porque me gustaría que sea super barato... pero bueno no sé cómo hacer. Veremos. Quizá si abrimos github contribuitors y nos donan tienen perk y sino bueno pueden pagarlo en la página de Cosmic."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:50:41.000Z",
+          "text": "Done. 1.2 has no sync choice: the folder chosen is the sync, since a folder inside a cloud storage service syncs through it. A second banner announces Use Relay+, coming soon: the same service as Nebula+ for preferences on any device. Ready (1.4) and Settings (6.1) no longer show a sync origin; Settings shows Relay+ as coming soon. The pricing idea went to the Overseer."
+        }
+      ]
+    },
+    {
+      "id": "t-mv691z3p-f15913",
+      "anchor": {
+        "screen": "setup-welcome",
+        "screenTitle": "1.1 Setup and first run: Install",
+        "element": "setup",
+        "label": "Install HIVEM1ND",
+        "path": [
+          "1.1 Setup and first run: Install",
+          "Install HIVEM1ND"
+        ],
+        "point": {
+          "x": 587,
+          "y": 397
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:37:48.278Z",
+          "text": "Subheader: only \"Setup takes about a minute.\""
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:50:41.000Z",
+          "text": "Done. The subheader of 1.1 is only \"Setup takes about a minute.\""
+        }
+      ]
+    },
+    {
+      "id": "t-mv6933lm-80ec2a",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": null,
+        "label": "6.1 Settings, the phone link and the service: Settings",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings"
+        ],
+        "point": {
+          "x": 415,
+          "y": 146
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:38:40.763Z",
+          "text": "Agregar themes:  Nebula, TXMSKA. Qué más se puede agregar?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:50:41.000Z",
+          "text": "Done. 6.1 Look adds Nebula, TXMSKA, Coffee Cat Studios and NTK, the family looks every Cosmic app offers (rule of 2026-10-12), each previewed in its brand palette."
+        }
+      ]
+    },
+    {
+      "id": "t-mv6943yg-19a3a6",
+      "anchor": {
+        "screen": "settings-agents",
+        "screenTitle": "6.2 Settings, the phone link and the service: Agents",
+        "element": null,
+        "label": "6.2 Settings, the phone link and the service: Agents",
+        "path": [
+          "6.2 Settings, the phone link and the service: Agents"
+        ],
+        "point": {
+          "x": 482,
+          "y": 139
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:39:27.880Z",
+          "text": "Ofrecer conectar los editors que se puedan tipo Claude app, Codex, Cursor, como hacemos nosotros ahora. Pero enfocarse principalmente en el CLI. Es el más accesible la verdad. Pensalo por acá y dame tus opiniones"
+        },
+        {
+          "author": "User",
+          "at": "2026-10-13T05:40:33.611Z",
+          "text": "Digo porque Cursor tuvo problemas, se puede hacer un CLI tipo chat y que se abra y descarten? También tener el flow que tenemos ahora manual de escribir en la app pero que enfoque a la orquestación eficiente de agentes via CLI que es lo más eficiente. Considerar cuestiones de permisos. pedir cambios y ofrecer hacerlos automático si se admite."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:50:41.000Z",
+          "text": "Done as chosen in chat. 6.2 shows each agent with its CLI first (it runs the units, Auto or On demand) and the app connection as optional. 6.3 lists every configuration change before it is made, with Apply or Copy changes. 2.13 Start a session runs an Executor as one task that closes by default, or as a chat that can open other CLIs itself. Builders are gone from the sample."
+        }
+      ]
+    },
+    {
+      "id": "t-mv696fqz-2cbcb5",
+      "anchor": {
+        "screen": null,
+        "screenTitle": null,
+        "element": null,
+        "label": "Board",
+        "path": [
+          "Board"
+        ],
+        "point": {
+          "x": 13101,
+          "y": 6736
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:41:16.475Z",
+          "text": "Considerar potenciales fricciones, errores. Audit with Sonnet 5.5 (yours, not Cursor's)."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T06:18:11.000Z",
+          "text": "Done. A Sonnet 5.5 audit found 21 points. The consistency errors are fixed (aliases, counts, waiting badges, the offline LAPTOP, labels). With the owner's yes the board now also covers: agent permissions (6.3 review of every write, git apart and unticked, 6.5 Permissions with Revoke), the phone (no standing approvals on it, 7.3 lock, access open in 6.1), migration and a second machine (1.3 join, 1.4 close 2.x), deletions with confirmation and Undo (2.10, 2.18, 5.3, 6.7), failures (1.6, 1.9, 5.5, Stop in 3.3, 3.4 approval to open a CLI, Not confirmed in 3.6), the machine selector (6.4), projects in the library (4.3, 4.5), History (4.14) and accessibility (shapes for status, 32 px targets, muted text contrast). 83 screens."
+        }
+      ]
+    },
+    {
+      "id": "t-mv69ozmy-b25b3b",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": "look-ntk",
+        "label": "NTK",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings",
+          "NTK"
+        ],
+        "point": {
+          "x": 528,
+          "y": 421
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:55:42.058Z",
+          "text": "Rename: Kinetic"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:58:43.000Z",
+          "text": "Done: the NTK look is named Kinetic."
+        }
+      ]
+    },
+    {
+      "id": "t-mv69p39z-a03386",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": "look-coffee-cat",
+        "label": "Coffee Cat Studios",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings",
+          "Coffee Cat Studios"
+        ],
+        "point": {
+          "x": 414,
+          "y": 426
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:55:46.775Z",
+          "text": "Rename: Toxic"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:58:43.000Z",
+          "text": "Done: the Coffee Cat Studios look is named Toxic."
+        }
+      ]
+    },
+    {
+      "id": "t-mv69pe3q-a7e478",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": "look-txmska",
+        "label": "TXMSKA",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings",
+          "TXMSKA"
+        ],
+        "point": {
+          "x": 188,
+          "y": 429
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:56:00.806Z",
+          "text": "Rename: Waves"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:58:43.000Z",
+          "text": "Done: the TXMSKA look is named Waves."
+        }
+      ]
+    },
+    {
+      "id": "t-mv69pn9c-cd8129",
+      "anchor": {
+        "screen": "settings-settings",
+        "screenTitle": "6.1 Settings, the phone link and the service: Settings",
+        "element": "look-contrast",
+        "label": "High contrast",
+        "path": [
+          "6.1 Settings, the phone link and the service: Settings",
+          "High contrast"
+        ],
+        "point": {
+          "x": 438,
+          "y": 263
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:56:12.672Z",
+          "text": "Rename: Nocturne"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:58:43.000Z",
+          "text": "Done: the High contrast look is named Nocturne."
+        }
+      ]
+    },
+    {
+      "id": "t-mv69qsda-7f2617",
+      "anchor": {
+        "screen": "settings-agents",
+        "screenTitle": "6.2 Settings, the phone link and the service: Agents",
+        "element": null,
+        "label": "6.2 Settings, the phone link and the service: Agents",
+        "path": [
+          "6.2 Settings, the phone link and the service: Agents"
+        ],
+        "point": {
+          "x": 85,
+          "y": 93
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-13T05:57:05.950Z",
+          "text": "No entiendo esto. Connect app es CLI?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-13T05:58:43.000Z",
+          "text": "No: they are two different connections, and 6.2 now says so. The left column is the command line (CLI), how HIVEM1ND runs the units, a session per task. The right column is the desktop app (Claude app, Codex app, Cursor editor), optional, for writing to an agent in its own window; its button names the app."
+        }
+      ]
+    }
+  ]
+}
