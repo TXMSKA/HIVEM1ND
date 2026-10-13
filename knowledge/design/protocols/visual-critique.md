@@ -35,9 +35,9 @@ report: the named screenshots, the board comparison, the proportion check, the c
    Result: every collision, detached surface or misalignment listed with its element and width, or the line "none found at any captured width".
 
 6. Walk it as the personas.
-   Task: pick two or three personas from [critique.md](../critique.md) by the kind of surface and walk the primary task as each.
-   Time: 20 minutes.
-   Result: one line per persona naming the exact element where it stalled, or that it completed the task, and the cognitive load count of failures.
+   Task: pick two or three personas from [critique.md](../critique.md) by the kind of surface and walk the primary task as each. Then walk every other flow the board draws once, end to end across its screens rather than screen by screen: go back at each step, change an earlier choice, and leave midway.
+   Time: 30 minutes.
+   Result: one line per persona naming the exact element where it stalled, or that it completed the task; one line per other flow naming each step with no way back, a lost choice or a step that could be cut, or that it held; and the cognitive load count of failures.
 
 7. Rank and fix.
    Task: rank every finding by the scale in [evidence.md](../evidence.md), give each a concrete fix, and apply the P0 and P1 fixes before continuing.
