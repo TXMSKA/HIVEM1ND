@@ -1433,6 +1433,7 @@ function intentIdPlaceholder() {
 }
 
 function authorize(principal, route) {
+  if (route.pattern.startsWith('/additions') && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Only the desktop may inspect additions.');
   if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias", "/units/:unitId"].includes(route.pattern)) {
     throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
   }
@@ -1770,8 +1771,109 @@ function matchPath(pattern, pathname) {
   return params;
 }
 
+function fixtureAdditionValidator(operation) {
+  return body => {
+    const fields = { upload: ["machine", "name"], chunk: ["path", "index", "total", "base64"], inspect: ["machine", "source", "updateOf"] }[operation];
+    requireObject(body, fields); requireKeys(body, fields);
+    if (operation !== "chunk" && body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "Open Add on the selected owning machine.");
+    if (operation === "upload" && (typeof body.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.name))) throw new HttpError(422, "invalid_source", "The folder name is invalid.");
+    if (operation === "inspect") {
+      if (body.updateOf !== null && !/^[0-9a-f-]{36}$/.test(body.updateOf ?? "")) throw new HttpError(422, "invalid_body", "The update identity is invalid.");
+      const source = body.source;
+      requireObject(source, source?.kind === "folder" ? ["kind", "uploadId"] : ["kind", "url"]);
+      requireKeys(source, source?.kind === "folder" ? ["kind", "uploadId"] : ["kind", "url"]);
+      if (source.kind === "folder") {
+        if (!/^[0-9a-f-]{36}$/.test(source.uploadId ?? "")) throw new HttpError(422, "invalid_source", "The upload identity is invalid.");
+      } else {
+        let url; try { url = new URL(source.url); } catch { throw new HttpError(422, "invalid_source", "The source link is invalid."); }
+        if (!["link", "git", "registry"].includes(source.kind) || url.protocol !== "https:" || url.username || url.password || url.search || url.hash
+          || !["github.com", "gitlab.com", "npmjs.com", "www.npmjs.com", "registry.npmjs.org"].includes(url.hostname)) throw new HttpError(422, "invalid_source", "The source link is invalid.");
+      }
+    }
+    if (operation === "chunk") {
+      const parts = typeof body.path === "string" ? body.path.split("/") : [];
+      if (!parts.length || parts.length > 40 || body.path.length > 1024 || /[\\\x00-\x1f\x7f:]/.test(body.path)
+        || parts.some(part => !part || [".", ".."].includes(part) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw new HttpError(422, "invalid_path", "The uploaded path is invalid.");
+      if (!Number.isInteger(body.index) || !Number.isInteger(body.total) || body.total < 1 || body.total > 256 || body.index < 0 || body.index >= body.total
+        || typeof body.base64 !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.base64)) throw new HttpError(422, "invalid_source", "The uploaded chunk is invalid.");
+      if (Buffer.from(body.base64, "base64").length > 65536) throw new HttpError(413, "addition_too_large", "The uploaded chunk is too large.");
+    }
+  };
+}
+
+function fixtureAdditionAccess(fx, principal, params, body) {
+  fx.additionUploads ??= new Map(); fx.additionPreviews ??= new Map();
+  if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop may inspect additions.");
+  const uploadId = params.uploadId ?? body?.source?.uploadId;
+  const record = params.previewId ? fx.additionPreviews.get(params.previewId) : uploadId ? fx.additionUploads.get(uploadId) : null;
+  if ((params.previewId || uploadId) && !record) throw new HttpError(404, "preview_not_found", "The local review was not found.");
+  if (!record) return null;
+  if (record.principalId !== principal.id || record.machine !== LOCAL_MACHINE) throw new HttpError(403, "forbidden", "The preview belongs to another owner.");
+  if (Date.parse(record.expiresAt) <= fx.nowMs && record.preview?.state !== "accepted") {
+    record.chunks?.clear(); record.cancelled = true;
+    throw new HttpError(409, "preview_expired", "The local review expired. Inspect the source again.");
+  }
+  if (record.cancelled) throw new HttpError(404, "preview_not_found", "The local review was canceled.");
+  return record;
+}
+
+function fixtureAdditionCandidates(pin, folder) {
+  const check = { pin: { ok: true, kind: pin.kind, value: pin.value }, license: { ok: true, value: "MIT" },
+    age: { ok: !folder, days: folder ? null : 30, publishedAt: folder ? null : "2026-09-01T00:00:00.000Z" },
+    scripts: { ok: true, noInstallScripts: true }, runtime: { ok: false, verified: true, requirements: ["Python"] }, eligible: !folder };
+  return [{ id: deterministicUuid("addition-candidate-pdf"), kind: "skill", name: "pdf", title: "pdf", description: "Reads PDF files", path: ".", supported: true,
+    blockedReason: null, requirements: ["Python"], check },
+  { id: deterministicUuid("addition-candidate-tool"), kind: "tool-server", name: "acme-files", title: "acme-files", description: "Available after 3.0", path: "tools",
+    supported: false, blockedReason: "after_3_0", requirements: ["Node.js"], check: { ...check, eligible: false } }];
+}
+
+async function prepareFixtureAddition(fx, pattern, params, body, principal) {
+  const prepared = (status, data, apply) => ({ status, data, writes: [], events: [], apply });
+  if (pattern === "/additions/uploads") {
+    const id = uuid(), expiresAt = new Date(fx.nowMs + 900000).toISOString();
+    return prepared(201, { uploadId: id, expiresAt }, () => fx.additionUploads.set(id, { id, name: body.name, machine: body.machine, principalId: principal.id, expiresAt, chunks: new Map(), cancelled: false }));
+  }
+  const record = fixtureAdditionAccess(fx, principal, params, body);
+  if (pattern.endsWith("/chunks")) {
+    if (record.sealed) throw new HttpError(409, "source_changed", "The upload is already under review.");
+    const prior = record.chunks.get(`${body.path.toLowerCase()}:${body.index}`);
+    if (prior && (prior.path !== body.path || prior.base64 !== body.base64 || prior.total !== body.total)) throw new HttpError(409, "source_changed", "The upload contains conflicting chunks.");
+    const chunks = new Map(record.chunks); chunks.set(`${body.path.toLowerCase()}:${body.index}`, { ...body });
+    const files = new Map(); let total = 0;
+    for (const chunk of chunks.values()) { total += Buffer.from(chunk.base64, "base64").length; const size = files.get(chunk.path) ?? 0; files.set(chunk.path, size + Buffer.from(chunk.base64, "base64").length); }
+    if (files.size > 1024 || total > 67108864 || [...files.values()].some(size => size > 16777216)) throw new HttpError(413, "addition_too_large", "The upload exceeds its file limits.");
+    return prepared(200, { uploadId: record.id, path: body.path, index: body.index }, () => { record.chunks = chunks; });
+  }
+  if (pattern === "/additions/previews") {
+    if (record?.sealed) throw new HttpError(409, "source_changed", "The upload is already under review.");
+    if (record) {
+      for (const chunk of record.chunks.values()) if (Array.from(record.chunks.values()).filter(item => item.path === chunk.path).length !== chunk.total) throw new HttpError(409, "source_changed", "The upload is incomplete.");
+    }
+    const snap = await projection(fx), id = uuid(), expiresAt = new Date(fx.nowMs + 900000).toISOString();
+    const digest = sha256(record ? JSON.stringify([...record.chunks.values()]) : "fixture pinned archive");
+    const pin = { kind: record ? "snapshot" : body.source.url.includes("npmjs") ? "version" : "commit", value: record ? digest : body.source.url.includes("npmjs") ? "1.2.3" : "a".repeat(40), digest };
+    const choices = { units: snap.units.filter(item => item.id !== "root:master" && !item.removed).map(item => ({ id: item.id, title: item.alias ?? item.unit })),
+      groups: (snap.groups ?? []).filter(item => !item.deleted).map(item => ({ id: item.id, title: item.title, members: [...item.members] })) };
+    const preview = { id, machine: body.machine, state: "inspecting", sourceDisplay: record?.name ?? body.source.url, pin, candidates: [], choices,
+      scopeRevision: sha256(JSON.stringify(choices)), contentRevision: null, projectRevision: null, expiresAt, error: null, result: null };
+    return prepared(202, preview, () => { if (record) record.sealed = id; fx.additionPreviews.set(id, { id, machine: body.machine, principalId: principal.id, expiresAt,
+      preview: structuredClone(preview), source: body.source, attempt: 1, cancelled: false }); });
+  }
+  if (pattern.endsWith("/retry")) {
+    const preview = record.preview.state === "failed" ? { ...record.preview, state: "inspecting", candidates: [], error: null } : record.preview;
+    return prepared(202, preview, () => { if (record.preview.state === "failed") record.attempt++; record.preview = structuredClone(preview); });
+  }
+  return prepared(204, null, () => { if (record.preview?.state !== "accepted") { record.cancelled = true; record.chunks?.clear(); if (record.source?.uploadId) fx.additionUploads.get(record.source.uploadId)?.chunks.clear(); } });
+}
+
 function routeTable() {
   return [
+    { pattern: '/additions/uploads', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('upload'), runtime: true } },
+    { pattern: '/additions/uploads/:uploadId/chunks', PUT: { capability: 'settings.write', validate: fixtureAdditionValidator('chunk'), runtime: true } },
+    { pattern: '/additions/uploads/:uploadId', DELETE: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
+    { pattern: '/additions/previews', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('inspect'), runtime: true } },
+    { pattern: '/additions/previews/:previewId', GET: { capability: 'settings.write', query: [] }, DELETE: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
+    { pattern: '/additions/previews/:previewId/retry', POST: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
     { pattern: "/view", GET: { query: ["project"] } },
     { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status", "archived"] } },
     { pattern: "/units", POST: { capability: "unit.create", validate: validateUnit } },
@@ -2138,6 +2240,17 @@ async function handleRead(fx, principal, spec, params, query, requestId) {
 
 async function readData(fx, snap, spec, params, query) {
   const pattern = spec.pattern;
+  if (pattern === '/additions/previews/:previewId') {
+    if ([...query.keys()].length) throw new HttpError(400, "invalid_query", "The query is not valid.");
+    const record = fixtureAdditionAccess(fx, spec.principal, params, null);
+    if (record.preview.state === 'inspecting') {
+      const failed = record.source.url?.includes('timeout') && record.attempt < 2;
+      record.preview.state = failed ? 'failed' : 'ready';
+      record.preview.error = failed ? { code: 'source_timeout', message: 'The source did not answer in 30 seconds.' } : null;
+      record.preview.candidates = failed ? [] : fixtureAdditionCandidates(record.preview.pin, record.source.kind === 'folder');
+    }
+    return structuredClone(record.preview);
+  }
   if (pattern === "/view") {
     if ([...query.keys()].some((key) => key !== "project")) throw new HttpError(400, "invalid_query", "The query is not valid.");
     const data = viewData(fx, snap, query.get("project") ?? null);
@@ -2518,6 +2631,7 @@ const GENERAL_BODY = 2_000_000;
 const LARGE_BODY = 16_000_000;
 
 function bodyLimit(method, apiPath) {
+  if (method === 'PUT' && /^\/additions\/uploads\/[^/]+\/chunks$/.test(apiPath)) return 96000;
   if (method === "PUT" && (/^\/blueprint\/boards\/[^/]+$/.test(apiPath) || /^\/void\/texts\/[^/]+$/.test(apiPath))) return LARGE_BODY;
   if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/blueprint/boards/import" || apiPath === "/void/texts")) return LARGE_BODY;
   if (method === "POST" && apiPath === "/void/replace") return LARGE_BODY;
@@ -2645,6 +2759,7 @@ async function handleApi(fx, request, response, audience) {
   if (audience.kind === "home" && principal.audience !== "phone") throw new HttpError(403, "forbidden", "This credential is not accepted on the home listener.");
   if (principal.expiresAt && Date.parse(principal.expiresAt) <= fx.nowMs) throw new HttpError(410, "home_expired", "Home access has expired.");
   const spec = { ...matched.route, ...matched.route[request.method], pattern: matched.route.pattern, method: request.method, token };
+  if (spec.pattern.startsWith('/additions')) authorize(principal, spec);
   if (apiPath === "/events" && request.method === "GET") {
     await handleEvents(fx, request, response, principal, url, requestId);
     return;
@@ -2670,6 +2785,7 @@ async function handleApi(fx, request, response, audience) {
   } catch {
     throw new HttpError(400, "invalid_json", "The JSON body is not valid.");
   }
+  if (spec.pattern.startsWith('/additions')) { spec.validate(body); fixtureAdditionAccess(fx, principal, matched.params, body); }
   const concrete = `/api/v1${apiPath.split("/").map((part, index) => index === 0 ? part : decodeOnce(part)).join("/")}`;
   const route = {
     ...spec,
@@ -4893,6 +5009,7 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern.startsWith('/additions')) return prepareFixtureAddition(fx, pattern, params, body, principal);
   if (pattern === "/settings/content") return prepareContentSettings(fx, body);
   if (pattern === "/settings/agents/scan") return prepareMachineSettings(fx, "scan", body);
   if (pattern === "/settings/agents/find") return prepareMachineSettings(fx, "find", body);

@@ -22,6 +22,7 @@ import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 import { mutateMachineSettings, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
+import { assertAdditionRequest, cancelAdditionPreview, cancelAdditionUpload, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditionPreview, retryAdditionPreview, writeAdditionChunk } from './additions.mjs';
 
 const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n';
 
@@ -97,6 +98,13 @@ const ROUTES = [
   ['GET', '/settings/projects', 'read', 'D', 'machineSettings', 'projects'],
   ['GET', '/settings/content', 'read', 'D', 'contentSettings'],
   ['PATCH', '/settings/content', 'settings.write', 'D', 'writeContent'],
+  ['POST', '/additions/uploads', 'settings.write', 'D', 'addition', 'upload'],
+  ['PUT', '/additions/uploads/:uploadId/chunks', 'settings.write', 'D', 'addition', 'chunk'],
+  ['DELETE', '/additions/uploads/:uploadId', 'settings.write', 'D', 'addition', 'cancelUpload'],
+  ['POST', '/additions/previews', 'settings.write', 'D', 'addition', 'inspect'],
+  ['GET', '/additions/previews/:previewId', 'settings.write', 'D', 'addition', 'read'],
+  ['DELETE', '/additions/previews/:previewId', 'settings.write', 'D', 'addition', 'cancel'],
+  ['POST', '/additions/previews/:previewId/retry', 'settings.write', 'D', 'addition', 'retry'],
   ['POST', '/settings/agents/scan', 'settings.write', 'D', 'settingsMutation', 'scan'],
   ['POST', '/settings/agents/find', 'settings.write', 'D', 'settingsMutation', 'find'],
   ['POST', '/settings/agents/:client/preview', 'settings.write', 'D', 'settingsMutation', 'preview'],
@@ -172,6 +180,7 @@ const JSON_LIMIT = 2_000_000;
 const REPLACEMENT_LIMIT = 16_000_000;
 
 function bodyLimitFor(route, pathname) {
+  if (route?.collection === 'chunk' && route.handler === 'addition') return 96000;
   if (pathname === '/mcp') return REPLACEMENT_LIMIT;
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
@@ -500,6 +509,7 @@ export async function createHttpServer(options) {
     const params = paramsOf(route, relative);
     const bodyLimit = bodyLimitFor(route, requested.path);
     const deferAssetBody = route.method === 'POST' && route.template === '/editors/:resourceId/assets';
+    if (route.handler === 'addition') await credentialFor(req, route, credentials, listener, options);
     let body = null;
     if (!deferAssetBody) {
       body = await readJsonBody(req, { expect: bodyExpect(route, req.method), limit: bodyLimit });
@@ -622,6 +632,7 @@ export async function createHttpServer(options) {
     security,
     viewers,
     async close() {
+      await closeAdditionJobs(domainContext(options, null, bus));
       disposeWatch(watch);
       await closeHome(homeState, { quiet: true }).catch(() => {});
       for (const socket of sockets) socket.destroy();
@@ -862,6 +873,9 @@ async function credentialFor(req, route, credentials, listener, options) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) throw new CoreError(401, 'invalid_session', 'The credential is not valid.');
   const record = credentials.verify(token);
+  if (route.template.startsWith('/additions') && record.audience !== 'desktop') {
+    throw new CoreError(403, 'forbidden', 'Only the desktop may inspect additions.');
+  }
   if (listener.kind === 'lan' && record.audience !== 'phone') {
     throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
   }
@@ -890,6 +904,10 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
+  if (route.handler === 'addition') {
+    await assertAdditionRequest(domain, route.collection, body, params.previewId ?? params.uploadId ?? null);
+    return {};
+  }
   if (credential?.audience === 'phone' && route.handler === 'answerApproval' && body?.decision === 'approve-always') {
     throw new CoreError(403, 'phone_read_only', 'Standing approvals are answered on the computer.');
   }
@@ -1019,6 +1037,12 @@ function boundRecord(value, label, limit) {
 
 function allowedBody(route) {
   const table = {
+    'POST /additions/uploads': ['machine', 'name'],
+    'PUT /additions/uploads/:uploadId/chunks': ['path', 'index', 'total', 'base64'],
+    'DELETE /additions/uploads/:uploadId': [],
+    'POST /additions/previews': ['machine', 'source', 'updateOf'],
+    'DELETE /additions/previews/:previewId': [],
+    'POST /additions/previews/:previewId/retry': [],
     'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
@@ -1106,6 +1130,8 @@ function domainContext(options, credential, bus) {
     adapters: options.adapters ?? null,
     models: options.models ?? [],
     settingsOwner: options.settingsOwner ?? null,
+    additionOwner: options.additionOwner ?? options.settingsOwner ?? options,
+    additionPrincipal: options.receiptPrincipals?.get(credential?.token) ?? credential?.token ?? null,
     ledger: options.ledger ?? null,
     sync: options.sync ?? null,
     pulse: options.pulse ?? null,
@@ -1226,6 +1252,15 @@ async function watchRoute(route, domain, params, body, credential) {
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
+  if (route.handler === 'addition') {
+    const operations = { upload: openAdditionUpload, inspect: inspectAddition, chunk: writeAdditionChunk, read: readAdditionPreview,
+      cancel: cancelAdditionPreview, cancelUpload: cancelAdditionUpload, retry: retryAdditionPreview };
+    const operation = operations[route.collection];
+    const id = params.previewId ?? params.uploadId;
+    const result = id ? await operation(domain, id, body ?? {}) : await operation(domain, body);
+    return { status: ['cancel', 'cancelUpload'].includes(route.collection) ? 204 : route.collection === 'upload' ? 201
+      : ['inspect', 'retry'].includes(route.collection) ? 202 : 200, body: result ?? null };
+  }
   if (route.handler === 'editor') return editorRoute(route, domain, params, query, body, credential);
   if (route.handler === 'watch') return watchRoute(route, domain, params, body, credential);
   if (route.handler === 'unavailable') {
@@ -1423,7 +1458,7 @@ async function rememberHome(memory, credential, req, relative, body, requestId, 
 async function mutate(options, credential, req, relative, body, requestId, eventCursor, run, domain) {
   const key = headerOne(req, 'idempotency-key');
   if (!isUuid(key)) throw new CoreError(400, 'idempotency_required', 'Idempotency-Key must be a UUID.');
-  return withReceipt(options.store, {
+  const outcome = await withReceipt(options.store, {
     principal: options.receiptPrincipals?.get(credential.token) ?? credential.token,
     key,
     method: req.method,
@@ -1446,6 +1481,10 @@ async function mutate(options, credential, req, relative, body, requestId, event
       if (domain) domain.receipt = null;
     }
   });
+  if (relative.startsWith('/additions/previews') && outcome.replayed && outcome.body?.id) {
+    return { ...outcome, body: await readAdditionPreview(domain, outcome.body.id) };
+  }
+  return outcome;
 }
 
 async function runAuth(route, scope) {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import { createEventBus } from '../engine/service/events.mjs';
 import { readContent, readMachineSettings } from '../engine/service/settings.mjs';
 import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
+import { hashBytes } from '../engine/service/identity.mjs';
 
 describe('service api', { concurrency: false }, () => {
 async function boot(t, { assetDir = null, missingAssets = false } = {}) {
@@ -1676,6 +1677,23 @@ test('every contract route has a success result and an authority or boundary fai
   const conflictAnswer = await call(port, 'POST', `${historyTarget}/conflict`, { token, body: { decision: 'keep-mine', document: restored.json.data.document,
     expectedRevision: restored.json.data.revision, expectedCommentsRevision: restored.json.data.commentsRevision }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(conflictAnswer, 200, 'editor conflict'); hit('POST', '/editors/:resourceId/conflict');
+  const additionUpload = await call(port, 'POST', '/api/v1/additions/uploads', { token,
+    body: { machine: fixture.machine, name: 'folder' }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(additionUpload, 201, 'addition upload'); hit('POST', '/additions/uploads');
+  const uploadId = additionUpload.json.data.uploadId;
+  const additionChunk = await call(port, 'PUT', `/api/v1/additions/uploads/${uploadId}/chunks`, { token,
+    body: { path: 'SKILL.md', index: 0, total: 1, base64: Buffer.from('---\nname: pdf\nruntime: none\n---\n').toString('base64') }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(additionChunk, 200, 'addition chunk'); hit('PUT', '/additions/uploads/:uploadId/chunks');
+  const additionPreview = await call(port, 'POST', '/api/v1/additions/previews', { token,
+    body: { machine: fixture.machine, source: { kind: 'folder', uploadId }, updateOf: null }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(additionPreview, 202, 'addition preview'); hit('POST', '/additions/previews');
+  const previewTarget = `/api/v1/additions/previews/${additionPreview.json.data.id}`;
+  expectStatus(await call(port, 'GET', previewTarget, { token }), 200, 'read addition preview'); hit('GET', '/additions/previews/:previewId');
+  expectStatus(await call(port, 'POST', `${previewTarget}/retry`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 202, 'retry addition preview'); hit('POST', '/additions/previews/:previewId/retry');
+  await core.runtime.settingsOwner.additionJobs.get(additionPreview.json.data.id)?.promise;
+  expectStatus(await call(port, 'DELETE', previewTarget, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 204, 'cancel addition preview'); hit('DELETE', '/additions/previews/:previewId');
+  const disposableUpload = await call(port, 'POST', '/api/v1/additions/uploads', { token, body: { machine: fixture.machine, name: 'other' }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(await call(port, 'DELETE', `/api/v1/additions/uploads/${disposableUpload.json.data.uploadId}`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 204, 'cancel addition upload'); hit('DELETE', '/additions/uploads/:uploadId');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');
@@ -2044,5 +2062,98 @@ test('unit removal archives with one receipt, keeps archived reads and requires 
   const restored = await call(port, 'POST', `/api/v1/changes/${removed.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
   assert.equal(restored.status, 200);
   assert.equal((await call(port, 'GET', '/api/v1/units', { token })).json.data.items[0].revision, unit.revision);
+});
+
+test('C12 rejects phone and agent callers before upload staging or receipt lookup and binds desktop previews', async t => {
+  const { core, token, fixture } = await boot(t);
+  const port = core.http.port, owner = core.runtime.settingsOwner;
+  async function inventory(root) {
+    const files = {};
+    async function visit(directory) {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entry.name);
+        if (entry.isDirectory()) await visit(target);
+        else files[path.relative(root, target)] = hashBytes(await readFile(target));
+      }
+    }
+    await visit(root); return files;
+  }
+  const client = path.join(fixture.home, 'foreign-client.json'), source = path.join(fixture.root, 'dropped');
+  await mkdir(source); await writeFile(client, 'Preserved client'); await writeFile(path.join(source, 'original.txt'), 'Preserved source');
+  const unchanged = async () => ({ mind: await inventory(fixture.paths.mind), client: hashBytes(await readFile(client)), source: await inventory(source) });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const initialized = await readFile(path.join(fixture.paths.mind, 'machines', fixture.machine, 'service.json')).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (initialized) break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const before = await unchanged();
+  const selected = { machine: fixture.machine, name: 'folder' }, key = randomUUID();
+  const audienceTokens = [core.credentials.issue({ audience: 'phone' }).token, core.credentials.issue({ audience: 'agent', unitId: 'root:one', capabilities: ['settings.write'] }).token];
+  for (const denied of audienceTokens) {
+    for (const [method, target, body] of [['POST', '/additions/uploads', selected], ['POST', '/additions/previews', { machine: fixture.machine, source: { kind: 'link', url: 'https://github.com/acme/example' }, updateOf: null }],
+      ['PUT', `/additions/uploads/${randomUUID()}/chunks`, { path: 'a.txt', index: 0, total: 1, base64: '' }],
+      ['GET', `/additions/previews/${randomUUID()}`, undefined], ['DELETE', `/additions/previews/${randomUUID()}`, {}], ['POST', `/additions/previews/${randomUUID()}/retry`, {}]]) {
+      const response = await call(port, method, `/api/v1${target}`, { token: denied, body, headers: { 'idempotency-key': key } });
+      assert.equal(response.status, 403); assert.equal(response.json.error.code, 'forbidden');
+    }
+  }
+  await assert.rejects(readFile(path.join(fixture.paths.localDirectory, 'additions', 'uploads', `${key}.json`)), { code: 'ENOENT' });
+  const localBefore = await inventory(fixture.paths.localDirectory);
+  assert.equal(Object.keys(localBefore).some(file => file.includes('receipts') || file.includes('additions')), false);
+  assert.equal((await call(port, 'POST', '/api/v1/additions/uploads', { token, body: { ...selected, path: source }, headers: { 'idempotency-key': randomUUID() } })).status, 400);
+  assert.equal((await call(port, 'POST', '/api/v1/additions/uploads', { token, body: { ...selected, machine: 'OFFLINE' }, headers: { 'idempotency-key': randomUUID() } })).json.error.code, 'machine_unavailable');
+  const upload = await call(port, 'POST', '/api/v1/additions/uploads', { token, body: selected, headers: { 'idempotency-key': key } });
+  assert.equal(upload.status, 201);
+  assert.deepEqual((await call(port, 'POST', '/api/v1/additions/uploads', { token, body: selected, headers: { 'idempotency-key': key } })).json.data, upload.json.data);
+  const uploadId = upload.json.data.uploadId, chunk = { path: 'SKILL.md', index: 0, total: 1, base64: Buffer.from('---\nname: pdf\nruntime: none\n---\n').toString('base64') };
+  assert.equal((await call(port, 'PUT', `/api/v1/additions/uploads/${uploadId}/chunks`, { token, body: chunk, headers: { 'idempotency-key': randomUUID() } })).status, 200);
+  const input = { machine: fixture.machine, source: { kind: 'folder', uploadId }, updateOf: null };
+  assert.equal((await call(port, 'POST', '/api/v1/additions/previews', { token, body: { ...input, source: { ...input.source, path: source } }, headers: { 'idempotency-key': randomUUID() } })).status, 400);
+  const previewKey = randomUUID(), preview = await call(port, 'POST', '/api/v1/additions/previews', { token, body: input, headers: { 'idempotency-key': previewKey } });
+  assert.equal(preview.status, 202); assert.equal(preview.json.data.state, 'inspecting');
+  await owner.additionJobs.get(preview.json.data.id)?.promise;
+  const target = `/api/v1/additions/previews/${preview.json.data.id}`;
+  const ready = await call(port, 'GET', target, { token }); assert.equal(ready.json.data.state, 'ready');
+  const replay = await call(port, 'POST', '/api/v1/additions/previews', { token, body: input, headers: { 'idempotency-key': previewKey } });
+  assert.equal(replay.json.data.id, ready.json.data.id); assert.equal(replay.json.data.state, 'ready');
+  const second = await call(port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  for (const [method, suffix, body] of [['GET', '', undefined], ['POST', '/retry', {}], ['DELETE', '', {}]]) {
+    const response = await call(port, method, target + suffix, { token: second.json.data.token, body, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(response.status, 403); assert.equal(response.json.error.code, 'forbidden');
+  }
+  assert.equal((await call(port, 'POST', target + '/retry', { token, body: { extra: true }, headers: { 'idempotency-key': randomUUID() } })).status, 400);
+  assert.equal((await call(port, 'DELETE', target, { token, body: {}, headers: { 'idempotency-key': randomUUID() } })).status, 204);
+  assert.deepEqual(await unchanged(), before);
+});
+
+test('C12 timeout retry remains on the same preview and safe errors omit private transport output', async t => {
+  const { core, token, fixture } = await boot(t), owner = core.runtime.settingsOwner;
+  let requests = 0, tick, signal;
+  const privateDiagnostic = randomUUID();
+  owner.additionLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  owner.additionSchedule = (callback, ms) => { assert.equal(ms, 30000); tick = callback; return 9; };
+  owner.additionClearTimeout = () => {};
+  owner.additionTransport = async (_url, options) => { requests++; signal = options.signal; return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error(privateDiagnostic)), { once: true })); };
+  const input = { machine: fixture.machine, source: { kind: 'link', url: 'https://github.com/acme/example' }, updateOf: null }, key = randomUUID();
+  const initial = await call(core.http.port, 'POST', '/api/v1/additions/previews', { token, body: input, headers: { 'idempotency-key': key } });
+  assert.equal(initial.status, 202);
+  while (!signal) await new Promise(resolve => setImmediate(resolve)); tick();
+  await owner.additionJobs.get(initial.json.data.id)?.promise;
+  const target = `/api/v1/additions/previews/${initial.json.data.id}`;
+  const failed = await call(core.http.port, 'GET', target, { token });
+  assert.equal(failed.json.data.state, 'failed'); assert.equal(failed.json.data.error.code, 'source_timeout');
+  assert.equal(failed.raw.includes(privateDiagnostic), false); assert.equal(signal.aborted, true);
+  const replay = await call(core.http.port, 'POST', '/api/v1/additions/previews', { token, body: input, headers: { 'idempotency-key': key } });
+  assert.equal(replay.json.data.state, 'failed'); assert.equal(requests, 1);
+  owner.additionTransport = async () => { requests++; throw new Error(privateDiagnostic); };
+  const retryKey = randomUUID();
+  const retry = await call(core.http.port, 'POST', target + '/retry', { token, body: {}, headers: { 'idempotency-key': retryKey } });
+  assert.equal(retry.status, 202); assert.equal(retry.json.data.id, initial.json.data.id);
+  await owner.additionJobs.get(initial.json.data.id)?.promise;
+  const duplicate = await call(core.http.port, 'POST', target + '/retry', { token, body: {}, headers: { 'idempotency-key': retryKey } });
+  assert.equal(duplicate.json.data.error.code, 'source_unavailable'); assert.equal(requests, 2);
+  assert.equal(JSON.stringify(core.http.security.diagnostics).includes(privateDiagnostic), false);
+  fixture.clock.now += 900000;
+  assert.equal((await call(core.http.port, 'GET', target, { token })).json.error.code, 'preview_expired');
 });
 });

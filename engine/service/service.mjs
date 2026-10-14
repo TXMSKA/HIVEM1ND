@@ -150,6 +150,7 @@ export async function startService(options, retained = null) {
       pulse: handle.runtime.pulse,
       adapters: handle.adapters.adapters,
       settingsOwner: handle.runtime.settingsOwner,
+      additionOwner: handle.runtime.settingsOwner,
       receiptPrincipals: handle.receiptPrincipals,
       recoveryHosts: handle.recoveryHosts,
       restartService: () => restartService(handle),
@@ -560,6 +561,7 @@ export async function composeCore(options) {
     sync: runtime.sync,
     pulse: runtime.pulse,
     settingsOwner: runtime.settingsOwner,
+    additionOwner: runtime.settingsOwner,
   });
   bindRuntime({ http, runtime });
   try {

@@ -481,6 +481,23 @@ export function safeError(error, requestId) {
   };
 }
 
+export function additionSourceError(error) {
+  const messages = {
+    source_timeout: 'The source did not answer in 30 seconds.',
+    source_unavailable: 'The public source could not be read. Retry the inspection.',
+    source_changed: 'The pinned source bytes changed.',
+    invalid_source: 'The source evidence is not valid.',
+    invalid_path: 'The source contains an unsafe or colliding path.',
+    addition_too_large: 'The source exceeds its file limits.',
+    unsafe_staging: 'The local preview storage is unavailable.',
+    unsafe_path: 'The local preview storage is unavailable.',
+    bootstrap_unavailable: 'The local preview storage could not be protected.',
+  };
+  const code = error instanceof CoreError && Object.hasOwn(messages, error.code) ? error.code : 'source_unavailable';
+  return new CoreError(code === 'addition_too_large' ? 413 : code === 'source_changed' ? 409
+    : ['invalid_source', 'invalid_path', 'unsafe_staging', 'unsafe_path'].includes(code) ? 422 : 503, code, messages[code]);
+}
+
 const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code', 'desktopOnly', 'triesLeft', 'lockedUntil']);
 
 function leaks(value) {
