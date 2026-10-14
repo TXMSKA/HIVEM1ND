@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverAgents, discoverContent, loadAdapters } from '../discovery.mjs';
-import { planAgentAssets } from '../install.mjs';
+import { OWNED_RULE_MODES, autoRuleLine, prepareContentAgentAssets } from '../install.mjs';
 import { machineSettingsPath, readMachineRecord } from '../records.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName } from './identity.mjs';
 import { answersFor, readProjection } from './projection.mjs';
@@ -12,9 +12,9 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, checkRevision, commitChange, readBytes, revisionOf, withLocks } from './store.mjs';
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
-import { probeClients } from './adapters.mjs';
+import { probeClients, reloadReviewedClient } from './adapters.mjs';
 import { configureOwnedService } from './install.mjs';
-import { buildClientConfig, clientConfigPaths } from '../relay/config.mjs';
+import { applyClientConfigChanges, buildClientConfig, clientConfigPaths, readConfigBytes, restoreClientConfig } from '../relay/config.mjs';
 
 // The Settings contract is registered here so the existing bus also serves it.
 for (const name of ['machine.settings.changed', 'settings.content.changed']) {
@@ -177,7 +177,8 @@ async function publishOwnedSettings(context, section) {
   }
   const view = await readProjection(context);
   const unitGrants = view.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant })));
-  const permissions = { unitGrants, agentPermissions: existing?.permissions.agentPermissions ?? [] };
+  const permissionBytes = await readConfigBytes(path.join(context.paths.localDirectory, 'client-permissions.json'));
+  const permissions = { unitGrants, agentPermissions: permissionBytes ? JSON.parse(permissionBytes).permissions : [] };
   const projects = { folders: [...folders.values()] };
   const contentRevision = revisionOf(await readBytes(context.store, absolute(context, CONTENT_PATH)));
   const refreshAgents = !existing || section === 'agents' || context.contentRevision !== contentRevision;
@@ -209,18 +210,18 @@ async function agentItems(context, legacy) {
   const detected = await discoverAgents({ homeDir: context.homeDir, env: context.env, adapters });
   const probes = context.probeAgents ? await context.probeAgents() : await probeClients({ env: context.env, platform: context.paths.platform, spawnVersion: true, timeoutMs: 1500 });
   const content = await readContent(context);
-  const excluded = contentExclusions(content);
   const foundSource = await readBytes(context.store, path.join(context.paths.localDirectory, 'settings-found-agents.json'));
   const foundPaths = foundSource ? JSON.parse(foundSource) : {};
+  const connections = await clientOwnership(context);
   return Promise.all(adapters.map(async adapter => {
     const id = CLIENT_IDS[adapter.id] ?? adapter.id;
     const foundState = foundPaths[adapter.id] ? await lstat(foundPaths[adapter.id]).catch(() => null) : null;
     const found = detected.some(item => item.id === adapter.id) || probes[id]?.installed === true || foundState?.isFile() === true;
-    const mode = legacy?.agents.find(item => item.name === adapter.id || item.name === id)?.mode === 'auto' ? 'auto' : 'on-demand';
+    const mode = connections.clients[id]?.cli?.mode ?? (legacy?.agents.find(item => item.name === adapter.id || item.name === id)?.mode === 'auto' ? 'auto' : 'on-demand');
     let changes = 0;
     if (found) {
-      const plan = await planAgentAssets({ kitPath: context.kitPath, mindPath: context.paths.mind, homeDir: context.homeDir, env: context.env, adapters: [adapter], agents: [{ name: adapter.id, mode }], excluded, managedFiles: legacy?.managedFiles ?? {}, keepExistingPreferences: content.preferences.keepExistingPreferencesFirst });
-      changes = plan.items.filter(item => item.action !== 'unchanged').length;
+      const plan = await clientAssetPlan(context, adapter, mode, legacy, content, connections);
+      changes = plan.items.filter(item => item.action !== 'unchanged').length + (plan.removals ?? []).length;
       const configPaths = clientConfigPaths({ client: id, homeDir: context.homeDir, env: context.env });
       const existing = {};
       for (const kind of ['mcp', 'hooks']) {
@@ -287,6 +288,11 @@ async function executeOwned(context, operation, input, id = null) {
   if (['preview', 'apply', 'disconnect'].includes(operation)) {
     const adapters = await loadAdapters({ kitPath: context.kitPath });
     if (!adapters.some(adapter => (CLIENT_IDS[adapter.id] ?? adapter.id) === id)) fail(422, 'invalid_body', 'The client is not a known adapter.');
+    if (!context.settingsHandlers?.[operation]) {
+      if (operation === 'preview') return { status: 200, body: await previewClientConfiguration(context, id, input) };
+      if (operation === 'apply') return { status: 200, body: await applyClientConfiguration(context, id, input) };
+      return { status: 200, body: await disconnectClientConfiguration(context, id, input) };
+    }
   }
   if (operation === 'scan' || operation === 'find') {
     if (operation === 'find') {
@@ -333,12 +339,181 @@ async function executeOwned(context, operation, input, id = null) {
   return result?.body ? result : { status: operation === 'restart' ? 202 : 200, body: result };
 }
 
+function ownershipPath(context) { return path.join(context.paths.localDirectory, 'client-configuration.json'); }
+
+async function clientOwnership(context) {
+  const source = await readConfigBytes(ownershipPath(context));
+  const record = source ? JSON.parse(source) : { format: 'hivem1nd-client-configuration-v1', machine: context.paths.machine, clients: {}, applied: {} };
+  if (record.format !== 'hivem1nd-client-configuration-v1' || record.machine !== context.paths.machine) fail(409, 'configuration_changed', 'The local configuration ownership changed.');
+  return record;
+}
+
+async function clientAssetPlan(context, adapter, mode, legacy, content, ownership) {
+  const managedFiles = { ...legacy?.managedFiles };
+  for (const client of Object.values(ownership.clients)) Object.assign(managedFiles, client.assetHashes);
+  return prepareContentAgentAssets({ kitPath: context.kitPath, mindPath: context.paths.mind, homeDir: context.homeDir,
+    env: context.env, adapters: [adapter], agents: [{ name: adapter.id, mode }], excluded: contentExclusions(content), managedFiles,
+    keepExistingPreferences: content.preferences.keepExistingPreferencesFirst });
+}
+
+function assertConfigurationOwner(context, operation, input) {
+  if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may review client configuration.');
+  validateSettingsBody(operation, input);
+  if (input.machine !== context.paths.machine || context.active === false) fail(409, 'machine_unavailable', 'Review configuration on its owning machine.');
+}
+
+export async function previewClientConfiguration(context, client, input) {
+  assertConfigurationOwner(context, 'preview', input);
+  const adapter = (await loadAdapters({ kitPath: context.kitPath })).find(item => (CLIENT_IDS[item.id] ?? item.id) === client);
+  if (!adapter) fail(422, 'invalid_body', 'The client is not a known adapter.');
+  const ownership = await clientOwnership(context);
+  if (ownership.clients[client]) await restoredClientEntries(context, client, ownership.clients[client]);
+  const ownerBytes = await readConfigBytes(ownershipPath(context));
+  const { record: legacy } = await readMachineRecord(context.paths.mind, context.paths.machine);
+  const content = await readContent(context);
+  const paths = clientConfigPaths({ client, homeDir: context.homeDir, env: context.env });
+  const existing = {}, snapshots = {};
+  for (const kind of ['mcp', 'hooks']) if (paths[kind]) {
+    snapshots[kind] = await readConfigBytes(paths[kind]);
+    existing[kind] = snapshots[kind]?.toString('utf8') ?? '';
+  }
+  let proposed, owned;
+  try {
+    const options = { client, kitPath: context.kitPath, mindPath: context.paths.mind, platform: context.paths.platform };
+    proposed = buildClientConfig({ ...options, existing });
+    owned = buildClientConfig(options);
+  } catch { fail(409, 'configuration_changed', 'The client configuration cannot be merged safely.'); }
+  const changes = [];
+  for (const kind of Object.keys(proposed)) {
+    const after = Buffer.from(proposed[kind]);
+    if (snapshots[kind]?.equals(after)) continue;
+    changes.push({ id: kind, path: paths[kind], root: paths[`${kind}Root`], kind, before: snapshots[kind], after,
+      description: kind === 'mcp' ? 'Add the Relay server, so sessions read and send messages' : 'Add the Relay hooks, so a session wakes when a message arrives',
+      afterText: owned[kind], optional: false, selected: true });
+  }
+  if (input.target === 'cli') {
+    const assets = await clientAssetPlan(context, adapter, input.mode, legacy, content, ownership);
+    for (const item of [...assets.items.filter(item => item.action !== 'unchanged'), ...(assets.removals ?? []).map(item => ({ ...item, action: 'delete' }))]) {
+      if (assets.conflicts.some(conflict => conflict.path === item.path) || item.linkComponent) fail(409, 'configuration_changed', 'An installed Content file has foreign changes; preserve it before reviewing again.');
+      const before = await readConfigBytes(item.path);
+      if (Object.hasOwn(item, 'currentHash') && revisionOf(before) !== item.currentHash) fail(409, 'configuration_changed', 'An installed Content file changed.');
+      const after = item.action === 'delete' ? null : Buffer.from(item.content);
+      changes.push({ id: `asset-${changes.length}`, path: item.path, root: item.root, kind: item.kind ?? 'asset', before, after,
+        description: item.kind === 'rule' ? input.mode === 'auto' ? 'Load the M1ND rules in every session' : 'Stop loading the M1ND rules automatically' : item.action === 'delete' ? 'Remove owned Content no longer included' : 'Make included M1ND Content available on demand',
+        afterText: item.kind === 'rule' && !OWNED_RULE_MODES.has(adapter.rules?.mode) ? input.mode === 'auto' ? `${autoRuleLine(context.paths.mind)}\n` : '' : after?.toString('utf8') ?? '', optional: false, selected: true });
+    }
+  }
+  const permissionPath = path.join(context.paths.localDirectory, 'client-permissions.json');
+  const permissionBytes = await readConfigBytes(permissionPath);
+  const permissions = permissionBytes ? JSON.parse(permissionBytes).permissions : [];
+  if (!permissions.some(item => item.client === client && item.machine === input.machine)) {
+    const permission = { id: randomUUID(), machine: input.machine, client, actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: stamp(context), grantedBy: 'root:master' };
+    changes.push({ id: 'git', path: permissionPath, root: context.paths.localDirectory, kind: 'permission', before: permissionBytes,
+      after: bytes({ permissions: [...permissions, permission] }), afterText: canonicalJson(permission), description: 'Allow git commit and git push only in HIVEM1ND-started sessions on this machine', optional: true, selected: false });
+  }
+  const previewId = randomUUID();
+  const revision = hashBytes(bytes(await agentItems(context, legacy)));
+  const expiresAt = new Date(context.now() + 600000).toISOString();
+  context.clientPreviews ??= new Map();
+  for (const [key, preview] of context.clientPreviews) if (Date.parse(preview.expiresAt) <= context.now()) context.clientPreviews.delete(key);
+  if (context.clientPreviews.size >= 64) context.clientPreviews.delete(context.clientPreviews.keys().next().value);
+  const restartRequired = changes.some(change => !change.optional);
+  context.clientPreviews.set(previewId, { machine: input.machine, client, mode: input.mode, target: input.target, changes, revision, expiresAt,
+    ownerHash: revisionOf(ownerBytes), contentRevision: content.revision, restartRequired });
+  return { previewId, revision, expiresAt, changes: changes.map(({ id, path, description, before, afterText, optional, selected }) => ({ id, path, description, beforeHash: revisionOf(before), afterText, optional, selected })), restartRequired };
+}
+
+function applicationBinding(client, input) { return canonicalJson({ client, machine: input.machine, changeIds: [...input.changeIds].sort(), expectedRevision: input.expectedRevision }); }
+
+async function configurationWrite(context, changes) {
+  return applyClientConfigChanges(changes, { protectFile: file => protectLocalFile(file, { store: context.store }), beforeWrite: context.configurationBeforeWrite });
+}
+
+export async function applyClientConfiguration(context, client, input) {
+  assertConfigurationOwner(context, 'apply', input);
+  const ownership = await clientOwnership(context);
+  const binding = applicationBinding(client, input);
+  const prior = ownership.applied[input.previewId];
+  if (prior) {
+    if (prior.binding !== binding) fail(409, 'configuration_changed', 'This preview was already applied with a different selection.');
+    return finishClientApplication(context, client, input.previewId, ownership);
+  }
+  const preview = context.clientPreviews?.get(input.previewId);
+  if (!preview || preview.client !== client || preview.machine !== input.machine || input.machine !== context.paths.machine || Date.parse(preview.expiresAt) <= context.now()) fail(409, 'configuration_changed', 'The configuration preview expired or belongs to another client or machine.');
+  if (input.expectedRevision !== preview.revision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
+  if (revisionOf(await readConfigBytes(ownershipPath(context))) !== preview.ownerHash || (await readContent(context)).revision !== preview.contentRevision) fail(409, 'configuration_changed', 'The reviewed configuration selection changed.');
+  const selected = preview.changes.filter(change => input.changeIds.includes(change.id));
+  if (selected.length !== input.changeIds.length) fail(422, 'invalid_body', 'A selected change does not belong to this preview.');
+  for (const change of preview.changes) if (revisionOf(await readConfigBytes(change.path)) !== revisionOf(change.before)) fail(409, 'configuration_changed', 'The client configuration changed after review.');
+  const { record: legacy } = await readMachineRecord(context.paths.mind, context.paths.machine);
+  if (hashBytes(bytes(await agentItems(context, legacy))) !== preview.revision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
+  if (selected.some(change => !change.optional)) await reloadReviewedClient(context, { client, target: preview.target, previewId: input.previewId, checkOnly: true });
+  const original = await readConfigBytes(ownershipPath(context));
+  const connection = ownership.clients[client] ?? { entries: [], assetHashes: {} };
+  for (const change of selected) {
+    connection.entries.push({ path: change.path, root: change.root, kind: change.kind, before: change.before?.toString('base64') ?? null, after: change.after?.toString('base64') ?? null });
+    if (!['mcp', 'hooks', 'permission'].includes(change.kind)) {
+      if (change.after === null) delete connection.assetHashes[change.path]; else connection.assetHashes[change.path] = hashBytes(change.after);
+    }
+  }
+  if (!preview.changes.some(change => !change.optional) || selected.some(change => !change.optional)) connection[preview.target] = { mode: preview.mode, reloadRequired: preview.restartRequired };
+  ownership.clients[client] = connection;
+  ownership.applied[input.previewId] = { binding, target: preview.target, reloadRequired: selected.some(change => !change.optional), result: null, keptCopies: selected.length };
+  await configurationWrite(context, [...selected, { path: ownershipPath(context), root: context.paths.localDirectory, before: original, after: bytes(ownership), internal: true }]);
+  return finishClientApplication(context, client, input.previewId, ownership);
+}
+
+async function finishClientApplication(context, client, previewId, ownership) {
+  const applied = ownership.applied[previewId];
+  if (applied.result) return applied.result;
+  if (applied.reloadRequired) await reloadReviewedClient(context, { client, target: applied.target, previewId, checkOnly: false });
+  const report = await publishMachineSettings(context, 'agents');
+  const result = { machine: context.paths.machine, client, state: 'connected', revision: report.agents.revision, keptCopies: applied.keptCopies };
+  const original = await readConfigBytes(ownershipPath(context));
+  applied.result = result;
+  await configurationWrite(context, [{ path: ownershipPath(context), root: context.paths.localDirectory, before: original, after: bytes(ownership), internal: true }]);
+  return result;
+}
+
+async function restoredClientEntries(context, client, connection) {
+  const changes = new Map();
+  for (const entry of [...connection.entries].reverse()) {
+    const current = changes.has(entry.path) ? changes.get(entry.path).after : await readConfigBytes(entry.path);
+    const decode = value => value === null ? null : Buffer.from(value, 'base64');
+    let after;
+    try { after = restoreClientConfig({ client, kind: entry.kind, before: decode(entry.before), after: decode(entry.after), current }); }
+    catch { fail(409, 'configuration_changed', 'An owned configuration entry changed; Disconnect preserved the files.'); }
+    const before = changes.has(entry.path) ? changes.get(entry.path).before : current;
+    changes.set(entry.path, { path: entry.path, root: entry.root, before, after });
+  }
+  return changes;
+}
+
+export async function disconnectClientConfiguration(context, client, input) {
+  assertConfigurationOwner(context, 'disconnect', input);
+  const ownership = await clientOwnership(context);
+  const report = await readPublishedSettings(context, input.machine);
+  if (report?.agents.revision !== input.expectedRevision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
+  const connection = ownership.clients[client];
+  if (!connection) fail(409, 'configuration_changed', 'The client has no reviewed owned changes to restore.');
+  const changes = await restoredClientEntries(context, client, connection);
+  await reloadReviewedClient(context, { client, target: connection.app ? 'app' : 'cli', previewId: 'disconnect', checkOnly: true });
+  const original = await readConfigBytes(ownershipPath(context));
+  delete ownership.clients[client];
+  await configurationWrite(context, [...changes.values(), { path: ownershipPath(context), root: context.paths.localDirectory, before: original, after: bytes(ownership), internal: true }]);
+  await reloadReviewedClient(context, { client, target: connection.app ? 'app' : 'cli', previewId: 'disconnect', checkOnly: false });
+  const updated = await publishMachineSettings(context, 'agents');
+  return { machine: context.paths.machine, client, state: 'disconnected', revision: updated.agents.revision };
+}
+
 export async function mutateMachineSettings(context, operation, input, id = null) {
   if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may change Settings.');
   validateSettingsBody(operation, input);
   if (operation === 'preview' && !Object.hasOwn(input, 'allowGit')) input = { ...input, allowGit: false };
   if (!await machineOnline(context, input.machine)) fail(409, 'machine_unavailable', 'The selected machine is unavailable.');
   const owner = ownerOf(context);
+  owner.adapters = context.adapters ?? owner.adapters;
+  owner.ownedPids = context.ownedPids ?? owner.ownedPids;
   if (input.machine === context.paths.machine) return withLocks(context.store, [`settings-operation:${input.machine}`], () => executeOwned(owner, operation, input, id));
   const target = await readPublishedSettings(context, input.machine);
   if (!target) fail(409, 'machine_unavailable', 'The selected machine has no verified Settings report.');

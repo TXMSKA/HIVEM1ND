@@ -399,6 +399,18 @@ export async function stopSession(context, sessionId, input = {}) {
   return withLocks(context.store, [`stop:${sessionId}`], () => stopOwnedSession(context, sessionId, input));
 }
 
+// Applying a reviewed configuration never grants ownership of an app process.
+// Active CLI work needs an adapter-supported reload or an explicit close first.
+export async function reloadReviewedClient(context, { client, target, previewId, checkOnly = false }) {
+  const journals = (await listJournals(context)).filter(item => item.client === client && !['failed', 'stopped'].includes(item.phase)
+    && item.pid && context.ownedPids?.has(item.pid));
+  const adapter = context.adapters?.[client];
+  if (journals.length && typeof adapter?.reload !== 'function') throw new CoreError(409, 'client_reload_required', 'Close the running HIVEM1ND sessions, then apply the reviewed changes.');
+  if (checkOnly || !journals.length) return;
+  const result = await adapter.reload({ owned: true, target, previewId, sessions: journals.map(({ pid, sessionId }) => ({ pid, sessionId })) });
+  if (result?.acknowledged !== true) throw new CoreError(409, 'client_reload_required', 'The owned client did not confirm its reload; close its HIVEM1ND sessions and retry.');
+}
+
 async function stopOwnedSession(context, sessionId, input) {
   if (input?.confirmed !== true) throw new CoreError(422, 'invalid_body', 'Stopping a session needs confirmation.');
   const statusDirectory = `user/relay/session-status/${sessionId}`;

@@ -1,9 +1,13 @@
 import { existsSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { CURSOR_STOP_LOOP_LIMIT } from './cursor-wake.mjs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { assertNoLinks } from '../service/paths.mjs';
+import { protectLocalFile } from '../service/security.mjs';
+import { CoreError } from '../service/identity.mjs';
 import { parse as parseToml } from 'smol-toml';
 import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-parser';
 
@@ -107,7 +111,7 @@ function openCodeMcpMerge(text, options) {
   if (existing !== undefined && !isOwnedOpenCodeMcp(existing)) {
     throw Object.assign(new Error(`The ${OWNED_SERVER} entry exists and is not owned by this setup.`), { code: 'RELAY_CONFIG_CONFLICT' });
   }
-  const intended = ownedOpenCodeMcp(options);
+  const intended = { ...existing, ...ownedOpenCodeMcp(options) };
   if (existing && JSON.stringify(existing) === JSON.stringify(intended)) return initial;
   return editJsonc(initial, ['mcp', OWNED_SERVER], intended);
 }
@@ -206,7 +210,7 @@ function jsonMerge(existingText, kind, options) {
     if (existing && JSON.stringify(existing) !== JSON.stringify(intended) && !isOwnedMcp(existing)) {
       throw Object.assign(new Error(`The ${OWNED_SERVER} entry exists and is not owned by this setup.`), { code: 'RELAY_CONFIG_CONFLICT' });
     }
-    document[key][OWNED_SERVER] = intended;
+    document[key][OWNED_SERVER] = { ...existing, ...intended };
     return `${JSON.stringify(document, null, 2)}\n`;
   }
   if (client === 'cursor') {
@@ -269,8 +273,8 @@ function codexMcpMerge(text, options) {
     if (markerAt < 0 || markerAt > headerAt || !isOwnedMcp(present)) {
       throw Object.assign(new Error(`The ${OWNED_SERVER} entry exists and is not an unchanged Relay-owned entry.`), { code: 'RELAY_CONFIG_CONFLICT' });
     }
-    if (JSON.stringify(present) === JSON.stringify(server)) return text;
-    return replaceOwnedTomlBlock(text, markerAt, headerAt, `${MARKER}\n[mcp_servers.${OWNED_SERVER}]\ncommand = ${JSON.stringify(server.command)}\nargs = ${tomlArray(server.args)}\n`);
+    if (present.command === server.command && isDeepStrictEqual(present.args, server.args)) return text;
+    return replaceCodexFields(text, present, server);
   }
   if (text.includes(`[mcp_servers.${OWNED_SERVER}]`) || text.includes(MARKER)) {
     throw Object.assign(new Error(`The ${OWNED_SERVER} entry is malformed and was left intact.`), { code: 'RELAY_CONFIG_CONFLICT' });
@@ -283,6 +287,33 @@ function codexMcpMerge(text, options) {
 }
 
 function tomlArray(values) { return `[${values.map((value) => JSON.stringify(value)).join(', ')}]`; }
+
+function replaceCodexFields(text, present, intended) {
+  const headerAt = findOwnedTableHeader(text);
+  const start = text.indexOf('\n', headerAt) + 1;
+  const table = /^\s*\[[^\]]+\]\s*$/gm;
+  table.lastIndex = start;
+  const limit = table.exec(text)?.index ?? text.length;
+  const edits = [];
+  for (const key of ['command', 'args']) {
+    if (isDeepStrictEqual(present[key], intended[key])) continue;
+    const field = new RegExp(`^[ \\t]*${key}[ \\t]*=`, 'gm');
+    field.lastIndex = start;
+    const match = field.exec(text);
+    if (!match || match.index >= limit) throw configurationChanged();
+    let end = text.indexOf('\n', match.index);
+    while (true) {
+      if (end < 0 || end > limit) end = limit;
+      let complete = false;
+      try { complete = isDeepStrictEqual(parseToml(text.slice(match.index, end))[key], present[key]); } catch { /* A multiline array is incomplete. */ }
+      if (complete) { edits.push({ start: match.index, end, text: `${key} = ${key === 'args' ? tomlArray(intended[key]) : JSON.stringify(intended[key])}` }); break; }
+      if (end === limit) throw configurationChanged();
+      end = text.indexOf('\n', end + 1);
+    }
+  }
+  for (const edit of edits.sort((a, b) => b.start - a.start)) text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+  return text;
+}
 
 function codexHooksMerge(text, options) {
   let doc;
@@ -446,23 +477,25 @@ async function ensureSafeParents(filePath, root) {
   }
 }
 
-async function atomicConfigWrite(filePath, content, homeDir, backup = true) {
+export async function atomicConfigWrite(filePath, content, homeDir, backup = true, protectFile = protectLocalFile) {
+  await assertNoLinks(filePath);
   await mkdir(homeDir, { recursive: true });
   const rootState = await lstat(homeDir);
   if (rootState.isSymbolicLink() || !rootState.isDirectory()) throw new Error(`Refusing unsafe configuration root: ${homeDir}`);
   await ensureSafeParents(filePath, homeDir);
   const prior = await readRegular(filePath);
   if (prior === content) return { changed: false, prior };
-  if (backup && prior) {
+  if (backup && await lstat(filePath).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) {
     const backupPath = `${filePath}.relay-backup`;
     try {
       const state = await lstat(backupPath);
       if (state.isSymbolicLink() || !state.isFile()) throw new Error(`Refusing unsafe Relay backup: ${backupPath}`);
-    } catch (error) { if (error.code === 'ENOENT') await copyFile(filePath, backupPath); else throw error; }
+    } catch (error) { if (error.code === 'ENOENT') { await copyFile(filePath, backupPath); await protectFile(backupPath); } else throw error; }
   }
   const temporary = `${filePath}.relay-${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, content, { flag: 'wx', encoding: 'utf8' });
+    await writeFile(temporary, content, { flag: 'wx', encoding: 'utf8', mode: 0o600 });
+    await protectFile(temporary);
     await rename(temporary, filePath);
   } catch (error) {
     await rm(temporary, { force: true });
@@ -471,30 +504,165 @@ async function atomicConfigWrite(filePath, content, homeDir, backup = true) {
   return { changed: true, prior };
 }
 
-export async function configureRelayClient({ client, homeDir, env = process.env, kitPath, mindPath, unit, sessionId, nodePath, platform } = {}) {
+function configurationChanged() {
+  return new CoreError(409, 'configuration_changed', 'The client configuration changed; review the changes again.');
+}
+
+export async function readConfigBytes(file) {
+  await assertNoLinks(file);
+  const state = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!state) return null;
+  if (!state.isFile() || state.size > 4_000_000) throw configurationChanged();
+  return readFile(file);
+}
+
+// Every original is protected before the first destination changes. The caller's
+// local ownership record participates in the same rollback as the client files.
+export async function applyClientConfigChanges(changes, { protectFile = protectLocalFile, beforeWrite } = {}) {
+  const snapshots = new Map();
+  const createdDirectories = new Set();
+  const backups = [];
+  const written = [];
+  const hash = value => value === null ? null : createHash('sha256').update(value).digest('hex');
+  for (const change of changes) {
+    if (snapshots.has(change.path)) throw configurationChanged();
+    const relative = path.relative(change.root, change.path);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw configurationChanged();
+    const current = await readConfigBytes(change.path);
+    if (hash(current) !== hash(change.before)) throw configurationChanged();
+    snapshots.set(change.path, current);
+  }
+  try {
+    for (const change of changes) {
+      for (let parent = path.dirname(change.path); !await lstat(parent).catch(error => { if (error.code === 'ENOENT') return null; throw error; }); parent = path.dirname(parent)) createdDirectories.add(parent);
+      await mkdir(path.dirname(change.path), { recursive: true });
+      if (change.before === null || change.internal) continue;
+      const first = `${change.path}.relay-backup`;
+      const previous = await readConfigBytes(first);
+      const backup = previous === null ? first : `${first}.${randomUUID()}`;
+      await writeFile(backup, change.before, { flag: 'wx', mode: 0o600 });
+      backups.push(backup);
+      await protectFile(backup);
+    }
+    for (const [index, change] of changes.entries()) {
+      await beforeWrite?.(change, index);
+      if (hash(await readConfigBytes(change.path)) !== hash(change.before)) throw configurationChanged();
+      if (change.after === null) await rm(change.path, { force: true });
+      else await atomicConfigWrite(change.path, change.after, change.root, false, protectFile);
+      written.push(change);
+      if (change.internal && change.after !== null) await protectFile(change.path);
+    }
+    return { keptCopies: changes.filter(change => !change.internal).length, backups };
+  } catch (error) {
+    const failures = [];
+    for (const change of written.reverse()) {
+      try {
+        if (hash(await readConfigBytes(change.path)) !== hash(change.after)) throw configurationChanged();
+        const prior = snapshots.get(change.path);
+        if (prior === null) await rm(change.path, { force: true });
+        else await atomicConfigWrite(change.path, prior, change.root, false, protectFile);
+      } catch (caught) { failures.push(caught); }
+    }
+    if (!failures.length) for (const backup of backups.reverse()) await rm(backup, { force: true }).catch(caught => failures.push(caught));
+    for (const directory of [...createdDirectories].sort((a, b) => b.length - a.length)) {
+      await rmdir(directory).catch(caught => { if (!['ENOTEMPTY', 'EEXIST', 'ENOENT'].includes(caught.code)) failures.push(caught); });
+    }
+    if (failures.length) throw new AggregateError([error, ...failures], 'Client configuration rollback failed.');
+    throw error;
+  }
+}
+
+function restoreValue(before, after, current) {
+  if (isDeepStrictEqual(before, after)) return current;
+  if (isDeepStrictEqual(current, after)) return before;
+  if (Array.isArray(before ?? after) && Array.isArray(after) && Array.isArray(current)) {
+    const old = [...(before ?? [])];
+    const added = after.filter(item => { const index = old.findIndex(value => isDeepStrictEqual(value, item)); if (index < 0) return true; old.splice(index, 1); return false; });
+    const kept = [...current];
+    for (const item of added) {
+      const index = kept.findIndex(value => isDeepStrictEqual(value, item));
+      if (index < 0) throw configurationChanged();
+      kept.splice(index, 1);
+    }
+    return [...kept, ...old];
+  }
+  const object = value => value && typeof value === 'object' && !Array.isArray(value);
+  if (object(after) && object(current) && (before === undefined || object(before))) {
+    const result = { ...current };
+    for (const key of new Set([...Object.keys(before ?? {}), ...Object.keys(after)])) {
+      const value = restoreValue(before?.[key], after[key], current[key]);
+      if (value === undefined) delete result[key]; else result[key] = value;
+    }
+    return before === undefined && !Object.keys(result).length ? undefined : result;
+  }
+  throw configurationChanged();
+}
+
+export function restoreClientConfig({ client, kind, before, after, current }) {
+  if (current?.equals(after) || current === null && after === null) return before;
+  if (after === null || current === null) throw configurationChanged();
+  const oldText = before?.toString('utf8') ?? '';
+  const nextText = after.toString('utf8');
+  const currentText = current.toString('utf8');
+  if (client === 'codex' && kind === 'mcp') {
+    const original = oldText.trim() ? parseToml(oldText) : {};
+    const installed = parseToml(nextText);
+    const present = parseToml(currentText);
+    if (original.mcp_servers?.[OWNED_SERVER]) {
+      const restored = restoreValue(original.mcp_servers[OWNED_SERVER], installed.mcp_servers?.[OWNED_SERVER], present.mcp_servers?.[OWNED_SERVER]);
+      return Buffer.from(replaceCodexFields(currentText, present.mcp_servers[OWNED_SERVER], restored));
+    }
+    if (!isDeepStrictEqual(present.mcp_servers?.[OWNED_SERVER], installed.mcp_servers?.[OWNED_SERVER])) throw configurationChanged();
+    const marker = currentText.lastIndexOf(MARKER), header = findOwnedTableHeader(currentText);
+    if (marker < 0 || marker > header) throw configurationChanged();
+    return Buffer.from(replaceOwnedTomlBlock(currentText, marker, header, ''));
+  }
+  if (['mcp', 'hooks'].includes(kind)) {
+    const restored = restoreValue(before === null ? {} : parseJsoncObject(oldText, 'Original configuration'), parseJsoncObject(nextText, 'Reviewed configuration'), parseJsoncObject(currentText, 'Current configuration')) ?? {};
+    let output = currentText;
+    const patch = (source, target, keys = []) => {
+      for (const key of new Set([...Object.keys(source), ...Object.keys(target)])) {
+        if (isDeepStrictEqual(source[key], target[key])) continue;
+        const object = value => value && typeof value === 'object' && !Array.isArray(value);
+        if (object(source[key]) && object(target[key])) patch(source[key], target[key], [...keys, key]);
+        else output = editJsonc(output, [...keys, key], target[key]);
+      }
+    };
+    patch(parseJsoncObject(currentText, 'Current configuration'), restored);
+    return Buffer.from(output);
+  }
+  let start = 0;
+  while (start < oldText.length && start < nextText.length && oldText[start] === nextText[start]) start += 1;
+  let end = 0;
+  while (end < oldText.length - start && end < nextText.length - start && oldText.at(-1 - end) === nextText.at(-1 - end)) end += 1;
+  const inserted = nextText.slice(start, nextText.length - end);
+  if (!inserted || currentText.indexOf(inserted) < 0 || currentText.indexOf(inserted) !== currentText.lastIndexOf(inserted)) throw configurationChanged();
+  return Buffer.from(currentText.replace(inserted, oldText.slice(start, oldText.length - end)));
+}
+
+export async function configureRelayClient({ client, homeDir, env = process.env, kitPath, mindPath, unit, sessionId, nodePath, platform, protectFile = protectLocalFile, beforeWrite } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   if (homeDir !== undefined) homeDir = path.resolve(safeString(homeDir, 'homeDir'));
   const targets = clientConfigPaths({ client, homeDir, env });
-  const oldMcp = await readRegular(targets.mcp);
-  const oldHooks = targets.hooks ? await readRegular(targets.hooks) : '';
-  const config = buildClientConfig({ client, existing: { mcp: oldMcp, hooks: oldHooks }, kitPath, mindPath, unit, sessionId, nodePath, platform });
-  const writes = [[targets.mcp, config.mcp], ...(targets.hooks ? [[targets.hooks, config.hooks]] : [])];
-  const applied = [];
-  try {
-    for (const [filePath, content] of writes) {
-      const root = filePath === targets.mcp ? targets.mcpRoot : targets.hooksRoot;
-      const change = await atomicConfigWrite(filePath, content, root);
-      applied.push({ filePath, ...change });
-    }
-  } catch (error) {
-    for (const item of applied.reverse()) {
-      if (!item.changed) continue;
-      if (item.prior) await atomicConfigWrite(item.filePath, item.prior, item.filePath === targets.mcp ? targets.mcpRoot : targets.hooksRoot, false);
-      else await rm(item.filePath, { force: true });
-    }
-    throw error;
+  const originals = { mcp: await readConfigBytes(targets.mcp), hooks: targets.hooks ? await readConfigBytes(targets.hooks) : null };
+  const config = buildClientConfig({ client, existing: { mcp: originals.mcp?.toString('utf8') ?? '', hooks: originals.hooks?.toString('utf8') ?? '' }, kitPath, mindPath, unit, sessionId, nodePath, platform });
+  const changes = [];
+  for (const kind of Object.keys(config)) {
+    const before = originals[kind];
+    if (before?.equals(Buffer.from(config[kind]))) continue;
+    changes.push({ path: targets[kind], root: targets[`${kind}Root`], kind, before, after: Buffer.from(config[kind]) });
   }
-  return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: applied.filter((item) => item.changed).map((item) => item.filePath), backups: applied.filter((item) => item.changed && item.prior).map((item) => `${item.filePath}.relay-backup`) };
+  const statePath = `${targets.mcp}.relay-owned.json`;
+  if (changes.length) {
+    const previous = await readConfigBytes(statePath);
+    const state = previous ? JSON.parse(previous) : { client, mindPath: path.resolve(mindPath), entries: [] };
+    if (state.client !== client || state.mindPath !== path.resolve(mindPath)) throw configurationChanged();
+    if (previous && !await relayEntryPresent({ client, homeDir, env })) state.entries = state.entries.filter(entry => entry.kind !== 'mcp');
+    state.entries.push(...changes.map(({ kind, before, after }) => ({ kind, before: before?.toString('base64') ?? null, after: after.toString('base64') })));
+    const applied = await applyClientConfigChanges([...changes, { path: statePath, root: targets.mcpRoot, before: previous, after: Buffer.from(`${JSON.stringify(state)}\n`), internal: true }], { protectFile, beforeWrite });
+    return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: changes.map(item => item.path), backups: applied.backups };
+  }
+  return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: [], backups: [] };
 }
 
 // Brings the Relay-owned entries of an existing hooks file up to date in place. Foreign entries stay as they are, and an event
@@ -544,10 +712,32 @@ export async function refreshRelayHooks({ client, homeDir, env = process.env, ki
   return { client, changed: [targets.hooks] };
 }
 
-export async function unconfigureRelayClient({ client, homeDir, env = process.env, mindPath } = {}) {
+export async function unconfigureRelayClient({ client, homeDir, env = process.env, mindPath, protectFile = protectLocalFile, beforeWrite } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   if (mindPath !== undefined && !await relayEntryPointsAt({ client, homeDir, env, mindPath })) return { client, paths: [], changed: [] };
   const targets = clientConfigPaths({ client, homeDir, env });
+  const statePath = `${targets.mcp}.relay-owned.json`;
+  const stateBytes = await readConfigBytes(statePath);
+  if (stateBytes) {
+    const state = JSON.parse(stateBytes);
+    if (state.client !== client) throw configurationChanged();
+    if (mindPath !== undefined && state.mindPath !== path.resolve(mindPath)) return { client, paths: [], changed: [] };
+    const changes = new Map();
+    for (const entry of [...state.entries].reverse()) {
+      if (!['mcp', 'hooks'].includes(entry.kind) || !targets[entry.kind]) throw configurationChanged();
+      const file = targets[entry.kind];
+      const current = changes.has(file) ? changes.get(file).after : await readConfigBytes(file);
+      const decode = value => value === null ? null : Buffer.from(value, 'base64');
+      const after = restoreClientConfig({ client, kind: entry.kind, before: decode(entry.before), after: decode(entry.after), current });
+      changes.set(file, { path: file, root: targets[`${entry.kind}Root`], before: changes.has(file) ? changes.get(file).before : current, after });
+    }
+    if (client === 'antigravity' && changes.get(targets.mcp)?.after) {
+      const change = changes.get(targets.mcp);
+      change.after = Buffer.from(antigravityRemove(change.after.toString('utf8'), mindPath));
+    }
+    await applyClientConfigChanges([...changes.values(), { path: statePath, root: targets.mcpRoot, before: stateBytes, after: null, internal: true }], { protectFile, beforeWrite });
+    return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: [...changes.keys()] };
+  }
   const mcpText = await readRegular(targets.mcp);
   const hooksText = targets.hooks ? await readRegular(targets.hooks) : '';
   let nextMcp = mcpText;

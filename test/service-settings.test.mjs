@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createSettingsOwner, findAgent, mutateMachineSettings, processSettingsRequests, publishMachineSettings, readContent, readMachineSettings, readPublishedSettings, scanAgents, writeContent } from '../engine/service/settings.mjs';
 import { createStore } from '../engine/service/store.mjs';
@@ -9,7 +10,11 @@ import { servicePaths } from '../engine/service/paths.mjs';
 import { composeCore, writeBeat } from '../engine/service/service.mjs';
 import { machineSettingsPath, writeMachineRecord } from '../engine/records.mjs';
 import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
+import { clientConfigPaths } from '../engine/relay/config.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
+import { createGuiFixture } from './gui-fixture.mjs';
+import { createHttpServer } from '../engine/service/http.mjs';
+import { createCredentialStore } from '../engine/service/security.mjs';
 
 async function setup(t) {
   const fixture = await makeCoreFixture();
@@ -200,4 +205,266 @@ test('composed services route a remote mutation through origin sync and return t
   assert.equal(result.body.machine, 'LAPTOP');
   assert.equal(scans, before + 1);
   assert.ok((await readMachineSettings(domain, 'LAPTOP', 'agents')).revision);
+});
+
+async function reviewWorld(t) {
+  const world = await setup(t);
+  const { fixture, domain } = world;
+  const content = await readContent(domain);
+  await writeContent(domain, { includedFeatures: [], includedKnowledge: [], preferences: content.preferences, expectedRevision: content.revision });
+  const paths = clientConfigPaths({ client: 'cursor', homeDir: fixture.home });
+  const secret = randomBytes(24).toString('hex');
+  const originals = { mcp: Buffer.from(JSON.stringify({ token: secret, mcpServers: { other: { command: 'foreign', env: { CREDENTIAL: secret } } } })), hooks: Buffer.from(JSON.stringify({ version: 1, secret, hooks: { stop: [{ command: 'foreign-stop' }] } })) };
+  await mkdir(path.dirname(paths.mcp), { recursive: true });
+  for (const kind of ['mcp', 'hooks']) await writeFile(paths[kind], originals[kind]);
+  await publishMachineSettings(world.owner);
+  return { ...world, paths, secret, originals };
+}
+
+async function review(world, options = {}) {
+  return (await mutateMachineSettings(world.domain, 'preview', { machine: world.fixture.machine, mode: 'on-demand', target: 'cli', ...options }, 'cursor')).body;
+}
+
+async function applyReview(world, preview, changeIds = preview.changes.filter(item => item.selected).map(item => item.id), client = 'cursor') {
+  return (await mutateMachineSettings(world.domain, 'apply', { machine: world.fixture.machine, previewId: preview.previewId, changeIds, expectedRevision: preview.revision }, client)).body;
+}
+
+test('preview, clipboard copy and cancel leave the entire fixture unchanged, with two required changes and unchecked scoped Git', async t => {
+  const world = await reviewWorld(t);
+  const before = await legacyTreeInventory(world.fixture.root);
+  for (const allowGit of [undefined, false, true]) {
+    const preview = await review(world, allowGit === undefined ? {} : { allowGit });
+    assert.deepEqual(preview.changes.filter(item => !item.optional).map(item => item.id), ['mcp', 'hooks']);
+    assert.equal(preview.changes.find(item => item.id === 'git').selected, false);
+    assert.equal(preview.restartRequired, true);
+    const copied = preview.changes.map(item => `${item.path}\n${item.afterText}`).join('\n');
+    assert.equal(copied.includes(world.secret), false);
+    for (const item of preview.changes.filter(item => !item.optional)) assert.match(item.beforeHash, /^[a-f0-9]{64}$/);
+    // Copy and Cancel consume only this redacted view, without an HTTP mutation.
+    assert.equal(typeof copied, 'string');
+  }
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+});
+
+test('Apply writes only the selected subset, protects the kept original, and retries once even after an owner restart', async t => {
+  const world = await reviewWorld(t);
+  const preview = await review(world);
+  const result = await applyReview(world, preview, ['mcp']);
+  assert.equal(result.state, 'connected');
+  assert.deepEqual(await readFile(world.paths.hooks), world.originals.hooks);
+  assert.deepEqual(await readFile(`${world.paths.mcp}.relay-backup`), world.originals.mcp);
+  const configured = JSON.parse(await readFile(world.paths.mcp));
+  assert.equal(configured.token === world.secret, true);
+  assert.equal(configured.mcpServers.other.env.CREDENTIAL === world.secret, true);
+  assert.ok(world.fixture.store.aclRunner.calls.some(item => item.op === 'protect' && item.target === `${world.paths.mcp}.relay-backup`));
+  assert.equal((await readMachineSettings(world.domain, world.fixture.machine, 'agents')).items.find(item => item.id === 'cursor').cli.state, 'changes-needed');
+  const beforeRetry = await legacyTreeInventory(world.fixture.root);
+  const restarted = createSettingsOwner({ ...world.owner, clientPreviews: undefined });
+  const retry = { ...world, domain: { ...restarted, settingsOwner: restarted } };
+  assert.deepEqual(await applyReview(retry, preview, ['mcp']), result);
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), beforeRetry);
+  await assert.rejects(applyReview(world, preview, ['hooks']), { code: 'configuration_changed' });
+  await assert.rejects(readFile(path.join(world.fixture.paths.localDirectory, 'client-permissions.json')), { code: 'ENOENT' });
+});
+
+test('any reviewed file drift, target mismatch or expired preview refuses Apply without filesystem mutation', async t => {
+  const world = await reviewWorld(t);
+  let preview = await review(world);
+  await writeFile(world.paths.hooks, 'changed after review');
+  let before = await legacyTreeInventory(world.fixture.root);
+  await assert.rejects(applyReview(world, preview, ['mcp']), { code: 'configuration_changed' });
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+  await writeFile(world.paths.hooks, world.originals.hooks);
+  preview = await review(world);
+  before = await legacyTreeInventory(world.fixture.root);
+  await assert.rejects(applyReview(world, preview, ['mcp'], 'codex'), { code: 'configuration_changed' });
+  await assert.rejects(mutateMachineSettings(world.domain, 'apply', { machine: 'LAPTOP', previewId: preview.previewId, changeIds: ['mcp'], expectedRevision: preview.revision }, 'cursor'), { code: 'machine_unavailable' });
+  await assert.rejects(applyReview(world, preview, ['foreign']), { code: 'invalid_body' });
+  world.fixture.clock.now += 600001;
+  await assert.rejects(applyReview(world, preview), { code: 'configuration_changed' });
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+});
+
+test('partial client and ownership writes roll back every file and newly created kept copy', async t => {
+  for (const faultIndex of [1, 2]) {
+    const world = await reviewWorld(t);
+    const preview = await review(world);
+    const before = await legacyTreeInventory(world.fixture.root);
+    world.owner.configurationBeforeWrite = (change, index) => { if (index === faultIndex) throw new Error('Injected selected write failure.'); };
+    await assert.rejects(applyReview(world, preview), /Injected selected write failure/);
+    assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+    delete world.owner.configurationBeforeWrite;
+    assert.equal((await applyReview(world, preview)).state, 'connected');
+  }
+});
+
+test('Disconnect restores kept entries and credential bytes while preserving later foreign servers, hooks and fields', async t => {
+  const world = await reviewWorld(t);
+  const applied = await applyReview(world, await review(world));
+  const mcp = JSON.parse(await readFile(world.paths.mcp));
+  mcp.mcpServers.later = { command: 'later-foreign' };
+  mcp.newPreference = true;
+  await writeFile(world.paths.mcp, JSON.stringify(mcp));
+  const hooks = JSON.parse(await readFile(world.paths.hooks));
+  hooks.hooks.stop.unshift({ command: 'later-hook' });
+  await writeFile(world.paths.hooks, JSON.stringify(hooks));
+  const disconnected = await mutateMachineSettings(world.domain, 'disconnect', { machine: world.fixture.machine, confirmed: true, expectedRevision: applied.revision }, 'cursor');
+  assert.equal(disconnected.body.state, 'disconnected');
+  const restored = JSON.parse(await readFile(world.paths.mcp));
+  assert.equal(restored.token === world.secret, true);
+  assert.equal(restored.mcpServers['hivem1nd-relay'], undefined);
+  assert.deepEqual(restored.mcpServers.later, { command: 'later-foreign' });
+  assert.equal(restored.newPreference, true);
+  const restoredHooks = JSON.parse(await readFile(world.paths.hooks));
+  assert.deepEqual(restoredHooks.hooks.stop, [{ command: 'later-hook' }, { command: 'foreign-stop' }]);
+  assert.equal(restoredHooks.secret === world.secret, true);
+});
+
+test('Disconnect refuses drift in an owned entry before writing any file', async t => {
+  const world = await reviewWorld(t);
+  const result = await applyReview(world, await review(world));
+  const hooks = JSON.parse(await readFile(world.paths.hooks));
+  hooks.hooks.sessionStart[0].command = 'a foreign replacement';
+  await writeFile(world.paths.hooks, JSON.stringify(hooks));
+  const before = await legacyTreeInventory(world.fixture.root);
+  await assert.rejects(mutateMachineSettings(world.domain, 'disconnect', { machine: world.fixture.machine, confirmed: true, expectedRevision: result.revision }, 'cursor'), { code: 'configuration_changed' });
+  await assert.rejects(review(world), { code: 'configuration_changed' });
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+});
+
+test('the HTTP review uses memory receipts, exact route schemas and selected Apply replay without leaking configuration', async t => {
+  const world = await reviewWorld(t);
+  const credentials = createCredentialStore({ now: world.owner.now });
+  const token = credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID() }).token;
+  const http = await createHttpServer({ ...world.owner, settingsOwner: world.owner, credentials });
+  t.after(() => http.close());
+  const origin = `http://127.0.0.1:${http.port}`;
+  const call = async (method, target, body, token, key = randomUUID()) => {
+    const response = await fetch(`${origin}/api/v1${target}`, { method, signal: AbortSignal.timeout(5000), headers: { origin,
+      authorization: `Bearer ${token}`, 'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(body) });
+    return { status: response.status, json: await response.json() };
+  };
+  const key = randomUUID();
+  const before = await legacyTreeInventory(world.fixture.root);
+  const body = { machine: world.fixture.machine, mode: 'on-demand', target: 'cli' };
+  const first = await call('POST', '/settings/agents/cursor/preview', body, token, key);
+  assert.equal(first.status, 200);
+  const again = await call('POST', '/settings/agents/cursor/preview', body, token, key);
+  assert.equal(again.json.data.previewId, first.json.data.previewId);
+  assert.equal(JSON.stringify(first.json.data).includes(world.secret), false);
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+  const preview = first.json.data;
+  const applyBody = { machine: world.fixture.machine, previewId: preview.previewId, changeIds: ['mcp', 'hooks'], expectedRevision: preview.revision };
+  const applyKey = randomUUID();
+  const applied = await call('POST', '/settings/agents/cursor/apply', applyBody, token, applyKey);
+  assert.equal(applied.status, 200);
+  const files = await legacyTreeInventory(world.fixture.home);
+  assert.deepEqual((await call('POST', '/settings/agents/cursor/apply', applyBody, token, applyKey)).json.data, applied.json.data);
+  assert.deepEqual(await legacyTreeInventory(world.fixture.home), files);
+  const invalid = await call('POST', '/settings/agents/cursor/preview', { ...body, afterText: 'unreviewed input' }, token);
+  assert.equal(invalid.status, 400);
+  const disconnected = await call('DELETE', '/settings/agents/cursor', { machine: world.fixture.machine, confirmed: true, expectedRevision: applied.json.data.revision }, token);
+  assert.equal(disconnected.status, 200);
+  assert.deepEqual(await readFile(world.paths.mcp), world.originals.mcp);
+  assert.deepEqual(await readFile(world.paths.hooks), world.originals.hooks);
+});
+
+test('app connection and Auto/On demand changes have separate bindings and preserve foreign rules', async t => {
+  const world = await reviewWorld(t);
+  world.owner.probeApps = async () => ({ name: 'Cursor editor', available: true, connected: true });
+  const app = await review(world, { target: 'app', mode: 'auto' });
+  await applyReview(world, app);
+  let report = await readMachineSettings(world.domain, world.fixture.machine, 'agents');
+  assert.equal(report.items.find(item => item.id === 'cursor').mode, 'on-demand');
+  assert.equal(report.items.find(item => item.id === 'cursor').app.state, 'connected');
+  const auto = await review(world, { mode: 'auto' });
+  assert.ok(auto.changes.some(item => item.path.endsWith('hivem1nd.mdc')));
+  await applyReview(world, auto);
+  report = await readMachineSettings(world.domain, world.fixture.machine, 'agents');
+  assert.equal(report.items.find(item => item.id === 'cursor').mode, 'auto');
+  const demand = await review(world);
+  const rule = demand.changes.find(item => item.path.endsWith('hivem1nd.mdc'));
+  assert.ok(rule);
+  await applyReview(world, demand);
+  await assert.rejects(readFile(rule.path), { code: 'ENOENT' });
+  report = await readMachineSettings(world.domain, world.fixture.machine, 'agents');
+  assert.equal(report.items.find(item => item.id === 'cursor').mode, 'on-demand');
+  assert.equal(report.items.find(item => item.id === 'cursor').app.state, 'connected');
+});
+
+test('optional Git records only the reviewed machine and started-session scope without broad client grants', async t => {
+  const world = await reviewWorld(t);
+  const preview = await review(world);
+  await applyReview(world, preview, ['git']);
+  assert.deepEqual(await readFile(world.paths.mcp), world.originals.mcp);
+  assert.deepEqual(await readFile(world.paths.hooks), world.originals.hooks);
+  const report = await readMachineSettings(world.domain, world.fixture.machine, 'permissions');
+  assert.equal(report.agentPermissions.length, 1);
+  assert.equal(report.agentPermissions[0].scope, 'hivem1nd-started-sessions');
+  assert.equal(report.agentPermissions[0].machine, world.fixture.machine);
+  assert.deepEqual(report.agentPermissions[0].actions, ['git.commit', 'git.push']);
+  assert.equal(JSON.stringify(report).includes(world.secret), false);
+  await mutateMachineSettings(world.domain, 'disconnect', { machine: world.fixture.machine, confirmed: true, expectedRevision: (await readMachineSettings(world.domain, world.fixture.machine, 'agents')).revision }, 'cursor');
+  assert.equal((await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions.length, 0);
+});
+
+test('Auto and On demand review only their owned instruction while retaining foreign rule credentials through Disconnect', async t => {
+  const world = await reviewWorld(t);
+  const rulesPath = path.join(world.fixture.home, '.codex', 'AGENTS.md');
+  await mkdir(path.dirname(rulesPath), { recursive: true });
+  const original = Buffer.from(`Foreign instructions and a retained credential: ${world.secret}\n`);
+  await writeFile(rulesPath, original);
+  const preview = async mode => (await mutateMachineSettings(world.domain, 'preview', { machine: world.fixture.machine, mode, target: 'cli' }, 'codex')).body;
+  const auto = await preview('auto');
+  assert.equal(JSON.stringify(auto).includes(world.secret), false);
+  await applyReview(world, auto, auto.changes.filter(item => item.selected).map(item => item.id), 'codex');
+  const demand = await preview('on-demand');
+  assert.equal(JSON.stringify(demand).includes(world.secret), false);
+  const result = await applyReview(world, demand, demand.changes.filter(item => item.selected).map(item => item.id), 'codex');
+  assert.equal((await readFile(rulesPath)).equals(original), true);
+  await mutateMachineSettings(world.domain, 'disconnect', { machine: world.fixture.machine, confirmed: true, expectedRevision: result.revision }, 'codex');
+  assert.equal((await readFile(rulesPath)).equals(original), true);
+});
+
+test('reviewed reload refuses unsupported owned work, reloads once with verified PIDs, and never stops foreign app work', async t => {
+  const world = await reviewWorld(t);
+  const journalRoot = path.join(world.fixture.paths.localDirectory, 'session-starts');
+  await mkdir(journalRoot);
+  for (const pid of [101, 202]) await writeFile(path.join(journalRoot, `${pid}.json`), JSON.stringify({ client: 'cursor', phase: 'registered', pid, sessionId: randomUUID() }));
+  world.owner.ownedPids = new Set([101]);
+  const preview = await review(world);
+  const before = await legacyTreeInventory(world.fixture.root);
+  await assert.rejects(applyReview(world, preview), { code: 'client_reload_required' });
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), before);
+  let reloads = 0;
+  world.owner.adapters = { cursor: { async reload(input) { reloads += 1; assert.equal(input.owned, true); assert.deepEqual(input.sessions.map(item => item.pid), [101]); return { acknowledged: true }; } } };
+  const result = await applyReview(world, preview);
+  assert.deepEqual(await applyReview(world, preview), result);
+  assert.equal(reloads, 1);
+});
+
+test('the isolated GUI fixture reviews without disk writes and applies, replays and disconnects its selected configuration', async t => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const call = async (method, route, body, key = randomUUID()) => {
+    const response = await fetch(`${fixture.origin}/api/v1${route}`, { method, signal: AbortSignal.timeout(5000), headers: { ...fixture.headers,
+      'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(body) });
+    return { status: response.status, json: await response.json() };
+  };
+  const before = await legacyTreeInventory(fixture.root);
+  const reviewed = await call('POST', '/settings/agents/cursor/preview', { machine: 'DESKTOP', mode: 'on-demand', target: 'cli' });
+  assert.equal(reviewed.status, 200);
+  assert.deepEqual(await legacyTreeInventory(fixture.root), before);
+  const preview = reviewed.json.data;
+  assert.equal(preview.changes.filter(item => item.selected).length, 2);
+  assert.equal(preview.changes.find(item => item.optional).selected, false);
+  const input = { machine: 'DESKTOP', previewId: preview.previewId, changeIds: ['mcp'], expectedRevision: preview.revision };
+  const key = randomUUID();
+  const applied = await call('POST', '/settings/agents/cursor/apply', input, key);
+  assert.equal(applied.status, 200);
+  assert.deepEqual((await call('POST', '/settings/agents/cursor/apply', input, key)).json.data, applied.json.data);
+  await assert.rejects(readFile(preview.changes.find(item => item.id === 'hooks').path), { code: 'ENOENT' });
+  const disconnected = await call('DELETE', '/settings/agents/cursor', { machine: 'DESKTOP', confirmed: true, expectedRevision: applied.json.data.revision });
+  assert.equal(disconnected.status, 200);
+  await assert.rejects(readFile(preview.changes.find(item => item.id === 'mcp').path), { code: 'ENOENT' });
 });

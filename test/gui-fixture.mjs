@@ -1807,6 +1807,9 @@ function routeTable() {
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
     { pattern: "/settings", GET: { query: ["machine"] }, PATCH: { capability: "settings.write", validate: validateSettings } },
     { pattern: "/settings/agents", GET: { query: ["machine"] } },
+    { pattern: "/settings/agents/:client/preview", POST: { capability: "settings.write", validate: clientReviewValidator("preview"), runtime: true } },
+    { pattern: "/settings/agents/:client/apply", POST: { capability: "settings.write", validate: clientReviewValidator("apply") } },
+    { pattern: "/settings/agents/:client", DELETE: { capability: "settings.write", validate: clientReviewValidator("disconnect") } },
     { pattern: "/settings/permissions", GET: { query: ["machine"] } },
     { pattern: "/settings/projects", GET: { query: ["machine"] } },
     { pattern: "/settings/content", GET: { query: [] } },
@@ -1862,6 +1865,94 @@ function validateSettings(body) {
   if ("look" in body && !["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(body.look)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   if ("language" in body && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   revisionField(body.expectedRevision);
+}
+
+function clientReviewValidator(operation) {
+  return body => {
+    const fields = operation === "preview" ? ["machine", "mode", "target", "allowGit"] : operation === "apply" ? ["machine", "previewId", "changeIds", "expectedRevision"] : ["machine", "confirmed", "expectedRevision"];
+    requireObject(body, fields);
+    requireKeys(body, fields.filter(key => key !== "allowGit"));
+    if (typeof body.machine !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+    if (operation === "preview" && (!["auto", "on-demand"].includes(body.mode) || !["cli", "app"].includes(body.target) || "allowGit" in body && typeof body.allowGit !== "boolean")) throw new HttpError(422, "invalid_body", "The configuration choice is not valid.");
+    if (operation !== "preview") revisionField(body.expectedRevision);
+    if (operation === "disconnect" && (body.confirmed !== true || body.expectedRevision === null)) throw new HttpError(422, "invalid_body", "Confirmation and an existing revision are required.");
+    if (operation === "apply" && (!/^[a-f0-9-]{36}$/.test(body.previewId) || !Array.isArray(body.changeIds) || body.changeIds.length > 1024 || body.changeIds.some(id => typeof id !== "string") || new Set(body.changeIds).size !== body.changeIds.length)) throw new HttpError(422, "invalid_body", "The selected changes are not valid.");
+  };
+}
+
+async function fixtureClientState(fx) {
+  return readJsonFile(join(fx.local, "reviewed-clients.json")).catch(error => { if (error.code === "ENOENT") return { value: { clients: {} }, hash: null }; throw error; });
+}
+
+async function prepareClientReview(fx, operation, client, body) {
+  if (body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "Open configuration review on the selected machine.");
+  if (!["claude", "codex", "cursor", "opencode", "copilot"].includes(client)) throw new HttpError(422, "invalid_body", "The client is not a known adapter.");
+  const state = await fixtureClientState(fx);
+  const statePath = join(fx.local, "reviewed-clients.json");
+  fx.clientPreviews ??= new Map();
+  const change = async (id, file, afterText, description, optional = false) => {
+    const before = await readFile(file).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    let current;
+    try { current = before === null ? {} : JSON.parse(before); } catch { throw new HttpError(409, "configuration_changed", "The client configuration cannot be merged."); }
+    const owned = JSON.parse(afterText);
+    const merged = id === "mcp" ? { ...current, mcpServers: { ...current.mcpServers, ...owned.mcpServers } }
+      : id === "hooks" ? { ...current, hooks: { ...current.hooks, stop: [...(current.hooks?.stop ?? []).filter(item => item.command !== "fixture-relay-hook"), ...owned.hooks.stop] } }
+      : { ...current, permissions: [...(current.permissions ?? []).filter(item => item.client !== client), owned] };
+    return { id, path: file, before, after: Buffer.from(stableJson(merged)), beforeHash: before === null ? null : sha256(before), afterText, description, optional, selected: !optional };
+  };
+  if (operation === "preview") {
+    const base = join(fx.local, "client-home", `.${client}`);
+    const changes = await Promise.all([
+      change("mcp", join(base, "mcp.json"), stableJson({ mcpServers: { "hivem1nd-relay": { command: "fixture-relay" } } }), "Add the Relay server, so sessions read and send messages"),
+      change("hooks", join(base, "hooks.json"), stableJson({ hooks: { stop: [{ command: "fixture-relay-hook" }] } }), "Add the Relay hooks, so a session wakes when a message arrives"),
+      change("git", join(fx.local, "client-permissions.json"), stableJson({ machine: LOCAL_MACHINE, client, actions: ["git.commit", "git.push"], scope: "hivem1nd-started-sessions" }), "Allow git commit and git push only in HIVEM1ND-started sessions", true),
+    ]);
+    const previewId = uuid(), expiresAt = new Date(fx.nowMs + 600000).toISOString();
+    return { status: 200, data: { previewId, revision: state.hash, expiresAt, restartRequired: true, changes: changes.map(({ before, after, ...item }) => item) }, writes: [], events: [],
+      apply() {
+        for (const [key, preview] of fx.clientPreviews) if (Date.parse(preview.expiresAt) <= fx.nowMs) fx.clientPreviews.delete(key);
+        if (fx.clientPreviews.size >= 64) fx.clientPreviews.delete(fx.clientPreviews.keys().next().value);
+        fx.clientPreviews.set(previewId, { ...body, client, revision: state.hash, expiresAt, changes });
+      } };
+  }
+  if (body.expectedRevision !== state.hash) throw new HttpError(409, "revision_conflict", "The selected machine Settings changed.");
+  const writes = [], removes = [];
+  let next;
+  const write = (file, before, after) => ({ path: file, beforeRevision: before === null ? null : sha256(before), afterRevision: sha256(after), afterBytesBase64: after.toString("base64") });
+  if (operation === "apply") {
+    const preview = fx.clientPreviews.get(body.previewId);
+    if (!preview || preview.client !== client || preview.machine !== body.machine || preview.revision !== body.expectedRevision || Date.parse(preview.expiresAt) <= fx.nowMs) throw new HttpError(409, "configuration_changed", "Review the client configuration again.");
+    for (const item of preview.changes) if (await hashExisting(item.path) !== item.beforeHash) throw new HttpError(409, "configuration_changed", "The client configuration changed.");
+    if (body.changeIds.some(id => !preview.changes.some(item => item.id === id))) throw new HttpError(422, "invalid_body", "A selected change is not in this preview.");
+    next = state.value.clients[client] ?? { mode: "on-demand", entries: [], appConnected: false };
+    for (const item of preview.changes.filter(item => body.changeIds.includes(item.id))) {
+      const after = item.after;
+      if (item.before !== null && await hashExisting(`${item.path}.relay-backup`) === null) writes.push(write(`${item.path}.relay-backup`, null, item.before));
+      writes.push(write(item.path, item.before, after));
+      next.entries.push({ path: item.path, before: item.before?.toString("base64") ?? null, after: after.toString("base64") });
+    }
+    if (preview.target === "cli") { next.mode = preview.mode; next.connected = body.changeIds.includes("mcp") && body.changeIds.includes("hooks"); }
+    else next.appConnected = true;
+    state.value.clients[client] = next;
+  } else {
+    const connection = state.value.clients[client];
+    if (!connection) throw new HttpError(409, "configuration_changed", "No reviewed configuration can be restored.");
+    const restored = new Map();
+    for (const entry of [...connection.entries].reverse()) {
+      const current = restored.has(entry.path) ? restored.get(entry.path).after : await readFile(entry.path).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+      if (current === null || sha256(current) !== sha256(Buffer.from(entry.after, "base64"))) throw new HttpError(409, "configuration_changed", "The owned configuration changed; the files were preserved.");
+      restored.set(entry.path, { before: restored.get(entry.path)?.before ?? current, after: entry.before === null ? null : Buffer.from(entry.before, "base64") });
+    }
+    for (const [file, item] of restored) {
+      if (item.after === null) removes.push({ path: file, beforeRevision: sha256(item.before) });
+      else writes.push(write(file, item.before, item.after));
+    }
+    delete state.value.clients[client];
+  }
+  const payload = Buffer.from(stableJson(state.value)), revision = sha256(payload);
+  writes.push(write(statePath, state.hash === null ? null : await readFile(statePath), payload));
+  return { status: 200, data: { machine: LOCAL_MACHINE, client, state: operation === "apply" ? "connected" : "disconnected", revision, ...(operation === "apply" ? { keptCopies: body.changeIds.length } : {}) }, writes, removes,
+    events: [{ name: "machine.settings.changed", global: true, data: { machine: LOCAL_MACHINE, section: "agents", revision, reportedAt: clock(fx).toISOString() } }] };
 }
 
 function validateHome(body) {
@@ -2045,7 +2136,13 @@ async function readData(fx, snap, spec, params, query) {
     const readOnly = machine !== LOCAL_MACHINE && !selected?.answers;
     const common = { machine, readOnly, reportedAt: reported?.reportedAt ?? selected?.heartbeatAt ?? null };
     const agents = reported?.agents ?? { revision: null, items: (selected?.clients ?? []).map(client => ({ id: client.id, name: client.id, version: null, found: client.installed === true, mode: "on-demand", cli: { state: client.enabled ? "connected" : "missing", changes: 0 }, app: { name: null, state: "missing" } })) };
-    if (pattern === "/settings/agents") return { ...common, ...agents };
+    if (pattern === "/settings/agents") {
+      const reviewed = machine === LOCAL_MACHINE ? await fixtureClientState(fx) : null;
+      return { ...common, ...agents, revision: reviewed?.hash ?? agents.revision, items: agents.items.map(item => {
+        const saved = reviewed?.value.clients[item.id];
+        return saved ? { ...item, mode: saved.mode, cli: { state: saved.connected ? "connected" : "changes-needed", changes: saved.connected ? 0 : 1 }, app: { ...item.app, state: saved.appConnected ? "connected" : item.app.state } } : item;
+      }) };
+    }
     if (pattern === "/settings/permissions") return { ...common, ...(reported?.permissions ?? { revision: null, unitGrants: snap.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant }))), agentPermissions: [] }) };
     if (pattern === "/settings/projects") return { ...common, ...(reported?.projects ?? { revision: null, folders: [] }) };
     const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
@@ -2427,7 +2524,7 @@ async function handleApi(fx, request, response, audience) {
     checkPreconditions: async (input) => checkMutation(fx, spec.pattern, matched.params, input),
     prepare: async (input, actor, operationId) => prepareMutation(fx, spec.pattern, matched.params, input, actor, operationId),
     runtime: Boolean(spec.runtime),
-    homeGrant: spec.pattern === "/settings/home-network",
+    homeGrant: spec.pattern === "/settings/home-network" || spec.pattern === "/settings/agents/:client/preview",
     apply: spec.pattern === "/auth/logout" ? () => revokeViewer(fx, principal.viewerId) : undefined,
   };
   if (spec.pattern === "/auth/logout") {
@@ -4640,6 +4737,9 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/settings/agents/:client/preview") return prepareClientReview(fx, "preview", params.client, body);
+  if (pattern === "/settings/agents/:client/apply") return prepareClientReview(fx, "apply", params.client, body);
+  if (pattern === "/settings/agents/:client") return prepareClientReview(fx, "disconnect", params.client, body);
   if (pattern === "/void/replace" || pattern === "/void/replace/:changeId/undo") {
     if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop can replace texts.");
     return pattern === "/void/replace" ? prepareReplace(fx, body) : prepareReplaceUndo(fx, params.changeId);

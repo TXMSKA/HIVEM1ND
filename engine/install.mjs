@@ -538,7 +538,23 @@ export async function prepareContentAgentAssets(options) {
   const roots = adapters.filter(adapter => (options.agents ?? []).some(agent => (agent.name ?? agent) === adapter.id))
     .map(adapter => resolveAdapterPaths(adapter, options).skillsRoot);
   const retainedPaths = Object.keys(options.managedFiles ?? {}).filter(file => !roots.some(root => relativeChild(root, file)));
-  return { ...await planManagedFileRemovals(plan, { managedFiles: options.managedFiles ?? {}, mindPath: options.mindPath, skillsRoots: roots, retainedPaths }), requiresReview: true };
+  const result = await planManagedFileRemovals(plan, { managedFiles: options.managedFiles ?? {}, mindPath: options.mindPath, skillsRoots: roots, retainedPaths });
+  for (const selected of options.agents ?? []) {
+    if (selected.mode !== 'on-demand') continue;
+    const adapter = adapters.find(item => item.id === selected.name);
+    if (!adapter?.rules) continue;
+    const resolved = resolveAdapterPaths(adapter, options);
+    const snapshot = await currentSnapshot(resolved.rulesPath, true);
+    if (snapshot.kind === 'missing') continue;
+    if (await unsafeDestinationReason(resolved.rulesBase, resolved.rulesPath)) throw new Error('A linked rules file cannot be changed by Content.');
+    if (OWNED_RULE_MODES.has(adapter.rules.mode)) {
+      if (matchesRecord(snapshot, [options.managedFiles?.[resolved.rulesPath]])) result.removals.push({ path: resolved.rulesPath, root: resolved.rulesBase, recordedHashes: [snapshot.hash] });
+    } else if (snapshot.kind === 'file') {
+      const content = removeExactLine(snapshot.content.toString('utf8'), autoRuleLine(options.mindPath));
+      if (content !== snapshot.content.toString('utf8')) result.items.push(plannedItem(resolved.rulesPath, content, resolved.rulesBase, 'rule', snapshot, 'update', false, selected.name, { id: adapter.id, label: adapter.displayName }));
+    }
+  }
+  return { ...result, requiresReview: true };
 }
 
 export async function applyContentAgentAssets(plan, { reviewed = false, changePaths = [] } = {}) {

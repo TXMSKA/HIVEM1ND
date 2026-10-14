@@ -4,7 +4,10 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildClientConfig, clientConfigPaths, configureRelayClient, diagnoseRelayClients, unconfigureRelayClient } from '../engine/relay/config.mjs';
+import { randomBytes } from 'node:crypto';
+import { parse as parseToml } from 'smol-toml';
+import { applyClientConfigChanges, buildClientConfig, clientConfigPaths, configureRelayClient, diagnoseRelayClients, restoreClientConfig, unconfigureRelayClient } from '../engine/relay/config.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
 
 async function temp(context) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'relay-config-'));
@@ -413,4 +416,52 @@ test('the Windows hook command hands a payload with a byte order mark and accent
   const result = spawnSync(command, { shell: true, input: payload, encoding: 'utf8', timeout: 60000 });
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /input unavailable/);
+});
+
+test('owned JSON and TOML entries retain opaque credentials and unknown fields during a reviewed kit update', async t => {
+  const root = await temp(t);
+  const credential = randomBytes(24).toString('hex');
+  for (const client of ['cursor', 'claude', 'codex', 'opencode', 'copilot']) {
+    const opts = options(root, { client });
+    const initial = buildClientConfig(opts);
+    let mcp;
+    if (client === 'codex') mcp = `${initial.mcp}\n[mcp_servers.hivem1nd-relay.env]\nCREDENTIAL = ${JSON.stringify(credential)}\n\n[profiles.foreign]\nmodel = "foreign"\n`;
+    else {
+      const value = JSON.parse(initial.mcp);
+      (value.mcpServers ?? value.mcp)['hivem1nd-relay'].env = { CREDENTIAL: credential };
+      mcp = JSON.stringify(value);
+    }
+    const changed = buildClientConfig({ ...opts, kitPath: path.join(root, 'new-kit'), existing: { ...initial, mcp } });
+    const parsed = client === 'codex' ? parseToml(changed.mcp) : JSON.parse(changed.mcp);
+    const entry = (parsed.mcp_servers ?? parsed.mcpServers ?? parsed.mcp)['hivem1nd-relay'];
+    assert.equal(entry.env.CREDENTIAL === credential, true);
+    if (client === 'codex') assert.equal(parsed.profiles.foreign.model, 'foreign');
+    const restored = restoreClientConfig({ client, kind: 'mcp', before: Buffer.from(mcp), after: Buffer.from(changed.mcp), current: Buffer.from(changed.mcp) });
+    assert.equal(restored.equals(Buffer.from(mcp)), true);
+    assert.equal(buildClientConfig({ ...opts, kitPath: path.join(root, 'new-kit'), existing: changed }).mcp === changed.mcp, true);
+  }
+});
+
+test('a partial reviewed write removes newly created files, directories and copies while retaining an older kept copy', async t => {
+  const root = await temp(t);
+  const first = path.join(root, 'existing.json');
+  const second = path.join(root, 'new', 'nested', 'hooks.json');
+  await writeFile(first, '');
+  await writeFile(`${first}.relay-backup`, 'An earlier kept copy.');
+  const before = await legacyTreeInventory(root);
+  await assert.rejects(applyClientConfigChanges([
+    { path: first, root, before: Buffer.from(''), after: Buffer.from('{}') },
+    { path: second, root, before: null, after: Buffer.from('{}') },
+  ], { protectFile: async () => {}, beforeWrite: (change, index) => { if (index === 1) throw new Error('Injected write failure.'); } }), /Injected write failure/);
+  assert.deepEqual(await legacyTreeInventory(root), before);
+  await configureRelayClient(options(root, { client: 'cursor' }));
+  const paths = clientConfigPaths({ client: 'cursor', homeDir: root });
+  const original = await readFile(`${paths.mcp}.relay-owned.json`);
+  const hooks = JSON.parse(await readFile(paths.hooks));
+  hooks.hooks.stop[0].command = 'foreign edit to an owned hook';
+  await writeFile(paths.hooks, JSON.stringify(hooks));
+  const changed = await legacyTreeInventory(root);
+  await assert.rejects(unconfigureRelayClient(options(root, { client: 'cursor' })), { code: 'configuration_changed' });
+  assert.deepEqual(await legacyTreeInventory(root), changed);
+  assert.equal((await readFile(`${paths.mcp}.relay-owned.json`)).equals(original), true);
 });

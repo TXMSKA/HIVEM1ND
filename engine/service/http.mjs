@@ -567,7 +567,7 @@ export async function createHttpServer(options) {
       return;
     }
     const run = async () => applySync(await invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState }), domain);
-    if (route.handler === 'home') {
+    if (route.handler === 'home' || route.handler === 'settingsMutation' && route.collection === 'preview') {
       const outcome = applySync(await rememberHome(homeMemory, credential, req, relative, body, requestId, run), domain);
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
