@@ -1482,3 +1482,24 @@ test('a person note and its reply persist without message admission or fanout', 
     await assert.rejects(readFile(fanout), { code: 'ENOENT' });
   }
 });
+
+test('Void replacement accepts omitted server fields and ignores forged revisions', async (t) => {
+  const { context, localPath } = await shop(t);
+  const created = await createText(context, { project: 'shop', path: 'docs/server-fields.json', document: {
+    title: 'Notes', rev: 7, marker: { kept: true }, pages: [{ k: 'intro', en: 'Before', es: 'Antes' }],
+  } });
+  const originalPath = path.join(localPath, 'docs', 'server-fields.orig.json');
+  const original = await readFile(originalPath);
+  const first = await replaceText(context, created.id, { expectedRevision: created.revision, document: {
+    title: 'Notes', marker: { kept: true }, pages: [{ k: 'intro', en: 'After', es: 'Antes' }],
+  } });
+  assert.equal(first.document.rev, 8);
+  assert.deepEqual(first.document.marker, { kept: true });
+  const second = await replaceText(context, created.id, { expectedRevision: first.revision, document: {
+    ...structuredClone(first.document), rev: 9999, history: [{ forged: true }], pages: [{ k: 'intro', en: 'After again', es: 'Antes' }],
+  } });
+  assert.equal(second.document.rev, 9);
+  assert.equal(Object.hasOwn(second.document, 'history'), false);
+  assert.deepEqual(second.document.marker, { kept: true });
+  assert.deepEqual(await readFile(originalPath), original);
+});

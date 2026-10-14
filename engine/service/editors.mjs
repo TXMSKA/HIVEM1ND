@@ -1392,6 +1392,9 @@ export async function replaceText(context, id, input) {
   await requireAttachment(context, found.entry.id);
   if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The text changed since it was read.');
   const incoming = validateText(input.document);
+  incoming.rev = found.document.rev ?? 0;
+  if (Object.hasOwn(found.document, 'history')) incoming.history = structuredClone(found.document.history);
+  else delete incoming.history;
   preserveUnknown(found.document, incoming);
   const changes = textChanges(found.document, incoming);
   incoming.rev = (found.document.rev || 0) + (changes.length > 0 ? 1 : 0);
