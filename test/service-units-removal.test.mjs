@@ -21,11 +21,11 @@ async function world(t) {
   t.after(() => dispose(fixture));
   const file = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state', 'one.md');
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `unit: one\nunit-id: ${UNIT}\nrole: executor\nstate: out\nlead-id: root:overseer\nextra: kept\n\nSaved context.\n`);
+  await writeFile(file, `unit: one\nunit-id: ${UNIT}\nrole: executor\nstate: out\nlead-id: root:overseer\nextra: kept\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nSaved context.\n`);
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
   await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'two.md'), 'unit: two\nunit-id: root:two\nrole: executor\nstate: out\n\n');
   const signaled = [];
-  const adapter = createNativeAdapter('codex', { fixture: true, signaled,
+  const adapter = createNativeAdapter('codex', { fixture: true, signaled, models: ['strong'],
     transcript: ['{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"owned-one"}}}'] });
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now,
     principal: { audience: 'desktop', unitId: 'root:master', capabilities: ['read', 'unit.create', 'chat.manage'] },

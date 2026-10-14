@@ -277,6 +277,7 @@ async function buildProjection(fx) {
         leadId: field(parsed.fields, "lead-id"),
         job: field(parsed.fields, "job"),
         model: field(parsed.fields, "model"),
+        runsIn: field(parsed.fields, "runs-in"),
         machine: field(parsed.fields, "machine"),
         state: state === "out" ? "out" : "in",
         context: parsed.body,
@@ -351,6 +352,7 @@ function publicUnit(unit) {
     leadId: unit.leadId,
     job: unit.job,
     model: unit.model,
+    runsIn: unit.runsIn ?? null,
     machine: unit.machine,
     state: unit.state,
     status: unit.status,
@@ -2981,9 +2983,9 @@ function validateLead(body) {
 }
 
 function validateSession(body) {
-  requireObject(body, ["client", "prompt", "runMode", "taskId", "expectedRevision"]);
-  requireKeys(body, ["client", "expectedRevision"]);
-  if (typeof body.client !== "string" || !body.client) throw new HttpError(422, "invalid_body", "The client is not valid.");
+  if (['client', 'model', 'effort', 'runsIn'].some(key => Object.hasOwn(body, key))) throw new HttpError(422, 'unsupported_launch_choice', 'Use the stored Runs in choice.');
+  requireObject(body, ["prompt", "runMode", "taskId", "expectedRevision"]);
+  requireKeys(body, ["expectedRevision"]);
   if (body.prompt !== undefined && body.prompt !== null && typeof body.prompt !== "string") throw new HttpError(422, "invalid_body", "The prompt is not valid.");
   if (body.runMode !== undefined && !['task', 'chat'].includes(body.runMode)) throw new HttpError(422, 'invalid_body', 'The run mode is not valid.');
   if (body.taskId !== undefined && body.taskId !== null && typeof body.taskId !== 'string') throw new HttpError(422, 'invalid_body', 'The task is not valid.');
@@ -3038,7 +3040,7 @@ async function rejectSession(fx, snap, unitId, body) {
   if (!machine || !machine.answers) {
     throw new HttpError(409, "machine_unavailable", "The machine is unavailable.", { machine: target.machine, heartbeatAt: machine?.heartbeatAt ?? null });
   }
-  const client = (machine.clients ?? []).find((item) => item.id === body.client && item.enabled && item.installed);
+  const client = (machine.clients ?? []).find((item) => item.id === target.runsIn?.client && item.enabled && item.installed);
   if (!client) throw new HttpError(422, "client_unavailable", "The client is not available on that machine.");
   if (snap.sessions.some((session) => session.unitId === unitId && session.state !== "stopped")) {
     throw new HttpError(409, "unit_in_use", "The unit already has a session.");
@@ -3090,6 +3092,7 @@ function unitRecord(body, id) {
   }
   if (body.job) lines.push(`job: ${body.job}`);
   if (body.model) lines.push(`model: ${body.model}`);
+  lines.push(`runs-in: ${JSON.stringify({ client: 'cursor', model: 'fixture-model', effort: 'high', mode: null })}`);
   lines.push("date: 2026-10-10 09:00");
   return `${lines.join("\n")}\n\n`;
 }
@@ -3192,7 +3195,7 @@ async function prepareSession(fx, unitId, body) {
     error: null,
     expiresAt: new Date(fx.nowMs + 60_000).toISOString(),
     prompt: body.prompt ?? null,
-    client: body.client,
+    client: target.runsIn.client,
     runMode: body.runMode ?? (target.role === 'executor' ? 'task' : 'chat'),
     taskId: body.taskId ?? null,
     launchKind: 'cli',
@@ -5482,6 +5485,13 @@ async function boot(fx, { seedHome = false } = {}) {
 export async function createGuiFixture(options = {}) {
   const tree = await createFixtureTree();
   const seeded = await seedRecords(tree, options);
+  for (const record of [...seeded.data.units, ...seeded.data.bulk]) {
+    if (!ROLES.has(record.role)) continue;
+    const scope = { kind: record.scopeKind, name: record.scopeName };
+    const file = unitFile(tree.user, { unit: record.unit, scope }, record.id);
+    const original = await readFile(file, 'utf8');
+    await writeFile(file, original.replace('\n\n', `\nruns-in: ${JSON.stringify({ client: 'cursor', model: 'fixture-model', effort: 'high', mode: null })}\n\n`));
+  }
   const fx = {
     tree,
     local: seeded.local,

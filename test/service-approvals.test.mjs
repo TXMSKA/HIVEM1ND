@@ -17,7 +17,7 @@ const UNIT = 'project:shop:executor-shop';
 
 function stateText(machine, grants = null) {
   const line = grants ? `\napprovals: ${canonicalJson(grants)}` : '';
-  return `unit: executor-shop\nunit-id: ${UNIT}\nrole: executor\nstate: in\nmachine: ${machine}${line}\n\nReady.\n`;
+  return `unit: executor-shop\nunit-id: ${UNIT}\nrole: executor\nstate: in\nmachine: ${machine}${line}\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`;
 }
 
 async function service(t, machine = 'DESKTOP') {
@@ -355,8 +355,8 @@ test('approval commits notify the running pulse with the staged transaction', as
 
 async function childWorld(t) {
   const { fixture, context, master } = await service(t);
-  const native = createNativeAdapter('codex', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
-  const child = createNativeAdapter('cursor', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
+  const native = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
+  const child = createNativeAdapter('cursor', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
   let creates = 0;
   const create = child.create.bind(child);
   child.create = async (request) => { creates += 1; return create(request); };
@@ -369,7 +369,7 @@ async function childWorld(t) {
   context.principal.sessionId = parent.result.sessionId;
   context.credential = { audience: 'agent', unitId: UNIT, sessionId: parent.result.sessionId };
   const unitId = 'project:shop:executor-child';
-  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-child.md'), `unit: executor-child\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'executor-child.md'), `unit: executor-child\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"cursor","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
   return { fixture, context, master, parent, pattern: { client: 'cursor', machine: 'DESKTOP', unitId, runMode: 'chat', taskId: null }, creates: () => creates };
 }
 

@@ -27,7 +27,7 @@ test('phone standing and push answers fail before receipt creation or replay, wi
   const unitId = 'project:shop:executor-shop', sessionId = randomUUID();
   const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
   await mkdir(path.dirname(stateFile), { recursive: true });
-  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: ['project:shop'], schedule() {}, principal: { audience: 'agent', unitId, sessionId } };
   const credentials = createCredentialStore({ now: context.now });
   const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
@@ -77,9 +77,9 @@ test('a phone can approve or deny session.open over HTTP once without creating s
   const unitId = 'project:shop:executor-shop';
   const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
   await mkdir(path.dirname(stateFile), { recursive: true });
-  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
-  const parentAdapter = createNativeAdapter('codex', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
-  const childAdapter = createNativeAdapter('cursor', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
+  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
+  const parentAdapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
+  const childAdapter = createNativeAdapter('cursor', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
   t.after(async () => { await parentAdapter.close(); await childAdapter.close(); });
   let creates = 0;
   const create = childAdapter.create.bind(childAdapter);
@@ -93,7 +93,7 @@ test('a phone can approve or deny session.open over HTTP once without creating s
   context.principal.sessionId = parent.result.sessionId;
   await writeBeat(context, 'running');
   const childId = 'project:shop:executor-child';
-  await writeFile(path.join(path.dirname(stateFile), 'executor-child.md'), `unit: executor-child\nunit-id: ${childId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  await writeFile(path.join(path.dirname(stateFile), 'executor-child.md'), `unit: executor-child\nunit-id: ${childId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"cursor","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
   const credentials = createCredentialStore({ now: context.now });
   const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
   const http = await createHttpServer({ ...context, credentials }); t.after(() => http.close());

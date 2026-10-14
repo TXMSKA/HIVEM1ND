@@ -70,12 +70,12 @@ test('scoped native launch and task review use the scoped state authority', asyn
   const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
   const directory = path.join(fixture.paths.mind, 'user/projects/shop');
   await mkdir(path.join(directory, 'state'), { recursive: true }); await mkdir(path.join(directory, 'tasks'), { recursive: true });
-  const state = 'unit: worker\nrole: executor\nstate: in\nmachine: DESKTOP\nlead-id: project:shop:lead\n\nScoped context.\n';
+  const state = 'unit: worker\nrole: executor\nstate: in\nmachine: DESKTOP\nlead-id: project:shop:lead\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nScoped context.\n';
   await writeFile(path.join(directory, 'state/worker.md'), state);
   await writeFile(path.join(directory, 'state/lead.md'), 'unit: lead\nrole: overlord\nstate: in\nmachine: DESKTOP\n');
   const task = 'id: 007\nstatus: review\nfrom: user\nto: worker\ndate: 2026-10-10\n\n## Request\nKeep authority.\n\n## Report\nDelivered.\n';
   await writeFile(path.join(directory, 'tasks/007.md'), task);
-  const adapter = createNativeAdapter('codex', { fixture: true, transcript: ['{"id":2,"result":{"thread":{"id":"scoped-thread"}}}'] });
+  const adapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: ['{"id":2,"result":{"thread":{"id":"scoped-thread"}}}'] });
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() }, projects: [{ name: 'shop', localPath: fixture.root }], adapters: { codex: adapter }, principal: { unitId: 'root:master', audience: 'desktop' }, ownedPids: new Set() };
   const loaded = await loadTask(context, 'project:shop:007'); assert.equal(loaded.toId, 'project:shop:worker'); assert.equal(reviewAuthority(loaded).reviewable, false);
   await assert.rejects(() => changeStatus(context, loaded.id, { status: 'done', expectedRevision: loaded.revision }), { code: 'forbidden' });

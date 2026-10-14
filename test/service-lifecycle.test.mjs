@@ -501,6 +501,7 @@ test('an enabled policy keeps its canonical unit and one native call is the subm
   const adapter = createNativeAdapter('codex', {
     command: path.join(fixture.root, 'codex.exe'),
     timeoutMs: 1000,
+    describe: async () => ({ id: 'codex', connected: false, models: [], scopeEnforced: false }),
     spawn() { return child; },
   });
   const created = await adapter.create({ cwd: fixture.root, unitId: registration.unitId });

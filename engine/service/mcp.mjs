@@ -9,6 +9,7 @@ import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment
 import { publishDomainEvents } from './events.mjs';
 import { requestApproval } from './approvals.mjs';
 import { completeSessionTask } from './adapters.mjs';
+import { assertGitCapability, readScopedFile, requestScopedGit, runScopedGit, verifiedSessionScope, writeScopedFile } from './file-access.mjs';
 import { carryHostConversation } from '../relay/carry-over.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
@@ -28,6 +29,12 @@ const text = { type: 'string', maxLength: 10000 };
 
 export function toolSchemas() {
   return [
+    tool('native_permission', 'Resolve one exact native file or process permission for this owned actor.', { toolName: label, input: { type: 'object' }, cwd: { type: 'string', maxLength: 4096 }, requestId }, ['toolName', 'input', 'cwd', 'requestId']),
+    tool('file_read', 'Read one bounded file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, approvalId: requestId }, ['path']),
+    tool('file_write', 'Write one reviewed file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, text: { type: 'string', maxLength: 1000000 }, expectedRevision: revision, approvalId: requestId, requestId }, ['path', 'text', 'requestId']),
+    tool('git_execute', 'Execute one separately approved scoped Git instruction.', { intentId: requestId, requestId }, ['intentId', 'requestId']),
+    tool('git_request', 'Request a separate explicit instruction for one reviewed scoped commit or push.', { action: { type: 'string', enum: ['git.commit', 'git.push'] }, repository: { type: 'string', maxLength: 4096 }, branch: label,
+      paths: { type: 'array', maxItems: 256, items: { type: 'string', maxLength: 4096 } }, message: { type: 'string', maxLength: 10000 }, remote: label, requestId }, ['action', 'repository', 'branch', 'paths', 'requestId']),
     tool('session_open', 'Ask the person to open one connected CLI for a registered unit on this machine.', { client: { type: 'string', enum: ['claude', 'codex', 'cursor'], maxLength: 32 }, machine: label, unitId: { type: 'string', maxLength: 256 }, runMode: { type: 'string', enum: ['task', 'chat'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']),
     tool('session_complete', 'Acknowledge terminal delivery or failure of this assigned task; wait for native completion before the CLI closes.', { outcome: { type: 'string', enum: ['delivered', 'failed'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['outcome', 'requestId']),
     tool('blueprint_open', 'Read one Blueprint board.', { resourceId }, ['resourceId']),
@@ -83,6 +90,7 @@ function valueMatches(rule, value) {
   if (Array.isArray(rule.type)) return value === null && rule.type.includes('null') || typeof value === 'string' && rule.type.includes('string') && value.length <= (rule.maxLength ?? Infinity);
   if (rule.type === 'integer') return Number.isInteger(value) && value >= (rule.minimum ?? 0) && value <= Number.MAX_SAFE_INTEGER;
   if (rule.type === 'object') return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  if (rule.type === 'array') return Array.isArray(value) && value.length <= rule.maxItems && value.every(item => valueMatches(rule.items, item));
   if (rule.type !== 'string' || typeof value !== 'string') return false;
   if (rule.maxLength && value.length > rule.maxLength) return false;
   if (rule.enum && !rule.enum.includes(value)) return false;
@@ -102,6 +110,22 @@ export async function callTool(context, name, args) {
 }
 
 async function runTool(context, name, args) {
+  if (name === 'native_permission') {
+    const registration = await canonicalRegistration(context);
+    await verifiedSessionScope(context);
+    return transactLegacy(context, name, args, registration, name, () => context.adapters[registration.client].permission(registration, args));
+  }
+  if (['file_read', 'file_write', 'git_request', 'git_execute'].includes(name)) {
+    const registration = await canonicalRegistration(context);
+    await verifiedSessionScope(context);
+    if (name === 'file_read') return readScopedFile(context, args);
+    if (name === 'git_request') {
+      await assertGitCapability(context, args.action, args.repository);
+      return transactLegacy(context, name, args, registration, name, () => requestScopedGit(context, args));
+    }
+    if (name === 'git_execute') return runScopedGit(context, args);
+    return transactLegacy(context, name, args, registration, name, () => writeScopedFile(context, { ...args, expectedRevision: args.expectedRevision ?? null }));
+  }
   if (name === 'session_open' || name === 'session_complete') {
     const registration = await canonicalRegistration(context);
     return transactLegacy(context, name, args, registration, name, () => name === 'session_open'

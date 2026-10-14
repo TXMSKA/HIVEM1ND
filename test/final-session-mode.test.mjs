@@ -10,6 +10,6 @@ test('session operations keep mode task and revision through retries', async () 
   const unit = { id: 'root:executor-shop', revision: 'a'.repeat(64) };
   const first = await startSession(api, unit, 'codex', 'Finish the task', null, { runMode: 'task', taskId: 'project:shop:029' });
   await startSession(api, unit, 'codex', 'Changed input', first.operation, { runMode: 'chat' });
-  assert.deepEqual(bodies[0], { client: 'codex', prompt: 'Finish the task', runMode: 'task', taskId: 'project:shop:029', expectedRevision: 'a'.repeat(64) });
+  assert.deepEqual(bodies[0], { prompt: 'Finish the task', runMode: 'task', taskId: 'project:shop:029', expectedRevision: 'a'.repeat(64) });
   assert.deepEqual(bodies[1], bodies[0]);
 });

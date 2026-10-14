@@ -47,10 +47,14 @@ export async function createUnit(api, input, retained = null) {
 }
 
 export async function startSession(api, unit, client, prompt = null, retained = null, mode = {}) {
-  const operation = retained ?? createOperation({
+  let operation = retained ?? createOperation({
     method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id },
-    body: { client, prompt, runMode: mode.runMode ?? 'task', taskId: mode.taskId ?? null, expectedRevision: unit.revision },
+    body: { prompt, runMode: mode.runMode ?? 'task', taskId: mode.taskId ?? null, expectedRevision: unit.revision },
   });
+  if (['client', 'model', 'effort', 'runsIn'].some(key => Object.hasOwn(operation.body, key))) {
+    const body = Object.fromEntries(Object.entries(operation.body).filter(([key]) => !['client', 'model', 'effort', 'runsIn'].includes(key)));
+    operation = Object.freeze({ ...operation, body: Object.freeze(body) });
+  }
   const result = await commit(api, operation);
   return { ...result, operation };
 }

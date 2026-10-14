@@ -2,7 +2,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
-import { stateUnitId } from './state.mjs';
+import { stateRunsIn, stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
 import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
@@ -618,7 +618,7 @@ function idleLimits() {
 function readUnit(bytes, relative, issues) {
   const blank = {
     id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null, clusterId: null,
-    machine: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
+    machine: null, runsIn: null, fresh: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
     sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
   };
   if (!bytes) {
@@ -642,6 +642,8 @@ function readUnit(bytes, relative, issues) {
       leadId: headers.get('lead-id') || null,
       job: headers.get('job') || null,
       model: headers.get('model') || null,
+      runsIn: stateRunsIn(bytes),
+      fresh: role === 'overseer' ? headers.get('fresh') !== 'false' : null,
       clusterId: isUuid(headers.get('cluster-id')) ? headers.get('cluster-id') : null,
       machine: headers.get('machine') || null,
       state,
@@ -837,11 +839,12 @@ async function readMachines(context, now, issues) {
   }
   const { readPublishedSettings } = await import('./settings.mjs');
   for (const machine of await childNames(context.paths.mind, 'user/machines')) {
-    if (machines.some(item => item.id === machine)) continue;
     try {
       const report = await readPublishedSettings(context, machine);
+      const existing = machines.find(item => item.id === machine);
+      if (existing) { existing.connectedClients = report?.connectedClients ?? []; continue; }
       if (report) machines.push({ id: machine, state: report.service.state, version: report.service.version, heartbeatAt: null, answers: false,
-        clients: report.agents.items.map(item => ({ id: item.id, enabled: item.cli.state === 'connected', installed: item.found })), issues: [] });
+        clients: report.agents.items.map(item => ({ id: item.id, enabled: item.cli.state === 'connected', installed: item.found })), connectedClients: report.connectedClients ?? [], issues: [] });
     } catch { issues.push({ path: `user/machines/${machine}/settings.json`, code: 'corrupt_resource', message: 'The machine Settings report could not be projected.' }); }
   }
   machines.sort((left, right) => left.id.localeCompare(right.id));

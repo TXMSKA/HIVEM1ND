@@ -12,7 +12,7 @@ const TASK_DIGITS = /^[0-9]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export const ROLES = Object.freeze(['overseer', 'adjutant', 'executive', 'overlord', 'executor', 'incubator', 'genesis', 'master']);
-export const CLIENTS = Object.freeze(['claude', 'codex', 'cursor']);
+export const CLIENTS = Object.freeze(['claude', 'codex', 'cursor', 'lyra']);
 
 const ROLE_SET = new Set(ROLES);
 const CLIENT_SET = new Set(CLIENTS);

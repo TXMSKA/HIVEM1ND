@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { parseUnitId, unitStatePath } from './identity.mjs';
+import { CoreError, parseUnitId, unitStatePath } from './identity.mjs';
 import { readBytes } from './store.mjs';
 
 export function stateHeader(bytes, name) {
@@ -11,6 +11,20 @@ export function stateHeader(bytes, name) {
     if (colon > 0 && line.slice(0, colon).trim() === name) return line.slice(colon + 1).trim();
   }
   return null;
+}
+
+export function stateRunsIn(bytes) {
+  const raw = stateHeader(bytes, 'runs-in');
+  if (!raw) return null;
+  let choice;
+  try { choice = JSON.parse(raw); } catch { /* A malformed stored choice must never fall back. */ }
+  if (!choice || Object.keys(choice).sort().join(',') !== 'client,effort,mode,model'
+    || !['claude', 'codex', 'cursor', 'lyra'].includes(choice.client) || typeof choice.model !== 'string' || !choice.model
+    || choice.client === 'lyra' && (choice.effort !== null || !['fast', 'normal', 'thinking'].includes(choice.mode))
+    || choice.client !== 'lyra' && (typeof choice.effort !== 'string' || !choice.effort || choice.mode !== null)) {
+    throw new CoreError(422, 'unsupported_launch_choice', 'The stored Runs in choice is invalid.');
+  }
+  return Object.freeze(choice);
 }
 
 export function stateUnitId(bytes, relative) {

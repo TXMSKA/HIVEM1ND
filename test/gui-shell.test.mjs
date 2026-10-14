@@ -2143,7 +2143,7 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   assert.equal(inventory.size, 20);
 });
 
-test("unit and session forms use machines and clients, and the inspector shows the contract facts", async (t) => {
+test("unit forms use machines, session forms use the stored runtime, and the inspector shows the contract facts", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const urls = [];
@@ -2221,8 +2221,8 @@ test("unit and session forms use machines and clients, and the inspector shows t
   typeInput(sessionForm.querySelector("[name='prompt']"), "Check the build", 0, 15);
   click(sessionForm.querySelector("[data-action='confirm-form']"));
   await waitFor(() => urls.slice(beforeSession).some((url) => url.includes("/session-requests/")), "The queued session was not read back.");
-  const started = writes.find((item) => item.body?.client === "codex");
-  assert.deepEqual(Object.keys(started.body).sort(), ["client", "expectedRevision", "prompt", "runMode", "taskId"]);
+  const started = writes.find((item) => item.url.endsWith('/session'));
+  assert.deepEqual(Object.keys(started.body).sort(), ["expectedRevision", "prompt", "runMode", "taskId"]);
   assert.equal(started.body.runMode, 'chat');
   assert.equal(started.body.taskId, null);
   assert.equal(started.body.prompt, "Check the build");

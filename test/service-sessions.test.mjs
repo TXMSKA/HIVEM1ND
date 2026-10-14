@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { request as httpRequest } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -16,6 +18,20 @@ import { requestApproval } from '../engine/service/approvals.mjs';
 import { readScopedAdditions } from '../engine/service/additions.mjs';
 import { bindManualAdditionContent } from '../engine/relay/local-wake.mjs';
 import { closeBridge, createNativeLaunch, dispatchNative, openBridge } from '../engine/service/bridge.mjs';
+import { createCluster } from '../engine/service/clusters.mjs';
+import { directoryIdentity, readRepositoryIdentity } from '../engine/service/cluster-git.mjs';
+
+async function linkRepository(context, directory) {
+  await mkdir(directory, { recursive: true });
+  const git = promisify(execFile);
+  await git('git', ['init', '--initial-branch=main'], { cwd: directory, timeout: 10000, windowsHide: true });
+  await git('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Fixture baseline'], { cwd: directory, timeout: 10000, windowsHide: true });
+  const identity = await readRepositoryIdentity(directory);
+  await writeFile(path.join(context.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
+    'repository:shop': { machine: 'DESKTOP', localPath: directory, identity: await directoryIdentity(directory), repositoryId: identity.id },
+  } }));
+  await createCluster(context, { title: 'Shop', members: [UNIT], machine: 'DESKTOP', parentId: null, link: { kind: 'repository', projectId: 'shop' }, confirmed: true });
+}
 
 async function scopedPackage(context, requirements = []) {
   const id = randomUUID(), content = Buffer.from('---\nname: pdf\nruntime: none\n---\nPDF support\n');
@@ -33,7 +49,7 @@ async function scopedPackage(context, requirements = []) {
 test('two canonical units on one client receive different native scoped channels and verified manual sessions cannot widen them', async t => {
   const { context, file, fixture } = await world(t), imported = await scopedPackage(context);
   const second = 'project:shop:second', secondFile = path.join(fixture.paths.mind, 'user', 'state', 'second.md');
-  await writeFile(secondFile, `unit: second\nunit-id: ${second}\nrole: executor\nstate: in\nmachine: DESKTOP\n`);
+  await writeFile(secondFile, `unit: second\nunit-id: ${second}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n`);
   const channels = new Map(), transcript = [...CODEX]; let count = 0;
   const adapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript, scopedContent: {
     async bind(proof, read) { channels.set(proof.nativeSessionId, { proof, read }); return { ...proof, bound: true }; }, runtimeAvailable: async () => true,
@@ -98,7 +114,7 @@ const CODEX = [
 ];
 
 function state() {
-  return `unit: executor-shop\nunit-id: ${UNIT}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`;
+  return `unit: executor-shop\nunit-id: ${UNIT}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`;
 }
 
 async function world(t, transcript = CODEX) {
@@ -136,6 +152,7 @@ async function start(context, file, extra = {}) {
 test('reviewed Git capability reaches only newly owned sessions and is rechecked after revocation', async t => {
   const transcript = [...CODEX];
   const { fixture, context, file } = await world(t, transcript);
+  await linkRepository(context, fixture.root);
   const permissionFile = path.join(fixture.paths.localDirectory, 'client-permissions.json');
   const launches = [], adapter = context.adapters.codex, original = adapter.create.bind(adapter);
   adapter.create = async request => {
@@ -182,7 +199,7 @@ test('reviewed Git capability reaches only newly owned sessions and is rechecked
   await writeFile(permissionFile, JSON.stringify({ permissions: [permission] }));
   for (const [unitId, role] of [['root:overseer', 'overseer'], ['env:web:overlord-web', 'overlord']]) {
     const unit = unitId.split(':').at(-1), otherFile = path.join(fixture.paths.mind, 'user', 'state', `${unit}.md`);
-    await writeFile(otherFile, `unit: ${unit}\nunit-id: ${unitId}\nrole: ${role}\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+    await writeFile(otherFile, `unit: ${unit}\nunit-id: ${unitId}\nrole: ${role}\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
     const started = await enqueueStart(context, { unitId, client: 'codex', runMode: 'chat', stateRevision: hashBytes(await readFile(otherFile)) });
     assert.equal(started.result.state, 'started');
     assert.deepEqual(launches.at(-1).agentPermissions, []);
@@ -195,8 +212,8 @@ test('unavailable clients, bad models, stale state and a quiet machine do not st
   const probe = await probeClients({ env: fixture.env, spawnVersion: true, fixture });
   for (const client of ['claude', 'codex', 'cursor']) assert.equal(probe[client].nativeSupport, false);
   const revision = hashBytes(await readFile(file));
-  await assert.rejects(() => enqueueStart(context, { unitId: UNIT, client: 'opencode', stateRevision: revision }), (error) => error.code === 'client_unavailable');
-  await assert.rejects(() => start(context, file, { model: 'giant' }), (error) => error.code === 'unsupported_model');
+  await assert.rejects(() => enqueueStart(context, { unitId: UNIT, client: 'opencode', stateRevision: revision }), (error) => error.code === 'unsupported_launch_choice');
+  await assert.rejects(() => start(context, file, { model: 'giant' }), (error) => error.code === 'unsupported_launch_choice');
   await assert.rejects(() => start(context, file, { stateRevision: 'a'.repeat(64) }), (error) => error.code === 'unit_changed');
   context.beat = null;
   await assert.rejects(() => start(context, file), (error) => error.code === 'machine_unavailable');
@@ -388,6 +405,7 @@ test('a start uses the unit project path instead of the first registered project
   const { fixture, context, file } = await world(t);
   const shop = path.join(fixture.root, 'shop-project');
   const other = path.join(fixture.root, 'other-project');
+  await linkRepository(context, shop);
   context.projects = [
     { name: 'other', localPath: other },
     { name: 'shop', localPath: shop },
@@ -555,7 +573,7 @@ test('Cursor correlates authenticate replies and Claude receives the startup ins
   assert.equal(writes.length > 0, true);
   assert.equal(writes[0].includes('Unit: project:shop:executor-shop'), true);
   assert.equal(writes[0].includes('Job: build'), true);
-  assert.equal(writes[0].includes('Model: strong'), true);
+  assert.equal(writes[0].includes('Model: strong'), false);
   assert.equal(writes[0].includes('Lead: root:lead'), true);
   assert.equal(writes[0].includes('do-not-embed-this-prompt'), false);
   assert.equal(writes[0].includes('"type":"user"'), true);
@@ -570,6 +588,7 @@ test('a failed native start can be retried and an unconsumed request expires ove
   await writeFile(file, state());
   const projects = [];
   const adapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: CODEX });
+  adapter.capabilities.create = false;
   const core = await composeCore({
     store: fixture.store,
     paths: { ...fixture.paths, origin },
@@ -590,7 +609,7 @@ test('a failed native start can be retried and an unconsumed request expires ove
   const revision = hashBytes(await readFile(file));
   const denied = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
     token,
-    body: { client: 'codex', prompt: 'Complete the task', expectedRevision: revision },
+    body: { prompt: 'Complete the task', expectedRevision: revision },
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(denied.status, 503);
@@ -598,9 +617,10 @@ test('a failed native start can be retried and an unconsumed request expires ove
   const reserved = await readdir(path.join(fixture.paths.localDirectory, 'session-starts')).catch((error) => error.code === 'ENOENT' ? [] : Promise.reject(error));
   assert.equal(reserved.length, 0);
   projects.push({ name: 'shop', localPath: fixture.root, eligible: true });
+  adapter.capabilities.create = true;
   const retried = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, {
     token,
-    body: { client: 'codex', prompt: 'Complete the task', expectedRevision: revision },
+    body: { prompt: 'Complete the task', expectedRevision: revision },
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(retried.status, 202);
@@ -691,7 +711,8 @@ function installHandshake(child, accountBody) {
   child.onRequest((message) => {
     if (message.method === 'initialize') child.respond(message, { result: { userAgent: 'codex' } });
     else if (message.method === 'account/read') child.respond(message, accountBody);
-    else if (message.method === 'thread/start') child.respond(message, { result: { thread: { id: 'thread-1' } } });
+    else if (message.method === 'thread/start') child.respond(message, { result: { thread: { id: 'thread-1' },
+      ...(message.params.model ? { model: message.params.model, reasoningEffort: message.params.config?.model_reasoning_effort, sandbox: { type: 'readOnly' } } : {}) } });
   });
 }
 
@@ -830,7 +851,7 @@ test('an active codex turn steers once and the next message starts after complet
   child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'other-thread', turn: { id: 'turn-1', items: [], status: 'completed' } } })}\n`);
   await tick();
   assert.equal(child.written.length, beforeNotice + 1);
-  assert.deepEqual(rpcMethods(child).find(message => message.id === 90), { jsonrpc: '2.0', id: 90, error: { code: -32601, message: 'This native request is not supported by the attached service.' } });
+  assert.deepEqual(rpcMethods(child).find(message => message.id === 90), { jsonrpc: '2.0', id: 90, result: { decision: 'decline' } });
   const steered = await adapter.send({ nativeSessionId: created.nativeSessionId, text: 'gamma' });
   assert.equal(steered.submitted, true);
   assert.equal(turnWrites().at(-1).method, 'turn/steer');
@@ -944,7 +965,7 @@ test('closing the owned codex child settles a pending response', async (t) => {
   assert.equal(rpcMethods(closed).filter((line) => line.method === 'turn/start').length, 1);
 });
 
-test('an unsupported Cursor native permission request receives a protocol error instead of hanging or allowing', async (t) => {
+test('an unsupported Cursor native permission request is canceled without hanging or allowing', async (t) => {
   const fixture = await makeCoreFixture();
   t.after(() => dispose(fixture));
   const child = liveChild();
@@ -960,8 +981,8 @@ test('an unsupported Cursor native permission request receives a protocol error 
   child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: 'permission-owned', method: 'session/request_permission', params: { sessionId: 'cursor-owned', options: [{ optionId: 'allow-once', kind: 'allow_once' }] } })}\n`);
   const completed = await settleOr(response, 500);
   assert.equal(completed.settled, true);
-  assert.equal(completed.value.error.code, -32601);
-  assert.equal(completed.value.result, undefined);
+  assert.deepEqual(completed.value.result, { outcome: { outcome: 'cancelled' } });
+  assert.equal(completed.value.error, undefined);
   assert.equal(JSON.stringify(completed.value).includes('allow'), false);
 });
 
@@ -1003,7 +1024,8 @@ test('the owned native task closes only after terminal delivery and its actual t
   installHandshake(child, { result: { account: null, requiresOpenaiAuth: false } });
   let turn = 0;
   child.onRequest((message) => { if (message.method === 'turn/start') child.respond(message, { result: { turn: { id: `task-${++turn}` } } }); });
-  const adapter = createNativeAdapter('codex', { command: path.join(fixture.root, 'codex.exe'), env: fixture.env, models: ['strong'], spawn: () => child });
+  const adapter = createNativeAdapter('codex', { command: path.join(fixture.root, 'codex.exe'), env: fixture.env, models: ['strong'], spawn: () => child,
+    describe: async () => ({ id: 'codex', connected: true, scopeEnforced: true, models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }] }) });
   context.adapters.codex = adapter;
   t.after(() => adapter.close());
   const started = await start(context, file);
@@ -1099,17 +1121,26 @@ test('Cursor and Claude task failures wait for their real terminal result and na
     if (client === 'cursor') child.onRequest((message) => {
       if (message.method === 'initialize') child.respond(message, { result: { authMethods: [{ id: 'existing-login' }] } });
       if (message.method === 'authenticate') child.respond(message, { result: {} });
-      if (message.method === 'session/new') { nativeId = 'cursor-task'; child.respond(message, { result: { sessionId: nativeId } }); }
+      const configOptions = [
+        { id: 'model', category: 'model', type: 'select', currentValue: 'strong', options: [{ value: 'strong' }] },
+        { id: 'effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'high' }] },
+      ];
+      if (message.method === 'session/new') { nativeId = 'cursor-task'; child.respond(message, { result: { sessionId: nativeId, configOptions } }); }
+      if (message.method === 'session/set_config_option') child.respond(message, { result: { configOptions } });
       if (message.method === 'session/prompt') finishPrompt = () => child.respond(message, { result: { stopReason: 'end_turn' } });
     });
-    const adapter = createNativeAdapter(client, { command: path.join(fixture.root, `${client}.exe`), env: fixture.env, models: ['strong'], spawn(_command, args) {
+    await writeFile(file, (await readFile(file, 'utf8')).replace('"client":"codex"', `"client":"${client}"`));
+    const spawnNative = (_command, args) => {
       if (client === 'claude') {
         nativeId = args[args.indexOf('--session-id') + 1];
-        queueMicrotask(() => child.stdout.emit('data', `${JSON.stringify({ type: 'system', subtype: 'init', session_id: nativeId })}\n`));
+        queueMicrotask(() => child.stdout.emit('data', `${JSON.stringify({ type: 'system', subtype: 'init', session_id: nativeId, model: 'strong' })}\n`));
         finishPrompt = () => child.stdout.emit('data', `${JSON.stringify({ type: 'result', subtype: 'success', session_id: nativeId })}\n`);
       }
       return child;
-    } });
+    };
+    const adapter = createNativeAdapter(client, { command: path.join(fixture.root, `${client}.exe`), env: fixture.env, models: ['strong'],
+      describe: async () => ({ id: client, connected: true, scopeEnforced: true, models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }] }),
+      enforceScope: async launch => ({ verified: true, spawn: () => spawnNative(launch.command, launch.args) }) });
     context.adapters[client] = adapter;
     t.after(() => adapter.close());
     const started = await start(context, file, { client });
@@ -1128,22 +1159,28 @@ test('Cursor and Claude task failures wait for their real terminal result and na
 
 test('HTTP start responds while native creation is pending so its exact request can be canceled', async (t) => {
   const { fixture, context, file, calls, signaled } = await world(t);
+  await linkRepository(context, fixture.root);
   let entered;
   const ready = new Promise((resolve) => { entered = resolve; });
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const create = context.adapters.codex.create.bind(context.adapters.codex);
   context.adapters.codex.create = async (request) => { entered(); await gate; return create(request); };
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects, adapters: context.adapters, ownedPids: context.ownedPids });
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects, adapters: context.adapters, ownedPids: context.ownedPids, env: { PATH: process.env.PATH } });
   t.after(() => core.http.close());
   const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   const token = local.json.data.token;
   const headers = { 'idempotency-key': randomUUID() };
-  const started = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, { token, headers, body: { client: 'codex', runMode: 'task', taskId: null, prompt: 'Complete the assigned task', expectedRevision: hashBytes(await readFile(file)) } });
+  const started = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, { token, headers, body: { runMode: 'task', taskId: null, prompt: 'Complete the assigned task', expectedRevision: hashBytes(await readFile(file)) } });
   assert.equal(started.status, 202);
   assert.equal(started.json.data.state, 'queued');
   assert.equal(started.json.data.runMode, 'task');
-  await ready;
+  const enteredNative = await settleOr(ready, 10000);
+  if (!enteredNative.settled) {
+    release();
+    const tracked = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${started.json.data.requestId}`, { token });
+    assert.fail(`The native start did not begin: ${JSON.stringify(tracked.json)}`);
+  }
   const requestId = started.json.data.requestId;
   const read = await settleOr(jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${requestId}`, { token }), 500);
   assert.equal(read.settled, true);

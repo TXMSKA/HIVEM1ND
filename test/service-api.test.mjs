@@ -1054,9 +1054,20 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(connected, 200, 'connect lead');
   hit('PUT', '/units/:unitId/lead');
   const led = await call(port, 'GET', '/api/v1/units/root:executor', { token });
+  const runsIn = { client: 'codex', model: 'strong', effort: 'high', mode: null };
+  const chosen = await call(port, 'PATCH', '/api/v1/units/root:executor/runs-in', {
+    token, body: { machine: fixture.machine, runsIn, useAsDefault: false, expectedRevision: led.json.data.revision }, headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(chosen, 200, 'stored runtime'); hit('PATCH', '/units/:unitId/runs-in');
+  const overseer = await call(port, 'POST', '/api/v1/overseer', { token, body: { machine: fixture.machine, runsIn, fresh: true, expectedRevision: null }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(overseer, 201, 'create Overseer'); hit('POST', '/overseer');
+  for (const denied of [phoneCredential.token, settingsAgent.token]) {
+    expectStatus(await call(port, 'POST', '/api/v1/overseer', { token: denied, body: { machine: fixture.machine, runsIn, fresh: true, expectedRevision: null }, headers: { 'idempotency-key': randomUUID() } }), 403, 'Overseer authority');
+    expectStatus(await call(port, 'PATCH', '/api/v1/units/root:executor/runs-in', { token: denied, body: { machine: fixture.machine, runsIn, useAsDefault: false, expectedRevision: chosen.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 403, 'Runs in authority');
+  }
   let started = await call(port, 'POST', '/api/v1/units/root:executor/session', {
     token,
-    body: { client: 'codex', model: 'strong', expectedRevision: led.json.data.revision, prompt: 'Say ok.' },
+    body: { expectedRevision: chosen.json.data.revision, prompt: 'Say ok.' },
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(started, 202, 'start session');
@@ -1778,8 +1789,13 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(linked, 201, 'reviewed cluster link'); hit('POST', '/cluster-links');
   const createdCluster = await call(port, 'POST', '/api/v1/clusters', { token, body: { title: 'Linked folder', parentId: null, link: linked.json.data.link, machine: fixture.machine, confirmed: true }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(createdCluster, 201, 'create cluster'); hit('POST', '/clusters');
+  const agentBody = { role: 'executor', machine: fixture.machine, runsIn, useAsDefault: false, expectedRevision: createdCluster.json.data.revision };
+  for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, 'POST', `/api/v1/clusters/${createdCluster.json.data.id}/agents`, { token: denied, body: agentBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'cluster agent authority');
+  const clusterAgent = await call(port, 'POST', `/api/v1/clusters/${createdCluster.json.data.id}/agents`, { token, body: agentBody, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(clusterAgent, 201, 'cluster agent'); hit('POST', '/clusters/:clusterId/agents');
+  const afterAgent = await call(port, 'GET', `/api/v1/clusters/${createdCluster.json.data.id}?machine=${fixture.machine}`, { token });
   const clusterTarget = `/api/v1/clusters/${createdCluster.json.data.id}`;
-  const patchedCluster = await call(port, 'PATCH', clusterTarget, { token, body: { title: 'Renamed folder', machine: fixture.machine, expectedRevision: createdCluster.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  const patchedCluster = await call(port, 'PATCH', clusterTarget, { token, body: { title: 'Renamed folder', machine: fixture.machine, expectedRevision: afterAgent.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(patchedCluster, 200, 'patch cluster'); hit('PATCH', '/clusters/:clusterId');
   const unlinked = await call(port, 'DELETE', `/api/v1/cluster-links/${createdCluster.json.data.id}`, { token, body: { machine: fixture.machine, confirmed: true, expectedRevision: patchedCluster.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(unlinked, 200, 'detach cluster link'); hit('DELETE', '/cluster-links/:clusterId');

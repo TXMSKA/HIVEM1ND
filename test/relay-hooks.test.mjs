@@ -42,6 +42,23 @@ async function invokeClaudeLifecycle(event, mindPath, sessionId) {
   return { result, output: Buffer.concat(chunks).toString('utf8').trim() };
 }
 
+test('every supported native file/process hook uses the actor-bound permission callback once', async () => {
+  for (const toolName of ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+    const stdin = new PassThrough(); stdin.end(JSON.stringify({ session_id: 'owned', hook_event_name: 'PreToolUse', tool_name: toolName,
+      cwd: 'C:/reviewed', tool_input: toolName === 'Bash' ? { command: 'node task.mjs' } : { file_path: 'C:/reviewed/task.txt', content: 'reviewed' } }));
+    const calls = [], stdout = new PassThrough(); stdout.resume();
+    const result = await runRelayHook({ client: 'claude', mindPath: 'unused', stdin, stdout, stderr: new PassThrough(),
+      env: { HIVEM1ND_SERVICE_GRANT: 'fixture' }, serviceConnector: async () => ({
+        hook: async () => ({ verified: true }), close() {}, async callTool(name, input) {
+          calls.push({ name, input }); return { isError: false, content: [{ type: 'text', text: JSON.stringify({ data: { decision: 'deny' } }) }] };
+        },
+      }) });
+    assert.equal(result.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(calls.length, 1); assert.equal(calls[0].name, 'native_permission'); assert.equal(calls[0].input.toolName, toolName);
+    assert.equal(Object.hasOwn(calls[0].input, 'unitId'), false);
+  }
+});
+
 test('manual session bootstrap names the exact native ID and never recommends guessing a role', async (context) => {
   const mindPath = await fixture(context);
   const response = await invoke('codex', 'SessionStart', mindPath, 'native-manual-42');

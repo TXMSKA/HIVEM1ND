@@ -30,7 +30,7 @@ async function world(t, client = 'codex', fresh = false, configured = false) {
   const projects = [{ name: 'shop', localPath: path.join(fixture.root, 'repository') }];
   await mkdir(projects[0].localPath, { recursive: true });
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
-  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'), 'unit: one\nunit-id: root:one\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'), 'unit: one\nunit-id: root:one\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n');
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects, principal: { audience: 'desktop', unitId: 'root:master' } };
   const editor = await createText(context, { project: 'shop', path: 'docs/note.json', document: { title: 'Owned', rev: 0, pages: [{ k: 'body', en: 'Original' }] } });
   await writeAttachments(context, editor.id, { attached: [UNIT], expectedRevision: null });
@@ -47,13 +47,14 @@ for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line); if (message.id == null) continue;
   let result = {};
   if (message.method === 'account/read') result = { account: { type: 'chatgpt', email: 'fixture@example.com' }, requiresOpenaiAuth: true };
-  if (message.method === 'thread/start') result = { thread: { id: '${NATIVE}' } };
+  if (message.method === 'thread/start') result = { thread: { id: '${NATIVE}' }, model: message.params.model, reasoningEffort: message.params.config?.model_reasoning_effort, sandbox: { type: 'readOnly' } };
   if (message.method === 'turn/start') result = { turn: { id: 'owned-fixture-turn' } };
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
 }
 `);
     adapters[client] = createNativeAdapter(client, {
       command: process.execPath, args: [script], env: fixture.env,
+      describe: async () => ({ id: client, connected: true, scopeEnforced: true, models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }] }),
       createNativeLaunch(request) { launch = createNativeLaunch(service.bridge, request); return launch; },
       onNativeRegistered({ request, registration }) { return initializeNativeEntry({ controller: service.adopted.controller.wake, bridge: service.bridge, request, registration }); },
     });
@@ -174,7 +175,7 @@ test('ordinary configured startup loads exact machine project paths for native l
   const login = await request({ origin, token: service.bootstrap.secret, closed: false }, { path: '/api/v1/auth/local', body: { embedded: false, hostOrigin: null, look: null, language: null } });
   assert.equal(login.status, 201);
   const desktop = { origin, token: login.json.data.token, closed: false };
-  let started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { client: 'codex', runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
+  let started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
   assert.equal(started.status, 202, JSON.stringify(started.json));
   // The route queues the start; the same request reports the verified launch.
   for (const deadline = Date.now() + 5000; ['queued', 'starting'].includes(started.json.data.state) && Date.now() < deadline;) {
@@ -182,7 +183,7 @@ test('ordinary configured startup loads exact machine project paths for native l
     started = await request(desktop, { method: 'GET', path: `/api/v1/session-requests/${started.json.data.requestId}` });
   }
   assert.equal(started.json.data.state, 'started', JSON.stringify(started.json));
-  assert.equal(await readFile(path.join(fixture.root, 'native-cwd.txt'), 'utf8'), projects[0].localPath);
+  assert.equal(path.dirname(await readFile(path.join(fixture.root, 'native-cwd.txt'), 'utf8')), path.join(fixture.paths.localDirectory, 'sessions'));
   const created = await request(desktop, { path: '/api/v1/void/texts', headers: { 'idempotency-key': randomUUID() }, body: { project: 'shop', path: 'docs/configured.json', document: { title: 'Configured', rev: 0, pages: [{ k: 'body', en: 'Registered repository' }] }, attached: [UNIT] } });
   assert.equal(created.status, 201, JSON.stringify(created.json));
   const lines = await stdio({ ...process.env, ...fixture.env, ...state.launch.env }, fixture.paths.mind, [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'void_open', arguments: { resourceId: created.json.data.id } } }]);

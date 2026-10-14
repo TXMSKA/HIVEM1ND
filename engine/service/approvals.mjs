@@ -1,10 +1,10 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CLIENTS, CoreError, canonicalJson, hashBytes, parseTaskId, parseUnitId, replaceHeader, uuidV8, validateName } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, isUuid, parseTaskId, parseUnitId, replaceHeader, uuidV8, validateName } from './identity.mjs';
 import { assertChatSession, classifyApprovalAction, enqueueStart } from './adapters.mjs';
 import { authorize } from './security.mjs';
-import { readUnitState as readState, readUnitStates } from './state.mjs';
+import { readUnitState as readState, readUnitStates, stateRunsIn } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
 import { paginate, readDetail } from './projection.mjs';
@@ -675,11 +675,19 @@ async function validateChild(context, pattern, sessionId) {
   const target = await readState(context, parseUnitId(pattern.unitId));
   if (!target || headerValue(target.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The child unit is not registered.');
   if (headerValue(target.bytes, 'machine') !== pattern.machine) throw new CoreError(409, 'machine_unavailable', 'The child unit belongs to another machine.');
+  const choice = stateRunsIn(target.bytes);
+  if (!choice || choice.client !== pattern.client) throw new CoreError(422, 'unsupported_launch_choice', 'The child must use its stored Runs in choice.');
   if (context.adapters?.[pattern.client]?.capabilities?.create !== true) throw new CoreError(503, 'client_unavailable', 'The requested CLI is not connected.');
   return target;
 }
 
 function normalizeFile(pattern) {
+  if (Object.hasOwn(pattern, 'operation') || Object.hasOwn(pattern, 'snapshot')) {
+    if (Object.keys(pattern).sort().join(',') !== 'operation,path,resource,snapshot' || !['read', 'write'].includes(pattern.operation)
+      || !isUuid(pattern.resource) || typeof pattern.path !== 'string' || !path.isAbsolute(pattern.path) || /[\0\r\n]/.test(pattern.path)
+      || !/^[a-f0-9]{64}$/.test(pattern.snapshot ?? '')) throw new CoreError(422, 'invalid_body', 'The outside-scope approval must identify one exact file operation.');
+    return { action: 'file.write', pattern: { ...pattern }, exact: true, alwaysAllowed: false, desktopOnly: false };
+  }
   const resource = typeof pattern.resource === 'string' ? pattern.resource : '';
   const filePath = normalizeRelative(pattern.path);
   const exact = resource.length > 0 && resource.length <= 240 && filePath !== null;

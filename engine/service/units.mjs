@@ -10,8 +10,15 @@ import { editChatMetadata, projectChatBytes } from './chats.mjs';
 import { stopSession } from './adapters.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { clusterChoices, clusterEntry, clusterEvents, rawClusters, readCluster, resolveClusterLink } from './clusters.mjs';
+import { validateRunsIn } from './runs-in.mjs';
+import { connectedClients, prepareDefaultRunsIn } from './settings.mjs';
 
 export async function createUnit(context, input, options = {}) {
+  if (input?.runsIn) {
+    if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Only the desktop may choose an agent runtime.');
+    if (input.machine !== context.paths.machine) throw new CoreError(409, 'machine_unavailable', 'Create the agent on its selected owner.');
+    if (input.fresh !== undefined && typeof input.fresh !== 'boolean') throw new CoreError(422, 'invalid_body', 'Fresh must be a boolean.');
+  }
   if (input?.clusterId) input = await deriveClusterUnit(context, input);
   const run = () => createPrepared(context, input);
   if (!options.receipt) return run();
@@ -243,6 +250,9 @@ export async function patchSettings(context, input) {
 }
 
 async function prepareCreate(context, input) {
+  const capabilities = input.runsIn ? await connectedClients(context) : [];
+  const runsIn = input.runsIn ? validateRunsIn(input.runsIn, capabilities) : null;
+  if (runsIn && capabilities.find(client => client.id === runsIn.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native scope boundary.');
   const unit = validateName(input?.unit, { label: 'unit', max: 80 });
   const role = validateRole(input?.role);
   const scope = canonicalScope(input?.scope);
@@ -268,7 +278,7 @@ async function prepareCreate(context, input) {
     }
   }
   const position = input.position ? { x: coordinate(input.position.x), y: coordinate(input.position.y) } : { x: 0, y: 0 };
-  const state = Buffer.from(renderState({ unit, id: id.id, role, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null }));
+  const state = Buffer.from(renderState({ unit, id: id.id, role, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null, runsIn, fresh: role === 'overseer' ? input.fresh ?? true : null }));
   const layoutFile = await readJson(context, 'user/gui/layout.json');
   const layout = layoutFile.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} };
   layout.nodes = { ...(layout.nodes ?? {}), [id.id]: position };
@@ -279,7 +289,8 @@ async function prepareCreate(context, input) {
     { name: 'view.changed', data: { revision: hashBytes(state), collections: ['units', 'leads', 'squads'] } },
   ];
   const relative = unitStatePath(id);
-  const membership = input.clusterId ? await prepareClusterMembership(context, input.clusterId, id.id) : [];
+  const membership = input.clusterId ? await prepareClusterMembership(context, input.clusterId, id.id, input.expectedRevision) : [];
+  const defaults = input.useAsDefault === true && runsIn ? [await prepareDefaultRunsIn(context, runsIn)] : [];
   if (membership.length) events.push(...clusterEvents(projectGroup(membership[0].afterBytes, input.clusterId)),
     { name: 'chat.changed', chatId: input.clusterId, data: { chat: projectChatBytes(membership[1].afterBytes, input.clusterId) } });
   return {
@@ -294,6 +305,7 @@ async function prepareCreate(context, input) {
       { resource: relative, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: state },
       { resource: 'user/gui/layout.json', recordPath: absolute(context, 'user/gui/layout.json'), beforeRevision: layoutFile.revision, afterBytes: layoutBytes },
       ...membership,
+      ...defaults,
     ], events),
   };
 }
@@ -355,6 +367,8 @@ function renderState(fields) {
   if (fields.job) lines.push(`job: ${fields.job}`);
   if (fields.model) lines.push(`model: ${fields.model}`);
   if (fields.clusterId) lines.push(`cluster-id: ${fields.clusterId}`);
+  if (fields.runsIn) lines.push(`runs-in: ${canonicalJson(fields.runsIn)}`);
+  if (fields.fresh !== null) lines.push(`fresh: ${fields.fresh}`);
   return `${lines.join('\n')}\n\nReady.\n`;
 }
 
@@ -372,10 +386,11 @@ export async function resolveUnitCluster(context, unitId) {
 
 async function deriveClusterUnit(context, input) {
   const cluster = await readCluster(context, input.clusterId, { machine: input.machine ?? context.paths.machine });
+  if (input.expectedRevision !== undefined && input.expectedRevision !== cluster.revision) throw new CoreError(409, 'cluster_changed', 'The selected cluster changed before agent creation.');
   if (!['executor', 'overlord'].includes(input.role)) throw new CoreError(422, 'invalid_role', 'A cluster agent is an Executor or Overlord.');
   const mapping = cluster.link.kind === 'none' ? null : await resolveClusterLink(context, cluster.link, context.paths.machine);
   const scope = cluster.link.kind === 'repository' ? { kind: 'project', name: mapping.projectId } : { kind: 'root' };
-  const records = await readUnitStates(context), clusters = await rawClusters(context);
+  const records = (await readUnitStates(context)).sort((left, right) => left.id.localeCompare(right.id)), clusters = await rawClusters(context);
   const base = `${input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
   let unit = base, index = 2;
   while (records.some(record => record.id === unitIdFor(unit, scope))) unit = `${base}-${index++}`;
@@ -391,9 +406,24 @@ async function deriveClusterUnit(context, input) {
   return { ...input, unit, scope, machine: context.paths.machine, leadId };
 }
 
-async function prepareClusterMembership(context, clusterId, unitId) {
+export async function setUnitRunsIn(context, unitId, input) {
+  if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Only the desktop may change Runs in.');
+  const parsed = parseUnitId(unitId), current = await readState(context, parsed);
+  if (!current || header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  if (input.machine !== context.paths.machine || header(current.bytes, 'machine') !== input.machine) throw new CoreError(409, 'machine_unavailable', 'Change Runs in on its owning machine.');
+  const capabilities = await connectedClients(context), choice = validateRunsIn(input.runsIn, capabilities);
+  if (capabilities.find(client => client.id === choice.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native scope boundary.');
+  const next = replaceHeader(current.bytes, 'runs-in', canonicalJson(choice));
+  const entries = [{ resource: current.relative, recordPath: current.absolute, beforeRevision: input.expectedRevision, afterBytes: next }];
+  if (input.useAsDefault === true) entries.push(await prepareDefaultRunsIn(context, choice));
+  const events = [{ name: 'unit.changed', data: { unit: { id: parsed.id } } }];
+  return finish(context, { events, stage: [{ target: { kind: 'mind', path: current.relative }, bytes: next }] }, transactionOf(context, entries, events));
+}
+
+async function prepareClusterMembership(context, clusterId, unitId, expectedRevision) {
   const current = (await rawClusters(context)).find(item => item.cluster.id === clusterId && !item.cluster.deleted);
   if (!current) throw new CoreError(409, 'cluster_changed', 'The cluster changed before creation.');
+  if (expectedRevision !== undefined && current.cluster.revision !== expectedRevision) throw new CoreError(409, 'cluster_changed', 'The cluster changed before creation.');
   if (current.cluster.members.length >= 255) throw new CoreError(422, 'invalid_members', 'A cluster can include at most 255 agents.');
   const relative = `user/relay/chats/${clusterId}/chat.md`, beforeChat = await readBytes(context.store, absolute(context, relative));
   if (revisionOf(beforeChat) !== current.record.chatRevision) throw new CoreError(409, 'chat_changed', 'The linked chat changed.');

@@ -8,7 +8,7 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
-import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias } from './units.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias, setUnitRunsIn } from './units.mjs';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { clusterOwner, createCluster, listClusters, patchCluster, readCluster, removeCluster } from './clusters.mjs';
@@ -58,6 +58,9 @@ const ROUTES = [
   ['POST', '/units', 'unit.create', 'D', 'createUnit'],
   ['PUT', '/units/:unitId/lead', 'unit.connect', 'D', 'connectLead'],
   ['POST', '/units/:unitId/session', 'session.start', 'D', 'enqueueStart'],
+  ['POST', '/clusters/:clusterId/agents', 'unit.create', 'D', 'createClusterAgent'],
+  ['POST', '/overseer', 'unit.create', 'D', 'createOverseer'],
+  ['PATCH', '/units/:unitId/runs-in', 'unit.create', 'D', 'setUnitRunsIn'],
   ['GET', '/session-requests/:requestId', 'read', 'DPA', 'detail', 'sessions'],
   ['POST', '/session-requests/:requestId/cancel', 'session.start', 'D', 'cancelStart'],
   ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
@@ -926,6 +929,10 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
+  if (['createClusterAgent', 'createOverseer', 'setUnitRunsIn'].includes(route.handler)) {
+    clusterOwner(domain, body?.machine, { write: true });
+    if (body.useAsDefault === true) authorize(credential, 'settings.write');
+  }
   if (route.handler === 'cluster' && route.method !== 'GET') clusterOwner(domain, body?.machine, { write: true });
   if (route.handler === 'addition') {
     await assertAdditionRequest(domain, route.collection, body, params.previewId ?? params.uploadId ?? params.additionId ?? null);
@@ -1010,6 +1017,11 @@ function bodyExpect(route) {
 
 function rejectUnknown(route, body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return;
+  if (route.handler === 'enqueueStart' && ['client', 'model', 'effort', 'runsIn'].some(key => Object.hasOwn(body, key))) throw new CoreError(422, 'unsupported_launch_choice', 'Change the stored Runs in choice before starting a session.');
+  if (['createClusterAgent', 'createOverseer', 'setUnitRunsIn'].includes(route.handler)) {
+    if (!body.runsIn || !Object.hasOwn(body, 'expectedRevision') || route.handler !== 'createOverseer' && typeof body.useAsDefault !== 'boolean'
+      || route.handler === 'createOverseer' && typeof body.fresh !== 'boolean') throw new CoreError(422, 'invalid_body', 'The complete stored launch choice is required.');
+  }
   const allowed = allowedBody(route);
   if (allowed) {
     for (const key of Object.keys(body)) {
@@ -1072,7 +1084,10 @@ function allowedBody(route) {
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
-    'POST /units/:unitId/session': ['client', 'prompt', 'model', 'runMode', 'taskId', 'expectedRevision'],
+    'POST /units/:unitId/session': ['prompt', 'runMode', 'taskId', 'expectedRevision'],
+    'POST /clusters/:clusterId/agents': ['machine', 'role', 'runsIn', 'useAsDefault', 'expectedRevision'],
+    'POST /overseer': ['machine', 'runsIn', 'fresh', 'expectedRevision'],
+    'PATCH /units/:unitId/runs-in': ['machine', 'runsIn', 'useAsDefault', 'expectedRevision'],
     'POST /session-requests/:requestId/cancel': [],
     'POST /sessions/:sessionId/stop': ['confirmed'],
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
@@ -1356,6 +1371,13 @@ async function invoke(route, scope) {
     return { status: 200, body: changed.unit };
   }
   if (route.handler === 'removeUnit') return { status: 200, body: await removeUnit(domain, params.unitId, body) };
+  if (route.handler === 'createClusterAgent' || route.handler === 'createOverseer') {
+    const input = route.handler === 'createClusterAgent' ? { ...body, clusterId: params.clusterId }
+      : { ...body, unit: 'overseer', role: 'overseer', scope: { kind: 'root' } };
+    const created = await createUnit(domain, input);
+    return { status: 201, body: created.unit };
+  }
+  if (route.handler === 'setUnitRunsIn') return { status: 200, body: (await setUnitRunsIn(domain, params.unitId, body)).unit };
   if (route.handler === 'createUnit') {
     const created = await createUnit(domain, body);
     return { status: 201, body: created.unit };

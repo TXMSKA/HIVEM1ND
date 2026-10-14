@@ -833,6 +833,7 @@ test('machine clients are the probed availability records without executable pat
     { id: 'claude', enabled: false, installed: false },
     { id: 'codex', enabled: true, installed: true },
     { id: 'cursor', enabled: false, installed: false },
+    { id: 'lyra', enabled: false, installed: false },
   ]);
   assert.equal(JSON.stringify(machine).includes(executable), false);
 });

@@ -219,6 +219,6 @@ test('HTTP clusters enforce exact bodies, explicit owner and replay without expo
   await createGroup(context, { title: 'Choice one', members: ['root:one'] });
   await createGroup(context, { title: 'Choice two', members: ['root:one'] });
   const unit = (await call('GET', '/units/root%3Aone')).value.data;
-  const launch = await call('POST', '/units/root%3Aone/session', { client: 'codex', prompt: 'Fixture task', expectedRevision: unit.revision });
+  const launch = await call('POST', '/units/root%3Aone/session', { prompt: 'Fixture task', expectedRevision: unit.revision });
   assert.equal(launch.status, 409); assert.equal(launch.value.error.code, 'scope_unresolved');
 });

@@ -147,6 +147,15 @@ function permissionResponse(decision) {
 }
 
 async function requestNativeApproval(service, input, timeoutMs) {
+  if (['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(input.tool_name) && typeof input.cwd === 'string') {
+    try {
+      const result = await service.callTool('native_permission', { toolName: input.tool_name, input: input.tool_input ?? {}, cwd: input.cwd, requestId: randomUUID() });
+      if (!result.isError) {
+        const value = JSON.parse(result.content?.find(item => item.type === 'text')?.text ?? '{}').data;
+        return value?.decision === 'allow' ? 'allow' : 'deny';
+      }
+    } catch { return 'deny'; }
+  }
   if (input.tool_name !== 'Bash' || typeof input.tool_input?.command !== 'string' || typeof input.cwd !== 'string') return 'ask';
   let approvalId = null;
   let settle;

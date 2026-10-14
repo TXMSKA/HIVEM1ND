@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,12 +6,16 @@ import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseTask
 import { loadTask } from './tasks.mjs';
 import { answersFor, readDetail } from './projection.mjs';
 import { publishDomainEvents } from './events.mjs';
-import { readUnitState } from './state.mjs';
+import { readUnitState, stateRunsIn } from './state.mjs';
 import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocks } from './store.mjs';
 import { readAgentPermissions } from './settings.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
+import { launchChoice } from './runs-in.mjs';
+import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOperation, writeScopedFile } from './file-access.mjs';
+import { assertNoLinks } from './paths.mjs';
+import { protectLocalFile } from './security.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
@@ -66,7 +70,7 @@ export async function probeClients(options = {}) {
   const platform = options.platform ?? process.platform;
   const reports = {};
   for (const client of CLIENTS) {
-    const located = await locateClient(client, env, platform);
+    const located = client === 'lyra' ? null : await locateClient(client, env, platform);
     const unwrapped = located && client !== 'cursor' ? await unwrapLaunch(located.command, client) : null;
     const command = client === 'cursor' ? located?.command ?? null : unwrapped?.command ?? null;
     const installed = Boolean(command);
@@ -114,13 +118,32 @@ export function createNativeAdapter(client, options = {}) {
       scopedContent: typeof options.scopedContent?.bind === 'function',
     },
     models,
+    async describe(context = {}) {
+      if (typeof options.describe === 'function') return options.describe();
+      if (fixture) return { id: client, title: client, connected: true, scopeEnforced: true,
+        models: models.map(id => ({ id, title: id, efforts: options.efforts ?? ['high'], modes: [] })),
+        quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
+      if (client === 'codex' && live) return probeCodexChoices(options);
+      if (live && ['claude', 'cursor'].includes(client)) return probeNativeChoices(client, options, context);
+      return { id: client, title: client, connected: false, models: [], scopeEnforced: false,
+        quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
+    },
     async probe() {
       return { client, nativeSupport: this.nativeSupport, installed: this.capabilities.create };
     },
     async create(request) {
       if (!this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
-      if (request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
+      if (!request.runsIn && request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
+      if (request.runsIn && (request.runsIn.client !== client || request.model !== request.runsIn.model || request.effort !== request.runsIn.effort)) {
+        throw new CoreError(422, 'unsupported_launch_choice', 'The immutable launch choice does not match the native request.');
+      }
+      if (request.runsIn) {
+        const capability = await this.describe({ localDirectory: request.probeDirectory });
+        launchChoice({ runsIn: request.runsIn }, [capability]);
+        if (capability.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
+      }
+      if (request.runsIn && !fixture && client !== 'codex' && typeof options.enforceScope !== 'function') throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
       if (fixture) {
         const created = acceptFixture(client, options.transcript ?? [], request);
         sessions.set(created.nativeSessionId, { ...created, unitId: request.unitId, closedTurns: [] });
@@ -130,24 +153,32 @@ export function createNativeAdapter(client, options = {}) {
       request = { ...request, nativeMcp: nativeLaunch?.mcp ?? null };
       if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
       let child;
+      const permissionAbort = new AbortController();
       try {
         const resolved = options.command
           ? { command: options.command, args: options.args ?? launchArgs(client, request) }
           : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
         if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
         assertNoBypass(resolved.args);
-        child = (options.spawn ?? spawn)(resolved.command, resolved.args, {
+        const spawnOptions = {
           shell: false,
           windowsHide: true,
           cwd: request.cwd || undefined,
           env: nativeLaunch ? { ...(options.env ?? process.env), ...nativeLaunch.env } : options.env ?? process.env,
           stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        };
+        if (request.runsIn && typeof options.enforceScope === 'function') {
+          const enforced = await options.enforceScope({ command: resolved.command, args: resolved.args, options: spawnOptions, scope: request.launchScope,
+            policy: { gitBrokerOnly: true, indirectWrites: 'confined', outsideWrites: 'exact-once' } });
+          if (enforced?.verified !== true || typeof enforced.spawn !== 'function') throw new CoreError(409, 'scope_unavailable', 'The OS sandbox could not be verified.');
+          request.nativeBoundary = { ...enforced, signal: permissionAbort.signal };
+          child = enforced.spawn();
+        } else child = (options.spawn ?? spawn)(resolved.command, resolved.args, spawnOptions);
       } catch (error) {
         nativeLaunch?.close();
         throw error;
       }
-      child.once?.('exit', () => nativeLaunch?.close());
+      child.once?.('exit', () => { permissionAbort.abort(); nativeLaunch?.close(); });
       if (child?.pid) children.set(child.pid, child);
       let opened = null;
       let deadline;
@@ -167,6 +198,8 @@ export function createNativeAdapter(client, options = {}) {
         record.unitId = request.unitId ?? null;
         record.nativeLaunch = nativeLaunch;
         record.timeoutMs = options.timeoutMs ?? 30000;
+        record.launchChoice = request.runsIn ?? null;
+        record.permissionRequest = request;
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
         sessions.set(opened.nativeSessionId, record);
         if (client === 'claude') pumpClaude(record);
@@ -183,13 +216,14 @@ export function createNativeAdapter(client, options = {}) {
           throw ambiguous;
         }
         if (child?.pid) children.delete(child.pid);
-        if (error instanceof CoreError && error.code === 'client_unavailable') throw error;
+        if (error instanceof CoreError) throw error;
         throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       }
     },
     async confirm(proof) {
       if (!proof || proof.client !== client || typeof proof.nativeSessionId !== 'string') return false;
       const session = sessions.get(proof.nativeSessionId);
+      if (session && proof.pid !== undefined && session.pid !== proof.pid) return false;
       if (fixture && session) return !proof.unitId || proof.unitId === session.unitId;
       if (!session?.child || session.child.exitCode != null || session.child.killed === true) return false;
       if (proof.unitId && session.unitId && proof.unitId !== session.unitId) return false;
@@ -251,6 +285,14 @@ export function createNativeAdapter(client, options = {}) {
       if (!choice || nativeRequest?.always === true) throw new CoreError(422, 'always_unavailable', 'The native request has no exact once decision.');
       return { decision: choice, requestId: nativeRequest.id };
     },
+    async permission(proof, input) {
+      if (await this.confirm(proof) !== true) throw new CoreError(409, 'scope_unavailable', 'The native permission actor is no longer owned.');
+      const session = sessions.get(proof.nativeSessionId);
+      const response = await nativePermissionReply({ type: 'control_request', request_id: input.requestId, session_id: proof.nativeSessionId,
+        request: { subtype: 'can_use_tool', tool_name: input.toolName, input: input.input } },
+      { ...session.permissionRequest, nativeSessionId: proof.nativeSessionId, cwd: input.cwd });
+      return { decision: response.response.response.behavior === 'allow' ? 'allow' : 'deny' };
+    },
     async stop(session) {
       if (!session?.owned) return { acknowledged: false, code: 'stop_unavailable' };
       const child = children.get(session.pid);
@@ -308,11 +350,20 @@ export function parseClaudeLine(line) {
 }
 
 export async function enqueueStart(context, input) {
-  const client = input?.client;
-  if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const unit = parseUnitId(input.unitId);
   const state = (await readUnitState(context, unit))?.bytes;
   if (!state || /^removed:\s*true\s*$/m.test(state.toString('utf8').split(/\r?\n\r?\n/, 1)[0])) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  const stored = stateRunsIn(state);
+  let choice = null;
+  if (stored) {
+    const reports = await import('./settings.mjs').then(module => module.connectedClients(context));
+    choice = launchChoice({ runsIn: stored }, reports);
+    if (reports.find(report => report.id === choice.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected client cannot enforce file and process scope.');
+  } else throw new CoreError(409, 'scope_unresolved', 'Choose Runs in before launching this agent.');
+  if (input.client !== undefined && input.client !== choice.client || input.model !== undefined && input.model !== choice.model
+    || input.effort !== undefined && input.effort !== choice.effort) throw new CoreError(422, 'unsupported_launch_choice', 'Use the stored Runs in choice.');
+  const client = choice?.client ?? input.client;
+  if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const id = input.approvalId ? uuidV8(['session-child', input.approvalId])
     : context.receipt ? uuidV8(['session-request', context.receipt.principalHash, context.receipt.key]) : randomUUID();
   const targetMachine = input.targetMachine ?? state.toString('utf8').match(/^machine:\s*(\S+)/m)?.[1] ?? context.paths.machine;
@@ -335,9 +386,7 @@ export async function enqueueStart(context, input) {
   }
   if (runMode === 'task' && taskId === null && !prompt?.trim()) throw new CoreError(422, 'task_required', 'A task or task prompt is required.');
   const adapter = adapterFor(context, client);
-  if (input.model && !adapter.models.includes(input.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
   if (!adapter.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
-  if (targetMachine === context.paths.machine && !registeredProjectCwd(context, unit.id)) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
   const request = {
     format: 'hivem1nd-session-request-v1',
     id,
@@ -346,7 +395,9 @@ export async function enqueueStart(context, input) {
     requestedBy: context.principal?.unitId ?? 'root:master',
     sourceMachine: context.paths.machine,
     client,
-    model: input.model ?? null,
+    model: choice.model,
+    runsIn: choice,
+    effort: choice.effort,
     leadId: input.leadId ?? null,
     job: input.job ?? null,
     prompt,
@@ -374,7 +425,16 @@ export async function consumeStart(context, requestId) {
     const request = await readJson(context, await findRequest(context, requestId));
     if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
     if (request.targetMachine !== context.paths.machine) return { status: 202, request, state: 'queued' };
-    return withLocks(context.store, [`launch:${request.unitId}`, `request:${requestId}`], () => launch(context, request));
+    try {
+      return await withLocks(context.store, [`launch:${request.unitId}`, `request:${requestId}`], () => launch(context, request));
+    } catch (error) {
+      if (error instanceof CoreError && error.code !== 'injected_crash') {
+        await writeResult(context, request, 'failed', null, { code: error.code, message: error.message });
+        const journal = (await listJournals(context)).find(item => item.requestId === requestId);
+        if (journal && journal.createAttempted !== true) await writeJournal(context, { ...journal, phase: 'failed' });
+      }
+      throw error;
+    }
   }).finally(() => context.store.sessionLaunches.delete(requestId));
   context.store.sessionLaunches.set(requestId, work);
   return work;
@@ -623,12 +683,18 @@ async function launch(context, request) {
   if (!answersFor(await currentBeat(context), context.now())) throw new CoreError(409, 'machine_unavailable', 'The target machine is not answering.');
   const state = (await readUnitState(context, parseUnitId(request.unitId)))?.bytes;
   if (!state || hashBytes(state) !== request.stateRevision) throw new CoreError(409, 'unit_changed', 'The unit changed before launch.');
-  const cwd = registeredProjectCwd(context, request.unitId);
-  if (!cwd) throw new CoreError(503, 'client_unavailable', 'The unit has no registered project path.');
+  if (!request.runsIn) throw new CoreError(409, 'scope_unresolved', 'Choose Runs in before launching this agent.');
+  const scope = await prepareLaunchScope(context, request);
+  const cwd = scope.cwd;
   if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && !['failed', 'stopped'].includes(item.phase) && item.createAttempted === true)) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
   const adapter = adapterFor(context, request.client);
+  if (request.runsIn) {
+    const report = await adapter.describe?.({ localDirectory: scope.directory, store: context.store });
+    request = { ...request, runsIn: launchChoice({ runsIn: request.runsIn }, report ? [report] : []) };
+    if (report.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The native boundary changed before launch.');
+  }
   try {
     const additions = await additionsForUnit(context, request.unitId);
     if (additions.length && (adapter.capabilities?.scopedContent !== true || typeof adapter.bindContent !== 'function')) throw new CoreError(503, 'scope_unavailable', 'The client cannot enforce scoped content for this session.');
@@ -642,16 +708,25 @@ async function launch(context, request) {
   }
   const contentReader = proof => readScopedAdditions(context, { unitId: request.unitId, client: request.client,
     nativeSessionId: proof.nativeSessionId, sessionId: uuidV8(['session', context.paths.machine, request.client, proof.nativeSessionId, request.unitId]) });
-  const permissions = (await readAgentPermissions(context)).filter(item => item.client === request.client && parseUnitId(request.unitId).project !== null);
-  const permissionBinding = { repository: cwd, permissionIds: permissions.map(item => item.id) };
+  const repository = scope.scope.writeRoots.find(root => root.gitCommonDir)?.realPath ?? null;
+  const permissions = (await readAgentPermissions(context)).filter(item => item.client === request.client && repository !== null);
+  const permissionBinding = { repository, permissionIds: permissions.map(item => item.id) };
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
   if (context.launchFault === 'prepared') throw new CoreError(500, 'injected_crash', 'Injected crash before native creation.');
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
   let created;
   try {
-    created = await adapter.create({ ...request, cwd, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
-      agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository: cwd })) });
+    const actorContext = () => {
+      if (!created) throw new CoreError(409, 'scope_unavailable', 'The native session is not registered yet.');
+      return { ...context, principal: { audience: 'agent', unitId: request.unitId,
+        sessionId: uuidV8(['session', context.paths.machine, request.client, created.nativeSessionId, request.unitId]) } };
+    };
+    created = await adapter.create({ ...request, cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+      nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
+      scopedRead: input => readScopedFile(actorContext(), input),
+      scopedWrite: input => writeScopedFile(actorContext(), input),
+      agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository })) });
   } catch (error) {
     if (error?.ownedPid) {
       context.ownedPids ??= new Set();
@@ -659,7 +734,7 @@ async function launch(context, request) {
       await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'ambiguous', pid: error.ownedPid, sessionId: null, createAttempted: true, at: stamp(context) });
       return finish(context, request, 'failed', null, { code: 'launch_ambiguous', message: 'The native launch has not been confirmed.' });
     }
-    if (error instanceof CoreError && (error.code === 'client_unavailable' || error.code === 'protocol_error')) {
+    if (error instanceof CoreError) {
       await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
       await writeResult(context, request, 'failed', null, { code: error.code, message: error.message });
     }
@@ -671,6 +746,7 @@ async function launch(context, request) {
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
+  if (scope) await bindLaunchScope(context, scope.scope, registration, pid);
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
   try {
     if (adapter.capabilities?.scopedContent) {
@@ -678,7 +754,7 @@ async function launch(context, request) {
       const bound = await adapter.bindContent(proof, () => contentReader(proof));
       if (bound?.bound !== true) throw new CoreError(503, 'scope_unavailable', 'The client did not confirm its scoped content binding.');
     }
-    await adapter.registered?.({ ...request, gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository: cwd }) }, registration, context);
+    await adapter.registered?.({ ...request, gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository }) }, registration, context);
   } catch (error) {
     await stopSession(context, registration.sessionId, { confirmed: true });
     await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
@@ -868,7 +944,7 @@ function parseRpc(line, methods) {
 }
 
 function assertNoBypass(argv) {
-  if (argv.some((arg) => /dangerously-skip-permissions|bypassPermissions/i.test(String(arg)))) {
+  if (argv.some((arg) => /dangerously-skip-permissions|dangerously-bypass|bypassPermissions|danger-full-access|dangerFullAccess|--yolo|--force|--trust|--allow-all|--auto-approve/i.test(String(arg)))) {
     throw new CoreError(422, 'unsupported_action', 'Permission bypass flags are not accepted.');
   }
 }
@@ -886,6 +962,8 @@ function launchArgs(client, request = {}) {
   if (client === 'codex') return ['app-server', '--listen', 'stdio://'];
   if (client === 'cursor') return ['acp'];
   const args = ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--session-id', request.nativeSessionId ?? randomUUID()];
+  if (request.runsIn) args.push('--model', request.runsIn.model, '--effort', request.runsIn.effort);
+  if (request.runsIn) args.push('--permission-mode', 'default', '--permission-prompt-tool', 'stdio', '--strict-mcp-config');
   if (request.nativeMcp) {
     const { name, command, args: serverArgs } = request.nativeMcp;
     args.push('--mcp-config', JSON.stringify({ mcpServers: { [name]: { command, args: serverArgs } } }));
@@ -987,18 +1065,6 @@ export async function resolveLaunch(client, env = process.env, platform = proces
   return unwrapLaunch(located.command, client, request);
 }
 
-function registeredProjectCwd(context, unitId) {
-  const projects = (context.projects ?? []).filter((item) => item?.name && typeof item.localPath === 'string' && item.eligible !== false);
-  let projectName = null;
-  try {
-    projectName = parseUnitId(unitId).project;
-  } catch {
-    projectName = null;
-  }
-  if (projectName) return projects.find((item) => item.name === projectName)?.localPath ?? null;
-  return projects.length === 1 ? projects[0].localPath : null;
-}
-
 async function unwrapLaunch(file, client, request = {}) {
   if (!file) return null;
   if (!file.toLowerCase().endsWith('.cmd')) return { command: file, args: launchArgs(client, request) };
@@ -1058,7 +1124,7 @@ async function openOwnedChannel(client, child, request, timeoutMs) {
       const nativeSessionId = await claudeHandshake(child, request, incoming);
       return { nativeSessionId, incoming, rpc: null, session: null };
     }
-    const rpc = openRpc(child, incoming, session, timeoutMs);
+    const rpc = openRpc(child, incoming, session, timeoutMs, request);
     const nativeSessionId = client === 'codex' ? await codexHandshake(rpc, request) : await cursorHandshake(rpc, request);
     session.nativeSessionId = nativeSessionId;
     return { nativeSessionId, incoming, rpc, session };
@@ -1083,7 +1149,8 @@ async function submitCodex(session, text) {
   const expected = typeof session.turnId === 'string' && session.turnId ? session.turnId : null;
   const started = expected
     ? await session.rpc.call('turn/steer', { threadId: session.nativeSessionId, expectedTurnId: expected, input })
-    : await session.rpc.call('turn/start', { threadId: session.nativeSessionId, input });
+    : await session.rpc.call('turn/start', { threadId: session.nativeSessionId, input,
+      ...(session.launchChoice ? { model: session.launchChoice.model, effort: session.launchChoice.effort } : {}) });
   if (expected) {
     const turnId = started?.result?.turnId;
     if (typeof turnId !== 'string' || turnId !== expected) return { submitted: false, ambiguous: true };
@@ -1122,6 +1189,7 @@ async function submitClaude(session, text) {
 }
 
 async function pumpClaude(session) {
+  const permissions = new Map();
   while (session.child.exitCode == null && !session.child.killed) {
     let message;
     try { message = parseClaudeLine(await session.incoming.line()); }
@@ -1131,6 +1199,22 @@ async function pumpClaude(session) {
       break;
     }
     if (message.session_id && message.session_id !== session.nativeSessionId) continue;
+    if (message.type === 'control_cancel_request') { permissions.get(message.request_id)?.abort.abort(); continue; }
+    if (message.type === 'control_request' && typeof message.request_id === 'string') {
+      const fingerprint = canonicalJson(message), previous = permissions.get(message.request_id);
+      const denied = () => nativePermissionReply(message);
+      let response;
+      if (previous && previous.fingerprint !== fingerprint || !previous && permissions.size >= 256) response = denied();
+      else if (previous) response = previous.response;
+      else {
+        const abort = new AbortController(), boundary = session.permissionRequest.nativeBoundary;
+        response = nativePermissionReply(message, { ...session.permissionRequest, nativeSessionId: session.nativeSessionId,
+          nativeBoundary: boundary ? { ...boundary, signal: AbortSignal.any([abort.signal, boundary.signal]) } : null });
+        permissions.set(message.request_id, { fingerprint, response, abort });
+      }
+      response.then(result => { if (session.child.exitCode == null && !session.child.killed) sendLine(session.child, result); }).catch(() => {});
+      continue;
+    }
     if (message.type === 'assistant' || message.type === 'result') {
       session.submission?.({ submitted: !message.is_error, ...(message.is_error ? { ambiguous: true } : {}) });
       session.submission = null;
@@ -1142,7 +1226,6 @@ async function pumpClaude(session) {
 function startupInstruction(request) {
   const lines = [`Unit: ${request.unitId ?? ''}`];
   if (typeof request.job === 'string' && request.job) lines.push(`Job: ${request.job}`);
-  if (typeof request.model === 'string' && request.model) lines.push(`Model: ${request.model}`);
   if (typeof request.leadId === 'string' && request.leadId) lines.push(`Lead: ${request.leadId}`);
   lines.push('Read the unit role, job and lead from the registered files and stay ready.');
   if (request.runMode === 'task') lines.push(`Assigned task: ${request.taskId ?? 'the task prompt in the mailbox'}. After terminal delivery or failure, call session_complete with outcome delivered or failed. The CLI closes after native completion is acknowledged.`);
@@ -1162,7 +1245,10 @@ async function claudeHandshake(child, request, incoming) {
       continue;
     }
     if (message?.type === 'result' && message.is_error) throw unavailable();
-    if (message?.type === 'system' && message.subtype === 'init' && message.session_id === request.nativeSessionId) return request.nativeSessionId;
+    if (message?.type === 'system' && message.subtype === 'init' && message.session_id === request.nativeSessionId) {
+      if (request.runsIn && message.model !== request.runsIn.model) throw new CoreError(422, 'unsupported_launch_choice', 'The native client did not confirm the selected model.');
+      return request.nativeSessionId;
+    }
   }
   throw unavailable();
 }
@@ -1182,12 +1268,14 @@ function noteTurn(session, message) {
   if (session.terminalTurnId === turnId) session.onCompleted?.().catch(() => {});
 }
 
-function openRpc(child, incoming, session, timeoutMs) {
+function openRpc(child, incoming, session, timeoutMs, request = {}) {
   let nextId = 1;
   let stopped = false;
   let started = false;
   const pending = new Map();
   const early = new Map();
+  const nativeRequests = new Map();
+  request.nativeItems = new Map();
   const failAll = (error) => {
     stopped = true;
     for (const waiter of [...pending.values()]) waiter.reject(error);
@@ -1234,13 +1322,27 @@ function openRpc(child, incoming, session, timeoutMs) {
         break;
       }
       if (message?.method && message.id == null) {
+        if (message.method === 'serverRequest/resolved') nativeRequests.get(message.params?.requestId)?.abort.abort();
+        if (message.method === 'item/started' && message.params?.item?.id) {
+          if (request.nativeItems.size >= 256) request.nativeItems.delete(request.nativeItems.keys().next().value);
+          request.nativeItems.set(message.params.item.id, message.params.item);
+        }
         noteTurn(session, message);
         continue;
       }
       if (typeof message?.method === 'string' && (typeof message.id === 'string' || typeof message.id === 'number')) {
-        // An unimplemented native permission request cannot wait indefinitely or imply approval.
-        try { sendLine(child, { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'This native request is not supported by the attached service.' } }); }
-        catch { failAll(unavailable()); }
+        const fingerprint = canonicalJson(message), previous = nativeRequests.get(message.id);
+        if (previous && previous.fingerprint !== fingerprint || !previous && nativeRequests.size >= 256) {
+          sendLine(child, { jsonrpc: '2.0', id: message.id, error: { code: -32001, message: 'The native operation identity changed.' } });
+          continue;
+        }
+        if (!previous) {
+          const abort = new AbortController(), boundary = request.nativeBoundary;
+          const response = nativePermissionReply(message, { ...request,
+            nativeBoundary: boundary ? { ...boundary, signal: AbortSignal.any([abort.signal, boundary.signal]) } : null });
+          nativeRequests.set(message.id, { fingerprint, response, abort });
+          response.then(result => { if (!stopped) sendLine(child, result); }).catch(() => failAll(unavailable()));
+        } else previous.response.then(result => { if (!stopped) sendLine(child, result); }).catch(() => {});
         continue;
       }
       remember(message);
@@ -1315,8 +1417,16 @@ async function codexHandshake(rpc, request) {
     params.config = { mcp_servers: { [name]: { command, args, env_vars: ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT'] } } };
   }
   if (request.model) params.model = request.model;
+  if (request.runsIn) {
+    params.approvalPolicy = 'untrusted';
+    params.sandbox = 'read-only';
+    params.config = { ...params.config, model_reasoning_effort: request.runsIn.effort };
+  }
   const thread = await rpc.call('thread/start', params);
   if (!thread.result?.thread?.id) throw unavailable();
+  if (request.runsIn && (thread.result.model !== request.runsIn.model || thread.result.reasoningEffort !== request.runsIn.effort
+    || thread.result.sandbox?.type !== 'readOnly')) throw new CoreError(409, 'scope_unavailable', 'The client did not confirm its effective native policy and launch choice.');
+  request.nativeSessionId = thread.result.thread.id;
   return thread.result.thread.id;
 }
 
@@ -1324,7 +1434,7 @@ async function cursorHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
   const init = await rpc.call('initialize', {
     protocolVersion: 1,
-    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    clientCapabilities: { fs: { readTextFile: typeof request.scopedRead === 'function', writeTextFile: typeof request.scopedWrite === 'function' }, terminal: false },
   });
   if (init?.error) throw unavailable();
   const method = (init.result?.authMethods ?? []).find((item) => /existing|login/i.test(`${item.id ?? ''} ${item.name ?? item}`));
@@ -1333,7 +1443,195 @@ async function cursorHandshake(rpc, request) {
   if (auth?.error) throw unavailable();
   const session = await rpc.call('session/new', { cwd: request.cwd, mcpServers: request.nativeMcp ? [request.nativeMcp] : [] });
   if (!session.result?.sessionId) throw unavailable();
+  if (request.runsIn) {
+    let configOptions = session.result.configOptions ?? [];
+    for (const [category, value] of [['model', request.runsIn.model], ['thought_level', request.runsIn.effort]]) {
+      const option = configOptions.find(option => option.category === category && option.type === 'select' && option.options?.flatMap(item => item.options ?? [item]).some(item => item.value === value));
+      if (!option) throw new CoreError(422, 'unsupported_launch_choice', 'The ACP choice is unavailable.');
+      const changed = await rpc.call('session/set_config_option', { sessionId: session.result.sessionId, configId: option.id, value });
+      configOptions = changed.result?.configOptions ?? [];
+      if (configOptions.find(item => item.id === option.id)?.currentValue !== value) throw new CoreError(422, 'unsupported_launch_choice', 'The ACP choice was not applied.');
+    }
+  }
+  request.nativeSessionId = session.result.sessionId;
   return session.result.sessionId;
+}
+
+export async function nativePermissionReply(message, request = {}) {
+  const reply = result => ({ jsonrpc: '2.0', id: message.id, result });
+  const params = message.params ?? {};
+  const permission = async operation => {
+    if (typeof request.nativePermission !== 'function' || request.nativeBoundary?.verified !== true) return false;
+    const nativeId = params.threadId ?? params.sessionId ?? message.session_id ?? request.nativeSessionId;
+    if (!request.nativeSessionId || nativeId !== request.nativeSessionId) return false;
+    try { return await request.nativePermission({ ...operation, id: message.id ?? message.request_id, protocol: request.runsIn?.client,
+      nativeSessionId: request.nativeSessionId, payload: operation.payload ?? params }, request.nativeBoundary) === true; } catch { return false; }
+  };
+  if (message.type === 'control_request') {
+    const call = message.request ?? {};
+    const input = call.input ?? {};
+    const paths = typeof input.file_path === 'string' ? [input.file_path] : typeof input.notebook_path === 'string' ? [input.notebook_path] : [];
+    const allow = call.subtype === 'can_use_tool' && await permission({ kind: call.tool_name === 'Bash' ? 'process' : 'write',
+      command: input.command, cwd: request.cwd, paths, payload: call });
+    return { type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
+      response: allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'This exact operation was not authorized.' } } };
+  }
+  // An approval cannot widen the native sandbox. Scoped service tools execute exact file/Git changes.
+  if (message.method === 'item/permissions/requestApproval') return reply({ permissions: {}, scope: 'turn' });
+  if (message.method === 'session/request_permission') {
+    const call = params.toolCall ?? {}, input = call.rawInput ?? {};
+    const allow = await permission({ kind: call.kind === 'execute' ? 'process' : 'write', command: input.command,
+      cwd: request.cwd, paths: (call.locations ?? []).map(location => location.path) });
+    const selected = params.options?.find(option => option.kind === (allow ? 'allow_once' : 'reject_once') && typeof option.optionId === 'string' && option.optionId.length > 0);
+    return reply({ outcome: selected ? { outcome: 'selected', optionId: selected.optionId } : { outcome: 'cancelled' } });
+  }
+  if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
+    const allow = await permission({ kind: message.method.includes('commandExecution') ? 'process' : 'write',
+      command: params.command, cwd: params.cwd ?? request.cwd, paths: request.nativeItems?.get(params.itemId)?.changes?.map(change => change.path) ?? [] });
+    return reply({ decision: allow ? 'accept' : 'decline' });
+  }
+  if (['execCommandApproval', 'applyPatchApproval'].includes(message.method)) return reply({ decision: 'denied' });
+  if (['fs/read_text_file', 'fs/write_text_file'].includes(message.method)) {
+    try {
+      if (!request.nativeSessionId || params.sessionId !== request.nativeSessionId) throw unavailable();
+      if (message.method === 'fs/read_text_file') {
+        const result = await request.scopedRead?.({ path: params.path });
+        if (!result) throw unavailable();
+        const lines = result.text.split(/\r?\n/), start = params.line ?? 1;
+        if (!Number.isInteger(start) || start < 1 || params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 1)) throw unavailable();
+        return reply({ content: lines.slice(start - 1, params.limit === undefined ? undefined : start - 1 + params.limit).join('\n') });
+      }
+      const before = await request.scopedRead?.({ path: params.path }).catch(() => null);
+      const result = await request.scopedWrite?.({ path: params.path, text: params.content, expectedRevision: before?.revision ?? null });
+      if (!result) throw unavailable();
+      return reply({});
+    } catch { return { jsonrpc: '2.0', id: message.id, error: { code: -32001, message: 'The scoped file operation is unavailable.' } }; }
+  }
+  if (['terminal/create', 'terminal/wait_for_exit', 'terminal/output', 'terminal/kill', 'terminal/release'].includes(message.method)) {
+    return { jsonrpc: '2.0', id: message.id, error: { code: -32001, message: 'Use the actor-bound scoped service operation.' } };
+  }
+  return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'The native method is not supported.' } };
+}
+
+async function probeCodexChoices(options) {
+  let child, incoming, deadline;
+  const unavailableReport = { id: 'codex', title: 'Codex', connected: false, models: [], scopeEnforced: false,
+    quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
+  try {
+    const launch = options.command ? { command: options.command, args: options.args ?? launchArgs('codex') }
+      : await resolveLaunch('codex', options.env ?? process.env, options.platform ?? process.platform);
+    if (!launch) return unavailableReport;
+    assertNoBypass(launch.args);
+    child = (options.spawn ?? spawn)(launch.command, launch.args, { shell: false, windowsHide: true, env: options.env ?? process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    incoming = readLines(child, options.timeoutMs ?? 3000);
+    deadline = setTimeout(() => { incoming.close(); child.kill(); }, Math.min(options.timeoutMs ?? 5000, 10000));
+    const rpc = openRpc(child, incoming, {}, options.timeoutMs ?? 3000);
+    await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
+    rpc.notify('initialized');
+    if (!accountReady(await rpc.call('account/read', {}))) return unavailableReport;
+    const models = [], cursors = new Set(); let cursor = null;
+    for (let page = 0; page < 16; page++) {
+      const listed = await rpc.call('model/list', { cursor, limit: 100 });
+      if (!Array.isArray(listed.result?.data)) return unavailableReport;
+      for (const model of listed.result.data) {
+        const efforts = model.supportedReasoningEfforts?.map(item => item.reasoningEffort);
+        if (typeof model.model !== 'string' || !Array.isArray(efforts) || !efforts.length || efforts.some(item => typeof item !== 'string')) continue;
+        if (!model.hidden) models.push({ id: model.model, title: model.displayName ?? model.model, efforts, modes: [] });
+      }
+      cursor = listed.result.nextCursor;
+      if (!cursor) {
+        const observed = await rpc.call('account/rateLimits/read', {}).catch(() => null);
+        const windows = [observed?.result?.rateLimits?.primary, observed?.result?.rateLimits?.secondary]
+          .filter(window => Number.isFinite(window?.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100);
+        windows.sort((left, right) => right.usedPercent - left.usedPercent);
+        const limiting = windows[0];
+        return { ...unavailableReport, connected: models.length > 0, scopeEnforced: true, models,
+          quota: limiting ? { remainingPercent: 100 - limiting.usedPercent, period: Number.isFinite(limiting.windowDurationMins) ? `${limiting.windowDurationMins}m` : null, known: true } : unavailableReport.quota };
+      }
+      if (cursors.has(cursor)) return unavailableReport;
+      cursors.add(cursor);
+    }
+    return unavailableReport;
+  } catch { return unavailableReport; }
+  finally { clearTimeout(deadline); incoming?.close(); if (child) await finishChild(child); }
+}
+
+async function probeNativeChoices(client, options, context) {
+  const unavailableReport = { id: client, title: client === 'claude' ? 'Claude Code' : 'Cursor', connected: false, models: [], scopeEnforced: false,
+    quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
+  const root = context.localDirectory;
+  if (typeof root !== 'string' || !path.isAbsolute(root)) return unavailableReport;
+  const directory = path.join(root, `probe-${client}-${randomUUID()}`);
+  let child, incoming, deadline;
+  try {
+    await assertNoLinks(root); await mkdir(directory, { recursive: true });
+    await protectLocalFile(directory, { store: context.store, aclRunner: options.aclRunner });
+    const launch = options.command ? { command: options.command, args: options.args ?? launchArgs(client) }
+      : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform);
+    if (!launch) return unavailableReport;
+    const args = client === 'claude' ? [...launch.args, '--permission-prompt-tool', 'stdio', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', ''] : launch.args;
+    assertNoBypass(args);
+    child = (options.spawn ?? spawn)(launch.command, args, { shell: false, windowsHide: true, cwd: directory, env: options.env ?? process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    incoming = readLines(child, options.timeoutMs ?? 3000);
+    deadline = setTimeout(() => { incoming.close(); child.kill(); }, Math.min(options.timeoutMs ?? 5000, 10000));
+    const models = [];
+    let quota = unavailableReport.quota;
+    if (client === 'claude') {
+      const control = async request => {
+        const id = randomUUID(); sendLine(child, { type: 'control_request', request_id: id, request });
+        for (let count = 0; count < 64; count++) {
+          const message = JSON.parse(await incoming.line());
+          if (message.type === 'control_request') { sendLine(child, await nativePermissionReply(message)); continue; }
+          if (message.type === 'control_response' && message.response?.request_id === id) {
+            if (message.response.subtype !== 'success') throw unavailable();
+            return message.response.response;
+          }
+        }
+        throw unavailable();
+      };
+      const initialized = await control({ subtype: 'initialize', hooks: null });
+      const account = initialized?.account;
+      if (!account || ![account.email, account.tokenSource, account.apiKeySource].some(value => typeof value === 'string' && value && value !== 'none')) return unavailableReport;
+      for (const model of (initialized.models ?? []).slice(0, 256)) {
+        if (model.supportsEffort !== true || !Array.isArray(model.supportedEffortLevels) || !model.supportedEffortLevels.length
+          || model.supportedEffortLevels.some(effort => !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort))) continue;
+        const id = model.resolvedModel ?? model.value;
+        if (typeof id === 'string' && id) models.push({ id, title: model.displayName ?? id, efforts: [...model.supportedEffortLevels], modes: [] });
+      }
+      const usage = await control({ subtype: 'get_usage', skip_behaviors: true }).catch(() => null);
+      if (usage?.rate_limits_available === true) {
+        const limits = Object.entries(usage.rate_limits ?? {}).filter(([, value]) => Number.isFinite(value?.utilization) && value.utilization >= 0 && value.utilization <= 100);
+        limits.sort((left, right) => right[1].utilization - left[1].utilization);
+        if (limits.length) quota = { remainingPercent: 100 - limits[0][1].utilization, period: limits[0][0], known: true };
+      }
+    } else {
+      const rpc = openRpc(child, incoming, {}, options.timeoutMs ?? 3000);
+      const initialized = await rpc.call('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+      const method = initialized.result?.authMethods?.find(item => /existing|login/i.test(`${item.id} ${item.name ?? ''}`));
+      if (!method) return unavailableReport;
+      await rpc.call('authenticate', { methodId: method.id });
+      const session = await rpc.call('session/new', { cwd: directory, mcpServers: [] });
+      if (typeof session.result?.sessionId !== 'string') return unavailableReport;
+      let config = session.result.configOptions ?? [];
+      const option = config.find(item => item.category === 'model' && item.type === 'select');
+      for (const model of (option?.options ?? []).flatMap(item => item.options ?? [item]).slice(0, 64)) {
+        if (typeof model.value !== 'string' || !model.value) continue;
+        const changed = await rpc.call('session/set_config_option', { sessionId: session.result.sessionId, configId: option.id, value: model.value });
+        config = changed.result?.configOptions ?? [];
+        if (config.find(item => item.id === option.id)?.currentValue !== model.value) continue;
+        const effort = config.find(item => item.category === 'thought_level' && item.type === 'select');
+        const efforts = (effort?.options ?? []).flatMap(item => item.options ?? [item]).map(item => item.value);
+        if (efforts.length && efforts.every(value => typeof value === 'string' && value)) models.push({ id: model.value, title: model.name ?? model.value, efforts, modes: [] });
+      }
+    }
+    return { ...unavailableReport, connected: models.length > 0, models, quota, scopeEnforced: typeof options.enforceScope === 'function' };
+  } catch { return unavailableReport; }
+  finally {
+    clearTimeout(deadline); incoming?.close(); if (child) await finishChild(child);
+    if (path.dirname(directory) === path.resolve(root)) {
+      await assertNoLinks(directory); await rm(directory, { recursive: true, force: true });
+    }
+  }
 }
 
 function sendLine(child, message) {

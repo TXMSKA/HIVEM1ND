@@ -271,7 +271,7 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     async callTool(name, args) {
       const response = await request(connection, {
         path: '/mcp',
-        timeoutMs: 3000,
+        timeoutMs: name === 'native_permission' ? 125000 : 3000,
         body: { jsonrpc: '2.0', id: args.requestId ?? randomUUID(), method: 'tools/call', params: { name, arguments: args } },
       });
       if (response.status !== 200 || !response.json?.result) {

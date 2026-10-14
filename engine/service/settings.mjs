@@ -16,6 +16,8 @@ import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-gi
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
+import { validateRunsIn } from './runs-in.mjs';
+import { stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
 import { applyClientConfigChanges, buildClientConfig, clientConfigPaths, readConfigBytes, restoreClientConfig } from '../relay/config.mjs';
 
@@ -33,6 +35,47 @@ function fail(status, code, message) { throw new CoreError(status, code, message
 function bytes(value) { return Buffer.from(`${canonicalJson(value)}\n`); }
 function revision(value) { return hashBytes(bytes(value)); }
 function stamp(context) { return new Date(context.now()).toISOString(); }
+
+export async function connectedClients(context) {
+  const reports = [];
+  for (const [id, adapter] of Object.entries(context.adapters ?? context.settingsOwner?.adapters ?? {})) {
+    const report = await Promise.resolve().then(() => adapter.describe?.({ localDirectory: context.paths?.localDirectory, store: context.store })).catch(() => null);
+    if (!report || report.id !== id || report.connected !== true) continue;
+    if (!['claude', 'codex', 'cursor', 'lyra'].includes(id) || !Array.isArray(report.models)) continue;
+    const models = report.models.filter(model => text(model.id, 256) && model.id && text(model.title, 256)
+      && Array.isArray(model.efforts) && model.efforts.every(value => text(value, 64))
+      && Array.isArray(model.modes) && model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value)))
+      .slice(0, 256).map(model => ({ id: model.id, title: model.title, efforts: [...model.efforts], modes: [...model.modes] }));
+    if (!models.length) continue;
+    const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
+      && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
+    reports.push({ id, title: text(report.title, 128) ? report.title : id, connected: true, models,
+      quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
+      scopeEnforced: report.scopeEnforced === true, context: { known: report.context?.known === true, compact: report.context?.compact === true } });
+  }
+  return reports;
+}
+
+export async function prepareDefaultRunsIn(context, choice) {
+  if (context.principal?.audience !== 'desktop' || context.principal.capabilities && !context.principal.capabilities.includes('settings.write')) fail(403, 'forbidden', 'Changing the default requires Settings authority.');
+  const clients = await connectedClients(context);
+  validateRunsIn(choice, clients);
+  if (clients.find(client => client.id === choice.client)?.scopeEnforced !== true) fail(409, 'scope_unavailable', 'The default needs a verified native scope boundary.');
+  const file = path.join(context.paths.localDirectory, 'default-runs-in.json');
+  await assertNoLinks(file);
+  const before = await readBytes(context.store, file);
+  return { resource: 'default-runs-in', recordPath: file, beforeRevision: revisionOf(before), afterBytes: bytes({ machine: context.paths.machine, runsIn: choice }), private: true };
+}
+
+export async function defaultRunsIn(context) {
+  const file = path.join(context.paths.localDirectory, 'default-runs-in.json');
+  await assertNoLinks(file);
+  const source = await readBytes(context.store, file);
+  const record = source ? JSON.parse(source) : null;
+  if (!record) return null;
+  if (record.machine !== context.paths.machine) fail(409, 'machine_unavailable', 'The default belongs to another machine.');
+  return stateRunsIn(Buffer.from(`runs-in: ${canonicalJson(record.runsIn)}\n`));
+}
 function absolute(context, relative) { return path.join(context.paths.mind, ...relative.split('/')); }
 function plain(value) { return value && typeof value === 'object' && !Array.isArray(value); }
 function exact(value, fields) {
@@ -92,7 +135,7 @@ function verifyRecord(record, publicKey = record?.publicKey) {
 }
 
 function reportShape(record, machine) {
-  exact(record, ['format', 'machine', 'reportedAt', 'service', 'locations', 'agents', 'permissions', 'projects', 'clusterLinks', 'discoveryOffer', 'publicKey', 'signature']);
+  exact(record, ['format', 'machine', 'reportedAt', 'service', 'locations', 'agents', 'permissions', 'projects', 'clusterLinks', 'discoveryOffer', 'connectedClients', 'publicKey', 'signature']);
   if (record.format !== 'hivem1nd-machine-settings-v1' || record.machine !== machine || !time(record.reportedAt) || !verifyRecord(record)) fail(422, 'corrupt_resource', 'The machine Settings report failed its integrity check.');
   exact(record.locations, ['mind', 'staging']);
   if (!text(record.locations.mind) || !text(record.locations.staging)) fail(422, 'corrupt_resource', 'The machine locations are not valid.');
@@ -150,6 +193,21 @@ function reportShape(record, machine) {
     }
   }
   if (record.discoveryOffer != null) validatePublicOffer(record.discoveryOffer);
+  if (record.connectedClients !== undefined && (!Array.isArray(record.connectedClients) || record.connectedClients.length > 4)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');
+  for (const client of record.connectedClients ?? []) {
+    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'context']);
+    exact(client.quota, ['remainingPercent', 'period', 'known']); exact(client.context, ['known', 'compact']);
+    if (!['claude', 'codex', 'cursor', 'lyra'].includes(client.id) || !text(client.title, 128) || client.connected !== true
+      || typeof client.scopeEnforced !== 'boolean' || typeof client.context.known !== 'boolean' || typeof client.context.compact !== 'boolean'
+      || !Array.isArray(client.models) || client.models.length > 256 || typeof client.quota.known !== 'boolean'
+      || client.quota.remainingPercent !== null && (!Number.isFinite(client.quota.remainingPercent) || client.quota.remainingPercent < 0 || client.quota.remainingPercent > 100)
+      || client.quota.period !== null && !text(client.quota.period, 128)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');
+    for (const model of client.models) {
+      exact(model, ['id', 'title', 'efforts', 'modes']);
+      if (!text(model.id, 256) || !text(model.title, 256) || !Array.isArray(model.efforts) || !model.efforts.every(value => text(value, 64))
+        || !Array.isArray(model.modes) || !model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value))) fail(422, 'corrupt_resource', 'The model capability is invalid.');
+    }
+  }
   return record;
 }
 
@@ -235,6 +293,7 @@ async function publishOwnedSettings(context, section) {
     agents: refreshAgents ? { revision: null, items: await agentItems(context, legacy) } : existing.agents,
     permissions: { ...permissions, revision: revision(permissions) }, projects: { ...projects, revision: revision(projects) },
     clusterLinks: links.map(link => ({ ...link, localPath: null })), discoveryOffer: publicOffer(offer),
+    connectedClients: refreshAgents ? await connectedClients(context) : existing.connectedClients ?? [],
   });
   if (report.agents.revision === null) {
     report.agents.revision = revision(report.agents.items);
@@ -295,7 +354,8 @@ export async function readMachineSettings(context, machine = context.paths.machi
   const report = machine === context.paths.machine ? await publishMachineSettings(context) : await readPublishedSettings(context, machine);
   const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' };
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
-  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [] };
+  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [],
+    connectedClients: report?.connectedClients ?? [], defaultRunsIn: machine === context.paths.machine ? await defaultRunsIn(context) : null };
   if (section === 'permissions') return { ...common, revision: report?.permissions.revision ?? null, unitGrants: report?.permissions.unitGrants ?? [], agentPermissions: report?.permissions.agentPermissions ?? [] };
   if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [],
     clusterLinks: machine === context.paths.machine ? await clusterLinks(ownerOf(context)) : report?.clusterLinks ?? [],
