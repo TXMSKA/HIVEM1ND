@@ -353,6 +353,10 @@ function drawVector(document, node, width, height) {
     const path = document.createElementNS(SVG, "path");
     path.setAttribute("d", safePath(node.d) ? node.d : `M0 0h${Math.max(width, 8)}v${Math.max(height, 8)}h-${Math.max(width, 8)}z`);
     path.setAttribute("data-kind", kind || "pen");
+    path.setAttribute('transform', 'scale(' + width / 100 + ' ' + height / 100 + ')');
+    path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
     applyPaint(path, node);
     return path;
   }

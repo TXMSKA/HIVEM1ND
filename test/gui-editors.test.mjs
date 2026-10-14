@@ -1003,3 +1003,13 @@ test("switching editor kind never shows the previous kind while its catalog is l
   assert.equal(nodesOf(view).some((node) => node.getAttribute?.("data-id") === "board"), false);
   assert.ok(nodesOf(view).some((node) => node.getAttribute?.("data-catalog-progress")));
 });
+
+test('board vectors use their declared dimensions and keep the stroke width', () => {
+  const nodes = nodesOf(renderNode(svgDocument(), { id: 'stroke', name: 'Pen stroke', t: 'vector', kind: 'pen',
+    place: { x: 0, y: 0 }, w: 270, h: 500, d: 'M0 0 L100 100', stroke: '#f5f1f6', strokeWidth: 2.2, fill: 'none' }, {}));
+  const vector = nodes.find((item) => item.tag === 'path');
+  assert.equal(vector.getAttribute('d'), 'M0 0 L100 100');
+  assert.equal(vector.getAttribute('transform'), 'scale(2.7 5)');
+  assert.equal(vector.getAttribute('vector-effect'), 'non-scaling-stroke');
+  assert.equal(vector.getAttribute('stroke-width'), '2.2');
+});
