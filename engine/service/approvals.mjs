@@ -117,6 +117,9 @@ export async function requestApproval(context, input) {
 
 export async function answerApproval(context, approvalId, input) {
   assertMaster(context);
+  if (context.principal?.audience === 'phone' && input?.decision === 'approve-always') {
+    throw new CoreError(403, 'phone_read_only', 'Standing approvals are answered on the computer.');
+  }
   if (!DECISIONS.has(input?.decision)) throw new CoreError(422, 'invalid_body', 'The decision is not supported.');
   if (typeof input?.expectedRevision !== 'string') throw new CoreError(422, 'invalid_body', 'The approval revision is required.');
   return withLocks(context.store, [`approval:${approvalId}`], async () => {

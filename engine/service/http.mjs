@@ -889,6 +889,9 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
+  if (credential?.audience === 'phone' && route.handler === 'answerApproval' && body?.decision === 'approve-always') {
+    throw new CoreError(403, 'phone_read_only', 'Standing approvals are answered on the computer.');
+  }
   if (credential?.audience === 'agent') return agentScope(route, domain, credential, params, body);
   if (route.handler === 'answerApproval' && credential?.audience === 'phone') {
     if (body?.decision === 'approve-always') return { decision: body.decision };

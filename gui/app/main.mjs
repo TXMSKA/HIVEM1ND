@@ -1400,7 +1400,7 @@ function renderWaitingRecord(app, t) {
   if (!record) return block;
   const caps = app.store.capabilities ?? [];
   if (record.kind === "approval" && record.approval && caps.includes("approval.answer")) {
-    block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${record.approval.id}`)));
+    block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${record.approval.id}`), app.store.audience !== 'phone'));
     return block;
   }
   if (record.kind === "review" && record.task && (caps.includes("task.status") || caps.includes("task.accept") || caps.includes("task.send-back"))) {
@@ -6725,7 +6725,7 @@ function renderInspector(app, t, selected) {
   const cards = element(document, "div", { class: "action-cards", "data-action-cards": "true" });
   if (caps.includes("approval.answer")) {
     for (const approval of data.approvals ?? []) {
-      cards.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`)));
+      cards.append(renderApproval(document, approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${approval.id}`), app.store.audience !== 'phone'));
     }
   }
   const tasks = data.tasks ?? [];

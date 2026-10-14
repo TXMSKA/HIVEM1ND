@@ -110,7 +110,7 @@ export function renderGrants(document, grants, t, onRevoke, busyId = null) {
   return block;
 }
 
-export function renderApproval(document, approval, t, onAnswer, busy = false) {
+export function renderApproval(document, approval, t, onAnswer, busy = false, allowAlways = true) {
   const block = element(document, "section", { class: "card", "data-approval": approval.id, "data-approval-state": approval.state });
   block.append(element(document, "p", { text: approval.action === 'session.open' ? `${t('sessionOpenAsk')}: ${approval.pattern.client} CLI · ${approval.pattern.machine}` : approval.display ?? approval.action ?? approval.id }));
   if (busy) block.append(progressMark(document, t("answering"), { "data-approval-progress": approval.id }));
@@ -125,7 +125,7 @@ export function renderApproval(document, approval, t, onAnswer, busy = false) {
       onclick: () => onAnswer?.(approval, action),
     });
     block.append(button("approve", t("approve")));
-    if (approval.alwaysAllowed !== false) block.append(button("approve-always", t("approveAlways")));
+    if (allowAlways && approval.alwaysAllowed !== false) block.append(button("approve-always", t("approveAlways")));
     block.append(button("deny", t("deny")));
   }
   return block;
