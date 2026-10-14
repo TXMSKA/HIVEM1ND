@@ -490,3 +490,19 @@ function encodeBytes(bytes) {
   for (let index = 0; index < bytes.length; index += 1) text += String.fromCharCode(bytes[index]);
   return btoa(text);
 }
+export function dragNodeGeometry(node, dx, dy, corner = null) {
+  const result = { place: { ...node.place }, w: node.w, h: node.h };
+  if (corner === null) {
+    result.place.x += dx;
+    result.place.y += dy;
+    return result;
+  }
+  if (!['nw', 'ne', 'sw', 'se'].includes(corner)) throw new RangeError('Invalid resize corner.');
+  const west = corner.includes('w');
+  const north = corner.includes('n');
+  result.w = Math.min(16000, Math.max(1, node.w + (west ? -dx : dx)));
+  result.h = Math.min(16000, Math.max(1, node.h + (north ? -dy : dy)));
+  if (west) result.place.x += node.w - result.w;
+  if (north) result.place.y += node.h - result.h;
+  return result;
+}
