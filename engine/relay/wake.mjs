@@ -410,41 +410,65 @@ export async function createRelayWakeController(options = {}) {
     // Every tool call of a turn repeats the mark the turn already set. The write takes the policy lock and replaces a file of the synced mind, so a mark that is still the same and recent is left alone.
     const stored = await readPolicy(binding, key);
     const age = now - Date.parse(stored?.activity?.observedAt);
-    if (freshPolicy(stored, now) && stored.activity.value === activity && age >= 0 && age < ACTIVITY_REFRESH_MS && !renewalDue(stored, now)) return stored.activity;
+    if (freshPolicy(stored, now) && stored.activity.value === activity && age >= 0 && age < ACTIVITY_REFRESH_MS && !renewalDue(stored, now)
+      && !(stored.wakeCount > 0)) return stored.activity;
     const next = await mutatePolicy(binding, key, async (policy) => {
       if (!freshPolicy(policy, now)) throw wakeError('WAKE_NOT_ENABLED', 'Activity can be observed only for an enabled, unexpired wake policy.');
-      // A turn is activity of the session, so it also starts the window again.
-      return { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), activity: { value: activity, observedAt: iso(now) } };
+      // A turn is activity of the session, so it also starts the window again and answers the wakes so far.
+      return { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), ...(policy.wakeCount > 0 ? { wakeCount: 0 } : {}),
+        activity: { value: activity, observedAt: iso(now) } };
     });
     return next.activity;
   }
 
+  // The command that gives a chat its wake again, with the window and the budget of the consent that ended.
+  function attachCommand(binding, policy) {
+    const flags = [];
+    if (!policy.unlimited && policy.durationHours !== DEFAULT_WINDOW_HOURS) flags.push(`--hours ${policy.durationHours}`, ...(policy.extended ? ['--extended'] : []));
+    if (policy.maxHandoffs !== DEFAULT_WAKE_HANDOFFS) flags.push(`--max-handoffs ${policy.maxHandoffs}`);
+    return `node "${CLI_PATH}" relay wake attach --mind-path "${options.mindPath}" --client ${binding.client} --unit ${binding.unit} `
+      + `--native-session-id ${binding.nativeSessionId}${flags.map((flag) => ` ${flag}`).join('')}`;
+  }
+
   // Activity of the session keeps its consent: a Relay tool call or a hook turn of the session starts its bounded window
-  // again. A window that passed without any ends the wake, and the first call after it is told once, with how to renew it.
+  // again and answers the wakes so far, so the handoff budget counts only wakes the chat has not answered. A window that
+  // passed, or a budget spent, without any activity ends the wake, and the first call after it is told once, with how to
+  // renew it.
   async function touch(bindingValue) {
     const binding = makeBinding(bindingValue);
     const key = bindingHash(binding);
     const now = nowMs(clock);
+    const quiet = { renewed: false, notice: null };
     let stored;
     try { stored = await readPolicy(binding, key); }
-    catch (error) { if (error?.code === 'MALFORMED_RECORD' || isTransientFsError(error)) return { renewed: false, notice: null }; throw error; }
-    if (stored?.enabled !== true || stored.unlimited === true) return { renewed: false, notice: null };
-    if (Date.parse(stored.deadlineAt) > now) {
-      if (!renewalDue(stored, now)) return { renewed: false, notice: null };
-      const renewed = await mutatePolicy(binding, key, async (policy) => renewalDue(policy, nowMs(clock)) && policy.generation === stored.generation
-        ? { ...policy, ...renewedWindow(policy, now) } : policy);
+    catch (error) { if (error?.code === 'MALFORMED_RECORD' || isTransientFsError(error)) return quiet; throw error; }
+    if (stored?.enabled !== true) return quiet;
+    if (stored.pausedReason === 'handoff-budget-exhausted') {
+      if (stored.budgetNoticeAt) return quiet;
+      const told = await mutatePolicy(binding, key, async (policy) => policy?.enabled === true && policy.pausedReason === 'handoff-budget-exhausted'
+        && !policy.budgetNoticeAt && policy.generation === stored.generation ? { ...policy, budgetNoticeAt: iso(now) } : policy);
+      if (told.budgetNoticeAt !== iso(now)) return quiet;
+      return {
+        renewed: false,
+        notice: `Relay wake for ${binding.unit} stopped after ${told.wakeCount} wakes that this chat did not answer with any Relay activity, the most its consent allows, so new messages no longer wake it. `
+          + `To wake it again, run from this chat's own shell: ${attachCommand(binding, told)}`,
+      };
+    }
+    if (stored.unlimited === true || Date.parse(stored.deadlineAt) > now) {
+      const due = (policy, at) => freshPolicy(policy, at) && (renewalDue(policy, at) || policy.wakeCount > 0);
+      if (!due(stored, now)) return quiet;
+      const renewed = await mutatePolicy(binding, key, async (policy) => due(policy, nowMs(clock)) && policy.generation === stored.generation
+        ? { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), wakeCount: 0 } : policy);
       return { renewed: renewed.startedAt === iso(now), notice: null };
     }
-    if (stored.endNoticeAt) return { renewed: false, notice: null };
+    if (stored.endNoticeAt) return quiet;
     const told = await mutatePolicy(binding, key, async (policy) => policy?.enabled === true && policy.unlimited !== true && !policy.endNoticeAt
       && policy.generation === stored.generation && Date.parse(policy.deadlineAt) <= nowMs(clock) ? { ...policy, endNoticeAt: iso(now) } : policy);
-    if (told.endNoticeAt !== iso(now)) return { renewed: false, notice: null };
-    const window = `${told.durationHours}-hour`;
-    const hours = told.durationHours === DEFAULT_WINDOW_HOURS ? '' : ` --hours ${told.durationHours}${told.extended ? ' --extended' : ''}`;
+    if (told.endNoticeAt !== iso(now)) return quiet;
     return {
       renewed: false,
-      notice: `Relay wake for ${binding.unit} ended at ${told.deadlineAt}: its ${window} window passed without activity of this chat, so new messages no longer wake it. `
-        + `To renew it, run from this chat's own shell: node "${CLI_PATH}" relay wake attach --mind-path "${options.mindPath}" --client ${binding.client} --unit ${binding.unit} --native-session-id ${binding.nativeSessionId}${hours}`,
+      notice: `Relay wake for ${binding.unit} ended at ${told.deadlineAt}: its ${told.durationHours}-hour window passed without activity of this chat, so new messages no longer wake it. `
+        + `To renew it, run from this chat's own shell: ${attachCommand(binding, told)}`,
     };
   }
 

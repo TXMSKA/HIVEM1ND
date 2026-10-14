@@ -104,7 +104,7 @@ test('worker coalesces metadata, persists dedupe across restart, never archives,
   await resumed.stopAll();
 });
 
-test('urgent arrivals bypass normal cooldown while busy and handoff budget prevents fresh-ID churn', async (context) => {
+test('urgent arrivals bypass normal cooldown while busy and the handoff budget stops wakes the session does not answer', async (context) => {
   const { mind, sender, binding } = await fixture(context);
   const notices = [];
   let now = Date.now();
@@ -142,17 +142,26 @@ test('urgent arrivals bypass normal cooldown while busy and handoff budget preve
   assert.deepEqual(notices[1].messageIds, [urgent.id]);
   assert.equal(notices[1].urgent, true);
   assert.equal(notices[1].activity, 'busy');
-  assert.equal((await wake.status(binding)).wakeCount, 2, 'both handoffs settled without advancing the cooldown clock');
+  assert.equal((await wake.status(binding)).wakeCount, 1, 'the busy mark answered the first wake, so only the urgent one counts');
   await wake.observeActivity(binding, { activity: 'idle' });
   await sender.send({ to: binding.unit, subject: 'Fresh ID', body: 'three' });
   await poll();
   assert.equal((await wake.status(binding)).pausedReason, null, 'normal arrivals still wait for cooldown');
   assert.equal(notices.length, 2);
   now += 1001;
+  await poll();
+  assert.equal(notices.length, 3);
+  await sender.send({ to: binding.unit, subject: 'Unanswered', body: 'four' });
+  now += 1001;
+  await poll();
+  assert.equal(notices.length, 4);
+  assert.equal((await wake.status(binding)).wakeCount, 2, 'two wakes without any activity of the session in between');
+  await sender.send({ to: binding.unit, subject: 'Fresh ID again', body: 'five' });
+  now += 1001;
   resumePoll();
   await until(async () => (await wake.status(binding)).pausedReason === 'handoff-budget-exhausted');
   assert.equal((await handle.done).reason, 'budget-exhausted');
-  assert.equal(notices.length, 2, 'a fresh ID cannot cause a third handoff');
+  assert.equal(notices.length, 4, 'a fresh ID cannot cause a third unanswered handoff');
   assert.equal((await wake.status(binding)).wakeCount, 2);
 });
 
@@ -911,4 +920,32 @@ test('read failures that clear on the next poll, as a sync gives them, never add
   await until(() => notices.length === 1);
   assert.deepEqual(notices[0].messageIds, [message.id]);
   await handle.stop();
+});
+
+test('activity of the session answers its wakes, and the first call after the budget ran out says so once', async (context) => {
+  const { mind, sender, binding } = await fixture(context);
+  const notices = [];
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  context.after(() => wake.stopAll());
+  await wake.enable({ ...binding, maxHandoffs: 2 });
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await sender.send({ to: binding.unit, subject: 'Build stopped', body: 'one' });
+  await until(async () => (await wake.status(binding)).wakeCount === 1 || (await wake.status(binding)).wakeCount);
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null });
+  assert.equal((await wake.status(binding)).wakeCount, 0, 'a Relay call of the woken chat answers the wake');
+  await handle.stop();
+
+  // Two wakes nobody answered spent the budget of two.
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const policy = JSON.parse(await readFile(policyFile, 'utf8'));
+  await writeFile(policyFile, JSON.stringify({ ...policy, wakeCount: 2, pausedReason: 'handoff-budget-exhausted' }));
+  const spent = await wake.touch(binding);
+  assert.equal(spent.renewed, false);
+  assert.ok(spent.notice.startsWith('Relay wake for executor-alpha stopped after 2 wakes that this chat did not answer'), spent.notice);
+  assert.ok(spent.notice.endsWith('--client claude --unit executor-alpha --native-session-id executor-native --max-handoffs 2'), spent.notice);
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null }, 'the notice is given once');
+  assert.equal((await wake.status(binding)).pausedReason, 'handoff-budget-exhausted', 'a spent budget is renewed only by a new attach');
+  await wake.enable({ ...binding, maxHandoffs: 2 });
+  assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null });
 });

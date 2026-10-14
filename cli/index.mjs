@@ -56,7 +56,7 @@ Relay options:
   --unit <name>            Explicit unit name, including user
   --event <name>           Native hook event name
   --hours <4|5|6|7|8|12|24> Bounded wake window (12/24 require --extended)
-  --max-handoffs <1-100> Maximum submitted Relay pointers (default 20)
+  --max-handoffs <1-100> Maximum Relay pointers the session leaves unanswered (default 20)
   --to <unit> --subject <text> --body <text>
   --reply-to <id> --thread-id <id> --reply-requested
   --priority <normal|urgent> --attachment <path> (repeatable)
