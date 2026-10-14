@@ -243,6 +243,12 @@ export function isTransientFsError(error) {
   return TRANSIENT_FS_CODES.has(error?.code);
 }
 
+// A file that is still being synced: busy or locked, or replaced while it was opened or read.
+function isSyncRace(error) {
+  return isTransientFsError(error)
+    || error?.code === 'UNSAFE_PATH' && /A Relay message changed while it was being (?:opened|read)\./.test(error.message);
+}
+
 function isSkippableRecordError(error) {
   return error?.code === 'MALFORMED_RECORD' || isTransientFsError(error);
 }
@@ -1066,6 +1072,9 @@ export async function createRelay(options = {}) {
         if (await isReadCopy(unit, file, raw)) continue;
         if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
       } catch (error) {
+        // A message that another machine wrote arrives by sync, and OneDrive can hold or replace the file while it lands. That
+        // file is left for the next read instead of failing the whole inbox, so the other messages still count and wake.
+        if (isSyncRace(error)) continue;
         skipMalformed(error);
         malformed.push(path.basename(file));
       }

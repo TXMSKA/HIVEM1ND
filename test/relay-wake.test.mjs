@@ -828,3 +828,87 @@ test('activity of the session starts its window again, and the first call after 
   now += 7 * 3600_000;
   assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null }, 'a consent the person ended says nothing');
 });
+
+// A message as another machine writes it: OneDrive brings the file into the inbox, so no Relay process here published it.
+function syncedMessage(mind, id, subject, minute) {
+  return {
+    id, file: path.join(mind, 'user', 'projects', 'alpha', 'inbox', 'executor-alpha', `20261013-20${minute}00-SCOUT-${id}.md`),
+    text: [`id: ${id}`, 'from: overseer', 'to: executor-alpha', 'machine: SCOUT', `timestamp: 2026-10-13T23:${minute}:00.000Z`,
+      `date: 2026-10-13 20:${minute}`, 'priority: normal', `subject: ${subject}`, `thread-id: ${id}`, 'reply-to: ', 'reply-requested: false',
+      'attachments: []', '', 'Written on SCOUT.'].join('\n'),
+  };
+}
+
+test('a message that another machine wrote and OneDrive synced into the inbox wakes the session, also while a file is half written or busy', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const notices = [];
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await mkdir(path.join(mind, 'user', 'projects', 'alpha', 'inbox', 'executor-alpha'), { recursive: true });
+  const first = syncedMessage(mind, '55e38934-6613-4b62-8457-48d7103943b3', 'From SCOUT', '14');
+  const second = syncedMessage(mind, '15a4083f-ba5e-4ca1-ad8e-19354c655525', 'Busy on arrival', '20');
+  // OneDrive writes the file in place, so a poll can find it half written.
+  await writeFile(first.file, first.text.slice(0, 40));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(notices.length, 0);
+
+  // The other file stays locked for a few polls while it lands.
+  const originalOpen = fsPromises.open;
+  let busy = 3;
+  fsPromises.open = async (...args) => {
+    if (busy > 0 && typeof args[1] === 'number' && path.resolve(String(args[0])) === path.resolve(second.file)) {
+      busy -= 1;
+      throw Object.assign(new Error('The file is busy.'), { code: 'EBUSY' });
+    }
+    return originalOpen(...args);
+  };
+  syncBuiltinESMExports();
+  context.after(() => { fsPromises.open = originalOpen; syncBuiltinESMExports(); });
+  await writeFile(second.file, second.text);
+  await writeFile(first.file, first.text);
+  await until(() => notices.length === 1);
+  assert.deepEqual(notices[0].messageIds, [first.id], 'the readable message wakes at once');
+  await until(() => notices.length === 2);
+  assert.deepEqual(notices[1].messageIds, [second.id], 'the busy one wakes once it can be read');
+  assert.ok(notices[1].text.includes(`${second.id} from overseer, subject "Busy on arrival"`));
+  const status = await wake.status(binding);
+  assert.equal(status.pausedReason, null);
+  assert.equal(status.lastError, null);
+  await handle.stop();
+});
+
+test('read failures that clear on the next poll, as a sync gives them, never add up to pausing the wake', async (context) => {
+  const { mind, sender, binding } = await fixture(context);
+  const notices = [];
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; });
+  context.after(() => wake.stopAll());
+  await wake.enable(binding);
+  const inbox = path.resolve(path.join(mind, 'user', 'projects', 'alpha', 'inbox', 'executor-alpha'));
+  await mkdir(inbox, { recursive: true });
+  const originalReaddir = fsPromises.readdir;
+  let calls = 0;
+  fsPromises.readdir = async (...args) => {
+    if (calls < 14 && path.resolve(String(args[0])) === inbox) {
+      calls += 1;
+      if (calls % 2) throw Object.assign(new Error('The folder is busy.'), { code: 'EBUSY' });
+    }
+    return originalReaddir(...args);
+  };
+  syncBuiltinESMExports();
+  const restore = () => { fsPromises.readdir = originalReaddir; syncBuiltinESMExports(); };
+  context.after(restore);
+  const handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await until(() => calls >= 14 || calls);
+  restore();
+  const status = await wake.status(binding);
+  assert.equal(status.pausedReason, null, 'seven failures, each followed by a clean poll');
+  assert.equal(status.worker.state, 'running');
+  const message = await sender.send({ to: binding.unit, subject: 'After the sync', body: 'body' });
+  await until(() => notices.length === 1);
+  assert.deepEqual(notices[0].messageIds, [message.id]);
+  await handle.stop();
+});

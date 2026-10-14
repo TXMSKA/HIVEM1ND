@@ -741,6 +741,11 @@ export async function createRelayWakeController(options = {}) {
       const messages = inbox.messages.filter((message) => typeof message.id === 'string' && message.id.length <= 180);
       policy = await readPolicy(binding, key);
       if (!freshPolicy(policy, nowMs(clock))) return policy?.pausedReason ?? (policy?.enabled ? 'expired' : 'disabled');
+      // A read that failed while OneDrive was still syncing a file is over once a poll reads cleanly, so such failures
+      // spread over hours never add up to pausing the wake. Failures to reach the session count until a wake succeeds.
+      if (policy.consecutiveErrors > 0 && !String(policy.lastError?.code).startsWith('SINK_')) {
+        policy = await mutatePolicy(binding, key, async (current) => current?.generation === policy.generation ? { ...current, consecutiveErrors: 0 } : current);
+      }
       if (Object.values(policy.deliveries ?? {}).some((item) => item.state === 'attempting')) {
         await mutatePolicy(binding, key, async (current) => {
           if (current?.generation !== policy.generation) return current;
