@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { crc32, inflateSync } from 'node:zlib';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
+import { prepareLegacyExport } from '../../features/blueprint/server.mjs';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { paginate } from './projection.mjs';
 import { admitMessage } from '../sync/limits.mjs';
@@ -608,6 +609,59 @@ export async function createBoard(context, input) {
     ...await initialHistory(context, entry, bytes, jsonBytes(sidecar)),
   ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null), { status: 201, body: editor });
   return editor;
+}
+
+export async function readLegacyExport(context, id) {
+  desktopLibrary(context);
+  const found = await resourceOf(context, id);
+  try {
+    return await prepareLegacyExport(found.project, found.entry);
+  } catch (error) {
+    if (error instanceof CoreError && ['unsafe_path', 'import_unavailable'].includes(error.code)) throw error;
+    fail(422, 'import_unavailable', 'This registered board cannot be exported.');
+  }
+}
+
+export async function importBoard(context, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const found = await resourceOf(context, input.legacyResourceId);
+    const exported = await readLegacyExport(context, input.legacyResourceId);
+    if (input.project !== found.entry.project || input.path !== exported.path) fail(422, 'invalid_path', 'The JSON copy must be beside its registered module.');
+    if (input.expectedRevision !== exported.expectedRevision) fail(409, 'revision_conflict', 'The module changed since it was exported.');
+    if (canonicalJson(input.document?.legacySource ?? null) !== canonicalJson(exported.sourceRevisions)) fail(409, 'revision_conflict', 'The source or kit changed since it was exported.');
+    const document = validateBoard(input.document);
+    if (document.id !== found.entry.legacyId || !document.screens.length) fail(422, 'import_unavailable', 'The export must contain the selected board.');
+    if (exported.sketch && canonicalJson(document.legacySketch ?? null) !== canonicalJson(exported.sketch)) fail(422, 'import_unavailable', 'The export must retain the existing sketch.');
+    if (exported.sketch) {
+      for (const key of ['pages', 'screens', 'links']) for (const item of exported.sketch[key]) {
+        if (canonicalJson(document[key].find((candidate) => candidate.id === item.id) ?? null) !== canonicalJson(item)) fail(422, 'import_unavailable', 'The export must retain every sketch item.');
+      }
+    }
+    document.title = libraryTitle(input.title);
+    const library = await loadLibrary(context, input.project);
+    validateFolder(library, input.folderId, 'blueprint');
+    const file = inside(found.project.localPath, input.path);
+    const existing = await loadBytes(file);
+    const id = editorId('blueprint', input.project, input.path);
+    if (existing.bytes || found.catalog.value.resources.some((item) => item.id === id || item.project === input.project && item.legacyId === document.id && item.id !== found.entry.id)) fail(409, 'resource_exists', 'The JSON copy already exists.');
+    const entry = { id, kind: 'blueprint', project: input.project, path: input.path, legacyId: document.id, readOnly: false, attached: [...(found.entry.attached ?? [])], importedFrom: found.entry.id };
+    const catalog = { ...found.catalog.value, resources: [...found.catalog.value.resources.map((item) => item.id === found.entry.id ? { ...item, convertedTo: id } : item), entry] };
+    const index = await loadBytes(indexFile(found.project));
+    const nextIndex = mergeIndex(parseJson(index.bytes), document);
+    for (const item of Array.isArray(nextIndex) ? nextIndex : nextIndex.boards) if (item.id === document.id) Object.assign(item, { path: input.path, resourceId: id, legacyPath: found.entry.path });
+    const comments = await loadComments(found);
+    const sidecar = comments.bytes ?? jsonBytes(comments.value);
+    const bytes = jsonBytes(document);
+    library.value.items[id] = { folderId: input.folderId, title: document.title, updatedAt: clock(context) };
+    const editor = createdEditor(context, entry, document, bytes, sidecar, library);
+    checkRevision((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes, input.expectedRevision);
+    await commit(context, [record(file, null, bytes), record(catalogFile(context), found.catalog.revision, jsonBytes(catalog)),
+      record(indexFile(found.project), index.revision, jsonBytes(nextIndex)), record(library.file, library.revision, jsonBytes(library.value)),
+      ...(!comments.bytes ? [record(comments.file, null, sidecar)] : []), ...await initialHistory(context, entry, bytes, sidecar)],
+    boardEvents(context, id, hashBytes(bytes), 'import', null, null), { status: 201, body: editor });
+    return editor;
+  });
 }
 
 async function boardFile(context, id) {

@@ -30,7 +30,41 @@ import {
   textBox,
   textNode,
   validateSketch,
+  normalizeBoard,
 } from "../features/blueprint/review/sketch-format.mjs";
+import { board, exportBoard } from "../features/blueprint/kit/board.mjs";
+
+test("the trusted exporter freezes actual nested layout pages styles links and sketches without changing the module data", async () => {
+  const prior = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => ({ measureText: (text) => ({ width: text.length * 8 }) }) }) };
+  try {
+    const kit = await import("../features/blueprint/kit/kit.mjs");
+    const { skins } = await import("../features/blueprint/kit/skins.mjs");
+    const source = board({ id: "legacy", title: "Actual legacy", sentinel: { future: true }, pages: [{ id: "one", title: "One", objects: [], order: ["first"], extra: 7 }, { id: "two", title: "Two", objects: [], order: ["second"] }],
+      screens: [{ id: "first", pageId: "one", title: "First", w: 400, h: 300, root: kit.col({ pad: 10, gap: 6, fill: "surface", radius: "md", extra: { retained: true }, _future: "kept" }, kit.row({ name: "action", gap: 4, place: { x: 0, y: 0, future: true } }, kit.text("Real nested text", { size: "lg", weight: 700, color: "accent" }))) },
+        { id: "second", pageId: "two", title: "Second", col: 1, root: kit.box({}, kit.text("Second page")) }],
+      links: [{ from: "first", to: "second", at: "action", label: "Continue", future: { kept: true } }] });
+    const sketch = sample(); sketch.id = "legacy"; sketch.sentinel = "sketch kept";
+    const original = structuredClone(source), originalSketch = structuredClone(sketch);
+    const exported = exportBoard(source, { layout: kit.layout, normalize: normalizeBoard, skin: skins.design, sketch });
+    assert.deepEqual(source, original); assert.deepEqual(sketch, originalSketch);
+    assert.equal(exported.screens.length, source.screens.length + sketch.screens.length);
+    assert.deepEqual(exported.pages.map((page) => page.id), ["one", "two", "sketch"]);
+    assert.deepEqual(exported.pages[0].order, ["first"]); assert.equal(exported.pages[0].extra, 7);
+    const nested = exported.screens[0].root.kids[0].kids[0];
+    assert.equal(nested.value, "Real nested text"); assert.equal(nested.size, 18); assert.equal(nested.weight, 700);
+    assert.equal(nested.color, skins.design.color("accent"));
+    assert.deepEqual(exported.screens[0].root.kids[0].place, { x: 10, y: 10, future: true });
+    assert.equal(exported.screens[0].root._future, "kept");
+    assert.equal(exported.screens[0].root.radius, 10); assert.equal(exported.screens[0].root.extra.retained, true);
+    assert.equal(exported.links[0].element, exported.screens[0].root.kids[0].id);
+    assert.equal(exported.links[0].future.kept, true); assert.equal(exported.legacySketch.sentinel, "sketch kept");
+    assert.equal(exported.sentinel.future, true); assert.ok(!JSON.stringify(exported).includes('"_text"'));
+    assert.throws(() => exportBoard({ screens: [] }, { layout: kit.layout, normalize: normalizeBoard }), /import_unavailable/);
+    assert.throws(() => exportBoard({ ...source, screens: [{ ...source.screens[0], root: { t: "unsupported" } }] }, { layout: kit.layout, normalize: normalizeBoard }), /Unknown node/);
+    assert.throws(() => exportBoard({ ...source, future: "x".repeat(16_000_000) }, { layout: kit.layout, normalize: normalizeBoard, skin: skins.design }), /import_unavailable/);
+  } finally { if (prior === undefined) delete globalThis.document; else globalThis.document = prior; }
+});
 
 const STYLE = { stroke: "#1c1c1c", fill: "none" };
 const UUID = "0b9d6a54-2b6f-4d8f-9a53-5f1d2f7b8c11";

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { crc32 } from 'node:zlib';
@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
-import { createFolder, duplicateEditor, listFolders, moveEditor, patchEditorLibrary, patchFolder, removeEditor, removeFolder } from '../engine/service/editors.mjs';
+import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from '../engine/service/editors.mjs';
+import { legacyModuleUrls } from '../gui/app/main.mjs';
 import { undoChange } from '../engine/service/store.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
@@ -25,6 +26,123 @@ import { createStore } from '../engine/service/store.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { WEBP } from './media-fixture.mjs';
+
+function legacyModule(id = 'legacy') {
+  return `import { board } from "blueprint/board.mjs";
+import { col, row, text } from "blueprint/kit.mjs";
+export default board({id: ${JSON.stringify(id)}, title: "Real legacy", future: {kept: true},
+  pages: [{id: "first-page", title: "First page", objects: [], order: ["first"]}, {id: "second-page", title: "Second page", objects: [], order: ["second"]}],
+  screens: [{id: "first", title: "First", pageId: "first-page", w: 400, h: 300, root: () => col({pad: 12, fill: "surface", radius: "lg", future: {node: true}}, row({name: "continue", gap: 8}, text("Actual nested text", {size: 22, weight: 700, color: "accent"})))},
+    {id: "second", title: "Second", pageId: "second-page", col: 1, root: col({}, text("Actual second page"))}],
+  links: [{from: "first", to: "second", at: "continue", label: "Continue", future: true}]});`;
+}
+
+async function evaluateExport(manifest) {
+  const before = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => ({ measureText: (value) => ({ width: value.length * 8 }) }) }) };
+  try {
+    const urls = legacyModuleUrls(manifest, (source) => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+    const [source, kit, skins, exporter, schema] = await Promise.all([urls.module, urls.kit, urls.skins, urls.exporter, urls.schema].map((url) => import(url)));
+    kit.useSkin(skins.skins.design);
+    const document = exporter.exportBoard(source.default, { layout: kit.layout, normalize: schema.normalizeBoard, skin: skins.skins.design, sketch: manifest.sketch });
+    document.legacySource = manifest.sourceRevisions;
+    return document;
+  } finally { if (before === undefined) delete globalThis.document; else globalThis.document = before; }
+}
+
+async function registeredLegacy(context, localPath, id = 'legacy', source = legacyModule(id)) {
+  const relative = `docs/flows/boards/${id}.mjs`, file = path.join(localPath, relative);
+  await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, source);
+  await writeFile(path.join(path.dirname(file), 'index.json'), JSON.stringify([{ id, title: 'Legacy', futureIndex: true }]));
+  const editor = await registerResource(context, { project: 'shop', path: relative, kind: 'blueprint' });
+  return { editor, file, relative };
+}
+
+test('legacy import retains real screens nested text two pages links sketches unknown fields and read-only source history', async (t) => {
+  const { context, localPath, fixture } = await shop(t);
+  const { editor: legacy, file } = await registeredLegacy(context, localPath);
+  const sketchDocument = sketch('legacy'); sketchDocument.future = { drawing: true };
+  sketchDocument.screens[0].root.kids.push({ id: 'hand-pen', name: 'Hand pen', t: 'vector', kind: 'pen', place: { x: 2, y: 3 }, w: 60, h: 30, d: 'M0 0 L100 100', stroke: '#112233', strokeWidth: 4, opacity: 0.4, futureStroke: true });
+  const sketchFile = path.join(localPath, 'docs/flows/sketches/legacy.json'); await mkdir(path.dirname(sketchFile), { recursive: true }); await writeFile(sketchFile, JSON.stringify(sketchDocument));
+  const oldHistory = path.join(localPath, `docs/flows/history/${legacy.id}/prior.json`); await mkdir(path.dirname(oldHistory), { recursive: true }); await writeFile(oldHistory, '{"readOnly":true}');
+  const original = await readFile(file), originalStat = await stat(file), oldSketch = await readFile(sketchFile), history = await readFile(oldHistory);
+  const exported = await readLegacyExport(context, legacy.id), document = await evaluateExport(exported);
+  const imported = await importBoard(context, { project: 'shop', path: exported.path, title: 'Imported real board', folderId: null, legacyResourceId: legacy.id, document, expectedRevision: legacy.revision });
+  assert.equal(imported.path, file.slice(localPath.length + 1).replaceAll('\\', '/').replace(/\.mjs$/, '.json'));
+  assert.notEqual(imported.id, legacy.id); assert.equal(imported.readOnly, false);
+  assert.equal(imported.document.screens.length, 2 + sketchDocument.screens.length); assert.equal(imported.document.pages.length, 3);
+  assert.equal(imported.document.screens[0].root.kids[0].kids[0].value, 'Actual nested text');
+  assert.equal(imported.document.screens[0].root.radius, 14); assert.equal(imported.document.screens[0].root.future.node, true);
+  assert.equal(imported.document.links[0].element, imported.document.screens[0].root.kids[0].id);
+  assert.equal(imported.document.legacySketch.future.drawing, true); assert.deepEqual(imported.document.screens.at(-1), sketchDocument.screens[0]);
+  assert.deepEqual(await readFile(file), original); assert.equal((await stat(file)).mtimeMs, originalStat.mtimeMs);
+  assert.deepEqual(await readFile(sketchFile), oldSketch); assert.deepEqual(await readFile(oldHistory), history);
+  assert.equal(fixture.store.writes.includes(file), false);
+  const catalog = JSON.parse(await readFile(path.join(context.paths.mind, 'user/gui/resources.json')));
+  assert.equal(catalog.resources.find((entry) => entry.id === legacy.id).convertedTo, imported.id);
+  assert.equal(catalog.resources.find((entry) => entry.id === imported.id).importedFrom, legacy.id);
+  const index = JSON.parse(await readFile(path.join(localPath, 'docs/flows/boards/index.json')));
+  assert.equal(index[0].path, imported.path); assert.equal(index[0].futureIndex, true); assert.equal(index[0].legacyPath, legacy.path);
+  assert.equal((await readEditor(context, legacy.id)).readOnly, true);
+  const saved = await replaceBoard(context, imported.id, { document: { ...imported.document, note: 'Retained after saving' }, expectedRevision: imported.revision });
+  assert.equal(saved.document.future.kept, true);
+  await assert.rejects(() => importBoard(context, { project: 'shop', path: exported.path, title: 'Again', folderId: null, legacyResourceId: legacy.id, document, expectedRevision: legacy.revision }), { code: 'revision_conflict' });
+});
+
+test('legacy exporter refuses unregistered outside linked unavailable and changed sources without creating a substitute', async (t) => {
+  const { context, localPath, fixture } = await shop(t);
+  const { editor, file } = await registeredLegacy(context, localPath);
+  await assert.rejects(() => readLegacyExport(context, randomUUID()), { code: 'not_found' });
+  await writeFile(path.join(localPath, 'outside.mjs'), legacyModule());
+  const outside = await registerResource(context, { project: 'shop', path: 'outside.mjs', kind: 'blueprint' });
+  await assert.rejects(() => readLegacyExport(context, outside.id), { code: 'import_unavailable' });
+  const exported = await readLegacyExport(context, editor.id), document = await evaluateExport(exported);
+  const input = { project: 'shop', path: exported.path, title: 'Import', folderId: null, legacyResourceId: editor.id, document, expectedRevision: exported.expectedRevision };
+  const before = fixture.store.writes.length;
+  await assert.rejects(() => importBoard(context, { ...input, path: '../outside.json' }), { code: 'invalid_path' });
+  await writeFile(file, `${legacyModule()}\nthrow new Error("exporter error");`);
+  const failed = await readLegacyExport(context, editor.id);
+  await assert.rejects(() => evaluateExport(failed), /exporter error/);
+  await assert.rejects(() => importBoard(context, input), { code: 'revision_conflict' });
+  assert.equal(fixture.store.writes.length, before);
+  await assert.rejects(() => readFile(path.join(localPath, exported.path)), { code: 'ENOENT' });
+  const kit = path.join(localPath, 'docs/flows/kit'), target = path.join(localPath, 'linked-kit');
+  await mkdir(target); await writeFile(path.join(target, 'kit.mjs'), 'export const forbidden = true;');
+  await symlink(target, kit, 'junction');
+  await assert.rejects(() => readLegacyExport(context, editor.id), { code: 'unsafe_path' });
+  const boards = path.dirname(file), keptBoards = path.join(localPath, 'kept-boards');
+  await rename(boards, keptBoards); await symlink(keptBoards, boards, 'junction');
+  await assert.rejects(() => readLegacyExport(context, editor.id), { code: 'unsafe_path' });
+});
+
+test('HTTP legacy export and import require exact desktop bodies and never evaluate uploaded or registered code on the service', async (t) => {
+  const fixture = await makeCoreFixture(), localPath = path.join(fixture.paths.localDirectory, 'shop'); await mkdir(localPath, { recursive: true });
+  const projects = [{ name: 'shop', localPath }];
+  const context = { paths: fixture.paths, store: fixture.store, projects, now: () => fixture.clock.now };
+  const { editor, file } = await registeredLegacy(context, localPath, 'legacy', `${legacyModule()}\nglobalThis.legacyExecutionMarker = true;`);
+  const original = await readFile(file);
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects });
+  t.after(async () => { await core.http.close(); await dispose(fixture); delete globalThis.legacyExecutionMarker; });
+  const auth = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = auth.json.data.token;
+  const manifest = await call(core.http.port, 'GET', `/api/v1/blueprint/boards/${editor.id}/export`, { token });
+  assert.equal(manifest.status, 200); assert.equal(globalThis.legacyExecutionMarker, undefined);
+  const data = manifest.json.data, document = await evaluateExport(data); delete globalThis.legacyExecutionMarker;
+  document.uploadedCode = 'globalThis.uploadedExecutionMarker = true';
+  const body = { project: 'shop', path: data.path, title: 'HTTP real board', folderId: null, legacyResourceId: editor.id, document, expectedRevision: data.expectedRevision };
+  for (const invalid of [{ ...body, module: 'globalThis.uploadedExecutionMarker = true' }, { ...body, expectedRevision: undefined }, { ...body, document: 'export default {}' }]) {
+    const response = await call(core.http.port, 'POST', '/api/v1/blueprint/boards/import', { token, body: invalid, headers: { 'idempotency-key': randomUUID() } });
+    assert.ok([400, 422].includes(response.status));
+  }
+  const key = randomUUID();
+  const imported = await call(core.http.port, 'POST', '/api/v1/blueprint/boards/import', { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(imported.status, 201, JSON.stringify(imported.json));
+  const replay = await call(core.http.port, 'POST', '/api/v1/blueprint/boards/import', { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(replay.status, 201); assert.equal(replay.json.data.id, imported.json.data.id);
+  assert.equal(globalThis.legacyExecutionMarker, undefined); assert.equal(globalThis.uploadedExecutionMarker, undefined);
+  assert.equal(imported.json.data.document.screens.length, 2); assert.equal(imported.json.data.document.uploadedCode, document.uploadedCode);
+  assert.deepEqual(await readFile(file), original);
+});
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 

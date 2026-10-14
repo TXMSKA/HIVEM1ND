@@ -126,7 +126,7 @@ function checkNode(node, path, depth, seen, count) {
   if (node.size !== undefined && !number(node.size, 1, 1000)) fail(`${path}.size`, "must be a number from 1 to 1000.");
   if (node.weight !== undefined && !(Number.isInteger(node.weight) && node.weight >= 100 && node.weight <= 900)) fail(`${path}.weight`, "must be a whole number from 100 to 900.");
   if (node.font !== undefined && (typeof node.font !== "string" || node.font.length > 240)) fail(`${path}.font`, "must be a font family name.");
-  if (node.align !== undefined && !["left", "center", "right"].includes(node.align)) fail(`${path}.align`, "must be left, center or right.");
+  if (node.t === "text" && node.align !== undefined && !["left", "center", "right"].includes(node.align)) fail(`${path}.align`, "must be left, center or right.");
   if (node.icon !== undefined && (typeof node.icon !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(node.icon))) fail(`${path}.icon`, "must be an icon name.");
   if (node.src !== undefined && (typeof node.src !== "string" || !ASSET.test(node.src))) fail(`${path}.src`, "must be assets/<uuid>.png, .jpg or .webp.");
   if (node.t === "box") {
@@ -229,6 +229,98 @@ export function validateSketch(value) {
   });
 
   return JSON.parse(JSON.stringify(value));
+}
+
+/** Freeze a laid-out Lite module as editable, parent-relative JSON, retaining its data. */
+export function normalizeBoard(source, { skin, sketch = null } = {}) {
+  const unavailable = () => { throw new SketchError("import_unavailable"); };
+  const copy = (value, depth = 0) => {
+    if (depth > 60) return unavailable();
+    if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) return value;
+    if (Array.isArray(value)) return value.map((item) => copy(item, depth + 1));
+    if (!plain(value) || Object.getPrototypeOf(value) !== Object.prototype) return unavailable();
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, copy(item, depth + 1)]));
+  };
+  const result = copy(source);
+  if (!Array.isArray(result.screens) || !result.screens.length) return unavailable();
+  const used = new Set();
+  const take = (id) => {
+    if (typeof id !== "string" || !ID.test(id) || used.has(id)) return unavailable();
+    used.add(id); return id;
+  };
+  for (const screen of result.screens) take(screen.id);
+  const fresh = (base) => {
+    const stem = String(base ?? "node").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 65) || "node";
+    let id = stem, index = 2;
+    while (used.has(id)) id = `${stem}-${index++}`;
+    used.add(id); return id;
+  };
+  const checkedSketch = sketch === null ? null : validateSketch(sketch);
+  if (checkedSketch) for (const id of idsOf(checkedSketch)) take(id);
+  const main = result.pages ? null : fresh("main");
+  const pages = result.pages ?? [{ id: main, title: "Main", objects: [], order: result.screens.map((screen) => screen.id) }];
+  if (main === null) for (const page of pages) take(page.id);
+  const colors = (role, theme) => {
+    if (role === "none") return role;
+    let color = theme?.[role] ?? (COLOR.test(role) ? role : skin?.color(role));
+    if (typeof color !== "string") return unavailable();
+    const rgba = color.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d*(?:\.\d+)?))?\s*\)$/);
+    if (rgba) color = `#${rgba.slice(1, 4).map((value) => Math.round(Number(value)).toString(16).padStart(2, "0")).join("")}${rgba[4] === undefined ? "" : Math.round(Number(rgba[4]) * 255).toString(16).padStart(2, "0")}`;
+    if (!COLOR.test(color)) return unavailable();
+    return color;
+  };
+  const names = new Map();
+  const node = (raw, parent, theme, screen, depth = 1) => {
+    if (depth > MAX_DEPTH) return unavailable();
+    const ownTheme = { ...theme, ...raw.theme };
+    const result = Object.fromEntries(Object.entries(raw).filter(([key]) => !["_x", "_y", "_w", "_h", "_text"].includes(key)));
+    if (![...TYPES, "space", "rule"].includes(raw.t)) return unavailable();
+    result.id = raw.id ? take(raw.id) : fresh(`${screen}-${raw.name ?? "node"}`);
+    result.name = raw.name || raw.label || raw.t;
+    if (raw.name && !names.get(screen).has(raw.name)) names.get(screen).set(raw.name, result.id);
+    result.place = { ...(plain(raw.place) ? raw.place : {}), x: raw._x - parent.x, y: raw._y - parent.y };
+    result.w = Math.max(1, raw._w); result.h = Math.max(1, raw._h);
+    for (const key of ["fill", "stroke", "color"]) if (raw[key] !== undefined && !(raw.t === "icon" && key === "stroke")) result[key] = colors(raw[key], ownTheme);
+    if (typeof raw.radius === "string") result.radius = ({ none: 0, xs: 4, sm: 6, md: 10, lg: 14, xl: 20, pill: 999 })[raw.radius] ?? unavailable();
+    if (raw.t === "text") {
+      result.color = colors(raw.color ?? "text", ownTheme);
+      result.size = raw._text.font.size;
+      result.font = skin?.face(raw.face ?? "body") ?? raw.font;
+      result.weight = skin?.weight(raw.face ?? "body", raw.weight ?? 400) ?? raw.weight ?? 400;
+    }
+    if (raw.t === "icon") { delete result.stroke; result.strokeWidth = raw.stroke ?? 2; result.color = colors(raw.color ?? "soft", ownTheme); }
+    if (raw.t === "vector") result.strokeWidth = raw.strokeWidth ?? 1.5;
+    if (raw.t === "box") {
+      result.dir = "stack";
+      result.kids = raw.kids.map((kid) => node(kid, { x: raw._x, y: raw._y }, ownTheme, screen, depth + 1));
+    }
+    if (raw.t === "space" || raw.t === "rule") {
+      result.t = "box"; result.dir = "stack"; result.kids = [];
+      if (raw.t === "rule") result.fill = colors(raw.color ?? "border-subtle", ownTheme);
+    }
+    return result;
+  };
+  for (const screen of result.screens) {
+    names.set(screen.id, new Map());
+    screen.title ||= screen.id; screen.pageId ??= main ?? pages[0].id;
+    screen.x ??= (screen.col ?? 0) * (DEFAULT_SCREEN.w + 360);
+    screen.y ??= (screen.row ?? 0) * (DEFAULT_SCREEN.h + 420);
+    screen.w ??= DEFAULT_SCREEN.w; screen.h ??= DEFAULT_SCREEN.h;
+    screen.root = node(screen.root, { x: 0, y: 0 }, {}, screen.id);
+  }
+  result.links = (result.links ?? []).map((link) => {
+    const next = { ...link, id: link.id ? take(link.id) : fresh("link"), transition: link.transition ?? "cut" };
+    if (link.at !== undefined) next.element = names.get(link.from)?.get(link.at) ?? unavailable();
+    return next;
+  });
+  Object.assign(result, { formatVersion: 1, note: result.note ?? "", pages, components: result.components ?? [], fonts: result.fonts ?? [], threads: result.threads ?? [] });
+  if (checkedSketch) {
+    result.pages.push(...checkedSketch.pages); result.screens.push(...checkedSketch.screens); result.links.push(...checkedSketch.links);
+    result.components.push(...checkedSketch.components); result.fonts.push(...checkedSketch.fonts); result.threads.push(...checkedSketch.threads);
+    result.legacySketch = checkedSketch;
+  }
+  if (new TextEncoder().encode(JSON.stringify(result)).length > 16_000_000) return unavailable();
+  return validateSketch(result);
 }
 
 // ---- building --------------------------------------------------------------

@@ -3,6 +3,8 @@ import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "n
 import http from "node:http";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { prepareLegacyExport } from "../features/blueprint/server.mjs";
+import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
 import {
   FIXTURE_HOME_CODE,
   FIXTURE_HOME_KEY,
@@ -15,7 +17,7 @@ import {
   stableJson,
 } from "./gui-data.mjs";
 
-// Isolated GUI contract fixture. It does not import the service, CLI, or feature servers.
+// Isolated GUI contract fixture. The read-only module boundary is shared; no server or CLI is started.
 // The home listener is a loopback transport simulation, not a production subnet check.
 // Stdin commands: advance <ms>, emit <name> <json>, disconnect, quit.
 
@@ -1812,6 +1814,8 @@ function routeTable() {
     { pattern: "/editors/:resourceId/move", POST: { capability: "editor.write", validate: libraryValidator("move") } },
     { pattern: "/editors/:resourceId", DELETE: { capability: "editor.write", validate: libraryValidator("delete") } },
     { pattern: "/blueprint/boards", GET: { query: ["q", "limit", "cursor", "project", "folderId", "openComments", "attachedAgents", "changedThisWeek"] }, POST: { capability: "editor.write", validate: validateBoard } },
+    { pattern: "/blueprint/boards/import", POST: { capability: "editor.write", validate: validateImport } },
+    { pattern: "/blueprint/boards/:resourceId/export", GET: { capability: "editor.write", query: [] } },
     { pattern: "/blueprint/boards/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateBoardPut } },
     { pattern: "/blueprint/boards/:resourceId/nodes", POST: { capability: "editor.write", validate: validateAddNode } },
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", PATCH: { capability: "editor.write", validate: validatePatchNode } },
@@ -2059,6 +2063,10 @@ async function readData(fx, snap, spec, params, query) {
     }
     return page(items, query, spec.GET.query, (folder, q) => includes(folder.title, q), issues);
   }
+  if (pattern === "/blueprint/boards/:resourceId/export") {
+    noneQuery(query);
+    return fixtureLegacyExport(fx, requireEditor(snap, params.resourceId));
+  }
   if (pattern === "/blueprint/boards/:resourceId" || pattern === "/void/texts/:resourceId") {
     noneQuery(query);
     const editor = requireEditor(snap, params.resourceId);
@@ -2197,7 +2205,7 @@ const LARGE_BODY = 16_000_000;
 
 function bodyLimit(method, apiPath) {
   if (method === "PUT" && (/^\/blueprint\/boards\/[^/]+$/.test(apiPath) || /^\/void\/texts\/[^/]+$/.test(apiPath))) return LARGE_BODY;
-  if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/void/texts")) return LARGE_BODY;
+  if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/blueprint/boards/import" || apiPath === "/void/texts")) return LARGE_BODY;
   if (method === "POST" && (/^\/void\/texts\/[^/]+\/ranges$/.test(apiPath) || /^\/editors\/[^/]+\/assets$/.test(apiPath))) return LARGE_BODY;
   return GENERAL_BODY;
 }
@@ -2230,7 +2238,7 @@ function canonicalOrigin(value) {
 function staticHeaders(frameAncestors, deny) {
   const headers = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}`,
+    "Content-Security-Policy": `default-src 'self'; script-src 'self' data:; frame-src blob:; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}`,
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
   };
@@ -3304,6 +3312,40 @@ function validateBoard(body) {
   else assertEditorPath(body.project, "docs/flows/boards/placeholder.json");
 }
 
+function validateImport(body) {
+  const fields = ["project", "path", "title", "folderId", "legacyResourceId", "document", "expectedRevision"];
+  requireObject(body, fields); requireKeys(body, fields);
+  assertEditorPath(body.project, body.path); groupTitle(body.title); revisionField(body.expectedRevision);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  if (!uuid.test(body.legacyResourceId) || body.folderId !== null && !uuid.test(body.folderId)) throw new HttpError(422, "invalid_body", "The resource and folder ids must be UUIDs.");
+  try { validateSketch(body.document); } catch { throw new HttpError(422, "invalid_document", "The exported document is invalid."); }
+}
+
+async function fixtureLegacyExport(fx, editor) {
+  try {
+    return await prepareLegacyExport({ name: editor.project, localPath: join(fx.tree.root, "repositories", editor.project) }, { ...editor, legacyId: editor.legacy?.id });
+  } catch (error) { throw new HttpError(error.status ?? 422, error.code ?? "import_unavailable", "This registered board cannot be exported."); }
+}
+
+async function prepareImport(fx, body) {
+  const source = await editorFor(fx, body.legacyResourceId);
+  const exported = await fixtureLegacyExport(fx, source);
+  if (source.project !== body.project || body.path !== exported.path) throw new HttpError(422, "invalid_path", "The JSON copy must be beside the module.");
+  if (body.expectedRevision !== exported.expectedRevision || stableJson(body.document.legacySource) !== stableJson(exported.sourceRevisions)) throw new HttpError(409, "revision_conflict", "The source changed since export.");
+  if (body.document.id !== source.legacy.id || !body.document.screens.length || exported.sketch && stableJson(body.document.legacySketch) !== stableJson(exported.sketch)) throw new HttpError(422, "import_unavailable", "The export must retain the source and sketch.");
+  const prepared = await prepareCreateEditor(fx, "blueprint", { ...body, document: { ...body.document, title: body.title } });
+  const catalogWrite = prepared.writes.find((write) => write.path === join(fx.tree.user, "gui", "resources.json"));
+  const catalog = JSON.parse(Buffer.from(catalogWrite.afterBytesBase64, "base64"));
+  catalog.resources.find((entry) => entry.id === source.id).convertedTo = prepared.data.id;
+  Object.assign(catalog.resources.find((entry) => entry.id === prepared.data.id), { legacyId: body.document.id, importedFrom: source.id });
+  Object.assign(catalogWrite, fixtureWrite(catalogWrite.path, await readFile(catalogWrite.path), Buffer.from(stableJson(catalog))));
+  const indexFile = editorFile(fx, body.project, "docs/flows/boards/index.json");
+  const indexBytes = await readFile(indexFile), index = JSON.parse(indexBytes);
+  Object.assign((Array.isArray(index) ? index : index.boards).find((entry) => entry.id === body.document.id), { title: body.title, path: body.path, resourceId: prepared.data.id, legacyPath: source.path });
+  prepared.writes.push(fixtureWrite(indexFile, indexBytes, Buffer.from(stableJson(index))));
+  return prepared;
+}
+
 function validateText(body) {
   requireObject(body, ["project", "path", "document", "attached", "folderId"]);
   requireKeys(body, ["project", "path", "document"]);
@@ -4287,6 +4329,7 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/viewer") return prepareViewer(fx, body, principal);
   if (pattern === "/editors/register") return prepareRegister(fx, body);
   if (pattern === "/blueprint/boards") return prepareCreateEditor(fx, "blueprint", body);
+  if (pattern === "/blueprint/boards/import") return prepareImport(fx, body);
   if (pattern === "/void/texts") return prepareCreateEditor(fx, "void", body);
   if (pattern === "/blueprint/boards/:resourceId") return prepareBoardPut(fx, params.resourceId, body);
   if (pattern === "/blueprint/boards/:resourceId/nodes" && body.node) return prepareAddNode(fx, params.resourceId, body);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request } from "../gui/app/api.mjs";
@@ -48,6 +48,70 @@ import {
 import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 import { text } from "../gui/app/i18n.mjs";
+import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
+
+test("desktop import opens the real registered board beside its module with pages links styles and sketches", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const repo = join(fixture.root, "repositories", "shop"), file = join(repo, "docs/flows/boards/legacy-cart.mjs");
+  const module = `import { board } from "blueprint/board.mjs";
+import { col, row, text } from "blueprint/kit.mjs";
+export default board({id: "legacy-cart", title: "Real cart", future: "kept",
+pages: [{id: "one", title: "One", objects: [], order: ["first"]}, {id: "two", title: "Two", objects: [], order: ["second"]}],
+screens: [{id: "first", title: "First", pageId: "one", w: 400, h: 300, root: col({pad: 10, fill: "surface", radius: "md"}, row({name: "continue"}, text("Actual cart", {size: 22, color: "accent"})))},
+{id: "second", title: "Second", pageId: "two", root: col({}, text("Actual second page"))}], links: [{from: "first", to: "second", at: "continue", label: "Continue"}]});`;
+  await writeFile(file, module); await writeFile(join(repo, "docs/flows/boards/index.json"), JSON.stringify([{ id: "legacy-cart", title: "Legacy cart", futureIndex: true }]));
+  const { newSketch, addScreen } = await import("../features/blueprint/review/sketch-format.mjs");
+  const sketch = newSketch("legacy-cart", "Cart sketch"), frame = addScreen(sketch, { title: "Real sketch", x: 0, y: 1000 });
+  frame.root.kids.push({ id: "stroke", name: "Stroke", t: "vector", kind: "pen", place: { x: 10, y: 10 }, w: 40, h: 20, d: "M0 0 L100 100", stroke: "#123456", strokeWidth: 3, opacity: 0.5, future: "stroke kept" });
+  await mkdir(join(repo, "docs/flows/sketches"), { recursive: true }); await writeFile(join(repo, "docs/flows/sketches/legacy-cart.json"), JSON.stringify(sketch));
+  const originalStat = await stat(file);
+  await fixture.control.refresh();
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors(); await loadCatalog(api, editors, "blueprint");
+  const legacy = editors.catalog.find((item) => item.readOnly);
+  const exported = await importLegacyBoard(api, legacy, { title: "Imported cart" }, null, async (manifest) => {
+    const prior = globalThis.document;
+    globalThis.document = { createElement: () => ({ getContext: () => ({ measureText: (value) => ({ width: value.length * 8 }) }) }) };
+    try {
+      const urls = legacyModuleUrls(manifest, (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+      const [source, kit, skins, exporter, schema] = await Promise.all([urls.module, urls.kit, urls.skins, urls.exporter, urls.schema].map((url) => import(url)));
+      kit.useSkin(skins.skins.design);
+      return exporter.exportBoard(source.default, { layout: kit.layout, normalize: schema.normalizeBoard, skin: skins.skins.design, sketch: manifest.sketch });
+    } finally { if (prior === undefined) delete globalThis.document; else globalThis.document = prior; }
+  });
+  assert.equal(exported.data.path, "docs/flows/boards/legacy-cart.json");
+  const opened = await openEditor(api, editors, exported.data);
+  assert.equal(opened.authoritative.readOnly, false); assert.equal(opened.authoritative.document.screens.length, 3);
+  assert.deepEqual(opened.authoritative.document.pages.map((page) => page.id), ["one", "two", "sketch"]);
+  assert.equal(opened.authoritative.document.screens[0].root.kids[0].kids[0].value, "Actual cart");
+  assert.equal(opened.authoritative.document.screens[0].root.radius, 10);
+  assert.equal(opened.authoritative.document.screens.at(-1).root.kids[0].future, "stroke kept");
+  assert.equal(opened.authoritative.document.links[0].element, opened.authoritative.document.screens[0].root.kids[0].id);
+  assert.equal(opened.authoritative.document.future, "kept");
+  assert.equal(await readFile(file, "utf8"), module); assert.equal((await stat(file)).mtimeMs, originalStat.mtimeMs);
+  await assert.rejects(importLegacyBoard(api, legacy, { project: "blog", title: "Wrong project" }), { code: "import_unavailable" });
+  const phone = await phoneApi(fixture);
+  await assert.rejects(request(phone, "GET", "/blueprint/boards/:resourceId/export", { params: { resourceId: legacy.id } }), { status: 403 });
+});
+
+test("an exporter failure creates no substitute and Retry reuses the exact imported document and operation", async () => {
+  const source = { id: "11111111-1111-4111-8111-111111111111", project: "shop", readOnly: true };
+  const manifest = { path: "docs/flows/boards/legacy.json", expectedRevision: "a".repeat(64), sourceRevisions: { module: "a".repeat(64), index: "b".repeat(64), sketch: null, kit: {} } };
+  const writes = [], reads = [], document = { formatVersion: 1, id: "legacy", title: "Actual", screens: [{ id: "actual" }], unknown: true };
+  const api = createApi({ location: { origin: "http://127.0.0.1:9", hash: "#session=fixture" }, history: { replaceState() {} }, fetch: async (url, init) => {
+    if (init.method === "GET") { reads.push(url); return jsonResponse(manifest); }
+    writes.push({ key: init.headers["Idempotency-Key"], body: init.body });
+    if (writes.length === 1) throw new Error("Connection closed after storage");
+    return jsonResponse({ id: "copy", document: JSON.parse(init.body).document });
+  } });
+  await assert.rejects(importLegacyBoard(api, source, { title: "Copy" }, null, async () => { throw new Error("Unsupported exporter"); }), { code: "import_unavailable" });
+  assert.equal(writes.length, 0);
+  let retained;
+  try { await importLegacyBoard(api, source, { title: "Copy" }, null, async () => structuredClone(document)); } catch (error) { retained = error.operation; }
+  assert.ok(retained);
+  const result = await importLegacyBoard(api, source, { title: "Later title" }, retained, async () => { throw new Error("Retry must not export twice"); });
+  assert.equal(reads.length, 2); assert.deepEqual(writes[0], writes[1]); assert.equal(result.data.document.unknown, true);
+  assert.equal(JSON.parse(writes[1].body).title, "Copy");
+});
 
 test("editor comments, attachments and Watch stay on their own revisions", async (t) => {
   const fixture = await createGuiFixture();

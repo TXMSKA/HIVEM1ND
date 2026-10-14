@@ -17,7 +17,7 @@ import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readSta
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
-import { createFolder, duplicateEditor, listFolders, moveEditor, patchEditorLibrary, patchFolder, removeEditor, removeFolder } from './editors.mjs';
+import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
@@ -94,6 +94,8 @@ const ROUTES = [
   ['POST', '/auth/logout', null, 'DP', 'logout'],
   ['GET', '/blueprint/boards', 'editor.read', 'DPA', 'editor'],
   ['GET', '/blueprint/boards/:resourceId', 'editor.read', 'DPA', 'editor'],
+  ['GET', '/blueprint/boards/:resourceId/export', 'editor.read', 'D', 'editor'],
+  ['POST', '/blueprint/boards/import', 'editor.write', 'D', 'editor'],
   ['POST', '/editors/register', 'editor.write', 'D', 'editor'],
   ['GET', '/library/folders', 'editor.read', 'DP', 'editor'],
   ['POST', '/library/folders', 'editor.write', 'D', 'editor'],
@@ -151,6 +153,7 @@ function bodyLimitFor(route, pathname) {
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
   if (route?.method === 'POST' && route.template === '/editors/:resourceId/assets') return REPLACEMENT_LIMIT;
+  if (route?.template === '/blueprint/boards/import') return REPLACEMENT_LIMIT;
   return JSON_LIMIT;
 }
 
@@ -938,6 +941,7 @@ function validateLibraryBody(route, body) {
   const signature = `${route.method} ${route.template}`;
   const required = {
     'POST /library/folders': ['project', 'kind', 'title', 'parentId', 'expectedRevision'],
+    'POST /blueprint/boards/import': ['project', 'path', 'title', 'folderId', 'legacyResourceId', 'document', 'expectedRevision'],
     'PATCH /library/folders/:folderId': ['project', 'expectedRevision'],
     'DELETE /library/folders/:folderId': ['project', 'confirmed', 'expectedRevision'],
     'PATCH /editors/:resourceId/library': ['expectedRevision', 'expectedLibraryRevision'],
@@ -950,6 +954,7 @@ function validateLibraryBody(route, body) {
     return;
   }
   if (required.some((key) => !Object.hasOwn(body, key))) throw new CoreError(422, 'invalid_body', 'The library body is missing a required field.');
+  if (signature === 'POST /blueprint/boards/import' && !isUuid(body.legacyResourceId)) throw new CoreError(422, 'invalid_body', 'The legacy resource id must be a UUID.');
   for (const [key, value] of Object.entries(body)) {
     if (key.startsWith('expected') && value !== null && !/^[0-9a-f]{64}$/.test(value ?? '')) throw new CoreError(422, 'invalid_body', 'The expected revision must be a byte revision.');
     if ((key === 'folderId' || key === 'parentId') && value !== null && !isUuid(value)) throw new CoreError(422, 'invalid_body', 'The folder id must be a UUID or null.');
@@ -995,6 +1000,7 @@ function allowedBody(route) {
     'POST /auth/home': ['key', 'code'],
     'POST /editors/register': ['project', 'path', 'kind'],
     'POST /blueprint/boards': ['project', 'document', 'path', 'attached', 'folderId'],
+    'POST /blueprint/boards/import': ['project', 'path', 'title', 'folderId', 'legacyResourceId', 'document', 'expectedRevision'],
     'POST /library/folders': ['project', 'kind', 'title', 'parentId', 'expectedRevision'],
     'PATCH /library/folders/:folderId': ['project', 'title', 'parentId', 'expectedRevision'],
     'DELETE /library/folders/:folderId': ['project', 'confirmed', 'expectedRevision'],
@@ -1063,6 +1069,8 @@ function noteActivity(domain, resourceId, kind = 'blueprint', focus = null) {
 
 async function editorRoute(route, domain, params, query, body) {
   const id = params.resourceId;
+  if (route.template === '/blueprint/boards/:resourceId/export') return { status: 200, body: await readLegacyExport(domain, id) };
+  if (route.template === '/blueprint/boards/import') return { status: 201, body: await importBoard(domain, body) };
   if (route.template === '/library/folders' && route.method === 'GET') return { status: 200, body: await listFolders(domain, query) };
   if (route.template === '/library/folders' && route.method === 'POST') return { status: 201, body: await createFolder(domain, body) };
   if (route.template === '/library/folders/:folderId' && route.method === 'PATCH') return { status: 200, body: await patchFolder(domain, params.folderId, body) };
@@ -1554,7 +1562,7 @@ function contentType(name) {
 }
 
 function csp(ancestors) {
-  return `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
+  return `default-src 'self'; script-src 'self' data:; frame-src blob:; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
 }
 
 function decodeStatic(name) {

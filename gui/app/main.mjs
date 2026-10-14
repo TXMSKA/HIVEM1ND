@@ -39,7 +39,7 @@ import {
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
-import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, request } from "./api.mjs";
+import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -2425,20 +2425,79 @@ function submitRegister(app, kind) {
 
 function submitJsonCopy(app, current) {
   const legacy = current?.authoritative?.legacy;
-  const id = jsonCopyId(legacy?.path ?? "");
-  if (!id || !canEditResources(app)) return;
-  const project = current.authoritative.project || editorDraft(app).project;
-  const path = `docs/flows/boards/${id}.json`;
-  if (path === legacy.path) return;
-  editorAct(app, `copy:${id}`, text(app.language, "working"), async (record) => {
-    const result = await createResource(app.api, "blueprint", { project, path, document: starterBoard(id, legacy.id || id) }, record.operation);
+  if (!legacy || !canEditResources(app)) return;
+  editorAct(app, `copy:${current.resourceId}`, text(app.language, "working"), async (record) => {
+    const result = await importLegacyBoard(app.api, current.authoritative, { title: current.authoritative.title, folderId: current.authoritative.folderId ?? null }, record.operation, (manifest) => exportLegacyDocument(app.root.ownerDocument, manifest));
     await openCreated(app, result.data, "blueprint");
   });
 }
 
-function jsonCopyId(path) {
-  const base = String(path).split("/").pop()?.replace(/\.mjs$/i, "") ?? "";
-  return /^[a-z0-9][a-z0-9-]{0,40}$/.test(base) ? base : "";
+/** Resolve the verified, bounded module graph without fetching executable URLs. */
+export function legacyModuleUrls(manifest, makeUrl) {
+  const urls = new Map(), loading = new Set();
+  let bytes = 0;
+  const build = (key) => {
+    if (urls.has(key)) return urls.get(key);
+    const module = manifest.modules[key];
+    if (!module || loading.has(key)) throw new ApiError(422, "import_unavailable", "The module cannot be exported.");
+    loading.add(key);
+    let source = module.source;
+    for (const reference of [...module.imports].reverse()) {
+      source = `${source.slice(0, reference.start)}${JSON.stringify(build(reference.key))}${source.slice(reference.end)}`;
+      if (source.length > 16_000_000) throw new ApiError(422, "import_unavailable", "The module export exceeds its limit.");
+    }
+    if ((bytes += new TextEncoder().encode(source).length) > 16_000_000) throw new ApiError(422, "import_unavailable", "The module export exceeds its limit.");
+    const url = makeUrl(source); loading.delete(key); urls.set(key, url); return url;
+  };
+  return Object.fromEntries(["module", "kit", "skins", "exporter", "schema", "icons", "nodes"].filter((key) => manifest[key]).map((key) => [key, build(manifest[key])]));
+}
+
+async function exportLegacyDocument(document, manifest) {
+  const env = document.defaultView;
+  const dataUrl = (source) => {
+    const bytes = new TextEncoder().encode(source), chunks = [];
+    for (let at = 0; at < bytes.length; at += 32768) chunks.push(String.fromCharCode(...bytes.subarray(at, at + 32768)));
+    return `data:text/javascript;base64,${env.btoa(chunks.join(""))}`;
+  };
+  const urls = legacyModuleUrls(manifest, dataUrl);
+  const script = `try {
+    const [source, kit, skins, exporter, schema] = await Promise.all(${JSON.stringify([urls.module, urls.kit, urls.skins, urls.exporter, urls.schema])}.map(url => import(url)));
+    const skin = skins.skins?.design ?? Object.values(skins.skins ?? {})[0]; if (!skin) throw new Error();
+    kit.useSkin?.(skin);
+    ${urls.icons ? `const icons = await import(${JSON.stringify(urls.icons)}); kit.useIcons?.(icons.default ?? icons.ICONS);` : ""}
+    ${urls.nodes ? `const nodes = await import(${JSON.stringify(urls.nodes)}); kit.useNodes?.(nodes.default ?? nodes.NODES);` : ""}
+    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: schema.normalizeBoard, skin, sketch: ${JSON.stringify(manifest.sketch)}});
+    parent.postMessage({document}, "*");
+  } catch { parent.postMessage({error: "import_unavailable"}, "*"); }`;
+  const iframe = document.createElement("iframe");
+  iframe.hidden = true; iframe.setAttribute("sandbox", "allow-scripts");
+  const html = new Blob([`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'"><script type="module" src="${dataUrl(script)}"></script>`], { type: "text/html" });
+  const url = env.URL.createObjectURL(html);
+  try {
+    return await new Promise((resolve, reject) => {
+      const finish = (error, result) => { env.clearTimeout(timer); env.removeEventListener("message", receive); error ? reject(error) : resolve(result); };
+      const receive = (event) => {
+        if (event.source !== iframe.contentWindow) return;
+        if (event.data?.error || !event.data?.document) finish(new ApiError(422, "import_unavailable", "The module cannot be exported."));
+        else finish(null, event.data.document);
+      };
+      const timer = env.setTimeout(() => finish(new ApiError(422, "import_unavailable", "The module cannot be exported.")), 30_000);
+      env.addEventListener("message", receive); iframe.src = url; document.body.append(iframe);
+    });
+  } finally { iframe.remove(); env.URL.revokeObjectURL(url); }
+}
+
+export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
+  if (retained) return perform(api, null, retained);
+  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
+  const manifest = (await request(api, "GET", "/blueprint/boards/:resourceId/export", { params: { resourceId: source.id } })).data;
+  let document;
+  try {
+    document = await exportDocument(manifest);
+    if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error();
+    document.legacySource = manifest.sourceRevisions;
+  } catch { throw new ApiError(422, "import_unavailable", "The module cannot be exported."); }
+  return perform(api, { method: "POST", path: "/blueprint/boards/import", body: { project, path: manifest.path, title, folderId, legacyResourceId: source.id, document, expectedRevision: manifest.expectedRevision } });
 }
 
 function openCreated(app, data, kind) {
@@ -3212,14 +3271,12 @@ function openLibraryCreate(app, kind, source = null) {
     let method = source ? "duplicate" : "empty";
     let chosen = source?.id ?? "";
     const sources = element(document, "select", { name: "source", "aria-label": text(app.language, "sourceBoard"), "data-library-source": "true" });
-    const notice = element(document, "p", { class: "field-hint", "data-import-unavailable": "true", text: text(app.language, "importUnavailable") });
     const paint = () => {
       sources.replaceChildren(element(document, "option", { value: "", text: text(app.language, "chooseBoard") }));
-      for (const item of state.sources ?? editorsOf(app).catalog) if ((method === "import") === item.readOnly) sources.append(element(document, "option", { value: item.id, text: `${item.project} / ${item.title}` }));
+      for (const item of state.sources ?? editorsOf(app).catalog) if ((method === "import") === item.readOnly && (method !== "import" || item.project === project.value)) sources.append(element(document, "option", { value: item.id, text: `${item.project} / ${item.title}` }));
       sources.value = chosen;
       sources.hidden = method === "empty";
-      notice.hidden = method !== "import";
-      confirm.disabled = method === "import";
+      confirm.disabled = false;
     };
     if (kind === "blueprint" || source) {
       const options = element(document, "div", { class: "library-create-options" });
@@ -3229,7 +3286,8 @@ function openLibraryCreate(app, kind, source = null) {
         options.append(element(document, "label", { class: "library-create-option" }, input, element(document, "span", {}, element(document, "strong", { text: text(app.language, key) }), element(document, "small", { text: text(app.language, hint) }))));
       }
       sources.addEventListener("change", () => { chosen = sources.value; });
-      form.append(options, sources, notice); paint();
+      project.addEventListener("change", () => { chosen = ""; paint(); });
+      form.append(options, sources); paint();
       collectPages(app.api, kind === "blueprint" ? "/blueprint/boards" : "/void/texts", { limit: 50 }).then((page) => { state.sources = page.items; if (document.querySelector('[data-form="library-create"]')) paint(); }).catch(() => {});
     }
     form.libraryCreation = () => ({ method, source: sources.value || chosen });
@@ -3238,7 +3296,7 @@ function openLibraryCreate(app, kind, source = null) {
       const title = form.querySelector('[data-field="create-title"]').value.trim();
       if (!title || title.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) problems.push({ name: "title", message: text(app.language, "groupNameRequired") });
       if (!project.value) problems.push({ name: "project", message: text(app.language, "projectRequired") });
-      if (method === "duplicate" && !form.libraryCreation().source) problems.push({ name: "source", message: text(app.language, "chooseBoard") });
+      if (method !== "empty" && !form.libraryCreation().source) problems.push({ name: "source", message: text(app.language, "chooseBoard") });
       return problems;
     };
     name.querySelector("input").setAttribute("name", "title");
@@ -3253,6 +3311,9 @@ function openLibraryCreate(app, kind, source = null) {
       if (choice.method === "duplicate") {
         const selected = (state.sources ?? editorsOf(app).catalog).find((entry) => entry.id === choice.source);
         result = await duplicateEditor(app.api, selected, { project, folderId, title, path }, operation);
+      } else if (choice.method === "import") {
+        const selected = (state.sources ?? editorsOf(app).catalog).find((entry) => entry.id === choice.source);
+        result = await importLegacyBoard(app.api, selected, { project, folderId, title }, operation, (manifest) => exportLegacyDocument(document, manifest));
       } else {
         result = await createResource(app.api, kind, { project, folderId, path, document: kind === "blueprint" ? starterBoard(id, title) : starterText(id, title) }, operation);
       }
