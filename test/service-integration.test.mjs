@@ -517,13 +517,22 @@ test('an invalid owner pack stays rejected and visible until reconcile succeeds'
   assert.deepEqual(failed.incoming, []);
   assert.equal(failed.retryAt, null);
   assert.equal(failed.error.message, 'The record is not owned by the publishing machine.');
-  const settings = await call(port, 'GET', '/api/v1/settings', { token });
+  const settings = await call(port, 'GET', `/api/v1/settings?machine=${fixture.machine}`, { token });
   assert.equal(settings.status, 200);
-  assert.equal(settings.json.data.service.syncState, 'error');
+  assert.equal(settings.json.data.selectedMachine, fixture.machine);
+  assert.equal(settings.json.data.readOnly, false);
+  assert.equal(settings.json.data.service.machine, fixture.machine);
+  assert.equal(settings.json.data.service.state, 'running');
+  const visible = await call(port, 'GET', '/api/v1/sync', { token });
+  assert.equal(visible.status, 200);
+  assert.equal(visible.json.data.state, 'error');
+  assert.deepEqual(visible.json.data.error, failed.error);
   await assert.rejects(() => readFile(messagePath), (error) => error.code === 'ENOENT');
   await recordSyncFailure(core.runtime.sync, { code: 'sync_rate_limited', retryAt: '2026-10-10T12:05:00.000Z' });
   await clearSyncFailure(core.runtime.sync);
   const kept = await call(port, 'GET', '/api/v1/sync', { token });
+  assert.equal(kept.status, 200);
+  assert.equal(kept.json.data.state, 'error');
   assert.equal(kept.json.data.error.code, 'invalid_record_owner');
   await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'registrations', 'laptop.json'), `${JSON.stringify({
     kind: 'registration', sessionId: 'abababab-abab-4bab-8bab-abababababab', unitId, machine: 'LAPTOP',
@@ -531,6 +540,7 @@ test('an invalid owner pack stays rejected and visible until reconcile succeeds'
   await writeFile(path.join(fixture.paths.origin, 'machines', 'LAPTOP', 'again.txt'), 'again\n');
   const cleared = await waitForSync(port, token, (data) => data?.error == null);
   assert.equal(cleared.state === 'error', false);
+  assert.equal(cleared.error, null);
   assert.equal(await readFile(messagePath, 'utf8'), messageBytes.toString('utf8'));
 });
 

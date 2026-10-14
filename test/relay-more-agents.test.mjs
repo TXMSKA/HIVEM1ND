@@ -17,8 +17,11 @@ import { localWakeChildEnv, spawnLocalWakeWorker } from '../engine/relay/local-w
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
 import { createRelay } from '../engine/relay/store.mjs';
 import { runRelayHook } from '../engine/relay/hooks.mjs';
-import { configureRelayClient, unconfigureRelayClient } from '../engine/relay/config.mjs';
+import { buildClientConfig, clientConfigPaths } from '../engine/relay/config.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
+import { createSettingsOwner, mutateMachineSettings, publishMachineSettings } from '../engine/service/settings.mjs';
 import { runCli } from '../cli/index.mjs';
+import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
 const bindingFor = (client) => ({ unit: 'overseer', nativeSessionId: 'exact-native', client, machine: os.hostname() });
@@ -445,19 +448,81 @@ test('relay diagnose names a consent that has no worker and keeps to the client 
 });
 
 test('Cursor configure adds a bounded owned stop entry and unconfigure preserves other hooks', async (context) => {
-  const { root, mind } = await fixture(context);
-  const options = { client: 'cursor', homeDir: root, kitPath: process.cwd(), mindPath: mind };
-  const configured = await configureRelayClient(options);
-  const hooks = JSON.parse(await readFile(configured.paths[1], 'utf8'));
-  assert.equal(hooks.hooks.stop[0].loop_limit, 5);
-  for (const event of ['sessionStart', 'postToolUse', 'stop']) assert.equal(hooks.hooks[event][0].timeout, 30);
-  assert.deepEqual((await configureRelayClient(options)).changed, []);
-  hooks.hooks.stop[0].timeout = 5;
-  await writeFile(configured.paths[1], JSON.stringify(hooks));
-  await configureRelayClient(options);
-  assert.equal(JSON.parse(await readFile(configured.paths[1], 'utf8')).hooks.stop[0].timeout, 30);
-  await unconfigureRelayClient(options);
-  assert.equal(JSON.parse(await readFile(configured.paths[1], 'utf8')).hooks.stop, undefined);
+  for (const original of ['missing hooks file', 'foreign hooks', 'stale owned stop hook']) {
+    await context.test(original, async (t) => {
+      const world = await makeCoreFixture();
+      t.after(() => dispose(world));
+      const kitPath = path.join(world.root, 'kit');
+      await mkdir(kitPath);
+      await writeFile(path.join(kitPath, 'package.json'), JSON.stringify({ name: 'fixture-kit', files: [] }));
+      const owner = createSettingsOwner({ store: world.store, paths: world.paths, now: () => world.clock.now, kitPath,
+        homeDir: world.home, env: { PATH: '' }, probeAgents: async () => ({ cursor: { installed: true } }) });
+      const paths = clientConfigPaths({ client: 'cursor', homeDir: world.home });
+      await mkdir(path.dirname(paths.mcp), { recursive: true });
+      const originalMcp = JSON.stringify({ mcpServers: { foreign: { command: 'foreign-server' } }, theme: 'original' });
+      await writeFile(paths.mcp, originalMcp);
+      const cliConfigPath = path.join(world.home, '.cursor', 'cli-config.json');
+      const cliConfig = JSON.stringify({ theme: 'foreign', permissions: { allow: ['Shell(echo)'] } });
+      await writeFile(cliConfigPath, cliConfig);
+      const foreignStop = { command: 'foreign-stop', timeout: 7 };
+      let originalHooks;
+      if (original !== 'missing hooks file') {
+        const hooks = { version: 1, preference: 'original', hooks: { stop: [foreignStop], beforeSubmitPrompt: [{ command: 'foreign-prompt' }] } };
+        if (original === 'stale owned stop hook') {
+          const owned = JSON.parse(buildClientConfig({ client: 'cursor', kitPath, mindPath: world.paths.mind, platform: world.platform }).hooks).hooks.stop[0];
+          hooks.hooks.stop.push({ ...owned, timeout: 5, loop_limit: 1 });
+        }
+        originalHooks = JSON.stringify(hooks);
+        await writeFile(paths.hooks, originalHooks);
+      }
+      await publishMachineSettings(owner);
+      const review = async () => (await mutateMachineSettings(owner, 'preview', { machine: world.machine, mode: 'on-demand', target: 'cli' }, 'cursor')).body;
+      const apply = async (preview) => (await mutateMachineSettings(owner, 'apply', { machine: world.machine, previewId: preview.previewId,
+        changeIds: preview.changes.filter(item => item.selected).map(item => item.id), expectedRevision: preview.revision }, 'cursor')).body;
+      const beforeReview = await legacyTreeInventory(world.root);
+      const preview = await review();
+      assert.deepEqual(preview.changes.filter(item => !item.optional).map(item => item.id), ['mcp', 'hooks']);
+      assert.deepEqual(await legacyTreeInventory(world.root), beforeReview);
+      await apply(preview);
+      const appliedHooks = await readFile(paths.hooks, 'utf8');
+      const hooks = JSON.parse(appliedHooks);
+      const ownedStop = hooks.hooks.stop.find(item => item.command !== foreignStop.command);
+      assert.equal(ownedStop.loop_limit, 5);
+      assert.equal(ownedStop.timeout, 30);
+      for (const event of ['sessionStart', 'postToolUse']) assert.equal(hooks.hooks[event][0].timeout, 30);
+      if (originalHooks) assert.deepEqual(hooks.hooks.stop[0], foreignStop);
+      const beforeRetry = await legacyTreeInventory(world.root);
+      await apply(preview);
+      assert.deepEqual(await legacyTreeInventory(world.root), beforeRetry);
+      const second = await review();
+      assert.deepEqual(second.changes.filter(item => !item.optional), []);
+      const applied = await apply(second);
+      assert.equal(await readFile(paths.hooks, 'utf8'), appliedHooks);
+      ownedStop.timeout = 5;
+      await writeFile(paths.hooks, JSON.stringify(hooks));
+      const drifted = await legacyTreeInventory(world.root);
+      await assert.rejects(review(), { code: 'configuration_changed' });
+      await assert.rejects(mutateMachineSettings(owner, 'disconnect', { machine: world.machine, confirmed: true, expectedRevision: applied.revision }, 'cursor'), { code: 'configuration_changed' });
+      assert.deepEqual(await legacyTreeInventory(world.root), drifted);
+      await writeFile(paths.hooks, appliedHooks);
+      if (originalHooks) {
+        const later = JSON.parse(appliedHooks);
+        later.hooks.stop.unshift({ command: 'later-foreign-stop' });
+        later.preference = 'later foreign edit';
+        await writeFile(paths.hooks, JSON.stringify(later));
+      }
+      await mutateMachineSettings(owner, 'disconnect', { machine: world.machine, confirmed: true, expectedRevision: applied.revision }, 'cursor');
+      assert.equal(await readFile(paths.mcp, 'utf8'), originalMcp);
+      assert.equal(await readFile(cliConfigPath, 'utf8'), cliConfig);
+      if (originalHooks) {
+        const expected = JSON.parse(originalHooks);
+        expected.hooks.stop.unshift({ command: 'later-foreign-stop' });
+        expected.preference = 'later foreign edit';
+        assert.deepEqual(JSON.parse(await readFile(paths.hooks, 'utf8')), expected);
+        assert.equal(await readFile(`${paths.hooks}.relay-backup`, 'utf8'), originalHooks);
+      } else await assert.rejects(readFile(paths.hooks), { code: 'ENOENT' });
+    });
+  }
 });
 
 async function serverFixture(context, handler) {

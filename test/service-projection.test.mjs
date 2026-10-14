@@ -592,6 +592,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   }, 'Archived\n'));
   await writeFile(path.join(root, 'user', 'relay', 'approvals', 'approve-1', 'request.json'), JSON.stringify({
     id: 'approve-1', unitId: 'root:master', display: 'Publish', requestedAt: '2026-10-10T12:00:00.000Z', action: 'process.run',
+    pattern: { command: 'npm run build', cwd: 'project:shop' },
   }));
   await writeFile(path.join(root, 'user', 'gui', 'resources.json'), JSON.stringify({
     format: 'hivem1nd-resources-v1',
@@ -642,6 +643,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   const view = await readProjection(context);
   assert.equal(view.chats.find((chat) => chat.id === 'direct').unread, 2);
   assert.equal(view.waiting.some((item) => item.id === 'approval:approve-1'), true);
+  assert.equal(view.waiting.find((item) => item.id === 'approval:approve-1').desktopOnly, false);
   assert.equal(view.waiting.some((item) => item.id === `question:root:overseer:${hashText('which name')}`), true);
   assert.equal(view.waiting.some((item) => item.kind === 'message' && item.messageId === 'secret'), false);
   assert.equal(view.sessions.filter((session) => session.id === '20c58b80-4d93-88cd-83b3-39d78f1d9d5d').length, 1);
