@@ -863,3 +863,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .group-inspector .btn, .selection-inspector .btn, .map-toast .btn { min-height: 32px; }
 .waiting-section-title { margin: 0; padding: 12px 8px 6px; font-size: 12.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--mute); }
 [data-look="high-contrast"] .waiting-section-title { font-size: 11.5px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; }
+.editor-history { width: var(--editor-comments); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; background: var(--panel); border-radius: var(--radius-panel); }
+.history-row { padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; border-radius: 12px; background: var(--card); }
+.history-row p { margin: 0; font-size: 13px; color: var(--body); }
+.history-current { color: var(--accent); font-size: 12px; font-weight: 700; }

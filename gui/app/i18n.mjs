@@ -599,6 +599,20 @@ const COPY = {
   reviews: ['Reviews', 'Revisiones'],
   endedWithoutAnswer: ['Ended without an answer', 'Finalizadas sin respuesta'],
   expiredAsk: ['Expired', 'Vencida'],
+  history: ['History', 'Historial'],
+  currentVersion: ['Current', 'Actual'],
+  restoreVersion: ['Restore', 'Restaurar'],
+  historyCreated: ['Created', 'Creado'],
+  historyRenamed: ['Renamed', 'Renombrado'],
+  historyBoardEdited: ['Edited the board', 'Editado el tablero'],
+  historySketchAdded: ['Added a sketch', 'Agregado un boceto'],
+  historyTextEdited: ['Edited the text', 'Editado el texto'],
+  historyCommentAdded: ['Added a comment', 'Agregado un comentario'],
+  historySuggestionAccepted: ['Accepted a suggestion', 'Aceptada una sugerencia'],
+  historyConflictResolved: ['Resolved a conflict', 'Resuelto un conflicto'],
+  historyRestored: ['Restored a version', 'Restaurada una versión'],
+  historyChanged: ['Changed', 'Modificado'],
+  restoreKeepsCurrent: ['Restoring keeps the current version in the list, so it can be restored back.', 'Restaurar conserva la versión actual en la lista para poder recuperarla después.'],
 };
 
 const DICTIONARIES = {

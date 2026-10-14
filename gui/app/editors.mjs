@@ -730,3 +730,26 @@ export function deleteEditor(api, editor, libraryRevision, retained = null) {
     body: { confirmed: true, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision ?? null,
       expectedAttachmentRevision: editor.attachmentRevision ?? null, expectedLibraryRevision: libraryRevision } }, retained);
 }
+
+export function newestHistory(items) {
+  return [...items].sort((a, b) => String(b.at).localeCompare(String(a.at)) || b.id.localeCompare(a.id));
+}
+export function historyOperationKey(operation) {
+  const keys = { create: 'historyCreated', rename: 'historyRenamed', 'board-edit': 'historyBoardEdited',
+    sketch: 'historySketchAdded', 'text-edit': 'historyTextEdited', comment: 'historyCommentAdded',
+    proposal: 'historySuggestionAccepted', conflict: 'historyConflictResolved', restore: 'historyRestored' };
+  return Object.hasOwn(keys, operation) ? keys[operation] : 'historyChanged';
+}
+export function renderEditorHistory(document, items, t, onRestore) {
+  const panel = element(document, 'section', { class: 'editor-history', 'aria-label': t('history') });
+  panel.append(element(document, 'h2', { text: t('history') }));
+  for (const item of newestHistory(items)) {
+    const row = element(document, 'article', { class: 'history-row', 'data-history-id': item.id });
+    row.append(element(document, 'p', { text: item.by + ' · ' + item.at }), element(document, 'p', { text: t(historyOperationKey(item.operation)) }));
+    if (item.current) row.append(element(document, 'span', { class: 'history-current', text: t('currentVersion') }));
+    else row.append(element(document, 'button', { type: 'button', class: 'btn', text: t('restoreVersion'), onclick: () => onRestore(item) }));
+    panel.append(row);
+  }
+  panel.append(element(document, 'p', { class: 'field-hint', text: t('restoreKeepsCurrent') }));
+  return panel;
+}
