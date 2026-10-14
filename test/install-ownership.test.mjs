@@ -283,10 +283,11 @@ test('joining does not prepare a kit replacement even when another machine owns 
       env: { PATH: '' },
       resume: false,
     });
-    await session.answer({});
-    let step = await session.answer({ mindPath: fixture.mindPath });
-    if (step.id === 'location') step = await session.answer({ mindPath: fixture.mindPath });
-    return step.preview;
+    const location = await session.answer({});
+    assert.equal(location.values.attach, true);
+    const service = await session.answer({ mindPath: fixture.mindPath, attach: true });
+    assert.equal(service.id, 'service');
+    return service.preview;
   };
 
   assert.deepEqual((await preview()).conflicts, []);

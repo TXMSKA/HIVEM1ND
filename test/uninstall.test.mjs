@@ -191,19 +191,16 @@ async function installFixture(fixture, hostname = 'TESTBOX') {
     env: { PATH: '' },
     resume: false,
   });
-  await session.answer({ installMode: 'custom' });
+  await session.answer({});
   await session.answer({ mindPath: fixture.mindPath });
-  await session.answer({ scan: true });
-  await session.answer({ addAgent: 'cursor' });
-  await session.answer({ addAgent: 'vscode' });
-  await session.answer({
-    agents: ['codex', 'cursor', 'vscode'],
-    attachModes: { codex: 'auto', cursor: 'auto', vscode: 'on-demand' },
-  });
-  const includeStep = await session.getStep();
-  await session.answer({ included: includeStep.values.included });
-  await session.answer({ projectsConfirmed: true });
-  await session.answer({ skipPreferences: true, autoUpdates: false });
+  // Setup has four steps; agents and preferences are chosen at the plan boundary of the session.
+  session.addManualAgent('cursor');
+  session.addManualAgent('vscode');
+  const modes = { codex: 'auto', cursor: 'auto', vscode: 'on-demand' };
+  session.answers.agents = session.answers.agents.map((agent) => ({ ...agent, selected: agent.id in modes, attach: modes[agent.id] ?? agent.attach }));
+  session.answers.skipPreferences = true;
+  session.answers.updateCheck = 'off';
+  await session.persistDraft();
   await session.answer({ confirm: true });
   return session.install();
 }

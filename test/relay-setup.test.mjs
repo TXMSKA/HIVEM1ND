@@ -188,7 +188,8 @@ async function simpleInstall(context, executables, extra = {}) {
   await mkdir(path.join(base.homeDir, '.codex'), { recursive: true });
   const options = { kitPath: KIT_PATH, mindPath: base.mindPath, homeDir: base.homeDir, hostname: 'TESTBOX', language: 'en', env: base.env };
   const session = await createSetupSession({ ...options, ...extra });
-  await session.answer({ installMode: 'simple' });
+  await session.answer({});
+  await session.answer({ mindPath: base.mindPath });
   await session.answer({ confirm: true });
   return { ...base, options, result: await session.install() };
 }

@@ -92,7 +92,9 @@ test('feature categories come from frontmatter, and a missing or unknown categor
   assert.equal(content.find((item) => item.name === 'delta').category, 'mystery');
 });
 
-test('the content step still lists a feature with a missing or unknown category, in a fallback group', async (context) => {
+// Setup has four steps (docs/3.0/final.md, decision 3): content is detected with defaults and changed
+// in Settings, so a feature without a known category must still be part of those defaults.
+test('setup still includes a feature with a missing or unknown category in its content defaults', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-categories-session-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const kitPath = path.join(root, 'kit');
@@ -101,8 +103,10 @@ test('the content step still lists a feature with a missing or unknown category,
   await mkdir(path.join(kitPath, 'features'), { recursive: true });
   await mkdir(homeDir, { recursive: true });
   await mkdir(path.join(mindPath, 'user'), { recursive: true });
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["features/"]}\n');
   await writeFile(path.join(kitPath, 'features', 'alpha.md'), '---\nname: alpha\ndescription: Alpha.\ncategory: planning\n---\n\n# Alpha\n');
   await writeFile(path.join(kitPath, 'features', 'gamma.md'), '---\nname: gamma\ndescription: Gamma.\n---\n\n# Gamma\n');
+  await writeFile(path.join(kitPath, 'features', 'delta.md'), '---\nname: delta\ndescription: Delta.\ncategory: mystery\n---\n\n# Delta\n');
 
   const session = await createSetupSession({
     kitPath,
@@ -113,15 +117,12 @@ test('the content step still lists a feature with a missing or unknown category,
     env: { PATH: '' },
     resume: false,
   });
-  await session.answer({ installMode: 'custom' });
-  await session.answer({ mindPath });
-  await session.answer({ scan: true });
-  const step = await session.answer({});
-  assert.equal(step.number, 4);
+  await session.answer({});
+  const step = await session.answer({ mindPath });
+  assert.equal(step.id, 'service');
 
-  const planning = step.categories.find((category) => category.id === 'planning');
-  const fallback = step.categories.find((category) => category.id === 'other');
-  assert.deepEqual(planning.items.map((item) => item.name), ['alpha']);
-  assert.ok(fallback);
-  assert.deepEqual(fallback.items.map((item) => item.name), ['gamma']);
+  const content = await session.availableContent();
+  assert.deepEqual(content.map((item) => item.name).sort(), ['alpha', 'delta', 'gamma']);
+  assert.deepEqual([...session.answers.included].sort(), content.map((item) => item.id).sort());
+  assert.deepEqual(session.excludedItems(), []);
 });
