@@ -175,20 +175,20 @@ const shell = (mode, body, { waiting = 2, footer = {}, over = [] } = {}) =>
     ...over,
   );
 
-const FACTS = [
+const FACTS = () => [
   ["Machine", row({ gap: 6 }, ic("desk", 14, "text"), t("DESKTOP", 13, { color: "text" }))],
   ["Runs in", t("Claude Code, command line", 13, { color: "text" })],
   ["Model", t("Sonnet 5.5, high", 13, { color: "text" })],
   ["Reports to", t("overlord-web", 13, { color: "text" })],
 ];
 
-const HISTORY = [
+const HISTORY = () => [
   message(L, { who: "You", when: "21:05", body: "Add the empty state to the cart page, as drawn on the Cart board.", me: true }),
   message(L, { who: "executor-shop", when: "23:31", body: "Done on feat/cart-empty. The page and its test pass; the board has my notes." }),
 ];
 
 /** The inspector of one unit. An alias shows as the title, with the real id under it. */
-function unitPanel({ glyph = "term", title = "executor-shop", alias = null, status = "work", statusText = "Working on task 029", factsList = FACTS, convo = HISTORY, place = ["Message executor-shop", "The session is notified at once", "bell"], composerNode = null, right = null }) {
+function unitPanel({ glyph = "term", title = "executor-shop", alias = null, status = "work", statusText = "Working on task 029", factsList = FACTS(), convo = HISTORY(), place = ["Message executor-shop", "The session is notified at once", "bell"], composerNode = null, right = null }) {
   return panel(
     L, "left", { name: "inspector", label: "Inspector", w: 366 },
     inspectorHead(L, {
@@ -438,10 +438,10 @@ const emptyMind = () =>
 
 const mapIdle = () => mapScreen({ before: true, inspector: emptyInspector() });
 
-const mapSelected = () => mapScreen({ before: true, sel: "executor-shop", field: { sel: "executor-shop" }, inspector: unitPanel({ convo: [...HISTORY, buildAsk(L), reviewAsk(L)] }) });
+const mapSelected = () => mapScreen({ before: true, sel: "executor-shop", field: { sel: "executor-shop" }, inspector: unitPanel({ convo: [...HISTORY(), buildAsk(L), reviewAsk(L)] }) });
 
-const BLOG_FACTS = [["Machine", row({ gap: 6 }, ic("lap", 14, "text"), t("LAPTOP", 13, { color: "text" }))], ["Runs in", t("Codex app, started by hand", 13, { color: "text" })], ["Mailbox", t("2 unread", 13, { color: "text" })], ["Reports to", t("overlord-web", 13, { color: "text" })]];
-const BLOG_CONVO = [message(L, { who: "overlord-web", when: "22:44", body: "When you start, announce the empty cart on the blog." })];
+const BLOG_FACTS = () => [["Machine", row({ gap: 6 }, ic("lap", 14, "text"), t("LAPTOP", 13, { color: "text" }))], ["Runs in", t("Codex app, started by hand", 13, { color: "text" })], ["Mailbox", t("2 unread", 13, { color: "text" })], ["Reports to", t("overlord-web", 13, { color: "text" })]];
+const BLOG_CONVO = () => [message(L, { who: "overlord-web", when: "22:44", body: "When you start, announce the empty cart on the blog." })];
 
 /** Renaming in place: the field holds the alias, the id stays written under it. */
 const renameField = (value) =>
@@ -458,7 +458,7 @@ const mapRename = () =>
     sel: "executor-blog",
     sideOpts: { renaming: { id: "executor-blog", node: renameField("Blog") } },
     field: { sel: "executor-blog" },
-    inspector: unitPanel({ title: "executor-blog", status: "idle", statusText: "No session", factsList: BLOG_FACTS, convo: BLOG_CONVO, place: ["Message executor-blog", "It waits in the mailbox until a session starts", "mail"] }),
+    inspector: unitPanel({ title: "executor-blog", status: "idle", statusText: "No session", factsList: BLOG_FACTS(), convo: BLOG_CONVO(), place: ["Message executor-blog", "It waits in the mailbox until a session starts", "mail"] }),
   });
 
 const mapRenamed = () =>
@@ -466,7 +466,7 @@ const mapRenamed = () =>
     before: true, renamed: true,
     sel: "executor-blog",
     field: { sel: "executor-blog" },
-    inspector: unitPanel({ title: "executor-blog", alias: "Blog", status: "idle", statusText: "No session", factsList: BLOG_FACTS, convo: BLOG_CONVO, place: ["Message Blog", "It waits in the mailbox until a session starts", "mail"] }),
+    inspector: unitPanel({ title: "executor-blog", alias: "Blog", status: "idle", statusText: "No session", factsList: BLOG_FACTS(), convo: BLOG_CONVO(), place: ["Message Blog", "It waits in the mailbox until a session starts", "mail"] }),
     over: [toast("executor-blog shows as Blog", "Undo")],
   });
 
@@ -817,15 +817,15 @@ const mapRepoAdded = () =>
 const chatScreen = (convo, rest = {}) =>
   mapScreen({ tab: "c", sel: "shop", field: { sel: "executor-shop" }, inspector: unitPanel({ convo, ...rest }) });
 
-const chatList = () => chatScreen([...HISTORY, buildAsk(L), reviewAsk(L)]);
-const chatSending = () => chatScreen([...HISTORY, mine("Add a Continue shopping button to the empty state too.", "Sending", { sending: true })]);
-const chatWorking = () => chatScreen([...HISTORY, mine("Add a Continue shopping button to the empty state too.", "Delivered 23:45"), working("executor-shop", "38 s", true)]);
+const chatList = () => chatScreen([...HISTORY(), buildAsk(L), reviewAsk(L)]);
+const chatSending = () => chatScreen([...HISTORY(), mine("Add a Continue shopping button to the empty state too.", "Sending", { sending: true })]);
+const chatWorking = () => chatScreen([...HISTORY(), mine("Add a Continue shopping button to the empty state too.", "Delivered 23:45"), working("executor-shop", "38 s", true)]);
 const chatOpenCli = () =>
   mapScreen({
     tab: "c", sel: "shop", field: { sel: "executor-shop" }, waiting: 3,
     inspector: unitPanel({
       convo: [
-        HISTORY[1],
+        HISTORY()[1],
         working("executor-shop", "4 min", true),
         ask(L, [ic("term", 15, "text"), t("Asks to open a session", 13, { color: "text" }), code("Codex CLI on DESKTOP")], [button(L, "Approve", "pri", "check", "approve-cli"), button(L, "Deny", "ghost", null, "deny-cli")]),
       ],
@@ -833,12 +833,12 @@ const chatOpenCli = () =>
   });
 const chatReply = () =>
   chatScreen([
-    HISTORY[1],
+    HISTORY()[1],
     mine("Add a Continue shopping button to the empty state too.", "Read 23:45"),
     message(L, { who: "executor-shop", when: "23:47", body: "Added. The button goes back to the catalog; the board shows it on the empty cart." }),
   ]);
 const chatFailed = () =>
-  chatScreen([...HISTORY, mine("Add a Continue shopping button to the empty state too.", "Not confirmed: the service did not answer in 10 s.", { failed: true })], {
+  chatScreen([...HISTORY(), mine("Add a Continue shopping button to the empty state too.", "Not confirmed: the service did not answer in 10 s.", { failed: true })], {
     composerNode: composer(L, "Message executor-shop", "Retry sends the same message once; it is never sent twice", "retry"),
   });
 
@@ -848,7 +848,7 @@ const mailbox = () =>
     field: { sel: "executor-blog" },
     inspector: unitPanel({
       title: "executor-blog", alias: "Blog", status: "idle", statusText: "No session",
-      factsList: BLOG_FACTS,
+      factsList: BLOG_FACTS(),
       convo: [
         col(
           { gap: 8, pad: [12, 14], radius: 14, fill: "waitSoft" },
@@ -856,7 +856,7 @@ const mailbox = () =>
           t("LAPTOP has been offline since 23:40. Messages wait in the mailbox and are delivered when Blog starts again there.", 13, { color: "body" }),
           row({ gap: 8 }, row({ opacity: 0.5 }, button(L, "Start session", "plain", "play", "start-session")), t("Needs LAPTOP online", 12, { color: "mute" })),
         ),
-        ...BLOG_CONVO,
+        ...BLOG_CONVO(),
         message(L, { who: "You", when: "23:12", body: "Draft the post tonight; publish after the merge.", me: true }),
       ],
       place: ["Message Blog", "It waits in the mailbox until a session starts", "mail"],
@@ -888,7 +888,7 @@ function waitingSide() {
 }
 
 const waiting = () =>
-  mapScreen({ sel: "executor-shop", sideNode: waitingSide(), field: { sel: "executor-shop" }, inspector: unitPanel({ convo: [HISTORY[1], buildAsk(L), reviewAsk(L)] }) });
+  mapScreen({ sel: "executor-shop", sideNode: waitingSide(), field: { sel: "executor-shop" }, inspector: unitPanel({ convo: [HISTORY()[1], buildAsk(L), reviewAsk(L)] }) });
 
 const answered = (value) =>
   row({ gap: 8, pad: [10, 12], radius: 14, fill: "card" }, stack({ w: 18, h: 18 }, circle(18, { fill: "acc" }), centered(ic("check", 12, "accInk"))), t(value, 13, { color: "body" }));
@@ -900,7 +900,7 @@ const approvalSent = () =>
     field: { sel: "executor-shop" },
     inspector: unitPanel({
       convo: [
-        HISTORY[1],
+        HISTORY()[1],
         ask(L, [ic("hand", 15, "text"), t("Asks to run", 13, { color: "text" }), code("npm run build")], [busy("Answer sent"), t("waiting for executor-shop to confirm", 12, { color: "mute" })]),
         reviewAsk(L),
       ],
@@ -911,7 +911,7 @@ const sendBack = () =>
   mapScreen({
     sel: "executor-shop",
     field: { sel: "executor-shop" },
-    inspector: unitPanel({ convo: [HISTORY[1], answered("Approved 23:46: npm run build"), reviewAsk(L)] }),
+    inspector: unitPanel({ convo: [HISTORY()[1], answered("Approved 23:46: npm run build"), reviewAsk(L)] }),
     over: [
       scrim(),
       dialog({
@@ -927,68 +927,50 @@ const accepted = () =>
   mapScreen({
     sel: "executor-shop",
     field: { sel: "executor-shop" },
-    inspector: unitPanel({ statusText: "Idle, task 029 done", status: "idle", convo: [HISTORY[1], answered("Approved 23:46: npm run build"), answered("Accepted 23:48: task 029")] }),
+    inspector: unitPanel({ statusText: "Idle, task 029 done", status: "idle", convo: [HISTORY()[1], answered("Approved 23:46: npm run build"), answered("Accepted 23:48: task 029")] }),
     waiting: 0,
     over: [toast("Task 029 accepted", "Undo")],
   });
 
-// ---- runs: roles, the run log and what keeps a run from stalling ----------------------------------
+// ---- runs: a group works through a plan, and the chat shows where it is -------------------------------
 
 const GROUP_SIDE = { open: "checkout-launch", groupSel: "checkout-launch" };
 const GROUP_FIELD = { groupSel: "checkout-launch" };
 
-/** One line of a run log: when, which role, what happened, and its state. */
-const logLine = (when, role, event, { state = "done", detail = null } = {}) =>
-  row(
-    { name: `log-${slug(`${when}-${event}`)}`, label: event, gap: 10, pad: [6, 2], align: "start" },
-    mono(when, 11.5, { color: "mute" }),
-    state === "busy" ? spinner(13) : state === "fail" ? ic("alert", 13, ERR) : state === "wait" ? ic("alert", 13, "wait") : ic("check", 13, "mute"),
-    col({ grow: 1, gap: 2 }, row({ gap: 6 }, t(role, 12.5, { weight: 700 }), t(event, 12.5, { color: "body", lines: 1 })), detail ? t(detail, 11.5, { color: "mute" }) : null),
+/** A run in the group chat: the plan, how far it is, the step under way and for how long. A problem turns it into a warning with its way out. */
+function runCard({ done = 3, step = "Cursor is running the tests", since = "4 min", problem = null }) {
+  const W = 306;
+  return col(
+    { name: "run", label: "Run", gap: 10, pad: [12, 14], radius: 14, fill: problem ? "waitSoft" : "card", stroke: problem ? "wait" : "line" },
+    row({ gap: 8 }, ic(problem ? "alert" : "task", 15, problem ? "wait" : "acc"), t("Cart empty state", 13.5, { weight: 700 }), fill(), t(`Task ${done + 1} of 10`, 12, { color: "mute" })),
+    stack({ w: W, h: 6 }, box({ w: W, h: 6, radius: "pill", fill: "card2", place: { x: 0, y: 0 } }), box({ w: Math.round((W * done) / 10), h: 6, radius: "pill", fill: "acc", place: { x: 0, y: 0 } })),
+    row({ gap: 8 }, problem ? ic("alert", 13, "wait") : spinner(13), t(step, 12.5, { color: "body" }), fill(), t(since, 12, { color: problem ? "wait" : "mute" })),
+    problem ? t(problem, 12.5, { color: "body" }) : null,
+    problem
+      ? row({ gap: 6 }, button(L, "Stop the step", "pri", "stop", "stop-step"), button(L, "Retry the task", "plain", "retry", "retry-task"))
+      : row({ gap: 6 }, ic("users", 12, "mute"), t("overlord-web coordinates, Codex plans and reviews, Cursor builds", 11.5, { color: "mute" })),
   );
+}
 
-/** A problem in a run: what happened, what did not change, who was told, and the way out. */
-const runAlert = (title, body, told, actions, kind = "wait") =>
-  col(
-    { name: "run-alert", label: title, gap: 8, pad: [12, 14], radius: 14, fill: kind === "error" ? ERR_SOFT : "waitSoft", stroke: kind === "error" ? ERR : "wait" },
-    row({ gap: 8 }, ic("alert", 15, kind === "error" ? ERR : "wait"), t(title, 13.5, { weight: 700 })),
-    t(body, 12.5, { color: "body" }),
-    row({ gap: 6 }, ic("bell", 12, "mute"), t(told, 11.5, { color: "mute" })),
-    row({ gap: 6 }, ...actions),
-  );
-
-const RUN_START = [
-  logLine("21:02", "Coordinator", "Run started, execution, 10 tasks"),
-  logLine("21:02", "Planner", "Confirmed its start", { detail: "Codex CLI, new session" }),
-  logLine("21:14", "Planner", "Plan checked: 10 tasks"),
-  logLine("21:15", "Builder", "Confirmed its start, task 1", { detail: "Cursor CLI on DESKTOP" }),
-  logLine("21:22", "Builder", "Tasks 1 to 3 committed"),
-];
-
-/** The group's inspector while a run is open: its roles, its budget and its log instead of the chat. */
-function runPanel({ statusText = "Run: task 4 of 10", status = "busy", used = "4 of 10", log = [], tail = null }) {
-  return panel(
+/** The group's inspector while a run is open: the run on top, the group's chat under it. */
+const runPanel = (card, convo) =>
+  panel(
     L, "left", { name: "inspector", label: "Inspector", w: 366 },
     inspectorHead(L, {
       glyph: "folder",
       title: "Checkout launch",
       monoTitle: false,
-      sub: row({ gap: 6 }, status === "busy" ? spinner(10) : dot(status), t(statusText, 12.5, { color: "mute" })),
-      right: [row({ gap: 6 }, avatars(L), ibtn(L, "dots", "more", "Run log, stop run, group"))],
+      sub: row({ gap: 6 }, spinner(10), t("Working on a plan", 12.5, { color: "mute" })),
+      right: [row({ gap: 6 }, avatars(L), ibtn(L, "dots", "more", "Rename, members, delete"))],
     }),
-    facts(L, [
-      ["Coordinator", mono("overlord-web", 12.5, { color: "text" })],
-      ["Mode", t("Execution", 13, { color: "text" })],
-      ["Messages", t(used, 13, { color: "text" })],
-      ["Last check", t("Relay, 1 min ago", 13, { color: "text" })],
-    ]),
-    conversation(L, heading(L, "Run log"), col({ gap: 0 }, ...log), tail),
-    composer(L, "Message the group", "Every member and every role sees it", "users"),
+    conversation(L, card, ...convo),
+    composer(L, "Message the group", "Every member sees every reply", "users"),
   );
-}
 
-const runScreen = (inspector, rest = {}) => mapScreen({ sideOpts: GROUP_SIDE, field: GROUP_FIELD, inspector, ...rest });
-
-const roleField = (role, value) => field(role, value, { select: true });
+const RUN_CHAT = () => [
+  message(L, { who: "overlord-web", when: "21:14", body: "Plan ready: 10 tasks. Cursor starts with task 1." }),
+  message(L, { who: "overlord-web", when: "21:22", body: "Tasks 1 to 3 done and committed." }),
+];
 
 const runStart = () =>
   mapScreen({
@@ -998,101 +980,31 @@ const runStart = () =>
     over: [
       scrim(),
       dialog({
-        title: "Start a run in Checkout launch",
-        sub: "Each role goes to a unit of the group or to an agent connected on this machine. Only the coordinator opens sessions; no agent opens another.",
+        title: "Start a plan in Checkout launch",
+        sub: "Choose the plan and who does each part: a unit of the group or an agent connected on this machine.",
         w: 560,
         kids: [
           field("Plan", "Cart empty state, 10 tasks", { select: true, glyph: "pen" }),
-          col({ gap: 6 }, label("Mode"), segment([["Planning", false], ["Execution", true]], "run-mode")),
-          pairOf(roleField("Coordinator", "overlord-web, Claude Code"), roleField("Planner", "Codex CLI, new session")),
-          pairOf(roleField("Builder", "Cursor CLI, one session per task"), roleField("Reviewer", "The planner's session, reopened")),
-          row(
-            { gap: 10, pad: [10, 12], radius: 12, fill: "card" },
-            ic("mail", 15, "mute"),
-            col({ grow: 1, gap: 2 }, t("10 messages, one per task", 13.5, { weight: 700 }), t("Up to 5 more are agreed between the roles, each with its reason; past that you are asked.", 12, { color: "mute" })),
-          ),
+          pairOf(field("Coordinates", "overlord-web", { select: true }), field("Plans", "Codex", { select: true })),
+          pairOf(field("Builds", "Cursor", { select: true }), field("Reviews", "Codex", { select: true })),
         ],
-        actions: [button(L, "Cancel", "ghost", null, "cancel"), button(L, "Start run", "pri", "play", "start-run")],
+        actions: [button(L, "Cancel", "ghost", null, "cancel"), button(L, "Start", "pri", "play", "start-run")],
       }),
     ],
   });
 
-const runLog = () =>
-  runScreen(runPanel({ log: [...RUN_START, logLine("21:23", "Builder", "Confirmed its start, task 4"), logLine("21:25", "Builder", "Running the tests", { state: "busy", detail: "4 min" })], tail: row({ gap: 6 }, button(L, "Stop step", "ghost", "stop", "stop-step"), t("Stops the tests; the task stays open", 12, { color: "mute" })) }));
+const runProgress = () => mapScreen({ sideOpts: GROUP_SIDE, field: GROUP_FIELD, inspector: runPanel(runCard({}), RUN_CHAT()) });
 
-const runNoStart = () =>
-  runScreen(
-    runPanel({
-      status: "wait",
-      statusText: "Run: task 4 did not start",
-      log: [...RUN_START, logLine("21:23", "Builder", "Task 4 sent"), logLine("21:26", "Builder", "No start confirmation", { state: "wait" })],
-      tail: runAlert(
-        "The builder did not start task 4",
-        "Cursor CLI gave no sign of starting within 3 minutes. Nothing in the repository changed.",
-        "overlord-web was told at 21:26",
-        [button(L, "Retry", "pri", "retry", "retry-start"), button(L, "Use another agent", "plain", null, "another-agent"), button(L, "Stop run", "ghost", null, "stop-run")],
-      ),
-    }),
-    { waiting: 3 },
-  );
-
-const runStalled = () =>
-  runScreen(
-    runPanel({
-      status: "wait",
-      statusText: "Run: no progress on task 4",
-      log: [...RUN_START, logLine("21:23", "Builder", "Confirmed its start, task 4"), logLine("21:25", "Builder", "Running the tests", { state: "wait", detail: "No new step since 21:25" })],
-      tail: runAlert(
-        "No progress from the builder for 10 minutes",
-        "Last step: running the tests since 21:25. The tests may be hung; the task's changes are kept.",
-        "overlord-web was told at 21:35; next the Overseer at 21:40, then you at 21:45",
-        [button(L, "Stop step", "pri", "stop", "stop-step"), button(L, "Retry task", "plain", "retry", "retry-task"), button(L, "Stop run", "ghost", null, "stop-run")],
-      ),
-    }),
-    { waiting: 3 },
-  );
-
-const runNotRead = () =>
-  runScreen(
-    runPanel({
-      statusText: "Run: waiting for the review",
-      used: "10 of 10",
-      log: [
-        logLine("22:31", "Builder", "Task 10 committed"),
-        logLine("22:31", "Coordinator", "Review asked of the reviewer"),
-        logLine("22:36", "Coordinator", "Not read in 5 min, sent again", { state: "wait" }),
-        logLine("22:41", "Coordinator", "Still not read", { state: "fail" }),
-      ],
-      tail: runAlert(
-        "The review request was not read",
-        "Sent at 22:31 and again at 22:36; the reviewer's session has not read it. No answer is assumed.",
-        "The Overseer was told at 22:41",
-        [button(L, "Open the reviewer", "pri", null, "open-reviewer"), button(L, "Send again", "plain", "retry", "send-again")],
-        "error",
-      ),
-    }),
-    { waiting: 3 },
-  );
-
-const runExtension = () =>
-  runScreen(
-    runPanel({
-      status: "wait",
-      statusText: "Run: asks for 2 more",
-      used: "10 of 10, 5 more agreed",
-      log: [
-        logLine("22:12", "Builder", "Two tests fail on task 9", { state: "wait" }),
-        logLine("22:13", "Builder", "2 more agreed with the planner", { detail: "To ask how an empty cart is detected" }),
-        logLine("22:20", "Builder", "Asks for 2 more, past half the plan", { state: "wait" }),
-      ],
-      tail: ask(
-        L,
-        [ic("mail", 15, "text"), t("2 more messages for task 9", 13, { color: "text" })],
-        [button(L, "Approve", "pri", "check", "approve-more"), button(L, "Deny", "ghost", null, "deny-more")],
-      ),
-    }),
-    { waiting: 3 },
-  );
+const runProblem = () =>
+  mapScreen({
+    sideOpts: GROUP_SIDE,
+    field: GROUP_FIELD,
+    waiting: 3,
+    inspector: runPanel(
+      runCard({ step: "The tests have not finished", since: "12 min", problem: "No progress in 10 minutes. The task's changes are kept; overlord-web was told." }),
+      RUN_CHAT(),
+    ),
+  });
 
 // ---- Blueprint ----------------------------------------------------------------------------------------
 
@@ -1968,7 +1880,7 @@ const reconnecting = () =>
   mapScreen({
     sel: "executor-shop",
     field: { sel: "executor-shop", extra: [banner("busy", "Reconnecting to the service. What you do is kept and sent when it answers.", [button(L, "Retry now", "plain", "retry", "retry")])] },
-    inspector: unitPanel({ convo: [...HISTORY, mine("Run the checkout tests too.", "Waiting for the service", { sending: true })] }),
+    inspector: unitPanel({ convo: [...HISTORY(), mine("Run the checkout tests too.", "Waiting for the service", { sending: true })] }),
     footer: { service: "wait", serviceText: "Reconnecting to the Relay service", read: "Last read 23:41" },
   });
 
@@ -1980,7 +1892,7 @@ const serviceDown = () =>
   });
 
 const slow = () =>
-  chatScreen([...HISTORY, mine("Summarize what changed today.", "Sending")], {
+  chatScreen([...HISTORY(), mine("Summarize what changed today.", "Sending")], {
     composerNode: col(
       { gap: 8, pad: [12, 14, 16] },
       row(
@@ -2121,12 +2033,9 @@ const DESK = {
     ["approval-sent", "Answer sent", approvalSent, "Approve answers at once; the card shows the answer is on its way until the unit confirms it."],
     ["send-back", "Send back", sendBack, "Sending a task back needs a note: the unit reads it."],
     ["accepted", "Accepted", accepted, "Accepting closes the review; the notice offers Undo."],
-    ["start-run", "Start a run", runStart, "A group runs a plan with roles: coordinator, planner, builder and reviewer, each given to a unit of the group or to an agent connected on the machine. Only the coordinator opens sessions, so no agent opens another. The plan sets the message budget, one per task."],
-    ["run-log", "The run log", runLog, "Every role confirms its start and every step is logged as it happens, from the agent's own events, with how long the current step has run. Relay reads the log every 5 minutes without spending tokens, and every 30 minutes the coordinator gets a summary."],
-    ["no-start", "It did not start", runNoStart, "A role that gives no sign of starting within 3 minutes is reported at once, with what did not change and who was told."],
-    ["stalled", "No progress", runStalled, "In execution, 10 minutes without a new step is a stall; in planning, 30. The coordinator is told first, then the Overseer, then the person. A task ends only with the agent's own report and the end of its process, and anything it left running is closed."],
-    ["not-read", "Not read", runNotRead, "Every message of a run is followed until it is read: after 5 minutes it is sent again once, after 10 it is reported. A message is never taken as read without the recipient's confirmation."],
-    ["extension", "More messages", runExtension, "The roles agree extra messages among themselves, up to half the plan, each logged with its reason. Past that the person is asked, and the ask waits with the others."],
+    ["start-run", "Start a plan", runStart, "A group can work through a plan. The person chooses who coordinates, plans, builds and reviews: units of the group or agents connected on the machine. The coordinator opens every session; no agent opens another."],
+    ["run-progress", "A plan in progress", runProgress, "The plan shows on top of the group chat: the task, the step under way and how long it has run. Each agent confirms that it started and reports every step; the coordinator sums up in the chat."],
+    ["run-problem", "A plan needs you", runProblem, "When an agent does not start within 3 minutes, shows no progress for 10, or leaves a message unread for 10, the card says so with Stop and Retry, and it waits in Waiting. The coordinator is told first, then the Overseer, then the person. Extra messages past half the plan are asked here too."],
   ],
   blueprint: [
     ["board", "A board", bpBoard, "The library on the left, the board in the middle, comments on the right. The library is the one Void uses: search, filters, folders, and New board and New folder at the top."],
