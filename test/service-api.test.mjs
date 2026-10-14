@@ -715,6 +715,67 @@ function sketch(id, title) {
   return document;
 }
 
+test('comment notes consume no admission or recipient notices, true replays once and a suppressed agent reply informs only master', async (t) => {
+  const fixture = await makeCoreFixture(), localPath = path.join(fixture.root, 'shop'), origin = path.join(fixture.root, 'origin');
+  await mkdir(localPath, { recursive: true }); await mkdir(origin, { recursive: true });
+  const core = await composeCore({ store: fixture.store, paths: { ...fixture.paths, origin }, projects: [{ name: 'shop', localPath }], now: () => fixture.clock.now });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  const port = core.http.port;
+  const login = await call(port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  assert.equal(login.status, 201);
+  const token = login.json.data.token;
+  const mutate = (method, target, body, as = token, key = randomUUID()) => call(port, method, `/api/v1${target}`, { token: as, body, headers: { 'idempotency-key': key } });
+  for (const unit of ['one', 'two']) assert.equal((await mutate('POST', '/units', { unit, role: 'executor', scope: 'root', machine: fixture.machine })).status, 201);
+  const created = await mutate('POST', '/blueprint/boards', { project: 'shop', document: sketch('notes', 'Notes'), attached: ['root:one', 'root:two'] });
+  assert.equal(created.status, 201);
+  const editor = created.json.data, target = `/editors/${editor.id}/comments`;
+  const admitted = async () => {
+    try { return JSON.parse(await readFile(core.runtime.ledger.file, 'utf8')).admitted.map((item) => item.id); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  };
+  const fanout = (message) => path.join(fixture.paths.mind, 'user', 'relay', 'fanout', `${message.id}.json`);
+  const before = await admitted();
+  const body = { text: 'Keep as a note', sendToAgent: false, anchor: { screen: editor.document.screens[0].id, label: 'Bag' }, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision };
+  const note = await mutate('POST', target, body);
+  assert.equal(note.status, 201);
+  const saved = note.json.data;
+  assert.equal(saved.thread.messages[0].sendToAgent, false);
+  assert.deepEqual(saved.thread.anchor, body.anchor);
+  assert.deepEqual(saved.thread.notifications, []);
+  await assert.rejects(readFile(fanout(saved.thread.messages[0])), { code: 'ENOENT' });
+  const reply = await mutate('POST', `${target}/${saved.thread.id}/replies`, { text: 'Local reply', sendToAgent: false, expectedCommentsRevision: saved.commentsRevision });
+  assert.equal(reply.status, 200);
+  const replied = reply.json.data;
+  await assert.rejects(readFile(fanout(replied.thread.messages.at(-1))), { code: 'ENOENT' });
+  assert.deepEqual(await admitted(), before);
+  const history = await call(port, 'GET', `/api/v1/editors/${editor.id}/history`, { token });
+  assert.equal(history.status, 200);
+  assert.ok(history.json.data.items.filter((item) => item.operation === 'comment').length >= 2);
+  const attach = await mutate('PUT', `/editors/${editor.id}/attachments`, { attached: ['root:one'], expectedRevision: editor.attachmentRevision });
+  assert.equal(attach.status, 200);
+  const sentBody = { ...body, text: 'Send once', sendToAgent: true, expectedCommentsRevision: replied.commentsRevision }, key = randomUUID();
+  const sent = await mutate('POST', target, sentBody, token, key);
+  assert.equal(sent.status, 201);
+  const once = sent.json.data, message = once.thread.messages[0];
+  const notices = JSON.parse(await readFile(fanout(message), 'utf8')).notices;
+  assert.deepEqual(notices.map((item) => item.unitId), ['root:one']);
+  const replay = await mutate('POST', target, sentBody, token, key);
+  assert.equal(replay.status, 201); assert.equal(replay.json.data.thread.id, once.thread.id);
+  assert.equal((await admitted()).filter((id) => id === message.id).length, 1);
+  assert.equal(JSON.parse(await readFile(fanout(message), 'utf8')).notices.length, 1);
+  const agent = core.credentials.issue({ audience: 'agent', unitId: 'root:one', capabilities: ['read', 'comment.write'], resourceIds: [editor.id], expiresAt: '2027-01-01T00:00:00.000Z' });
+  const agentReply = await mutate('POST', `${target}/${once.thread.id}/replies`, { text: 'Inform the person', sendToAgent: false, expectedCommentsRevision: once.commentsRevision }, agent.token);
+  assert.equal(agentReply.status, 200);
+  const answer = agentReply.json.data.thread.messages.at(-1);
+  assert.equal(answer.sendToAgent, false); assert.equal(answer.authorId, 'root:one');
+  assert.deepEqual(JSON.parse(await readFile(fanout(answer), 'utf8')).notices.map((item) => item.unitId), ['root:master']);
+  assert.ok((await admitted()).includes(answer.id));
+  const settings = await mutate('PATCH', '/settings', { sendToAgent: false, expectedRevision: null });
+  assert.equal(settings.status, 200);
+  assert.equal((await call(port, 'GET', '/api/v1/settings', { token })).json.data.settings.sendToAgent, false);
+  assert.equal((await mutate('PATCH', '/settings', { sendToAgent: true, expectedRevision: settings.json.data.revision }, agent.token)).status, 403);
+});
+
 test('library routes reject exact schema violations and foreign writes then replay a recovered deletion once', async (t) => {
   const fixture = await makeCoreFixture();
   const projects = [];
@@ -1459,6 +1520,28 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(port, 'DELETE', folderPath, { token,
     body: { project: 'shop', confirmed: true, expectedRevision: latestFolder.revision }, headers: { 'idempotency-key': randomUUID() } }), 200, 'delete library folder');
   hit('DELETE', '/library/folders/:folderId');
+  const legacyDocument = sketch('route-import', 'Route import'), legacyPath = 'docs/flows/boards/route-import.mjs';
+  await writeFile(path.join(localPath, legacyPath), `export default ${JSON.stringify(legacyDocument)};\n`);
+  const indexFile = path.join(localPath, 'docs/flows/boards/index.json'), index = JSON.parse(await readFile(indexFile, 'utf8'));
+  (Array.isArray(index) ? index : index.boards).push({ id: legacyDocument.id, title: legacyDocument.title });
+  await writeFile(indexFile, JSON.stringify(index));
+  const legacy = await call(port, 'POST', '/api/v1/editors/register', { token, body: { project: 'shop', path: legacyPath, kind: 'blueprint' }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(legacy, 201, 'register legacy route board');
+  const exported = await call(port, 'GET', `/api/v1/blueprint/boards/${legacy.json.data.id}/export`, { token });
+  expectStatus(exported, 200, 'export legacy board'); hit('GET', '/blueprint/boards/:resourceId/export');
+  const imported = await call(port, 'POST', '/api/v1/blueprint/boards/import', { token,
+    body: { project: 'shop', path: exported.json.data.path, title: 'Imported route board', folderId: null, legacyResourceId: legacy.json.data.id,
+      document: { ...legacyDocument, legacySource: exported.json.data.sourceRevisions }, expectedRevision: exported.json.data.expectedRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(imported, 201, 'import legacy board'); hit('POST', '/blueprint/boards/import');
+  const historyTarget = `/api/v1/editors/${imported.json.data.id}`;
+  const historyList = await call(port, 'GET', `${historyTarget}/history`, { token });
+  expectStatus(historyList, 200, 'editor history'); hit('GET', '/editors/:resourceId/history');
+  const historyBody = { expectedRevision: imported.json.data.revision, expectedCommentsRevision: imported.json.data.commentsRevision };
+  const restored = await call(port, 'POST', `${historyTarget}/history/${historyList.json.data.items.find((item) => item.current).id}/restore`, { token, body: historyBody, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(restored, 200, 'restore history'); hit('POST', '/editors/:resourceId/history/:historyId/restore');
+  const conflictAnswer = await call(port, 'POST', `${historyTarget}/conflict`, { token, body: { decision: 'keep-mine', document: restored.json.data.document,
+    expectedRevision: restored.json.data.revision, expectedCommentsRevision: restored.json.data.commentsRevision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(conflictAnswer, 200, 'editor conflict'); hit('POST', '/editors/:resourceId/conflict');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');

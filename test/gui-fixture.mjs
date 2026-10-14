@@ -1493,6 +1493,7 @@ async function prepareSettings(fx, body) {
   const next = { ...current.settings, format: "hivem1nd-settings-v1" };
   if (body.look) next.look = body.look;
   if (body.language) next.language = body.language;
+  next.sendToAgent = body.sendToAgent ?? next.sendToAgent ?? true;
   const bytes = Buffer.from(stableJson(next));
   const afterRevision = sha256(bytes);
   return {
@@ -1848,9 +1849,10 @@ function validateEmpty(body) {
 }
 
 function validateSettings(body) {
-  requireObject(body, ["look", "language", "expectedRevision"]);
+  requireObject(body, ["look", "language", "sendToAgent", "expectedRevision"]);
   requireKeys(body, ["expectedRevision"]);
-  if (!("look" in body) && !("language" in body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if (!("look" in body) && !("language" in body) && !("sendToAgent" in body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if ("sendToAgent" in body && typeof body.sendToAgent !== "boolean") throw new HttpError(422, "invalid_body", "Send to agent must be a boolean.");
   if ("look" in body && !["modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   if ("language" in body && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   revisionField(body.expectedRevision);
@@ -3043,7 +3045,8 @@ const VOID_ANCHOR_KEYS = ["k", "lang", "start", "end", "quote", "prefix", "suffi
 const BOARD_ANCHOR_KEYS = ["screen", "screenTitle", "element", "label", "path", "point"];
 
 function validateComment(body) {
-  requireObject(body, ["anchor", "text", "expectedRevision", "expectedCommentsRevision"]);
+  requireObject(body, ["anchor", "text", "expectedRevision", "expectedCommentsRevision", "sendToAgent"]);
+  if ("sendToAgent" in body && typeof body.sendToAgent !== "boolean") throw new HttpError(422, "invalid_body", "Send to agent must be a boolean.");
   requireKeys(body, ["anchor", "text", "expectedRevision"]);
   if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 10000) throw new HttpError(422, "invalid_body", "The comment is not valid.");
   revisionField(body.expectedRevision);
@@ -3137,7 +3140,8 @@ function nodeExists(node, id) {
 }
 
 function validateReply(body) {
-  requireObject(body, ["text", "expectedCommentsRevision"]);
+  requireObject(body, ["text", "expectedCommentsRevision", "sendToAgent"]);
+  if ("sendToAgent" in body && typeof body.sendToAgent !== "boolean") throw new HttpError(422, "invalid_body", "Send to agent must be a boolean.");
   requireKeys(body, ["text", "expectedCommentsRevision"]);
   if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(422, "invalid_body", "The comment is not valid.");
   revisionField(body.expectedCommentsRevision);
@@ -3165,7 +3169,13 @@ function validateWatch(body) {
   if (typeof body.unitId !== "string") throw new HttpError(422, "invalid_body", "The unit is not valid.");
 }
 
-async function prepareComment(fx, resourceId, body) {
+function commentRecipients(editor, body, principal) {
+  const recipients = [...new Set(editor.attached)].filter((id) => id !== principal.unitId);
+  if (principal.audience === "agent" && !recipients.includes("root:master")) recipients.push("root:master");
+  return body.sendToAgent === false ? recipients.filter((id) => id === "root:master") : recipients;
+}
+
+async function prepareComment(fx, resourceId, body, principal) {
   const editor = await editorFor(fx, resourceId);
   if (editor.revision !== body.expectedRevision || (body.expectedCommentsRevision ?? null) !== editor.commentsRevision) {
     throw new HttpError(409, "revision_conflict", "The editor was changed elsewhere.");
@@ -3178,12 +3188,12 @@ async function prepareComment(fx, resourceId, body) {
     anchor: body.anchor,
     status: "open",
     place: body.anchor?.screen ? { screenId: body.anchor.screen, nodeId: body.anchor.element ?? null, x: body.anchor.point?.x ?? 0, y: body.anchor.point?.y ?? 0 } : null,
-    messages: [{ id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
+    messages: [{ id: uuid(), author: principal.unitId.split(":").at(-1), authorId: principal.unitId, at: clock(fx).toISOString(), text: body.text, sendToAgent: body.sendToAgent !== false, proposal: null }],
   };
-  return writeComments(fx, editor, [...editor.threads, thread], thread, 201, "create");
+  return writeComments(fx, editor, [...editor.threads, thread], thread, 201, "create", commentRecipients(editor, body, principal));
 }
 
-async function prepareReply(fx, params, body) {
+async function prepareReply(fx, params, body, principal) {
   const editor = await editorFor(fx, params.resourceId);
   if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
   const thread = editor.threads.find((item) => item.id === params.threadId);
@@ -3191,9 +3201,9 @@ async function prepareReply(fx, params, body) {
   const next = {
     ...thread,
     status: "open",
-    messages: [...(thread.messages ?? []), { id: uuid(), author: "master", authorId: "root:master", at: clock(fx).toISOString(), text: body.text, proposal: null }],
+    messages: [...(thread.messages ?? []), { id: uuid(), author: principal.unitId.split(":").at(-1), authorId: principal.unitId, at: clock(fx).toISOString(), text: body.text, sendToAgent: body.sendToAgent !== false, proposal: null }],
   };
-  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200, "reply");
+  return writeComments(fx, editor, editor.threads.map((item) => item.id === thread.id ? next : item), next, 200, "reply", commentRecipients(editor, body, principal));
 }
 
 async function prepareThreadStatus(fx, params, body) {
@@ -3276,7 +3286,7 @@ function commentsPath(fx, editor) {
   return join(repo, "docs", "flows", "comments", `${editor.legacy?.id ?? editor.document?.id}.json`);
 }
 
-function writeComments(fx, editor, threads, thread, status = 201, operation = "create") {
+function writeComments(fx, editor, threads, thread, status = 201, operation = "create", recipients = editor.attached) {
   const document = { threads: threads.map((item) => ({ ...item, revision: undefined })) };
   const bytes = Buffer.from(stableJson(document));
   const commentsRevision = sha256(bytes);
@@ -3286,7 +3296,7 @@ function writeComments(fx, editor, threads, thread, status = 201, operation = "c
     data: {
       thread: { ...thread, place: thread.place ?? null },
       commentsRevision,
-      notifications: [{ unitId: editor.attached[0] ?? null, state: failed && editor.attached.includes(failed) ? "failed" : "pending" }],
+      notifications: [...new Set(recipients)].map((unitId) => ({ unitId, state: unitId === failed ? "failed" : "pending" })),
     },
     writes: [{ path: commentsPath(fx, editor), beforeRevision: editor.commentsRevision, afterRevision: commentsRevision, afterBytesBase64: bytes.toString("base64") }],
     events: [{ name: "comment.changed", resourceId: editor.id, data: { resourceId: editor.id, thread, commentsRevision, operation } }],
@@ -4456,8 +4466,8 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/units/:unitId/approval-grants/:grantId") return prepareRevoke(fx, params, body);
   if (pattern === "/tasks/:taskId/status") return prepareTaskStatus(fx, params.taskId, body, principal);
   if (pattern === "/tasks/:taskId/undo") return prepareUndo(fx, params.taskId, body);
-  if (pattern === "/editors/:resourceId/comments") return prepareComment(fx, params.resourceId, body);
-  if (pattern === "/editors/:resourceId/comments/:threadId/replies") return prepareReply(fx, params, body);
+  if (pattern === "/editors/:resourceId/comments") return prepareComment(fx, params.resourceId, body, principal);
+  if (pattern === "/editors/:resourceId/comments/:threadId/replies") return prepareReply(fx, params, body, principal);
   if (pattern === "/editors/:resourceId/comments/:threadId") return prepareThreadStatus(fx, params, body);
   if (pattern === "/editors/:resourceId/attachments") return prepareAttachments(fx, params.resourceId, body);
   if (pattern === "/watch") return prepareWatch(fx, body, principal);

@@ -23,6 +23,7 @@ export function createEditors() {
     viewerPatch: null,
     error: null,
     libraries: new Map(),
+    sendToAgent: true,
   };
 }
 
@@ -346,7 +347,12 @@ export async function loadComments(api, editors) {
   return page;
 }
 
-export async function createComment(api, editors, anchor, text, retained = null) {
+export function commentChoice(editors, current = editors.current) {
+  const attached = Object.freeze([...new Set(current?.attached ?? [])].filter((id) => id !== "root:master"));
+  return Object.freeze({ attached, sendToAgent: attached.length > 0 && editors.sendToAgent !== false });
+}
+
+export async function createComment(api, editors, anchor, text, retained = null, choice = commentChoice(editors)) {
   const current = editors.current;
   const result = await perform(api, {
     method: "POST",
@@ -355,26 +361,27 @@ export async function createComment(api, editors, anchor, text, retained = null)
     body: {
       anchor,
       text,
+      sendToAgent: choice.sendToAgent,
       expectedRevision: current.revision,
       expectedCommentsRevision: current.commentsRevision,
     },
   }, retained);
   applyCommentThread(current, result.data.thread, result.data.commentsRevision);
-  current.notices = result.data.notifications ?? [];
-  current.commentText = "";
+  current.notices = result.data.notifications ?? result.data.thread?.notifications ?? [];
+  if (current.commentText === text) current.commentText = "";
   return result;
 }
 
-export async function replyComment(api, editors, threadId, text, retained = null) {
+export async function replyComment(api, editors, threadId, text, retained = null, choice = commentChoice(editors)) {
   const current = editors.current;
   const result = await perform(api, {
     method: "POST",
     path: "/editors/:resourceId/comments/:threadId/replies",
     params: { resourceId: current.resourceId, threadId },
-    body: { text, expectedCommentsRevision: current.commentsRevision },
+    body: { text, sendToAgent: choice.sendToAgent, expectedCommentsRevision: current.commentsRevision },
   }, retained);
   applyCommentThread(current, result.data.thread, result.data.commentsRevision);
-  current.notices = result.data.notifications ?? [];
+  current.notices = result.data.notifications ?? result.data.thread?.notifications ?? [];
   return result;
 }
 

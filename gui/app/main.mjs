@@ -45,6 +45,7 @@ import { element, icon, labelDialog, labeledField, progressMark, runAction, setB
 import {
   applyWatch,
   createComment,
+  commentChoice,
   createEditors,
   createResource,
   libraryState,
@@ -824,6 +825,7 @@ async function loadPresentation(app, options = {}) {
   app.layout = shellLayout(app.store.capabilities, app.store.audience);
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
+  editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
   app.store.settings.home = home.home;
   if (app.layout !== "unknown" && app.store.snapshotReady) {
     app.bootReading = false;
@@ -1980,7 +1982,7 @@ function paintBoardSelection(app, document, host, editor, t) {
       sendEditorComment(app, editor, anchor, field.value); editor.commentPopover = false;
     } });
     field.addEventListener("input", () => { editor.commentText = field.value; submit.disabled = !field.value.trim(); syncViewerDirty(app); });
-    popover.append(field, element(document, "div", { class: "board-comment-actions" }, element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => { editor.commentPopover = false; renderShell(app); } }), submit));
+    popover.append(field, commentPreferenceControl(app, document, editor, t), element(document, "div", { class: "board-comment-actions" }, element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => { editor.commentPopover = false; renderShell(app); } }), submit));
     const pixel = point(anchor.point); popover.style.left = `${Math.max(0, Math.min(host.clientWidth - 320, pixel.x + 32))}px`; popover.style.top = `${pixel.y}px`; host.append(popover);
   }
   if (editor.conflict) host.append(boardConflict(app, document, editor, t));
@@ -2365,6 +2367,7 @@ function renderEditorSurfaces(app, t) {
       if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatWhen(app.language, message.at) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
       box.append(line);
+      if (message.sendToAgent === false && message.authorId === "root:master") box.append(element(document, "p", { class: "field-hint", "data-comment-note": message.id, text: t("keptAsNote") }));
     }
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
@@ -2383,15 +2386,17 @@ function renderEditorSurfaces(app, t) {
       },
     }));
   }
-  const compose = element(document, "textarea", { "data-comment": "true", "data-keep": keepId("comment", current.resourceId) });
+  const composeLabel = t(current.threads?.length ? current.kind === "void" ? "replyOnText" : "replyOnBoard" : "comment");
+  const compose = element(document, "textarea", { "data-comment": "true", "data-keep": keepId("comment", current.resourceId), "aria-label": composeLabel, placeholder: composeLabel });
   compose.value = current.commentText ?? "";
   const commentButton = element(document, "button", {
     type: "button",
-    class: "btn primary",
+    class: "btn primary comment-send",
     "data-action": "comment",
+    "aria-label": t("send"),
     disabled: commentCanSubmit(app, compose.value) ? null : "",
     onclick: () => addEditorComment(app, compose),
-  }, t("addComment"));
+  }, element(document, "span", { "aria-hidden": "true", text: "↑" }));
   commentButton.disabled = !commentCanSubmit(app, compose.value);
   compose.addEventListener("input", () => {
     current.commentText = compose.value;
@@ -2407,7 +2412,8 @@ function renderEditorSurfaces(app, t) {
     setCommentEnabled(button, commentCanSubmit(app, field.value));
   };
   owner.addEventListener?.("selectionchange", app.onCommentSelection);
-  const commentField = labeledField(document, t("comment"), t(commentHintKey(app)), compose);
+  const commentField = labeledField(document, composeLabel, t(commentHintKey(app)), compose);
+  const composer = element(document, "div", { class: "comment-composer" }, element(document, "div", { class: "comment-input-row" }, commentField, commentButton), commentPreferenceControl(app, document, current, t));
   commentButton.setAttribute("aria-describedby", compose.getAttribute("aria-describedby"));
   if (!commentCanSubmit(app, compose.value)) {
     const reason = element(document, "p", {
@@ -2417,8 +2423,9 @@ function renderEditorSurfaces(app, t) {
       text: currentCommentAnchor(app) ? t("commentNeedsText") : t(commentMissingKey(app)),
     });
     commentButton.setAttribute("aria-describedby", "reason-comment");
-    commentsColumn.append(comments, commentField, commentButton, reason);
-  } else commentsColumn.append(comments, commentField, commentButton);
+    composer.append(reason);
+  }
+  commentsColumn.append(comments, composer);
   const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
   for (const notice of current.notices ?? []) {
     const key = noticeCopy[notice.state];
@@ -2519,10 +2526,12 @@ function addEditorComment(app, compose) {
 
 function sendEditorComment(app, editor, anchor, value) {
   const editors = editorsOf(app);
-  const current = editors.current;
+  const current = editor;
   if (!current || !value.trim()) return;
   const key = `comment:${current.resourceId}`;
   if (activityPending(app, key)) return;
+  const previous = app.activity.get(key);
+  if (app.api.uncertain.has(previous?.operation?.id)) { previous.retry?.(); return; }
   let row = (current.threads ?? []).find((thread) => thread.pending);
   if (!row) {
     row = { id: "pending-comment", status: "open", pending: true, failed: false, messages: [{ text: value }] };
@@ -2530,12 +2539,19 @@ function sendEditorComment(app, editor, anchor, value) {
   }
   row.failed = false;
   row.messages = [{ text: value }];
+  const choice = commentChoice(editors, current);
+  const target = { ...editors, current };
+  let operation = null;
   editorAct(app, key, text(app.language, "sending"), async (record) => {
+    record.operation = operation;
+    record.commentChoice = choice;
     try {
-      await createComment(app.api, editors, anchor, value, record.operation);
+      await createComment(app.api, target, anchor, value, operation, choice);
+      record.operation = null;
       current.threads = (current.threads ?? []).filter((thread) => !thread.pending);
       syncViewerDirty(app);
     } catch (error) {
+      operation = error.operation;
       const pending = (current.threads ?? []).find((thread) => thread.pending);
       if (pending) pending.failed = true;
       throw error;
@@ -2545,14 +2561,47 @@ function sendEditorComment(app, editor, anchor, value) {
 
 function replyToThread(app, threadId) {
   const editors = editorsOf(app);
-  const supplied = editors.current?.commentText;
+  const current = editors.current;
+  const supplied = current?.commentText;
   if (typeof supplied !== "string" || !supplied.trim()) {
     explain(app, "commentNeedsText");
     return;
   }
-  editorAct(app, `reply:${threadId}`, text(app.language, "sending"), async (record) => {
-    await replyComment(app.api, editors, threadId, supplied, record.operation);
+  const choice = commentChoice(editors, current);
+  const target = { ...editors, current };
+  const key = `reply:${threadId}`;
+  if (activityPending(app, key)) return;
+  const previous = app.activity.get(key);
+  if (app.api.uncertain.has(previous?.operation?.id)) { previous.retry?.(); return; }
+  let operation = null;
+  editorAct(app, key, text(app.language, "sending"), async (record) => {
+    record.operation = operation;
+    record.commentChoice = choice;
+    try {
+      await replyComment(app.api, target, threadId, supplied, operation, choice);
+      record.operation = null;
+    } catch (error) { operation = error.operation; throw error; }
   });
+}
+
+function commentPreferenceControl(app, document, current, t) {
+  if (app.layout === "phone") return null;
+  const choice = commentChoice(editorsOf(app), current);
+  const none = choice.attached.length === 0;
+  const disabled = none || !app.store.capabilities.includes("settings.write") || activityPending(app, "settings");
+  const input = element(document, "input", { type: "checkbox", "data-send-to-agent": current.kind,
+    "aria-label": t("sendToAgent"), "data-keep": keepId("send-to-agent", current.resourceId),
+    disabled: disabled ? "" : null });
+  input.disabled = disabled;
+  input.checked = choice.sendToAgent;
+  input.addEventListener("change", () => {
+    homeState(app).sendToAgentChoice = input.checked;
+    editorsOf(app).sendToAgent = input.checked;
+    chooseSetting(app, { sendToAgent: input.checked });
+  });
+  return element(document, "div", { class: `comment-preference${none ? " no-agents" : ""}` },
+    element(document, "label", { class: "comment-preference-label" }, element(document, "span", { class: "comment-checkbox-hit" }, input, element(document, "span", { class: "comment-checkbox", "aria-hidden": "true" })), t("sendToAgent")),
+    element(document, "span", { class: "comment-preference-hint", text: t(none ? "noAgentsAttached" : choice.sendToAgent ? "notifiesAttachedAgents" : "keptAsNote", { count: choice.attached.length }) }));
 }
 
 function resolveThread(app, threadId) {
@@ -3267,6 +3316,7 @@ function chooseSetting(app, patch) {
         const revision = app.store.settings?.revision ?? null;
         saved = await saveSettings(app.api, revision, patch, retained);
         record.operation = saved.operation;
+        if (Object.hasOwn(patch, "sendToAgent") && homeState(app).sendToAgentChoice === patch.sendToAgent) homeState(app).sendToAgentChoice = null;
         applySettingsResult(app, saved);
       }
       const overrides = Object.fromEntries(Object.keys(patch)
@@ -3296,7 +3346,7 @@ function chooseSetting(app, patch) {
 
 function sameSettingsChoice(operation, patch) {
   const body = operation?.body ?? {};
-  return ["look", "language"].every((key) => (key in patch) === (key in body) && (!(key in patch) || patch[key] === body[key]));
+  return ["look", "language", "sendToAgent"].every((key) => (key in patch) === (key in body) && (!(key in patch) || patch[key] === body[key]));
 }
 
 function homeRequestBody(enabled, addresses) {
@@ -3344,6 +3394,9 @@ function canonicalPayload(value) {
 function applySettingsResult(app, result) {
   app.store.settings.settings = result.data.settings;
   app.store.settings.revision = result.data.revision;
+  const home = homeState(app);
+  applySettingsRead(home, app.store.settings);
+  editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
   const choice = presentation(app.store.viewer, result.data.settings);
   app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
   app.language = choice.language === "es" ? "es" : "en";

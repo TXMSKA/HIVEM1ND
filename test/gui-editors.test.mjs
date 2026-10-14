@@ -32,6 +32,7 @@ import {
 import {
   applyWatch,
   createComment,
+  commentChoice,
   discardEditorDraft,
   noteComment,
   createEditors,
@@ -63,6 +64,72 @@ import { createGuiFixture } from "./gui-fixture.mjs";
 import { text } from "../gui/app/i18n.mjs";
 import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
 import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
+
+test("comment choice snapshots attached IDs and no attachments never change the shared preference", () => {
+  const editors = createEditors();
+  editors.current = { attached: ["root:one", "root:one", "root:master"] };
+  const choice = commentChoice(editors);
+  assert.deepEqual(choice.attached, ["root:one"]);
+  assert.equal(choice.sendToAgent, true);
+  editors.current.attached.push("root:two"); editors.sendToAgent = false;
+  assert.deepEqual(choice.attached, ["root:one"]);
+  assert.equal(choice.sendToAgent, true);
+  assert.ok(Object.isFrozen(choice.attached));
+  editors.current.attached = [];
+  editors.sendToAgent = true;
+  assert.equal(commentChoice(editors).sendToAgent, false);
+  assert.equal(editors.sendToAgent, true);
+});
+
+test("both editor kinds save false notes with complete anchors and History and true sends notify each agent once", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  for (const kind of ["blueprint", "void"]) {
+    const catalog = await loadCatalog(api, editors, kind);
+    const current = await openEditor(api, editors, catalog.find((item) => !item.readOnly));
+    await setAttachments(api, editors, ["project:shop:executor-shop"]);
+    editors.sendToAgent = false;
+    const anchor = kind === "void" ? welcomeAnchor() : canvasAnchor();
+    const before = (await loadHistory(api, editors)).length;
+    const note = await createComment(api, editors, anchor, "Keep a complete note");
+    assert.deepEqual(note.data.thread.anchor, anchor);
+    assert.equal(note.data.thread.messages[0].sendToAgent, false);
+    assert.deepEqual(note.data.notifications, []);
+    const reply = await replyComment(api, editors, note.data.thread.id, "Keep the reply too");
+    assert.equal(reply.data.thread.messages.at(-1).sendToAgent, false);
+    assert.deepEqual(reply.data.notifications, []);
+    const history = await loadHistory(api, editors);
+    assert.ok(history.length >= before + 2);
+    assert.equal(history.filter((item) => item.operation === "comment").length, 2);
+    await openEditor(api, editors, catalog.find((item) => item.id === current.resourceId));
+    assert.equal(editors.current.threads.find((item) => item.id === note.data.thread.id).messages.length, 2);
+    editors.sendToAgent = true;
+    const sent = await createComment(api, editors, anchor, "Notify the attached agent");
+    assert.equal(sent.data.thread.messages[0].sendToAgent, true);
+    assert.deepEqual(sent.data.notifications, [{ unitId: "project:shop:executor-shop", state: "pending" }]);
+  }
+});
+
+test("lost comment and reply responses retry their original boolean and body after a later toggle", async () => {
+  for (const reply of [false, true]) {
+    const editors = commentEditor(); editors.current.attached = ["root:one"]; editors.sendToAgent = false;
+    const attempts = [];
+    const api = commentApi(async (_url, init) => {
+      attempts.push({ key: init.headers["Idempotency-Key"], body: JSON.parse(init.body) });
+      if (attempts.length === 1) throw new Error("Response lost");
+      return commentEnvelope({ thread: { id: "saved", messages: [{ text: "Original", sendToAgent: false }] }, commentsRevision: "d".repeat(64), notifications: [] });
+    });
+    let operation;
+    const send = (retained) => reply ? replyComment(api, editors, "old-thread", "Original", retained) : createComment(api, editors, canvasAnchor(), "Original", retained);
+    await assert.rejects(send(), (error) => { operation = error.operation; return Boolean(operation); });
+    editors.sendToAgent = true; editors.current.attached = ["root:two"];
+    editors.current.commentText = "Later typing";
+    await send(operation);
+    assert.deepEqual(attempts[1], attempts[0]);
+    assert.equal(attempts[1].body.sendToAgent, false);
+    assert.equal(editors.current.commentText, "Later typing");
+  }
+});
 
 test("desktop import opens the real registered board beside its module with pages links styles and sketches", async (t) => {
   const fixture = await createGuiFixture(); t.after(() => fixture.close());

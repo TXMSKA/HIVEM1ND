@@ -119,7 +119,8 @@ export function armExpiry(state, nowMs, schedule, clearScheduled) {
 }
 
 export function applySettingsRead(state, data) {
-  state.settings = data?.settings ?? state.settings;
+  const settings = data?.settings ?? state.settings;
+  state.settings = { ...settings, sendToAgent: settings?.sendToAgent ?? true };
   state.revision = data?.revision ?? state.revision;
   state.service = data?.service ?? state.service;
   state.home = homeFields(data?.home);

@@ -117,7 +117,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("<style"), false);
   assert.equal(html.includes("session="), false);
   const main = sources[2][1];
-  const imports = [...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).sort();
+  const imports = [...new Set([...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]))].sort();
   assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[4][1];
   assert.match(css, /--bg:\s*#0f0b13/);
@@ -2012,7 +2012,7 @@ test("board nodes and named controls are available from the keyboard", async (t)
   assert.equal(desktop.root.querySelector("[data-node-name]").closest("label").querySelector(".field-label").textContent, "Node name");
   assert.equal(desktop.root.querySelector("[data-draft]"), null);
   const comment = desktop.root.querySelector("[data-comment]");
-  assert.equal(comment.closest("label").querySelector(".field-label").textContent, "Comment");
+  assert.equal(comment.closest("label").querySelector(".field-label").textContent, "Reply on the board");
   assert.equal(comment.closest("label").querySelector(".field-hint").textContent, "Choose a screen or node, then write the comment.");
 
   navigate(desktop.app, "document");
@@ -4516,6 +4516,140 @@ function changeSelect(node, value) {
   for (const handler of node.listeners.get("change") ?? []) handler({ target: node, currentTarget: node });
 }
 
+function toggleCommentPreference(root, value) {
+  const input = root.querySelector("[data-send-to-agent]");
+  assert.ok(input); assert.equal(input.disabled, false);
+  input.checked = value;
+  for (const handler of input.listeners.get("change") ?? []) handler({ target: input });
+}
+
+async function openCommentEditor(desktop, kind) {
+  navigate(desktop.app, kind === "blueprint" ? "blueprint" : "document");
+  await waitFor(() => desktop.app.editors?.loadedKind === kind && !desktop.app.editors.catalogLoading, "The editor library did not load.");
+  const item = desktop.app.editors.catalog.find((entry) => entry.title === (kind === "blueprint" ? "Cart" : "Release notes"));
+  renderShell(desktop.app); click(desktop.root.querySelector(`[data-id="${item.id}"]`));
+  await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector("[data-send-to-agent]"), "The comment composer did not open.");
+  return desktop.app.editors.current;
+}
+
+test("Blueprint and Void share the default checkbox, persisted false, machine changes and reopen without overwriting an unattached preference", async (t) => {
+  const desktop = await openedBoardDesktop(t), { app, root, fixture } = desktop;
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
+  click(root.querySelector("button[data-board-tool='comment']"));
+  const host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  assert.equal(root.querySelectorAll("[data-send-to-agent]").length, 2);
+  toggleCommentPreference(root, false);
+  await waitFor(() => app.activity.get("settings")?.phase === "success", "The preference did not save.");
+  assert.ok(root.querySelectorAll("[data-send-to-agent]").every((input) => input.checked === false));
+  assert.ok(root.querySelectorAll(".comment-preference-hint").every((hint) => hint.textContent === "Kept as a note, not sent"));
+  const current = await openCommentEditor(desktop, "void");
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
+  assert.equal(root.querySelector("[data-comment]").getAttribute("aria-label"), "Reply on the text");
+  await setAttachments(app.api, app.editors, []); renderShell(app);
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
+  assert.equal(root.querySelector("[data-send-to-agent]").disabled, true);
+  assert.equal(root.querySelector(".comment-preference-hint").textContent, "No agents attached");
+  assert.equal((await request(app.api, "GET", "/settings")).data.settings.sendToAgent, false);
+  const reopened = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(reopened.app));
+  await openCommentEditor(reopened, "blueprint");
+  assert.equal(reopened.root.querySelector("[data-send-to-agent]").checked, false);
+  const settings = (await request(app.api, "GET", "/settings")).data;
+  await saveSettings(app.api, settings.revision, { sendToAgent: true });
+  await waitFor(() => app.editors.sendToAgent && reopened.root.querySelector("[data-send-to-agent]")?.checked, "The shared setting did not synchronize to both viewers.");
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
+  assert.equal((await request(app.api, "GET", "/settings")).data.settings.sendToAgent, true);
+  await setAttachments(app.api, app.editors, ["project:shop:executor-shop"]); renderShell(app);
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
+  assert.equal(current.kind, "void");
+  app.language = "es"; renderShell(app);
+  assert.equal(root.querySelector("[data-send-to-agent]").getAttribute("aria-label"), "Enviar al agente");
+  const phone = await bootApp(fixture.phoneUrl, 390, []); t.after(() => dispose(phone.app));
+  assert.equal(phone.root.querySelector("[data-send-to-agent]"), null);
+  const css = await readFile("gui/app/styles.css", "utf8");
+  assert.match(css, /\.comment-composer[^}]*padding: 12px 14px 16px;[^}]*gap: 7px/);
+  assert.match(css, /\.comment-checkbox-hit[^}]*width: 32px; height: 32px/);
+  assert.match(css, /\.comment-checkbox \{[^}]*width: 16px; height: 16px;[^}]*border-radius: 4px/);
+});
+
+test("false remains shared after the fixture service restarts and both composers reopen", async (t) => {
+  const desktop = await openedBoardDesktop(t), { app, root, fixture } = desktop;
+  toggleCommentPreference(root, false);
+  await waitFor(() => app.activity.get("settings")?.phase === "success", "The preference did not save before restart.");
+  dispose(app); await fixture.control.restart();
+  const restarted = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(restarted.app));
+  for (const kind of ["blueprint", "void"]) {
+    await openCommentEditor(restarted, kind);
+    assert.equal(restarted.root.querySelector("[data-send-to-agent]").checked, false);
+    assert.equal(restarted.app.editors.sendToAgent, false);
+  }
+  assert.equal((await request(restarted.app.api, "GET", "/settings")).data.settings.sendToAgent, false);
+});
+
+test("a settings conflict retains the visible checkbox and Retry saves that choice while a lost response reuses its receipt", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), writes = []; let conflict = true;
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (url, init) => {
+    if (init?.method !== "PATCH" || !String(url).endsWith("/settings")) return;
+    writes.push({ key: headerValue(init.headers, "Idempotency-Key"), body: JSON.parse(init.body) });
+    if (conflict) {
+      conflict = false;
+      const current = (await request(api, "GET", "/settings")).data;
+      await saveSettings(api, current.revision, { look: "high-contrast" });
+    }
+  });
+  t.after(() => dispose(desktop.app)); await openCommentEditor(desktop, "blueprint");
+  toggleCommentPreference(desktop.root, false);
+  await waitFor(() => desktop.app.activity.get("settings")?.error?.code === "revision_conflict", "The setting conflict was not shown.");
+  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, false);
+  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, true);
+  await openCommentEditor(desktop, "void");
+  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, false);
+  await desktop.app.activity.get("settings").retry();
+  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, false);
+  assert.equal(writes[0].body.sendToAgent, false); assert.equal(writes[1].body.sendToAgent, false);
+  assert.notEqual(writes[0].key, writes[1].key);
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", dropAfterCommit: true });
+  toggleCommentPreference(desktop.root, true);
+  await waitFor(() => desktop.app.activity.get("settings")?.phase === "error", "The lost setting response did not offer Retry.");
+  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, true);
+  await desktop.app.activity.get("settings").retry();
+  assert.deepEqual(writes[3], writes[2]);
+  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, true);
+});
+
+test("a pending note retries its captured choice and original board after navigation and a later toggle", async (t) => {
+  const writes = [], desktop = await openedBoardDesktop(t, (url, init) => {
+    if (init?.method === "POST" && String(url).includes("/comments")) writes.push({ url: String(url), key: headerValue(init.headers, "Idempotency-Key"), body: JSON.parse(init.body) });
+  });
+  const { app, root, fixture } = desktop, current = app.editors.current;
+  toggleCommentPreference(root, false);
+  await waitFor(() => app.activity.get("settings")?.phase === "success", "The note preference did not save.");
+  const host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  typeInput(root.querySelector("[data-comment]"), "Keep the original note", 0, 0);
+  fixture.control.setFault({ method: "POST", path: `/api/v1/editors/${current.resourceId}/comments`, dropAfterCommit: true });
+  click(root.querySelector("[data-action='comment']"));
+  const key = `comment:${current.resourceId}`;
+  await waitFor(() => app.activity.get(key)?.phase === "error", "The lost comment did not offer Retry.");
+  const captured = app.activity.get(key).commentChoice;
+  assert.equal(captured.sendToAgent, false);
+  assert.deepEqual(captured.attached, current.attached);
+  await openCommentEditor(desktop, "void");
+  toggleCommentPreference(root, true);
+  await waitFor(() => app.activity.get("settings")?.phase === "success", "The later preference did not save.");
+  await app.activity.get(key).retry();
+  assert.deepEqual(writes[1], writes[0]);
+  assert.equal(writes[1].body.sendToAgent, false);
+  assert.equal(app.editors.current.kind, "void");
+  await openCommentEditor(desktop, "blueprint");
+  const note = app.editors.current.threads.filter((thread) => thread.messages?.some((message) => message.text === "Keep the original note"));
+  assert.equal(note.length, 1); assert.equal(note[0].anchor.element, "label");
+  assert.equal(note[0].messages[0].sendToAgent, false);
+  assert.equal(root.querySelector("[data-comment-note]").textContent, "Kept as a note, not sent");
+  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
+});
+
 async function openedBoardDesktop(t, onFetch) {
   const fixture = await createGuiFixture(); t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, [], onFetch); t.after(() => dispose(desktop.app));
@@ -4654,11 +4788,14 @@ test("board text saves later typing, comments pin full anchors, and conflict con
   assert.equal(thread.anchor.element, "label");
   const { setBoardDraft } = await import("../gui/app/blueprint.mjs");
   const local = structuredClone(editor.authoritative.document); local.title = "Local draft"; setBoardDraft(editor, local);
-  const remote = { ...editor.authoritative, revision: "f".repeat(64), document: { ...editor.authoritative.document, title: "Incoming board" }, by: "project:shop:executor-shop" };
+  const incoming = await request(app.api, "PUT", "/blueprint/boards/:resourceId", { operation: createOperation({ method: "PUT", path: "/blueprint/boards/:resourceId", params: { resourceId: editor.resourceId },
+    body: { document: { ...editor.authoritative.document, title: "Incoming board" }, expectedRevision: editor.revision } }) });
+  const remote = { ...incoming.data, by: "project:shop:executor-shop" };
   editor.conflict = { remote, revision: remote.revision }; renderShell(app);
   click(root.querySelector("[data-action='show-changes']"));
   assert.equal(root.querySelector("[data-board-changes]").querySelectorAll("pre").length, 2);
   click(root.querySelector("[data-action='discard-draft']"));
+  await waitFor(() => editor.authoritative.document.title === "Incoming board" && !editor.historyPending, "Reload did not persist its conflict answer.");
   assert.equal(editor.authoritative.document.title, "Incoming board");
   assert.equal(editor.conflictCopies.at(-1).local.document.title, "Local draft");
   assert.equal(editor.conflictCopies.at(-1).remote.by, "project:shop:executor-shop");
@@ -4720,8 +4857,8 @@ test("Keep mine rebases a rejected board write under a new operation and retains
   await waitFor(() => app.activity.get(`board:${editor.resourceId}`)?.phase === "error" && editor.conflict?.remote, "The stale write did not retain a conflict.");
   const failedId = app.activity.get(`board:${editor.resourceId}`).operation.id;
   click(root.querySelector("[data-action='reapply-draft']"));
-  await waitFor(() => !editor.boardDraft && app.activity.get(`board:${editor.resourceId}`)?.phase === "success", "Keep mine retried the rejected revision.");
-  assert.equal(puts, 3); assert.notEqual(app.activity.get(`board:${editor.resourceId}`).operation?.id, failedId);
+  await waitFor(() => !editor.boardDraft && !editor.historyPending && !app.activity.has(`board:${editor.resourceId}`), "Keep mine did not commit its conflict answer.");
+  assert.equal(puts, 2); assert.notEqual(app.activity.get(`board:${editor.resourceId}`)?.operation?.id, failedId);
   assert.equal(editor.authoritative.document.screens[0].root.kids[0].value, "Keep local typing");
   assert.deepEqual(editor.conflictCopies.at(-1).remote.document, remote);
 });
