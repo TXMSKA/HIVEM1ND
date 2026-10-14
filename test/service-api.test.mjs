@@ -893,6 +893,7 @@ test('every contract route has a success result and an authority or boundary fai
     '{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/work","model":"strong"}}',
     '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}',
   ];
+  const contextReplacements = new Map();
   const core = await composeCore({
     store: fixture.store,
     paths,
@@ -909,7 +910,16 @@ test('every contract route has a success result and an authority or boundary fai
       throw new Error('Unexpected Git operation');
     },
     editorLauncher: { reviewed: true, open: async () => ({ requestId: randomUUID() }) },
-    adapters: { codex: createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }) },
+    adapters: { codex: {
+      ...createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }),
+      prepareContext: async input => {
+        assert.equal(input.summary, null);
+        const replacement = { acknowledged: true, generationId: randomUUID() };
+        contextReplacements.set(input.requestId, replacement);
+        return replacement;
+      },
+      commitContext: async input => contextReplacements.get(input.requestId)?.generationId === input.replacement.generationId,
+    } },
     // Configuration review uses its injected owner handlers.
     settingsHandlers: {
       preview: async ({ context }) => ({ previewId: randomUUID(), revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, expiresAt: new Date(fixture.clock.now + 30000).toISOString(), changes: [], restartRequired: false }),
@@ -1090,6 +1100,35 @@ test('every contract route has a success result and an authority or boundary fai
   hit('GET', '/session-requests/:requestId');
   const sessions = await call(port, 'GET', '/api/v1/sessions', { token });
   assert.equal(sessions.json.data.items.some((item) => item.id === sessionId), true);
+  const contextTarget = `/api/v1/sessions/${sessionId}/context`;
+  const sessionContext = await call(port, 'GET', contextTarget, { token });
+  expectStatus(sessionContext, 200, 'session context');
+  assert.equal(sessionContext.json.data.sessionId, sessionId);
+  hit('GET', '/sessions/:sessionId/context');
+  const contextBody = { action: 'clear', expectedRevision: sessionContext.json.data.revision };
+  const contextWrites = fixture.store.writes.length;
+  for (const denied of [phoneCredential.token, settingsAgent.token]) {
+    expectStatus(await call(port, 'GET', contextTarget, { token: denied }), 403, 'session context authority');
+    expectStatus(await call(port, 'POST', contextTarget, { token: denied, body: contextBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'renew context authority');
+  }
+  assert.equal(fixture.store.writes.length, contextWrites);
+  assert.equal(contextReplacements.size, 0);
+  const renewedContext = await call(port, 'POST', contextTarget, {
+    token,
+    body: contextBody,
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(renewedContext, 202, 'clear context');
+  assert.equal(renewedContext.json.data.state, 'pending');
+  assert.equal(renewedContext.json.data.context.sessionId, sessionId);
+  hit('POST', '/sessions/:sessionId/context');
+  await fixture.store.contextJobs?.get(sessionId);
+  const clearedContext = await call(port, 'GET', contextTarget, { token });
+  expectStatus(clearedContext, 200, 'cleared context');
+  assert.equal(clearedContext.json.data.operation.requestId, renewedContext.json.data.requestId);
+  assert.equal(clearedContext.json.data.operation.state, 'applied');
+  assert.notEqual(clearedContext.json.data.generationId, sessionContext.json.data.generationId);
+  assert.equal(contextReplacements.size, 1);
   const stopped = await call(port, 'POST', `/api/v1/sessions/${sessionId}/stop`, {
     token,
     body: { confirmed: true },
