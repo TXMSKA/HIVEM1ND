@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { evolve } from '../engine/lifecycle.mjs';
-import { listInstallableAssets } from '../engine/install.mjs';
+import { applyContentAgentAssets, applyInstallPlan, listInstallableAssets, prepareContentAgentAssets } from '../engine/install.mjs';
 import { readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 
 test('evolve installs an included knowledge feature with its support files', async (context) => {
@@ -100,6 +100,26 @@ test('evolve carries knowledge module protocols into the mind and skips excluded
   const excluded = await makeKnowledgeFixture(context, ['security']);
   assert.equal((await evolve(excluded.options)).completed, true);
   await assert.rejects(() => access(path.join(excluded.mindPath, 'knowledge', 'security', 'protocols')), { code: 'ENOENT' });
+});
+
+test('shared Content selections prepare only included knowledge features and require a selected concrete review', async t => {
+  const fixture = await makeKnowledgeFixture(t);
+  await mkdir(path.join(fixture.mindPath, 'user', 'gui'), { recursive: true });
+  const settingsFile = path.join(fixture.mindPath, 'user', 'gui', 'content.json');
+  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: [], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } }));
+  let plan = await prepareContentAgentAssets({ ...fixture.options, agents: [{ name: 'codex', mode: 'on-demand' }], managedFiles: {} });
+  assert.equal(plan.items.some(item => item.path.includes('security-sweep')), false);
+  await assert.rejects(applyInstallPlan(plan), /Review changes in Settings/);
+  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: ['knowledge:security'], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } }));
+  plan = await prepareContentAgentAssets({ ...fixture.options, agents: [{ name: 'codex', mode: 'on-demand' }], managedFiles: {} });
+  const selected = plan.items.filter(item => item.path.includes('security-sweep')).map(item => item.path);
+  assert.equal(selected.length, 2);
+  await assert.rejects(applyContentAgentAssets(plan, { changePaths: selected }), /Review changes/);
+  await assert.rejects(applyContentAgentAssets(plan, { reviewed: true, changePaths: [settingsFile] }), /do not belong/);
+  const applied = await applyContentAgentAssets(plan, { reviewed: true, changePaths: selected });
+  assert.deepEqual(new Set(applied.files), new Set(selected));
+  assert.equal(await readFile(path.join(fixture.homeDir, '.agents', 'skills', 'security-sweep', 'scripts', 'check.mjs'), 'utf8'), 'export default true;\n');
+  await assert.rejects(access(path.join(fixture.homeDir, '.agents', 'skills', 'executor')), { code: 'ENOENT' });
 });
 
 async function writeMindFile(fixture, relativePath, content) {

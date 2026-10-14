@@ -27,6 +27,7 @@ import { deliverNotifications } from './chats.mjs';
 import { resolveActivity } from './watch.mjs';
 import { bytesAt, importedSidecarEvents } from './import-events.mjs';
 import { watchLocalChanges } from './local-watch.mjs';
+import { createSettingsOwner, processSettingsRequests, publishMachineSettings } from './settings.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -139,6 +140,7 @@ export async function startService(options) {
       sync: handle.runtime.sync,
       pulse: handle.runtime.pulse,
       adapters: handle.adapters.adapters,
+      settingsOwner: handle.runtime.settingsOwner,
     });
     handle.bridge.origin = `http://127.0.0.1:${handle.http.port}`;
     handle.bridge.onNativeHook = binding => handleNativeHook({
@@ -521,6 +523,7 @@ export async function composeCore(options) {
     ledger: runtime.ledger,
     sync: runtime.sync,
     pulse: runtime.pulse,
+    settingsOwner: runtime.settingsOwner,
   });
   bindRuntime({ http, runtime });
   try {
@@ -701,6 +704,7 @@ async function openServiceSync(options, paths) {
     clientOptions: Array.isArray(options.clients) ? options.clients : null,
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
+  runtime.settingsOwner = createSettingsOwner({ ...options, paths, now, sync, pulse, ledger, bus: runtime.bus, startedAt: runtime.startedAt });
   try {
     try {
       await recoverIncomingGroups(sync);
@@ -710,6 +714,7 @@ async function openServiceSync(options, paths) {
     }
     runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes));
     await pulse.resume();
+    await publishMachineSettings(runtime.settingsOwner);
     runtime.unwatch = watchOrigin(origin, () => {
       reconcileOrigin(runtime).catch((error) => {
         runtime.lastError = error;
@@ -744,6 +749,8 @@ async function publishServiceBeat(runtime, state) {
   };
   const result = await runtime.pulse.beat(record);
   if (result.published) runtime.beat = result.record ?? record;
+  runtime.settingsOwner.active = state === 'running';
+  await publishMachineSettings(runtime.settingsOwner, 'service');
   return runtime.beat;
 }
 
@@ -848,6 +855,7 @@ async function receiveOrigin(runtime) {
     }
   }
   await retryPending(runtime, provider, bindings);
+  await processSettingsRequests(runtime.settingsOwner);
 }
 
 async function retryPending(runtime, provider, bindings) {

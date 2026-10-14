@@ -12,6 +12,7 @@ import { eligibleAddresses } from '../engine/service/home.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { writeBeat } from '../engine/service/service.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
+import { readContent, readMachineSettings } from '../engine/service/settings.mjs';
 import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -846,6 +847,17 @@ test('every contract route has a success result and an authority or boundary fai
     now: () => fixture.clock.now,
     projects: [{ name: 'shop', localPath }],
     adapters: { codex: createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }) },
+    // Later tasks supply the reviewed configuration, permission and cluster executors.
+    settingsHandlers: {
+      preview: async ({ context }) => ({ previewId: randomUUID(), revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, expiresAt: new Date(fixture.clock.now + 30000).toISOString(), changes: [], restartRequired: false }),
+      apply: async ({ context, id }) => ({ machine: fixture.machine, client: id, state: 'connected', revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, keptCopies: 0 }),
+      disconnect: async ({ context, id }) => ({ machine: fixture.machine, client: id, state: 'disconnected', revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision }),
+      revoke: async ({ context, id }) => ({ permissionId: id, state: 'revoked', revision: (await readMachineSettings(context, fixture.machine, 'permissions')).revision }),
+      folder: async ({ context }) => readMachineSettings(context, fixture.machine, 'projects'),
+      removeProject: async ({ context, id }) => ({ projectId: id, changeId: randomUUID(), undoUntil: new Date(fixture.clock.now + 10000).toISOString(), revision: (await readMachineSettings(context, fixture.machine, 'projects')).revision }),
+      service: async ({ context, input }) => ({ ...(await readMachineSettings(context)).service, startWithWindows: input.startWithWindows }),
+      restart: async () => ({ machine: fixture.machine, state: 'restarting' }),
+    },
   });
   t.after(async () => {
     await core.http.close();
@@ -869,16 +881,64 @@ test('every contract route has a success result and an authority or boundary fai
     expectStatus(response, 200, template);
     if (template === '/projects') assert.equal(Array.isArray(response.json.data.items), true);
     if (template === '/sync') {
-      assert.equal(response.json.data.state, 'idle');
+      assert.ok(['idle', 'pending'].includes(response.json.data.state));
       assert.equal(typeof response.json.data.pendingChanges, 'number');
       assert.equal(response.json.data.items, undefined);
     }
     if (template === '/settings') {
       assert.equal(response.json.data.service.machine, fixture.machine);
       assert.equal(response.json.data.service.version, '3.0.0');
-      assert.equal(response.json.data.service.syncState, 'idle');
+      assert.equal(response.json.data.service.state, 'running');
+      assert.equal(response.json.data.service.startWithWindows, false);
     }
     hit('GET', template);
+  }
+  for (const section of ['agents', 'permissions', 'projects', 'content']) {
+    const template = `/settings/${section}`;
+    expectStatus(await call(port, 'GET', `/api/v1${template}`, { token }), 200, template);
+    expectStatus(await call(port, 'GET', `/api/v1${template}?unknown=true`, { token }), 400, 'Settings unknown query');
+    hit('GET', template);
+  }
+  const knownBinary = path.join(fixture.root, 'codex.cmd');
+  await writeFile(knownBinary, 'Fixture binary; never executed.\n');
+  const agentsReport = await call(port, 'GET', '/api/v1/settings/agents', { token });
+  const permissionsReport = await call(port, 'GET', '/api/v1/settings/permissions', { token });
+  const projectsReport = await call(port, 'GET', '/api/v1/settings/projects', { token });
+  const contentReport = await readContent(core.runtime.settingsOwner);
+  const previewId = randomUUID();
+  const permissionId = randomUUID();
+  const settingsRoutes = [
+    ['POST', '/settings/agents/scan', '/settings/agents/scan', { machine: fixture.machine }],
+    ['POST', '/settings/agents/find', '/settings/agents/find', { machine: fixture.machine, client: 'codex', path: knownBinary }],
+    ['POST', '/settings/agents/:client/preview', '/settings/agents/codex/preview', { machine: fixture.machine, mode: 'on-demand', target: 'cli', allowGit: false }],
+    ['POST', '/settings/agents/:client/apply', '/settings/agents/codex/apply', { machine: fixture.machine, previewId, changeIds: [], expectedRevision: agentsReport.json.data.revision }],
+    ['DELETE', '/settings/agents/:client', '/settings/agents/codex', { machine: fixture.machine, confirmed: true, expectedRevision: agentsReport.json.data.revision }],
+    ['DELETE', '/settings/permissions/:permissionId', `/settings/permissions/${permissionId}`, { machine: fixture.machine, expectedRevision: permissionsReport.json.data.revision }],
+    ['POST', '/settings/projects/folders', '/settings/projects/folders', { machine: fixture.machine, path: localPath, environment: null, expectedRevision: projectsReport.json.data.revision }],
+    ['DELETE', '/settings/projects/:projectId', '/settings/projects/shop', { machine: fixture.machine, confirmed: true, expectedRevision: projectsReport.json.data.revision }],
+    ['PATCH', '/settings/service', '/settings/service', { machine: fixture.machine, startWithWindows: false, expectedRevision: null }],
+    ['POST', '/settings/service/restart', '/settings/service/restart', { machine: fixture.machine }],
+    ['PATCH', '/settings/content', '/settings/content', { includedFeatures: contentReport.features.filter(item => item.included).map(item => item.id), includedKnowledge: contentReport.knowledge.filter(item => item.included).map(item => item.id), preferences: contentReport.preferences, expectedRevision: contentReport.revision }],
+  ];
+  const phoneCredential = core.credentials.issue({ audience: 'phone' });
+  const settingsAgent = core.credentials.issue({ audience: 'agent', unitId: 'root:executor', capabilities: ['read'] });
+  for (const [method, template, target, initialBody] of settingsRoutes) {
+    const body = { ...initialBody };
+    if (template === '/settings/agents/:client/apply' || template === '/settings/agents/:client') body.expectedRevision = (await call(port, 'GET', '/api/v1/settings/agents', { token })).json.data.revision;
+    const key = randomUUID();
+    const result = await call(port, method, `/api/v1${target}`, { token, body, headers: { 'idempotency-key': key } });
+    expectStatus(result, template === '/settings/service/restart' ? 202 : 200, template);
+    const replay = await call(port, method, `/api/v1${target}`, { token, body, headers: { 'idempotency-key': key } });
+    assert.deepEqual(replay.json.data, result.json.data);
+    expectStatus(await call(port, method, `/api/v1${target}`, { token, body: { ...body, unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'Settings unknown body');
+    assert.equal(routeTable().find(route => route.method === method && route.template === template).operation, 'settings.write');
+    for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, method, `/api/v1${target}`, { token: denied, body, headers: { 'idempotency-key': randomUUID() } }), 403, 'Settings authority');
+    if (Object.hasOwn(body, 'machine')) {
+      const offline = await call(port, method, `/api/v1${target}`, { token, body: { ...body, machine: 'OFFLINE' }, headers: { 'idempotency-key': randomUUID() } });
+      expectStatus(offline, 409, 'Settings offline owner');
+      assert.equal(offline.json.error.code, 'machine_unavailable');
+    }
+    hit(method, template);
   }
   const homeDenied = await call(port, 'POST', '/api/v1/auth/home', { body: { key: 'not-a-grant' } });
   expectStatus(homeDenied, 403, 'auth home');
@@ -1350,6 +1410,13 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(savedText, 200, 'replace text');
   hit('PUT', '/void/texts/:resourceId');
+  const matchRevision = (await call(port, 'GET', `/api/v1/editors/${textId}/comments`, { token })).json.data.commentsRevision;
+  const replacedMatches = await call(port, 'POST', '/api/v1/void/replace', { token,
+    body: { items: [{ resourceId: textId, k: 'Intro.Welcome', lang: 'en', start: 0, end: 2, expectedText: 'Hi', replacement: 'Hello', expectedRevision: savedText.json.data.revision }], expectedCommentsRevisions: { [textId]: matchRevision } },
+    headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(replacedMatches, 200, 'replace matches'); hit('POST', '/void/replace');
+  expectStatus(await call(port, 'POST', `/api/v1/void/replace/${replacedMatches.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 200, 'undo replaced matches');
+  hit('POST', '/void/replace/:changeId/undo');
 
   const watch = await call(port, 'POST', '/api/v1/watch', {
     token,

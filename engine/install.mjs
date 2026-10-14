@@ -209,13 +209,15 @@ export async function planAgentAssets({
   language = 'en',
 }) {
   const available = new Map(adapters.map((adapter) => [adapter.id, adapter]));
-  const excludedNames = new Set(excluded);
+  const excludedNames = new Set(await sharedContentExclusions(mindPath, excluded, kitPath));
   const sourceAssets = await listInstallableAssets(installableAssetRoots(kitPath, mindPath), excludedNames, retiredSources);
   const items = [];
   const conflicts = [];
   const warnings = [...sourceAssets.warnings];
   const linkComponents = [];
   const agentFiles = new Map();
+  const contentSettings = await readFile(path.join(mindPath, 'user', 'gui', 'content.json'), 'utf8')
+    .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
 
   for (const selected of agents ?? []) {
     const agentName = typeof selected === 'string' ? selected : selected.name;
@@ -301,6 +303,7 @@ export async function planAgentAssets({
     linkComponents,
     agentFiles,
     roots: [...new Set(items.map((item) => item.root))],
+    ...(contentSettings !== null && items.some(item => item.action !== 'unchanged') ? { requiresReview: true } : {}),
   };
 }
 
@@ -315,7 +318,7 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
   const conflicts = [];
   const warnings = [];
   const linkComponents = [];
-  const excludedNames = new Set(excluded);
+  const excludedNames = new Set(await sharedContentExclusions(mindPath, excluded, kitPath));
   const nestedDestination = relativeChild(sourceRoot, destinationRoot);
   const packageJson = JSON.parse(await readFile(path.join(sourceRoot, 'package.json'), 'utf8'));
   const distributableRoots = new Set(['package.json', ...(packageJson.files ?? []).map(topLevelEntry).filter(Boolean)]);
@@ -380,6 +383,7 @@ export async function planKitCopy({ kitPath, mindPath, managedFiles = {}, exclud
       if (!distributableRoots.has(top)
         || segments.some((segment) => KIT_EXCLUSIONS.has(segment))
         || excludedKnowledgePath(segments, excludedNames)
+        || (segments[0] === 'features' && isExcluded(excludedNames, 'feature', segments[1]?.replace(/\.md$/, '')))
         || PRIVATE_INSTRUCTION_FILES.has(entry.name)
         || entry.name === '.env'
         || entry.name.startsWith('.env.')
@@ -488,7 +492,10 @@ export async function planManagedFileRemovals(plan, { managedFiles, mindPath, sk
     const cleanupRoot = skillsRoots.find((skillsRoot) => relativeChild(skillsRoot, filePath));
     removals.push({ path: filePath, root, recordedHashes, cleanupRoot });
   }
-  return { ...plan, retired, removals, kept };
+  const sharedContent = await readFile(path.join(mindPath, 'user', 'gui', 'content.json'), 'utf8')
+    .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  return { ...plan, retired, removals, kept,
+    ...(sharedContent !== null && removals.some(item => skillsRoots.some(root => relativeChild(root, item.path))) ? { requiresReview: true } : {}) };
 }
 
 async function removalReason(filePath, root, recordedHashes) {
@@ -507,6 +514,42 @@ async function removalReason(filePath, root, recordedHashes) {
 export async function prepareSetupAgentAssets(options) {
   const adapters = options.adapters ?? await loadAdapters({ kitPath: options.kitPath });
   return { ...await planAgentAssets({ ...options, adapters }), requiresReview: true };
+}
+
+async function sharedContentExclusions(mindPath, excluded, kitPath) {
+  if (!mindPath) return excluded;
+  const file = path.join(mindPath, 'user', 'gui', 'content.json');
+  const source = await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (source === null) return excluded;
+  const settings = JSON.parse(source);
+  if (settings.format !== 'hivem1nd-content-settings-v1' || !Array.isArray(settings.includedFeatures) || !Array.isArray(settings.includedKnowledge)) throw new Error('The shared Content selection is not valid.');
+  const catalog = [...await discoverContent(kitPath ?? mindPath), ...await discoverContent(mindPath), ...await discoverContent(path.join(mindPath, 'user'))];
+  const contentIds = new Set(catalog.flatMap(item => [item.id, item.name]));
+  const retained = excluded.filter(item => item !== 'knowledge' && !contentIds.has(item));
+  for (const item of catalog) {
+    if (!(item.type === 'feature' ? settings.includedFeatures : settings.includedKnowledge).includes(item.id)) retained.push(item.id);
+  }
+  return [...new Set(retained)];
+}
+
+export async function prepareContentAgentAssets(options) {
+  const adapters = options.adapters ?? await loadAdapters({ kitPath: options.kitPath });
+  const plan = await planAgentAssets({ ...options, adapters });
+  const roots = adapters.filter(adapter => (options.agents ?? []).some(agent => (agent.name ?? agent) === adapter.id))
+    .map(adapter => resolveAdapterPaths(adapter, options).skillsRoot);
+  const retainedPaths = Object.keys(options.managedFiles ?? {}).filter(file => !roots.some(root => relativeChild(root, file)));
+  return { ...await planManagedFileRemovals(plan, { managedFiles: options.managedFiles ?? {}, mindPath: options.mindPath, skillsRoots: roots, retainedPaths }), requiresReview: true };
+}
+
+export async function applyContentAgentAssets(plan, { reviewed = false, changePaths = [] } = {}) {
+  if (!reviewed) throw new Error('Client configuration requires Review changes in Settings.');
+  const selected = new Set(changePaths);
+  const available = new Set([...plan.items, ...(plan.removals ?? [])].map(item => item.path));
+  if (selected.size !== changePaths.length || changePaths.some(file => !available.has(file))) throw new Error('The selected Content changes do not belong to the reviewed plan.');
+  const conflicts = (plan.conflicts ?? []).filter(item => selected.has(item.path));
+  if (conflicts.length || plan.items.some(item => selected.has(item.path) && item.linkComponent)) throw new Error('A foreign or linked client file cannot be replaced by Content.');
+  return applyInstallPlan({ ...plan, requiresReview: false, items: plan.items.filter(item => selected.has(item.path)),
+    removals: (plan.removals ?? []).filter(item => selected.has(item.path)), conflicts: [], linkComponents: [] });
 }
 
 export async function applyInstallPlan(plan, conflictChoices = {}) {

@@ -797,13 +797,11 @@ async function readChats(mind, messages, issues) {
 async function readMachines(context, now, issues) {
   const machines = [];
   const origin = context.paths?.origin;
-  if (!origin) return machines;
   let entries = [];
   try {
-    entries = await readdir(path.join(origin, 'machines'), { withFileTypes: true });
+    if (origin) entries = await readdir(path.join(origin, 'machines'), { withFileTypes: true });
   } catch (error) {
-    if (error?.code === 'ENOENT') return machines;
-    throw error;
+    if (error?.code !== 'ENOENT') throw error;
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -822,6 +820,15 @@ async function readMachines(context, now, issues) {
     } catch {
       issues.push({ path: `machines/${entry.name}/service.json`, code: 'corrupt_resource', message: 'The service beat could not be projected.' });
     }
+  }
+  const { readPublishedSettings } = await import('./settings.mjs');
+  for (const machine of await childNames(context.paths.mind, 'user/machines')) {
+    if (machines.some(item => item.id === machine)) continue;
+    try {
+      const report = await readPublishedSettings(context, machine);
+      if (report) machines.push({ id: machine, state: report.service.state, version: report.service.version, heartbeatAt: null, answers: false,
+        clients: report.agents.items.map(item => ({ id: item.id, enabled: item.cli.state === 'connected', installed: item.found })), issues: [] });
+    } catch { issues.push({ path: `user/machines/${machine}/settings.json`, code: 'corrupt_resource', message: 'The machine Settings report could not be projected.' }); }
   }
   machines.sort((left, right) => left.id.localeCompare(right.id));
   return machines;

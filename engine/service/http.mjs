@@ -21,6 +21,7 @@ import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, pa
 import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
+import { mutateMachineSettings, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
 
 const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n';
 
@@ -90,6 +91,21 @@ const ROUTES = [
   ['GET', '/settings', 'read', 'DP', 'settings'],
   ['PATCH', '/settings', 'settings.write', 'D', 'patchSettings'],
   ['POST', '/settings/home-network', 'home.manage', 'D', 'home'],
+  ['GET', '/settings/agents', 'read', 'D', 'machineSettings', 'agents'],
+  ['GET', '/settings/permissions', 'read', 'D', 'machineSettings', 'permissions'],
+  ['GET', '/settings/projects', 'read', 'D', 'machineSettings', 'projects'],
+  ['GET', '/settings/content', 'read', 'D', 'contentSettings'],
+  ['PATCH', '/settings/content', 'settings.write', 'D', 'writeContent'],
+  ['POST', '/settings/agents/scan', 'settings.write', 'D', 'settingsMutation', 'scan'],
+  ['POST', '/settings/agents/find', 'settings.write', 'D', 'settingsMutation', 'find'],
+  ['POST', '/settings/agents/:client/preview', 'settings.write', 'D', 'settingsMutation', 'preview'],
+  ['POST', '/settings/agents/:client/apply', 'settings.write', 'D', 'settingsMutation', 'apply'],
+  ['DELETE', '/settings/agents/:client', 'settings.write', 'D', 'settingsMutation', 'disconnect'],
+  ['DELETE', '/settings/permissions/:permissionId', 'settings.write', 'D', 'settingsMutation', 'revoke'],
+  ['POST', '/settings/projects/folders', 'settings.write', 'D', 'settingsMutation', 'folder'],
+  ['DELETE', '/settings/projects/:projectId', 'settings.write', 'D', 'settingsMutation', 'removeProject'],
+  ['PATCH', '/settings/service', 'settings.write', 'D', 'settingsMutation', 'service'],
+  ['POST', '/settings/service/restart', 'settings.write', 'D', 'settingsMutation', 'restart'],
   ['POST', '/auth/local', null, '', 'authLocal'],
   ['POST', '/auth/home', null, '', 'authHome'],
   ['POST', '/auth/logout', null, 'DP', 'logout'],
@@ -811,6 +827,10 @@ function allowedQuery(route) {
     '/units/:unitId/approval-grants': list,
     '/tasks': [...list, 'project', 'unitId', 'status'],
     '/waiting': [...list, 'unitId', 'kind'],
+    '/settings': ['machine'],
+    '/settings/agents': ['machine'],
+    '/settings/permissions': ['machine'],
+    '/settings/projects': ['machine'],
     '/blueprint/boards': [...list, 'project', 'folderId', 'openComments', 'attachedAgents', 'changedThisWeek'],
     '/void/texts': [...list, 'project', 'folderId', 'openComments', 'attachedAgents', 'changedThisWeek'],
     '/library/folders': [...list, 'project', 'kind'],
@@ -943,6 +963,7 @@ function rejectUnknown(route, body) {
   if (Object.hasOwn(body, 'node')) boundRecord(body.node, 'node', 64_000);
   if (Object.hasOwn(body, 'pattern')) boundRecord(body.pattern, 'pattern', 16_000);
   validateLibraryBody(route, body);
+  if (route.handler === 'settingsMutation') validateSettingsBody(route.collection, body);
 }
 
 function validateLibraryBody(route, body) {
@@ -1006,6 +1027,17 @@ function allowedBody(route) {
     'POST /tasks/:taskId/undo': ['expectedRevision'],
     'PATCH /settings': ['look', 'language', 'sendToAgent', 'expectedRevision'],
     'POST /settings/home-network': ['enabled', 'addresses'],
+    'PATCH /settings/content': ['includedFeatures', 'includedKnowledge', 'preferences', 'expectedRevision'],
+    'POST /settings/agents/scan': ['machine'],
+    'POST /settings/agents/find': ['machine', 'client', 'path'],
+    'POST /settings/agents/:client/preview': ['machine', 'mode', 'target', 'allowGit'],
+    'POST /settings/agents/:client/apply': ['machine', 'previewId', 'changeIds', 'expectedRevision'],
+    'DELETE /settings/agents/:client': ['machine', 'confirmed', 'expectedRevision'],
+    'DELETE /settings/permissions/:permissionId': ['machine', 'expectedRevision'],
+    'POST /settings/projects/folders': ['machine', 'path', 'environment', 'expectedRevision'],
+    'DELETE /settings/projects/:projectId': ['machine', 'confirmed', 'expectedRevision'],
+    'PATCH /settings/service': ['machine', 'startWithWindows', 'expectedRevision'],
+    'POST /settings/service/restart': ['machine'],
     'POST /auth/local': ['embedded', 'hostOrigin', 'look', 'language'],
     'POST /auth/home': ['key', 'code'],
     'POST /editors/register': ['project', 'path', 'kind'],
@@ -1056,6 +1088,7 @@ function domainContext(options, credential, bus) {
     aliases: Array.isArray(options.aliases) ? options.aliases : null,
     adapters: options.adapters ?? null,
     models: options.models ?? [],
+    settingsOwner: options.settingsOwner ?? null,
     ledger: options.ledger ?? null,
     sync: options.sync ?? null,
     pulse: options.pulse ?? null,
@@ -1210,13 +1243,17 @@ async function invoke(route, scope) {
     return { status: 200, body: await readDetail(domain, route.collection, detailId, scope) };
   }
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
+  if (route.handler === 'machineSettings') return { status: 200, body: await readMachineSettings(domain, query.machine ?? domain.paths.machine, route.collection) };
+  if (route.handler === 'contentSettings') return { status: 200, body: await readContent(domain) };
+  if (route.handler === 'writeContent') return { status: 200, body: await writeContent(domain, body) };
+  if (route.handler === 'settingsMutation') return mutateMachineSettings(domain, route.collection, body, params.client ?? params.permissionId ?? params.projectId ?? null);
   if (route.handler === 'settings') {
-    const detail = safeSettings(await readDetail(domain, 'settings'), credential);
-    const service = await serviceRecord(domain);
+    const detail = await readMachineSettings(domain, query.machine ?? domain.paths.machine);
     if (credential?.audience === 'phone') {
-      return { status: 200, body: { settings: detail.settings, revision: detail.revision, service, home: homeStatus(homeState) } };
+      const shared = safeSettings(detail, credential);
+      return { status: 200, body: { ...shared, selectedMachine: detail.selectedMachine, readOnly: true, reportedAt: detail.reportedAt, service: detail.service, home: homeStatus(homeState) } };
     }
-    return { status: 200, body: { ...detail, service, home: homeStatus(homeState) } };
+    return { status: 200, body: { ...detail, home: homeStatus(homeState) } };
   }
   if (route.handler === 'setUnitAlias') {
     const changed = await setUnitAlias(domain, params.unitId, body);

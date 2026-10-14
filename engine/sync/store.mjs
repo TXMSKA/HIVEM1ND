@@ -269,6 +269,14 @@ export async function listStaged(sync) {
 
 export async function resolveIncoming(sync, packBytes, provider) {
   const result = await resolveDependencies(packBytes, provider);
+  if (result.status !== 'pending') {
+    const { validateSettingsSyncRecord } = await import('../service/settings.mjs');
+    const incoming = new Map(result.decoded.changes.filter(change => change.operation === 'put').map(change => [change.target.path, result.objects.get(change.hash)]));
+    for (const change of result.decoded.changes) {
+      if (change.target.kind !== 'mind') continue;
+      await validateSettingsSyncRecord(sync, change.target, change.operation === 'put' ? result.objects.get(change.hash) : null, result.decoded.header.machine, incoming);
+    }
+  }
   const file = pendingPath(sync, result.decoded.header.machine, result.decoded.header.sequence);
   if (result.status !== 'pending') {
     await removeFile(sync, file);
@@ -301,6 +309,10 @@ async function observeUnlocked(sync, target, options) {
     source = clean;
   }
   if (!deleted && source == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
+  if (normalized.kind === 'mind' && /^user\/(?:machines\/[^/]+\/settings\.json|relay\/settings-(?:requests|results)\/)/.test(normalized.path)) {
+    const { validateSettingsSyncRecord } = await import('../service/settings.mjs');
+    await validateSettingsSyncRecord(sync, normalized, deleted ? null : source, options.applied === true ? options.machine ?? sync.machine : sync.machine);
+  }
   const nextHash = deleted ? null : hashBytes(Buffer.isBuffer(source) ? source : Buffer.from(source));
   if (options.stage === false) {
     const marker = await readJson(sync, markerPath(sync, key));
@@ -394,6 +406,11 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
     const deleted = entry.deleted === true;
     const raw = deleted ? null : Buffer.isBuffer(entry.bytes) ? entry.bytes : Buffer.from(entry.bytes ?? '');
     if (!deleted && entry.bytes == null) throw new CoreError(422, 'invalid_body', 'A change needs its bytes.');
+    if (normalized.kind === 'mind' && /^user\/(?:machines\/[^/]+\/settings\.json|relay\/settings-(?:requests|results)\/)/.test(normalized.path)) {
+      const { validateSettingsSyncRecord } = await import('../service/settings.mjs');
+      const incoming = new Map(entries.filter(item => item.target.kind === 'mind' && !item.deleted).map(item => [item.target.path, item.bytes]));
+      await validateSettingsSyncRecord(sync, normalized, raw, sync.machine, incoming);
+    }
     const at = entry.at ? requireTime(entry.at) : atDefault;
     const hash = raw ? hashBytes(raw) : null;
     const id = entry.id ?? uuidV8(['change', sync.machine, canonicalJson(normalized), deleted ? 'delete' : 'put', hash ?? 'deleted', at]);
@@ -494,6 +511,8 @@ async function prepareTarget(sync, target, authorizedTargets = []) {
 async function walkMind(sync, targets) {
   await walkDirectory(sync.paths.mind, '', async (relative, absolute) => {
     if (!relative.startsWith('user/')) return;
+    const settingsOwner = /^user\/(?:machines\/([^/]+)\/settings\.json|relay\/settings-(?:requests|results)\/([^/]+)\/)/.exec(relative);
+    if (settingsOwner && (settingsOwner[1] ?? settingsOwner[2]) !== sync.machine) return;
     if (isInside(sync.paths.origin, absolute) || isInside(sync.paths.localDirectory, absolute) || isInside(sync.paths.staging, absolute)) return;
     try {
       if (relative.startsWith('user/relay/sessions/')) {

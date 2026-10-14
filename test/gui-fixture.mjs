@@ -1314,7 +1314,7 @@ function publish(fx, events, principal) {
       unitId: event.unitId ?? event.data?.unit?.id ?? null,
       chatId: event.chatId ?? event.data?.chat?.id ?? event.data?.chatId ?? null,
       resourceId: event.resourceId ?? event.data?.resourceId ?? null,
-      global: Boolean(event.global) || ["service.changed", "settings.changed", "sync.changed", "stream.reset", "home.changed"].includes(event.name),
+      global: Boolean(event.global) || ["service.changed", "settings.changed", "machine.settings.changed", "settings.content.changed", "sync.changed", "stream.reset", "home.changed"].includes(event.name),
       at: Date.now(),
     };
     fx.ring.push(record);
@@ -1806,7 +1806,11 @@ function routeTable() {
     { pattern: "/units/:unitId/approval-grants/:grantId", DELETE: { capability: "grant.revoke", validate: validateRevoke } },
     { pattern: "/grant-revocations/:requestId", GET: { query: [] } },
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
-    { pattern: "/settings", GET: { query: [] }, PATCH: { capability: "settings.write", validate: validateSettings } },
+    { pattern: "/settings", GET: { query: ["machine"] }, PATCH: { capability: "settings.write", validate: validateSettings } },
+    { pattern: "/settings/agents", GET: { query: ["machine"] } },
+    { pattern: "/settings/permissions", GET: { query: ["machine"] } },
+    { pattern: "/settings/projects", GET: { query: ["machine"] } },
+    { pattern: "/settings/content", GET: { query: [] } },
     { pattern: "/settings/home-network", POST: { capability: "home.manage", validate: validateHome, runtime: true } },
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
     { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
@@ -2032,9 +2036,49 @@ async function readData(fx, snap, spec, params, query) {
     if (query.get("kind")) items = items.filter((item) => item.kind === query.get("kind"));
     return page(items, query, spec.GET.query, (item, q) => includes(item.title, q) || includes(item.unitId, q), []);
   }
-  if (pattern === "/settings") {
+  if (pattern === "/settings" || ["/settings/agents", "/settings/permissions", "/settings/projects"].includes(pattern)) {
+    if ([...query.keys()].some(key => key !== "machine")) throw new HttpError(400, "invalid_query", "The query is not valid.");
+    if (pattern !== "/settings" && spec.principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Machine Settings are available on the desktop.");
+    const machine = query.get("machine") ?? LOCAL_MACHINE;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+    const selected = snap.machines.find(item => item.id === machine);
+    const reported = await readJsonFile(join(fx.tree.user, "machines", machine, "settings.json")).then(item => item.value).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    const readOnly = machine !== LOCAL_MACHINE && !selected?.answers;
+    const common = { machine, readOnly, reportedAt: reported?.reportedAt ?? selected?.heartbeatAt ?? null };
+    const agents = reported?.agents ?? { revision: null, items: (selected?.clients ?? []).map(client => ({ id: client.id, name: client.id, version: null, found: client.installed === true, mode: "on-demand", cli: { state: client.enabled ? "connected" : "missing", changes: 0 }, app: { name: null, state: "missing" } })) };
+    if (pattern === "/settings/agents") return { ...common, ...agents };
+    if (pattern === "/settings/permissions") return { ...common, ...(reported?.permissions ?? { revision: null, unitGrants: snap.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant }))), agentPermissions: [] }) };
+    if (pattern === "/settings/projects") return { ...common, ...(reported?.projects ?? { revision: null, folders: [] }) };
+    const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
+    return { settings: snap.settings.settings, revision: snap.settings.revision, selectedMachine: machine, readOnly, reportedAt: common.reportedAt,
+      service: reported?.service ?? { machine, state: selected?.state ?? "unknown", version: selected?.version ?? null, startedAt: null, startWithWindows: config?.value.startWithWindows === true, revision: config?.hash ?? null },
+      ...(spec.principal.audience === "desktop" ? { locations: reported?.locations ?? { mind: config?.value.mindPath ?? "", staging: config?.value.stagingPath ?? "" } } : {}), home: homeStatus(fx) };
+  }
+  if (pattern === "/settings/content") {
     noneQuery(query);
-    return { settings: snap.settings.settings, revision: snap.settings.revision, service: { machine: LOCAL_MACHINE, version: "3.0.0", originKind: "folder", syncState: syncState(fx).state }, home: homeStatus(fx) };
+    if (spec.principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Content Settings are available on the desktop.");
+    const saved = await readJsonFile(join(fx.tree.user, "gui", "content.json")).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    const report = { revision: saved?.hash ?? null, features: [], knowledge: [], preferences: saved?.value.preferences ?? { addressStyle: "impersonal", additionalInstructions: "", keepExistingPreferencesFirst: true, updateChecks: "off" } };
+    for (const [directory, field, prefix] of [["features", "features", "feature"], ["knowledge", "knowledge", "knowledge"]]) {
+      const catalog = new Map();
+      for (const root of [fx.tree.mind, fx.tree.user]) for (const entry of await listDir(join(root, directory))) {
+        if (entry.isSymbolicLink() || entry.name.toLowerCase() === "readme.md") continue;
+        if (!entry.isDirectory() && !entry.name.endsWith(".md")) continue;
+        const title = entry.name.replace(/\.md$/, ""), id = `${prefix}:${title}`;
+        let category = "other";
+        if (field === "features") {
+          const candidates = entry.isDirectory() ? [join(root, directory, entry.name, `${title}.md`), join(root, directory, entry.name, "SKILL.md")] : [join(root, directory, entry.name)];
+          for (const file of candidates) {
+            const value = await readFile(file, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
+            const named = /^category:\s*(\w+)/m.exec(value)?.[1];
+            if (["planning", "quality", "continuity"].includes(named)) { category = named; break; }
+          }
+        }
+        catalog.set(id, { id, title, ...(field === "features" ? { category } : {}), included: saved ? (saved.value[field === "features" ? "includedFeatures" : "includedKnowledge"] ?? []).includes(id) : true });
+      }
+      report[field] = [...catalog.values()];
+    }
+    return report;
   }
   if (pattern === "/viewer") {
     noneQuery(query);

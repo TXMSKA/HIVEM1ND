@@ -8,6 +8,7 @@ import { readApproval } from './approvals.mjs';
 import { projectSessionRequest, readStartRequest } from './adapters.mjs';
 import { readAsset, readAttachments, readComments } from './editors.mjs';
 import { clearResource } from './watch.mjs';
+import { readPublishedSettings } from './settings.mjs';
 
 const PRIVATE_FIELDS = new Set(['nativeSessionId', 'endpoint', 'endpoints', 'token', 'authorization', 'secret', 'secrets', 'pipe', 'password', 'credential', 'credentials', 'pid', 'lease', 'bootstrap']);
 
@@ -17,6 +18,16 @@ export async function importedSidecarEvents(context, change) {
   if (change.target?.kind === 'project') return projectSidecar(context, change, file);
   const event = (name, data, extra = {}) => ({ name, data, ...extra });
   const changed = (events, collections) => ({ events, collections });
+  const settingsReport = /^user\/machines\/([^/]+)\/settings\.json$/.exec(file);
+  if (settingsReport) {
+    if (change.operation === 'delete') return changed([], ['machines']);
+    const report = await readPublishedSettings(context, settingsReport[1]);
+    return changed(['agents', 'permissions', 'projects', 'service'].map(section => event('machine.settings.changed', {
+      machine: report.machine, section, reportedAt: report.reportedAt, revision: report[section].revision,
+    })), ['machines']);
+  }
+  if (file === 'user/gui/content.json') return changed([event('settings.content.changed', { revision: change.hash ?? null })], []);
+  if (/^user\/relay\/settings-(?:requests|results)\//.test(file)) return changed([], []);
   if (/^user\/(?:inbox|(?:envs|projects)\/[^/]+\/inbox)\/[^/]+\.md$/.test(file)) {
     if (change.operation === 'delete') return changed([], ['mailboxes', 'messages', 'waiting']);
     const bytes = await bytesAt(context.paths.mind, file);

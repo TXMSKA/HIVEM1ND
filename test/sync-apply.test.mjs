@@ -1,4 +1,4 @@
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -12,6 +12,7 @@ import { createFolder, createText, moveEditor, readEditor, removeEditor } from '
 import { listHistory, replaceText, resolveConflict, restoreHistory } from '../engine/service/editors.mjs';
 import { readCollection, readProjection } from '../engine/service/projection.mjs';
 import { importedSidecarEvents } from '../engine/service/import-events.mjs';
+import { createSettingsOwner, publishMachineSettings, readPublishedSettings, writeContent, readContent } from '../engine/service/settings.mjs';
 import { applyPack, compareVersions, recoverIncomingGroups } from '../engine/sync/apply.mjs';
 import { limitsFor, openLedger } from '../engine/sync/limits.mjs';
 import { closeOrigin, openOrigin, publishBeat, publishPack, readHead, watchOrigin } from '../engine/sync/origin.mjs';
@@ -22,6 +23,50 @@ import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
 const LATER = '2026-10-10T12:00:05.000Z';
+
+test('machine Settings reports sync only from their owner, preserve offline reads and reject private or tampered records before writes', async t => {
+  const { fixture, desktop, laptop } = await world(t);
+  laptop.store.aclRunner = fixture.store.aclRunner;
+  const owner = createSettingsOwner({ ...laptop, env: { PATH: '' }, homeDir: fixture.home, projects: [], probeAgents: async () => ({}) });
+  const report = await publishMachineSettings(owner);
+  const target = { kind: 'mind', path: 'user/machines/LAPTOP/settings.json' };
+  const raw = Buffer.from(`${JSON.stringify(report)}\n`);
+  const incoming = pack([put(target, raw)], [{ hash: hashBytes(raw), raw }]);
+  assert.equal((await applyPack(desktop, incoming)).status, 'applied');
+  assert.deepEqual(await readPublishedSettings({ ...desktop, now: desktop.now }, 'LAPTOP'), report);
+  const events = await importedSidecarEvents({ ...desktop, now: desktop.now }, { target, operation: 'put' });
+  assert.deepEqual(events.events.map(event => event.name), Array(4).fill('machine.settings.changed'));
+  assert.equal(events.events.some(event => JSON.stringify(event.data).includes('publicKey')), false);
+  const before = await readFile(path.join(fixture.paths.mind, target.path));
+  const altered = Buffer.from(JSON.stringify({ ...report, locations: { mind: 'forged', staging: 'forged' } }));
+  await assert.rejects(applyPack(desktop, pack([put(target, altered, { at: LATER })], [{ hash: hashBytes(altered), raw: altered }], { sequence: 2 })), { code: 'corrupt_resource' });
+  const privateReport = Buffer.from(JSON.stringify({ ...report, secret: 'fixture-only-private-material' }));
+  await assert.rejects(applyPack(desktop, pack([put(target, privateReport, { at: LATER })], [{ hash: hashBytes(privateReport), raw: privateReport }], { sequence: 2 })), { code: 'unknown_field' });
+  const wrongOwner = pack([put(target, raw, { machine: 'OTHER' })], [{ hash: hashBytes(raw), raw }], { machine: 'OTHER' });
+  await assert.rejects(applyPack(desktop, wrongOwner), { code: 'invalid_record_owner' });
+  assert.deepEqual(await readFile(path.join(fixture.paths.mind, target.path)), before);
+  assert.equal((await eligibleTargets(desktop)).some(item => item.path === target.path), false);
+  assert.equal((await eligibleTargets(laptop)).some(item => item.path === target.path), true);
+  assert.equal((await eligibleTargets(laptop)).some(item => item.path.includes('settings-owner-key')), false);
+});
+
+test('Content selections and preferences replicate together without changing a peer client configuration', async t => {
+  const { fixture, desktop, laptop } = await world(t);
+  laptop.store.aclRunner = fixture.store.aclRunner;
+  const owner = createSettingsOwner({ ...laptop, env: { PATH: '' }, homeDir: fixture.home, projects: [] });
+  const content = await readContent(owner);
+  const updated = await writeContent(owner, { includedFeatures: content.features.filter(item => item.included).map(item => item.id), includedKnowledge: content.knowledge.filter(item => item.included).map(item => item.id),
+    preferences: { addressStyle: 'explanatory', additionalInstructions: 'Shared preferences fixture.', keepExistingPreferencesFirst: true, updateChecks: 'daily' }, expectedRevision: null });
+  const changes = await listStaged(laptop);
+  const objects = await Promise.all([...new Set(changes.map(change => change.hash).filter(Boolean))].map(async hash => ({ hash, raw: await readObject(laptop, hash) })));
+  assert.equal((await applyPack(desktop, encodePack({ machine: 'LAPTOP', sequence: 1, changes, objects, transactions: [{ id: changes[0].transactionId, changeIds: changes.map(change => change.id) }] }))).status, 'applied');
+  const peer = createSettingsOwner({ ...desktop, env: { PATH: '' }, homeDir: fixture.home, projects: [] });
+  assert.deepEqual((await readContent(peer)).preferences, updated.preferences);
+  assert.equal((await readContent(peer)).revision, updated.revision);
+  assert.equal(await readFile(path.join(desktop.paths.mind, 'user/preferences.md'), 'utf8'), await readFile(path.join(laptop.paths.mind, 'user/preferences.md'), 'utf8'));
+  const clients = await readdir(fixture.home);
+  assert.equal(clients.some(name => ['.codex', '.agents', '.claude', '.cursor'].includes(name)), false);
+});
 
 function put(target, raw, extra = {}) {
   const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);

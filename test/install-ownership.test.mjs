@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { applyInstallPlan, combinePlans, installAgentAssets, planKitCopy, prepareSetupAgentAssets } from '../engine/install.mjs';
+import { applyContentAgentAssets, applyInstallPlan, combinePlans, installAgentAssets, planKitCopy, prepareContentAgentAssets, prepareSetupAgentAssets } from '../engine/install.mjs';
 import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { hashContent, machineManagedPath, machineRecordPath, readMachineRecord } from '../engine/records.mjs';
@@ -283,7 +283,10 @@ test('joining does not prepare a kit replacement even when another machine owns 
       env: { PATH: '' },
       resume: false,
     });
-    return (await session.answer({ installMode: 'simple' })).preview;
+    await session.answer({});
+    let step = await session.answer({ mindPath: fixture.mindPath });
+    if (step.id === 'location') step = await session.answer({ mindPath: fixture.mindPath });
+    return step.preview;
   };
 
   assert.deepEqual((await preview()).conflicts, []);
@@ -305,6 +308,24 @@ test('prepared setup client changes cannot be applied directly or through a comb
   await assert.rejects(applyInstallPlan(plan), /Review changes in Settings/);
   await assert.rejects(applyInstallPlan(combinePlans(plan)), /Review changes in Settings/);
   assert.deepEqual(await legacyTreeInventory(fixture.homeDir), before);
+});
+
+test('managed Content review preserves foreign client bytes and refuses changed selected files', async t => {
+  const fixture = await makeFixture(t);
+  await writeKit(fixture, { 'features/qa.md': '---\nname: qa\ndescription: QA fixture.\n---\n\n# QA\n' });
+  const foreign = path.join(fixture.homeDir, '.agents', 'skills', 'qa', 'SKILL.md');
+  await mkdir(path.dirname(foreign), { recursive: true });
+  await writeFile(foreign, 'Foreign client skill bytes.\n');
+  const options = { ...fixture, agents: [{ name: 'codex', mode: 'on-demand' }], managedFiles: {} };
+  const plan = await prepareContentAgentAssets(options);
+  assert.ok(plan.conflicts.some(item => item.path === foreign));
+  await assert.rejects(applyContentAgentAssets(plan, { reviewed: true, changePaths: [foreign] }), /foreign or linked/);
+  assert.equal(await readFile(foreign, 'utf8'), 'Foreign client skill bytes.\n');
+  await rm(foreign);
+  const fresh = await prepareContentAgentAssets(options);
+  await writeFile(foreign, 'Foreign edit after review.\n');
+  await assert.rejects(applyContentAgentAssets(fresh, { reviewed: true, changePaths: [foreign] }), /File changed after preview/);
+  assert.equal(await readFile(foreign, 'utf8'), 'Foreign edit after review.\n');
 });
 
 test('the kit copy carries the runtime dependency closure into the mind and warns on a missing one', async (t) => {

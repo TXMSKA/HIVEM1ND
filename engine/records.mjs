@@ -236,6 +236,10 @@ export function machineReportPath(mindPath, hostname) {
   return path.join(path.resolve(mindPath), 'user', 'machines', `${safeSegment(hostname, 'hostname')}.report.md`);
 }
 
+export function machineSettingsPath(mindPath, hostname) {
+  return path.join(path.resolve(mindPath), 'user', 'machines', safeSegment(hostname, 'hostname'), 'settings.json');
+}
+
 // Removes the link itself, never what it points at, so a junction left by an older setup
 // can be replaced without touching the folder behind it.
 export async function removeSymbolicLink(root, target) {

@@ -152,7 +152,8 @@ export async function discoverContent(kitPath) {
 async function readFeatureCategory(featuresDirectory, name) {
   // A feature is a file, or a folder whose main file carries the same name.
   const content = await readFileIfPresent(path.join(featuresDirectory, `${name}.md`))
-    ?? await readFileIfPresent(path.join(featuresDirectory, name, `${name}.md`));
+    ?? await readFileIfPresent(path.join(featuresDirectory, name, `${name}.md`))
+    ?? await readFileIfPresent(path.join(featuresDirectory, name, 'SKILL.md'));
   return content === null ? undefined : parseFrontmatter(content).attributes.category;
 }
 
