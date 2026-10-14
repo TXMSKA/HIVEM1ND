@@ -1153,3 +1153,43 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 @media (max-width: 360px) {
   .phone-code-cells { display: grid; grid-template-columns: repeat(3, 40px); }
 }
+.add-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 7px 13px; border: 0; border-radius: 11px; background: var(--accent); color: var(--accent-ink); font: 700 13px var(--font); }
+.add-plus { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+[data-look="high-contrast"] .add-button { border-radius: 8px; }
+.add-dialog { width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; margin: auto; padding: 24px; border: 1px solid var(--line2); border-radius: 22px; background: var(--panel); color: var(--text); font-family: var(--font); }
+.add-dialog { --add-scrim: rgba(4,2,6,0.62); }
+.add-dialog::backdrop { background: var(--add-scrim); }
+.add-dialog h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+.add-dialog h3 { margin: 0 0 8px; font-size: 14px; }
+.add-subtitle { margin: 0 0 18px; font-size: 13.5px; line-height: 1.5; color: var(--mute); }
+.add-link { box-sizing: border-box; width: 100%; min-height: 32px; padding: 11px 13px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--text); font: 13px var(--mono); }
+.add-field-label { margin: 18px 0 6px; color: var(--mute); font-size: 12.5px; font-weight: 600; }
+.add-found, .add-scope { display: grid; gap: 6px; }
+.add-choice { display: flex; align-items: center; gap: 12px; min-height: 32px; padding: 10px 12px; border: 1px solid transparent; border-radius: 12px; background: var(--card); font-size: 13.5px; cursor: pointer; }
+.add-choice.is-selected { border-color: var(--accent); background: var(--card2); }
+.add-choice strong { font-size: 14px; font-weight: 700; }
+.add-choice input { appearance: none; flex: 0 0 18px; width: 18px; height: 18px; margin: 0; border: 2px solid var(--line2); border-radius: 4px; background: transparent; }
+.add-choice input:checked { border-color: var(--accent); background: var(--accent); }
+.add-choice input:checked::after { display: block; width: 8px; height: 4px; margin: 3px 2px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: rotate(-45deg); content: ''; }
+.add-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--mute); }
+.add-badge { margin-left: auto; padding: 2px 9px; border-radius: var(--radius-pill); background: var(--card2); color: var(--body); font-size: 12px; white-space: nowrap; }
+.add-part-check + .add-part-check { margin-top: 18px; }
+.add-checks { display: grid; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--card); }
+.add-check-line { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.add-check-dot { box-sizing: border-box; flex: 0 0 12px; width: 12px; height: 12px; border-radius: var(--radius-circle); }
+.add-check-dot.complete { background: var(--accent); }
+.add-check-dot.caution { border: 2px solid var(--waiting); }
+.add-check-note { margin-left: auto; font-size: 12px; color: var(--mute); }
+.add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.add-actions button { min-height: 32px; padding: 7px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 600; }
+.add-content-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 9px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card2); }
+.add-content-row .add-origin { margin-left: auto; font-size: 12.5px; color: var(--accent); }
+.add-content-row button.add-origin { padding: 0; border: 0; background: transparent; font-family: var(--font); cursor: pointer; }
+.add-content-row input { accent-color: var(--accent); width: 18px; height: 18px; }
+.add-content-choice { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.add-content-row button { min-height: 32px; }
+.add-content { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.add-error { display: grid; gap: 8px; margin-top: 18px; padding: 12px 14px; border: 1px solid var(--error); border-radius: 14px; background: var(--error-soft); font-size: 13px; }
+.add-error p { margin: 0; color: var(--body); }
+.add-wait { margin: 18px 0 0; color: var(--body); font-size: 13px; }
+@media (max-width: 720px) { .add-choice { flex-wrap: wrap; } .add-check-line { flex-wrap: wrap; } .add-check-note { margin-left: 22px; } .add-description { white-space: normal; } .add-content-row { flex-wrap: wrap; } }
