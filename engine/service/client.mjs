@@ -151,7 +151,7 @@ export async function closeAttachedServices() {
 
 export async function openRelayOperations(options = {}) {
   const { createRelay } = await import('../relay/store.mjs');
-  const direct = () => createRelay(Object.fromEntries(Object.entries(options).filter(([key]) => ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile'].includes(key))));
+  const direct = () => createRelay(Object.fromEntries(Object.entries(options).filter(([key]) => ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile', 'nativeSessionId', 'sessionLive'].includes(key))));
   if (options.pinnedRegistration || options.internal === true) return direct();
   const env = options.env ?? process.env;
   if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) return nativeOperations(options, env);
@@ -188,7 +188,7 @@ export async function relayPolicy(options, input) {
 
 function nativeOperations(options, env) {
   let connected = null;
-  const tools = { register: 'register', send: 'send_message', inbox: 'list_inbox', read: 'read_inbox', history: 'history', threads: 'threads', status: 'status', events: 'events', reminder: 'reminder', delivery: 'delivery_status' };
+  const tools = { register: 'register', send: 'send_message', inbox: 'list_inbox', read: 'read_inbox', history: 'history', threads: 'threads', status: 'status', overview: 'status', events: 'events', reminder: 'reminder', delivery: 'delivery_status' };
   return Object.fromEntries(Object.entries(tools).map(([operation, name]) => [operation, async (args = {}) => {
     connected ??= await connectNativeService({ env, client: options.client, nativeSessionId: options.nativeSessionId });
     const forwarded = ['register', 'send', 'read'].includes(operation) ? { ...args, requestId: args.requestId ?? randomUUID() } : args;
@@ -246,7 +246,10 @@ function personOperations(options) {
 export async function connectNativeService({ env = process.env, nativeSessionId = null, client = null } = {}) {
   const endpoint = env.HIVEM1ND_SERVICE_BRIDGE;
   const grant = env.HIVEM1ND_SERVICE_GRANT;
-  const binding = { ...(nativeSessionId ? { nativeSessionId } : {}), ...(client ? { client } : {}) };
+  const { hostSessionOf } = await import('../relay/carry-over.mjs');
+  nativeSessionId ??= client === 'claude' ? env.CLAUDE_CODE_SESSION_ID : null;
+  const hostSessionId = client === 'claude' ? hostSessionOf(env) : null;
+  const binding = { ...(nativeSessionId ? { nativeSessionId } : {}), ...(client ? { client } : {}), ...(hostSessionId ? { hostSessionId } : {}) };
   const attached = await dispatchNative(endpoint, grant, 'attach', binding);
   let origin;
   try { origin = new URL(attached.origin); } catch { throw new CoreError(503, 'service_unavailable', 'The native service origin is invalid.'); }
@@ -279,6 +282,10 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     hook(event) { return dispatchNative(endpoint, grant, 'hook', { ...binding, event }); },
     close() { connection.closed = true; },
   };
+}
+
+export function nativeHook({ env = process.env, nativeSessionId, client, event }) {
+  return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event });
 }
 
 export async function request(client, spec) {

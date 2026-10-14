@@ -148,14 +148,17 @@ export async function handleNativeHook({ controller, credentials, binding }) {
   if (!controller || !allowed[binding.client]?.has(binding.event)) throw new CoreError(503, 'service_unavailable', 'The native hook is unavailable.');
   const enabled = await controller.findEnabledBinding({ nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine });
   const unit = parseUnitId(binding.unitId).unit;
-  if (!enabled || enabled.unit.toLowerCase() !== unit.toLowerCase()) throw new CoreError(403, 'forbidden', 'The native wake binding is unavailable.');
+  if (enabled && (enabled.unit.toLowerCase() !== unit.toLowerCase() || enabled.unitId && enabled.unitId !== binding.unitId)) throw new CoreError(403, 'forbidden', 'The native wake binding is unavailable.');
   const exact = { unit, unitId: binding.unitId, nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
   if (binding.event === 'SessionEnd') {
     await controller.endSession(exact);
     credentials?.revokeSession(binding.sessionId);
   } else {
+    const touched = await controller.touch?.(exact);
+    if (!enabled) return { verified: true, ...(touched?.notice ? { wakeNotice: touched.notice } : {}) };
     const activity = ['UserPromptSubmit', 'PreToolUse'].includes(binding.event) ? 'busy' : 'idle';
     await controller.observeActivity(exact, { activity });
+    return { verified: true, ...(touched?.notice ? { wakeNotice: touched.notice } : {}) };
   }
   return { verified: true };
 }
@@ -164,7 +167,7 @@ export async function handleRelayPolicy({ controller, bridge, binding: input }) 
   if (!controller || !['attach', 'enable', 'disable', 'status'].includes(input.action)) throw new CoreError(422, 'invalid_body', 'The shared wake operation is invalid.');
   if (Object.keys(input).some(key => !['action', 'binding', 'consent'].includes(key))
       || input.consent && (typeof input.consent !== 'object' || Array.isArray(input.consent)
-        || Object.keys(input.consent).some(key => !['windowHours', 'extended', 'unlimited', 'manualConsent', 'maxHandoffs'].includes(key)))) {
+        || Object.keys(input.consent).some(key => !['windowHours', 'extended', 'unlimited', 'manualConsent', 'maxHandoffs', 'maxDailyHandoffs'].includes(key)))) {
     throw new CoreError(422, 'invalid_body', 'The shared wake consent is invalid.');
   }
   const binding = input.binding;
@@ -197,12 +200,17 @@ export async function initializeNativeEntry({ controller, bridge, request, regis
     matches.push(policy);
   }
   const exact = { unit: registration.unit, ...proof };
+  if (!matches.length) await controller.takeOver?.(exact);
+  const continued = await controller.status(exact);
   if (matches.length) {
     const now = bridge.now();
-    if (matches.some((policy) => policy.enabled !== true || policy.pausedReason || !Number.isFinite(Date.parse(policy.deadlineAt)) || Date.parse(policy.deadlineAt) <= now)) {
+    if (matches.some((policy) => policy.enabled !== true || policy.pausedReason
+      || !policy.unlimited && (!Number.isFinite(Date.parse(policy.deadlineAt)) || Date.parse(policy.deadlineAt) <= now))) {
       throw new CoreError(409, 'wake_expired', 'The previous wake consent is no longer active.');
     }
-  } else {
+  } else if (!continued.enabled && continued.startedAt) {
+    throw new CoreError(409, 'wake_expired', 'The previous wake consent is no longer active.');
+  } else if (!continued.enabled) {
     await controller.enable({ unit: registration.unit, nativeSessionId: proof.nativeSessionId, client: proof.client, machine: proof.machine });
   }
   const worker = controller.start(exact);
@@ -223,6 +231,23 @@ async function nativeOperation(bridge, secret, operation, input) {
   const proof = { unitId: launch.unitId, nativeSessionId: launch.nativeSessionId, client: launch.client, machine: launch.machine };
   const adapter = bridge.adapters?.[proof.client];
   if (await adapter?.confirm?.(proof) !== true) throw new CoreError(403, 'native_login_unverified', 'The native process is no longer attached.');
+  if (input.hostSessionId !== undefined) {
+    if (operation !== 'attach' && operation !== 'hook' || proof.client !== 'claude'
+      || launch.hostSessionId && launch.hostSessionId !== input.hostSessionId) throw new CoreError(403, 'forbidden', 'The host conversation cannot be changed.');
+    if (typeof bridge.carryConversation !== 'function') throw new CoreError(503, 'service_unavailable', 'Host continuity is unavailable.');
+    const carried = await bridge.carryConversation({ ...proof, unit: parseUnitId(proof.unitId).unit,
+      sessionId: uuidV8(['session', proof.machine, proof.client, proof.nativeSessionId, proof.unitId]) }, input.hostSessionId);
+    if (!carried) throw new CoreError(403, 'forbidden', 'The host conversation could not be verified.');
+    launch.hostSessionId = input.hostSessionId;
+  }
+  if (operation === 'hook') {
+    const sessionId = uuidV8(['session', proof.machine, proof.client, proof.nativeSessionId, proof.unitId]);
+    if (!await newestRegistration(bridge.paths.mind, sessionId, proof, proof.unitId) || await sessionStopped(bridge.paths.mind, sessionId)) {
+      throw new CoreError(403, 'native_login_unverified', 'The native session is no longer attached.');
+    }
+    if (typeof bridge.onNativeHook !== 'function') throw new CoreError(503, 'service_unavailable', 'The native hook is unavailable.');
+    return bridge.onNativeHook({ ...proof, sessionId, event: input.event });
+  }
   const bound = await boundSession(bridge, proof, launch.unitId);
   if (operation === 'content') {
     if (typeof launch.contentReader !== 'function') throw new CoreError(503, 'scope_unavailable', 'The native content channel is unavailable.');
@@ -242,10 +267,6 @@ async function nativeOperation(bridge, secret, operation, input) {
       throw new CoreError(403, 'forbidden', 'The wake binding cannot be changed.');
     }
     return perform(bridge, 'policy', { ...input, binding: { ...selected, unitId: proof.unitId } });
-  }
-  if (operation === 'hook') {
-    if (typeof bridge.onNativeHook !== 'function') throw new CoreError(503, 'service_unavailable', 'The native hook is unavailable.');
-    return bridge.onNativeHook({ ...proof, sessionId: bound.sessionId, event: input.event });
   }
   if (!bridge.origin) throw new CoreError(503, 'service_unavailable', 'The service is not ready.');
   if (launch.token) {
@@ -348,11 +369,11 @@ async function activeWake(bridge, proof, unitId) {
     const binding = policy?.binding ?? {};
     if (binding.unitId !== unitId || binding.nativeSessionId !== proof.nativeSessionId || binding.client !== proof.client || binding.machine !== proof.machine) continue;
     if (policy.enabled !== true || policy.pausedReason) continue;
-    const deadline = Date.parse(policy.deadlineAt);
-    if (!Number.isFinite(deadline) || deadline <= now) continue;
+    const deadline = policy.unlimited === true ? Infinity : Date.parse(policy.deadlineAt);
+    if (Number.isNaN(deadline) || deadline <= now) continue;
     const wakeId = typeof policy.key === 'string' && policy.key.length > 0 ? policy.key : name.slice(0, -5);
     const generation = typeof policy.generation === 'string' ? policy.generation : null;
-    if (!chosen || deadline < chosen.deadline) chosen = { wakeId, expiresAt: new Date(deadline).toISOString(), deadline, generation };
+    if (!chosen || deadline < chosen.deadline) chosen = { wakeId, expiresAt: deadline === Infinity ? null : new Date(deadline).toISOString(), deadline, generation };
   }
   return chosen;
 }

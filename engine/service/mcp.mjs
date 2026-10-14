@@ -9,6 +9,7 @@ import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment
 import { publishDomainEvents } from './events.mjs';
 import { requestApproval } from './approvals.mjs';
 import { completeSessionTask } from './adapters.mjs';
+import { carryHostConversation } from '../relay/carry-over.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 
@@ -91,6 +92,16 @@ function valueMatches(rule, value) {
 }
 
 export async function callTool(context, name, args) {
+  const value = await runTool(context, name, args);
+  if (!context.wake?.touch) return value;
+  const registration = await canonicalRegistration(context);
+  if (!await proveBinding(context, registration)) return value;
+  const touched = await context.wake.touch({ unit: registration.unit, unitId: registration.unitId,
+    nativeSessionId: registration.nativeSessionId, client: registration.client, machine: registration.machine });
+  return touched?.notice ? { ...value, wakeNotice: touched.notice } : value;
+}
+
+async function runTool(context, name, args) {
   if (name === 'session_open' || name === 'session_complete') {
     const registration = await canonicalRegistration(context);
     return transactLegacy(context, name, args, registration, name, () => name === 'session_open'
@@ -186,7 +197,7 @@ async function legacyNamed(name) {
 
 const LEGACY_METHODS = {
   register: 'register', send_message: 'send', list_inbox: 'inbox', read_inbox: 'read', history: 'history',
-  threads: 'threads', status: 'status', events: 'events', reminder: 'reminder', delivery_status: 'delivery',
+  threads: 'threads', status: 'overview', events: 'events', reminder: 'reminder', delivery_status: 'delivery',
 };
 const LEGACY_MUTATIONS = new Set(['register', 'send', 'read']);
 
@@ -206,11 +217,20 @@ async function legacyCall(context, name, args) {
     scopeLock: true,
     pinnedRegistration: registration,
     proveBinding: () => proveBinding(context, registration),
+    sessionLive: async candidate => await sessionStopped(context, candidate.sessionId) ? false
+      : await context.adapters?.[candidate.client]?.confirm?.(candidate) === true ? true : null,
     commitFile: (destination, bytes) => commitMindFile(context, destination, bytes),
   });
   const run = async () => {
     try {
-      return await relay[method](forwarded);
+      const value = await relay[method](forwarded);
+      if (await proveBinding(context, registration)) {
+        await relay.hold();
+        const binding = { unit: registration.unit, unitId: registration.unitId, nativeSessionId: registration.nativeSessionId,
+          client: registration.client, machine: registration.machine };
+        if (method === 'register') await context.wake?.takeOver?.(binding);
+      }
+      return value;
     } catch (error) {
       if (error?.code === 'FORBIDDEN_SCOPE' || error?.code === 'UNPROVED_SESSION') {
         throw new CoreError(403, 'forbidden', 'The tool cannot use another unit or session.');
@@ -284,8 +304,16 @@ function forwardedArgs(method, args, registration) {
   delete copy.unit;
   delete copy.client;
   delete copy.nativeSessionId;
-  delete copy.machine;
+  if (method !== 'overview') delete copy.machine;
   return copy;
+}
+
+export function carryNativeConversation(context, binding, hostSessionId) {
+  return carryHostConversation({ mindPath: context.paths.mind, hostname: context.paths.machine,
+    binding, hostSessionId, controller: context.wake,
+    proveBinding: async proof => !await sessionStopped(context, proof.sessionId)
+      && await context.adapters?.[proof.client]?.confirm?.(proof) === true,
+    commitFile: (destination, bytes) => commitMindFile(context, destination, bytes) });
 }
 
 async function proveBinding(context, registration) {

@@ -50,6 +50,41 @@ test('manual session bootstrap names the exact native ID and never recommends gu
   assert.match(response.hookSpecificOutput.additionalContext, /never authorization/);
 });
 
+test('a verified hook renews the shared window and carries the expired or daily-cap notice once', async t => {
+  const mindPath = await fixture(t), machine = os.hostname(), nativeSessionId = 'verified-hook';
+  const relay = await createRelay({ mindPath, hostname: machine, client: 'claude' });
+  const registration = await relay.register({ unit: 'overseer', nativeSessionId });
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const { handleNativeHook } = await import('../engine/service/bridge.mjs');
+  let now = new Date(2026, 9, 14, 23).getTime();
+  const controller = await createRelayWakeController({ mindPath, hostname: machine, clock: { now: () => now, sleep: () => Promise.resolve() }, sink: async () => ({ status: 'not_submitted' }) });
+  const binding = { unit: registration.unit, unitId: registration.unitId, nativeSessionId, client: 'claude', machine };
+  await controller.enable({ ...binding, maxDailyHandoffs: 1 });
+  const directory = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const file = path.join(directory, (await readdir(directory))[0]);
+  const policy = JSON.parse(await fsPromises.readFile(file, 'utf8'));
+  await writeFile(file, JSON.stringify({ ...policy, day: { date: '2026-10-14', count: 1 } }));
+  const invokeVerified = async () => {
+    const stdin = new PassThrough(), stdout = new PassThrough();
+    stdin.end(JSON.stringify({ session_id: nativeSessionId, hook_event_name: 'UserPromptSubmit' }));
+    return runRelayHook({ client: 'claude', mindPath, stdin, stdout, stderr: new PassThrough(), env: { HIVEM1ND_SERVICE_GRANT: 'fixture' },
+      serviceConnector: async () => ({
+        hook: event => handleNativeHook({ controller, binding: { ...binding, sessionId: registration.sessionId, event } }),
+        callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify({ data: { registered: true, text: '' } }) }] }), close() {},
+      }) });
+  };
+  const capped = await invokeVerified();
+  assert.match(capped.hookSpecificOutput.additionalContext, /reached its limit of 1 wakes/);
+  assert.equal(await invokeVerified(), null);
+  now += 3 * 3600000;
+  await invokeVerified();
+  assert.equal(Date.parse((await controller.status(binding)).deadlineAt), now + 4 * 3600000);
+  now += 5 * 3600000;
+  const ended = await invokeVerified();
+  assert.match(ended.hookSpecificOutput.additionalContext, /window passed without activity/);
+  assert.equal(await invokeVerified(), null);
+});
+
 test('registered quiet sessions receive no repetitive bootstrap, unread sessions get client-native context', async (context) => {
   const mindPath = await fixture(context);
   const relay = await createRelay({ mindPath, hostname: os.hostname(), sessionId: 'registering', client: 'codex' });

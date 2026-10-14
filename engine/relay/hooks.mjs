@@ -1,4 +1,4 @@
-import { connectNativeService, openRelayOperations, request, subscribe } from '../service/client.mjs';
+import { connectNativeService, nativeHook, openRelayOperations, request, subscribe } from '../service/client.mjs';
 import { randomUUID } from 'node:crypto';
 
 const CLIENT_EVENTS = {
@@ -84,10 +84,21 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
   const hookEvent = event ?? context.event;
   if (!CLIENT_EVENTS[client]?.has(hookEvent)) return null;
   let service = null;
+  let observed = null;
   try {
     if (env.HIVEM1ND_SERVICE_GRANT || env.HIVEM1ND_SERVICE_BRIDGE) {
-      service = await serviceConnector({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client });
-      await service.hook(hookEvent);
+      if (serviceConnector === connectNativeService) {
+        observed = await nativeHook({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client, event: hookEvent });
+        if (!REMINDER_EVENTS[client]?.has(hookEvent) && hookEvent !== 'PreToolUse') return null;
+      }
+      try { service = await serviceConnector({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client }); }
+      catch (error) {
+        if (!observed?.wakeNotice) throw error;
+        const response = formatHookResponse(client, hookEvent, { text: observed.wakeNotice });
+        if (response) { stdout.write(`${JSON.stringify(response)}\n`); return response; }
+        throw error;
+      }
+      if (serviceConnector !== connectNativeService) observed = await service.hook(hookEvent);
     }
     if (client === 'claude' && hookEvent === 'PreToolUse' && typeof input.tool_name === 'string') {
       const decision = service ? await requestNativeApproval(service, input, approvalTimeoutMs) : 'ask';
@@ -100,7 +111,8 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
       const received = await service.callTool('reminder', {});
       if (received.isError) return null;
       const reminder = JSON.parse(received.content?.find((item) => item.type === 'text')?.text ?? '{}').data;
-      const response = formatHookResponse(client, hookEvent, reminder);
+      const text = [observed?.wakeNotice, reminder?.wakeNotice, reminder?.text].filter(Boolean).join(' ');
+      const response = formatHookResponse(client, hookEvent, text ? { text } : reminder);
       if (response) stdout.write(`${JSON.stringify(response)}\n`);
       return response;
     }

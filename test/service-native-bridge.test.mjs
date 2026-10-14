@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createNativeLaunch, dispatchNative, handleNativeHook, initializeNativeEntry } from '../engine/service/bridge.mjs';
-import { closeAttachedServices, connectNativeService, openRelayOperations, relayPolicy, request, subscribe } from '../engine/service/client.mjs';
+import { closeAttachedServices, connectNativeService, nativeHook, openRelayOperations, relayPolicy, request, subscribe } from '../engine/service/client.mjs';
 import { createPersonRelay } from '../engine/relay/person.mjs';
 import { runCli } from '../cli/index.mjs';
 import { createText, readEditor, writeAttachments } from '../engine/service/editors.mjs';
@@ -257,6 +257,63 @@ test('hook activity uses only the shared controller and cannot change identity o
   assert.equal(calls[1].ended.unitId, UNIT);
   assert.equal(calls[2].revoked, binding.sessionId);
   await assert.rejects(() => handleNativeHook({ controller, credentials, binding: { ...binding, event: 'beforeSubmitPrompt' } }), { code: 'service_unavailable' });
+});
+
+test('a Relay tool call keeps its verified window open and a hook reports the ended window once without reviving it', async t => {
+  const w = await world(t, 'claude');
+  w.launch.ready(NATIVE);
+  const env = { ...w.launch.env, CLAUDE_CODE_SESSION_ID: NATIVE, CLAUDE_CODE_HOST_SESSION_ID: 'verified-host' };
+  const client = await connectNativeService({ env, client: 'claude' });
+  t.after(() => client.close());
+  const binding = { unit: 'one', unitId: UNIT, nativeSessionId: NATIVE, client: 'claude', machine: w.fixture.machine };
+  const before = await w.service.adopted.controller.wake.status(binding);
+  w.fixture.clock.now += 3600000;
+  const received = await client.callTool('list_inbox', {});
+  assert.equal(received.isError, false);
+  assert.equal(JSON.parse(received.content[0].text).data.wakeNotice, undefined);
+  const renewed = await w.service.adopted.controller.wake.status(binding);
+  assert.equal(Date.parse(renewed.deadlineAt), w.fixture.clock.now + 4 * 3600000);
+  assert.ok(renewed.deadlineAt > before.deadlineAt);
+  w.fixture.clock.now += 5 * 3600000;
+  const ended = await nativeHook({ env, nativeSessionId: NATIVE, client: 'claude', event: 'UserPromptSubmit' });
+  assert.match(ended.wakeNotice, /window passed without activity/);
+  assert.equal((await nativeHook({ env, nativeSessionId: NATIVE, client: 'claude', event: 'UserPromptSubmit' })).wakeNotice, undefined);
+  assert.equal((await w.service.adopted.controller.wake.status(binding)).enabled, false);
+});
+
+test('verified owner host continuity survives an MCP reconnect and rejects another host without making a separate worker', async t => {
+  const w = await world(t, 'claude');
+  w.launch.ready(NATIVE);
+  const env = { ...w.launch.env, CLAUDE_CODE_SESSION_ID: NATIVE, CLAUDE_CODE_HOST_SESSION_ID: 'owned-conversation' };
+  const first = await connectNativeService({ env, client: 'claude' });
+  first.close();
+  const second = await connectNativeService({ env, client: 'claude' });
+  t.after(() => second.close());
+  const result = await second.callTool('status', { detail: true, limit: 1 });
+  assert.equal(result.isError, false);
+  const detail = JSON.parse(result.content[0].text).data;
+  assert.equal(detail.units.length, 1);
+  assert.equal(detail.total, 1, 'legacy user and canonical root registrations describe one unit');
+  assert.equal(JSON.stringify(detail).includes(NATIVE), false);
+  assert.equal(JSON.stringify(detail).includes('owned-conversation'), false);
+  await assert.rejects(connectNativeService({ env: { ...env, CLAUDE_CODE_HOST_SESSION_ID: 'different-host' }, client: 'claude' }), { code: 'forbidden' });
+  const records = await readdir(path.join(w.fixture.paths.mind, 'user', 'relay', 'sessions'));
+  assert.ok(records.length >= 2, 'continuity registrations use the owner journal');
+});
+
+test('shared attach and enable carry the exact daily cap and reject unreviewed consent fields', async t => {
+  const w = await world(t);
+  w.launch.ready(NATIVE);
+  const binding = { unit: 'one', unitId: UNIT, nativeSessionId: NATIVE, client: 'codex', machine: w.fixture.machine };
+  const input = { action: 'enable', binding, consent: { maxDailyHandoffs: 31 } };
+  const enabled = await relayPolicy({ mindPath: w.fixture.paths.mind, env: w.launch.env }, input);
+  assert.equal(enabled.policy.dailyBudget, 31);
+  await assert.rejects(relayPolicy({ mindPath: w.fixture.paths.mind, env: w.launch.env }, { ...input, consent: { maxDailyHandoffs: 31, execute: true } }), { code: 'invalid_body' });
+  await relayPolicy({ mindPath: w.fixture.paths.mind, env: w.launch.env }, { ...input, consent: { unlimited: true, manualConsent: true, maxDailyHandoffs: 1 } });
+  const connected = await connectNativeService({ env: w.launch.env, client: 'codex', nativeSessionId: NATIVE });
+  t.after(() => connected.close());
+  assert.equal((await connected.callTool('list_inbox', {})).isError, false);
+  assert.equal((await w.service.adopted.controller.wake.status(binding)).dailyBudget, 1);
 });
 
 test('an expired launch grant and an unbound permission hook fail closed without starting another service', async (t) => {

@@ -181,3 +181,33 @@ test('a bounded alias constrains an older unlimited consent and immediate stop c
   assert.equal((await handle.done).reason, 'stopped');
   assert.equal((await wake.workerStates())[0].worker, 'idle');
 });
+
+test('daily caps intersect canonical aliases without losing usage or notices and never join equal short names across projects', async t => {
+  const w = await world(t), wake = await w.controller();
+  await wake.enable({ ...w.binding, maxDailyHandoffs: 40 });
+  const canonical = JSON.parse(await readFile(w.file(), 'utf8'));
+  const date = new Date(w.clock.now);
+  const localDay = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const noticeAt = new Date(w.clock.now).toISOString();
+  canonical.day = { date: localDay, count: 17 };
+  const legacy = { ...canonical, key: key(w.binding, true), binding: { ...w.binding }, maxDailyHandoffs: 35,
+    day: { date: localDay, count: 30, noticeAt } };
+  delete legacy.binding.unitId;
+  await writeFile(w.file(), JSON.stringify(canonical));
+  await writeFile(w.file(true), JSON.stringify(legacy));
+  const merged = await wake.adopt(w.binding);
+  assert.deepEqual(merged.day, legacy.day);
+  assert.equal((await wake.status(w.binding)).dailyBudget, 35);
+  await wake.touch(w.binding);
+  await wake.enable({ ...w.binding, maxDailyHandoffs: 35 });
+  assert.equal((await wake.status(w.binding)).dailyCount, 30);
+  assert.equal((await wake.adopt(w.binding)).day.noticeAt, noticeAt);
+  await writeFile(path.join(w.mind, 'user', 'state', 'worker.md'), 'unit: worker\nstate: in\n\nAnother canonical scope.\n');
+  const rootBinding = { ...w.binding, unitId: 'root:worker', nativeSessionId: 'root-worker-native' };
+  const root = await createRelay({ mindPath: w.mind, hostname: w.machine, client: 'claude' });
+  await root.register({ unit: 'worker', unitId: 'root:worker', nativeSessionId: rootBinding.nativeSessionId });
+  await wake.enable({ ...rootBinding, maxDailyHandoffs: 50 });
+  assert.equal((await wake.status(rootBinding)).dailyCount, 0);
+  assert.equal(await wake.takeOver(rootBinding), null);
+  assert.equal((await wake.status(w.binding)).dailyCount, 30);
+});

@@ -273,6 +273,12 @@ export function isTransientFsError(error) {
   return TRANSIENT_FS_CODES.has(error?.code);
 }
 
+// A file that is still being synced: busy or locked, or replaced while it was opened or read.
+function isSyncRace(error) {
+  return isTransientFsError(error)
+    || error?.code === 'UNSAFE_PATH' && /A Relay message changed while it was being (?:opened|read)\./.test(error.message);
+}
+
 function isSkippableRecordError(error) {
   return error?.code === 'MALFORMED_RECORD' || isTransientFsError(error);
 }
@@ -570,16 +576,18 @@ function toPublicRegistration(record) {
     activityObservedAt: record.activityObservedAt ?? null,
     quota: record.quota ?? null,
     quotaObservedAt: record.quotaObservedAt ?? null,
+    hostSessionId: record.hostSessionId ?? null,
   };
 }
 
 export async function createRelay(options = {}) {
-  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile']);
+  validateArgs(options, 'createRelay', ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile', 'nativeSessionId', 'sessionLive']);
   if (options.mindPath !== undefined && typeof options.mindPath !== 'string') throw relayError('INVALID_ROOT', 'mindPath must be a filesystem path string.');
   const mindPath = path.resolve(options.mindPath ?? process.cwd());
   const hostname = safeMachine(options.hostname ?? os.hostname());
   const defaultClient = options.client === undefined ? null : scalar(options.client, 'client', 80);
   const scopeLock = options.scopeLock === true;
+  const servedSession = options.nativeSessionId === undefined ? null : scalar(options.nativeSessionId, 'nativeSessionId', 180);
   const instanceId = options.sessionId === undefined ? randomUUID() : scalar(options.sessionId, 'sessionId', 180);
   await assertRoot(mindPath);
   const canonicalMind = await realpath(mindPath);
@@ -606,7 +614,8 @@ export async function createRelay(options = {}) {
       let record;
       try { record = await readJsonSafe(mindPath, file); }
       catch (error) { if (isSkippableRecordError(error)) continue; throw error; }
-      if (record?.kind === 'registration' && typeof record.registrationId === 'string') result.push(record);
+      if (record?.kind === 'registration' && typeof record.registrationId === 'string'
+        && record.registrationId.toLowerCase() === path.basename(file, '.json').toLowerCase()) result.push(record);
     }
     return result;
   }
@@ -707,7 +716,7 @@ export async function createRelay(options = {}) {
         if (JSON.stringify(stored) !== JSON.stringify(latest)) { registrationIndex = emptyRegistrationIndex(); continue; }
         verifiedRegistrations.add(latest.registrationId);
       }
-      return { latest, ambiguous: records.some((record) => record.unit.toLowerCase() !== latest.unit.toLowerCase()) };
+      return { latest, ambiguous: records.some((record) => canonicalUnitId(record.unit, record.scopeId) !== canonicalUnitId(latest.unit, latest.scopeId)) };
     }
     return null;
   }
@@ -758,11 +767,36 @@ export async function createRelay(options = {}) {
       client: scalar(args.client, 'client', 80), machine: safeMachine(args.machine) });
   }
 
+  // The newest registration of a unit for a client on this machine, among the native sessions whose newest registration names
+  // that unit. A wake follows it, because a chat that registered the unit again replaced the session an older consent names.
+  async function latestUnitRegistration(args) {
+    validateArgs(args, 'latestUnitRegistration', ['unit', 'unitId', 'client', 'machine']);
+    const unit = validUnit(args.unit);
+    const client = scalar(args.client, 'client', 80);
+    if (safeMachine(args.machine) !== hostname) return null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const records = Object.values((await currentRegistrationIndex()).latest).flat()
+        .filter((record) => record.machine === hostname && record.client === client && record.unit.toLowerCase() === unit.toLowerCase()
+          && (!args.unitId || canonicalUnitId(record.unit, record.scopeId) === args.unitId));
+      if (!records.length) return null;
+      const [latest] = records.sort((a, b) => b.registeredAt.localeCompare(a.registeredAt) || b.registrationId.localeCompare(a.registrationId));
+      if (!verifiedRegistrations.has(latest.registrationId)) {
+        let stored = null;
+        try { stored = await readJsonSafe(mindPath, path.join(sessionsPath, `${latest.registrationId}.json`)); }
+        catch (error) { if (!isSkippableRecordError(error)) throw error; }
+        if (JSON.stringify(stored) !== JSON.stringify(latest)) { registrationIndex = emptyRegistrationIndex(); continue; }
+        verifiedRegistrations.add(latest.registrationId);
+      }
+      return toPublicRegistration(latest);
+    }
+    return null;
+  }
+
   const wakeRoot = path.join(relayPath, 'wake');
   const localRoot = relayLocalStatePath(canonicalMind);
-  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index']);
-  // A policy describes a binding and is read from other machines; a lease and a lock hold a process id that means something only on the machine that wrote it, and the index records what this machine has read.
-  const localBuckets = new Set(['workers', 'locks', 'index']);
+  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index', 'holders']);
+  // A policy describes a binding and is read from other machines; a lease, a lock and a holder hold a process id that means something only on the machine that wrote it, and the index records what this machine has read.
+  const localBuckets = new Set(['workers', 'locks', 'index', 'holders']);
   function wakeStorage(bucket) {
     return localBuckets.has(bucket)
       ? { root: localRoot, directory: path.join(localRoot, 'wake', bucket) }
@@ -935,10 +969,30 @@ export async function createRelay(options = {}) {
     throw relayError('WAKE_STORE_BUSY', 'Wake storage is temporarily busy; retry later.');
   }
 
-  const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, latestRegistration: latestWakeRegistration, read: readWakeRecord, list: listWakeRecords,
+  const wakePersistence = Object.freeze({ resolveBinding: resolveWakeBinding, latestRegistration: latestWakeRegistration,
+    latestUnitRegistration, read: readWakeRecord, list: listWakeRecords,
     write: writeWakeRecord, remove: removeWakeRecord, withLock: withWakeLock, removeLegacy: removeLegacyWakeRecords });
 
+  // The newest registration of the native session this instance serves. The registration may come from an earlier process of
+  // the same chat: a client starts its MCP server again after a restart or a reconnect, and the new process has a new instance.
+  async function servedRegistration() {
+    if (servedSession === null) return null;
+    if (defaultClient !== null) {
+      const found = await newestRegistration(hostname, defaultClient, servedSession);
+      if (found?.ambiguous) throw relayError('AMBIGUOUS_SESSION', 'This session id has simultaneous registrations for different units.');
+      return found?.latest ?? null;
+    }
+    const records = (await registrations()).filter((record) => record.nativeSessionId === servedSession && record.machine === hostname)
+      .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || b.registrationId.localeCompare(a.registrationId));
+    if (!records.length) return null;
+    if (records.some((item) => item.registeredAt === records[0].registeredAt && (item.unit !== records[0].unit || item.client !== records[0].client))) {
+      throw relayError('AMBIGUOUS_SESSION', 'This session id has simultaneous registrations for different units.');
+    }
+    return records[0];
+  }
+
   async function currentIdentity() {
+    if (!scopeLock && servedSession !== null) return servedRegistration();
     if (currentRegistration) return currentRegistration;
     const matches = (await registrations()).filter((record) => record.instanceId === instanceId
       && record.machine === hostname && (defaultClient === null || record.client === defaultClient))
@@ -984,6 +1038,7 @@ export async function createRelay(options = {}) {
     if (typeof options.proveBinding !== 'function' || await options.proveBinding(pinned) !== true) {
       throw relayError('UNPROVED_SESSION', 'Registration needs a verified native process.');
     }
+    if (pinned.hostSessionId && args.hostSessionId !== undefined && args.hostSessionId !== pinned.hostSessionId) throw relayError('FORBIDDEN_SCOPE', 'The host conversation cannot be changed.');
     const activity = safeActivity(args.activity);
     const quota = safeQuota(args.quota);
     const observedAt = isoNow();
@@ -1003,9 +1058,11 @@ export async function createRelay(options = {}) {
       activityObservedAt: activity === null ? null : observedAt,
       quota,
       quotaObservedAt: quota === null ? null : observedAt,
+      ...(args.hostSessionId || pinned.hostSessionId ? { hostSessionId: scalar(args.hostSessionId ?? pinned.hostSessionId, 'hostSessionId', 180) } : {}),
     };
     await publish(path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
     currentRegistration = record;
+    await retireStale(record).catch(() => {});
     return toPublicRegistration(record);
   }
 
@@ -1018,6 +1075,11 @@ export async function createRelay(options = {}) {
         unitId: 'root:master',
         scope: { id: person === 'master' ? 'root' : 'user', path: userPath, environment: null, project: null },
       };
+    }
+    if (scopeLock && currentRegistration?.unit.toLowerCase() === unit.toLowerCase()) {
+      const scope = await registeredScope(unit, currentRegistration.scopeId);
+      if (!scope) throw relayError('UNKNOWN_UNIT', 'The bound unit state is unavailable.');
+      return { unit, unitId: currentRegistration.unitId, scope };
     }
     const { scopes } = await routesAndScopes();
     const matches = [];
@@ -1174,6 +1236,9 @@ export async function createRelay(options = {}) {
         if (await isReadCopy(unit, file, raw)) continue;
         if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
       } catch (error) {
+        // A message that another machine wrote arrives by sync, and OneDrive can hold or replace the file while it lands. That
+        // file is left for the next read instead of failing the whole inbox, so the other messages still count and wake.
+        if (isSyncRace(error)) continue;
         skipMalformed(error);
         malformed.push(path.basename(file));
       }
@@ -1185,20 +1250,25 @@ export async function createRelay(options = {}) {
   const relay = {
     wakePersistence,
     async register(args = {}) {
-      validateArgs(args, 'register', ['unit', 'nativeSessionId', 'client', 'activity', 'quota']);
+      validateArgs(args, 'register', ['unit', 'unitId', 'nativeSessionId', 'client', 'activity', 'quota', 'hostSessionId']);
+      if (args.unit === undefined && args.unitId !== undefined) throw relayError('INVALID_INPUT', 'Registration requires the explicit unit as well as its canonical identity.');
       if (scopeLock) return registerLocked(args);
       const unit = validUnit(args.unit);
-      const identity = await resolveUnit(unit);
+      const identity = args.unitId ? { unitId: args.unitId, scope: await registeredScope(unit, args.unitId.slice(0, -(unit.length + 1))) } : await resolveUnit(unit);
+      if (!identity.scope || args.unitId && canonicalUnitId(unit, identity.scope.id) !== args.unitId) throw relayError('UNKNOWN_UNIT', 'The canonical unit does not match its state.');
       const nativeSessionId = args.nativeSessionId === undefined ? instanceId : scalar(args.nativeSessionId, 'nativeSessionId', 180);
       const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
       const activity = safeActivity(args.activity);
       const quota = safeQuota(args.quota);
+      const hostSessionId = args.hostSessionId == null ? null : scalar(args.hostSessionId, 'hostSessionId', 180);
       // A chat registers again whenever its client starts a new MCP process. When it is still registered as the same unit, that
       // record stays, so the consent that names the chat is not outdated and the registrations do not pile up.
       if (activity === null && quota === null) {
         const latest = (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
           .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
-        if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id) {
+        if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id
+          && (hostSessionId === null || latest.hostSessionId === hostSessionId)
+          && (client === null || (await latestUnitRegistration({ unit, unitId: latest.unitId, client, machine: hostname }))?.nativeSessionId === nativeSessionId)) {
           currentRegistration = latest;
           return toPublicRegistration(latest);
         }
@@ -1211,10 +1281,21 @@ export async function createRelay(options = {}) {
         scopeId: identity.scope.id, nativeSessionId, client, machine: hostname,
         registeredAt: observedAt, activity, activityObservedAt: activity === null ? null : observedAt,
         quota, quotaObservedAt: quota === null ? null : observedAt,
+        ...(hostSessionId === null ? {} : { hostSessionId }),
       };
       await publish(path.join(sessionsPath, `${record.registrationId}.json`), Buffer.from(`${JSON.stringify(record)}\n`));
       currentRegistration = record;
+      await retireStale(record).catch(() => {});
       return toPublicRegistration(record);
+    },
+
+    async hold() {
+      const registration = await currentIdentity();
+      if (!registration?.client || typeof options.proveBinding !== 'function' || await options.proveBinding(registration) !== true) return false;
+      const key = holderKey(registration.client, registration.nativeSessionId);
+      await writeWakeRecord('holders', key, { kind: 'relay-session-holder', machine: hostname, client: registration.client,
+        unitId: registration.unitId, sessionId: registration.sessionId, nativeSessionId: registration.nativeSessionId, at: isoNow() });
+      return true;
     },
 
     async send(args = {}) {
@@ -1451,8 +1532,10 @@ export async function createRelay(options = {}) {
           const content = await readFile(file, 'utf8');
           const parsed = parseHeaders(`${content}\n\n`);
           const name = header(parsed.headers, 'unit') || path.basename(file, '.md');
-          if (!UNIT_PATTERN.test(name) || selected && name.toLowerCase() !== selected.toLowerCase()) continue;
-          const matching = registered.filter((item) => item.unit.toLowerCase() === name.toLowerCase() && item.scopeId === scope.id);
+          if (!UNIT_PATTERN.test(name) || selected && name.toLowerCase() !== selected.toLowerCase()
+            || scopeLock && canonicalUnitId(name, scope.id) !== registration.unitId) continue;
+          const matching = registered.filter((item) => item.unit.toLowerCase() === name.toLowerCase()
+            && (item.unitId ?? canonicalUnitId(item.unit, item.scopeId)) === canonicalUnitId(name, scope.id));
           units.push({
             unit: name, scope: scope.id, environment: scope.environment, project: scope.project,
             state: header(parsed.headers, 'state') || 'out', machine: header(parsed.headers, 'machine') || null,
@@ -1464,13 +1547,68 @@ export async function createRelay(options = {}) {
         }
       }
       for (const record of registered) {
-        if (selected && record.unit.toLowerCase() !== selected.toLowerCase()) continue;
-        if (units.some((item) => item.unit.toLowerCase() === record.unit.toLowerCase() && item.scope === record.scopeId)) continue;
+        if (selected && record.unit.toLowerCase() !== selected.toLowerCase()
+          || scopeLock && canonicalUnitId(record.unit, record.scopeId) !== registration.unitId) continue;
+        if (units.some((item) => canonicalUnitId(item.unit, item.scope) === (record.unitId ?? canonicalUnitId(record.unit, record.scopeId)))) continue;
         const matching = registered.filter((item) => item.unit.toLowerCase() === record.unit.toLowerCase() && item.scopeId === record.scopeId);
         units.push({ unit: record.unit, scope: record.scopeId, environment: null, project: null, state: null, machine: record.machine, date: null, currentWork: null,
           registeredSessions: matching.map(toPublicRegistration), active: latestActivity(matching, 'active'), busy: latestActivity(matching, 'busy'), quota: latestQuota(matching) });
       }
       return { units: units.sort((a, b) => a.unit.localeCompare(b.unit) || a.scope.localeCompare(b.scope)) };
+    },
+
+    // The status a chat asks for through MCP, whose tool output is bounded: by default counts, the caller's own unit and the
+    // units with unread messages, and the full entries of `status` only with `detail`, a page at a time.
+    async overview(args = {}) {
+      validateArgs(args, 'overview', ['unit', 'machine', 'detail', 'limit', 'offset']);
+      const machine = args.machine === undefined ? null : safeMachine(args.machine);
+      if (args.detail !== undefined && typeof args.detail !== 'boolean') throw relayError('INVALID_INPUT', 'detail must be a boolean.');
+      const limit = args.limit === undefined ? (args.detail ? 10 : 20) : args.limit;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw relayError('INVALID_LIMIT', 'limit must be an integer from 1 to 100.');
+      const offset = args.offset ?? 0;
+      if (!Number.isInteger(offset) || offset < 0) throw relayError('INVALID_INPUT', 'offset must be a whole number.');
+      let { units } = await relay.status(args.unit === undefined ? {} : { unit: validUnit(args.unit) });
+      if (machine !== null) {
+        units = units.map((item) => ({ ...item, registeredSessions: item.registeredSessions.filter((record) => record.machine === machine) }))
+          .filter((item) => item.registeredSessions.length || item.machine === machine);
+      }
+      const page = (items) => ({ total: items.length, offset, limit, nextOffset: offset + limit < items.length ? offset + limit : null });
+      const publicEntry = entry => scopeLock ? Object.fromEntries(Object.entries(entry).filter(([key]) => !['nativeSessionId', 'hostSessionId', 'instanceId'].includes(key))) : entry;
+      if (args.detail) return { units: units.slice(offset, offset + limit).map(item => ({ ...item, registeredSessions: item.registeredSessions.map(publicEntry) })), ...page(units) };
+      const { scopes } = await routesAndScopes();
+      let self = null;
+      try { self = await currentIdentity(); } catch { /* a session with simultaneous registrations has no single unit to show */ }
+      const summaries = [];
+      for (const item of units) {
+        const scope = scopes.find((candidate) => candidate.id === item.scope);
+        let inbox = { messages: [], unread: 0 };
+        if (scope && item.state !== null) {
+          try { inbox = await unreadInbox(item.unit, scope, MAX_LIST_LIMIT); } catch (error) { if (!isTransientFsError(error)) throw error; }
+        }
+        const [newest] = [...item.registeredSessions].sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)));
+        summaries.push({
+          unit: item.unit, scope: item.scope, state: item.state, machine: item.machine, unread: inbox.unread,
+          // A message that asks for a reply waits for this unit.
+          waiting: inbox.messages.filter((message) => message.replyRequested).length,
+          sessions: item.registeredSessions.length,
+          newest: newest ? { ...(scopeLock ? {} : { nativeSessionId: newest.nativeSessionId }), client: newest.client, machine: newest.machine, registeredAt: newest.registeredAt } : null,
+        });
+      }
+      const machines = {};
+      for (const item of units) for (const record of item.registeredSessions) machines[record.machine] = (machines[record.machine] ?? 0) + 1;
+      const attention = summaries.filter((item) => item.unread || item.waiting)
+        .sort((a, b) => b.waiting - a.waiting || b.unread - a.unread || a.unit.localeCompare(b.unit));
+      const own = self && summaries.find((item) => canonicalUnitId(item.unit, item.scope) === (self.unitId ?? canonicalUnitId(self.unit, self.scopeId)));
+      return {
+        counts: {
+          units: units.length, registeredUnits: units.filter((item) => item.registeredSessions.length).length,
+          registrations: Object.values(machines).reduce((sum, count) => sum + count, 0), machines,
+          unread: summaries.reduce((sum, item) => sum + item.unread, 0), waiting: summaries.reduce((sum, item) => sum + item.waiting, 0),
+        },
+        self: own ? { ...own, registration: publicEntry(toPublicRegistration(self)) } : null,
+        attention: attention.slice(offset, offset + limit), ...page(attention),
+        more: 'Pass detail: true for every unit with its registrations, a page at a time through limit and offset, and unit or machine to narrow it.',
+      };
     },
 
     async events(args = {}) {
@@ -1503,6 +1641,26 @@ export async function createRelay(options = {}) {
       const events = [...byId.values()].filter((event) => !bound || String(event.from ?? '').toLowerCase() === bound || String(event.to ?? '').toLowerCase() === bound)
         .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
       return { events: events.slice(-limit) };
+    },
+
+    /** The registration this instance answers for, or null when it has none or more than one. */
+    async identity() {
+      try {
+        const registration = await currentIdentity();
+        return registration ? toPublicRegistration(registration) : null;
+      } catch (error) { if (error?.code === 'AMBIGUOUS_SESSION') return null; throw error; }
+    },
+
+    /** The newest registration on this machine of a client's host conversation, or null. */
+    async hostRegistration(args = {}) {
+      validateArgs(args, 'hostRegistration', ['hostSessionId', 'client', 'excludeNativeSessionId']);
+      const hostSessionId = scalar(args.hostSessionId, 'hostSessionId', 180);
+      const client = args.client === undefined ? defaultClient : scalar(args.client, 'client', 80);
+      const exclude = args.excludeNativeSessionId === undefined ? null : scalar(args.excludeNativeSessionId, 'excludeNativeSessionId', 180);
+      const newest = (await registrations()).filter((record) => record.hostSessionId === hostSessionId && record.client === client && record.machine === hostname
+        && record.nativeSessionId !== exclude)
+        .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
+      return newest ? toPublicRegistration(newest) : null;
     },
 
     async reminder(args = {}) {
@@ -1551,6 +1709,75 @@ export async function createRelay(options = {}) {
   };
 
   let currentRegistration = scopeLock && options.pinnedRegistration ? options.pinnedRegistration : null;
+
+  function holderKey(client, nativeSessionId) {
+    return createHash('sha256').update(JSON.stringify(['relay-session-holder', hostname, client, nativeSessionId])).digest('hex');
+  }
+
+  // A recent observation retains a session; retirement additionally requires a verified native closure.
+  // An unreadable or unknown connection is retained, and the shared owner PID is never a chat identity.
+  async function sessionLive(records, now) {
+    const recent = (at) => typeof at === 'string' && now - Date.parse(at) < OBSERVATION_MAX_AGE_MS;
+    if (records.some((item) => recent(item.registeredAt) || recent(item.activityObservedAt))) return true;
+    const [{ client, nativeSessionId }] = records;
+    if (typeof client !== 'string') return false;
+    try {
+      const holder = await readWakeRecord('holders', holderKey(client, nativeSessionId));
+      const live = typeof options.sessionLive === 'function' ? await options.sessionLive(toPublicRegistration(records[0])) : null;
+      if (live !== false) return true;
+      if (holder?.kind === 'relay-session-holder' && holder.sessionId !== toPublicRegistration(records[0]).sessionId) return true;
+      for (const unit of new Set(records.map((item) => item.unit))) {
+        const key = createHash('sha256').update(JSON.stringify([unit, nativeSessionId, client, hostname])).digest('hex');
+        const policy = await readWakeRecord('policies', key);
+        if (recent(policy?.activity?.observedAt) || recent(policy?.startedAt)) return true;
+        const lease = await readWakeRecord('workers', key);
+        if (lease?.expiresAt > now && typeof options.sessionLive !== 'function') return true;
+      }
+    } catch { return true; }
+    return false;
+  }
+
+  // A new registration of a unit retires the older registrations of the same unit on this machine whose sessions show no
+  // sign of life, so they stop piling up in every listing and no wake follows them. Another machine's records, another
+  // unit's and those of a live session are left alone. The files move to sessions/retired, where they stay readable.
+  async function retireStale(record) {
+    const now = Date.now();
+    const sessions = new Map();
+    for (const item of await registrations()) {
+      if (item.machine !== hostname || item.client === record.client && item.nativeSessionId === record.nativeSessionId) continue;
+      const key = sessionKey(item.machine, item.client, item.nativeSessionId);
+      if (!sessions.has(key)) sessions.set(key, []);
+      sessions.get(key).push(item);
+    }
+    const retiredPath = path.join(sessionsPath, 'retired');
+    const retired = [];
+    for (const records of sessions.values()) {
+      const stale = records.filter((item) => (item.unitId && record.unitId ? item.unitId === record.unitId
+        : canonicalUnitId(item.unit, item.scopeId).toLowerCase() === canonicalUnitId(record.unit, record.scopeId).toLowerCase())
+        && String(item.registeredAt) < record.registeredAt);
+      if (!stale.length || await sessionLive(records, now)) continue;
+      await ensureDirectory(mindPath, retiredPath);
+      for (const item of stale) {
+        const source = path.join(sessionsPath, `${item.registrationId}.json`);
+        const destination = path.join(retiredPath, `${item.registrationId}.json`);
+        try {
+          await safePath(mindPath, source, { missing: false });
+          await safePath(mindPath, destination);
+          if (await lstatOrNull(destination)) continue;
+          if (scopeLock && typeof options.commitFile === 'function') {
+            const bytes = await readRegularFileSafe(mindPath, source);
+            if (!bytes) continue;
+            await options.commitFile(destination, bytes);
+            if (!(await readRegularFileSafe(mindPath, source))?.equals(bytes)) continue;
+            await unlink(source);
+          } else await rename(source, destination);
+          retired.push(item.registrationId);
+        } catch (error) { if (!isMissingPath(error) && !isTransientFsError(error)) throw error; }
+      }
+      if (typeof records[0].client === 'string') await removeWakeRecord('holders', holderKey(records[0].client, records[0].nativeSessionId)).catch(() => {});
+    }
+    return retired;
+  }
 
   async function requireRegistration() {
     const registration = await currentIdentity();

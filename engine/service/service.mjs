@@ -16,6 +16,7 @@ import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs
 import { createRelay, parseRoutes } from '../relay/store.mjs';
 import { machineRecordPath, parseMachineRecord } from '../records.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
+import { carryNativeConversation } from './mcp.mjs';
 import { closeBridge, createNativeLaunch, dispatchLocal, handleNativeHook, handleRelayPolicy, initializeNativeEntry, openBridge } from './bridge.mjs';
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, verifyBootstrapFiles, wakeBindingLive } from './security.mjs';
@@ -150,6 +151,9 @@ export async function startService(options, retained = null) {
       sync: handle.runtime.sync,
       pulse: handle.runtime.pulse,
       adapters: handle.adapters.adapters,
+      wake: { ...options.wake,
+        touch: binding => handle.adopted?.controller?.wake.touch(binding),
+        takeOver: binding => handle.adopted?.controller?.wake.takeOver(binding) },
       settingsOwner: handle.runtime.settingsOwner,
       additionOwner: handle.runtime.settingsOwner,
       receiptPrincipals: handle.receiptPrincipals,
@@ -163,6 +167,11 @@ export async function startService(options, retained = null) {
       binding,
     });
     handle.bridge.adoptWake = binding => handle.adopted?.controller?.wake.adopt(binding);
+    handle.bridge.carryConversation = (binding, hostSessionId) => carryNativeConversation({
+      store: options.store, paths, now: options.now, adapters: handle.adapters.adapters,
+      ownedPids: options.ownedPids, sync: handle.runtime.sync, pulse: handle.runtime.pulse,
+      wake: handle.adopted?.controller?.wake,
+    }, binding, hostSessionId);
     handle.bridge.operations.policy = binding => handleRelayPolicy({
       controller: handle.adopted?.controller?.wake,
       bridge: handle.bridge,
@@ -707,6 +716,11 @@ function mergePolicy(left, right) {
   }
   return { ...left, startedAt: earlier(left.startedAt, right.startedAt), deadlineAt: deadline,
     wakeCount, maxHandoffs: wakeCount + remaining, deliveries,
+    maxDailyHandoffs: Math.min(left.maxDailyHandoffs ?? 200, right.maxDailyHandoffs ?? 200),
+    day: !left.day && !right.day ? undefined : left.day?.date === right.day?.date
+      ? { ...left.day, count: Math.max(left.day?.count ?? 0, right.day?.count ?? 0),
+        ...(left.day?.noticeAt || right.day?.noticeAt ? { noticeAt: earlier(left.day?.noticeAt, right.day?.noticeAt) } : {}) }
+      : String(left.day?.date ?? '') >= String(right.day?.date ?? '') ? left.day : right.day,
     enabled: left.enabled === true && right.enabled === true, pausedReason: left.pausedReason ?? right.pausedReason,
     unlimited: left.unlimited === true && right.unlimited === true && !deadline, extended: left.extended === true && right.extended === true };
 }
