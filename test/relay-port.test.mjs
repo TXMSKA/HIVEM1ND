@@ -246,7 +246,7 @@ async function until(predicate) {
 }
 
 test('the source manifest classifies every enumerated commit and restores each source regression suite with 3.0 metadata retained', async () => {
-  const text = await readFile(new URL(import.meta.url), 'utf8');
+  const text = (await readFile(new URL(import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
   const manifest = JSON.parse(text.slice(text.indexOf('\n[\n') + 1, text.indexOf('\n*/')));
   assert.equal(manifest.length, 11);
   assert.equal(new Set(manifest.map(entry => entry.hash)).size, 11);
