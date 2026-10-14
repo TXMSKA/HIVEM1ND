@@ -506,3 +506,18 @@ export function dragNodeGeometry(node, dx, dy, corner = null) {
   if (north) result.place.y += node.h - result.h;
   return result;
 }
+export function handStrokeNode(id, points, color, marker = false) {
+  if (!Array.isArray(points) || points.length < 2 || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    throw new RangeError('A stroke needs at least two finite points.');
+  }
+  if (!/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(color)) throw new RangeError('Invalid stroke color.');
+  const minX = Math.min(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const width = Math.max(1, Math.max(...points.map((point) => point.x)) - minX);
+  const height = Math.max(1, Math.max(...points.map((point) => point.y)) - minY);
+  const d = points.map((point, index) => (index === 0 ? 'M' : 'L')
+    + ((point.x - minX) * 100 / width).toFixed(3) + ' ' + ((point.y - minY) * 100 / height).toFixed(3)).join(' ');
+  return { id, name: marker ? 'Marker stroke' : 'Pen stroke', t: 'vector', kind: 'pen',
+    place: { x: minX, y: minY }, w: width, h: height, d, fill: 'none', stroke: color,
+    strokeWidth: 2.2, opacity: 1 };
+}
