@@ -149,6 +149,17 @@ test('removeMind keeps the mind when another machine record exists, but this mac
   await lstat(path.join(fixture.mindPath, 'user', 'machines', 'OTHERBOX.md'));
 });
 
+test('uninstall removes the local setup checkpoint, so a later setup of the same M1ND starts again', async (context) => {
+  const fixture = await makeFixture(context);
+  await installFixture(fixture);
+  const options = { kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', language: 'en', env: { PATH: '' } };
+  assert.equal((await (await createSetupSession(options)).getStep()).id, 'ready');
+
+  const result = await uninstall({ mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' } });
+  assert.ok(result.removed.some((file) => path.basename(file) === 'setup.json'));
+  assert.equal((await (await createSetupSession(options)).getStep()).id, 'install');
+});
+
 test('running uninstall twice is harmless', async (context) => {
   const fixture = await makeFixture(context);
   await installFixture(fixture);

@@ -5,9 +5,12 @@ import { loadAdapters, resolveAdapterPaths } from './discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine } from './install.mjs';
 import { atomicWriteFile, hashContent, machineManagedPath, machineReportPath, readMachineRecord } from './records.mjs';
 import { removeOwnedRegistration } from './service/install.mjs';
+import { defaultMind, mindKeyFor } from './service/paths.mjs';
 
 const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
 const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
+// Setup keeps its checkpoint, proof and draft for one M1ND in this machine's local service folder.
+const SETUP_STATE_FILES = ['setup.json', 'setup-proof.json', 'setup-draft.json'];
 
 export async function uninstall(options = {}) {
   const mindPath = path.resolve(requireValue(options.mindPath, 'mindPath'));
@@ -47,6 +50,10 @@ export async function uninstall(options = {}) {
     const stop = options.stopService ?? (await import('./service/service.mjs')).stopConfiguredService;
     await stop({ ...options, mindPath, hostname, env, homeDir });
   }
+  // A checkpoint left behind would reopen a later setup of this M1ND at Ready with nothing installed.
+  const setupState = await removeSetupState({ mindPath, hostname, env, homeDir, cosmicPath: options.cosmicPath, dryRun });
+  removed.push(...setupState.removed);
+  kept.push(...setupState.kept);
 
   const managedFiles = record.managedFiles ?? {};
   const cleanupDirectories = new Set();
@@ -117,6 +124,31 @@ export async function uninstall(options = {}) {
   }
 
   return { action: 'uninstall', removed, updated, kept, relay, warnings };
+}
+
+// The folder is the one setup writes: an explicit Cosmic root, or the parent of the default M1ND.
+async function removeSetupState({ mindPath, hostname, env, homeDir, cosmicPath, dryRun }) {
+  const result = { removed: [], kept: [] };
+  let cosmic;
+  try {
+    cosmic = cosmicPath ? path.resolve(cosmicPath) : path.dirname(defaultMind({ platform: process.platform, env, home: homeDir }));
+  } catch (error) {
+    if (error?.code === 'invalid_path') return result;
+    throw error;
+  }
+  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mindPath, process.platform), hostname);
+  for (const name of SETUP_STATE_FILES) {
+    const file = path.join(directory, name);
+    if (await findSymlinkAncestor(file)) {
+      if (await lstatIfPresent(file)) result.kept.push({ path: file, reason: SYMLINK_REASON });
+      continue;
+    }
+    const state = await lstatIfPresent(file);
+    if (!state?.isFile()) continue;
+    if (!dryRun) await removeFile(file);
+    result.removed.push(file);
+  }
+  return result;
 }
 
 // A stable kit or legacy mind copy is owned only when its explicit mind argument matches this mind.
