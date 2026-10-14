@@ -2,7 +2,8 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
@@ -1694,6 +1695,63 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(port, 'DELETE', previewTarget, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 204, 'cancel addition preview'); hit('DELETE', '/additions/previews/:previewId');
   const disposableUpload = await call(port, 'POST', '/api/v1/additions/uploads', { token, body: { machine: fixture.machine, name: 'other' }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(await call(port, 'DELETE', `/api/v1/additions/uploads/${disposableUpload.json.data.uploadId}`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 204, 'cancel addition upload'); hit('DELETE', '/additions/uploads/:uploadId');
+  const archiveChunks = [];
+  for (const [relative, content] of [['LICENSE', 'MIT License\n'], ['SKILL.md', '---\nname: pdf\nruntime: none\n---\n# PDF\n']]) {
+    const data = Buffer.from(content), header = Buffer.alloc(512);
+    header.write(`package/${relative}`, 0, 100); header.write('0000644\0', 100);
+    header.write('0000000\0', 108); header.write('0000000\0', 116);
+    header.write(data.length.toString(8).padStart(11, '0') + '\0', 124); header.write('00000000000\0', 136);
+    header.fill(32, 148, 156); header[156] = 48; header.write('ustar\0', 257);
+    header.write([...header].reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0') + '\0 ', 148);
+    archiveChunks.push(header, data, Buffer.alloc((512 - data.length % 512) % 512));
+  }
+  const archive = gzipSync(Buffer.concat([...archiveChunks, Buffer.alloc(1024)]));
+  const additionOwner = core.runtime.settingsOwner;
+  additionOwner.additionLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  additionOwner.additionTransport = async url => ({ status: 200, bytes: url.pathname.includes('/commits/')
+    ? Buffer.from(JSON.stringify({ sha: 'a'.repeat(40), commit: { committer: { date: '2026-10-01T00:00:00.000Z' } } })) : archive });
+  additionOwner.additionRunner = async (command, args, options, input) => {
+    assert.equal(command, 'git'); assert.ok(args.includes('hash-object')); assert.equal(options.shell, false);
+    return Buffer.from(createHash('sha1').update(`blob ${input.length}\0`).update(input).digest('hex') + '\n');
+  };
+  const acceptancePreview = await call(port, 'POST', '/api/v1/additions/previews', { token,
+    body: { machine: fixture.machine, source: { kind: 'git', url: 'https://github.com/acme/example' }, updateOf: null }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(acceptancePreview, 202, 'inspect accepted addition');
+  await additionOwner.additionJobs.get(acceptancePreview.json.data.id)?.promise;
+  const reviewedAddition = await call(port, 'GET', `/api/v1/additions/previews/${acceptancePreview.json.data.id}`, { token });
+  expectStatus(reviewedAddition, 200, 'review accepted addition');
+  const readyAddition = reviewedAddition.json.data;
+  assert.equal(readyAddition.state, 'ready');
+  const candidate = readyAddition.candidates.find(item => item.kind === 'skill');
+  assert.equal(candidate.check.eligible, true);
+  const acceptanceBody = { machine: fixture.machine, previewId: readyAddition.id,
+    selections: [{ candidateId: candidate.id, scope: { everyUnit: false, units: ['root:executor'], groups: [] } }],
+    expectedContentRevision: readyAddition.contentRevision, expectedProjectRevision: readyAddition.projectRevision, confirmed: true };
+  for (const denied of [phone.token, agent.token]) {
+    const response = await call(port, 'POST', '/api/v1/additions', { token: denied, body: acceptanceBody, headers: { 'idempotency-key': randomUUID() } });
+    expectStatus(response, 403, 'addition acceptance authority'); assert.equal(response.json.error.code, 'forbidden');
+  }
+  const acceptedAddition = await call(port, 'POST', '/api/v1/additions', { token, body: acceptanceBody, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(acceptedAddition, 201, 'accept addition'); hit('POST', '/additions');
+  assert.equal(acceptedAddition.json.data.items.length, 1);
+  const addition = acceptedAddition.json.data.items[0];
+  const additionList = await call(port, 'GET', '/api/v1/additions', { token });
+  expectStatus(additionList, 200, 'read additions'); hit('GET', '/additions');
+  assert.deepEqual(additionList.json.data.items, [addition]);
+  const additionTarget = `/api/v1/additions/${addition.id}`;
+  const removalInput = { machine: fixture.machine, confirmed: true, expectedRevision: addition.revision };
+  for (const denied of [phone.token, agent.token]) {
+    const read = await call(port, 'GET', '/api/v1/additions', { token: denied });
+    expectStatus(read, 403, 'addition list authority'); assert.equal(read.json.error.code, 'forbidden');
+    const remove = await call(port, 'DELETE', additionTarget, { token: denied, body: removalInput, headers: { 'idempotency-key': randomUUID() } });
+    expectStatus(remove, 403, 'addition removal authority'); assert.equal(remove.json.error.code, 'forbidden');
+  }
+  const removedAddition = await call(port, 'DELETE', additionTarget, { token, body: removalInput, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(removedAddition, 200, 'remove addition'); hit('DELETE', '/additions/:additionId');
+  assert.equal(removedAddition.json.data.additionId, addition.id);
+  const remainingAdditions = await call(port, 'GET', '/api/v1/additions', { token });
+  expectStatus(remainingAdditions, 200, 'read additions after removal');
+  assert.deepEqual(remainingAdditions.json.data.items, []);
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');
