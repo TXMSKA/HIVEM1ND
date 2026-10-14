@@ -60,15 +60,20 @@ test('home grants expire exactly, revoke tokens and hide secrets', async (t) => 
   const phone = await exchange(context, { code: grant.shortCode.toLowerCase() }, '192.168.1.23');
   assert.equal(phone.expiresAt, grant.expiresAt);
   await assert.rejects(() => exchange(context, { key: 'wrong-key' }, '192.168.1.23'), (error) => error.code === 'invalid_home_key');
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await assert.rejects(() => exchange(context, { code: 'ZZZZZZ' }, '192.168.1.40'), (error) => error.code === 'invalid_home_key');
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await assert.rejects(() => exchange(context, { code: '000000' }, '192.168.1.40'), { status: 401, code: 'invalid_home_key', details: { triesLeft: 4 - attempt } });
   }
-  await assert.rejects(() => exchange(context, { code: 'ZZZZZZ' }, '192.168.1.40'), (error) => error.code === 'auth_rate_limited');
-  await openHome(context, {});
+  const lockedUntil = new Date(fixture.clock.now + 600000).toISOString();
+  await assert.rejects(() => exchange(context, { code: '000000' }, '192.168.1.40'), {
+    status: 429, code: 'pairing_locked', details: { triesLeft: 0, lockedUntil }, retryAt: lockedUntil,
+  });
+  await assert.rejects(() => exchange(context, { code: grant.shortCode }, '192.168.1.40'), { status: 429, code: 'pairing_locked' });
+  const replacement = await openHome(context, {});
   await assert.rejects(async () => credentials.verify(phone.token), (error) => error.status === 401);
-  const second = await exchange(context, { key: context.grant.key }, '192.168.1.23');
-  await assert.rejects(() => exchange(context, { code: context.grant.shortCode }, '192.168.1.40'), { code: 'auth_rate_limited' });
-  const liveKey = context.grant.key;
+  const second = await exchange(context, { key: replacement.key }, '192.168.1.23');
+  await assert.rejects(() => exchange(context, { code: '000000' }, '192.168.1.40'), { status: 401, code: 'invalid_home_key', details: { triesLeft: 4 } });
+  assert.equal((await exchange(context, { code: replacement.shortCode }, '192.168.1.40')).audience, 'phone');
+  const liveKey = replacement.key;
   advanceClock(fixture, 43200000);
   await assert.rejects(() => exchange(context, { key: liveKey }, '192.168.1.23'), { code: 'home_expired' });
   await assert.rejects(async () => credentials.verify(second.token), { status: 401, code: 'invalid_session' });
@@ -154,6 +159,10 @@ test('the home listener is the shared dispatcher and a correct key stays blocked
     await assert.rejects(() => exchange(context, { key: 'wrong-key' }, '192.168.1.40'), { code: 'invalid_home_key' });
   }
   await assert.rejects(() => exchange(context, { key: grant.key }, '192.168.1.40'), { code: 'auth_rate_limited' });
+  for (let peer = 41; peer <= 65; peer += 1) {
+    await assert.rejects(() => exchange(context, { code: '000000' }, `192.168.1.${peer}`), { code: 'invalid_home_key' });
+  }
+  await assert.rejects(() => exchange(context, { code: grant.shortCode }, '192.168.1.66'), { status: 429, code: 'auth_rate_limited' });
   await closeHome(context);
 });
 
