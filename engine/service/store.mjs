@@ -675,7 +675,9 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
   const undoUntil = new Date(context.now() + 10000).toISOString();
   const record = { format: 'hivem1nd-change-undo-v1', id, permission, resourceIds, undoUntil, undone: false,
     entries: entries.map((entry) => {
-      const project = entry.recordPath ? context.store.projects.find((item) => isInside(item.localPath, entry.recordPath)) : null;
+      // A record inside the M1ND stays a M1ND record even when a registered project folder contains the M1ND.
+      const mindRecord = (item) => Boolean(context.store.mindPath) && isInside(context.store.mindPath, entry.recordPath) && isInside(item.localPath, context.store.mindPath);
+      const project = entry.recordPath ? context.store.projects.find((item) => isInside(item.localPath, entry.recordPath) && !mindRecord(item)) : null;
       const target = entry.target ?? (project ? { kind: 'project', project: project.name, path: path.relative(project.localPath, entry.recordPath).replaceAll('\\', '/') } : null);
       return { resource: target ? `project:${target.project}:${target.path}` : entry.resource, recordPath: entry.recordPath, target,
         afterRevision: entry.operation === 'delete' ? null : revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null };
