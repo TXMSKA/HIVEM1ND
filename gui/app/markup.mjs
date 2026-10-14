@@ -111,3 +111,15 @@ export function rangeRequest(editor, k, lang, start, end, replacement) {
   return { k, lang, start, end, expectedText: source.slice(start, end), replacement,
     expectedRevision: editor.revision };
 }
+
+export function plainCaretFromSource(tokens, offset) {
+  if (!Number.isInteger(offset) || offset < 0) return null;
+  for (const token of tokens) {
+    if (offset < token.sourceStart) return token.plainStart;
+    if (offset <= token.sourceEnd) {
+      if (token.type !== 'text') return token.plainStart;
+      return token.plainStart + Math.min(offset - token.sourceStart, token.plainEnd - token.plainStart);
+    }
+  }
+  return offset === (tokens.at(-1)?.sourceEnd ?? 0) ? tokens.at(-1)?.plainEnd ?? 0 : null;
+}
