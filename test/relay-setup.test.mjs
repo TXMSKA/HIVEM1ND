@@ -163,13 +163,14 @@ test('a client whose config cannot be read is reported as failed and left untouc
 test('Antigravity counts as configured only for rules that name this mind', async (context) => {
   const { homeDir, mindPath, env } = await fixture(context, ['agy']);
   const otherMind = path.join(path.dirname(mindPath), 'other-mind');
-  await ensureRelayClients({ homeDir, env, kitPath: otherMind, mindPath: otherMind });
+  assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: otherMind, mindPath: otherMind })).antigravity, 'configured');
   assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath: otherMind }), true);
   assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath }), false);
 
   const results = await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath });
   assert.equal(statuses(results).antigravity, 'configured');
   assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath }), true);
+  assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath: otherMind }), true);
   assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: mindPath, mindPath })).antigravity, 'already-configured');
 });
 
@@ -198,7 +199,8 @@ async function simpleInstall(context, executables, extra = {}) {
 // reviewed client apply writes the Relay entries, through the same configuration of the stable kit CLI.
 async function installWithRelay(context, executables) {
   const installed = await simpleInstall(context, executables, { relaySetup: true });
-  await ensureRelayClients({ homeDir: installed.homeDir, env: installed.env, kitPath: KIT_PATH, mindPath: installed.mindPath });
+  const applied = await ensureRelayClients({ homeDir: installed.homeDir, env: installed.env, kitPath: KIT_PATH, mindPath: installed.mindPath });
+  for (const client of applied) assert.notEqual(client.status, 'failed', client.client);
   return installed;
 }
 
@@ -296,8 +298,20 @@ test('evolve configures a client that gained no entry yet, then only reports it'
 const uninstallOptions = ({ mindPath, homeDir, env }, extra = {}) => ({ mindPath, homeDir, hostname: 'TESTBOX', env, ...extra });
 
 test('uninstall removes the Relay entries that run this mind and keeps every foreign entry', async (context) => {
-  const installed = await installWithRelay(context, ['claude', 'codex']);
-  const { homeDir } = installed;
+  const installed = await simpleInstall(context, ['claude', 'codex'], { relaySetup: true });
+  const { homeDir, env, mindPath } = installed;
+  const codexFile = path.join(homeDir, '.codex', 'config.toml');
+  const originalCodex = '# keep this configuration\nmodel = "foreign-model"\n\n[mcp_servers.other]\ncommand = "other-server"\nargs = []\n';
+  await writeFile(codexFile, originalCodex);
+  const applied = await ensureRelayClients({ homeDir, env, kitPath: KIT_PATH, mindPath });
+  assert.equal(statuses(applied).claude, 'configured');
+  assert.equal(statuses(applied).codex, 'configured');
+  const codex = await readFile(codexFile, 'utf8');
+  assert.equal(codex.startsWith(originalCodex), true);
+  assert.match(codex, /\[mcp_servers\.hivem1nd-relay\]/);
+  assert.equal(await readFile(`${codexFile}.relay-backup`, 'utf8'), originalCodex);
+  const laterCodex = '\n[profiles.foreign]\nmodel = "later-model"\n';
+  await writeFile(codexFile, `${codex}${laterCodex}`);
   const claudeFile = path.join(homeDir, '.claude.json');
   const settingsFile = path.join(homeDir, '.claude', 'settings.json');
   const claude = JSON.parse(await readFile(claudeFile, 'utf8'));
@@ -319,7 +333,9 @@ test('uninstall removes the Relay entries that run this mind and keeps every for
   assert.equal(after.theme, 'dark');
   const hooks = JSON.parse(await readFile(settingsFile, 'utf8')).hooks;
   assert.deepEqual(hooks.SessionStart, [{ hooks: [{ type: 'command', command: 'echo foreign' }] }, foreignMindHook]);
-  assert.doesNotMatch(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /hivem1nd-relay/);
+  const restoredCodex = await readFile(codexFile, 'utf8');
+  assert.doesNotMatch(restoredCodex, /hivem1nd-relay/);
+  assert.equal(restoredCodex, `${originalCodex}${laterCodex}`);
 });
 
 test('uninstall leaves a Relay entry that runs another kit', async (context) => {
@@ -349,8 +365,9 @@ test('uninstall removes the Antigravity rules of this mind and keeps those of an
   const installed = await installWithRelay(context, ['agy']);
   const { homeDir, mindPath, env, root } = installed;
   const otherMind = path.join(root, 'other-mind');
-  await ensureRelayClients({ homeDir, env, kitPath: otherMind, mindPath: otherMind });
+  assert.equal(statuses(await ensureRelayClients({ homeDir, env, kitPath: otherMind, mindPath: otherMind })).antigravity, 'configured');
   assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath }), true);
+  assert.equal(await relayEntryPresent({ client: 'antigravity', homeDir, mindPath: otherMind }), true);
 
   const result = await uninstall(uninstallOptions(installed));
   assert.equal(statuses(result.relay).antigravity, 'removed');

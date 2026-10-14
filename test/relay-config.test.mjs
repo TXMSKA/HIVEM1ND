@@ -293,6 +293,46 @@ test('Antigravity configure adds only the kit relay read and send allow rules an
   assert.equal(await readFile(file, 'utf8'), original);
 });
 
+test('Antigravity keeps separate mind ownership through either disconnect order and an all-minds disconnect', async context => {
+  for (const order of [['mind-a', 'mind-b'], ['mind-b', 'mind-a'], []]) {
+    await context.test(order.length ? order.join(' then ') : 'all minds', async t => {
+      const root = await temp(t);
+      const opts = options(root, { client: 'antigravity' });
+      const file = clientConfigPaths(opts).mcp;
+      const stateFile = `${file}.relay-owned.json`;
+      const original = { permissions: { allow: ['command(git)'], deny: ['command(sudo)'] }, colorScheme: 'original' };
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify(original));
+      const first = { ...opts, mindPath: path.join(root, 'mind-a') };
+      const second = { ...opts, mindPath: path.join(root, 'mind-b') };
+      await configureRelayClient(first);
+      // Existing T052 ownership records identify their mind only at the top level.
+      const legacy = JSON.parse(await readFile(stateFile));
+      for (const entry of legacy.entries) delete entry.mindPath;
+      await writeFile(stateFile, JSON.stringify(legacy));
+      await configureRelayClient(second);
+      const edited = JSON.parse(await readFile(file));
+      const laterRule = 'command(foreign-tool)';
+      edited.permissions.allow.push(laterRule);
+      edited.colorScheme = 'later foreign edit';
+      await writeFile(file, JSON.stringify(edited));
+      const rules = mind => antigravityRulesFor(opts.kitPath, path.join(root, mind));
+      assert.deepEqual(edited.permissions.allow, [...original.permissions.allow, ...rules('mind-a'), ...rules('mind-b'), laterRule]);
+      if (order.length) {
+        await unconfigureRelayClient({ ...opts, mindPath: path.join(root, order[0]) });
+        const remaining = JSON.parse(await readFile(file));
+        assert.deepEqual(remaining.permissions.allow, [...original.permissions.allow, ...rules(order[1]), laterRule]);
+        assert.equal(remaining.colorScheme, edited.colorScheme);
+        await readFile(stateFile);
+        await unconfigureRelayClient({ ...opts, mindPath: path.join(root, order[1]) });
+      } else await unconfigureRelayClient({ client: 'antigravity', homeDir: root });
+      assert.deepEqual(JSON.parse(await readFile(file)), { ...original, permissions: { ...original.permissions, allow: [...original.permissions.allow, laterRule] }, colorScheme: edited.colorScheme });
+      assert.equal(await readFile(`${file}.relay-backup`, 'utf8'), JSON.stringify(original));
+      await assert.rejects(readFile(stateFile), { code: 'ENOENT' });
+    });
+  }
+});
+
 test('Antigravity unconfigure restores a file that had no permissions, keeps foreign rules and preserves JSONC comments', async (context) => {
   const root = await temp(context);
   const opts = { client: 'antigravity', homeDir: root, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') };

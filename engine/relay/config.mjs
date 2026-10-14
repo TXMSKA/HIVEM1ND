@@ -656,9 +656,11 @@ export async function configureRelayClient({ client, homeDir, env = process.env,
   if (changes.length) {
     const previous = await readConfigBytes(statePath);
     const state = previous ? JSON.parse(previous) : { client, mindPath: path.resolve(mindPath), entries: [] };
-    if (state.client !== client || state.mindPath !== path.resolve(mindPath)) throw configurationChanged();
+    if (state.client !== client || client !== 'antigravity' && state.mindPath !== path.resolve(mindPath)) throw configurationChanged();
+    if (client === 'antigravity') for (const entry of state.entries) entry.mindPath ??= state.mindPath;
     if (previous && !await relayEntryPresent({ client, homeDir, env })) state.entries = state.entries.filter(entry => entry.kind !== 'mcp');
-    state.entries.push(...changes.map(({ kind, before, after }) => ({ kind, before: before?.toString('base64') ?? null, after: after.toString('base64') })));
+    state.entries.push(...changes.map(({ kind, before, after }) => ({ kind, before: before?.toString('base64') ?? null, after: after.toString('base64'),
+      ...(client === 'antigravity' ? { mindPath: path.resolve(mindPath) } : {}) })));
     const applied = await applyClientConfigChanges([...changes, { path: statePath, root: targets.mcpRoot, before: previous, after: Buffer.from(`${JSON.stringify(state)}\n`), internal: true }], { protectFile, beforeWrite });
     return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: changes.map(item => item.path), backups: applied.backups };
   }
@@ -721,9 +723,11 @@ export async function unconfigureRelayClient({ client, homeDir, env = process.en
   if (stateBytes) {
     const state = JSON.parse(stateBytes);
     if (state.client !== client) throw configurationChanged();
-    if (mindPath !== undefined && state.mindPath !== path.resolve(mindPath)) return { client, paths: [], changed: [] };
+    if (client !== 'antigravity' && mindPath !== undefined && state.mindPath !== path.resolve(mindPath)) return { client, paths: [], changed: [] };
+    const entries = state.entries.filter(entry => client !== 'antigravity' || mindPath === undefined || (entry.mindPath ?? state.mindPath) === path.resolve(mindPath));
+    const retained = state.entries.filter(entry => !entries.includes(entry));
     const changes = new Map();
-    for (const entry of [...state.entries].reverse()) {
+    for (const entry of [...entries].reverse()) {
       if (!['mcp', 'hooks'].includes(entry.kind) || !targets[entry.kind]) throw configurationChanged();
       const file = targets[entry.kind];
       const current = changes.has(file) ? changes.get(file).after : await readConfigBytes(file);
@@ -731,11 +735,16 @@ export async function unconfigureRelayClient({ client, homeDir, env = process.en
       const after = restoreClientConfig({ client, kind: entry.kind, before: decode(entry.before), after: decode(entry.after), current });
       changes.set(file, { path: file, root: targets[`${entry.kind}Root`], before: changes.has(file) ? changes.get(file).before : current, after });
     }
-    if (client === 'antigravity' && changes.get(targets.mcp)?.after) {
-      const change = changes.get(targets.mcp);
-      change.after = Buffer.from(antigravityRemove(change.after.toString('utf8'), mindPath));
+    if (client === 'antigravity') {
+      const current = changes.has(targets.mcp) ? changes.get(targets.mcp).after : await readConfigBytes(targets.mcp);
+      if (current) {
+        const after = Buffer.from(antigravityRemove(current.toString('utf8'), mindPath));
+        if (!after.equals(current)) changes.set(targets.mcp, { path: targets.mcp, root: targets.mcpRoot,
+          before: changes.has(targets.mcp) ? changes.get(targets.mcp).before : current, after });
+      }
     }
-    await applyClientConfigChanges([...changes.values(), { path: statePath, root: targets.mcpRoot, before: stateBytes, after: null, internal: true }], { protectFile, beforeWrite });
+    const afterState = retained.length ? Buffer.from(`${JSON.stringify({ ...state, entries: retained })}\n`) : null;
+    await applyClientConfigChanges([...changes.values(), { path: statePath, root: targets.mcpRoot, before: stateBytes, after: afterState, internal: true }], { protectFile, beforeWrite });
     return { client, paths: [targets.mcp, ...(targets.hooks ? [targets.hooks] : [])], changed: [...changes.keys()] };
   }
   const mcpText = await readRegular(targets.mcp);
