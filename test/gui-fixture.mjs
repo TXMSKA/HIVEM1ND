@@ -1,10 +1,9 @@
 import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { boundaryInsideTag, plainText, validUtf16Boundary } from "../gui/app/markup.mjs";
-import { classifyApprovalAction } from "../engine/service/adapters.mjs";
 import {
   FIXTURE_HOME_CODE,
   FIXTURE_HOME_KEY,
@@ -1813,13 +1812,17 @@ function routeTable() {
     { pattern: "/waiting", GET: { query: ["q", "limit", "cursor", "unitId", "kind"] } },
     { pattern: "/settings", GET: { query: ["machine"] }, PATCH: { capability: "settings.write", validate: validateSettings } },
     { pattern: "/settings/agents", GET: { query: ["machine"] } },
+    { pattern: "/settings/agents/scan", POST: { capability: "settings.write", validate: settingsOperationValidator("scan") } },
+    { pattern: "/settings/agents/find", POST: { capability: "settings.write", validate: settingsOperationValidator("find") } },
     { pattern: "/settings/agents/:client/preview", POST: { capability: "settings.write", validate: clientReviewValidator("preview"), runtime: true } },
     { pattern: "/settings/agents/:client/apply", POST: { capability: "settings.write", validate: clientReviewValidator("apply") } },
     { pattern: "/settings/agents/:client", DELETE: { capability: "settings.write", validate: clientReviewValidator("disconnect") } },
     { pattern: "/settings/permissions", GET: { query: ["machine"] } },
     { pattern: "/settings/permissions/:permissionId", DELETE: { capability: "settings.write", validate: permissionRevokeValidator } },
     { pattern: "/settings/projects", GET: { query: ["machine"] } },
-    { pattern: "/settings/content", GET: { query: [] } },
+    { pattern: "/settings/content", GET: { query: [] }, PATCH: { capability: "settings.write", validate: validateContentSettings } },
+    { pattern: "/settings/service", PATCH: { capability: "settings.write", validate: settingsOperationValidator("service") } },
+    { pattern: "/settings/service/restart", POST: { capability: "settings.write", validate: settingsOperationValidator("restart") } },
     { pattern: "/settings/home-network", POST: { capability: "home.manage", validate: validateHome, runtime: true } },
     { pattern: "/viewer", GET: { capability: "viewer.write", query: [] }, PATCH: { capability: "viewer.write", validate: validateViewer, runtime: true } },
     { pattern: "/editors/register", POST: { capability: "editor.write", validate: validateRegister } },
@@ -1874,6 +1877,37 @@ function validateSettings(body) {
   revisionField(body.expectedRevision);
 }
 
+// The transport fixture classifies literal approvals without loading native adapters.
+function classifyApprovalAction(action, pattern) {
+  if (action === "git.commit" || action === "git.push") return { gitAction: action, desktopOnly: action === "git.push" };
+  if (action !== "process.run") return { gitAction: null, desktopOnly: false };
+  const command = pattern?.command;
+  const unsupported = () => { throw new HttpError(422, "unsupported_capability", "The command cannot be classified as one literal operation."); };
+  if (typeof command !== "string" || !command.trim() || command.length > 100000 || /[\u0000-\u0008\u000a-\u001f\u007f\u2028\u2029]/.test(command)) unsupported();
+  const tokens = command.match(/"[^"\r\n]*"|'[^'\r\n]*'|[^\s"']+/g) ?? [];
+  if (tokens.join(" ").replace(/\s+/g, " ") !== command.trim().replace(/\s+/g, " ")) unsupported();
+  const argv = tokens.map(token => {
+    const quoted = token[0] === '"' || token[0] === "'";
+    if (/[;&|<>`$^()%{}]/.test(token) || !quoted && token.includes("#")) unsupported();
+    const value = quoted ? token.slice(1, -1) : token;
+    if (value.includes("\\") && !/^[A-Za-z]:\\/.test(value)) unsupported();
+    return value;
+  });
+  const executable = argv.shift()?.replaceAll("\\", "/").split("/").at(-1).toLowerCase();
+  if (/^(?:sh|bash|zsh|fish|cmd|powershell|pwsh|env|call|start|command|exec|sudo|nohup|nice|time|xargs|eval)(?:\.exe)?$/.test(executable) || executable?.includes("=")) unsupported();
+  if (/^git\.(?:cmd|bat)$/.test(executable)) unsupported();
+  if (!["git", "git.exe"].includes(executable)) return { gitAction: null, desktopOnly: false };
+  while (argv[0]?.startsWith("-")) {
+    if (["-C", "--git-dir", "--work-tree"].includes(argv[0]) && argv[1] && !argv[1].startsWith("-")) argv.splice(0, 2);
+    else if (/^--(?:git-dir|work-tree)=.+$/.test(argv[0]) || ["--no-pager", "--no-optional-locks"].includes(argv[0])) argv.shift();
+    else unsupported();
+  }
+  const operation = argv.shift();
+  if (!["push", "commit", "status", "diff", "log", "show", "fetch", "pull", "checkout", "switch", "branch", "add", "restore", "reset", "merge", "rebase", "rev-parse", "ls-files", "ls-remote", "clone", "init", "tag"].includes(operation)) unsupported();
+  const gitAction = ["push", "commit"].includes(operation) ? `git.${operation}` : null;
+  return { gitAction, desktopOnly: gitAction === "git.push" };
+}
+
 function clientReviewValidator(operation) {
   return body => {
     const fields = operation === "preview" ? ["machine", "mode", "target", "allowGit"] : operation === "apply" ? ["machine", "previewId", "changeIds", "expectedRevision"] : ["machine", "confirmed", "expectedRevision"];
@@ -1893,6 +1927,81 @@ function permissionRevokeValidator(body) {
   if (typeof body.machine !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
   revisionField(body.expectedRevision);
   if (body.expectedRevision === null) throw new HttpError(422, "invalid_body", "An existing revision is required.");
+}
+
+function settingsOperationValidator(operation) {
+  return body => {
+    const fields = operation === "find" ? ["machine", "client", "path"] : operation === "service" ? ["machine", "startWithWindows", "expectedRevision"] : ["machine"];
+    requireObject(body, fields); requireKeys(body, fields);
+    if (typeof body.machine !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+    if (operation === "find" && (typeof body.path !== "string" || !isAbsolute(body.path) || !["claude", "codex", "cursor", "opencode", "copilot"].includes(body.client))) throw new HttpError(422, "invalid_path", "An installed known client path is required.");
+    if (operation === "service") {
+      revisionField(body.expectedRevision);
+      if (typeof body.startWithWindows !== "boolean") throw new HttpError(422, "invalid_body", "Start with Windows must be boolean.");
+    }
+  };
+}
+
+function validateContentSettings(body) {
+  const fields = ["includedFeatures", "includedKnowledge", "preferences", "expectedRevision"];
+  requireObject(body, fields); requireKeys(body, fields); revisionField(body.expectedRevision);
+  const preferenceFields = ["addressStyle", "additionalInstructions", "keepExistingPreferencesFirst", "updateChecks"];
+  requireObject(body.preferences, preferenceFields); requireKeys(body.preferences, preferenceFields);
+  const preferences = body.preferences;
+  if (!["impersonal", "formal", "explanatory"].includes(preferences.addressStyle) || typeof preferences.additionalInstructions !== "string" || preferences.additionalInstructions.length > 64000
+    || preferences.additionalInstructions.includes("\0") || typeof preferences.keepExistingPreferencesFirst !== "boolean" || !["daily", "off"].includes(preferences.updateChecks)
+    || [body.includedFeatures, body.includedKnowledge].some(items => !Array.isArray(items) || items.length > 1024 || items.some(id => typeof id !== "string") || new Set(items).size !== items.length)) throw new HttpError(422, "invalid_body", "The Content preferences are not valid.");
+}
+
+async function prepareContentSettings(fx, body) {
+  const snap = await projection(fx);
+  const current = await readData(fx, snap, { pattern: "/settings/content", principal: { audience: "desktop" } }, {}, new URLSearchParams());
+  if (current.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The Content selection changed.");
+  for (const [field, catalog] of [["includedFeatures", current.features], ["includedKnowledge", current.knowledge]]) {
+    if (body[field].some(id => !catalog.some(item => item.id === id))) throw new HttpError(422, "invalid_body", "An included item does not exist.");
+  }
+  const file = join(fx.tree.user, "gui", "content.json");
+  const source = await readOptional(file);
+  const payload = Buffer.from(stableJson({ format: "hivem1nd-content-settings-v1", includedFeatures: body.includedFeatures, includedKnowledge: body.includedKnowledge, preferences: body.preferences }));
+  const preferenceFile = join(fx.tree.user, "preferences.md"), previous = await readOptional(preferenceFile);
+  const block = value => `<!-- HIVEM1ND Settings preferences -->\nAddress style: ${value.addressStyle}\nKeep existing preferences first: ${value.keepExistingPreferencesFirst ? "yes" : "no"}\nCheck for updates: ${value.updateChecks}\n\n${value.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
+  let text = previous?.toString("utf8") ?? "";
+  if (source) {
+    const owned = block(JSON.parse(source).preferences);
+    if (!text.includes(owned)) throw new HttpError(409, "configuration_changed", "The managed preference text changed.");
+    text = text.replace(owned, "");
+  }
+  const owned = block(body.preferences);
+  const preferenceBytes = Buffer.from(body.preferences.keepExistingPreferencesFirst ? `${text}${text && !text.endsWith("\n") ? "\n" : ""}${owned}` : `${owned}${text}`);
+  const revision = sha256(payload);
+  return { status: 200, data: { revision, features: current.features.map(item => ({ ...item, included: body.includedFeatures.includes(item.id) })),
+    knowledge: current.knowledge.map(item => ({ ...item, included: body.includedKnowledge.includes(item.id) })), preferences: body.preferences },
+    writes: [fixtureWrite(file, source, payload), fixtureWrite(preferenceFile, previous, preferenceBytes)],
+    events: [{ name: "settings.content.changed", global: true, data: { revision } }] };
+}
+
+async function prepareMachineSettings(fx, operation, body) {
+  if (body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "The selected machine is unavailable.");
+  if (operation === "restart") return { status: 202, data: { machine: body.machine, state: "restarting" }, writes: [], events: [] };
+  if (operation === "service") {
+    const file = join(fx.local, "config.json"), current = await readJsonFile(file);
+    if (current.hash !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The service configuration changed.");
+    const payload = Buffer.from(stableJson({ ...current.value, startWithWindows: body.startWithWindows }));
+    const revision = sha256(payload);
+    return { status: 200, data: { machine: body.machine, startWithWindows: body.startWithWindows, revision }, writes: [fixtureWrite(file, await readFile(file), payload)],
+      events: [{ name: "machine.settings.changed", global: true, data: { machine: body.machine, section: "service", revision, reportedAt: clock(fx).toISOString() } }] };
+  }
+  const snap = await projection(fx);
+  const agents = await readData(fx, snap, { pattern: "/settings/agents", principal: { audience: "desktop" } }, {}, new URLSearchParams({ machine: body.machine }));
+  if (operation === "scan") return { status: 200, data: { ...agents, reportedAt: clock(fx).toISOString() }, writes: [], events: [] };
+  const stat = await lstat(body.path).catch(() => null);
+  const base = basename(body.path).toLowerCase().replace(/\.(exe|cmd|bat|com)$/, "");
+  if (!stat?.isFile() || base !== body.client) throw new HttpError(422, "invalid_path", "The known client executable was not found.");
+  const file = join(fx.tree.user, "machines", body.machine, "settings.json"), current = await readJsonFile(file);
+  const report = { ...current.value, reportedAt: clock(fx).toISOString(), agents: { revision: null, items: agents.items.map(item => item.id === body.client ? { ...item, found: true, cli: { state: "changes-needed", changes: 2 } } : item) } };
+  report.agents.revision = sha256(Buffer.from(stableJson(report.agents.items)));
+  return { status: 200, data: { ...agents, ...report.agents }, writes: [fixtureWrite(file, await readFile(file), Buffer.from(stableJson(report)))],
+    events: [{ name: "machine.settings.changed", global: true, data: { machine: body.machine, section: "agents", revision: report.agents.revision, reportedAt: report.reportedAt } }] };
 }
 
 async function fixturePermissions(fx, snap) {
@@ -2190,7 +2299,7 @@ async function readData(fx, snap, spec, params, query) {
     if (pattern === "/settings/projects") return { ...common, ...(reported?.projects ?? { revision: null, folders: [] }) };
     const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
     return { settings: snap.settings.settings, revision: snap.settings.revision, selectedMachine: machine, readOnly, reportedAt: common.reportedAt,
-      service: reported?.service ?? { machine, state: selected?.state ?? "unknown", version: selected?.version ?? null, startedAt: null, startWithWindows: config?.value.startWithWindows === true, revision: config?.hash ?? null },
+      service: machine === LOCAL_MACHINE ? { machine, state: selected?.state ?? "unknown", version: selected?.version ?? null, startedAt: reported?.service.startedAt ?? null, startWithWindows: config?.value.startWithWindows === true, revision: config?.hash ?? null } : reported?.service ?? { machine, state: "unknown", version: null, startedAt: null, startWithWindows: false, revision: null },
       ...(spec.principal.audience === "desktop" ? { locations: reported?.locations ?? { mind: config?.value.mindPath ?? "", staging: config?.value.stagingPath ?? "" } } : {}), home: homeStatus(fx) };
   }
   if (pattern === "/settings/content") {
@@ -4781,6 +4890,11 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/settings/content") return prepareContentSettings(fx, body);
+  if (pattern === "/settings/agents/scan") return prepareMachineSettings(fx, "scan", body);
+  if (pattern === "/settings/agents/find") return prepareMachineSettings(fx, "find", body);
+  if (pattern === "/settings/service") return prepareMachineSettings(fx, "service", body);
+  if (pattern === "/settings/service/restart") return prepareMachineSettings(fx, "restart", body);
   if (pattern === "/settings/permissions/:permissionId") return preparePermissionRevoke(fx, params.permissionId, body);
   if (pattern === "/settings/agents/:client/preview") return prepareClientReview(fx, "preview", params.client, body);
   if (pattern === "/settings/agents/:client/apply") return prepareClientReview(fx, "apply", params.client, body);

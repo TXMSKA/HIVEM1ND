@@ -80,7 +80,7 @@ import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQu
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
-import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
+import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
@@ -336,8 +336,12 @@ export function navigate(app, mode) {
   }
   const allowed = [...DESKTOP_MODES, "settings", "hierarchy", "chats"];
   if (!allowed.includes(mode)) return;
-  if (mode === "hierarchy" || mode === "chats") app.tab = mode;
+  if (mode === "hierarchy" || mode === "chats") {
+    app.tab = mode;
+    if (app.mode === "settings") app.mode = "map";
+  }
   else app.mode = mode;
+  if (mode !== "settings" && app.homeState?.grant) clearGrant(app.homeState);
   if (mode === "focus" && app.voidState) enterFocus(app.voidState);
   renderShell(app);
 }
@@ -384,6 +388,7 @@ function paintShell(app) {
     opening ? openingFooter(app) : renderFooter(app, t),
   );
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
+  clearPhoneDialog(app);
   app.root.replaceChildren(shell);
   syncLiveRegions(app);
   paintActivity(app, shell);
@@ -393,6 +398,14 @@ function paintShell(app) {
   finishMap(app);
   syncChatReads(app);
   armHomeExpiry(app);
+  const phoneDialog = app.root.querySelector("[data-phone-dialog]");
+  if (phoneDialog) {
+    phoneDialog.showModal?.();
+    if (!homeState(app).phoneDialogFocused) {
+      phoneDialog.querySelector("[data-action='phone-done']")?.focus();
+      homeState(app).phoneDialogFocused = true;
+    }
+  }
 }
 
 function inputDrafts(app) {
@@ -598,6 +611,8 @@ export function dispose(app) {
     app.homeState.expiryTimer = null;
     clearGrant(app.homeState);
   }
+  clearPhoneDialog(app);
+  app.settingsState?.dialog?.close();
   disposeEmbed(app.embed);
   releaseAssets(app.editors?.current);
   app.liveStatus?.remove?.();
@@ -627,6 +642,8 @@ async function onStream(app, event) {
   if (event?.name === "sync.changed") noteSync(app, dataOf(event));
   if (event?.name === "service.changed") noteService(app, dataOf(event));
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
+  if (event?.name === "machine.settings.changed" && dataOf(event).machine === app.settingsState?.machine
+    || event?.name === "settings.content.changed" && app.settingsState) loadSettingsSections(app);
   if (event?.name === "viewer.changed") {
     await loadPresentation(app, { keepShell: true });
     result?.consume?.();
@@ -940,6 +957,7 @@ function renderWorkspace(app, t, view, counts) {
   if (app.mode === "focus") return renderFocusWorkspace(app, t);
   if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
+  if (app.layout !== "phone" && app.mode === "settings") return element(document, "div", { class: "workspace workspace-settings" }, settingsSurface(app, document, t));
   const tabs = element(document, "div", { class: "tabs" });
   for (const tab of ["hierarchy", "chats"]) {
     tabs.append(element(document, "button", {
@@ -3532,8 +3550,9 @@ function statusKey(status) {
 
 function settingsSurface(app, document, t) {
   const home = homeState(app);
-  const info = app.store.settings ?? {};
-  if (info.home) home.home = { enabled: Boolean(info.home.enabled), openedAt: info.home.openedAt ?? null, expiresAt: info.home.expiresAt ?? null, addresses: info.home.addresses ?? [], remainingSeconds: info.home.remainingSeconds ?? 0 };
+  const state = settingsState(app);
+  if (!state.loaded && !state.loading && !state.error) loadSettingsSections(app);
+  const info = state.info ?? (state.machine === state.localMachine ? app.store.settings ?? {} : { service: { machine: state.machine, state: "unknown" } });
   if (!app.settingsSync && !app.settingsSyncLoading) {
     app.settingsSyncLoading = true;
     const ticket = app.settingsSyncTicket ?? 0;
@@ -3547,7 +3566,25 @@ function settingsSurface(app, document, t) {
     });
   }
   const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ message: issue.message }));
-  return renderSettings(document, {
+  const panel = renderSettings(document, {
+    tab: state.tab,
+    machine: state.machine,
+    localMachine: state.localMachine,
+    machineMenu: state.machineMenu,
+    machines: state.machines ?? app.store.view?.machines ?? [],
+    readOnly: state.info?.readOnly ?? state.machine !== state.localMachine,
+    reportedAt: info.reportedAt,
+    loading: state.loading,
+    error: state.error ? actionText(app.language, state.error.code) : null,
+    locations: info.locations,
+    agents: state.agents,
+    permissions: state.permissions,
+    pendingGrants: state.pendingGrants,
+    projects: state.projects,
+    content: state.content,
+    contentDraft: state.contentDraft,
+    contentDirty: state.contentDirty,
+    contentConflict: state.contentConflict,
     settings: info.settings,
     revision: info.revision,
     service: info.service,
@@ -3563,8 +3600,56 @@ function settingsSurface(app, document, t) {
     language: app.language,
     canWrite: app.store.capabilities.includes("settings.write"),
     canManage: app.store.capabilities.includes("home.manage"),
+    canRevoke: app.store.capabilities.includes("grant.revoke"),
     now: Date.now(),
   }, t, {
+    onTab: (tab) => {
+      state.tab = tab; state.machineMenu = false;
+      if (tab !== "general") clearGrant(home);
+      renderShell(app);
+      app.root.querySelector(`[data-settings-tab="${tab}"]`)?.focus();
+    },
+    onMachineMenu: (open) => {
+      state.machineMenu = typeof open === "boolean" ? open : !state.machineMenu;
+      renderShell(app);
+      app.root.querySelector(state.machineMenu ? `[data-machine-choice="${state.machine}"]` : "[data-action='settings-machine']")?.focus();
+    },
+    onMachine: (machine) => {
+      state.machine = machine; state.machineMenu = false;
+      state.info = null; state.agents = null; state.permissions = null; state.projects = null;
+      loadSettingsSections(app);
+      renderShell(app);
+      app.root.querySelector("[data-action='settings-machine']")?.focus();
+    },
+    onRetry: () => loadSettingsSections(app),
+    onStartup: (startWithWindows) => settingsMutation(app, "PATCH", "/settings/service", { machine: state.machine, startWithWindows, expectedRevision: info.service?.revision ?? null }),
+    onRestart: () => settingsMutation(app, "POST", "/settings/service/restart", { machine: state.machine }),
+    onScan: () => settingsMutation(app, "POST", "/settings/agents/scan", { machine: state.machine }),
+    onFind: (agent) => findSettingsAgent(app, agent),
+    onReview: (agent, mode, target) => reviewSettingsAgent(app, agent, mode, target),
+    onDisconnect: (agent) => disconnectSettingsAgent(app, agent),
+    onRevokeGrant: (item) => revokeSettingsGrant(app, item),
+    onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
+    onContentItem: (field, id, included) => {
+      contentSettingsDraft(state)[field].find(item => item.id === id).included = included;
+      state.contentGeneration = (state.contentGeneration ?? 0) + 1;
+      state.contentDirty = true; renderShell(app);
+    },
+    onPreference: (key, value, paint = true) => {
+      contentSettingsDraft(state).preferences[key] = value; state.contentDirty = true;
+      state.contentGeneration = (state.contentGeneration ?? 0) + 1;
+      if (paint) renderShell(app);
+      else { const save = app.root.querySelector("[data-action='settings-save-content']"); if (save) save.disabled = false; }
+    },
+    onSaveContent: () => saveSettingsContent(app),
+    onReloadContent: () => {
+      state.contentDraft = null; state.contentDirty = false; state.contentConflict = false;
+      inputDrafts(app).fields.delete("settings|instructions");
+      const key = "settings:PATCH:/settings/content";
+      app.activity?.delete(key); clearMatchedError(app, key);
+      renderShell(app);
+      app.root.querySelector("[data-preference-instructions]")?.focus();
+    },
     onLook: (look) => chooseSetting(app, { look }),
     onLanguage: (language) => chooseSetting(app, { language }),
     onOpen: (raw, replacing) => beginHome(app, raw, replacing),
@@ -3573,12 +3658,239 @@ function settingsSurface(app, document, t) {
       home.selected = index;
       renderShell(app);
     },
+    onDismissHome: () => {
+      clearGrant(home); home.phoneDialogFocused = false; renderShell(app);
+      app.root.querySelector("[data-action='replace-home']")?.focus();
+    },
+  });
+  if (outcomeVisible(app) && app.actionScope === "settings") panel.append(element(document, "p", {
+    class: "settings-toast", role: app.actionTone === "error" ? "alert" : "status", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
+  }));
+  return panel;
+}
+
+function settingsState(app) {
+  if (!app.settingsState) {
+    const localMachine = app.store.settings?.selectedMachine ?? app.store.settings?.service?.machine ?? app.store.view?.mind?.machine ?? "";
+    app.settingsState = { tab: "general", machine: localMachine, localMachine, loaded: false, loading: false, ticket: 0 };
+  }
+  return app.settingsState;
+}
+
+async function loadSettingsSections(app) {
+  const state = settingsState(app);
+  const machine = state.machine;
+  const ticket = ++state.ticket;
+  state.loading = true; state.error = null;
+  const query = `?machine=${encodeURIComponent(machine)}`;
+  try {
+    const results = await Promise.all([
+      ...["/settings", "/settings/agents", "/settings/permissions", "/settings/projects", "/settings/content"]
+        .map(path => request(app.api, "GET", path + (path === "/settings/content" ? "" : query))),
+      collectPages(app.api, "/machines", { limit: 50 }).then(page => ({ data: page.items })),
+    ]);
+    if (app.disposed || ticket !== state.ticket) return;
+    [state.info, state.agents, state.permissions, state.projects, state.content] = results.map(result => result.data);
+    state.machines = results[5].data;
+    for (const id of state.pendingGrants ?? []) if (!state.permissions.unitGrants.some(item => item.grant.id === id)) state.pendingGrants.delete(id);
+    state.loaded = true;
+    if (!state.contentDirty) state.contentDraft = null;
+    if (state.info.home) {
+      const home = homeState(app);
+      applySettingsRead(home, { home: state.info.home });
+      if (app.store.settings) app.store.settings.home = home.home;
+    }
+  } catch (error) {
+    if (!app.disposed && ticket === state.ticket) state.error = error;
+  } finally {
+    if (!app.disposed && ticket === state.ticket) {
+      state.loading = false;
+      if (app.mode === "settings") renderShell(app);
+    }
+  }
+}
+
+async function commitSettingsMutation(app, record, method, path, body) {
+  const retained = await reuseOrReconcile(app, record, method, path, operation => samePayload(operation.body, body));
+  record.operation = retained ?? createOperation({ method, path, body });
+  return request(app.api, method, path, { operation: record.operation });
+}
+
+function settingsMutation(app, method, path, body, onSuccess = null) {
+  return settle(app, `settings:${method}:${path}`, text(app.language, "savingSetting"), async record => {
+    try {
+      const result = await commitSettingsMutation(app, record, method, path, body);
+      onSuccess?.(result.data);
+      await loadSettingsSections(app);
+      showOutcome(app, text(app.language, path === "/settings/service/restart" ? "settingsRestartRequested" : "saved"), "settings_saved", "status", "settings");
+      return result;
+    } catch (error) {
+      if (["revision_conflict", "configuration_changed", "machine_unavailable"].includes(error.code)) {
+        if (path === "/settings/content") settingsState(app).contentConflict = true;
+        await loadSettingsSections(app);
+      }
+      throw error;
+    }
+  });
+}
+
+function contentSettingsDraft(state) {
+  state.contentDraft ??= structuredClone(state.content);
+  return state.contentDraft;
+}
+
+function saveSettingsContent(app) {
+  const state = settingsState(app);
+  const draft = contentSettingsDraft(state);
+  const generation = state.contentGeneration ?? 0;
+  const body = { includedFeatures: draft.features.filter(item => item.included).map(item => item.id),
+    includedKnowledge: draft.knowledge.filter(item => item.included).map(item => item.id),
+    preferences: { ...draft.preferences }, expectedRevision: draft.revision };
+  return settingsMutation(app, "PATCH", "/settings/content", body, data => {
+    state.content = data;
+    if (generation === (state.contentGeneration ?? 0)) { state.contentDirty = false; state.contentDraft = null; }
+    else state.contentDraft.revision = data.revision;
+    state.contentConflict = false;
+  });
+}
+
+function mountSettingsDialog(app, dialog, opener) {
+  const state = settingsState(app);
+  state.dialog = dialog;
+  dialog.setAttribute("data-look", app.look);
+  dialog.addEventListener("close", () => {
+    dialog.replaceChildren(); dialog.remove();
+    if (state.dialog === dialog) state.dialog = null;
+    restoreInvoker(app, opener);
+  });
+  dialog.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); dialog.close(); return; }
+    if (event.key !== "Tab") return;
+    const controls = [...dialog.querySelectorAll("button, input, textarea, summary")].filter(node => !node.disabled);
+    if (event.shiftKey && dialog.ownerDocument.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
+    else if (!event.shiftKey && dialog.ownerDocument.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
+  });
+  dialog.ownerDocument.body.append(dialog);
+  dialog.showModal();
+  dialog.querySelector("input, button")?.focus();
+  return dialog;
+}
+
+function reviewSettingsAgent(app, agent, mode, target) {
+  const state = settingsState(app);
+  const machine = state.machine;
+  const opener = target === "app" ? `settings-app-${agent.id}` : agent.cli.state === "connected" ? `settings-mode-${agent.id}-${mode}` : `settings-review-${agent.id}`;
+  return settle(app, `settings-preview:${agent.id}`, text(app.language, "settingsReview"), async record => {
+    const path = `/settings/agents/${encodeURIComponent(agent.id)}/preview`;
+    const result = await commitSettingsMutation(app, record, "POST", path, { machine, mode, target, allowGit: false });
+    if (app.disposed || state.machine !== machine || app.mode !== "settings") return;
+    const review = { agent, machine, target, preview: result.data, selected: new Set(result.data.changes.filter(change => !change.optional && change.selected).map(change => change.id)) };
+    const t = (key, variables) => text(app.language, key, variables);
+    const dialog = renderClientReview(app.root.ownerDocument, review, t, {
+      onCopy: async ids => {
+        const value = review.preview.changes.filter(change => ids.includes(change.id)).map(change => `${change.path}\n${change.afterText}`).join("\n\n");
+        try {
+          const clipboard = dialog.ownerDocument.defaultView?.navigator?.clipboard;
+          if (clipboard?.writeText) await clipboard.writeText(value);
+          else {
+            let field = dialog.querySelector("[data-copy-changes]");
+            if (!field) { field = element(dialog.ownerDocument, "textarea", { "data-copy-changes": "true", readonly: "true", "aria-label": t("settingsCopy") }); dialog.append(field); }
+            field.value = value; field.focus(); field.select?.();
+          }
+        } catch { settingsDialogError(dialog, t("settingsCopyFailed")); }
+      },
+      onApply: ids => applySettingsReview(app, dialog, review, ids),
+    });
+    state.dialog?.close();
+    mountSettingsDialog(app, dialog, opener);
+  });
+}
+
+function settingsDialogError(dialog, message) {
+  dialog.querySelector("[data-settings-dialog-error]")?.remove();
+  dialog.append(element(dialog.ownerDocument, "p", { role: "alert", "data-settings-dialog-error": "true", text: message }));
+}
+
+function applySettingsReview(app, dialog, review, ids) {
+  const path = `/settings/agents/${encodeURIComponent(review.agent.id)}/apply`;
+  const controls = [...dialog.querySelectorAll("button, input")];
+  for (const control of controls) control.disabled = true;
+  return track(app, `settings-apply:${review.preview.previewId}`, text(app.language, "savingSetting"), async record => {
+    const result = await commitSettingsMutation(app, record, "POST", path, { machine: review.machine, previewId: review.preview.previewId, changeIds: ids, expectedRevision: review.preview.revision });
+    dialog.close();
+    await loadSettingsSections(app);
+    app.root.querySelector(`[data-agent="${review.agent.id}"] button`)?.focus();
+    showOutcome(app, text(app.language, "settingsConnected"), "settings_connected", "status", "settings");
+    return result;
+  }).catch(error => {
+    const unconfirmed = Boolean(findUncertain(app.api, "POST", path));
+    for (const control of controls) control.disabled = unconfirmed && control.tagName === "INPUT";
+    if (dialog.getAttribute("open") !== null) settingsDialogError(dialog, actionText(app.language, error.code));
+    noteAction(app, error, `settings-apply:${review.preview.previewId}`);
+  });
+}
+
+function disconnectSettingsAgent(app, agent) {
+  const state = settingsState(app);
+  const machine = state.machine;
+  const revision = state.agents.revision;
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: text(app.language, "settingsDisconnectTitle", { client: agent.name }), body: text(app.language, "finalBackupExplanation"),
+    confirm: text(app.language, "settingsDisconnect"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+    onConfirm: () => track(app, `settings-disconnect:${machine}:${agent.id}`, text(app.language, "working"), async record => {
+      await commitSettingsMutation(app, record, "DELETE", `/settings/agents/${encodeURIComponent(agent.id)}`, { machine, confirmed: true, expectedRevision: revision });
+      await loadSettingsSections(app);
+    }),
+  });
+  dialog.className += " settings-review";
+  dialog.setAttribute("data-settings-disconnect", agent.id);
+  dialog.addEventListener("close", () => restoreInvoker(app, `settings-disconnect-${agent.id}`));
+  dialog.addEventListener("close", () => app.root.querySelector(`[data-agent="${agent.id}"] button`)?.focus());
+}
+
+function findSettingsAgent(app, agent) {
+  const machine = settingsState(app).machine;
+  openChoiceForm(app, "settings-find", text(app.language, "settingsFind"), form => {
+    form.append(labeledField(form.ownerDocument, text(app.language, "registerPath"), text(app.language, "settingsFindHint"),
+      element(form.ownerDocument, "input", { name: "path", "aria-label": text(app.language, "registerPath") })));
+  }, async form => {
+    const path = form.querySelector("[name='path']").value;
+    await track(app, `settings-find:${machine}:${agent.id}`, text(app.language, "working"), async record => {
+      await commitSettingsMutation(app, record, "POST", "/settings/agents/find", { machine, client: agent.id, path });
+      await loadSettingsSections(app);
+    });
+    return true;
+  }, `settings-find-${agent.id}`);
+}
+
+function revokeSettingsGrant(app, item) {
+  const state = settingsState(app);
+  if (state.info?.readOnly) return;
+  return settle(app, `settings-grant:${item.grant.id}`, text(app.language, "revoke"), async record => {
+    const unit = await request(app.api, "GET", `/units/${encodeURIComponent(item.unitId)}`);
+    const result = await commitSettingsMutation(app, record, "DELETE", `/units/${encodeURIComponent(item.unitId)}/approval-grants/${encodeURIComponent(item.grant.id)}`, { expectedRevision: unit.data.revision });
+    if (result.data.state !== "revoked") {
+      state.pendingGrants ??= new Set(); state.pendingGrants.add(item.grant.id);
+      app.revocationRequestId = result.data.requestId ?? null; app.revocationUnitId = item.unitId;
+    }
+    await loadSettingsSections(app);
+    showOutcome(app, text(app.language, result.data.state === "revoked" ? "grantRevoked" : "grantPending"), "grant_revoke", "status", "settings");
+    return result;
   });
 }
 
 function homeState(app) {
   if (!app.homeState) app.homeState = { grant: null, home: app.store.settings?.home ?? null, expectGrant: false, selected: 0 };
   return app.homeState;
+}
+
+function clearPhoneDialog(app) {
+  const dialog = app.root.querySelector("[data-phone-dialog]");
+  if (!dialog) return;
+  for (const node of dialog.querySelectorAll("[data-secret], [data-qr], [data-code]")) {
+    node.removeAttribute("data-qr"); node.removeAttribute("data-code"); node.replaceChildren(); node.textContent = "";
+  }
+  dialog.replaceChildren(); dialog.remove();
 }
 
 function noteHome(app, data) {
@@ -3597,6 +3909,7 @@ function noteSync(app, data) {
 function noteService(app, data) {
   if (!app.store.settings) app.store.settings = {};
   app.store.settings.service = applyServiceBeat(app.store.settings.service, data?.machine ?? data);
+  if (app.settingsState?.machine === app.settingsState?.localMachine && app.settingsState.info) app.settingsState.info.service = app.store.settings.service;
 }
 
 function noteIssue(app, data) {
@@ -4266,8 +4579,9 @@ function enableHome(app, raw) {
       const result = await openHome(app.api, addresses, retained);
       record.operation = result.operation;
       takeGrant(home, result.data);
+      home.phoneDialogFocused = false;
       if (app.store.settings) app.store.settings.home = home.home;
-      return result;
+      return { ...result, data: home.home };
     } catch (error) {
       home.expectGrant = false;
       if (error?.operation) record.operation = error.operation;
@@ -4560,6 +4874,7 @@ const ACTION_COPY = {
   machine_unavailable: "machineDown",
   note_required: "noteRequired",
   revision_conflict: "revisionConflict",
+  configuration_changed: "settingsConfigurationChanged",
   phone_read_only: "phoneReadOnly",
   forbidden: "actionForbidden",
   always_unavailable: "alwaysUnavailable",
@@ -5517,7 +5832,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const inputs = [...form.querySelectorAll("input, select, textarea")];
   const enabled = inputs.filter((control) => !control.disabled);
   const setFieldsBusy = (busy) => {
-    if (!["unit", "group", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) return;
+    if (!["unit", "group", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) return;
     for (const control of enabled) {
       const immutable = kind === "unit" && form.created && control.getAttribute("name") !== "groupId";
       control.disabled = busy || Boolean(immutable);
@@ -5578,7 +5893,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
     dialog.remove();
     restoreInvoker(app, opener);
   });
-  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) {
+  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) {
     dialog.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault?.(); dialog.close(); return; }
       if (event.key !== "Tab") return;
@@ -5592,7 +5907,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   }
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") dialog.showModal();
-  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) enabled[0]?.focus?.();
+  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) enabled[0]?.focus?.();
 }
 
 function appendInput(document, form, name, label, value, options = {}) {
@@ -6460,6 +6775,7 @@ async function noteGrant(app, data) {
   if (!data?.unitId || (data.operation !== "granted" && data.operation !== "revoked")) return;
   if (data.operation === "revoked") showOutcome(app, text(app.language, "grantRevoked"), "revoked");
   await refreshOwnerSurface(app, data.unitId);
+  if (app.settingsState) await loadSettingsSections(app);
 }
 
 async function refreshOwnerSurface(app, unitId) {

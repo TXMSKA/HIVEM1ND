@@ -1,5 +1,5 @@
 import { createOperation, request } from "./api.mjs";
-import { element, labeledField } from "./components.mjs";
+import { element, icon, labelDialog, labeledField } from "./components.mjs";
 import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
@@ -175,7 +175,7 @@ export function renderHomeGrant(document, grant, index, label) {
       class: "btn",
       "data-link": String(item),
       "aria-pressed": String(item === index),
-      text: grant.links[item],
+      text: new URL(grant.links[item]).origin,
     }));
   }
   host.append(links);
@@ -190,65 +190,345 @@ export function renderHomeGrant(document, grant, index, label) {
 
 export function renderSettings(document, model, t, actions) {
   const panel = element(document, "section", { class: "settings-panel", "data-settings": "true" });
+  const tabs = [["general", "settingsGeneral", "settings"], ["agents", "settingsAgents", "executor"],
+    ["permissions", "settingsPermissions", "waiting"], ["projects", "settingsProjects", "document"], ["content", "settingsContent", "blueprint"]];
+  const tab = model.tab ?? "general";
+  const bar = element(document, "div", { class: "settings-tabs", role: "tablist", "aria-label": t("settings") });
+  for (const [id, key, glyph] of tabs) {
+    const button = element(document, "button", { type: "button", role: "tab", id: `settings-tab-${id}`,
+      "data-settings-tab": id, "data-action": `settings-tab-${id}`, "aria-selected": String(tab === id), "aria-controls": "settings-page", tabindex: tab === id ? "0" : "-1",
+      onclick: () => actions.onTab?.(id) }, icon(document, glyph), t(key));
+    button.addEventListener("keydown", event => {
+      const index = tabs.findIndex(item => item[0] === id);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+        : event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : null;
+      if (next === null) return;
+      event.preventDefault();
+      actions.onTab?.(tabs[next][0], true);
+    });
+    bar.append(button);
+  }
+  panel.append(element(document, "header", { class: "settings-header" }, element(document, "h2", { text: t("settings") }), bar,
+    renderMachinePicker(document, model, t, actions)));
+  if (model.readOnly) panel.append(element(document, "p", { class: "settings-offline", role: "status", "data-settings-readonly": "true",
+    text: t("settingsOfflineReport", { machine: model.machine, time: formatWhen(model.language, model.reportedAt) || t("unknown") }) }));
+  if (model.loading) panel.append(element(document, "p", { role: "status", text: t("loadingList") }));
+  if (model.error) panel.append(element(document, "p", { role: "alert", text: model.error }),
+    settingsButton(document, "retry-settings", t("retry"), actions.onRetry));
+  const page = element(document, "div", { id: "settings-page", role: "tabpanel", "aria-labelledby": `settings-tab-${tab}`, "data-settings-page": tab });
+  if (tab === "general") page.append(renderGeneral(document, model, t, actions));
+  if (tab === "agents") page.append(renderAgents(document, model, t, actions));
+  if (tab === "permissions") page.append(renderPermissions(document, model, t, actions));
+  if (tab === "projects") page.append(renderProjects(document, model, t));
+  if (tab === "content") page.append(renderContent(document, model, t, actions));
+  panel.append(page);
+  return panel;
+}
+
+function renderMachinePicker(document, model, t, actions) {
+  const host = element(document, "div", { class: "settings-machine-picker" });
+  const current = model.machine === model.localMachine ? t("finalThisMachine", { machine: model.machine }) : model.machine;
+  const toggle = settingsButton(document, "settings-machine", current || t("machine"), actions.onMachineMenu);
+  toggle.replaceChildren(machineIcon(document, model.machine === model.localMachine), current || t("machine"), element(document, "span", { "aria-hidden": "true", text: "⌄" }));
+  toggle.setAttribute("aria-label", `${t("machine")}: ${current ?? ""}`);
+  toggle.setAttribute("aria-expanded", String(Boolean(model.machineMenu)));
+  toggle.setAttribute("aria-haspopup", "menu");
+  host.append(toggle);
+  if (model.machineMenu) {
+    const menu = element(document, "div", { class: "settings-machine-menu", role: "menu", "aria-label": t("machine") });
+    for (const machine of model.machines ?? []) {
+      const label = machine.id === model.localMachine ? t("finalThisMachine", { machine: machine.id }) : machine.id;
+      const option = settingsButton(document, `settings-machine-${machine.id}`, label, () => actions.onMachine?.(machine.id));
+      option.setAttribute("role", "menuitemradio");
+      option.setAttribute("aria-checked", String(machine.id === model.machine));
+      option.setAttribute("data-machine-choice", machine.id);
+      const identity = element(document, "span", { class: "settings-machine-label" }, label);
+      if (!machine.answers) identity.append(element(document, "small", { text: t("finalMachineOffline", { time: formatWhen(model.language, machine.heartbeatAt) || t("unknown") }) }));
+      option.replaceChildren(machineIcon(document, machine.id === model.localMachine), identity);
+      menu.append(option);
+    }
+    menu.addEventListener("keydown", event => {
+      const controls = [...menu.querySelectorAll("button")];
+      const index = controls.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1
+        : event.key === "ArrowDown" ? (index + 1) % controls.length : event.key === "ArrowUp" ? (index + controls.length - 1) % controls.length : null;
+      if (event.key === "Escape") { event.preventDefault(); actions.onMachineMenu?.(false); }
+      else if (next !== null) { event.preventDefault(); controls[next]?.focus(); }
+    });
+    host.append(menu);
+  }
+  return host;
+}
+
+function machineIcon(document, local) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "icon"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", local ? "M3 4h18v12H3zM12 16v4M8 20h8" : "M5 4h14v12H5zM5 16l-3 4h20l-3-4");
+  svg.append(path);
+  return svg;
+}
+
+function settingsSection(document, title, ...children) {
+  return element(document, "section", { class: "settings-section" }, element(document, "h3", { text: title }), ...children);
+}
+
+function settingsButton(document, action, label, onClick, disabled = false) {
+  const button = element(document, "button", { type: "button", class: "btn", "data-action": action, text: label, onclick: onClick });
+  button.disabled = disabled;
+  return button;
+}
+
+function settingsFact(document, name, value, attributes = {}) {
+  return element(document, "div", { class: "settings-fact" }, element(document, "span", { text: name }),
+    element(document, "span", { ...attributes, text: value }));
+}
+
+function renderGeneral(document, model, t, actions) {
   const service = model.service ?? {};
-  panel.append(element(document, "p", { "data-machine": service.machine ?? "", text: t("serviceRunning", { machine: service.machine ?? "" }) }));
-  panel.append(element(document, "p", { "data-version": service.version ?? "", text: t("versionLabel", { version: service.version ?? "" }) }));
-  panel.append(element(document, "p", { "data-origin": service.originKind ?? "", text: t("originKind", { kind: service.originKind ?? "" }) }));
-  panel.append(element(document, "p", {
-    "data-sync": model.syncState ?? service.syncState ?? "",
-    "data-pending": String(model.pendingChanges ?? ""),
-    text: model.syncLabel ?? "",
-  }));
+  const looks = element(document, "div", { class: "settings-looks" });
+  for (const look of LOOK_OPTIONS) {
+    const preview = renderLookPreview(document, look, model.look === look.id, actions.onLook);
+    preview.disabled = !model.canWrite;
+    looks.append(preview);
+  }
+  const language = element(document, "div", { class: "settings-segment" },
+    choice(document, "language", "en", t("english"), model.language === "en", actions.onLanguage),
+    choice(document, "language", "es", t("spanish"), model.language === "es", actions.onLanguage));
+  for (const button of language.children) button.disabled = !model.canWrite;
+  const startup = element(document, "input", { type: "checkbox", "data-start-with-windows": "true", "aria-label": t("settingsStartup") });
+  startup.checked = service.startWithWindows === true;
+  startup.disabled = !model.canWrite || model.readOnly || model.loading;
+  startup.addEventListener("change", () => actions.onStartup?.(startup.checked));
+  const relay = settingsSection(document, t("settingsService"),
+    settingsFact(document, t("settingsState"), service.state === "running" ? t("finalRunningOn", { machine: service.machine }) : t(service.state === "stopped" ? "settingsStopped" : "unknown"), { "data-machine": service.machine ?? "" }),
+    settingsFact(document, t("settingsVersion"), service.version ?? t("unknown"), { "data-version": service.version ?? "" }),
+    settingsFact(document, t("settingsStarted"), formatWhen(model.language, service.startedAt) || t("unknown")),
+    element(document, "label", { class: "settings-fact" }, t("settingsStartup"), element(document, "span", {}, startup, t(startup.checked ? "finalOn" : "finalOff"))),
+    settingsButton(document, "settings-restart", t("settingsRestart"), actions.onRestart, !model.canWrite || model.readOnly || model.loading));
+  // Transport status remains diagnostic; it never offers a synchronization choice.
   if (model.limits) {
     const limits = model.limits;
-    panel.append(element(document, "p", {
+    relay.append(element(document, "p", {
       "data-limits": limits.state ?? "normal",
       "data-retry-at": limits.retryAt ?? "",
       text: t(limitsLabel(limits.state), { time: formatWhen(model.language, limits.retryAt) }),
     }));
     const messages = limits.messages ?? {};
     const bytes = limits.syncBytes ?? {};
-    panel.append(element(document, "p", {
+    relay.append(element(document, "p", {
       "data-limit-usage": "true",
       text: limitsUsage(model.language, messages, bytes),
     }));
   }
   const issues = element(document, "ul", { "data-issues": "true" });
   for (const issue of model.issues ?? []) issues.append(element(document, "li", { text: issue.message ?? "" }));
-  panel.append(issues);
-  if (model.canWrite) {
-    const looks = element(document, "div", { class: "editor-actions" });
-    looks.append(choice(document, "look", "modern", t("modern"), model.look === "modern", actions.onLook));
-    looks.append(choice(document, "look", "high-contrast", t("highContrast"), model.look === "high-contrast", actions.onLook));
-    looks.append(choice(document, "language", "en", t("english"), model.language === "en", actions.onLanguage));
-    looks.append(choice(document, "language", "es", t("spanish"), model.language === "es", actions.onLanguage));
-    panel.append(looks);
+  relay.append(issues);
+  const coming = settingsButton(document, "relay-coming-soon", t("settingsComingSoon"), null, true);
+  return element(document, "div", { class: "settings-columns" },
+    element(document, "div", { class: "settings-column" }, settingsSection(document, t("finalLook"), looks,
+      element(document, "p", { class: "settings-hint", text: t("finalPreviewHint") })),
+    settingsSection(document, t("settingsLanguage"), language), renderHome(document, model, t, actions)),
+    element(document, "div", { class: "settings-column" }, relay, settingsSection(document, "Relay+", coming,
+      element(document, "p", { text: t("settingsRelayPlus") })), settingsSection(document, t("settingsLocations"),
+      settingsFact(document, "M1ND", model.locations?.mind || t("unknown")),
+      settingsFact(document, t("settingsStaging"), model.locations?.staging || t("unknown")))));
+}
+
+function renderAgents(document, model, t, actions) {
+  const disabled = !model.canWrite || model.readOnly || model.loading;
+  const reviewDisabled = disabled || model.machine !== model.localMachine;
+  const section = settingsSection(document, t("finalAgentsOn", { machine: model.machine }));
+  section.append(element(document, "div", { class: "settings-scan" },
+    element(document, "small", { text: t("finalScanned", { time: formatWhen(model.language, model.agents?.reportedAt) || t("unknown") }) }),
+    settingsButton(document, "settings-scan", t("settingsScan"), actions.onScan, disabled)),
+    element(document, "div", { class: "settings-agent-head" }, element(document, "span", { text: t("settingsAgent") }),
+      element(document, "span", { text: t("settingsCli") }), element(document, "span", { text: t("settingsApp") })));
+  for (const agent of model.agents?.items ?? []) {
+    const row = element(document, "div", { class: "settings-agent-row", "data-agent": agent.id });
+    row.append(element(document, "span", { class: "settings-avatar", "aria-hidden": "true" }, icon(document, "executor")),
+      element(document, "div", { class: "settings-agent-identity" }, element(document, "strong", { text: agent.name }),
+        element(document, "small", { text: agent.found ? `CLI ${agent.version ?? t("unknown")}` : t("settingsNotFound") })));
+    if (!agent.found) row.append(settingsButton(document, `settings-find-${agent.id}`, t("settingsFind"), () => actions.onFind?.(agent), disabled));
+    else {
+      const cli = element(document, "div", { class: "settings-agent-cli" });
+      if (agent.cli?.state === "connected") {
+        cli.append(element(document, "span", { class: "settings-connected", text: t("settingsConnected") }));
+        const modes = element(document, "div", { class: "settings-segment settings-agent-mode" });
+        for (const [mode, key] of [["auto", "settingsAuto"], ["on-demand", "settingsOnDemand"]]) {
+          const button = choice(document, "agent-mode", mode, t(key), agent.mode === mode, () => actions.onReview?.(agent, mode, "cli"));
+          button.setAttribute("data-action", `settings-mode-${agent.id}-${mode}`);
+          button.disabled = reviewDisabled;
+          modes.append(button);
+        }
+        cli.append(modes);
+      } else cli.append(element(document, "span", { text: t("settingsChangesNeeded", { count: agent.cli?.changes ?? 0 }) }),
+        settingsButton(document, `settings-review-${agent.id}`, t("settingsReview"), () => actions.onReview?.(agent, agent.mode, "cli"), reviewDisabled));
+      const app = element(document, "div", { class: "settings-agent-app" });
+      if (agent.app?.state === "connected") app.append(element(document, "span", { class: "settings-connected", text: t("settingsAppConnected", { app: agent.app.name }) }));
+      else if (agent.app?.state === "available" && agent.app.name) app.append(settingsButton(document, `settings-app-${agent.id}`, t("settingsConnectApp", { app: agent.app.name }), () => actions.onReview?.(agent, agent.mode, "app"), reviewDisabled));
+      else app.append(element(document, "span", { text: t("settingsNoApp") }));
+      row.append(cli, app);
+      if (agent.cli?.state === "connected" || agent.app?.state === "connected") row.append(settingsButton(document, `settings-disconnect-${agent.id}`, t("settingsDisconnect"), () => actions.onDisconnect?.(agent), reviewDisabled));
+    }
+    section.append(row);
   }
-  panel.append(renderHome(document, model, t, actions));
-  return panel;
+  if (!model.agents?.items?.length) section.append(element(document, "p", { text: t("settingsNoAgents") }));
+  if (model.machine !== model.localMachine && !model.readOnly) section.append(element(document, "p", { class: "settings-hint", text: t("settingsReviewOwner", { machine: model.machine }) }));
+  for (const key of ["finalCliExplanation", "finalAppExplanation", "finalManualExplanation"]) section.append(element(document, "p", { class: "settings-hint", text: t(key) }));
+  return section;
+}
+
+function renderPermissions(document, model, t, actions) {
+  const disabled = model.readOnly || model.loading;
+  const standing = settingsSection(document, t("settingsStanding"));
+  const agents = settingsSection(document, t("settingsAgentPermissions"));
+  const row = (id, name, description, at, action, cannotWrite) => {
+    const revoke = settingsButton(document, `settings-revoke-${id}`, t("revoke"), action, disabled || cannotWrite);
+    revoke.setAttribute("aria-label", `${t("revoke")}: ${name}, ${description}`);
+    return element(document, "div", { class: "settings-grant", "data-permission": id }, element(document, "strong", { text: name }),
+      element(document, "code", { text: description }), element(document, "small", { text: formatWhen(model.language, at) }), revoke);
+  };
+  for (const item of model.permissions?.unitGrants ?? []) standing.append(row(item.grant.id, item.unitId,
+    item.grant.pattern?.command ?? `${item.grant.action}: ${JSON.stringify(item.grant.pattern)}`, item.grant.grantedAt,
+    () => actions.onRevokeGrant?.(item), !model.canRevoke || model.pendingGrants?.has(item.grant.id)));
+  for (const item of model.permissions?.agentPermissions ?? []) agents.append(row(item.id, item.client,
+    item.actions.join(", "), item.grantedAt, () => actions.onRevokePermission?.(item), !model.canWrite));
+  standing.append(element(document, "p", { class: "settings-hint", text: t("finalStandingExplanation") }));
+  agents.append(element(document, "p", { class: "settings-hint", text: t("finalAgentPermissionExplanation") }));
+  return element(document, "div", { class: "settings-column" }, standing, agents);
+}
+
+function renderProjects(document, model, t) {
+  const section = settingsSection(document, t("settingsClusterLinks"));
+  const projects = (model.projects?.folders ?? []).flatMap(folder => folder.repositories ?? []).filter(item => item.registered);
+  for (const project of projects) section.append(element(document, "div", { class: "settings-link", "data-settings-project": project.id },
+    element(document, "strong", { text: project.title }), element(document, "code", { text: project.path })));
+  if (!projects.length) section.append(element(document, "p", { text: t("settingsNoLinks") }));
+  return section;
+}
+
+function renderContent(document, model, t, actions) {
+  const content = model.content;
+  if (!content) return element(document, "p", { text: t("loadingList") });
+  const draft = model.contentDraft ?? content;
+  const select = (item, field) => {
+    const input = element(document, "input", { type: "checkbox", "data-content-item": item.id });
+    input.checked = item.included;
+    input.disabled = !model.canWrite;
+    input.addEventListener("change", () => actions.onContentItem?.(field, item.id, input.checked));
+    return element(document, "label", { class: "settings-content-item" }, input, item.title);
+  };
+  const features = element(document, "div", { class: "settings-content-groups" });
+  for (const [category, key] of [["planning", "finalPlanning"], ["quality", "finalQuality"], ["continuity", "finalContinuity"], ["other", "finalOther"]]) {
+    const items = draft.features.filter(item => item.category === category);
+    if (items.length) features.append(element(document, "div", {}, element(document, "h4", { text: t(key) }), items.map(item => select(item, "features"))));
+  }
+  const knowledge = element(document, "div", { class: "settings-content-groups" }, draft.knowledge.map(item => select(item, "knowledge")));
+  const preferences = settingsSection(document, t("settingsPreferences"), element(document, "h4", { text: t("settingsAddressStyle") }));
+  const styles = element(document, "div", { class: "settings-segment" });
+  for (const [style, key] of [["impersonal", "settingsImpersonal"], ["formal", "settingsFormal"], ["explanatory", "settingsExplanatory"]]) {
+    const button = choice(document, "address-style", style, t(key), draft.preferences.addressStyle === style, () => actions.onPreference?.("addressStyle", style));
+    button.disabled = !model.canWrite;
+    styles.append(button);
+  }
+  const instructions = element(document, "textarea", { "data-preference-instructions": "true", maxlength: "64000", "data-keep": "settings|instructions" });
+  instructions.value = draft.preferences.additionalInstructions;
+  instructions.disabled = !model.canWrite;
+  instructions.addEventListener("input", () => actions.onPreference?.("additionalInstructions", instructions.value, false));
+  preferences.append(styles, labeledField(document, t("settingsInstructions"), t("settingsInstructionsHint"), instructions));
+  for (const [key, title] of [["keepExistingPreferencesFirst", "settingsKeepPreferences"], ["updateChecks", "settingsUpdates"]]) {
+    const input = element(document, "input", { type: "checkbox", "data-preference": key });
+    input.checked = key === "updateChecks" ? draft.preferences[key] === "daily" : draft.preferences[key];
+    input.disabled = !model.canWrite;
+    input.addEventListener("change", () => actions.onPreference?.(key, key === "updateChecks" ? input.checked ? "daily" : "off" : input.checked));
+    preferences.append(element(document, "label", { class: "settings-fact" }, t(title), element(document, "span", {}, input,
+      t(key === "updateChecks" && input.checked ? "settingsDaily" : input.checked ? "finalOn" : "finalOff"))));
+  }
+  preferences.append(settingsButton(document, "settings-save-content", t("save"), actions.onSaveContent, !model.canWrite || !model.contentDirty));
+  if (model.contentConflict) preferences.append(settingsButton(document, "settings-reload-content", t("settingsReloadContent"), actions.onReloadContent));
+  return element(document, "div", { class: "settings-columns settings-content-columns" },
+    element(document, "div", { class: "settings-column" }, settingsSection(document, t("settingsFeatures"), features), settingsSection(document, t("settingsKnowledge"), knowledge)),
+    preferences);
+}
+
+export function renderClientReview(document, review, t, actions) {
+  const dialog = element(document, "dialog", { class: "dialog settings-review", "data-settings-review": review.agent.id });
+  const heading = element(document, "h2", { text: t("settingsConnectTitle", { client: review.target === "app" ? review.agent.app.name : `${review.agent.name} CLI` }) });
+  labelDialog(dialog, heading);
+  dialog.append(heading, element(document, "p", { text: t("finalReviewExplanation", { machine: review.machine }) }));
+  const selected = review.selected;
+  const apply = settingsButton(document, "settings-apply", "", () => actions.onApply?.([...selected]));
+  const update = () => { apply.textContent = t("settingsApply", { count: selected.size }); apply.disabled = !selected.size; };
+  for (const optional of [false, true]) {
+    const changes = review.preview.changes.filter(change => change.optional === optional);
+    if (optional && changes.length) dialog.append(element(document, "h3", { text: t("settingsOptional") }));
+    for (const change of changes) {
+      const input = element(document, "input", { type: "checkbox", "data-review-change": change.id });
+      input.checked = selected.has(change.id);
+      input.addEventListener("change", () => { if (input.checked) selected.add(change.id); else selected.delete(change.id); update(); });
+      const details = element(document, "details", {}, element(document, "summary", { text: t("details") }), element(document, "pre", { text: change.afterText }));
+      const descriptions = { "Load the M1ND rules in every session": "settingsLoadRules", "Stop loading the M1ND rules automatically": "settingsStopRules",
+        "Remove owned Content no longer included": "settingsRemoveContent", "Make included M1ND Content available on demand": "settingsIncludeContent" };
+      const description = change.id === "mcp" ? t("settingsRelayChange") : change.id === "hooks" ? t("settingsHooksChange") : change.optional ? t("settingsGitChange")
+        : descriptions[change.description] ? t(descriptions[change.description]) : change.description;
+      dialog.append(element(document, "div", { class: "settings-change" }, element(document, "label", {}, input,
+        element(document, "span", {}, element(document, "strong", { text: description }), element(document, "code", { text: change.path }))), details));
+    }
+  }
+  dialog.append(element(document, "p", { class: "settings-hint", text: t("finalAgentPermissionExplanation") }),
+    element(document, "p", { text: t("finalBackupExplanation") }));
+  if (review.preview.restartRequired) dialog.append(element(document, "p", { text: t("finalRestartClientExplanation", { client: review.agent.name }) }));
+  dialog.append(element(document, "div", { class: "dialog-actions" }, settingsButton(document, "settings-review-cancel", t("cancel"), () => dialog.close()),
+    settingsButton(document, "settings-copy", t("settingsCopy"), () => actions.onCopy?.([...selected])), apply));
+  update();
+  return dialog;
 }
 
 function renderHome(document, model, t, actions) {
   const home = model.home;
   const expiry = updateExpiry(home, model.now ?? Date.now());
-  const block = element(document, "section", { "data-home": home?.enabled && !expiry.expired ? "open" : "closed" });
-  block.append(element(document, "h3", { text: t("homeAccess") }));
+  const block = element(document, "section", { class: "settings-section", "data-home": home?.enabled && !expiry.expired ? "open" : "closed" });
+  block.append(element(document, "h3", { text: t("settingsPhone") }), element(document, "p", { text: t("finalPhoneHint") }));
   if (!home?.enabled || expiry.expired) {
     block.append(element(document, "p", { text: t("homeClosed") }));
   } else {
-    block.append(element(document, "p", { text: t("homeActive", { time: formatWhen(model.language, home.expiresAt) }) }));
+    block.append(element(document, "p", { "data-phone-count": home.phoneCount ?? "unknown", text: Number.isInteger(home.phoneCount)
+      ? t(home.phoneCount === 1 ? "finalPhoneStatus" : "finalPhoneStatusPlural", { time: formatWhen(model.language, home.expiresAt), count: home.phoneCount })
+      : `${t("homeActive", { time: formatWhen(model.language, home.expiresAt) })} ${t("settingsPhoneCountUnknown")}` }));
     block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: cardinal(model.language, "homeRemaining", expiry.remainingSeconds) }));
   }
   const grant = !expiry.expired ? model.grant : null;
-  if (grant?.qrPayloads?.length) block.append(renderHomeGrant(document, grant, model.selected ?? 0, t("qrTitle")));
+  if (grant?.qrPayloads?.length) {
+    const dialog = element(document, "dialog", { class: "dialog settings-phone-dialog", "data-phone-dialog": "true" });
+    const heading = element(document, "h2", { text: t("settingsOpenPhone") });
+    labelDialog(dialog, heading);
+    dialog.append(heading, element(document, "p", { text: t("finalPhoneHint") }),
+      element(document, "div", { class: "settings-phone-columns" }, renderHomeGrant(document, grant, model.selected ?? 0, t("qrTitle")),
+        element(document, "div", {}, element(document, "p", { text: t("finalTypeCode") }),
+          element(document, "p", { "data-secret": "true", text: grant.shortCode }),
+          element(document, "p", { text: t("finalAccessCloses", { hours: Math.floor(expiry.remainingSeconds / 3600), minutes: Math.floor(expiry.remainingSeconds % 3600 / 60) }) }),
+          element(document, "p", { text: t("finalNewCodeHint") }))),
+      element(document, "div", { class: "dialog-actions" }, settingsButton(document, "close-home", t("settingsCloseAccess")),
+        settingsButton(document, "phone-done", t("finalDone"), () => actions.onDismissHome?.())));
+    dialog.addEventListener("cancel", event => { event.preventDefault(); actions.onDismissHome?.(); });
+    dialog.addEventListener("keydown", event => {
+      if (event.key === "Escape") { event.preventDefault(); actions.onDismissHome?.(); }
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll("button, input")].filter(control => !control.disabled);
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
+    });
+    block.append(dialog);
+  }
   else if (home?.enabled && !expiry.expired) block.append(element(document, "p", { text: t("noGrantSecret") }));
   if (model.canManage && (!home?.enabled || expiry.expired)) {
     block.append(addressField(document, t));
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "open-home", text: t("homeOpen") }));
+    block.append(element(document, "button", { type: "button", class: "btn primary", "data-action": "open-home", text: t("settingsOpenPhone") }));
   } else if (model.canManage && home?.enabled) {
     block.append(addressField(document, t));
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "replace-home", text: t("homeReplace") }));
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "close-home", text: t("homeClose") }));
+    block.append(element(document, "button", { type: "button", class: "btn primary", "data-action": "replace-home", text: t("settingsOpenPhone") }));
+    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "close-home", text: t("settingsCloseAccess") }));
   }
   block.addEventListener("click", (event) => {
     const link = event.target?.closest?.("[data-link]");
@@ -285,6 +565,7 @@ function homeFields(home) {
     expiresAt: home.expiresAt ?? null,
     addresses: home.addresses ?? [],
     remainingSeconds: home.remainingSeconds ?? 0,
+    phoneCount: Number.isInteger(home.phoneCount) ? home.phoneCount : null,
   };
 }
 
@@ -295,8 +576,9 @@ export const LOOK_OPTIONS = Object.freeze([
 ]);
 export function renderLookPreview(document, look, selected, onChoose) {
   const button = element(document, 'button', { type: 'button', class: 'look-choice',
-    'aria-label': look.label, 'aria-pressed': String(selected), onclick: () => onChoose(look.id) });
+    'aria-label': look.label, 'aria-pressed': String(selected), onclick: () => onChoose?.(look.id) });
   const preview = element(document, 'span', { class: 'look-preview', 'data-look': look.id, 'aria-hidden': 'true' });
+  preview.addEventListener('click', event => { event.stopPropagation?.(); onChoose?.(look.id); });
   preview.append(element(document, 'span', { class: 'look-preview-bar' },
     element(document, 'span', { class: 'look-preview-mark' }),
     element(document, 'span', { class: 'look-preview-modes' })));

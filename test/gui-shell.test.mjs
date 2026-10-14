@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, createGroup, setUnitAlias, startSession } from "../gui/app/actions.mjs";
@@ -11,7 +11,7 @@ import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishRead
 import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
-import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
+import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
@@ -58,6 +58,278 @@ test("English and Spanish use the same copy keys", () => {
   assert.throws(() => text("en", "missing-key"), /Unknown copy key: missing-key/);
   assert.throws(() => text("es", "missing-key"), /Unknown copy key: missing-key/);
 });
+
+async function settingsApp(t, onFetch) {
+  const fixture = await createGuiFixture({ scenario: "settings", now: new Date().toISOString() });
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], onFetch);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell"), "The Settings fixture did not start.");
+  navigate(desktop.app, "settings");
+  await waitFor(() => desktop.app.settingsState?.loaded && !desktop.app.settingsState.loading, "The Settings reports did not load.");
+  return { fixture, ...desktop };
+}
+
+function changeControl(control, value) {
+  control.checked = value;
+  for (const handler of control.listeners.get("change") ?? []) handler({ target: control });
+}
+
+test("Settings exposes five keyboard tabs, own-palette looks and machine-owned read-only reports", async t => {
+  const desktop = await settingsApp(t);
+  const { root, app } = desktop;
+  assert.deepEqual([...root.querySelectorAll("[data-settings-tab]")].map(node => node.textContent || text("en", `settings${node.dataset.settingsTab[0].toUpperCase()}${node.dataset.settingsTab.slice(1)}`)),
+    ["General", "Agents", "Permissions", "Projects", "Content"]);
+  assert.equal(root.querySelectorAll(".look-choice").length, 6);
+  for (const preview of root.querySelectorAll(".look-choice")) {
+    assert.equal(preview.getAttribute("data-look"), null);
+    assert.equal(preview.querySelector(".look-preview-panels").children.length, 3);
+    assert.equal(preview.querySelector(".look-preview").getAttribute("data-look") !== null, true);
+  }
+  assert.equal(root.querySelector("[data-origin]"), null);
+  assert.equal(root.querySelector("[data-action='relay-coming-soon']").disabled, true);
+  assert.equal(root.querySelector("[data-start-with-windows]").checked, false);
+  click(root.querySelector("[data-look='nebula']").closest("button"));
+  await waitFor(() => app.look === "nebula" && app.activity.get("settings")?.phase === "success", "The look did not apply.");
+  const tab = root.querySelector("[data-settings-tab='general']");
+  for (const handler of tab.listeners.get("keydown") ?? []) handler({ key: "ArrowRight", preventDefault() {} });
+  assert.equal(app.settingsState.tab, "agents");
+  assert.equal(desktop.document.activeElement, root.querySelector("[data-settings-tab='agents']"));
+  assert.equal(root.querySelector("[data-agent='claude']").querySelector("small").textContent, "CLI 2.6.1");
+  click(root.querySelector("[data-action='settings-machine']"));
+  click(root.querySelector("[data-machine-choice='OFFLINE']"));
+  await waitFor(() => app.settingsState.info?.selectedMachine === "OFFLINE" && !app.settingsState.loading, "The offline report did not load.");
+  assert.equal(root.querySelectorAll("[data-agent]").length, 1);
+  assert.equal(root.querySelector("[data-agent='codex']").querySelector("small").textContent, "CLI 0.150.0");
+  assert.equal(root.querySelector("[data-action='settings-scan']").disabled, true);
+  assert.equal(root.querySelector("[data-action='settings-mode-codex-auto']").disabled, true);
+  assert.match(root.querySelector("[data-settings-readonly]").textContent, /Last report/);
+  click(root.querySelector("[data-settings-tab='projects']"));
+  assert.equal(root.querySelector("[data-settings-project='blog']").querySelector("code").textContent.endsWith("blog"), true);
+  assert.equal(root.querySelector("[data-action='add-folder']"), null);
+  click(root.querySelector("[data-settings-tab='general']"));
+  assert.equal(root.querySelector("[data-start-with-windows]").disabled, true);
+  assert.equal([...root.querySelectorAll("span")].some(node => node.textContent.includes("offline-staging")), true);
+  assert.equal(root.querySelector(".look-choice").disabled, false);
+  app.language = "es"; renderShell(app);
+  assert.match(root.querySelector("[data-settings-readonly]").textContent, /solo lectura/);
+  assertVisibleCopy("es", mountedVisibleCopy(desktop));
+});
+
+test("Settings mode and named app changes are reviewed; Copy and Cancel write no client bytes", async t => {
+  const writes = [];
+  const desktop = await settingsApp(t, (input, init) => { if (!["GET", "HEAD"].includes(init.method)) writes.push(new URL(input).pathname); });
+  const { root, app, document, fixture } = desktop;
+  const copies = [];
+  desktop.view.navigator = { clipboard: { writeText: async value => copies.push(value) } };
+  click(root.querySelector("[data-settings-tab='agents']"));
+  click(root.querySelector("[data-action='settings-mode-codex-on-demand']"));
+  await waitFor(() => document.querySelector("[data-settings-review='codex']"), "The mode change bypassed review.");
+  let dialog = document.querySelector("[data-settings-review]");
+  assert.equal(dialog.querySelector("[data-review-change='git']").checked, false);
+  assert.equal(dialog.querySelector("[data-action='settings-apply']").textContent, "Apply 2 changes");
+  const preview = dialog.querySelector("pre");
+  assert.ok(preview);
+  click(dialog.querySelector("[data-action='settings-copy']"));
+  await waitFor(() => copies.length === 1, "Copy changes did not use the clipboard.");
+  assert.equal(copies[0].includes("mcp.json") && copies[0].includes("fixture-relay") && !copies[0].includes("git.commit"), true);
+  click(dialog.querySelector("[data-action='settings-review-cancel']"));
+  assert.equal(document.querySelector("[data-settings-review]"), null);
+  assert.equal(document.activeElement, root.querySelector("[data-action='settings-mode-codex-on-demand']"));
+  assert.equal(app.settingsState.agents.items.find(item => item.id === "codex").mode, "auto");
+  assert.equal((await readdir(fixture.root, { recursive: true })).some(path => path.endsWith("reviewed-clients.json") || path.endsWith("mcp.json")), false);
+  click(root.querySelector("[data-action='settings-app-codex']"));
+  await waitFor(() => document.querySelector("[data-settings-review='codex']"), "The named app connection bypassed review.");
+  dialog = document.querySelector("[data-settings-review]");
+  assert.match(dialog.querySelector("h2").textContent, /Codex app/);
+  click(dialog.querySelector("[data-action='settings-review-cancel']"));
+  const settingsWrites = writes.filter(path => path.includes("/settings/"));
+  assert.equal(settingsWrites.length, 2);
+  assert.equal(settingsWrites.every(path => path.endsWith("/preview")), true);
+});
+
+test("Settings applies a reviewed selection once after a lost response and revokes the exact optional agent permission", async t => {
+  const writes = [];
+  const desktop = await settingsApp(t, (input, init) => {
+    if (init.body && !["GET", "HEAD"].includes(init.method)) writes.push({ path: new URL(input).pathname, key: headerValue(init.headers, "Idempotency-Key"), body: JSON.parse(init.body) });
+  });
+  const { root, app, document, fixture } = desktop;
+  click(root.querySelector("[data-settings-tab='agents']"));
+  click(root.querySelector("[data-action='settings-review-cursor']"));
+  await waitFor(() => document.querySelector("[data-settings-review='cursor']"), "The client review did not open.");
+  const dialog = document.querySelector("[data-settings-review]");
+  changeControl(dialog.querySelector("[data-review-change='git']"), true);
+  assert.equal(dialog.querySelector("[data-action='settings-apply']").textContent, "Apply 3 changes");
+  fixture.control.setFault({ method: "POST", path: "/api/v1/settings/agents/cursor/apply", dropAfterCommit: true });
+  click(dialog.querySelector("[data-action='settings-apply']"));
+  await waitFor(() => root.querySelector("[data-action='retry-activity']"), "The unconfirmed Apply did not offer Retry.");
+  assert.equal(dialog.querySelector("[data-review-change='git']").checked, true);
+  click(root.querySelector("[data-action='retry-activity']"));
+  await waitFor(() => !document.querySelector("[data-settings-review]") && app.settingsState.agents.items.find(item => item.id === "cursor").cli.state === "connected", "Apply did not reconcile.");
+  const applied = writes.filter(item => item.path.endsWith("cursor/apply"));
+  assert.equal(applied.length, 2);
+  assert.equal(applied[0].key === applied[1].key, true);
+  assert.deepEqual(applied[0].body, applied[1].body);
+  assert.equal(app.settingsState.agents.items.find(item => item.id === "cursor").mode, "on-demand");
+  click(root.querySelector("[data-settings-tab='permissions']"));
+  const permission = app.settingsState.permissions.agentPermissions[0];
+  assert.equal(permission.client, "cursor");
+  click(root.querySelector(`[data-action='settings-revoke-${permission.id}']`));
+  await waitFor(() => app.settingsState.permissions.agentPermissions.length === 0, "The exact agent permission was not revoked.");
+  assert.equal(writes.filter(item => item.path.includes("/settings/permissions/")).length, 1);
+  const grant = app.settingsState.permissions.unitGrants[0];
+  click(root.querySelector(`[data-action='settings-revoke-${grant.grant.id}']`));
+  await waitFor(() => writes.some(item => item.path.endsWith(`/approval-grants/${grant.grant.id}`)), "The standing grant was not addressed exactly.");
+  assert.equal(writes.find(item => item.path.endsWith(`/approval-grants/${grant.grant.id}`)).path.includes(encodeURIComponent(grant.unitId)), true);
+});
+
+test("Settings Content uses discovered items, preserves preferences and retains drafts on revision failure", async t => {
+  const desktop = await settingsApp(t);
+  const { root, app, fixture } = desktop;
+  click(root.querySelector("[data-settings-tab='projects']"));
+  assert.equal(root.querySelectorAll("[data-settings-project]").length, 1);
+  assert.equal(root.querySelectorAll("[data-settings-project] button").length, 0);
+  click(root.querySelector("[data-settings-tab='content']"));
+  assert.equal(root.querySelectorAll("[data-content-item]").length, 13);
+  changeControl(root.querySelector("[data-content-item='feature:tribunal']"), false);
+  typeInput(root.querySelector("[data-preference-instructions]"), "Retained instructions.\nSecond line.", 3, 3);
+  click(root.querySelector("[data-action='settings-save-content']"));
+  await waitFor(() => !app.settingsState.contentDirty && !app.settingsState.loading && app.activity.get("settings:PATCH:/settings/content")?.phase === "success", "Content did not save.");
+  const preferences = await readFile(join(fixture.root, "Cosmic", "hivem1nd", "user", "preferences.md"), "utf8");
+  assert.equal(preferences.startsWith("Existing user preference."), true);
+  assert.match(preferences, /Retained instructions\.\nSecond line\./);
+  assert.equal(app.settingsState.content.features.find(item => item.id === "feature:tribunal").included, false);
+  typeInput(root.querySelector("[data-preference-instructions]"), "Draft after conflict.", 5, 5);
+  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings/content", status: 409, code: "revision_conflict" });
+  click(root.querySelector("[data-action='settings-save-content']"));
+  await waitFor(() => app.activity.get("settings:PATCH:/settings/content")?.phase === "error", "The revision conflict was hidden.");
+  assert.equal(root.querySelector("[data-preference-instructions]").value, "Draft after conflict.");
+  assert.equal(app.settingsState.contentDirty, true);
+  assert.equal(await readFile(join(fixture.root, "Cosmic", "hivem1nd", "user", "preferences.md"), "utf8"), preferences);
+  click(root.querySelector("[data-action='settings-reload-content']"));
+  assert.equal(app.settingsState.contentDirty, false);
+  assert.equal(root.querySelector("[data-preference-instructions]").value, "Retained instructions.\nSecond line.");
+});
+
+test("Settings refuses a stale configuration preview without touching the other selected files", async t => {
+  const desktop = await settingsApp(t);
+  const { root, document } = desktop;
+  click(root.querySelector("[data-settings-tab='agents']"));
+  click(root.querySelector("[data-action='settings-review-cursor']"));
+  await waitFor(() => document.querySelector("[data-settings-review]"), "The configuration review did not open.");
+  const dialog = document.querySelector("[data-settings-review]");
+  const files = [...dialog.querySelectorAll("code")].map(node => node.textContent);
+  await mkdir(dirname(files[0]), { recursive: true });
+  const foreign = '{"mcpServers":{"foreign":{"command":"preserve"}}}\n';
+  await writeFile(files[0], foreign);
+  click(dialog.querySelector("[data-action='settings-apply']"));
+  await waitFor(() => dialog.querySelector("[data-settings-dialog-error]"), "A stale preview was silently applied.");
+  assert.match(dialog.querySelector("[data-settings-dialog-error]").textContent, /configuration changed/);
+  assert.equal(await readFile(files[0], "utf8"), foreign);
+  assert.equal(await readFile(files[1]).then(() => true).catch(() => false), false);
+  assert.equal(dialog.querySelector("[data-review-change='git']").checked, false);
+  click(dialog.querySelector("[data-action='settings-review-cancel']"));
+});
+
+test("Settings retains Content edits typed while an earlier save waits for acknowledgment", async t => {
+  let release;
+  let saving = false;
+  const held = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const desktop = await settingsApp(t, async (input, init) => {
+    if (init.method === "PATCH" && new URL(input).pathname.endsWith("/settings/content")) { saving = true; await held; }
+  });
+  const { root, app } = desktop;
+  click(root.querySelector("[data-settings-tab='content']"));
+  typeInput(root.querySelector("[data-preference-instructions]"), "First save.", 3, 3);
+  click(root.querySelector("[data-action='settings-save-content']"));
+  await waitFor(() => saving, "The Content save did not start.");
+  typeInput(root.querySelector("[data-preference-instructions]"), "Newer draft.", 5, 5);
+  release();
+  await waitFor(() => app.activity.get("settings:PATCH:/settings/content")?.phase === "success", "The earlier save did not finish.");
+  assert.equal(root.querySelector("[data-preference-instructions]").value, "Newer draft.");
+  assert.equal(app.settingsState.content.preferences.additionalInstructions, "First save.");
+  assert.equal(app.settingsState.contentDirty, true);
+  click(root.querySelector("[data-action='settings-save-content']"));
+  await waitFor(() => !app.settingsState.contentDirty && app.activity.get("settings:PATCH:/settings/content")?.phase === "success", "The newer draft did not save against the acknowledged revision.");
+  assert.equal(app.settingsState.content.preferences.additionalInstructions, "Newer draft.");
+});
+
+test("Settings ignores a late previous-machine response after another selection", async t => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const desktop = await settingsApp(t, async (input, init) => {
+    if (init.method === "GET" && new URL(input).searchParams.get("machine") === "OFFLINE") await held;
+  });
+  const { root, app } = desktop;
+  click(root.querySelector("[data-action='settings-machine']"));
+  click(root.querySelector("[data-machine-choice='OFFLINE']"));
+  click(root.querySelector("[data-action='settings-machine']"));
+  click(root.querySelector("[data-machine-choice='DESKTOP']"));
+  await waitFor(() => app.settingsState.info?.selectedMachine === "DESKTOP" && !app.settingsState.loading, "The current-machine report did not load.");
+  release();
+  await delay(100);
+  assert.equal(app.settingsState.machine, "DESKTOP");
+  assert.equal(app.settingsState.info.selectedMachine, "DESKTOP");
+  click(root.querySelector("[data-settings-tab='projects']"));
+  assert.equal(root.querySelectorAll("[data-settings-project]").length, 1);
+  assert.equal(root.querySelector("[data-settings-project='shop']") !== null, true);
+});
+
+test("Settings startup, scan and manual finding target the selected owner with revision checks", async t => {
+  const desktop = await settingsApp(t);
+  const { root, app, fixture, document } = desktop;
+  changeControl(root.querySelector("[data-start-with-windows]"), true);
+  await waitFor(() => app.settingsState.info.service.startWithWindows, "The machine-local startup setting did not save.");
+  click(root.querySelector("[data-settings-tab='agents']"));
+  click(root.querySelector("[data-action='settings-scan']"));
+  await waitFor(() => app.activity.get("settings:POST:/settings/agents/scan")?.phase === "success", "Scan did not finish.");
+  const binary = join(fixture.root, "copilot.exe");
+  await writeFile(binary, "Fixture binary, never executed.");
+  click(root.querySelector("[data-action='settings-find-copilot']"));
+  await waitFor(() => document.querySelector("[data-form='settings-find']"), "Manual finding did not open.");
+  const dialog = document.querySelector("[data-form='settings-find']");
+  dialog.querySelector("[name='path']").value = binary;
+  click(dialog.querySelector("[data-action='confirm-form']"));
+  await waitFor(() => app.settingsState.agents.items.find(item => item.id === "copilot").found, "The known client path was not found.");
+  assert.equal(document.querySelector("[data-form='settings-find']"), null);
+});
+
+test("Settings phone dialog uses the real grant, retains expiry and scrubs secrets on dismissal and close", async t => {
+  const desktop = await settingsApp(t);
+  const { root, app, fixture } = desktop;
+  await endFixtureHome(desktop);
+  clickAction(root, "open-home");
+  await waitFor(() => root.querySelector("[data-phone-dialog]"), "The QR dialog did not open.");
+  assert.equal(root.querySelector(".qr").getAttribute("data-qr") === app.homeState.grant.qrPayloads[0], true);
+  assert.equal(Date.parse(app.homeState.grant.expiresAt) - Date.parse(app.homeState.grant.openedAt), 12 * 3600000);
+  assert.equal(root.querySelector("[data-phone-count]").getAttribute("data-phone-count"), "unknown");
+  assert.equal(Object.hasOwn(app.activity.get("home-open").result.data, "key"), false);
+  click(root.querySelector("[data-action='phone-done']"));
+  assert.equal(app.homeState.grant, null);
+  assert.equal(root.querySelector("[data-secret]"), null);
+  assert.equal(root.querySelector("[data-phone-dialog]"), null);
+  assert.equal(app.homeState.home.enabled, true);
+  clickAction(root, "close-home");
+  await waitFor(() => !app.homeState.home.enabled, "Close access did not revoke the grant.");
+  assert.equal(root.querySelector("[data-home]").getAttribute("data-home"), "closed");
+  assert.equal(JSON.stringify((await request(app.api, "GET", "/settings")).data).includes("shortCode"), false);
+  const { document } = createTestDocument(1440);
+  const panel = renderSettings(document, { tab: "general", machine: "DESKTOP", language: "en", home: { enabled: true, phoneCount: 2, expiresAt: new Date(Date.now() + 10000).toISOString() } }, (key, values) => text("en", key, values), {});
+  assert.match(panel.querySelector("[data-phone-count]").textContent, /2 phones signed in/);
+  clickAction(root, "open-home");
+  await waitFor(() => root.querySelector("[data-phone-dialog]"), "The next QR grant did not open.");
+  await fixture.control.advance(12 * 3600000);
+  await waitFor(() => !app.homeState.home.enabled && !root.querySelector("[data-phone-dialog]"), "Expiry did not remove the QR grant.");
+  assert.equal(app.homeState.grant, null);
+  assert.equal(root.querySelector("[data-secret]"), null);
+});
+
+async function endFixtureHome(desktop) {
+  clickAction(desktop.root, "close-home");
+  await waitFor(() => !desktop.app.homeState.home.enabled, "The fixture home access did not close.");
+}
 
 test("presentation prefers a viewer override and otherwise uses settings", () => {
   assert.deepEqual(presentation({ look: "high-contrast", language: "es" }, { look: "modern", language: "en" }), {
@@ -2791,8 +3063,8 @@ test("disabled controls explain how to continue", async (t) => {
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
   await waitFor(() => desktop.root.querySelector("[data-task='project:shop:030']")?.querySelector("[data-disabled-reason='accept']")?.textContent === "Accept is available when the task is in review.", "The accept reason was not shown.");
   navigate(desktop.app, "settings");
-  await waitFor(() => desktop.root.querySelector("[data-look='modern']")?.getAttribute("aria-pressed") === "true", "The current look was not marked.");
-  assert.equal(desktop.root.querySelector("[data-look='high-contrast']")?.getAttribute("aria-pressed"), "false");
+  await waitFor(() => desktop.root.querySelector("[data-look='modern']")?.closest("button").getAttribute("aria-pressed") === "true", "The current look was not marked.");
+  assert.equal(desktop.root.querySelector("[data-look='high-contrast']")?.closest("button").getAttribute("aria-pressed"), "false");
   assert.equal(desktop.root.querySelector("[data-language='en']")?.getAttribute("aria-pressed"), "true");
   navigate(desktop.app, "blueprint");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");

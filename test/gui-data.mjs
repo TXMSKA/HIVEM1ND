@@ -327,7 +327,35 @@ export async function seedRecords(tree, options = {}) {
   await mkdir(join(local, "receipts"), { recursive: true });
   await mkdir(join(local, "transactions"), { recursive: true });
   await mkdir(tree.origin, { recursive: true });
+  if (data.scenario === "settings") await writeSettingsReports(paths, tree, local, data.now);
   return { data, paths, local };
+}
+
+async function writeSettingsReports(paths, tree, local, now) {
+  const agents = [
+    { id: "claude", name: "Claude Code", version: "2.6.1", found: true, mode: "auto", cli: { state: "connected", changes: 0 }, app: { name: "Claude app", state: "connected" } },
+    { id: "codex", name: "Codex", version: "0.159.3", found: true, mode: "auto", cli: { state: "connected", changes: 0 }, app: { name: "Codex app", state: "available" } },
+    { id: "cursor", name: "Cursor", version: "2026.10.01", found: true, mode: "on-demand", cli: { state: "changes-needed", changes: 2 }, app: { name: "Cursor editor", state: "available" } },
+    { id: "opencode", name: "OpenCode", version: "1.4.0", found: true, mode: "on-demand", cli: { state: "connected", changes: 0 }, app: { name: null, state: "missing" } },
+    { id: "copilot", name: "GitHub Copilot", version: null, found: false, mode: "on-demand", cli: { state: "missing", changes: 0 }, app: { name: null, state: "missing" } },
+  ];
+  for (const machine of [LOCAL_MACHINE, "OFFLINE"]) {
+    const localReport = machine === LOCAL_MACHINE;
+    const items = localReport ? agents : [{ ...agents[1], version: "0.150.0", mode: "on-demand" }];
+    const project = { id: localReport ? "shop" : "blog", title: localReport ? "Shop" : "Blog", path: localReport ? tree.repo : join(tree.root, "offline-repositories", "blog"), registered: true };
+    await writeOwned(paths, join(tree.user, "machines", machine, "settings.json"), stableJson({
+      machine, reportedAt: localReport ? now : new Date(Date.parse(now) - 3600000).toISOString(),
+      locations: { mind: localReport ? tree.mind : join(tree.root, "offline-mind"), staging: localReport ? join(local, "staging") : join(tree.root, "offline-staging") },
+      service: { machine, state: localReport ? "running" : "stopped", version: "3.0.0", startedAt: now, startWithWindows: false, revision: null },
+      agents: { revision: null, items }, permissions: { revision: null, unitGrants: [], agentPermissions: [] },
+      projects: { revision: null, folders: [{ id: deterministicUuid(["settings-folder", machine]), path: dirname(project.path), environment: null, repositories: [project] }] },
+    }));
+  }
+  for (const [name, category] of [["plan", "planning"], ["brainstorm", "planning"], ["task", "planning"], ["qa", "quality"], ["tribunal", "quality"], ["cyberattack", "quality"], ["relay", "continuity"], ["catchup", "continuity"], ["docs", "continuity"]]) {
+    await writeOwned(paths, join(tree.mind, "features", `${name}.md`), `category: ${category}\n\n${name}\n`);
+  }
+  for (const name of ["security", "design", "copy", "coding"]) await writeOwned(paths, join(tree.mind, "knowledge", `${name}.md`), `${name}\n`);
+  await writeOwned(paths, join(tree.user, "preferences.md"), "Existing user preference.\n");
 }
 
 async function writeChats(paths, user, now) {
