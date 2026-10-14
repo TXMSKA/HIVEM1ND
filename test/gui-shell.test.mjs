@@ -19,7 +19,7 @@ import { setAttachments, startWatch, libraryState, createResource } from "../gui
 import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
-import { renderSession, renderUnit } from "../gui/app/inspector.mjs";
+import { renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -408,6 +408,14 @@ test("Settings phone dialog uses the real grant, retains expiry and scrubs secre
   clickAction(root, "open-home");
   await waitFor(() => root.querySelector("[data-phone-dialog]"), "The QR dialog did not open.");
   assert.equal(root.querySelector(".qr").getAttribute("data-qr") === app.homeState.grant.qrPayloads[0], true);
+  assert.equal(decodeHomeQrPath(root.querySelector('.qr').querySelector('path').getAttribute('d')), app.homeState.grant.qrPayloads[0]);
+  const homeApi = apiFrom(`${new URL(fixture.phoneUrl).origin}/`);
+  await exchangeCode(homeApi, app.homeState.grant.shortCode);
+  const reported = await request(app.api, 'GET', '/settings');
+  assert.equal(reported.data.home.phoneCount, 1);
+  const counted = renderSettings(root.ownerDocument, { tab: 'general', machine: 'DESKTOP', language: 'en', home: reported.data.home, now: Date.parse(reported.meta.readAt) }, (key, values) => text('en', key, values), {});
+  assert.equal(counted.querySelector('[data-phone-count]').getAttribute('data-phone-count'), '1');
+  assert.match(counted.querySelector('[data-phone-count]').textContent, /1 phone signed in/);
   assert.equal(Date.parse(app.homeState.grant.expiresAt) - Date.parse(app.homeState.grant.openedAt), 12 * 3600000);
   assert.equal(root.querySelector("[data-phone-count]").getAttribute("data-phone-count"), "unknown");
   assert.equal(Object.hasOwn(app.activity.get("home-open").result.data, "key"), false);
@@ -905,7 +913,7 @@ test("a failed home binding leaves no active grant", async (t) => {
   assert.equal((await exchangeRaw(fixture, FIXTURE_HOME_KEY)).status, 410);
 });
 
-for (const reason of ["closed", "expired"]) test(`a ${reason} home event clears the phone session without closing the desktop viewer`, async (t) => {
+for (const reason of ["closed", "expired", "replaced"]) test(`a ${reason} home event clears the phone session without closing the desktop viewer`, async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const phone = await bootApp(fixture.phoneUrl, 390, []);
@@ -915,12 +923,19 @@ for (const reason of ["closed", "expired"]) test(`a ${reason} home event clears 
   await waitFor(() => phone.root.querySelector(".shell") && desktop.root.querySelector(".shell"), "The viewers did not open.");
   const desktopToken = desktop.app.api.token;
   await fixture.control.emit("home.changed", { reason, home: { enabled: false } });
-  await waitFor(() => phone.root.querySelector("[data-home-code]"), "The closed phone session did not show reopening guidance.");
+  await waitFor(() => phone.root.querySelector('[data-phone-state="ended"]'), "The closed phone session did not show reopening guidance.");
   assert.equal(phone.app.api.token, null);
   assert.equal(phone.app.api.homeKey, null);
   assert.equal(phone.app.api.live.stopped, true);
   assert.equal(phone.root.querySelector(".shell"), null);
-  assert.equal(phone.root.querySelector(".gate")?.querySelector("p")?.textContent, text(phone.app.language, reason === "expired" ? "homeExpired" : "homeClosed"));
+  assert.equal(phone.root.querySelector(".gate")?.querySelector("p")?.textContent, text(phone.app.language, 'phoneAccessEndedBody'));
+  assert.equal(phone.root.querySelector('[data-home-code]'), null);
+  assert.equal(phone.app.store.view, null);
+  assert.equal(phone.app.store.indexes.units.size, 0);
+  assert.equal(phone.app.unitList, null);
+  assert.equal(phone.app.inputDrafts ?? null, null);
+  click(phone.root.querySelector('[data-action="phone-new-code"]'));
+  assert.equal(phone.root.querySelectorAll('[data-code-cell]').length, 6);
   renderShell(phone.app);
   assert.equal(phone.root.querySelector(".shell"), null);
   assert.equal(desktop.app.api.token, desktopToken);
@@ -934,7 +949,7 @@ test("a home code is cleared before it is sent and a bad code keeps no secret", 
   const input = form.querySelector("[data-home-code]");
   input.value = "ab23cd";
   form.listeners.get("submit")[0]({ preventDefault() {} });
-  assert.equal(submitted, "ab23cd");
+  assert.equal(submitted, "AB23CD");
   assert.equal(input.value, "");
   const nav = renderPhone(document, (key) => text("en", key), ["hierarchy", "chats", "waiting"], "hierarchy", () => undefined, () => null);
   assert.deepEqual([...nav.querySelectorAll("[data-phone-mode]")].map((node) => node.getAttribute("data-phone-mode")), ["hierarchy", "chats", "waiting"]);
@@ -979,6 +994,127 @@ test("a home code is cleared before it is sent and a bad code keeps no secret", 
   assert.equal(again.expiresAt, exchanged.expiresAt);
 });
 
+test('one accessible code input paints six cells, normalizes paste and backspace, and clears every cell on submit', () => {
+  const { document } = createTestDocument();
+  let submitted;
+  const form = renderCodeEntry(document, key => text('en', key), code => { submitted = code; });
+  const input = form.querySelector('[data-home-code]');
+  assert.equal(form.querySelectorAll('input').length, 1);
+  assert.equal(form.querySelectorAll('[data-code-cell]').length, 6);
+  assert.equal(input.getAttribute('aria-label'), text('en', 'homeCode'));
+  assert.equal(input.getAttribute('autocomplete'), 'off');
+  assert.equal(form.querySelector('.phone-code-cells').getAttribute('aria-hidden'), 'true');
+  const button = form.querySelector('button');
+  assert.equal(button.disabled, true);
+  let prevented = false;
+  input.listeners.get('paste')[0]({ preventDefault() { prevented = true; }, clipboardData: { getData: () => ' k7p-4qx ' } });
+  assert.equal(prevented, true);
+  assert.equal(input.value, 'K7P4QX');
+  assert.equal(button.disabled, false);
+  typeInput(input, 'K7P4Q', 5, 5);
+  assert.equal(button.disabled, true);
+  assert.equal(form.querySelectorAll('[data-code-cell]')[5].textContent, '');
+  typeInput(input, 'k7p4qx', 6, 6);
+  form.listeners.get('submit')[0]({ preventDefault() {} });
+  assert.equal(submitted, 'K7P4QX');
+  assert.equal(input.value, '');
+  assert.equal(form.querySelectorAll('[data-filled="true"]').length, 0);
+});
+
+test('pairing errors keep only server counters and lock dates, with no reply credential or entered code', async () => {
+  const api = apiFrom('http://127.0.0.1:43123/');
+  api.fetch = async () => ({ ...jsonEnvelope(401, null), text: async () => JSON.stringify({ error: {
+    code: 'invalid_home_key', message: 'reply-secret K7P4QX', details: { triesLeft: 4, token: 'reply-secret', code: 'K7P4QX' },
+  } }) });
+  await assert.rejects(exchangeCode(api, 'K7P4QX'), error => {
+    assert.deepEqual(error.details, { triesLeft: 4 });
+    assert.equal(JSON.stringify(error).includes('reply-secret'), false);
+    assert.equal(error.message.includes('K7P4QX'), false);
+    return error.code === 'invalid_home_key';
+  });
+  assert.equal(api.uncertain.size, 0);
+  assert.equal(api.token, null);
+  assert.equal(api.homeKey, null);
+});
+
+test('pairing renders four server counts, locks without submit, and accepts a replacement grant immediately', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const origin = new URL(fixture.phoneUrl).origin;
+  const phone = await bootApp(`${origin}/`, 390, []); t.after(() => dispose(phone.app));
+  phone.app.api.now = () => fixtureNow;
+  let fixtureNow = Date.parse('2026-10-10T12:00:00.000Z');
+  assert.equal(phone.view.innerHeight, 844);
+  assert.equal(phone.root.querySelector('[data-phone-state]').getAttribute('data-phone-state'), 'pair');
+  for (let count = 4; count >= 1; count -= 1) {
+    const input = phone.root.querySelector('[data-home-code]');
+    typeInput(input, '000000', 6, 6);
+    const form = phone.root.querySelector('[data-code-entry]');
+    form.listeners.get('submit')[0]({ preventDefault() {} });
+    assert.equal(input.value, '');
+    assert.equal(phone.app.phoneCode ?? null, null);
+    await waitFor(() => phone.root.querySelector('[data-tries-left]')?.getAttribute('data-tries-left') === String(count), 'Server attempts were not rendered.');
+    assert.equal(phone.root.querySelector('[data-home-code]').getAttribute('aria-invalid'), 'true');
+  }
+  typeInput(phone.root.querySelector('[data-home-code]'), '000000', 6, 6);
+  phone.root.querySelector('[data-code-entry]').listeners.get('submit')[0]({ preventDefault() {} });
+  await waitFor(() => phone.root.querySelector('[data-phone-state="locked"]'), 'Pairing did not lock.');
+  assert.equal(phone.root.querySelector('[data-code-entry]'), null);
+  assert.equal(phone.root.querySelector('button'), null);
+  await fixture.control.advance(599999); fixtureNow += 599999;
+  await assert.rejects(exchangeCode(apiFrom(`${origin}/`), FIXTURE_HOME_CODE), { code: 'pairing_locked' });
+  await fixture.control.advance(1); fixtureNow += 1;
+  renderShell(phone.app);
+  assert.ok(phone.root.querySelector('[data-home-code]'));
+  await exchangeCode(apiFrom(`${origin}/`), FIXTURE_HOME_CODE);
+  for (let attempt = 0; attempt < 5; attempt++) await assert.rejects(exchangeCode(apiFrom(`${origin}/`), '000000'));
+  const next = await openHome(apiFrom(fixture.desktopUrl));
+  const replacement = await bootApp(`${origin}/#home=${next.data.key}`, 390, []); t.after(() => dispose(replacement.app));
+  await waitFor(() => replacement.root.querySelector('.shell'), 'The replacement grant did not unlock pairing.');
+  assert.equal(replacement.app.store.audience, 'phone');
+  await assertAbsent(fixture.root, next.data.shortCode);
+  await assertAbsent(fixture.root, replacement.app.api.token);
+});
+
+test('a phone shows computer guidance for push asks and ordinary controls for session.open in both languages', () => {
+  const { document } = createTestDocument();
+  for (const language of ['en', 'es']) {
+    const t = key => text(language, key);
+    const push = renderApproval(document, { id: 'push', state: 'pending', display: 'Build', desktopOnly: true }, t, () => assert.fail('Phone push action'), false, false);
+    assert.equal(push.querySelectorAll('button').length, 0);
+    assert.equal(push.querySelector('[data-computer-required]').textContent, t('phoneComputerRequired'));
+    const session = renderApproval(document, { id: 'session', state: 'pending', action: 'session.open', pattern: { client: 'codex', machine: 'DESKTOP' }, desktopOnly: false, alwaysAllowed: false }, t, () => {}, false, false);
+    assert.deepEqual(session.querySelectorAll('button').map(button => button.getAttribute('data-action')), ['approve', 'deny']);
+  }
+});
+
+test('phone chat cards belong to its existing conversation, require a review note and preserve authority when widened', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const requests = [];
+  const phone = await bootApp(fixture.phoneUrl, 390, [], (url, init) => requests.push({ path: new URL(url).pathname, method: init.method }));
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.app.chatList?.catalog?.length, 'Phone conversations did not load.');
+  const unit = phone.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  phone.app.activeHandlers.onActivate({ id: unit.id, kind: 'unit', unit }, 'double');
+  await waitFor(() => phone.root.querySelector('[data-phone-card="review"]'), 'In-place review did not load.');
+  assert.equal(phone.app.activeRows.some(row => row.unit?.role === 'master'), false);
+  assert.equal(requests.some(item => item.method === 'POST' && item.path === '/api/v1/chats'), false);
+  const review = phone.root.querySelector('[data-task="project:shop:029"]');
+  assert.equal(review.querySelector('[data-action="accept"]').disabled, false);
+  assert.equal(review.querySelector('[data-action="send-back"]').disabled, true);
+  typeInput(review.querySelector('[data-note]'), 'Please repeat the checks', 0, 23);
+  assert.equal(review.querySelector('[data-action="send-back"]').disabled, false);
+  const notReady = phone.root.querySelector('[data-task="project:shop:030"]');
+  assert.equal(notReady.querySelector('[data-action="accept"]').disabled, true);
+  assert.equal(notReady.querySelector('[data-action="send-back"]').disabled, true);
+  phone.view.innerWidth = 1440; renderShell(phone.app);
+  assert.equal(phone.root.querySelector('[data-action="approve-always"]'), null);
+  assert.equal(phone.root.querySelector('[data-action="undo"]'), null);
+  assert.equal(phone.root.querySelector('[data-action="mailbox"]'), null);
+  const approval = (await request(phone.app.api, 'GET', '/approvals/e80a0bf9-8fb4-4d64-9527-04524c9a2ecf')).data;
+  await assert.rejects(answerApproval(phone.app.api, approval, 'approve-always'), { code: 'phone_read_only' });
+  assert.equal((await request(phone.app.api, 'GET', `/approvals/${approval.id}`)).data.state, 'pending');
+});
+
 test("replaced and expired home codes are rejected and attempts are rate limited", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
@@ -995,10 +1131,10 @@ test("replaced and expired home codes are rejected and attempts are rate limited
   const limited = await createGuiFixture();
   t.after(() => limited.close());
   const limitedHome = new URL(limited.phoneUrl).origin;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "invalid_home_key");
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "invalid_home_key" && error.details.triesLeft === 4 - attempt);
   }
-  await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "auth_rate_limited" && error.retryAfter === 60_000);
+  await assert.rejects(exchangeCode(apiFrom(`${limitedHome}/`), "ABCDEF"), (error) => error.code === "pairing_locked" && error.retryAfter === 600_000);
 });
 
 test("a mounted map persists a drag with the loaded revision and keeps a later in-flight drag", async (t) => {
@@ -1083,7 +1219,9 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   await until(() => phone.root.querySelector("[data-waiting-record='review']")?.querySelector("[data-action='accept']"));
   const review = phone.root.querySelector("[data-waiting-record='review']");
   assert.equal(review?.querySelector("[data-action='accept']")?.disabled, false);
-  assert.equal(review?.querySelector("[data-action='send-back']")?.disabled, false);
+  assert.equal(review?.querySelector("[data-action='send-back']")?.disabled, true);
+  typeInput(review.querySelector('[data-note]'), 'Needs another pass', 0, 18);
+  assert.equal(review.querySelector('[data-action="send-back"]').disabled, false);
   assert.equal(phone.root.querySelector("[data-task='project:shop:030']"), null);
   assert.equal(phone.root.querySelector("[data-action='undo']"), null);
   assert.equal(phone.root.querySelector("[data-action='revoke-grant']"), null);
@@ -1427,19 +1565,9 @@ test("visible chat lines are marked read and mailbox inspection stays closed", a
   click(phone.root.querySelector("[data-phone-mode='chats']"));
   const phoneChat = phone.app.chatList.catalog[0];
   phone.app.activeHandlers.onActivate({ id: phoneChat.id, kind: "chat" }, "double");
-  await waitFor(() => phone.root.querySelector("[data-action='mailbox']"), "The phone mailbox control did not appear.");
-  click(phone.root.querySelector("[data-action='mailbox']"));
-  await waitFor(() => phone.root.querySelector("[data-mailbox-unit]"), "The phone mailbox list did not open.");
-  const agent = [...phone.root.querySelectorAll("[data-mailbox-unit]")].find((node) => node.getAttribute("data-mailbox-unit") !== "root:master");
-  assert.ok(agent);
-  click(agent);
-  const agentId = agent.getAttribute("data-mailbox-unit");
-  await waitFor(() => phone.root.querySelector(`[data-mailbox-history="${agentId}"]`), "The phone mailbox history did not open.");
-  const agentMessage = phone.root.querySelector(`[data-mailbox-history="${agentId}"]`).querySelector("[data-mailbox-message]");
-  if (agentMessage) {
-    click(agentMessage);
-    await waitFor(() => phone.root.querySelector("[data-mailbox-detail]"), "The phone mailbox detail did not open.");
-  }
+  await waitFor(() => phone.root.querySelector('[data-composer]'), 'The phone conversation did not open.');
+  assert.equal(phone.root.querySelector('[data-action="mailbox"]'), null);
+  assert.equal(phone.root.querySelector('[data-mailbox-view]'), null);
   assert.equal(phone.root.querySelector("[data-action='mark-read']"), null);
   assert.equal(phoneUrls.some((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)), false);
 });
@@ -1964,8 +2092,10 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   navigate(phone.app, "waiting");
   capture("Phone Waiting", phone);
   await fixture.control.emit("home.changed", { reason: "expired", home: { enabled: false } });
-  await waitFor(() => phone.root.querySelector("[data-home-code]"), "The copy inventory did not end phone access.");
+  await waitFor(() => phone.root.querySelector('[data-phone-state="ended"]'), "The copy inventory did not end phone access.");
   capture("Phone access ended and pairing", phone);
+  click(phone.root.querySelector('[data-action="phone-new-code"]'));
+  capture('Phone pairing', phone);
   const first = await createGuiFixture({ scenario: "first-run" });
   t.after(() => first.close());
   const empty = await bootApp(first.desktopUrl, 1440, []);
@@ -1978,7 +2108,7 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   empty.app.selectedFolder = "C:/fixtures/mind/keep";
   empty.app.bootError = new ApiError(0, "timeout", text(language, "requestTimeout"));
   capture("Unreadable M1ND", empty);
-  assert.equal(inventory.size, 19);
+  assert.equal(inventory.size, 20);
 });
 
 test("unit and session forms use machines and clients, and the inspector shows the contract facts", async (t) => {
@@ -2442,7 +2572,7 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
   t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
+  await waitFor(() => desktop.app.layout === 'desktop' && !desktop.app.bootReading && desktop.app.store.capabilities.includes('editor.read'), "The desktop shell did not become ready.");
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
@@ -2786,9 +2916,9 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
   await waitFor(() => desktop.root.querySelector("[data-task='project:shop:030']"), "The task list did not load.");
-  click(desktop.root.querySelector("[data-task='project:shop:030']").querySelector("[data-action='send-back']"));
-  await waitFor(() => noteText(desktop) === "A note is required.", "The missing note was shown as a raw code.");
-  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "note_required");
+  const missingNoteTask = (await request(desktop.app.api, 'GET', '/tasks/:taskId', { params: { taskId: 'project:shop:030' } })).data;
+  await assert.rejects(changeTaskStatus(desktop.app.api, missingNoteTask, 'open', ''), { code: 'note_required' });
+  assert.equal(desktop.root.querySelector("[data-task='project:shop:030']").querySelector("[data-action='send-back']").disabled, true);
   click(desktop.root.querySelector("[data-task='project:shop:029']").querySelector("[data-action='accept']"));
   await waitFor(() => noteText(desktop) === "The task is done.", "The task status was shown as a wire value.");
   assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "done");
@@ -3102,7 +3232,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   assert.equal(phone.root.querySelector("[data-phone-mode='hierarchy']")?.getAttribute("aria-pressed"), "true");
   await waitFor(() => phone.app.chatList?.catalog?.length, "The phone chat list did not load.");
   click(phone.root.querySelector("[data-phone-mode='chats']"));
-  const chat = phone.app.chatList.catalog[0];
+  const chat = phone.app.chatList.catalog.find(chat => chat.kind === 'direct');
   phone.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
   await waitFor(() => phone.root.querySelector("[data-stage-title]")?.textContent === (chat.title || chat.id), "The phone conversation title was not shown.");
   assert.equal(phone.root.querySelector("[data-stage-title]").textContent === "Hierarchy", false);
@@ -4328,6 +4458,29 @@ test("the GUI import graph stays inside its ownership table", async () => {
 function qrDigest(matrix) {
   const text = matrix.map((row) => row.map((cell) => (cell ? "1" : "0")).join("")).join("\n");
   return createHash("sha256").update(text).digest("hex");
+}
+
+function decodeHomeQrPath(commands) {
+  const matrix = Array.from({ length: 37 }, () => Array(37).fill(false));
+  for (const match of commands.matchAll(/M(\d+) (\d+)h1v1h-1z/g)) matrix[Number(match[2]) - 4][Number(match[1]) - 4] = true;
+  // Read the version-5 function regions and unmask the byte-mode data from the rendered SVG.
+  const reserved = (x, y) => x === 6 || y === 6 || (x <= 8 && y <= 8) || (x >= 29 && y <= 8)
+    || (x <= 8 && y >= 29) || (x >= 28 && x <= 32 && y >= 28 && y <= 32);
+  const bits = [];
+  let upward = true;
+  for (let right = 36; right > 0; right -= 2) {
+    if (right === 6) right--;
+    for (let step = 0; step < 37; step++) {
+      const y = upward ? 36 - step : step;
+      for (const x of [right, right - 1]) if (!reserved(x, y)) bits.push(Number(matrix[y][x] !== ((x + y) % 2 === 0)));
+    }
+    upward = !upward;
+  }
+  let position = 0;
+  const read = size => { let value = 0; while (size--) value = value * 2 + bits[position++]; return value; };
+  assert.equal(read(4), 4);
+  const length = read(8);
+  return new TextDecoder().decode(Uint8Array.from({ length }, () => read(8)));
 }
 
 function apiFrom(url) {

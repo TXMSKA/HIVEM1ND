@@ -441,6 +441,51 @@ button, input { font: inherit; color: inherit; }
 .shell[data-layout="phone"] .btn { min-height: var(--target); }
 .shell[data-layout="phone"] .composer { margin-bottom: env(safe-area-inset-bottom); }
 
+.phone-gate, .shell[data-layout="phone"] { border-radius: 28px; overflow: hidden; }
+.phone-gate { display: flex; flex-direction: column; align-content: initial; gap: 0; padding: 0; }
+.phone-status { height: 44px; min-height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; font-size: 13px; font-weight: 700; }
+.phone-gate-content { display: flex; flex: 1; flex-direction: column; align-items: center; gap: 18px; padding: 60px 24px 24px; text-align: center; }
+.phone-gate-content > .mark { width: 56px; height: 56px; }
+.phone-gate h2 { margin: 0; font-size: 22px; font-weight: 700; }
+.phone-gate p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--body); }
+.phone-code-form { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.phone-code-entry { position: relative; }
+.phone-code-cells { display: flex; gap: 8px; }
+.phone-code-cell { display: grid; place-items: center; width: 40px; height: 50px; border-radius: 12px; border: 1px solid var(--line2); background: var(--card); font: 700 20px var(--mono); }
+.phone-code-cell[data-filled="true"] { border-color: var(--accent); }
+.phone-code-entry[data-invalid="true"] .phone-code-cell { border-color: var(--error); }
+.phone-code-input { position: absolute; inset: 0; width: 100%; height: 50px; opacity: 0; cursor: text; }
+.phone-code-entry:focus-within { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 12px; }
+.phone-code-feedback { display: grid; gap: 6px; }
+.phone-code-feedback p { font-size: 12.5px; color: var(--mute); }
+.phone-code-feedback .phone-code-error { font-size: 13.5px; color: var(--error); }
+.phone-gate .btn { min-width: 44px; min-height: 44px; }
+.phone-gate[data-phone-state="locked"] .phone-gate-content, .phone-gate[data-phone-state="ended"] .phone-gate-content { padding: 120px 28px 24px; gap: 16px; }
+.phone-state-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--card); color: var(--mute); display: grid; place-items: center; }
+.phone-state-icon .icon { width: 28px; height: 28px; }
+.phone-gate[data-phone-state="locked"] .phone-state-icon { background: var(--error-soft); color: var(--error); }
+.shell[data-layout="phone"] { grid-template-rows: 44px 52px minmax(0, 1fr) 64px; }
+.shell[data-layout="phone"] .bar { min-height: 52px; padding: 0 14px; gap: 10px; flex-wrap: nowrap; }
+.shell[data-layout="phone"] .bar h2 { margin: 0; font-size: 16px; font-weight: 700; }
+.shell[data-layout="phone"] .bar .pill { margin-left: auto; font-size: 12px; min-height: 44px; }
+.shell[data-layout="phone"] .workspace { padding: 0; gap: 0; min-height: 0; }
+.shell[data-layout="phone"] .panel { border: 0; border-radius: 0; box-shadow: none; }
+.shell[data-layout="phone"] .side { padding: 6px 10px; }
+.shell[data-layout="phone"] .side > h2, .shell[data-layout="phone"] .stage > h2, .shell[data-layout="phone"][data-tab="chats"] .side { display: none; }
+.shell[data-layout="phone"] .stage { padding: 14px; gap: 12px; }
+.shell[data-layout="phone"] .list [data-row="true"] { min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
+.shell[data-layout="phone"] .phone-dock { height: 64px; padding: 0 14px 12px; }
+.shell[data-layout="phone"] .phone-dock > p { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.shell[data-layout="phone"] .phone-nav { height: 52px; padding: 0; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-pill); }
+.shell[data-layout="phone"] .phone-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11.5px; border-radius: 0; min-height: 44px; }
+.shell[data-layout="phone"] .phone-nav button[aria-pressed="true"] { color: var(--accent); background: transparent; font-weight: 700; }
+.shell[data-layout="phone"] .phone-nav .icon { width: 18px; height: 18px; }
+.shell[data-layout="phone"] .transcript, .phone-cards { display: grid; gap: 12px; }
+.shell[data-layout="phone"] .transcript { max-height: none; }
+.shell[data-layout="phone"] .card { padding: 14px; border-radius: 16px; }
+.shell[data-layout="phone"] .btn, .shell[data-layout="phone"] input, .shell[data-layout="phone"] summary { min-height: 44px; }
+.shell[data-layout="phone"] .phone-retry { position: absolute; right: 14px; top: 96px; z-index: 1; background: var(--panel); }
+
 .search {
   margin: 0 var(--gap) 8px;
   min-height: 36px;

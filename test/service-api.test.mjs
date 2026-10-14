@@ -590,9 +590,10 @@ test('a home listener keeps denial status, headers and the body deadline', async
   });
   assert.equal(opened.status, 201);
   const origin = new URL(opened.json.data.addresses[0].origin);
-  const denied = await lanCall(origin, 'POST', '/api/v1/auth/home', { code: 'ZZZZZZ' });
+  const denied = await lanCall(origin, 'POST', '/api/v1/auth/home', { code: '000000' });
   assert.equal(denied.status, 401);
   assert.equal(denied.json.error.code, 'invalid_home_key');
+  assert.equal(denied.json.error.details.triesLeft, 4);
   assert.equal(denied.raw.length > 0, true);
   assert.equal(denied.headers['cache-control'], 'no-store');
   assert.equal(denied.headers['x-content-type-options'], 'nosniff');
@@ -605,14 +606,37 @@ test('a home listener keeps denial status, headers and the body deadline', async
   assert.equal(desktop.json.error.code, 'forbidden');
   assert.equal(desktop.headers['cache-control'], 'no-store');
   assert.equal(desktop.raw.length > 0, true);
+  for (let count = 3; count >= 1; count -= 1) {
+    const failure = await lanCall(origin, 'POST', '/api/v1/auth/home', { code: '000000' });
+    assert.equal(failure.status, 401);
+    assert.equal(failure.json.error.details.triesLeft, count);
+  }
+  const locked = await lanCall(origin, 'POST', '/api/v1/auth/home', { code: '000000' });
+  assert.equal(locked.status, 429);
+  assert.equal(locked.json.error.code, 'pairing_locked');
+  assert.equal(locked.headers['retry-after'], '600');
+  assert.equal(Date.parse(locked.json.error.details.lockedUntil), fixture.clock.now + 600000);
+  const serialized = JSON.stringify(locked.json);
+  for (const secret of ['000000', opened.json.data.key, opened.json.data.shortCode]) assert.equal(serialized.includes(secret), false);
+  fixture.clock.now += 599999;
+  assert.equal((await lanCall(origin, 'POST', '/api/v1/auth/home', { code: opened.json.data.shortCode })).status, 429);
+  fixture.clock.now += 1;
+  assert.equal((await lanCall(origin, 'POST', '/api/v1/auth/home', { code: opened.json.data.shortCode })).status, 200);
+  for (let attempt = 0; attempt < 5; attempt++) await lanCall(origin, 'POST', '/api/v1/auth/home', { code: '000000' });
+  const replacement = await call(core.http.port, 'POST', '/api/v1/settings/home-network', {
+    token: local.json.data.token, body: { enabled: true }, headers: { 'idempotency-key': randomUUID() },
+  });
+  assert.equal(replacement.status, 201);
+  assert.equal((await lanCall(new URL(replacement.json.data.addresses[0].origin), 'POST', '/api/v1/auth/home', { code: replacement.json.data.shortCode })).status, 200);
+  const stalledOrigin = new URL(replacement.json.data.addresses[0].origin);
   const stalled = await new Promise((resolve) => {
     const req = request({
-      host: origin.hostname,
-      port: origin.port,
+      host: stalledOrigin.hostname,
+      port: stalledOrigin.port,
       method: 'POST',
       path: '/api/v1/auth/home',
       headers: {
-        host: origin.host,
+        host: stalledOrigin.host,
         'content-type': 'application/json',
         'content-length': '64',
       },

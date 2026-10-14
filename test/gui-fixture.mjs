@@ -1131,6 +1131,7 @@ function homeStatus(fx) {
     expiresAt: fx.home.expiresAt,
     addresses: fx.home.addresses,
     remainingSeconds: Math.max(0, Math.ceil((Date.parse(fx.home.expiresAt) - fx.nowMs) / 1000)),
+    phoneCount: [...fx.tokens.values()].filter(token => token.audience === 'phone' && fx.nowMs < Date.parse(token.expiresAt)).length,
   };
 }
 
@@ -1547,6 +1548,8 @@ function prepareHomeNetwork(fx, body, principal) {
     apply() {
       revokeAudience(fx, "phone");
       fx.home = { key, code, openedAt, expiresAt, addresses };
+      fx.homeFailures.clear();
+      fx.homeGrantFailures = [];
     },
   };
 }
@@ -5028,18 +5031,39 @@ async function handleAuth(fx, request, response, audience, path, requestId) {
   const presented = String(body.key ?? body.code ?? "");
   const expected = body.key ? fx.home.key : fx.home.code;
   const normalized = body.code ? presented.toUpperCase() : presented;
+  const peer = request.socket.remoteAddress;
+  fx.home.pairing ??= new Map();
+  let attempts = fx.home.pairing.get(peer) ?? { failures: 0, lockedUntil: null };
+  if (attempts.lockedUntil && fx.nowMs < Date.parse(attempts.lockedUntil)) throw fixturePairingLocked(fx, attempts.lockedUntil);
+  if (attempts.lockedUntil) attempts = { failures: 0, lockedUntil: null };
+  fx.home.pairing.set(peer, attempts);
   if (!safeEqual(normalized, expected)) {
-    noteHomeFailure(fx, request.socket.remoteAddress);
+    noteHomeFailure(fx, peer);
+    if (Object.hasOwn(body, 'code')) {
+      attempts.failures += 1;
+      if (attempts.failures === 5) {
+        attempts.lockedUntil = new Date(fx.nowMs + 600000).toISOString();
+        throw fixturePairingLocked(fx, attempts.lockedUntil);
+      }
+      throw new HttpError(401, 'invalid_home_key', 'The home code does not match.', { triesLeft: 5 - attempts.failures });
+    }
     throw new HttpError(401, "invalid_home_key", "The home key is not valid.");
   }
+  attempts.failures = 0;
   const viewer = createViewer(fx, { embedded: false, hostOrigin: null, look: null, language: null, audience: "phone", expiresAt: fx.home.expiresAt });
   sendJson(response, 200, success(fx, {
     token: viewer.token, audience: "phone", expiresAt: fx.home.expiresAt, capabilities: viewer.capabilities,
   }, requestId, cursorNow(fx)));
 }
 
+function fixturePairingLocked(fx, lockedUntil) {
+  const error = new HttpError(429, 'pairing_locked', 'Pairing is locked for 10 minutes.', { triesLeft: 0, lockedUntil }, lockedUntil);
+  error.retryAfter = Math.ceil((Date.parse(lockedUntil) - fx.nowMs) / 1000);
+  return error;
+}
+
 function noteHomeFailure(fx, remote) {
-  const now = Date.now();
+  const now = fx.nowMs;
   const bucket = fx.homeFailures.get(remote) ?? [];
   const recent = bucket.filter((at) => now - at < 60_000);
   recent.push(now);
@@ -5482,6 +5506,7 @@ export async function createGuiFixture(options = {}) {
       disconnectStreams() { disconnectStreams(fx); },
       async restart() {
         await fx.tail;
+        publish(fx, [{ name: 'home.changed', global: true, data: { reason: 'closed', home: { enabled: false } } }], fx.primary);
         disconnectStreams(fx);
         await closeServers(fx);
         fx.tokens.clear();

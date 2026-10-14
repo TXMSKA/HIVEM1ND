@@ -293,8 +293,16 @@ async function bootSession(app, credential, env = {}) {
     app.store.capabilities = credential.capabilities ?? [];
     app.store.audience = credential.audience ?? null;
     app.store.expiresAt = credential.expiresAt ?? null;
+    app.store.signedOut = null;
   }
   if (app.store.audience === "phone") {
+    app.phoneEnded = false;
+    clearTimeout(app.phoneExpiryTimer);
+    const remaining = Date.parse(app.store.expiresAt) - (app.api.homeReadAt ?? app.api.now());
+    if (Number.isFinite(remaining)) {
+      app.phoneExpiryTimer = setTimeout(() => { endPhoneAccess(app); renderSignedOut(app); }, Math.max(0, remaining));
+      app.phoneExpiryTimer.unref?.();
+    }
     app.mode = "hierarchy";
     app.tab = "hierarchy";
   }
@@ -445,6 +453,7 @@ export function renderShell(app) {
 function paintShell(app) {
   captureInputs(app);
   if (!app.api.token && (app.layout === 'phone' || !app.recovery)) {
+    if (app.store.audience === 'phone') endPhoneAccess(app);
     renderSignedOut(app);
     return;
   }
@@ -462,13 +471,15 @@ function paintShell(app) {
   document.title = `${heading} · HIVEM1ND`;
   const workspace = renderWorkspace(app, t, view, counts);
   workspace.setAttribute("id", "workspace");
+  if (app.layout === 'phone') shell.append(element(document, 'div', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
   shell.append(
     element(document, "a", { class: "skip", href: "#workspace", text: t("skipToContent") }),
     element(document, "h1", { class: "sr", text: heading }),
     renderBar(app, t, counts),
     workspace,
-    opening ? openingFooter(app) : renderFooter(app, t),
   );
+  if (app.layout !== 'phone') shell.append(opening ? openingFooter(app) : renderFooter(app, t));
+  else if (app.store.stream?.state === 'error') shell.append(element(document, 'button', { type: 'button', class: 'btn phone-retry', 'data-action': 'retry-stream', text: t('retry'), onclick: () => startServiceStream(app) }));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   clearPhoneDialog(app);
   app.root.replaceChildren(shell);
@@ -674,6 +685,8 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   clearTimeout(app.readyTimer);
+  clearTimeout(app.phoneExpiryTimer);
+  clearTimeout(app.phoneLockTimer);
   clearTimeout(app.mapToastTimer);
   clearTimeout(app.libraryToastTimer);
   clearTimeout(app.voidFind?.timer);
@@ -713,11 +726,8 @@ async function onStream(app, event) {
     const data = dataOf(event);
     noteHome(app, data);
     if (app.store.audience === "phone" && data.home?.enabled === false) {
-      closeStream(app.api.live);
-      clearCredentials(app.api);
-      app.store.signedOut = 410;
-      app.phoneError = data.reason === "expired" ? "homeExpired" : "homeClosed";
       result?.consume?.();
+      endPhoneAccess(app);
       renderSignedOut(app);
       return;
     }
@@ -935,6 +945,7 @@ async function loadPresentation(app, options = {}) {
   app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
   app.layout = shellLayout(app.store.capabilities, app.store.audience);
+  app.store.audience ??= app.layout;
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
   editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
@@ -1024,7 +1035,8 @@ function renderBar(app, t, counts) {
       renderShell(app);
     },
   });
-  const bar = element(document, "header", { class: "bar" }, brand(document), modes);
+  const bar = element(document, "header", { class: "bar" }, app.layout === 'phone' ? brand(document).querySelector('.mark') : brand(document), modes);
+  if (app.layout === 'phone') bar.append(element(document, 'h2', { 'data-phone-title': 'true', text: viewTitle(app, t) }));
   if (counts.waiting || (!app.bootReading && !app.bootFailed && !emptyMind(app))) bar.append(waiting);
   if (app.layout !== "phone") {
     bar.append(catalogToggle);
@@ -1103,19 +1115,20 @@ function renderWorkspace(app, t, view, counts) {
   } else if (app.layout === "phone" && app.tab === "chats") {
     stage.append(chatPanel(app, t));
     if (app.phoneChatNote) stage.append(element(document, "p", { "data-phone-chat": "required", text: t("desktopChatRequired") }));
-    const cards = (app.waitingList?.items ?? []).filter((item) => item.kind === "approval" || item.kind === "review");
-    if (cards.length) {
+    if (selected && app.inspectorData?.unitId === selected.id) {
       const host = element(document, "div", { class: "phone-cards", "data-phone-cards": "true" });
-      for (const item of cards.slice(0, 3)) {
-        host.append(element(document, "button", {
-          type: "button",
-          class: "btn",
-          "data-phone-card": item.kind,
-          text: item.title || item.kind,
-          onclick: () => openWaitingItem(app, item),
-        }));
+      for (const approval of app.inspectorData.approvals ?? []) {
+        const card = renderWaitingRecord(app, t, { kind: 'approval', approval });
+        card.setAttribute('data-phone-card', 'approval');
+        host.append(card);
       }
-      stage.append(host);
+      for (const task of (app.inspectorData.tasks ?? []).filter(task => task.status === 'review')) {
+        const card = renderWaitingRecord(app, t, { kind: 'review', task });
+        card.setAttribute('data-phone-card', 'review');
+        host.append(card);
+      }
+      host.append(element(document, 'p', { class: 'field-hint', text: t('phoneComputerRequired') }));
+      stage.querySelector('.transcript')?.append(host);
     }
   } else {
     stage.append(element(document, "p", { text: app.store.mode === "paged" ? t("viewTooLarge") : t("later") }));
@@ -1393,9 +1406,8 @@ function openWaitingItem(app, item) {
   else if (!app.disposed) renderShell(app);
 }
 
-function renderWaitingRecord(app, t) {
+function renderWaitingRecord(app, t, record = app.waitingRecord) {
   const document = app.root.ownerDocument;
-  const record = app.waitingRecord;
   const block = element(document, "div", { "data-waiting-record": record?.kind ?? "" });
   if (!record) return block;
   const caps = app.store.capabilities ?? [];
@@ -1404,10 +1416,10 @@ function renderWaitingRecord(app, t) {
     return block;
   }
   if (record.kind === "review" && record.task && (caps.includes("task.status") || caps.includes("task.accept") || caps.includes("task.send-back"))) {
-    const phone = app.layout === "phone" || app.store.audience === "phone";
+    const phone = app.store.audience === "phone";
     const noteDraft = inputDrafts(app).notes.get(record.task.id);
     const taskBusy = activityPending(app, `task:${record.task.id}`) || activityPending(app, `undo:${record.task.id}`);
-    block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy));
@@ -3606,7 +3618,7 @@ function collectionRows(app, t, list) {
     return rows;
   }
   const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
-  const tree = buildHierarchy(source, list.issues, [...app.store.indexes.groups.values()]);
+  const tree = buildHierarchy(app.store.audience === 'phone' ? source.filter(unit => unit.role !== 'master') : source, list.issues, [...app.store.indexes.groups.values()]);
   const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
@@ -4776,18 +4788,67 @@ function renderPhoneNav(app, t) {
   );
 }
 
+function endPhoneAccess(app) {
+  if (app.phoneEnded) return;
+  clearCredentials(app.api);
+  closeStream(app.api.live);
+  clearTimeout(app.phoneExpiryTimer);
+  for (const list of [app.unitList, app.chatList, app.waitingList]) {
+    list?.controller?.abort();
+    clearTimeout(list?.timer);
+  }
+  for (const controller of app.api.controllers) controller.abort();
+  app.api.uncertain.clear();
+  app.inspectorTicket = (app.inspectorTicket ?? 0) + 1;
+  app.presentationTicket = (app.presentationTicket ?? 0) + 1;
+  app.chatThreads?.clear();
+  for (const value of Object.values(app.inputDrafts ?? {})) value?.clear?.();
+  app.activity?.clear();
+  app.store = { ...createStore(), audience: 'phone', signedOut: 410 };
+  for (const key of ['unitList', 'chatList', 'waitingList', 'activeList', 'activeRows', 'activeHandlers', 'thread', 'inputDrafts', 'inspectorData', 'waitingRecord', 'mailbox', 'pendingChat', 'actionNote', 'phoneCode']) app[key] = null;
+  app.bootReading = false;
+  app.bootFailed = false;
+  app.phoneEnded = true;
+}
+
 function renderSignedOut(app) {
   const document = app.root.ownerDocument;
   const t = (key, variables) => text(app.language, key, variables);
-  const gate = element(document, "section", { class: "gate" },
-    element(document, "h2", { text: t("reopenTitle") }),
-    element(document, "p", { text: app.phoneError ? t(app.phoneError) : t("reopenBody") }),
-  );
-  if (app.phoneRetryAfter != null && app.phoneRetryAfter !== "" && Number.isFinite(Number(app.phoneRetryAfter))) {
-    gate.append(element(document, "p", { "data-retry-after": String(app.phoneRetryAfter), text: cardinal(app.language, "retryWait", app.phoneRetryAfter) }));
+  document.documentElement.lang = app.language;
+  document.documentElement.dataset.look = app.look;
+  document.documentElement.dataset.mode = 'phone';
+  const locked = app.phoneLockDeadline > app.api.now();
+  const state = app.phoneEnded ? 'ended' : locked ? 'locked' : app.phoneError === 'phoneCodeMismatch' ? 'error' : 'pair';
+  const gate = element(document, "section", { class: "gate phone-gate", "data-phone-state": state });
+  gate.append(element(document, 'header', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
+  const content = element(document, 'div', { class: 'phone-gate-content' });
+  if (state === 'locked' || state === 'ended') {
+    const title = state === 'locked' ? 'phonePairingLocked' : 'phoneAccessEnded';
+    const stateIcon = icon(document, 'alert');
+    if (state === 'ended') stateIcon.querySelector('path').setAttribute('d', 'M3 9a15 15 0 0 1 18 0M6 12a10 10 0 0 1 12 0M9 15a5 5 0 0 1 6 0M12 18h.01');
+    document.title = `${t(title)} · HIVEM1ND`;
+    content.append(element(document, 'div', { class: 'phone-state-icon' }, stateIcon),
+      element(document, 'h2', { text: t(title) }), element(document, 'p', { text: t(`${title}Body`), role: 'status' }));
+    if (locked) {
+      content.setAttribute('data-locked-until', app.phoneLockedUntil);
+      clearTimeout(app.phoneLockTimer);
+      app.phoneLockTimer = setTimeout(() => { app.phoneError = null; renderSignedOut(app); }, app.phoneLockDeadline - app.api.now());
+      app.phoneLockTimer.unref?.();
+    } else content.append(element(document, 'button', { type: 'button', class: 'btn primary', 'data-action': 'phone-new-code', text: t('phoneNewCode'), onclick: () => {
+      app.phoneEnded = false; app.phoneError = null; app.phoneLockedUntil = null; renderSignedOut(app); app.root.querySelector('[data-home-code]')?.focus();
+    } }));
+  } else {
+    document.title = `${t('phoneOpenMind')} · HIVEM1ND`;
+    content.append(brand(document).querySelector('.mark'), element(document, 'h2', { text: t('phoneOpenMind') }),
+      element(document, 'p', { id: 'phone-code-guidance', text: t('phoneCodePrompt') }));
+    const feedback = element(document, 'div', { class: 'phone-code-feedback', id: 'phone-code-error', role: 'status' });
+    if (app.phoneError) {
+      feedback.append(element(document, 'p', { class: 'phone-code-error', text: t(app.phoneError) }));
+      if (Number.isInteger(app.phoneTriesLeft)) feedback.append(element(document, 'p', { 'data-tries-left': String(app.phoneTriesLeft), text: t('phoneTriesLeft', { count: app.phoneTriesLeft }) }));
+    } else feedback.append(element(document, 'p', { class: 'field-hint', text: t('phoneScanQr') }));
+    content.append(renderCodeEntry(document, t, code => submitCode(app, code), { busy: Boolean(app.phoneBusy), invalid: Boolean(app.phoneError), feedback }));
   }
-  if (app.phoneBusy) gate.append(progressMark(document, t("checkingCode")));
-  gate.append(renderCodeEntry(document, t, (code) => submitCode(app, code), { value: app.phoneCode ?? "", busy: Boolean(app.phoneBusy) }));
+  gate.append(content);
   app.root.replaceChildren(gate);
   releaseBootstrapAnnouncement(app);
 }
@@ -4795,23 +4856,25 @@ function renderSignedOut(app) {
 function renderPhoneError(app, error) {
   app.api.homeKey = null;
   app.api.token = null;
-  if (error?.code === "home_expired") app.phoneError = "homeExpired";
+  app.phoneTriesLeft = Number.isInteger(error.details?.triesLeft) ? error.details.triesLeft : null;
+  app.phoneLockedUntil = error?.code === 'pairing_locked' ? error.details?.lockedUntil : null;
+  app.phoneLockDeadline = app.phoneLockedUntil ? app.api.now() + (error.retryAfter ?? Math.max(0, Date.parse(app.phoneLockedUntil) - app.api.now())) : null;
+  if (error?.code === "home_expired") { app.phoneError = null; endPhoneAccess(app); }
   else if (error?.code === "auth_rate_limited") app.phoneError = "rateLimited";
-  else app.phoneError = "homeKeyInvalid";
-  app.phoneRetryAfter = error?.retryAfter ?? null;
+  else app.phoneError = "phoneCodeMismatch";
   renderSignedOut(app);
 }
 
 async function submitCode(app, code) {
-  if (app.phoneBusy) return;
-  app.phoneCode = code;
+  if (app.phoneBusy || app.phoneLockDeadline > app.api.now()) return;
   app.phoneBusy = true;
   renderSignedOut(app);
   try {
     const credential = await exchangeCode(app.api, code);
     app.phoneBusy = false;
-    app.phoneCode = "";
     app.phoneError = null;
+    app.phoneLockedUntil = null;
+    clearTimeout(app.phoneLockTimer);
     await bootSession(app, credential);
   } catch (error) {
     app.phoneBusy = false;
@@ -5149,7 +5212,7 @@ function decorateHierarchy(app, host) {
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
-        node.style.paddingLeft = `${8 + (row.personalMember ? 24 : row.depth * 14)}px`;
+        node.style.paddingLeft = app.store.audience === 'phone' ? `${row.depth > 1 ? 42 : row.depth ? 24 : 10}px` : `${8 + (row.personalMember ? 24 : row.depth * 14)}px`;
         node.replaceChildren(unitNameNode(document, row.unit), element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) }));
         if (app.aliasEdit?.rowId === row.id) {
           const editor = aliasField(app, row.unit);
@@ -6321,7 +6384,7 @@ function chatPanel(app, t) {
     if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
   row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
-  if (caps.includes("mailbox.read") || caps.includes("master.read")) {
+  if (app.store.audience !== 'phone' && (caps.includes("mailbox.read") || caps.includes("master.read"))) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "mailbox", text: t("mailbox"), onclick: () => inspectMailbox(app) }));
   }
   panel.append(transcript, row);
@@ -6515,6 +6578,11 @@ function openExistingDirect(app, unitId) {
 
 function showChat(app, chat) {
   captureInputs(app);
+  if (app.store.audience === 'phone') {
+    const unitId = chat.kind === 'direct' ? chat.members?.find(id => id !== 'root:master') : null;
+    app.store.selected.unitId = unitId;
+    if (unitId && app.inspectorData?.unitId !== unitId && !activityPending(app, `inspector:${unitId}`)) loadInspector(app, unitId);
+  }
   const group = app.store.indexes.groups.get(chat.id);
   app.store.selected.chatId = chat.id;
   app.store.selected.groupId = group && !group.deleted ? group.id : null;
@@ -6746,9 +6814,9 @@ function renderInspector(app, t, selected) {
   const visibleTasks = tasks.length >= 100 ? tasks.filter((task) => task.id === app.openTaskId).slice(0, 1) : tasks;
   for (const task of visibleTasks) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
-    const phone = app.layout === "phone" || app.store.audience === "phone";
+    const phone = app.store.audience === "phone";
     const taskBusy = activityPending(app, `task:${task.id}`) || activityPending(app, `undo:${task.id}`);
-    cards.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    cards.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(task) : canSendBack(task), taskBusy));

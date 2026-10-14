@@ -113,6 +113,10 @@ export function renderGrants(document, grants, t, onRevoke, busyId = null) {
 export function renderApproval(document, approval, t, onAnswer, busy = false, allowAlways = true) {
   const block = element(document, "section", { class: "card", "data-approval": approval.id, "data-approval-state": approval.state });
   block.append(element(document, "p", { text: approval.action === 'session.open' ? `${t('sessionOpenAsk')}: ${approval.pattern.client} CLI · ${approval.pattern.machine}` : approval.display ?? approval.action ?? approval.id }));
+  if (!allowAlways) {
+    block.append(element(document, "p", { class: "field-hint", "data-computer-required": "true", text: t("phoneComputerRequired") }));
+    if (approval.desktopOnly) return block;
+  }
   if (busy) block.append(progressMark(document, t("answering"), { "data-approval-progress": approval.id }));
   if (approval.state === "pending") {
     const button = (action, label) => element(document, "button", {
@@ -151,15 +155,17 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   }
   const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}` });
   note.value = draft;
-  note.addEventListener("input", () => onDraft?.(note.value, note.selectionStart, note.selectionEnd));
+  note.required = true;
   const back = element(document, "button", {
     type: "button",
     class: "btn",
     "data-action": "send-back",
     text: t("sendBack"),
-    onclick: () => onStatus?.(task, "open", note.value),
+    onclick: () => { if (allowSendBack && !busy && note.value.trim()) onStatus?.(task, "open", note.value); },
   });
-  if (!allowSendBack || busy) back.disabled = true;
+  const updateNote = () => { back.disabled = !allowSendBack || busy || !note.value.trim(); };
+  note.addEventListener("input", () => { updateNote(); onDraft?.(note.value, note.selectionStart, note.selectionEnd); });
+  updateNote();
   if (busy) back.setAttribute("aria-busy", "true");
   if (!allowSendBack && !busy) {
     const hint = element(document, "p", { id: `reason-back-${task.id}`, class: "field-hint", "data-disabled-reason": "send-back", text: t("sendBackNeedsReview") });

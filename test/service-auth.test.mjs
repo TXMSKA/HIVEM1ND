@@ -8,8 +8,10 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
-import { composeCore, startService, stopService } from '../engine/service/service.mjs';
+import { composeCore, startService, stopService, writeBeat } from '../engine/service/service.mjs';
 import { CoreError, canonicalJson, hashText } from '../engine/service/identity.mjs';
+import { revisionOf } from '../engine/service/store.mjs';
+import { createNativeAdapter, enqueueStart } from '../engine/service/adapters.mjs';
 import { requestApproval } from '../engine/service/approvals.mjs';
 import { createHttpServer } from '../engine/service/http.mjs';
 import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
@@ -44,7 +46,7 @@ test('phone standing and push answers fail before receipt creation or replay, wi
     const denied = await requestJson(http.port, 'POST', `/api/v1${route}`, { token: phone, body });
     assert.equal(denied.status, 403);
     assert.equal(denied.json.error.code, 'phone_read_only');
-    assert.deepEqual(denied.json.error.details, { desktopOnly: true });
+    assert.deepEqual(denied.json.error.details, decision === 'approve-always' ? {} : { desktopOnly: true });
     const key = randomUUID(), receiptRoot = path.join(fixture.paths.localDirectory, 'receipts', hashText(phone));
     await mkdir(receiptRoot, { recursive: true });
     const file = path.join(receiptRoot, `${key}.json`);
@@ -67,6 +69,44 @@ test('phone standing and push answers fail before receipt creation or replay, wi
     assert.equal(answered.status, 200);
     assert.equal(answered.json.data.approval.desktopOnly, false);
     assert.equal(answered.json.data.approval.grantId, null);
+  }
+});
+
+test('a phone can approve or deny session.open over HTTP once without creating standing authority', async t => {
+  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const unitId = 'project:shop:executor-shop';
+  const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await mkdir(path.dirname(stateFile), { recursive: true });
+  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  const parentAdapter = createNativeAdapter('codex', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
+  const childAdapter = createNativeAdapter('cursor', { fixture: true, transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
+  t.after(async () => { await parentAdapter.close(); await childAdapter.close(); });
+  let creates = 0;
+  const create = childAdapter.create.bind(childAdapter);
+  childAdapter.create = async input => { creates++; return create(input); };
+  const paths = { ...fixture.paths, origin: path.join(fixture.root, 'origin') };
+  await mkdir(paths.origin, { recursive: true });
+  const context = { store: fixture.store, paths, now: () => fixture.clock.now, projects: [{ name: 'shop', localPath: fixture.root }],
+    adapters: { codex: parentAdapter, cursor: childAdapter }, ownedPids: new Set(), beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() },
+    schedule() {}, principal: { audience: 'agent', unitId } };
+  const parent = await enqueueStart(context, { unitId, client: 'codex', runMode: 'chat', stateRevision: revisionOf(await readFile(stateFile)) });
+  context.principal.sessionId = parent.result.sessionId;
+  await writeBeat(context, 'running');
+  const childId = 'project:shop:executor-child';
+  await writeFile(path.join(path.dirname(stateFile), 'executor-child.md'), `unit: executor-child\nunit-id: ${childId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  const credentials = createCredentialStore({ now: context.now });
+  const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  const http = await createHttpServer({ ...context, credentials }); t.after(() => http.close());
+  for (const decision of ['deny', 'approve']) {
+    const ask = await requestApproval(context, { action: 'session.open', pattern: { client: 'cursor', machine: 'DESKTOP', unitId: childId, runMode: 'chat', taskId: null }, display: 'Open another CLI' });
+    const options = { token: phone, body: { decision, expectedRevision: ask.approval.revision }, headers: { 'idempotency-key': randomUUID() } };
+    const route = `/api/v1/approvals/${ask.approval.id}/answer`;
+    const result = await requestJson(http.port, 'POST', route, options);
+    assert.equal(result.status, 200);
+    assert.equal(result.json.data.approval.grantId, null);
+    assert.equal(result.json.data.approval.desktopOnly, false);
+    assert.equal((await requestJson(http.port, 'POST', route, options)).status, 200);
+    assert.equal(creates, decision === 'approve' ? 1 : 0);
   }
 });
 
