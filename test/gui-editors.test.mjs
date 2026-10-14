@@ -545,6 +545,45 @@ test("a late editor read keeps the newer selection and draft", async () => {
   assert.equal(editors.current.draftText, "second draft");
 });
 
+test("reopening a text retains its page and saver while an earlier acknowledgment is pending", async t => {
+  let record = { id: "text", kind: "void", revision: "a".repeat(64), document: { title: "Text", rev: 1, pages: [{ k: "One", en: "Before" }, { k: "Two", en: "Other" }] } };
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const saving = new Promise(resolve => { started = resolve; });
+  t.after(() => release());
+  const writes = [];
+  const api = createApi({ location: { origin: "http://127.0.0.1:9", hash: "#session=fixture" }, history: { replaceState() {} }, fetch: async (url, init) => {
+    if (init.method === "PUT") {
+      const body = JSON.parse(init.body); writes.push(body);
+      if (writes.length === 1) { started(); await gate; }
+      record = { ...record, revision: String(writes.length + 1).repeat(64), document: { ...body.document, rev: writes.length + 1 } };
+    }
+    return jsonResponse(/\/(comments|proposals)(\?|$)/.test(String(url)) ? { items: [] } : record);
+  } });
+  const editors = createEditors(), summary = { id: "text", kind: "void" };
+  const editor = await openEditor(api, editors, summary);
+  editor.page = "Two";
+  editor.textSelections = new Map([["text\0Two\0en", { start: 1, end: 2 }]]);
+  editor.voidSaver = documentSaver(api, editor, () => {}, 60000);
+  t.after(() => editor.voidSaver.dispose());
+  rememberTextDraft(editor, "text", "One", "en", "First"); editor.voidSaver.queue(draftSnapshot(editor));
+  const pending = editor.voidSaver.flush();
+  await saving;
+  editors.current = null;
+  const reopened = await openEditor(api, editors, summary);
+  assert.equal(reopened, editor);
+  assert.equal(reopened.page, "Two");
+  assert.deepEqual(reopened.textSelections.get("text\0Two\0en"), { start: 1, end: 2 });
+  rememberTextDraft(reopened, "text", "One", "en", "Later"); reopened.voidSaver.queue(draftSnapshot(reopened));
+  release(); await pending;
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].expectedRevision, "2".repeat(64));
+  assert.equal(reopened.authoritative.document.pages[0].en, "Later");
+  assert.equal(reopened.revision, "3".repeat(64));
+  assert.equal(reopened.dirty, false);
+  assert.equal(reopened.textDrafts.size, 0);
+});
+
 test("blueprint edits keep unknown fields and refuse a lossy save", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());

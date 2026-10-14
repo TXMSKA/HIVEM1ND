@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
-import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
+import { createApi, createOperation, dispose as disposeApi, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias, startSession } from "../gui/app/actions.mjs";
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
@@ -31,6 +31,23 @@ import { assertVisibleCopy } from "./spanish-register.test.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
+
+test("disposing an API or shell cancels its pending reconnect timer", async t => {
+  for (const close of [disposeApi, api => dispose({ api, root: createTestDocument().root })]) {
+    const api = createApi({ location: { origin: "http://127.0.0.1:9", hash: "" } });
+    let reconnected = false;
+    const timer = setTimeout(() => { reconnected = true; }, 0);
+    t.after(() => clearTimeout(timer));
+    api.live = { stopped: false, timer, controller: new AbortController() };
+    api.controllers.add(api.live.controller);
+    close(api);
+    await delay(0);
+    assert.equal(reconnected, false);
+    assert.equal(api.live.stopped, true);
+    assert.equal(api.live.controller.signal.aborted, true);
+    assert.equal(api.controllers.size, 0);
+  }
+});
 
 test('the browser launcher restores a stopped singleton without losing a draft or duplicating an uncertain send', async t => {
   const fixture = await makeCoreFixture();
@@ -385,8 +402,17 @@ test("Settings ignores a late previous-machine response after another selection"
 test("Settings startup, scan and manual finding target the selected owner with revision checks", async t => {
   const desktop = await settingsApp(t);
   const { root, app, fixture, document } = desktop;
+  let releaseFind;
+  const findResponse = new Promise(resolve => { releaseFind = resolve; });
+  t.after(() => releaseFind());
+  const send = app.api.fetch;
+  app.api.fetch = async (input, init) => {
+    const response = await send(input, init);
+    if (init?.method === "POST" && new URL(input).pathname === "/api/v1/settings/agents/find") await findResponse;
+    return response;
+  };
   changeControl(root.querySelector("[data-start-with-windows]"), true);
-  await waitFor(() => app.settingsState.info.service.startWithWindows, "The machine-local startup setting did not save.");
+  await waitFor(() => app.settingsState.info.service.startWithWindows && app.activity.get("settings:PATCH:/settings/service")?.phase === "success", "The machine-local startup setting did not save.");
   click(root.querySelector("[data-settings-tab='agents']"));
   click(root.querySelector("[data-action='settings-scan']"));
   await waitFor(() => app.activity.get("settings:POST:/settings/agents/scan")?.phase === "success", "Scan did not finish.");
@@ -397,7 +423,10 @@ test("Settings startup, scan and manual finding target the selected owner with r
   const dialog = document.querySelector("[data-form='settings-find']");
   dialog.querySelector("[name='path']").value = binary;
   click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => app.settingsState.agents.items.find(item => item.id === "copilot").found, "The known client path was not found.");
+  await waitFor(() => app.settingsState.agents.items.find(item => item.id === "copilot").found, "The client discovery event did not arrive before its acknowledgment.");
+  assert.equal(document.querySelector("[data-form='settings-find']"), dialog);
+  releaseFind();
+  await waitFor(() => app.settingsState.agents.items.find(item => item.id === "copilot").found && document.querySelector("[data-form='settings-find']") == null, "The known client path was not found.");
   assert.equal(document.querySelector("[data-form='settings-find']"), null);
 });
 
@@ -1804,7 +1833,6 @@ test("void drafts stay with their page and comments use the rendered selection",
   assert.equal(ranged.document.pages.find((page) => page.k === "Intro.Welcome").es, desktop.app.editors.current.authoritative.document.pages[0].es);
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.k === "Intro.Welcome")?.en === broken
     && desktop.root.querySelector("[data-source]")?.value === broken, "The saved text was not shown.");
-  await delay(150);
 
   const kept = `${broken} kept`;
   fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, status: 409, code: "revision_conflict" });
@@ -1842,7 +1870,11 @@ test("void drafts stay with their page and comments use the rendered selection",
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "Next page.");
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
-  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-source]")?.value === "LOCAL DRAFT", "The page draft was lost while switching texts.");
+  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.app.voidState?.page === "Notes.Next", "The text did not restore its selected page.");
+  assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), "LOCAL DRAFT");
+  desktop.app.voidState.page = "Intro.Welcome";
+  renderShell(desktop.app);
+  await waitFor(() => desktop.root.querySelector("[data-source]")?.value === "LOCAL DRAFT", "The page draft was lost while switching texts.");
 });
 
 test("comments use a complete anchor and stay disabled until one exists", async (t) => {
@@ -4064,6 +4096,7 @@ test("connection direction waits for the authoritative commit and Undo restores 
     writes.push(JSON.parse(init.body));
     if (writes.length === 1) await gate;
   });
+  t.after(() => release());
   t.after(() => dispose(desktop.app));
   const target = desktop.app.unitList.catalog.find((unit) => unit.id === "project:blog:executor-shop");
   const source = desktop.app.unitList.catalog.find((unit) => unit.id === "env:web:overlord-web");
@@ -4083,11 +4116,13 @@ test("connection direction waits for the authoritative commit and Undo restores 
   assert.equal(desktop.root.querySelector("[data-action='map-undo']"), null);
   assert.equal(desktop.app.unitList.catalog.find((unit) => unit.id === target.id).leadId, target.leadId);
   release();
-  await waitFor(() => desktop.root.querySelector("[data-action='map-undo']") && desktop.document.querySelector("dialog") == null, "The committed connection did not offer Undo.");
+  await waitFor(() => desktop.root.querySelector("[data-action='map-undo']") && desktop.document.querySelector("dialog") == null
+    && desktop.app.unitList.catalog.find(unit => unit.id === target.id)?.leadId === source.id, "The committed connection did not offer Undo.");
   assert.equal(desktop.app.unitList.catalog.find((unit) => unit.id === target.id).leadId, source.id);
   const undoKey = desktop.app.mapToast.key;
   clickAction(desktop.root, "map-undo");
-  await waitFor(() => ["success", "error"].includes(desktop.app.activity.get(undoKey)?.phase), "Undo did not settle.");
+  await waitFor(() => ["success", "error"].includes(desktop.app.activity.get(undoKey)?.phase)
+    && desktop.app.unitList.catalog.find(unit => unit.id === target.id)?.leadId === target.leadId, "Undo did not settle.");
   assert.equal(desktop.app.activity.get(undoKey).error?.code ?? null, null);
   assert.equal(writes.length, 2);
   assert.equal(desktop.app.unitList.catalog.find((unit) => unit.id === target.id)?.leadId, target.leadId);
@@ -4635,6 +4670,9 @@ async function bootApp(url, width, urls, onFetch) {
       return fetch(input, init);
     },
   });
+  if (parsed.hash) {
+    await waitFor(() => app.bootSettled && !app.bootReading, "The application did not finish its initial read.");
+  }
   return { app, root, view, document };
 }
 

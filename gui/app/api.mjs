@@ -180,7 +180,10 @@ export function dispose(api) {
   api.closed = true;
   clearCredentials(api);
   if (api.live) api.live.stopped = true;
-  if (typeof api.live?.timer === "number") clearTimeout(api.live.timer);
+  if (api.live?.timer != null) {
+    clearTimeout(api.live.timer);
+    api.live.timer = null;
+  }
   for (const controller of [...api.controllers]) controller.abort();
   api.controllers.clear();
   for (const url of api.blobs) api.revokeObjectURL?.(url);

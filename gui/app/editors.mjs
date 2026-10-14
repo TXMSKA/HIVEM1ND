@@ -233,7 +233,7 @@ export async function openEditor(api, editors, summary) {
   }
   if (editors.openTicket !== ticket) return editors.current;
   const saved = editors.drafts.get(summary.id);
-  const next = {
+  const next = Object.assign(saved?.kind === "void" ? saved : {}, {
     resourceId: summary.id,
     kind: summary.kind,
     authoritative: result.data,
@@ -260,7 +260,7 @@ export async function openEditor(api, editors, summary) {
     dirty: Boolean(saved?.dirty),
     conflict: saved?.conflict ?? null,
     notices: saved?.notices ?? [],
-  };
+  });
   if (next.boardDraft && next.baseRevision !== result.data.revision) next.conflict = { revision: result.data.revision, remote: result.data };
   const previousAssets = saved?.assets;
   next.assets = new Map();
@@ -279,7 +279,7 @@ export async function openEditor(api, editors, summary) {
     for (const image of previousAssets.values()) {
       if (![...next.assets.values()].includes(image)) image.revoke?.();
     }
-    if (saved) saved.assets = new Map();
+    if (saved && saved !== next) saved.assets = new Map();
   }
   if (editors.openTicket !== ticket && editors.current !== next) {
     releaseAssets(next);

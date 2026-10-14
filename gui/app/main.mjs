@@ -695,7 +695,7 @@ export function dispose(app) {
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onVoidSelection);
   for (const editor of app.editors?.drafts?.values() ?? []) editor.voidSaver?.dispose();
-  app.api.live && (app.api.live.stopped = true);
+  closeStream(app.api.live);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
     if (!list) continue;
     list.controller?.abort();
@@ -2882,14 +2882,8 @@ function selectEditor(app, summary) {
   const name = summary.title || summary.id;
   editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
     const before = editors.error;
-    const previous = editors.drafts.get(summary.id);
     await openEditor(app.api, editors, summary);
     if (editors.error && editors.error !== before) throw editors.error;
-    if (previous?.kind === "void" && editors.current?.resourceId === summary.id) {
-      Object.assign(previous, editors.current);
-      editors.current = previous;
-      editors.drafts.set(summary.id, previous);
-    }
   });
 }
 
