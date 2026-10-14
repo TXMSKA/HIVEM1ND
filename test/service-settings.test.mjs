@@ -152,15 +152,17 @@ test('remote requests execute on their authenticated selected owner once, with s
   await writeBeat({ store, paths: laptop.paths, now: owner.now }, 'running');
   scans = 0;
   const before = await legacyTreeInventory(fixture.home);
-  const pump = async () => {
-    for (let index = 0; index < 30; index += 1) {
+  const pump = async pending => {
+    let settled = false;
+    pending.then(() => { settled = true; }, () => { settled = true; });
+    do {
       await processSettingsRequests(laptop);
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
+      if (!settled) await new Promise(resolve => setTimeout(resolve, 10));
+    } while (!settled);
+    return pending;
   };
   const changed = mutateMachineSettings({ ...domain, receipt: { key: '11111111-1111-4111-8111-111111111111', principalHash: 'fixture' } }, 'scan', { machine: 'LAPTOP' });
-  await pump();
-  const result = await changed;
+  const result = await pump(changed);
   assert.equal(result.body.machine, 'LAPTOP');
   assert.equal(result.body.items.find(item => item.id === 'codex').version, 'laptop-version');
   assert.equal(scans, 1);
@@ -169,12 +171,15 @@ test('remote requests execute on their authenticated selected owner once, with s
   assert.deepEqual(await legacyTreeInventory(fixture.home), before);
   const stale = mutateMachineSettings({ ...domain, operationId: 'stale' }, 'service', { machine: 'LAPTOP', startWithWindows: true, expectedRevision: 'a'.repeat(64) });
   const staleRejection = assert.rejects(stale, { code: 'revision_conflict' });
-  await pump(); await staleRejection;
-  const expired = mutateMachineSettings({ ...domain, operationId: 'expired' }, 'scan', { machine: 'LAPTOP' });
+  await pump(staleRejection);
+  let publishRequest;
+  const requestPublished = new Promise(resolve => { publishRequest = resolve; });
+  const expired = mutateMachineSettings({ ...domain, operationId: 'expired', pulse: { changed: async () => publishRequest() } }, 'scan', { machine: 'LAPTOP' });
   const expiredRejection = assert.rejects(expired, { code: 'machine_unavailable' });
-  await new Promise(resolve => setTimeout(resolve, 30));
+  // The sync pulse runs after commit, so expiry starts before advancing the fixture clock.
+  await requestPublished;
   fixture.clock.now += 31000;
-  await pump(); await expiredRejection;
+  await pump(expiredRejection);
   assert.equal(scans, 1);
 });
 
