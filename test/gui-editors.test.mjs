@@ -66,6 +66,7 @@ import { text } from "../gui/app/i18n.mjs";
 import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
 import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
 import { createTextFinder, findTextMatches, matchReplacement, replacementItems, replaceMatches, undoReplace } from "../gui/app/void.mjs";
+import { editProposal, loadProposals, proposalComment, proposalPassage, proposalStale, renderProposal } from "../gui/app/void.mjs";
 
 function nativeFindWorker(workers) {
   const url = new URL('../gui/app/find-worker.mjs', import.meta.url);
@@ -709,6 +710,132 @@ test("one document saver retains later typing and retries its exact failed opera
   assert.equal(attempts[2].body.document.pages[0].sentinel, 7);
   assert.equal(editor.dirty, false); assert.equal(editor.textDrafts.size, 0); assert.equal(editor.draftText, "");
   assert.equal(states.at(-1), "saved");
+});
+
+test("suggestion drafts keep original preconditions and render explicit bilingual valid and stale actions", () => {
+  const proposal = { id: "suggestion", state: "pending", k: "One", lang: "en", start: 3, end: 10, expectedText: "Welcome", replacement: "Hello", baseRevision: "a".repeat(64) };
+  const original = structuredClone(proposal), editor = { revision: proposal.baseRevision, authoritative: { document: { pages: [{ k: "One", en: "<b>Welcome</b>" }] } } };
+  for (const language of ["en", "es"]) {
+    const calls = [], actions = Object.fromEntries(["accept-change", "edit-change", "discard", "edit-passage", "ask-again"].map((action) => [action, () => calls.push(action)]));
+    const render = () => renderProposal(fakeDocument(), proposal, { editor, t: (key) => text(language, key), actions });
+    const valid = nodesOf(render()), buttons = valid.filter((node) => node.getAttribute?.("data-action"));
+    assert.deepEqual(buttons.map((node) => node.getAttribute("data-action")), ["accept-change", "edit-change", "discard"]);
+    assert.deepEqual(buttons.map((node) => node.textContent), language === "en" ? ["Accept change", "Edit", "Discard"] : ["Aceptar cambio", "Editar", "Descartar"]);
+    buttons[1].listeners.get("click")(); assert.deepEqual(calls, ["edit-change"]);
+    editProposal(editor, proposal);
+    const input = nodesOf(render()).find((node) => node.getAttribute?.("data-proposal-draft"));
+    assert.equal(input.value, "Hello"); input.value = "Edited 😀"; input.listeners.get("input")();
+    assert.equal(editor.proposalDrafts.get(proposal.id), "Edited 😀"); assert.deepEqual(proposal, original);
+    editor.revision = "b".repeat(64);
+    const stale = nodesOf(render());
+    assert.equal(proposalStale(editor, proposal), true);
+    assert.deepEqual(stale.filter((node) => node.getAttribute?.("data-action")).map((node) => node.getAttribute("data-action")), ["edit-passage", "ask-again", "discard"]);
+    assert.equal(stale.some((node) => node.getAttribute?.("role") === "alert"), true);
+    assert.equal(stale.some((node) => node.getAttribute?.("data-proposal-draft")), false);
+    assert.equal(stale.some((node) => node.textContent === text(language, "suggestionStale")), true);
+    assert.equal(editor.proposalDrafts.get(proposal.id), "Edited 😀"); assert.deepEqual(proposal, original);
+    editor.revision = proposal.baseRevision;
+  }
+  editor.authoritative.document.pages[0].en = "<b>Changed</b>";
+  assert.equal(proposalStale(editor, proposal), true);
+});
+
+test("an edited suggestion survives reopening and retry accepts its exact replacement once", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  const summary = (await loadCatalog(api, editors, "void")).find((item) => item.title === "Release notes");
+  let editor = await openEditor(api, editors, summary);
+  let proposal = editor.proposals.find((item) => item.replacement === "Hello");
+  const original = structuredClone(proposal);
+  editProposal(editor, proposal, "Edited 😀");
+  await loadProposals(api, editors);
+  editor = await openEditor(api, editors, summary); proposal = editor.proposals.find((item) => item.id === original.id);
+  assert.equal(editor.proposalDrafts.get(proposal.id), "Edited 😀"); assert.deepEqual(proposal, original);
+  const file = join(fixture.root, "repositories", "shop", "docs", "release.versions.jsonl"), before = await readFile(file, "utf8");
+  await loadHistory(api, editors);
+  const fetchImpl = api.fetch;
+  let dropped = false;
+  api.fetch = async (url, options) => {
+    const response = await fetchImpl(url, options);
+    if (!dropped && options?.method === "POST" && new URL(url).pathname.endsWith("/answer")) { dropped = true; await response.text(); throw new Error("Response lost after commit"); }
+    return response;
+  };
+  let retained;
+  try { await answerProposal(api, editor, proposal, "accept"); assert.fail("The response must be lost."); }
+  catch (error) { retained = error.operation; }
+  assert.ok(retained); assert.equal(retained.body.replacement, "Edited 😀"); assert.equal(retained.body.expectedRevision, original.baseRevision);
+  editProposal(editor, proposal, "Later typing");
+  const accepted = await answerProposal(api, editor, proposal, "accept", retained);
+  assert.equal(accepted.data.proposal.replacement, "Edited 😀"); assert.equal(accepted.data.proposal.expectedText, original.expectedText);
+  assert.equal(accepted.data.proposal.baseRevision, original.baseRevision); assert.equal(accepted.data.proposal.id, original.id);
+  assert.equal(editor.authoritative.document.pages[0].en.includes("<b>Edited 😀</b>"), true);
+  assert.equal(editor.authoritative.document.rev, 2); assert.equal(editor.authoritative.document.sentinel, "void-sentinel");
+  assert.equal(editor.authoritative.document.pages[0].sentinel, "void-page-sentinel"); assert.equal(editor.proposalDrafts.has(proposal.id), false);
+  assert.equal((await readFile(file, "utf8")).trim().split('\n').length, before.trim().split('\n').length + 1);
+  const historyAfter = await loadHistory(api, editors);
+  assert.equal(historyAfter.filter((item) => item.revision === editor.revision).length, 1);
+  await answerProposal(api, editor, proposal, "accept", retained);
+  assert.deepEqual(await loadHistory(api, editors), historyAfter);
+});
+
+test("stale edited acceptance leaves the source and discussion unchanged and discard retains the discussion", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  const summary = (await loadCatalog(api, editors, "void")).find((item) => item.title === "Release notes");
+  const editor = await openEditor(api, editors, summary), proposal = editor.proposals.find((item) => item.replacement === "Hello");
+  const original = structuredClone(proposal);
+  editProposal(editor, proposal, "Edited stale replacement");
+  const source = editor.authoritative.document.pages[0].en;
+  await saveRange(api, editor, "Intro.Welcome", "en", 0, source.length, "<b>Changed greeting 😀</b>\nA different paragraph.");
+  const base = join(fixture.root, "repositories", "shop", "docs"), files = ["release.json", "release.comments.json", "release.versions.jsonl", "release.orig.json"];
+  const before = await Promise.all(files.map((file) => readFile(join(base, file))));
+  const history = await loadHistory(api, editors);
+  let rejected;
+  await assert.rejects(answerProposal(api, editor, proposal, "accept"), (error) => { rejected = error.operation; return error.code === "proposal_stale"; });
+  assert.deepEqual(await Promise.all(files.map((file) => readFile(join(base, file)))), before);
+  assert.deepEqual(await loadHistory(api, editors), history); assert.deepEqual(proposal, original);
+  assert.equal(editor.proposalDrafts.get(proposal.id), "Edited stale replacement");
+  await loadComments(api, editors);
+  const messages = structuredClone(editor.threads.find((thread) => thread.id === proposal.threadId).messages);
+  await answerProposal(api, editor, proposal, "discard", rejected); await loadComments(api, editors);
+  const after = editor.threads.find((thread) => thread.id === proposal.threadId).messages;
+  assert.equal(after.length, messages.length); assert.equal(after.at(-1).text, messages.at(-1).text);
+  assert.equal(after.at(-1).proposal.state, "discarded"); assert.equal(after.at(-1).proposal.replacement, original.replacement);
+  assert.deepEqual(after.slice(0, -1), messages.slice(0, -1)); assert.deepEqual(await readFile(join(base, "release.json")), before[0]);
+});
+
+test("Ask again creates a new current-source anchor with the persisted Send to agent choice", async (t) => {
+  for (const sendToAgent of [false, true]) await t.test(String(sendToAgent), async (t) => {
+    const fixture = await createGuiFixture(); t.after(() => fixture.close());
+    const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+    const settings = await request(api, "GET", "/settings");
+    await request(api, "PATCH", "/settings", { body: { sendToAgent, expectedRevision: settings.data.revision }, operation: createOperation({ method: "PATCH", path: "/settings", body: { sendToAgent, expectedRevision: settings.data.revision } }) });
+    editors.sendToAgent = (await request(api, "GET", "/settings")).data.settings.sendToAgent;
+    const editor = await openEditor(api, editors, (await loadCatalog(api, editors, "void")).find((item) => item.title === "Release notes"));
+    const proposal = editor.proposals.find((item) => item.replacement === "Hello"), original = structuredClone(proposal);
+    const source = editor.authoritative.document.pages[0].en;
+    await saveRange(api, editor, proposal.k, proposal.lang, 0, source.length, "<b>Current greeting 😀</b>\nA different paragraph."); await loadComments(api, editors);
+    const passage = proposalPassage(editor, proposal), comment = proposalComment(editor, proposal);
+    assert.equal(passage.source, editor.authoritative.document.pages[0].en);
+    assert.equal(passage.source.slice(passage.start, passage.end), "Current greeting 😀");
+    assert.equal(comment.anchor.quote, "Current greeting 😀"); assert.equal(comment.anchor.start, 0);
+    assert.equal(comment.anchor.end, "Current greeting 😀".length); assert.equal(comment.anchor.lang, proposal.lang); assert.equal(comment.anchor.k, proposal.k);
+    const prior = editor.threads.find((thread) => thread.id === proposal.threadId);
+    assert.equal(comment.text, prior.messages.find((message) => message.authorId === "root:master").text);
+    const fetchImpl = api.fetch;
+    let sent;
+    api.fetch = async (url, options) => {
+      if (options?.method === "POST" && new URL(url).pathname.endsWith("/comments")) sent = JSON.parse(options.body);
+      return fetchImpl(url, options);
+    };
+    const result = await createComment(api, editors, comment.anchor, comment.text);
+    assert.notEqual(result.data.thread.id, prior.id); assert.equal(sent.expectedRevision, editor.revision);
+    assert.equal(sent.sendToAgent, sendToAgent && editor.attached.length > 0);
+    assert.equal(result.data.thread.messages[0].sendToAgent, sent.sendToAgent);
+    await loadProposals(api, editors);
+    const retained = editor.proposals.find((item) => item.id === original.id);
+    assert.equal(retained.baseRevision, original.baseRevision); assert.equal(retained.expectedText, original.expectedText); assert.equal(retained.state, "pending");
+  });
 });
 
 test("void edits keep source boundaries, history and proposals", async (t) => {

@@ -1222,6 +1222,126 @@ test('ranges reject split characters and tags, and a proposal accepts once', asy
   await assert.rejects(() => answerProposal({ ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } }, created.id, stale.proposal.id, { decision: 'accept', expectedRevision: edited.revision, expectedCommentsRevision: stale.proposal.commentsRevision }), { status: 403, code: 'forbidden' });
 });
 
+test('an edited suggestion keeps its base expected text identity discussion and unknown fields', async (t) => {
+  const { context, localPath } = await shop(t);
+  const document = { ...release(), rev: 7, future: { retained: true } };
+  document.pages[0].future = { retained: true };
+  const editor = await createText(context, { project: 'shop', path: 'docs/edited-suggestion.json', document });
+  const comment = await createComment(context, editor.id, { text: 'Improve the greeting', sendToAgent: false,
+    expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' } });
+  const suggested = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello',
+    expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
+  const file = path.join(localPath, 'docs/edited-suggestion.comments.json');
+  const comments = JSON.parse(await readFile(file));
+  comments.future = { retained: true }; comments.threads[0].future = { retained: true };
+  const message = comments.threads[0].messages.at(-1);
+  message.future = { retained: true }; message.proposal.future = { retained: true };
+  await writeFile(file, JSON.stringify(comments));
+  const body = { decision: 'accept', replacement: 'Greetings 😀', expectedRevision: editor.revision, expectedCommentsRevision: (await readComments(context, editor.id)).commentsRevision };
+  const accepted = await answerProposal(context, editor.id, suggested.proposal.id, body);
+  assert.equal(accepted.editor.document.pages[0].en, '<b>Greetings 😀</b>\nA first paragraph.');
+  assert.equal(accepted.editor.document.pages[0].es, editor.document.pages[0].es);
+  assert.equal(accepted.editor.document.rev, editor.document.rev + 1);
+  assert.deepEqual(accepted.editor.document.future, document.future);
+  assert.deepEqual(accepted.editor.document.pages[0].future, document.pages[0].future);
+  assert.equal(accepted.proposal.id, suggested.proposal.id); assert.equal(accepted.proposal.threadId, comment.thread.id);
+  assert.equal(accepted.proposal.expectedText, 'Welcome'); assert.equal(accepted.proposal.baseRevision, editor.revision);
+  assert.equal(accepted.proposal.replacement, body.replacement); assert.equal(accepted.proposal.state, 'accepted');
+  const saved = JSON.parse(await readFile(file));
+  assert.deepEqual(saved.future, comments.future); assert.deepEqual(saved.threads[0].future, comments.threads[0].future);
+  assert.deepEqual(saved.threads[0].messages[0], comments.threads[0].messages[0]);
+  assert.equal(saved.threads[0].messages.at(-1).text, message.text);
+  assert.deepEqual(saved.threads[0].messages.at(-1).future, message.future);
+  assert.deepEqual(accepted.proposal.future, message.proposal.future);
+  const versions = (await readFile(path.join(localPath, 'docs/edited-suggestion.versions.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(versions.at(-1).after, accepted.editor.document.pages[0].en);
+});
+
+test('stale edited suggestions write nothing and discard keeps every discussion message', async (t) => {
+  for (const drift of ['revision', 'expected-text']) await t.test(drift, async (t) => {
+    const { context, localPath } = await shop(t);
+    let editor = await createText(context, { project: 'shop', path: 'docs/stale-suggestion.json', document: release() });
+    const comment = await createComment(context, editor.id, { text: 'Improve the greeting', sendToAgent: false,
+      expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+      anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' } });
+    const suggested = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello',
+      expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
+    const commentFile = path.join(localPath, 'docs/stale-suggestion.comments.json');
+    if (drift === 'revision') editor = await replaceText(context, editor.id, { document: { ...editor.document, title: 'Changed title' }, expectedRevision: editor.revision });
+    else {
+      const comments = JSON.parse(await readFile(commentFile)); comments.threads[0].messages.at(-1).proposal.expectedText = 'Changed';
+      await writeFile(commentFile, JSON.stringify(comments));
+    }
+    const comments = await readComments(context, editor.id), before = await readFile(commentFile), textBefore = await readFile(path.join(localPath, editor.path));
+    const historyBefore = await listHistory(context, editor.id);
+    const originalBefore = await readFile(path.join(localPath, 'docs/stale-suggestion.orig.json'));
+    const versionsBefore = await readFile(path.join(localPath, 'docs/stale-suggestion.versions.jsonl')).catch(() => null);
+    await assert.rejects(() => answerProposal(context, editor.id, suggested.proposal.id, { decision: 'accept', replacement: 'Edited replacement',
+      expectedRevision: editor.revision, expectedCommentsRevision: comments.commentsRevision }), { status: 409, code: 'proposal_stale' });
+    assert.deepEqual(await readFile(commentFile), before); assert.deepEqual(await readFile(path.join(localPath, editor.path)), textBefore);
+    assert.deepEqual(await listHistory(context, editor.id), historyBefore);
+    assert.deepEqual(await readFile(path.join(localPath, 'docs/stale-suggestion.orig.json')), originalBefore);
+    assert.deepEqual(await readFile(path.join(localPath, 'docs/stale-suggestion.versions.jsonl')).catch(() => null), versionsBefore);
+    const discarded = await answerProposal(context, editor.id, suggested.proposal.id, { decision: 'discard', expectedRevision: editor.revision, expectedCommentsRevision: comments.commentsRevision });
+    assert.equal(discarded.proposal.state, 'discarded'); assert.equal(discarded.editor.revision, editor.revision);
+    const messages = JSON.parse(await readFile(commentFile)).threads[0].messages;
+    const prior = JSON.parse(before).threads[0].messages;
+    assert.deepEqual(messages[0], prior[0]); assert.equal(messages.length, prior.length);
+    assert.equal(messages.at(-1).text, prior.at(-1).text); assert.equal(messages.at(-1).proposal.replacement, 'Hello');
+  });
+});
+
+test('edited acceptance recovers text comments and one History entry with the same receipt', async (t) => {
+  for (const fault of [{ afterPrepared: true }, { afterRenames: 1 }, { beforeReceipt: true }, { afterReceipt: true }]) await t.test(JSON.stringify(fault), async (t) => {
+    const { context, fixture, localPath } = await shop(t);
+    const editor = await createText(context, { project: 'shop', path: 'docs/retry-suggestion.json', document: release() });
+    const comment = await createComment(context, editor.id, { text: 'Improve the greeting', sendToAgent: false,
+      expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+      anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' } });
+    const suggested = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello',
+      expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
+    const count = (await listHistory(context, editor.id)).total;
+    const body = { decision: 'accept', replacement: '', expectedRevision: editor.revision, expectedCommentsRevision: suggested.editor.commentsRevision };
+    const input = { principal: 'suggestion-fixture', key: randomUUID(), requestId: randomUUID(), method: 'POST', path: `/void/texts/${editor.id}/proposals/${suggested.proposal.id}/answer`, body };
+    fixture.store.fault = fault;
+    await assert.rejects(() => withReceipt(fixture.store, input, (receipt) => answerProposal({ ...context, receipt }, editor.id, suggested.proposal.id, body)), { code: 'injected_crash' });
+    await recoverTransactions(fixture.store);
+    const replay = await withReceipt(fixture.store, input, () => assert.fail('Acceptance was executed twice.'));
+    assert.equal(replay.replayed, true); assert.equal(replay.body.proposal.state, 'accepted'); assert.equal(replay.body.proposal.replacement, '');
+    assert.equal((await readEditor(context, editor.id)).document.pages[0].en, '<b></b>\nA first paragraph.');
+    assert.equal((await readComments(context, editor.id)).threads[0].messages.at(-1).proposal.state, 'accepted');
+    assert.equal((await listHistory(context, editor.id)).total, count + 1);
+    assert.equal((await readFile(path.join(localPath, 'docs/retry-suggestion.versions.jsonl'), 'utf8')).trim().split('\n').length, 1);
+  });
+});
+
+test('HTTP suggestion answers allow only a string accept override and replay one edited acceptance', async (t) => {
+  const { context, fixture } = await shop(t);
+  const editor = await createText(context, { project: 'shop', path: 'docs/http-suggestion.json', document: release() });
+  const comment = await createComment(context, editor.id, { text: 'Improve the greeting', sendToAgent: false,
+    expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' } });
+  const suggested = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello',
+    expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); t.after(() => core.http.close());
+  const auth = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = auth.json.data.token, url = `/api/v1/void/texts/${editor.id}/proposals/${suggested.proposal.id}/answer`;
+  const body = { decision: 'accept', expectedRevision: editor.revision, expectedCommentsRevision: suggested.editor.commentsRevision };
+  const historyBefore = (await listHistory(context, editor.id)).total;
+  for (const [extra, status] of [[{ replacement: null }, 422], [{ replacement: 1 }, 422], [{ decision: 'discard', replacement: 'No' }, 422], [{ replacement: 'Hi', baseRevision: editor.revision }, 400], [{ replacement: 'Hi', expectedText: 'Changed' }, 400]]) {
+    const result = await call(core.http.port, 'POST', url, { token, body: { ...body, ...extra }, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(result.status, status); assert.equal((await readEditor(context, editor.id)).revision, editor.revision);
+    assert.equal((await listHistory(context, editor.id)).total, historyBefore);
+  }
+  const headers = { 'idempotency-key': randomUUID() }, acceptedBody = { ...body, replacement: 'Edited' };
+  const accepted = await call(core.http.port, 'POST', url, { token, body: acceptedBody, headers });
+  assert.equal(accepted.status, 200); assert.equal(accepted.json.data.proposal.baseRevision, editor.revision);
+  const replay = await call(core.http.port, 'POST', url, { token, body: acceptedBody, headers });
+  assert.equal(replay.status, 200); assert.deepEqual(replay.json.data, accepted.json.data);
+  assert.equal((await listHistory(context, editor.id)).total, historyBefore + 1);
+});
+
 test('comments keep a corrupt sidecar, relocate anchors and notify once', async (t) => {
   const { context, fixture, localPath } = await shop(t);
   await seedAttachedUnits(context, ['project:shop:executor', 'project:shop:other']);

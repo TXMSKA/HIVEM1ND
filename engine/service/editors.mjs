@@ -304,7 +304,7 @@ async function commitEditor(context, entries, events, response, replaceUndo = nu
     const library = entries.find((entry) => entry.recordPath === inside(projectOf(context, resource.project).localPath, 'docs/flows/library.json'));
     if (library) Object.assign(resource, parseJson(library.afterBytes).items[resource.id], { libraryRevision: hashBytes(library.afterBytes) });
   }
-  for (const editor of response?.body?.editors ?? []) {
+  for (const editor of response?.body?.editor ? [response.body.editor] : response?.body?.editors ?? []) {
     const library = entries.find((entry) => entry.recordPath === inside(projectOf(context, editor.project).localPath, 'docs/flows/library.json'));
     if (library) Object.assign(editor, parseJson(library.afterBytes).items[editor.id], { libraryRevision: hashBytes(library.afterBytes) });
   }
@@ -1629,6 +1629,9 @@ export async function listProposals(context, id, query = {}) {
 
 export async function answerProposal(context, id, proposalId, input) {
   if (context.principal?.audience === 'agent') fail(403, 'forbidden', 'The agent cannot accept a proposal.');
+  if (input.replacement !== undefined && (input.decision !== 'accept' || typeof input.replacement !== 'string')) {
+    fail(422, 'invalid_body', 'A replacement must be text and requires accept.');
+  }
   const found = await textBundle(context, id);
   const comments = await loadComments(found);
   if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
@@ -1653,10 +1656,13 @@ export async function answerProposal(context, id, proposalId, input) {
     message.proposal.decidedAt = decidedAt;
     const bytes = jsonBytes(comments.value);
     const revision = hashBytes(bytes);
+    const response = { editor: { ...await shown(context, found.entry, found.document, found.loaded.revision),
+      commentsRevision: revision, threads: projectComments(comments.value, id).threads },
+    proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision } };
     await commit(context, [record(comments.file, comments.revision, bytes)], [
       { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision }, commentsRevision: revision } },
-    ]);
-    return { editor: await shown(context, found.entry, found.document, found.loaded.revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision: revision } };
+    ], { status: 200, body: response });
+    return response;
   }
   const page = found.document.pages.find((item) => item.k === message.proposal.k);
   const source = page?.[message.proposal.lang];
@@ -1664,9 +1670,12 @@ export async function answerProposal(context, id, proposalId, input) {
     fail(409, 'proposal_stale', 'The proposal no longer matches the text.');
   }
   const document = structuredClone(found.document);
-  const next = applySlice(source, message.proposal.start, message.proposal.end, message.proposal.replacement, message.proposal.expectedText);
+  const replacement = input.replacement ?? message.proposal.replacement;
+  const next = applySlice(source, message.proposal.start, message.proposal.end, replacement, message.proposal.expectedText);
   document.pages.find((item) => item.k === message.proposal.k)[message.proposal.lang] = next;
   document.rev = (document.rev || 0) + 1;
+  validateText(document);
+  message.proposal.replacement = replacement;
   message.proposal.state = 'accepted';
   message.proposal.decidedBy = decidedBy;
   message.proposal.decidedAt = decidedAt;
@@ -1680,12 +1689,15 @@ export async function answerProposal(context, id, proposalId, input) {
   if (!orig.bytes) entries.push(record(`${stemOf(found.file)}.orig.json`, null, found.loaded.bytes));
   const revision = hashBytes(bytes);
   const commentsRevision = hashBytes(commentBytes);
+  const response = { editor: { ...await shown(context, found.entry, document, revision),
+    commentsRevision, threads: projectComments(comments.value, id).threads },
+  proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision } };
   await commit(context, entries, [
     voidEvent(id, revision, document.rev, 'replace-range', message.proposal.k, message.proposal.lang),
     { name: 'void.proposal.changed', resourceId: id, data: { resourceId: id, proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision }, commentsRevision } },
-  ]);
+  ], { status: 200, body: response });
   rememberExternal(context, id, revision, document);
-  return { editor: await shown(context, found.entry, document, revision), proposal: { ...message.proposal, resourceId: id, threadId: thread.id, commentsRevision } };
+  return response;
 }
 
 function commentText(value) {

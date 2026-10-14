@@ -82,8 +82,8 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
-import { assetIdentity, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
+import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
+import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -2221,6 +2221,10 @@ function voidSurface(app, document, editor, t) {
   const hits = finding ? find.matches.filter((match) => match.resourceId === editor.resourceId && match.k === k && match.lang === lang) : [];
   host.setAttribute('data-find-hits', String(hits.length));
   highlightFind(document, body, hits, find?.matches[find.current]);
+  const suggestionTokens = tokenizeMarkup(value());
+  const suggestions = (editor.proposals ?? []).filter((proposal) => proposal.state === "pending" && proposal.k === k && proposal.lang === lang && !proposalStale(editor, proposal))
+    .map((proposal) => ({ start: plainCaretFromSource(suggestionTokens, proposal.start), end: plainCaretFromSource(suggestionTokens, proposal.end) }));
+  highlightFind(document, body, suggestions, null, 'void-suggestion');
   if (focused) {
     surface.append(element(document, "p", { class: "void-focus-hint", "data-focus-hint": "true", text: t("focusHint") }));
     const dots = element(document, "div", { class: "void-page-dots" });
@@ -2380,14 +2384,17 @@ function voidFormatTarget(app, editor, format, range, apply) {
   document.body.append(dialog); dialog.showModal(); input.focus();
 }
 
-function appendProposals(app, document, host, editor, t) {
-  for (const proposal of editor.proposals ?? []) {
-    const block = renderProposal(document, proposal);
-    if (proposal.state === "pending" && app.store.capabilities.includes("proposal.answer")) {
-      block.append(element(document, "button", { type: "button", class: "btn", "data-action": "accept-change", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "accept") }, t("acceptChange")));
-      block.append(element(document, "button", { type: "button", class: "btn", "data-action": "discard", "data-proposal-id": proposal.id, onclick: () => answerVoid(app, editor, proposal, "discard") }, t("discard")));
+function appendProposals(app, document, host, editor, t, proposalId = null, discussion = null) {
+  for (const proposal of (editor.proposals ?? []).filter((item) => proposalId ? item.id === proposalId : !(editor.threads ?? []).some((thread) => thread.messages?.some((message) => message.proposal?.id === item.id)))) {
+    const actions = { busy: activityPending(app, `proposal:${proposal.id}`) || activityPending(app, `proposal-ask:${proposal.id}`) };
+    if (app.store.capabilities.includes("proposal.answer")) {
+      actions["accept-change"] = () => answerVoid(app, editor, proposal, "accept");
+      actions["discard"] = () => answerVoid(app, editor, proposal, "discard");
+      actions["edit-change"] = () => { editProposal(editor, proposal, editor.proposalDrafts?.get(proposal.id) ?? proposal.replacement); renderShell(app); app.root.querySelector?.(`[data-proposal-draft='${proposal.id}']`)?.focus?.(); };
+      if (canEditResources(app)) actions["edit-passage"] = () => editVoidPassage(app, editor, proposal);
+      if (app.store.capabilities.includes("comment.write")) actions["ask-again"] = () => askVoidAgain(app, editor, proposal);
     }
-    host.append(block);
+    host.append(renderProposal(document, proposal, { editor, t, actions, discussion }));
   }
 }
 
@@ -2409,13 +2416,57 @@ function commentOnQuote(app, editor) {
 }
 
 function answerVoid(app, editor, proposal, decision) {
-  editorAct(app, `proposal:${proposal.id}`, text(app.language, "answering"), async (record) => {
+  if (activityPending(app, `proposal:${proposal.id}`)) return;
+  if (decision === "accept" && editor.dirty) { explain(app, "suggestionUnsaved"); return; }
+  const previous = app.activity.get(`proposal:${proposal.id}`);
+  if (previous?.operation && (!app.api.uncertain.has(previous.operation.id) || previous.operation.body.decision !== decision)) previous.operation = null;
+  return editorAct(app, `proposal:${proposal.id}`, text(app.language, "answering"), async (record) => {
     try {
       await answerProposal(app.api, editor, proposal, decision, record.operation);
+      if (decision === "accept") { editor.voidSaver?.dispose(); editor.voidSaver = null; }
     } catch (error) {
-      if (error.code === "proposal_stale") editor.conflict = { code: error.code };
+      if (error.code === "proposal_stale") {
+        editor.staleProposals ??= new Set(); editor.staleProposals.add(proposal.id);
+        editor.remoteStale = true;
+        await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
+      }
       throw error;
     }
+  });
+}
+
+function editVoidPassage(app, editor, proposal) {
+  if (editor.dirty) { explain(app, "suggestionUnsaved"); return; }
+  return editorAct(app, `proposal-edit:${proposal.id}`, text(app.language, "editPassage"), async () => {
+    editor.remoteStale = true;
+    await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
+    const passage = proposalPassage(editor, proposal);
+    if (!passage) { explain(app, "quoteNeedsSelection"); return; }
+    editor.page = proposal.k; editor.findLanguage = proposal.lang; editor.sourceMode = true;
+    editor.textSelections ??= new Map();
+    editor.textSelections.set(textDraftKey(editor.resourceId, proposal.k, proposal.lang), { start: passage.start, end: passage.end });
+    editor.restoreCaret = true;
+    if (app.voidState) app.voidState.page = proposal.k;
+    if (app.voidFind) app.voidFind.open = false;
+    app.mode = "document";
+  });
+}
+
+function askVoidAgain(app, editor, proposal) {
+  if (editor.dirty) { explain(app, "suggestionUnsaved"); return; }
+  const key = `proposal-ask:${proposal.id}`;
+  if (activityPending(app, key)) return;
+  const previous = app.activity.get(key);
+  if (previous?.operation && !app.api.uncertain.has(previous.operation.id)) previous.operation = null;
+  return editorAct(app, key, text(app.language, "sending"), async (record) => {
+    if (!record.operation) {
+      editor.remoteStale = true;
+      await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
+      await loadComments(app.api, { ...app.editors, current: editor });
+    }
+    const comment = proposalComment(editor, proposal);
+    if (!comment && !record.operation) { explain(app, "quoteNeedsSelection"); return; }
+    await createComment(app.api, { ...app.editors, current: editor }, comment?.anchor, comment?.text, record.operation, commentChoice(app.editors, editor));
   });
 }
 
@@ -2640,7 +2691,8 @@ function renderEditorSurfaces(app, t) {
       line.append(element(document, "span", { class: "comment-author", text: message.author || t("unknown") }));
       if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatWhen(app.language, message.at) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
-      box.append(line);
+      if (current.kind === "void" && message.proposal && current.proposals?.some((item) => item.id === message.proposal.id)) appendProposals(app, document, box, current, t, message.proposal.id, line);
+      else box.append(line);
       if (message.sendToAgent === false && message.authorId === "root:master") box.append(element(document, "p", { class: "field-hint", "data-comment-note": message.id, text: t("keptAsNote") }));
     }
     box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));

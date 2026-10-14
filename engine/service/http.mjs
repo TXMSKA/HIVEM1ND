@@ -1027,7 +1027,7 @@ function allowedBody(route) {
     'POST /void/replace/:changeId/undo': [],
     'PUT /void/texts/:resourceId': ['document', 'expectedRevision'],
     'POST /void/texts/:resourceId/ranges': ['k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'mode', 'threadId', 'expectedCommentsRevision'],
-    'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'expectedRevision', 'expectedCommentsRevision'],
+    'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'replacement', 'expectedRevision', 'expectedCommentsRevision'],
     'PUT /editors/:resourceId/attachments': ['attached', 'expectedRevision'],
     'POST /editors/:resourceId/history/:historyId/restore': ['expectedRevision', 'expectedCommentsRevision'],
     'POST /editors/:resourceId/conflict': ['decision', 'document', 'expectedRevision', 'expectedCommentsRevision'],

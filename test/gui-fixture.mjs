@@ -3663,9 +3663,10 @@ function validateRange(body) {
 }
 
 function validateProposalAnswer(body) {
-  requireObject(body, ["decision", "expectedRevision", "expectedCommentsRevision"]);
+  requireObject(body, ["decision", "replacement", "expectedRevision", "expectedCommentsRevision"]);
   requireKeys(body, ["decision", "expectedRevision", "expectedCommentsRevision"]);
   if (!["accept", "discard"].includes(body.decision)) throw new HttpError(422, "invalid_body", "The decision is not valid.");
+  if (body.replacement !== undefined && (body.decision !== "accept" || typeof body.replacement !== "string")) throw new HttpError(422, "invalid_body", "A replacement must be text and requires accept.");
   revisionField(body.expectedRevision);
   revisionField(body.expectedCommentsRevision);
 }
@@ -3753,7 +3754,7 @@ async function proposeRange(fx, editor, body) {
 }
 
 async function prepareProposal(fx, params, body) {
-  const editor = await mutableText(fx, params.resourceId, body.expectedRevision);
+  const editor = await editorFor(fx, params.resourceId);
   if (editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The comments were changed elsewhere.");
   const proposal = editor.proposals.find((item) => item.id === params.proposalId);
   if (!proposal) throw new HttpError(404, "not_found", "The proposal was not found.");
@@ -3761,6 +3762,7 @@ async function prepareProposal(fx, params, body) {
   const source = textSource(editor.document, proposal.k, proposal.lang);
   const stale = proposal.baseRevision !== editor.revision || source.slice(proposal.start, proposal.end) !== proposal.expectedText;
   if (body.decision === "accept" && stale) throw new HttpError(409, "proposal_stale", "The suggestion no longer matches.");
+  await mutableText(fx, params.resourceId, body.expectedRevision);
   const threads = structuredClone(editor.threads);
   const thread = threads.find((item) => (item.messages ?? []).some((message) => message.proposal?.id === proposal.id));
   const message = thread.messages.find((item) => item.proposal?.id === proposal.id);
@@ -3769,11 +3771,13 @@ async function prepareProposal(fx, params, body) {
     const comments = writeComments(fx, editor, threads, thread, 200, "reply");
     return { ...comments, status: 200, data: { ...comments.data, proposal: message.proposal, editor: { ...editor, commentsRevision: comments.data.commentsRevision, threads, proposals: threads.flatMap(proposalList) } } };
   }
+  message.proposal.replacement = body.replacement ?? proposal.replacement;
   const document = structuredClone(editor.document);
   const page = document.pages.find((item) => item.k === proposal.k);
-  page[proposal.lang] = `${source.slice(0, proposal.start)}${proposal.replacement}${source.slice(proposal.end)}`;
+  page[proposal.lang] = `${source.slice(0, proposal.start)}${message.proposal.replacement}${source.slice(proposal.end)}`;
   document.rev = (document.rev ?? 0) + 1;
-  const saved = await writeText(fx, editor, document, { operation: "replace-range", k: proposal.k, lang: proposal.lang, before: proposal.expectedText, after: proposal.replacement });
+  validateTextPut({ document, expectedRevision: editor.revision });
+  const saved = await writeText(fx, editor, document, { operation: "replace-range", k: proposal.k, lang: proposal.lang, before: proposal.expectedText, after: message.proposal.replacement });
   const comments = writeComments(fx, { ...editor, threads }, threads, thread, 200, "reply");
   return {
     status: 200,

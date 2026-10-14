@@ -764,6 +764,16 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .action-cards { display: grid; gap: 8px; }
 .card { background: var(--card); border-radius: var(--radius-control); padding: 8px; }
 .comment-line { margin: 0 0 6px; }
+.void-suggestion { margin-left: 18px; padding: 11px 12px; display: flex; flex-direction: column; gap: 6px; border-radius: 16px; background: var(--card); color: var(--body); font-size: 13px; }
+.void-suggestion p { margin: 0; }
+.void-suggestion.is-stale { gap: 8px; background: var(--waiting-soft); }
+.void-suggestion-warning { display: flex; flex-direction: column; gap: 8px; }
+.void-suggestion-heading { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.void-suggestion-heading .icon { width: 14px; height: 14px; flex: none; color: var(--waiting); }
+.void-suggestion-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.void-suggestion-actions .btn { min-width: 32px; min-height: 32px; padding: 6px 10px; font-size: 12.5px; border-radius: 8px; }
+.void-suggestion-edit { width: 100%; min-height: 64px; resize: vertical; border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; background: var(--card2); color: var(--body); font: 13px/1.65 var(--font); }
+.void-body ::highlight(void-suggestion) { background: var(--accent-soft); color: var(--body); text-decoration: underline solid var(--accent) 2px; }
 .comment-author { font-weight: 600; margin-right: 8px; }
 .unit-card, .inspector-details { display: grid; gap: 6px; }
 .settings-panel { display: grid; gap: 8px; }

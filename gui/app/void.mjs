@@ -1,4 +1,5 @@
 import { perform, request } from "./api.mjs";
+import { element, icon } from "./components.mjs";
 import { assetIdentity, boundaryInsideTag, createTextAnchor, plainCaretFromSource, plainOffsets, plainText, rangeRequest, renderMarkup, runMetadata, sourceBoundary, tokenizeMarkup, validLink, validUtf16Boundary } from "./markup.mjs";
 
 export function renderDocument(document, host, editor) {
@@ -112,17 +113,82 @@ export async function replaceDocument(api, editor, document, retained = null, ex
   return result;
 }
 
-export function renderProposal(document, proposal) {
-  const block = document.createElement("article");
-  block.dataset.proposal = proposal.id;
-  block.dataset.state = proposal.state;
-  block.append(line(document, proposal.expectedText), line(document, proposal.replacement), line(document, proposal.createdBy));
+export function editProposal(editor, proposal, replacement = proposal.replacement) {
+  editor.proposalDrafts ??= new Map();
+  editor.proposalDrafts.set(proposal.id, replacement);
+}
+
+export function proposalStale(editor, proposal) {
+  const source = (editor.authoritative?.document ?? editor.document)?.pages?.find((page) => page.k === proposal.k)?.[proposal.lang];
+  return editor.staleProposals?.has(proposal.id) || proposal.baseRevision !== editor.revision
+    || typeof source !== "string" || source.slice(proposal.start, proposal.end) !== proposal.expectedText;
+}
+
+export function proposalPassage(editor, proposal) {
+  const source = (editor.authoritative?.document ?? editor.document)?.pages?.find((page) => page.k === proposal.k)?.[proposal.lang];
+  if (typeof source !== "string") return null;
+  const visible = plainText(source), tokens = tokenizeMarkup(source);
+  const near = plainCaretFromSource(tokens, Math.min(source.length, Math.max(0, proposal.start)));
+  const quote = plainText(proposal.expectedText);
+  const offsets = [];
+  if (quote) for (let at = visible.indexOf(quote); at >= 0; at = visible.indexOf(quote, at + 1)) offsets.push(at);
+  let start = offsets.sort((a, b) => Math.abs(a - near) - Math.abs(b - near))[0];
+  let end;
+  if (start !== undefined) end = start + quote.length;
+  else {
+    start = visible.lastIndexOf("\n", Math.max(0, near - 1)) + 1;
+    end = visible.indexOf("\n", near);
+    if (end < 0) end = visible.length;
+  }
+  if (end <= start || !validUtf16Boundary(visible, start) || !validUtf16Boundary(visible, end)) return null;
+  return { source, anchor: createTextAnchor(source, proposal.k, proposal.lang, start, end),
+    start: sourceBoundary(source, start, "end"), end: sourceBoundary(source, end, "start") };
+}
+
+export function proposalComment(editor, proposal) {
+  const passage = proposalPassage(editor, proposal);
+  const thread = editor.threads?.find((item) => item.id === proposal.threadId);
+  const original = thread?.messages?.find((message) => !message.proposal && message.authorId === "root:master")
+    ?? thread?.messages?.find((message) => !message.proposal)
+    ?? thread?.messages?.find((message) => message.authorId === "root:master");
+  return passage && original?.text?.trim() ? { anchor: passage.anchor, text: original.text } : null;
+}
+
+export function renderProposal(document, proposal, { editor, t, actions = {}, discussion = null } = {}) {
+  const stale = editor && proposal.state === "pending" && proposalStale(editor, proposal);
+  const block = element(document, "article", { class: `void-suggestion${stale ? " is-stale" : ""}`, "data-proposal": proposal.id, "data-state": proposal.state });
+  if (discussion) block.append(discussion);
+  else block.append(line(document, proposal.expectedText), line(document, proposal.replacement), line(document, proposal.createdBy));
+  if (!t || proposal.state !== "pending") return block;
+  if (stale) {
+    block.setAttribute("data-proposal-stale", "true");
+    block.append(element(document, "div", { class: "void-suggestion-warning", role: "alert" },
+      element(document, "div", { class: "void-suggestion-heading" }, icon(document, "alert"), element(document, "strong", { text: t("suggestionStale") })),
+      element(document, "p", { text: t("suggestionNotApplied") })));
+  } else if (editor?.proposalDrafts?.has(proposal.id)) {
+    const input = element(document, "textarea", { class: "void-suggestion-edit", "data-proposal-draft": proposal.id, "data-keep": `proposal:${proposal.id}`, "aria-label": t("edit"),
+      disabled: actions.busy ? "" : null });
+    input.value = editor.proposalDrafts.get(proposal.id);
+    input.addEventListener("input", () => editProposal(editor, proposal, input.value));
+    block.append(input);
+  }
+  const row = element(document, "div", { class: "void-suggestion-actions" });
+  for (const [action, label, primary] of stale ? [["edit-passage", "editPassage", true], ["ask-again", "askAgain", false], ["discard", "discard", false]]
+    : [["accept-change", "acceptChange", true], ["edit-change", "edit", false], ["discard", "discard", false]]) {
+    if (typeof actions[action] !== "function") continue;
+    row.append(element(document, "button", { type: "button", class: `btn${primary ? " primary" : ""}`, "data-action": action, "data-proposal-id": proposal.id,
+      disabled: actions.busy ? "" : null, text: t(label), onclick: actions[action] }));
+  }
+  block.append(row);
   return block;
 }
 
 export async function loadProposals(api, editors) {
   const current = editors.current;
   if (!current || current.kind !== "void") return current?.proposals ?? [];
+  editors.proposalDrafts ??= new Map();
+  current.proposalDrafts = editors.proposalDrafts.get(current.resourceId) ?? current.proposalDrafts ?? new Map();
+  editors.proposalDrafts.set(current.resourceId, current.proposalDrafts);
   const ticket = (editors.proposalTicket ?? 0) + 1;
   editors.proposalTicket = ticket;
   const items = [];
@@ -158,14 +224,18 @@ export function rememberProposal(editor, proposal, commentsRevision) {
 }
 
 export async function answerProposal(api, editor, proposal, decision, retained = null) {
+  if (retained && retained.body.decision !== decision) retained = null;
   const result = await perform(api, {
     method: "POST",
     path: "/void/texts/:resourceId/proposals/:proposalId/answer",
     params: { resourceId: editor.resourceId, proposalId: proposal.id },
-    body: { decision, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision },
+    body: { decision, expectedRevision: decision === "accept" ? proposal.baseRevision : editor.revision, expectedCommentsRevision: editor.commentsRevision,
+      ...(decision === "accept" && editor.proposalDrafts?.has(proposal.id) ? { replacement: editor.proposalDrafts.get(proposal.id) } : {}) },
   }, retained);
   acceptText(editor, result.data.editor ?? result.data);
   rememberProposal(editor, result.data.proposal, result.data.editor?.commentsRevision ?? result.data.commentsRevision);
+  editor.proposalDrafts?.delete(proposal.id);
+  editor.staleProposals?.delete(proposal.id);
   return result;
 }
 
@@ -593,7 +663,7 @@ function acceptReplace(editors, values) {
   }
 }
 
-export function highlightFind(document, host, matches, current) {
+export function highlightFind(document, host, matches, current, name = 'void-find') {
   const css = document.defaultView?.CSS ?? globalThis.CSS, HighlightType = document.defaultView?.Highlight ?? globalThis.Highlight;
   if (!css?.highlights || !HighlightType || !document.createRange) return;
   const nodes = [];
@@ -608,6 +678,6 @@ export function highlightFind(document, host, matches, current) {
     range.setStart(first, match.start - runMetadata(first).plainStart); range.setEnd(last, match.end - runMetadata(last).plainStart);
     ranges.push(range); if (match === current) selected.push(range);
   }
-  css.highlights.set('void-find', new HighlightType(...ranges));
-  css.highlights.set('void-current', new HighlightType(...selected));
+  css.highlights.set(name, new HighlightType(...ranges));
+  if (name === 'void-find') css.highlights.set('void-current', new HighlightType(...selected));
 }
