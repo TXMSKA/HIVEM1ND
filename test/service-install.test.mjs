@@ -296,37 +296,66 @@ test('the real wizard retries only service startup and opens its authenticated v
   const server = await createWizardServer({ session, openCompletedViewer: async (url) => { opened.push(url); } });
   let wizardClosed = false;
   t.after(() => wizardClosed ? undefined : server.close());
-  const call = async (route, body) => {
-    const response = await fetch(`${server.origin}/api/v1/${route}`, {
+  const call = async (route, body, wizard = server) => {
+    const response = await fetch(`${wizard.origin}/api/v1/${route}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { authorization: `Bearer ${server.token}`, origin: server.origin, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${wizard.token}`, origin: wizard.origin, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.status, 200, `${route} status`);
     return (await response.json()).data;
   };
-  await call('answer', { values: { installMode: 'simple' } });
+  const initial = await call('step');
+  assert.equal(initial.id, 'install');
+  assert.equal(initial.number, 1);
+  assert.equal(initial.total, 4);
+  const location = await call('answer', { values: {} });
+  assert.equal(location.id, 'location');
+  assert.equal(location.number, 2);
+  const service = await call('answer', { values: { mindPath: mind } });
+  assert.equal(service.id, 'service');
+  assert.equal(service.number, 3);
+  assert.equal(service.back, false);
   const first = await call('install', { confirm: true, conflicts: {} });
   assert.equal(first.completed, false);
   assert.equal(first.service.phase, 'start');
   const pending = await call('step');
-  assert.equal(pending.number, 7);
+  assert.equal(pending.id, 'service');
+  assert.equal(pending.number, 3);
   assert.equal(pending.done, false);
-  assert.match(pending.description, /could not start/);
+  assert.match(pending.failure.headline, /could not complete the start phase/);
+  assert.equal(pending.failure.headline, first.service.error);
+  assert.deepEqual(pending.progress.map(row => [row.id, row.state]), [
+    ['folder', 'done'], ['legacy', 'done'], ['registration', 'done'], ['start', 'fail'], ['open', 'todo'],
+  ]);
+  assert.equal(starts, 1);
+  assert.deepEqual(opened, []);
   const before = await stat(path.join(mind, 'rules.md'));
+  const configFile = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'config.json');
+  const configBefore = await stat(configFile);
   const registered = commands.length;
   const finished = await call('install', { confirm: true, conflicts: {} });
   assert.equal(finished.completed, true);
-  assert.equal((await call('step')).done, true);
+  const ready = await call('step');
+  assert.equal(ready.id, 'ready');
+  assert.equal(ready.number, 4);
+  assert.equal(ready.done, true);
+  assert.equal(ready.back, false);
+  assert.equal(starts, 2);
   assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
   assert.equal(commands.length, registered);
   assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
+  assert.equal((await stat(configFile)).mtimeMs, configBefore.mtimeMs);
+  assert.deepEqual(opened, []);
+  for (let index = 0; index < 2; index += 1) {
+    assert.deepEqual(await call('open', {}), { opened: true, viewerUrl: null });
+  }
   assert.deepEqual(opened, [finished.viewerUrl]);
   assert.equal(finished.service.state.configBody.origin.path, origin);
   const url = new URL(finished.viewerUrl);
   const token = new URLSearchParams(url.hash.slice(1)).get('session');
   const view = await fetch(`${url.origin}/api/v1/view`, { headers: { authorization: `Bearer ${token}` } });
-  assert.equal(view.status, 200, await view.clone().text());
+  assert.equal(view.status, 200);
   assert.equal((await view.json()).contract, 'hivem1nd-gui-v3');
   await server.close();
   wizardClosed = true;
@@ -337,9 +366,14 @@ test('the real wizard retries only service startup and opens its authenticated v
   const resumedServer = await createWizardServer({ session: resumed, openCompletedViewer: async viewer => { resumedOpened.push(viewer); } });
   t.after(() => resumedServer.close());
   for (let index = 0; index < 2; index += 1) {
-    const step = await fetch(`${resumedServer.origin}/api/v1/step`, { headers: { authorization: `Bearer ${resumedServer.token}` } });
-    assert.equal(step.status, 200);
-    assert.equal((await step.json()).data.done, true);
+    const step = await call('step', undefined, resumedServer);
+    assert.equal(step.id, 'ready');
+    assert.equal(step.number, 4);
+    assert.equal(step.done, true);
+  }
+  assert.deepEqual(resumedOpened, []);
+  for (let index = 0; index < 2; index += 1) {
+    assert.deepEqual(await call('open', {}, resumedServer), { opened: true, viewerUrl: null });
   }
   assert.deepEqual(resumedOpened, [resumed.result.viewerUrl]);
   let failed = true;
@@ -348,12 +382,14 @@ test('the real wizard retries only service startup and opens its authenticated v
     return sessionOptions.serviceStart(config);
   } });
   assert.equal((await retry.getStep()).done, false);
-  assert.equal((await retry.getStep()).number, 7);
+  assert.equal((await retry.getStep()).id, 'service');
+  assert.equal((await retry.getStep()).number, 3);
   assert.deepEqual((await retry.preview()).files, []);
   await retry.answer({ confirm: true });
   assert.equal((await retry.install()).completed, true);
   assert.equal(commands.length, registered);
   assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
+  assert.equal((await stat(configFile)).mtimeMs, configBefore.mtimeMs);
   assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '3.0.0\n');
   const progressFile = path.join(mind, '.migration', 'migration-3.0.0.json');
   const progress = await readFile(progressFile).catch(error => { if (error?.code === 'ENOENT') return null; throw error; });
@@ -897,15 +933,24 @@ test('service install dry-run is a plan and the wizard opens one viewer', async 
   assert.equal(parsed.options.action, 'install');
   assert.equal(parsed.options.dryRun, true);
   assert.equal(parsed.options.originKind, 'folder');
+  const planned = await installService({ ...base, platform: 'win32' }, {
+    dryRun: parsed.options.dryRun,
+    run: async () => { assert.fail('A dry run must not execute service registration.'); },
+  });
+  assert.equal(planned.dryRun, true);
+  assert.deepEqual(planned.executed, []);
+  assert.ok(planned.commands.length > 0);
   const opened = [];
-  let number = 7;
+  let number = 3;
+  let result = null;
   const session = {
-    async getStep() { return { number, language: 'en', fields: [], values: {}, done: number === 8 }; },
+    async getStep() { return { id: number === 3 ? 'service' : 'ready', number, total: 4, back: false, busy: false, language: 'en', fields: [], values: {}, done: number === 4, result }; },
     async preview() { return { conflicts: [] }; },
     async answer() {},
     async install() {
-      number = 8;
-      return { viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' };
+      number = 4;
+      result = { completed: true, viewerUrl: 'http://127.0.0.1:9/gui/viewer#/' };
+      return result;
     },
   };
   const server = await createWizardServer({
@@ -924,6 +969,26 @@ test('service install dry-run is a plan and the wizard opens one viewer', async 
     body: JSON.stringify({ confirm: true, conflicts: {} }),
   });
   assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, result);
+  assert.deepEqual(opened, []);
+  for (let index = 0; index < 2; index += 1) {
+    const step = await fetch(`${server.origin}/api/v1/step`, { headers: { Authorization: `Bearer ${server.token}` } });
+    assert.equal(step.status, 200);
+    const ready = (await step.json()).data;
+    assert.equal(ready.id, 'ready');
+    assert.equal(ready.number, 4);
+    assert.equal(ready.done, true);
+  }
+  assert.deepEqual(opened, []);
+  for (let index = 0; index < 2; index += 1) {
+    const response = await fetch(`${server.origin}/api/v1/open`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${server.token}`, Origin: server.origin, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).data, { opened: true, viewerUrl: null });
+  }
   assert.deepEqual(opened, ['http://127.0.0.1:9/gui/viewer#/']);
 });
 
