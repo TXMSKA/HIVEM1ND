@@ -813,6 +813,26 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .void-format-bar [data-format="italic"] { font-style: italic; }
 .void-format-bar [data-format="strikethrough"] { text-decoration: line-through; }
 .void-format-divider { width: 1px; height: 20px; margin: 6px 4px; background: var(--line2); }
+.void-find-bar { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); width: 640px; max-width: calc(100% - 32px); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line2); }
+.void-find-row { display: flex; gap: 8px; align-items: center; }
+.void-find-input, .void-replace-input { display: flex; flex: 1; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--card); border: 1px solid var(--line2); }
+.void-find-input { border-color: var(--accent); }
+.void-find-bar input { width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 13.5px; }
+.void-find-bar [data-find-count] { flex: none; color: var(--mute); font-size: 12px; }
+.void-find-bar .btn { min-height: 32px; padding: 4px 10px; font-size: 12.5px; border-radius: 8px; white-space: nowrap; }
+.void-find-option, .void-find-nav { position: relative; width: 32px; height: 32px; flex: none; padding: 0; border: 0; background: transparent; color: var(--body); font-size: 12px; font-weight: 700; }
+.void-find-option::before { content: ''; position: absolute; inset: 1px; border: 1px solid var(--line2); border-radius: 8px; }
+.void-find-option[aria-pressed="true"] { color: var(--accent); background: var(--card2); border-radius: 8px; }
+.void-find-scopes { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--mute); }
+.void-find-scopes .btn { padding: 0; font-size: 12px; font-weight: 400; }
+.void-find-scopes [aria-pressed="true"] { color: var(--accent); font-weight: 700; }
+.void-find-scopes > span { margin-left: auto; font-size: 12px; }
+.void-find-bar p { margin: 0; font-size: 12px; color: var(--error); }
+.void-tools .void-find-toggle { width: 32px; height: 32px; padding: 0; justify-content: center; }
+.void-find-toggle .icon { width: 15px; height: 15px; }
+.is-finding .void-page { margin-top: 222px; height: 600px; }
+.void-body ::highlight(void-find) { background: var(--waiting-soft); color: var(--text); }
+.void-body ::highlight(void-current) { background: var(--accent); color: var(--accent-ink); }
 .void-save-error { position: absolute; top: 66px; left: 12px; right: 12px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; border-radius: 14px; color: var(--error); background: var(--error-soft); font-size: 13px; }
 .void-save-error .icon { flex: none; }
 .void-save-error .btn { min-height: 32px; margin-left: auto; background: var(--error); color: var(--error-ink); }

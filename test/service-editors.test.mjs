@@ -11,6 +11,7 @@ import { addScreen, newSketch, rectangleNode } from '../features/blueprint/revie
 import { addNode, answerProposal, createAsset, createBoard, commentRecipients, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from '../engine/service/editors.mjs';
 import { listHistory, restoreHistory, resolveConflict, setCommentStatus } from '../engine/service/editors.mjs';
+import { replaceTextMatches, undoTextReplace } from '../engine/service/editors.mjs';
 import { legacyModuleUrls } from '../gui/app/main.mjs';
 import { undoChange } from '../engine/service/store.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions, withReceipt } from '../engine/service/store.mjs';
@@ -27,6 +28,130 @@ import { createStore, revisionOf } from '../engine/service/store.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { WEBP } from './media-fixture.mjs';
+
+function replaceMatch(editor, k, lang, start, end, replacement) {
+  return { resourceId: editor.id, k, lang, start, end, expectedText: editor.document.pages.find((page) => page.k === k)[lang].slice(start, end), replacement, expectedRevision: editor.revision };
+}
+
+test('replace validates every text and comments revision before one batch and one non-expiring Undo retains History', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const document = { title: 'Batch', future: { kept: true }, rev: 0, pages: [{ k: 'One', en: '**cat** cat 😀', es: 'gato gato', future: { kept: true } }, { k: 'Two', en: 'cat' }] };
+  const first = await createText(context, { project: 'shop', path: 'docs/first.json', document });
+  const second = await createText(context, { project: 'shop', path: 'docs/second.json', document });
+  const before = await Promise.all([first, second].map((editor) => readFile(path.join(localPath, editor.path))));
+  const body = { items: [replaceMatch(first, 'One', 'en', 2, 5, 'dog'), replaceMatch(first, 'One', 'en', 8, 11, 'dog'), replaceMatch(first, 'Two', 'en', 0, 3, 'dog'), replaceMatch(second, 'One', 'es', 5, 9, 'perro')],
+    expectedCommentsRevisions: { [first.id]: first.commentsRevision, [second.id]: second.commentsRevision } };
+  const saved = await replaceTextMatches(context, body);
+  assert.equal(saved.matches, 4); assert.equal(saved.editors.length, 2);
+  assert.equal(saved.editors[0].document.pages[0].en, '**dog** dog 😀');
+  assert.equal(saved.editors[1].document.pages[0].es, 'gato perro');
+  assert.deepEqual(saved.editors[0].document.future, document.future);
+  assert.deepEqual(saved.editors[0].document.pages[0].future, document.pages[0].future);
+  assert.equal(new Set(context.lastEditorChanges.map((change) => change.transactionId)).size, 1);
+  fixture.clock.now += 60000;
+  const undone = await undoTextReplace(context, saved.changeId);
+  assert.equal(undone.undoOf, saved.changeId);
+  for (let index = 0; index < 2; index++) {
+    const editor = [first, second][index];
+    assert.deepEqual(await readFile(path.join(localPath, editor.path)), before[index]);
+    const history = await listHistory(context, editor.id);
+    assert.ok(history.items.length >= 3); assert.equal(history.items.filter((item) => item.current).length, 1);
+  }
+  const writes = fixture.store.writes.length;
+  await assert.rejects(() => undoTextReplace(context, saved.changeId), { code: 'undo_conflict' });
+  assert.equal(fixture.store.writes.length, writes);
+});
+
+test('one stale target, changed range, overlap, split character or comments conflict writes none of the replacement batch', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const document = { title: 'Batch', pages: [{ k: 'One', en: 'cat cat 😀' }] };
+  const first = await createText(context, { project: 'shop', path: 'docs/first.json', document });
+  const second = await createText(context, { project: 'shop', path: 'docs/second.json', document });
+  const body = { items: [replaceMatch(first, 'One', 'en', 0, 3, 'dog'), replaceMatch(second, 'One', 'en', 4, 7, 'dog')], expectedCommentsRevisions: { [first.id]: first.commentsRevision, [second.id]: second.commentsRevision } };
+  for (const [edit, code] of [
+    [(value) => { value.items[1].expectedRevision = '0'.repeat(64); }, 'revision_conflict'],
+    [(value) => { value.items[1].expectedText = 'stale'; }, 'range_changed'],
+    [(value) => { value.expectedCommentsRevisions[second.id] = null; }, 'revision_conflict'],
+    [(value) => { value.items.push({ ...value.items[0], start: 2, end: 5, expectedText: 't c' }); }, 'invalid_range'],
+    [(value) => { value.items[1] = replaceMatch(second, 'One', 'en', 8, 9, 'dog'); }, 'invalid_range'],
+    [(value) => { value.items[1].extra = true; }, 'unknown_field'],
+  ]) {
+    const invalid = structuredClone(body); edit(invalid); const writes = fixture.store.writes.length;
+    await assert.rejects(() => replaceTextMatches(context, invalid), { code });
+    assert.equal(fixture.store.writes.length, writes);
+    for (const editor of [first, second]) assert.deepEqual(JSON.parse(await readFile(path.join(localPath, editor.path))), { ...document, rev: 0 });
+  }
+  const saved = await replaceTextMatches(context, body);
+  await replaceRange(context, second.id, { ...replaceMatch(saved.editors[1], 'One', 'en', 0, 3, 'later') });
+  const before = await readFile(path.join(localPath, first.path)), writes = fixture.store.writes.length;
+  await assert.rejects(() => undoTextReplace(context, saved.changeId), { code: 'undo_conflict' });
+  assert.deepEqual(await readFile(path.join(localPath, first.path)), before); assert.equal(fixture.store.writes.length, writes);
+});
+
+test('whole replace Undo also conflicts on later comments and a same-value replace remains one operation', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const first = await createText(context, { project: 'shop', path: 'docs/same.json', document: release() });
+  const body = { items: [replaceMatch(first, 'Intro.Welcome', 'en', 3, 10, 'Welcome')], expectedCommentsRevisions: { [first.id]: first.commentsRevision } };
+  const saved = await replaceTextMatches(context, body);
+  assert.equal(saved.matches, 1); assert.equal(saved.editors[0].document.pages[0].en, first.document.pages[0].en);
+  await writeFile(path.join(localPath, 'docs/same.comments.json'), JSON.stringify({ threads: [], later: true }));
+  const writes = fixture.store.writes.length;
+  await assert.rejects(() => undoTextReplace(context, saved.changeId), { code: 'undo_conflict' });
+  assert.equal(fixture.store.writes.length, writes);
+});
+
+test('replace and Undo recover the entire multi-text journal and replay one receipt after every crash boundary', async (t) => {
+  for (const fault of [{ afterPrepared: true }, { afterRenames: 1 }, { beforeReceipt: true }, { afterReceipt: true }]) await t.test(JSON.stringify(fault), async (t) => {
+    const { context, fixture, localPath } = await shop(t);
+    const document = { title: 'Batch', pages: [{ k: 'One', en: 'cat' }] };
+    const texts = [];
+    for (const name of ['first', 'second']) texts.push(await createText(context, { project: 'shop', path: `docs/${name}.json`, document }));
+    const body = { items: texts.map((editor) => replaceMatch(editor, 'One', 'en', 0, 3, 'dog')), expectedCommentsRevisions: Object.fromEntries(texts.map((editor) => [editor.id, editor.commentsRevision])) };
+    const request = { principal: 'replace-fixture', key: randomUUID(), requestId: randomUUID(), method: 'POST', path: '/void/replace', body };
+    const run = (receipt) => replaceTextMatches({ ...context, receipt }, body);
+    fixture.store.fault = fault;
+    await assert.rejects(() => withReceipt(fixture.store, request, run), { code: 'injected_crash' });
+    const store = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind, localDirectory: fixture.paths.localDirectory, projects: context.projects, now: context.now });
+    await recoverTransactions(store);
+    const restarted = { ...context, store }, replay = await withReceipt(store, request, () => assert.fail('Replace was executed twice.'));
+    const changeId = replay.body.changeId;
+    for (const editor of texts) assert.equal((await readEditor(restarted, editor.id)).document.pages[0].en, 'dog');
+    const undoRequest = { ...request, key: randomUUID(), requestId: randomUUID(), path: `/void/replace/${changeId}/undo`, body: {} };
+    store.fault = fault;
+    await assert.rejects(() => withReceipt(store, undoRequest, (receipt) => undoTextReplace({ ...restarted, receipt }, changeId)), { code: 'injected_crash' });
+    await recoverTransactions(store);
+    const undone = await withReceipt(store, undoRequest, () => assert.fail('Undo was executed twice.'));
+    assert.equal(undone.body.undoOf, changeId);
+    for (const editor of texts) assert.deepEqual(JSON.parse(await readFile(path.join(localPath, editor.path))), { ...document, rev: 0 });
+  });
+});
+
+test('HTTP whole replace and Undo bind desktop permission exact bodies bounded matches receipts and the same-origin worker', async (t) => {
+  const { context, fixture } = await shop(t);
+  const first = await createText(context, { project: 'shop', path: 'docs/http.json', document: release() });
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); t.after(() => core.http.close());
+  const auth = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = auth.json.data.token, body = { items: [replaceMatch(first, 'Intro.Welcome', 'en', 3, 10, 'Hello')], expectedCommentsRevisions: { [first.id]: first.commentsRevision } }, key = randomUUID();
+  for (const audience of ['phone', 'agent']) {
+    const credential = core.credentials.issue({ audience, unitId: audience === 'agent' ? 'root:builder' : 'root:master', capabilities: ['editor.write'], expiresAt: '2027-01-01T00:00:00.000Z' });
+    const denied = await call(core.http.port, 'POST', '/api/v1/void/replace', { token: credential.token, body, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(denied.status, 403);
+    const undoDenied = await call(core.http.port, 'POST', `/api/v1/void/replace/${randomUUID()}/undo`, { token: credential.token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(undoDenied.status, 403);
+  }
+  for (const invalid of [{ ...body, pattern: 'cat' }, { ...body, items: [{ ...body.items[0], unknown: true }] }, { items: body.items }, { ...body, items: Array(10001).fill(body.items[0]) }]) {
+    const result = await call(core.http.port, 'POST', '/api/v1/void/replace', { token, body: invalid, headers: { 'idempotency-key': randomUUID() } });
+    assert.ok([400, 422].includes(result.status));
+  }
+  const saved = await call(core.http.port, 'POST', '/api/v1/void/replace', { token, body, headers: { 'idempotency-key': key } });
+  assert.equal(saved.status, 200); assert.equal(saved.json.data.matches, 1);
+  const replay = await call(core.http.port, 'POST', '/api/v1/void/replace', { token, body, headers: { 'idempotency-key': key } });
+  assert.deepEqual(replay.json.data, saved.json.data);
+  const undo = await call(core.http.port, 'POST', `/api/v1/void/replace/${saved.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(undo.status, 200); assert.equal(undo.json.data.editors[0].document.pages[0].en, first.document.pages[0].en);
+  const worker = await call(core.http.port, 'GET', '/app/find-worker.mjs');
+  assert.equal(worker.status, 200); assert.match(worker.headers['content-security-policy'], /worker-src 'self'/);
+});
 
 function legacyModule(id = 'legacy') {
   return `import { board } from "blueprint/board.mjs";

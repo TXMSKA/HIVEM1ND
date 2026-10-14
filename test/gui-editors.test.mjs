@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { Worker as NodeWorker } from "node:worker_threads";
 import { createApi, createOperation, request } from "../gui/app/api.mjs";
 import { editorDraftDocument, loadHistory, resolveEditorConflict, restoreEditorHistory } from "../gui/app/editors.mjs";
 import { boundaryInsideTag, plainCaretFromSource, plainText, rangeRequest, renderMarkup, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "../gui/app/markup.mjs";
@@ -64,6 +65,121 @@ import { createGuiFixture } from "./gui-fixture.mjs";
 import { text } from "../gui/app/i18n.mjs";
 import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
 import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
+import { createTextFinder, findTextMatches, matchReplacement, replacementItems, replaceMatches, undoReplace } from "../gui/app/void.mjs";
+
+function nativeFindWorker(workers) {
+  const url = new URL('../gui/app/find-worker.mjs', import.meta.url);
+  const worker = new NodeWorker(new URL('data:text/javascript,' + encodeURIComponent(`import { parentPort } from 'node:worker_threads'; globalThis.self = { postMessage: (data) => parentPort.postMessage(data) }; await import(${JSON.stringify(url.href)}); parentPort.on('message', (data) => self.onmessage({data}));`)));
+  const bridge = { terminated: false, postMessage: (data) => worker.postMessage(data), terminate() { this.terminated = true; return worker.terminate(); } };
+  worker.on('message', (data) => bridge.onmessage?.({ data })); worker.on('error', (error) => bridge.onerror?.(error));
+  workers.push(bridge);
+  return bridge;
+}
+
+test('the packaged module worker preserves option combinations Unicode boundaries captures and error envelopes', async (t) => {
+  const workers = [], worker = nativeFindWorker(workers); t.after(() => worker.terminate());
+  const send = (source, query, options) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Worker did not answer.')), 2000);
+    worker.onmessage = ({ data }) => { clearTimeout(timer); resolve(data); };
+    worker.postMessage({ id: 'test', text: source, query, options });
+  });
+  for (const [options, expected] of [[{}, ['cat', 'Cat', 'cat']], [{ caseSensitive: true }, ['cat', 'cat']], [{ wholeWord: true }, ['cat', 'Cat']], [{ caseSensitive: true, wholeWord: true }, ['cat']]]) {
+    const result = await send('cat Cat catapult', 'cat', { regularExpression: false, caseSensitive: false, wholeWord: false, ...options });
+    assert.equal(result.id, 'test'); assert.deepEqual(result.matches.map((match) => match.text), expected);
+  }
+  const unicode = await send('café décafé café_ café😀', 'café', { wholeWord: true });
+  assert.equal(unicode.matches.length, 2);
+  const captures = await send('cat cot', 'c(a|o)(t)(x)?', { regularExpression: true });
+  assert.deepEqual(captures.matches[0].captures, ['a', 't', '']);
+  assert.deepEqual((await send('cat', '^|$', { regularExpression: true })).matches, []);
+  assert.equal((await send('cat', '[', { regularExpression: true })).error.code, 'invalid_pattern');
+  assert.equal((await send('x'.repeat(10001), 'x', {})).error.code, 'too_many_matches');
+  assert.equal((await send('x'.repeat(10000), 'x', {})).matches.length, 10000);
+});
+
+test('Find terminates a catastrophic regex at 100 ms and ignores canceled generations and wrong reply IDs', async (t) => {
+  const workers = [], finder = createTextFinder({ createWorker: () => nativeFindWorker(workers) });
+  t.after(async () => { finder.cancel(); await Promise.all(workers.map((worker) => worker.terminate())); });
+  const editor = { resourceId: 'one', authoritative: { revision: 'a'.repeat(64), commentsRevision: null, document: { pages: [{ k: 'One', en: 'a'.repeat(10000) + '!' }] } } };
+  let heartbeat = false; const beat = setTimeout(() => { heartbeat = true; }, 20);
+  const started = performance.now();
+  await assert.rejects(() => finder.find(null, editor, '(a+)+$', { regularExpression: true }), { code: 'pattern_too_slow' });
+  clearTimeout(beat); assert.equal(heartbeat, true); assert.ok(performance.now() - started < 1000); assert.equal(workers[0].terminated, true);
+  const bridges = [], controlled = createTextFinder({ createWorker: () => { const bridge = { terminate() { this.terminated = true; }, postMessage(data) { this.data = data; } }; bridges.push(bridge); return bridge; } });
+  const before = controlled.find(null, editor, 'old', {}); controlled.cancel();
+  await assert.rejects(before, { code: 'canceled' }); assert.equal(bridges[0].terminated, true);
+  const next = controlled.find(null, editor, 'new', {}), bridge = bridges[1];
+  bridge.onmessage({ data: { id: bridges[0].data.id, matches: [{ start: 0, end: 1, text: 'stale', captures: [] }] } });
+  bridge.onmessage({ data: { id: bridge.data.id, matches: [] } });
+  assert.deepEqual(await next, []); assert.equal(bridge.terminated, true);
+});
+
+test('Find collects every accessible library page and maps bilingual pages and capture substitutions to exact source ranges', async () => {
+  const first = { id: 'one', revision: 'a'.repeat(64), commentsRevision: 'b'.repeat(64), document: { pages: [{ k: 'One', en: '**cat** cat 😀', es: 'gato' }, { k: 'Two', en: 'cat' }] } };
+  const second = { id: 'two', revision: 'c'.repeat(64), commentsRevision: null, document: { pages: [{ k: 'Three', en: 'a<b>cat</b> cat' }] } };
+  const requested = [];
+  const api = commentApi(async (url) => {
+    const path = new URL(url); requested.push(path.pathname + path.search);
+    if (path.pathname.endsWith('/void/texts')) return jsonResponse({ items: [{ id: path.searchParams.get('cursor') ? 'two' : 'one' }], nextCursor: path.searchParams.get('cursor') ? null : 'second-page' });
+    return jsonResponse(second);
+  });
+  const finder = createTextFinder({ createWorker: () => ({ terminate() {}, postMessage(data) { queueMicrotask(() => this.onmessage({ data: { id: data.id, matches: findTextMatches(data.text, data.query, data.options) } })); } }) });
+  const matches = await finder.find(api, { resourceId: 'one', authoritative: first }, 'c(a)(t)', { regularExpression: true }, 'all');
+  assert.equal(matches.length, 5); assert.equal(requested.filter((path) => path.includes('/void/texts?')).length, 2);
+  const projection = replacementItems(matches, '$2$1 $$ $&', true);
+  assert.equal(projection.items[0].expectedText, 'cat'); assert.equal(projection.items[0].start, 2); assert.equal(projection.items[0].end, 5);
+  assert.equal(projection.items[0].replacement, 'ta $ cat');
+  assert.deepEqual(projection.expectedCommentsRevisions, { one: first.commentsRevision, two: null });
+  assert.equal(matchReplacement(matches[0], '$12 $3 $0', true), 'a2 $3 $0');
+  assert.equal(matchReplacement(matches[0], "$`/$'", true), '/ cat 😀');
+  assert.equal(matchReplacement(matches[0], '$1', false), '$1');
+  const across = { ...matches[0], source: 'ca<b>t</b>😀\r\ncat', start: 0, end: 3, text: 'cat' };
+  const mapped = replacementItems([across], 'dog').items[0];
+  assert.equal(mapped.expectedText, 'ca<b>t');
+  assert.equal(across.source.slice(0, mapped.start) + mapped.replacement + across.source.slice(mapped.end), 'dog<b></b>😀\r\ncat');
+  const escaped = { ...matches[0], source: '\\*cat 😀\r\ncat', start: 0, end: 4, text: '*cat' };
+  const escapeRange = replacementItems([escaped], 'dog').items[0];
+  assert.equal(escapeRange.expectedText, '\\*cat');
+  assert.equal(escaped.source.slice(0, escapeRange.start) + escapeRange.replacement + escaped.source.slice(escapeRange.end), 'dog 😀\r\ncat');
+  const manySource = 'cat '.repeat(10000), manyMatches = findTextMatches(manySource, 'cat').map((match) => ({ ...matches[0], ...match, source: manySource }));
+  const started = performance.now();
+  assert.equal(replacementItems(manyMatches, 'dog').items.length, 10000);
+  assert.ok(performance.now() - started < 2000);
+});
+
+test('Find applies the 10000 cap across pages and retained replacements reuse the captured body after later input', async () => {
+  const finder = createTextFinder({ createWorker: () => ({ terminate() {}, postMessage(data) { queueMicrotask(() => this.onmessage({ data: { id: data.id, matches: findTextMatches(data.text, data.query, data.options) } })); } }) });
+  const editor = { resourceId: 'one', authoritative: { revision: 'a'.repeat(64), document: { pages: [{ k: 'One', en: 'x'.repeat(10000) }, { k: 'Two', en: 'x' }] } } };
+  await assert.rejects(() => finder.find(null, editor, 'x', {}), { code: 'too_many_matches' });
+  const matches = [{ resourceId: 'one', k: 'One', lang: 'en', source: '**cat**', start: 0, end: 3, text: 'cat', captures: [], expectedRevision: 'a'.repeat(64), commentsRevision: null }];
+  const attempts = [], editors = { current: { resourceId: 'one', authoritative: editor.authoritative, revision: 'a'.repeat(64), textDrafts: new Map() } };
+  const api = commentApi(async (_url, init) => {
+    attempts.push({ key: init.headers['Idempotency-Key'], body: JSON.parse(init.body) });
+    if (attempts.length === 1) throw new Error('Lost response.');
+    return jsonResponse({ changeId: 'saved', editors: [{ id: 'one', revision: 'b'.repeat(64), document: { pages: [{ k: 'One', en: '**dog**' }] } }], matches: 1 });
+  });
+  let retained;
+  await assert.rejects(() => replaceMatches(api, editors, matches, 'dog'), (error) => { retained = error.operation; return Boolean(retained); });
+  editors.current.textDrafts.set('later', 'Later typing'); editors.current.dirty = true;
+  await replaceMatches(api, editors, [], 'later query', true, retained);
+  assert.deepEqual(attempts[1], attempts[0]); assert.equal(editors.current.dirty, true); assert.equal(editors.current.textDrafts.get('later'), 'Later typing');
+});
+
+test('the GUI replaces and undoes all matches once through the HTTP fixture while retaining drafts', async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  await loadCatalog(api, editors, 'void');
+  const summary = editors.catalog.find((item) => !item.readOnly), editor = await openEditor(api, editors, summary);
+  const page = editor.authoritative.document.pages[0], source = page.en, visible = plainText(source), needle = visible.split(/\s/)[0];
+  const matches = findTextMatches(visible, needle).map((match) => ({ ...match, resourceId: editor.resourceId, k: page.k, lang: 'en', source, expectedRevision: editor.revision, commentsRevision: editor.commentsRevision }));
+  const original = structuredClone(editor.authoritative.document);
+  const saved = await replaceMatches(api, editors, matches, 'Replacement');
+  assert.equal(saved.data.matches, matches.length); assert.notDeepEqual(editor.authoritative.document, original);
+  await undoReplace(api, editors, saved.data.changeId);
+  assert.deepEqual(editor.authoritative.document, original);
+  const assets = await fetch(`${fixture.origin}/app/find-worker.mjs`);
+  assert.equal(assets.status, 200); assert.match(assets.headers.get('content-security-policy'), /worker-src 'self'/);
+});
 
 test("comment choice snapshots attached IDs and no attachments never change the shared preference", () => {
   const editors = createEditors();

@@ -427,3 +427,187 @@ export function findTextMatches(source, query, { caseSensitive = false, wholeWor
   }
   return matches;
 }
+
+export function createTextFinder({ createWorker = () => new Worker(new URL('./find-worker.mjs', import.meta.url), { type: 'module' }) } = {}) {
+  let generation = 0, active = null;
+  function cancel() {
+    generation += 1;
+    active?.cancel();
+    active = null;
+  }
+  return {
+    cancel,
+    async find(api, editor, query, options, scope = 'document') {
+      cancel();
+      const ticket = generation;
+      const check = () => { if (ticket !== generation) throw Object.assign(new Error('Search canceled.'), { code: 'canceled' }); };
+      if (!query) return [];
+      const controller = new AbortController();
+      let worker = null, pending = null, sequence = 0;
+      const stop = () => { controller.abort(); worker?.terminate(); pending?.(Object.assign(new Error('Search canceled.'), { code: 'canceled' })); };
+      const operation = { cancel: stop };
+      active = operation;
+      const matches = [];
+      try {
+        const sources = [];
+        if (scope === 'all') {
+          let cursor = null;
+          do {
+            const result = await request(api, 'GET', '/void/texts', { query: { limit: '50', ...(cursor ? { cursor } : {}) }, signal: controller.signal });
+            check();
+            sources.push(...result.data.items.filter((item) => !item.readOnly));
+            cursor = result.data.nextCursor ?? null;
+          } while (cursor);
+        } else sources.push({ id: editor.resourceId });
+        worker = createWorker();
+        const run = (text) => new Promise((resolve, reject) => {
+          const id = `${ticket}:${++sequence}`;
+          const finish = (error, value) => { clearTimeout(timer); pending = null; error ? reject(error) : resolve(value); };
+          pending = (error) => finish(error);
+          const timer = setTimeout(() => {
+            worker.terminate();
+            finish(Object.assign(new Error('The pattern took too long.'), { code: 'pattern_too_slow' }));
+          }, 100);
+          worker.onmessage = ({ data }) => {
+            if (ticket !== generation || data.id !== id) return;
+            finish(data.error ? Object.assign(new Error(data.error.message), { code: data.error.code }) : null, data.matches);
+          };
+          worker.onerror = () => finish(Object.assign(new Error('The search worker failed.'), { code: 'find_unavailable' }));
+          worker.postMessage({ id, text, query, options });
+        });
+        for (const summary of sources) {
+          check();
+          const data = summary.id === editor.resourceId ? editor.authoritative ?? editor
+            : (await request(api, 'GET', '/void/texts/:resourceId', { params: { resourceId: summary.id }, signal: controller.signal })).data;
+          check();
+          for (const page of data.document?.pages ?? []) for (const [lang, source] of Object.entries(page)) {
+            if (!/^[a-z]{2,3}$/.test(lang) || lang === 'k' || typeof source !== 'string') continue;
+            const visible = plainText(source), hits = await run(visible);
+            check();
+            for (const match of hits) {
+              if (!validUtf16Boundary(visible, match.start) || !validUtf16Boundary(visible, match.end)) continue;
+              matches.push({ ...match, resourceId: summary.id, k: page.k, lang, source,
+                expectedRevision: data.revision, commentsRevision: data.commentsRevision ?? null });
+              if (matches.length > 10000) throw Object.assign(new RangeError('Too many matches.'), { code: 'too_many_matches' });
+            }
+          }
+        }
+        return matches;
+      } finally {
+        worker?.terminate();
+        if (active === operation) active = null;
+      }
+    },
+  };
+}
+
+// Numbered captures follow String.replace semantics; unmatched groups are empty.
+export function matchReplacement(match, replacement, regularExpression, visible = null) {
+  if (!regularExpression) return replacement;
+  visible ??= plainText(match.source);
+  return replacement.replace(/\$(\$|&|`|'|[0-9]{1,2})/g, (value, token) => {
+    if (token === '$') return '$';
+    if (token === '&') return match.text;
+    if (token === '`') return visible.slice(0, match.start);
+    if (token === "'") return visible.slice(match.end);
+    const index = Number(token);
+    if (index > 0 && index <= match.captures.length) return match.captures[index - 1] ?? '';
+    if (token.length === 2 && Number(token[0]) > 0 && Number(token[0]) <= match.captures.length) return (match.captures[Number(token[0]) - 1] ?? '') + token[1];
+    return value;
+  });
+}
+
+export function replacementItems(matches, replacement, regularExpression = false) {
+  const expectedCommentsRevisions = {};
+  const pages = new Map();
+  for (const group of Map.groupBy(matches, (match) => `${match.resourceId}\0${match.k}\0${match.lang}`).values()) {
+    const source = group[0].source, tokens = tokenizeMarkup(source), visible = tokens.filter((token) => token.type === 'text').map((token) => token.text).join('');
+    const offsets = [...new Set(group.flatMap((match) => [match.start, match.end]))].sort((a, b) => a - b);
+    const starts = new Map(), ends = new Map(), tags = new Set(), text = [];
+    const lowerBound = (values, offset, key = (value) => value) => {
+      let low = 0, high = values.length;
+      while (low < high) { const middle = (low + high) >>> 1; if (key(values[middle]) < offset) low = middle + 1; else high = middle; }
+      return low;
+    };
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (token.type === 'tag') {
+        if (token.sourceEnd > token.sourceStart) {
+          starts.set(token.plainStart, token.sourceEnd);
+          if (!tags.has(token.plainStart)) ends.set(token.plainStart, token.sourceStart);
+          tags.add(token.plainStart);
+        }
+        continue;
+      }
+      text.push({ ...token, escape: tokens[index - 1]?.text === '\\' && tokens[index - 1].sourceEnd === token.sourceStart ? tokens[index - 1].sourceStart : null });
+      for (let at = lowerBound(offsets, token.plainStart); at < offsets.length && offsets[at] <= token.plainEnd; at++) {
+        const offset = offsets[at], boundary = token.boundaries?.[offset - token.plainStart] ?? token.sourceStart + offset - token.plainStart;
+        if (!starts.has(offset)) starts.set(offset, boundary);
+        if (!ends.has(offset)) ends.set(offset, boundary);
+      }
+    }
+    pages.set(group[0], { source, visible, starts, ends, text, lowerBound, newline: source.includes('\r\n') ? '\r\n' : '\n' });
+    for (const match of group) pages.set(match, pages.get(group[0]));
+  }
+  const items = matches.map((match) => {
+    const page = pages.get(match), { source, visible, starts, ends, text, lowerBound } = page;
+    let start = starts.get(match.start), end = ends.get(match.end);
+    const first = lowerBound(text, match.start + 1, (token) => token.plainEnd);
+    if (text[first]?.escape !== null && match.start === text[first]?.plainStart) start = text[first].escape;
+    if (!validUtf16Boundary(visible, match.start) || !validUtf16Boundary(visible, match.end) || !validUtf16Boundary(source, start) || !validUtf16Boundary(source, end) || end <= start) throw new RangeError('The match has no safe source range.');
+    let at = start;
+    const kept = [];
+    for (let index = first; index < text.length && text[index].plainStart < match.end; index++) {
+      const token = text[index], from = Math.max(match.start, token.plainStart), to = Math.min(match.end, token.plainEnd);
+      const left = from === token.plainStart && token.escape !== null ? token.escape : token.boundaries?.[from - token.plainStart] ?? token.sourceStart + from - token.plainStart;
+      const right = token.boundaries?.[to - token.plainStart] ?? token.sourceStart + to - token.plainStart;
+      kept.push(source.slice(at, left)); at = right;
+    }
+    kept.push(source.slice(at, end));
+    const inserted = matchReplacement(match, replacement, regularExpression, visible).replace(/\r\n?|\n/g, page.newline).replace(/[\\`*_~[\]]/g, '\\$&');
+    expectedCommentsRevisions[match.resourceId] = match.commentsRevision;
+    return { resourceId: match.resourceId, k: match.k, lang: match.lang, start, end,
+      expectedText: source.slice(start, end), replacement: inserted + kept.join(''), expectedRevision: match.expectedRevision };
+  });
+  return { items, expectedCommentsRevisions };
+}
+
+export async function replaceMatches(api, editors, matches, replacement, regularExpression = false, retained = null) {
+  const result = await perform(api, { method: 'POST', path: '/void/replace', body: retained?.body ?? replacementItems(matches, replacement, regularExpression) }, retained);
+  acceptReplace(editors, result.data.editors);
+  return result;
+}
+
+export async function undoReplace(api, editors, changeId, retained = null) {
+  const result = await perform(api, { method: 'POST', path: '/void/replace/:changeId/undo', params: { changeId }, body: {} }, retained);
+  acceptReplace(editors, result.data.editors);
+  return result;
+}
+
+function acceptReplace(editors, values) {
+  for (const value of values) {
+    const current = editors.drafts?.get(value.id) ?? (editors.current?.resourceId === value.id ? editors.current : null);
+    if (current) { current.voidSaver?.dispose(); current.voidSaver = null; acceptText(current, value); }
+    const summary = editors.catalog?.find((item) => item.id === value.id);
+    if (summary) Object.assign(summary, { revision: value.revision, libraryRevision: value.libraryRevision });
+  }
+}
+
+export function highlightFind(document, host, matches, current) {
+  const css = document.defaultView?.CSS ?? globalThis.CSS, HighlightType = document.defaultView?.Highlight ?? globalThis.Highlight;
+  if (!css?.highlights || !HighlightType || !document.createRange) return;
+  const nodes = [];
+  const walk = (node) => { if (runMetadata(node)) nodes.push(node); else for (const child of node.childNodes ?? node.children ?? []) walk(child); };
+  walk(host);
+  const ranges = [], selected = [];
+  for (const match of matches) {
+    const first = nodes.find((node) => { const run = runMetadata(node); return match.start >= run.plainStart && match.start < run.plainEnd; });
+    const last = nodes.find((node) => { const run = runMetadata(node); return match.end > run.plainStart && match.end <= run.plainEnd; });
+    if (!first || !last) continue;
+    const range = document.createRange();
+    range.setStart(first, match.start - runMetadata(first).plainStart); range.setEnd(last, match.end - runMetadata(last).plainStart);
+    ranges.push(range); if (match === current) selected.push(range);
+  }
+  css.highlights.set('void-find', new HighlightType(...ranges));
+  css.highlights.set('void-current', new HighlightType(...selected));
+}

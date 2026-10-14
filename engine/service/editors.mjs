@@ -9,9 +9,9 @@ import { paginate } from './projection.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
-import { boundaryInsideTag, validUtf16Boundary } from '../../gui/app/markup.mjs';
+import { boundaryInsideTag, tokenizeMarkup, validUtf16Boundary } from '../../gui/app/markup.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
+import { bindProjects, checkRevision, commitChange, prepareChangeUndo, prepareReplaceUndo, readReplaceUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { openSync } from '../sync/store.mjs';
 import { convertMedia, webpPayload } from '../sync/media.mjs';
 import { clearResource, startResourceWatch } from './watch.mjs';
@@ -295,7 +295,7 @@ async function commit(context, entries, events = [], response) {
   return withLocalChanges(context.store, () => commitEditor(context, entries, events, response));
 }
 
-async function commitEditor(context, entries, events, response) {
+async function commitEditor(context, entries, events, response, replaceUndo = null) {
   bindProjects(context.store, context.projects ?? []);
   await historyEdits(context, entries, events);
   await libraryEdits(context, entries, events);
@@ -303,6 +303,10 @@ async function commitEditor(context, entries, events, response) {
     const resource = response.body;
     const library = entries.find((entry) => entry.recordPath === inside(projectOf(context, resource.project).localPath, 'docs/flows/library.json'));
     if (library) Object.assign(resource, parseJson(library.afterBytes).items[resource.id], { libraryRevision: hashBytes(library.afterBytes) });
+  }
+  for (const editor of response?.body?.editors ?? []) {
+    const library = entries.find((entry) => entry.recordPath === inside(projectOf(context, editor.project).localPath, 'docs/flows/library.json'));
+    if (library) Object.assign(editor, parseJson(library.afterBytes).items[editor.id], { libraryRevision: hashBytes(library.afterBytes) });
   }
   const prepared = entries.map((entry) => rewriteEntry(context, entry));
   for (const entry of prepared) {
@@ -312,7 +316,8 @@ async function commitEditor(context, entries, events, response) {
       : entry.recordPath;
     if (file) await assertNoLinks(file);
   }
-  const id = randomUUID();
+  const id = replaceUndo?.id ?? (response?.body?.undoOf ? response.body.changeId : randomUUID());
+  if (replaceUndo) prepared.push(prepareReplaceUndo(context, id, replaceUndo.resourceIds, replaceUndo.entries.map((entry) => rewriteEntry(context, entry))));
   const result = await commitChange(context, { id, entries: prepared, events, response });
   const { listStaged } = await import('../sync/store.mjs');
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: context.now, projects: context.projects ?? [] });
@@ -1423,7 +1428,7 @@ export async function replaceText(context, id, input) {
   return shown(context, found.entry, incoming, revision);
 }
 
-function assertRange(source, start, end) {
+function assertRange(source, start, end, insideSyntax = (offset) => boundaryInsideTag(source, offset)) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length) fail(422, 'invalid_range', 'The range is outside the text.');
   const splitsPair = (index) => {
     if (index <= 0 || index >= source.length) return false;
@@ -1432,7 +1437,7 @@ function assertRange(source, start, end) {
     return previous >= 0xd800 && previous <= 0xdbff && here >= 0xdc00 && here <= 0xdfff;
   };
   if (splitsPair(start) || splitsPair(end)) fail(422, 'invalid_range', 'The range splits a character.');
-  if (boundaryInsideTag(source, start) || boundaryInsideTag(source, end)) fail(422, 'invalid_range', 'The range splits markup syntax.');
+  if (insideSyntax(start) || insideSyntax(end)) fail(422, 'invalid_range', 'The range splits markup syntax.');
 }
 
 function applySlice(source, start, end, replacement, expected) {
@@ -1475,6 +1480,105 @@ export async function replaceRange(context, id, input) {
   await commit(context, entries, [voidEvent(id, revision, document.rev, 'replace-range', input.k, input.lang)]);
   rememberExternal(context, id, revision, document);
   return { editor: await shown(context, found.entry, document, revision), proposal: null };
+}
+
+export async function replaceTextMatches(context, input) {
+  desktopLibrary(context);
+  const fields = ['resourceId', 'k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision'];
+  if (!input || Object.keys(input).some((key) => !['items', 'expectedCommentsRevisions'].includes(key))) fail(400, 'unknown_field', 'The replace body has an unknown field.');
+  if (!Array.isArray(input.items) || !input.items.length || input.items.length > 10000
+    || !input.expectedCommentsRevisions || typeof input.expectedCommentsRevisions !== 'object' || Array.isArray(input.expectedCommentsRevisions)) {
+    fail(422, 'invalid_body', 'Replace needs 1 to 10000 matches and their comments revisions.');
+  }
+  for (const item of input.items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) fail(422, 'invalid_body', 'A replace item must be an object.');
+    if (Object.keys(item).some((key) => !fields.includes(key))) fail(400, 'unknown_field', 'A replace item has an unknown field.');
+    if (fields.some((key) => !Object.hasOwn(item, key)) || !isUuid(item.resourceId)
+      || typeof item.k !== 'string' || !item.k || item.k.length > 240 || !/^[a-z]{2,3}$/.test(item.lang ?? '')
+      || typeof item.expectedText !== 'string' || typeof item.replacement !== 'string'
+      || !/^[0-9a-f]{64}$/.test(item.expectedRevision ?? '') || !Number.isInteger(item.start) || !Number.isInteger(item.end) || item.end <= item.start) {
+      fail(422, 'invalid_body', 'The replace item is not valid.');
+    }
+  }
+  const groups = Map.groupBy(input.items, (item) => item.resourceId);
+  if (Object.keys(input.expectedCommentsRevisions).length !== groups.size
+    || [...groups.keys()].some((id) => !Object.hasOwn(input.expectedCommentsRevisions, id)
+      || input.expectedCommentsRevisions[id] !== null && !/^[0-9a-f]{64}$/.test(input.expectedCommentsRevisions[id] ?? ''))) {
+    fail(422, 'invalid_body', 'Every affected text needs its comments revision.');
+  }
+  return withLocalChanges(context.store, async () => {
+    const entries = [], snapshots = [], events = [], editors = [];
+    for (const [id, items] of groups) {
+      const found = await textBundle(context, id);
+      if (found.entry.readOnly) fail(409, 'read_only_resource', 'The text is read only.');
+      for (const item of items) checkRevision(found.loaded.bytes, item.expectedRevision);
+      const comments = await loadComments(found);
+      checkRevision(comments.bytes, input.expectedCommentsRevisions[id]);
+      const document = structuredClone(found.document);
+      for (const ranges of Map.groupBy(items, (item) => `${item.k}\0${item.lang}`).values()) {
+        const page = document.pages.find((page) => page.k === ranges[0].k), lang = ranges[0].lang;
+        if (!page || typeof page[lang] !== 'string') fail(422, 'invalid_range', 'The page language does not exist.');
+        const source = page[lang];
+        const offsets = [...new Set(ranges.flatMap((item) => [item.start, item.end]))].sort((a, b) => a - b), unsafe = new Set();
+        for (const token of tokenizeMarkup(source)) {
+          if (token.type !== 'tag' || token.sourceEnd <= token.sourceStart) continue;
+          let low = 0, high = offsets.length;
+          while (low < high) { const middle = (low + high) >>> 1; if (offsets[middle] <= token.sourceStart) low = middle + 1; else high = middle; }
+          for (let index = low; index < offsets.length && offsets[index] < token.sourceEnd; index++) unsafe.add(offsets[index]);
+        }
+        let boundary = source.length;
+        const pieces = [];
+        for (const item of ranges.toSorted((a, b) => b.start - a.start)) {
+          if (item.end > boundary) fail(422, 'invalid_range', 'Replace ranges cannot overlap.');
+          assertRange(source, item.start, item.end, (offset) => unsafe.has(offset));
+          if (source.slice(item.start, item.end) !== item.expectedText) fail(409, 'range_changed', 'The text at that range changed.');
+          pieces.push(source.slice(item.end, boundary), item.replacement);
+          boundary = item.start;
+        }
+        page[lang] = source.slice(0, boundary) + pieces.reverse().join('');
+      }
+      document.rev = (document.rev || 0) + 1;
+      validateText(document);
+      const bytes = jsonBytes(document);
+      const documentEntry = byteEntry(found.file, found.loaded.bytes, bytes), commentsEntry = byteEntry(comments.file, comments.bytes, comments.bytes);
+      entries.push(documentEntry, commentsEntry);
+      snapshots.push(documentEntry, commentsEntry);
+      const orig = await loadBytes(`${stemOf(found.file)}.orig.json`);
+      if (!orig.bytes) entries.push(record(`${stemOf(found.file)}.orig.json`, null, found.loaded.bytes));
+      const lines = textChanges(found.document, document).map((change) => JSON.stringify({ at: clock(context), rev: document.rev, ...change })).join('\n');
+      entries.push((await historyEntry(found.file, null, `${lines}\n`)).entry);
+      const revision = hashBytes(bytes);
+      events.push(voidEvent(id, revision, document.rev, 'replace-matches'));
+      editors.push(await shown(context, found.entry, document, revision));
+    }
+    const changeId = randomUUID(), response = { changeId, editors, matches: input.items.length };
+    await commitEditor(context, entries, events, { status: 200, body: response }, { id: changeId, resourceIds: [...groups.keys()], entries: snapshots });
+    for (const editor of editors) rememberExternal(context, editor.id, editor.revision, editor.document);
+    return response;
+  });
+}
+
+export async function undoTextReplace(context, changeId) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    bindProjects(context.store, context.projects ?? []);
+    const undo = await readReplaceUndo(context, changeId), entries = undo.entries, editors = [], events = [];
+    for (const id of undo.resourceIds) {
+      const found = await textBundle(context, id);
+      const restored = entries.find((entry) => entry.recordPath === found.file);
+      if (!restored?.afterBytes) fail(409, 'undo_conflict', 'The replaced text is no longer available.');
+      const document = validateText(parseJson(restored.afterBytes)), revision = hashBytes(restored.afterBytes);
+      const lines = textChanges(found.document, document).map((change) => JSON.stringify({ at: clock(context), rev: document.rev, ...change })).join('\n');
+      entries.push((await historyEntry(found.file, null, `${lines}\n`)).entry);
+      events.push(voidEvent(id, revision, document.rev, 'undo-replace'));
+      editors.push(await shown(context, found.entry, document, revision));
+    }
+    const response = { changeId: randomUUID(), undoOf: changeId, editors };
+    try { await commit(context, entries, events, { status: 200, body: response }); }
+    catch (error) { if (error.code === 'revision_conflict') fail(409, 'undo_conflict', 'A changed record prevents undo.'); throw error; }
+    for (const editor of editors) rememberExternal(context, editor.id, editor.revision, editor.document);
+    return response;
+  });
 }
 
 async function proposeRange(context, found, input) {

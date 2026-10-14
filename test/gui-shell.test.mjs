@@ -5,7 +5,7 @@ import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, createGroup, setUnitAlias, startSession } from "../gui/app/actions.mjs";
-import { documentSaver, textDraft } from "../gui/app/void.mjs";
+import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
@@ -2117,6 +2117,68 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   assert.match(focusCss, /box-shadow:\s*none/);
 });
 
+test("Find controls navigate source matches replace one or all texts and Undo the complete last batch", async (t) => {
+  const desktop = await openedBoardDesktop(t), { app, root } = desktop;
+  await openCommentEditor(desktop, 'void');
+  const workers = [];
+  app.createFindWorker = () => {
+    const worker = { terminated: false, terminate() { this.terminated = true; }, postMessage(data) { queueMicrotask(() => {
+      if (this.terminated || data.query === '(a+)+$') return;
+      try { this.onmessage({ data: { id: data.id, matches: findTextMatches(data.text, data.query, data.options) } }); }
+      catch (error) { this.onmessage({ data: { id: data.id, error: { code: error instanceof RangeError ? 'too_many_matches' : 'invalid_pattern', message: error.message } } }); }
+    }); } };
+    workers.push(worker); return worker;
+  };
+  const editor = app.editors.current;
+  typeInput(root.querySelector('[data-source]'), '**cat** cat 😀', 0, 0);
+  await editor.voidSaver.flush(); renderShell(app);
+  await createResource(app.api, 'void', { project: 'shop', path: 'docs/find-second.json', document: { formatVersion: 1, id: 'find-second', title: 'Other text', pages: [{ k: 'One', en: 'cat cat' }, { k: 'Two', en: 'cat' }] } });
+  click(root.querySelector('[data-action="toggle-find"]'));
+  typeInput(root.querySelector('[data-find-field="query"]'), 'cat', 3, 3);
+  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 2, 'Find did not return both matches.');
+  assert.equal(root.querySelector('[data-find-count]').textContent, '1 of 2');
+  assert.equal(root.querySelector('[data-find-hits]').getAttribute('data-find-hits'), '2');
+  const toggles = root.querySelectorAll('.void-find-option');
+  assert.deepEqual(toggles.map((node) => node.textContent), ['Aa', 'W', '.*']);
+  assert.ok(toggles.every((node) => node.getAttribute('aria-label') && node.getAttribute('title')));
+  const selection = { get isCollapsed() { return this.anchorNode === this.focusNode && this.anchorOffset === this.focusOffset; }, setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset) { Object.assign(this, { anchorNode, anchorOffset, focusNode, focusOffset }); } };
+  desktop.document.getSelection = () => selection;
+  const firstRun = textNodes(root.querySelector('[data-void-body]')).find((node) => node.textContent === 'cat');
+  selection.setBaseAndExtent(firstRun, 0, firstRun, 0); root.querySelector('[data-void-body]').focus(); editor.captureSelection();
+  click(root.querySelector('[data-action="find-next"]'));
+  assert.equal(root.querySelector('[data-find-count]').textContent, '2 of 2');
+  assert.deepEqual(editor.textSelections.get(`${editor.resourceId}\0${editor.page}\0en`), { start: 8, end: 11 });
+  click(root.querySelector('[data-action="find-previous"]'));
+  typeInput(root.querySelector('[data-find-field="replacement"]'), 'dog', 3, 3);
+  click(root.querySelector('[data-action="replace-match"]'));
+  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 1, 'Replace did not update the current hit.');
+  assert.equal(editor.authoritative.document.pages[0].en, '**dog** cat 😀');
+  click(root.querySelector('[data-action="find-all"]'));
+  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 4, 'All texts did not include every page.');
+  assert.equal(root.querySelector('[data-action="replace-all"]').textContent, 'Replace all 4');
+  click(root.querySelector('[data-action="find-next"]'));
+  await waitFor(() => app.editors.current.authoritative.title === 'Other text', 'Next did not open the matching text.');
+  assert.equal(app.voidFind.matches.length, 4);
+  click(root.querySelector('[data-action="find-next"]')); click(root.querySelector('[data-action="find-next"]'));
+  assert.equal(app.editors.current.page, 'Two');
+  click(root.querySelector('[data-action="replace-all"]'));
+  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 0, 'Replace all did not commit.');
+  assert.equal(editor.authoritative.document.pages[0].en, '**dog** dog 😀');
+  click(root.querySelector('[data-action="undo-replace"]'));
+  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 4, 'Undo did not restore the whole replacement batch.');
+  assert.equal(editor.authoritative.document.pages[0].en, '**dog** cat 😀');
+  click(root.querySelector('[data-action="find-regularExpression"]'));
+  typeInput(root.querySelector('[data-find-field="query"]'), '[', 1, 1);
+  await waitFor(() => root.querySelector('[data-find-error="invalid_pattern"]'), 'Invalid regex did not show an error.');
+  assert.equal(root.querySelector('[data-action="replace-all"]').getAttribute('disabled'), '');
+  typeInput(root.querySelector('[data-find-field="query"]'), '(a+)+$', 6, 6);
+  await waitFor(() => root.querySelector('[data-find-error="pattern_too_slow"]'), 'A slow regex did not terminate.');
+  assert.equal(root.querySelector('[data-find-error]').textContent, text('en', 'findSlow'));
+  assert.equal(root.querySelector('[data-action="replace-match"]').getAttribute('disabled'), '');
+  click(root.querySelector('[data-action="toggle-find"]'));
+  assert.equal(root.querySelector('[data-find-bar]'), null); assert.ok(workers.every((worker) => worker.terminated));
+});
+
 test("Void keeps the source selection and draft through formatting, Source, Focus and page arrows", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
@@ -3850,6 +3912,9 @@ test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
   const section = plan.split("## File ownership")[1].split("\n## ")[0];
   const owned = new Set([...section.matchAll(/`((?:gui\/app|test)\/[^`]+)`/g)].map((match) => match[1]));
+  const integration = await readFile('docs/3.0/integration.md', 'utf8');
+  assert.match(integration.split('#### T046.')[1].split('#### T047.')[0], /`gui\/app\/find-worker\.mjs`, new isolated regex worker/);
+  owned.add('gui/app/find-worker.mjs');
   assert.equal(owned.has("gui/app/phone.mjs"), true);
   assert.equal(owned.has("gui/app/embed.mjs"), true);
   assert.equal(owned.has("test/gui-fixture.mjs"), true);
@@ -3879,6 +3944,7 @@ test("the GUI import graph stays inside its ownership table", async () => {
     }
   }
   await walk(resolve("gui/app/main.mjs"));
+  await walk(resolve('gui/app/find-worker.mjs'));
   await walk(resolve("test/gui-fixture.mjs"));
   await walk(resolve("test/gui-data.mjs"));
 });

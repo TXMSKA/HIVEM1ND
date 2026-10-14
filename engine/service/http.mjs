@@ -16,7 +16,7 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replaceTextMatches, undoTextReplace, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from './editors.mjs';
 import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
@@ -32,7 +32,7 @@ export const EMBEDDED_BROWSER_FILES = Object.freeze({
 export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
-  'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs',
+  'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
 ]);
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
@@ -112,6 +112,8 @@ const ROUTES = [
   ['PATCH', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
   ['DELETE', '/blueprint/boards/:resourceId/nodes/:nodeId', 'editor.write', 'DA', 'editor'],
   ['GET', '/void/texts', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/void/replace', 'editor.write', 'D', 'editor'],
+  ['POST', '/void/replace/:changeId/undo', 'editor.write', 'D', 'editor'],
   ['GET', '/void/texts/:resourceId', 'editor.read', 'DPA', 'editor'],
   ['POST', '/void/texts', 'editor.write', 'D', 'editor'],
   ['PUT', '/void/texts/:resourceId', 'editor.write', 'DA', 'editor'],
@@ -156,6 +158,7 @@ function bodyLimitFor(route, pathname) {
   if (pathname === '/mcp') return REPLACEMENT_LIMIT;
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
+  if (route?.template === '/void/replace') return REPLACEMENT_LIMIT;
   if (route?.method === 'POST' && route.template === '/editors/:resourceId/assets') return REPLACEMENT_LIMIT;
   if (route?.template === '/blueprint/boards/import') return REPLACEMENT_LIMIT;
   return JSON_LIMIT;
@@ -1020,6 +1023,8 @@ function allowedBody(route) {
     'PATCH /blueprint/boards/:resourceId/nodes/:nodeId': ['changes', 'expectedRevision'],
     'DELETE /blueprint/boards/:resourceId/nodes/:nodeId': ['expectedRevision'],
     'POST /void/texts': ['project', 'path', 'document', 'attached', 'folderId'],
+    'POST /void/replace': ['items', 'expectedCommentsRevisions'],
+    'POST /void/replace/:changeId/undo': [],
     'PUT /void/texts/:resourceId': ['document', 'expectedRevision'],
     'POST /void/texts/:resourceId/ranges': ['k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'mode', 'threadId', 'expectedCommentsRevision'],
     'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'expectedRevision', 'expectedCommentsRevision'],
@@ -1078,6 +1083,8 @@ function noteActivity(domain, resourceId, kind = 'blueprint', focus = null) {
 
 async function editorRoute(route, domain, params, query, body) {
   const id = params.resourceId;
+  if (route.template === '/void/replace') return { status: 200, body: await replaceTextMatches(domain, body) };
+  if (route.template === '/void/replace/:changeId/undo') return { status: 200, body: await undoTextReplace(domain, params.changeId) };
   if (route.template === '/blueprint/boards/:resourceId/export') return { status: 200, body: await readLegacyExport(domain, id) };
   if (route.template === '/blueprint/boards/import') return { status: 201, body: await importBoard(domain, body) };
   if (route.template === '/library/folders' && route.method === 'GET') return { status: 200, body: await listFolders(domain, query) };
@@ -1574,7 +1581,7 @@ function contentType(name) {
 }
 
 function csp(ancestors) {
-  return `default-src 'self'; script-src 'self' data:; frame-src blob:; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
+  return `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
 }
 
 function decodeStatic(name) {

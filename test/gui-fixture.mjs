@@ -32,7 +32,7 @@ const HOME_MS = 12 * 3600_000;
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
-const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs"];
+const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs"];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 class HttpError extends Error {
@@ -1824,6 +1824,8 @@ function routeTable() {
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", PATCH: { capability: "editor.write", validate: validatePatchNode } },
     { pattern: "/blueprint/boards/:resourceId/nodes/:nodeId", DELETE: { capability: "editor.write", validate: validateDeleteNode } },
     { pattern: "/void/texts", GET: { query: ["q", "limit", "cursor", "project", "folderId", "openComments", "attachedAgents", "changedThisWeek"] }, POST: { capability: "editor.write", validate: validateText } },
+    { pattern: "/void/replace", POST: { capability: "editor.write", validate: validateReplace } },
+    { pattern: "/void/replace/:changeId/undo", POST: { capability: "editor.write", validate: validateEmpty } },
     { pattern: "/void/texts/:resourceId", GET: { query: [] }, PUT: { capability: "editor.write", validate: validateTextPut } },
     { pattern: "/void/texts/:resourceId/ranges", POST: { capability: "editor.write", validate: validateRange } },
     { pattern: "/void/texts/:resourceId/proposals/:proposalId/answer", POST: { capability: "proposal.answer", validate: validateProposalAnswer } },
@@ -2223,6 +2225,7 @@ const LARGE_BODY = 16_000_000;
 function bodyLimit(method, apiPath) {
   if (method === "PUT" && (/^\/blueprint\/boards\/[^/]+$/.test(apiPath) || /^\/void\/texts\/[^/]+$/.test(apiPath))) return LARGE_BODY;
   if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/blueprint/boards/import" || apiPath === "/void/texts")) return LARGE_BODY;
+  if (method === "POST" && apiPath === "/void/replace") return LARGE_BODY;
   if (method === "POST" && (/^\/void\/texts\/[^/]+\/ranges$/.test(apiPath) || /^\/editors\/[^/]+\/assets$/.test(apiPath))) return LARGE_BODY;
   return GENERAL_BODY;
 }
@@ -2255,7 +2258,7 @@ function canonicalOrigin(value) {
 function staticHeaders(frameAncestors, deny) {
   const headers = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'self'; script-src 'self' data:; frame-src blob:; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}`,
+    "Content-Security-Policy": `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}`,
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
   };
@@ -3591,6 +3594,59 @@ function validateTextPut(body) {
   if (!body.document || typeof body.document !== "object" || !Array.isArray(body.document.pages)) throw new HttpError(422, "invalid_document", "The document is not valid.");
 }
 
+function validateReplace(body) {
+  requireObject(body, ["items", "expectedCommentsRevisions"]);
+  requireKeys(body, ["items", "expectedCommentsRevisions"]);
+  if (!Array.isArray(body.items) || !body.items.length || body.items.length > 10000 || !body.expectedCommentsRevisions || Array.isArray(body.expectedCommentsRevisions) || typeof body.expectedCommentsRevisions !== "object") throw new HttpError(422, "invalid_body", "Replace needs matches and comments revisions.");
+  for (const item of body.items) { requireObject(item, ["resourceId", "k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision"]); const { resourceId, ...range } = item; if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(resourceId ?? '')) throw new HttpError(422, "invalid_body", "A resource id is required."); validateRange(range); }
+}
+
+async function prepareReplace(fx, body) {
+  const editors = [], writes = [], snapshots = [], events = [];
+  for (const [id, items] of Map.groupBy(body.items, (item) => item.resourceId)) {
+    const editor = await mutableText(fx, id, items[0].expectedRevision);
+    if (items.some((item) => item.expectedRevision !== editor.revision) || body.expectedCommentsRevisions[id] !== editor.commentsRevision) throw new HttpError(409, "revision_conflict", "The text or comments changed.");
+    const document = structuredClone(editor.document);
+    for (const ranges of Map.groupBy(items, (item) => `${item.k}\0${item.lang}`).values()) {
+      const page = document.pages.find((page) => page.k === ranges[0].k), lang = ranges[0].lang;
+      const source = textSource(document, ranges[0].k, lang); let boundary = source.length;
+      for (const item of ranges.toSorted((a, b) => b.start - a.start)) {
+        if (item.end <= item.start || item.end > boundary || !validTextBoundary(source, item.start) || !validTextBoundary(source, item.end) || insideTag(source, item.start) || insideTag(source, item.end)) throw new HttpError(422, "invalid_range", "Replace ranges are not valid.");
+        if (source.slice(item.start, item.end) !== item.expectedText) throw new HttpError(409, "range_changed", "The match changed.");
+        page[lang] = page[lang].slice(0, item.start) + item.replacement + page[lang].slice(item.end); boundary = item.start;
+      }
+    }
+    document.rev = (document.rev ?? 0) + 1;
+    const saved = await writeText(fx, editor, document, { operation: "replace-matches" });
+    const file = editorFile(fx, editor.project, editor.path), sidecar = commentsPath(fx, editor), comments = await readOptional(sidecar);
+    const commentWrite = comments ? fixtureWrite(sidecar, comments, comments) : { path: sidecar, beforeRevision: null, afterRevision: null, afterBytesBase64: null, operation: "delete" };
+    snapshots.push({ path: file, afterRevision: saved.data.revision, beforeBytesBase64: (await readFile(file)).toString("base64") }, { path: sidecar, afterRevision: editor.commentsRevision, beforeBytesBase64: comments?.toString("base64") ?? null });
+    writes.push(...saved.writes, commentWrite); events.push(...saved.events); editors.push(saved.data);
+  }
+  const changeId = uuid();
+  writes.push(fixtureWrite(join(fx.local, "replace-undo", `${changeId}.json`), null, Buffer.from(stableJson({ id: changeId, undone: false, entries: snapshots, resourceIds: editors.map((editor) => editor.id) }))));
+  return { status: 200, data: { changeId, editors, matches: body.items.length }, writes, events };
+}
+
+async function prepareReplaceUndo(fx, changeId) {
+  const file = join(fx.local, "replace-undo", `${changeId}.json`), bytes = await readOptional(file);
+  if (!bytes) throw new HttpError(404, "change_not_found", "The replace operation does not exist.");
+  const record = JSON.parse(bytes), writes = [], events = [], editors = [];
+  if (record.undone) throw new HttpError(409, "undo_conflict", "The replace operation was already undone.");
+  for (const entry of record.entries) {
+    if (await hashExisting(entry.path) !== entry.afterRevision) throw new HttpError(409, "undo_conflict", "A changed text or comments record prevents undo.");
+    writes.push({ path: entry.path, beforeRevision: entry.afterRevision, afterRevision: entry.beforeBytesBase64 === null ? null : sha256(Buffer.from(entry.beforeBytesBase64, "base64")), afterBytesBase64: entry.beforeBytesBase64, ...(entry.beforeBytesBase64 === null ? { operation: "delete" } : {}) });
+  }
+  for (const id of record.resourceIds) {
+    const editor = await editorFor(fx, id), restored = writes.find((write) => write.path === editorFile(fx, editor.project, editor.path));
+    const document = JSON.parse(Buffer.from(restored.afterBytesBase64, "base64"));
+    editors.push({ ...editor, document, revision: restored.afterRevision });
+    events.push({ name: "void.changed", resourceId: id, data: { resourceId: id, revision: restored.afterRevision, rev: document.rev, operation: "undo-replace" } });
+  }
+  writes.push(fixtureWrite(file, bytes, Buffer.from(stableJson({ ...record, undone: true }))));
+  return { status: 200, data: { changeId: uuid(), undoOf: changeId, editors }, writes, events };
+}
+
 function validateRange(body) {
   requireObject(body, ["k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision", "mode", "threadId", "expectedCommentsRevision"]);
   requireKeys(body, ["k", "lang", "start", "end", "expectedText", "replacement", "expectedRevision"]);
@@ -4427,6 +4483,10 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/void/replace" || pattern === "/void/replace/:changeId/undo") {
+    if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop can replace texts.");
+    return pattern === "/void/replace" ? prepareReplace(fx, body) : prepareReplaceUndo(fx, params.changeId);
+  }
   if (pattern === "/editors/:resourceId/history/:historyId/restore" || pattern === "/editors/:resourceId/conflict") {
     if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop can restore or answer a conflict.");
     return prepareHistoryAnswer(fx, params, body, principal);

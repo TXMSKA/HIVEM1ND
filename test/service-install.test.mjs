@@ -1186,6 +1186,7 @@ test('release packaging uses the served browser modules', async (t) => {
   await mkdir(app);
   assert.equal(BROWSER_ASSETS.includes('app.js'), false);
   assert.equal(BROWSER_ASSETS.includes('main.mjs'), true);
+  assert.equal(BROWSER_ASSETS.includes('find-worker.mjs'), true);
   for (const name of BROWSER_ASSETS) {
     const body = name === 'index.html'
       ? '<link rel="stylesheet" href="./styles.css">\n<script type="module" src="./main.mjs"></script>\n'
@@ -1199,6 +1200,9 @@ test('release packaging uses the served browser modules', async (t) => {
   assert.equal(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES).length, 0);
   assert.equal(BROWSER_ASSETS.includes('mark.svg'), true);
   assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), []);
+  archived.delete('gui/app/find-worker.mjs');
+  assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), ['gui/app/find-worker.mjs']);
+  archived.add('gui/app/find-worker.mjs');
   archived.delete('gui/app/main.mjs');
   assert.deepEqual(missingPackagedBrowserAssets(archived, EMBEDDED_BROWSER_FILES), ['gui/app/main.mjs']);
   await rm(path.join(app, 'mark.svg'));

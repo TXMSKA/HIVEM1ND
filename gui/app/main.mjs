@@ -82,8 +82,8 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, captureTextSelection, documentSaver, draftSnapshot, enterFocus, formatSelection, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
-import { assetIdentity, plainOffsets, plainText, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
+import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
+import { assetIdentity, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -344,6 +344,10 @@ export function navigate(app, mode) {
 
 export function renderShell(app) {
   if (app.editors?.current?.boardGesture || app.editors?.current?.textComposing) return;
+  if (app.voidFind?.open && (app.mode !== 'document' || app.editors.current?.kind !== 'void' || app.editors.current.sourceMode)) {
+    clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++;
+    app.voidFind.open = false; app.voidFind.pending = false;
+  }
   app.rendering = true;
   try {
     paintShell(app);
@@ -576,6 +580,8 @@ export function dispose(app) {
   clearTimeout(app.readyTimer);
   clearTimeout(app.mapToastTimer);
   clearTimeout(app.libraryToastTimer);
+  clearTimeout(app.voidFind?.timer);
+  app.voidFind?.finder.cancel();
   for (const record of app.activity?.values() ?? []) record.cancel?.();
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onVoidSelection);
@@ -2025,6 +2031,10 @@ async function answerEditorConflict(app, editor, decision) {
 
 function voidSurface(app, document, editor, t) {
   editor.focus = app.editors.focus;
+  if (app.voidFind?.open && app.voidFind.resourceId !== editor.resourceId) {
+    app.voidFind.resourceId = editor.resourceId;
+    scheduleVoidFind(app);
+  }
   const pages = editor.authoritative.document.pages ?? [];
   if (!app.voidState || app.voidState.resourceId !== editor.resourceId) {
     const requested = editor.page ?? editor.focus?.k;
@@ -2033,15 +2043,21 @@ function voidSurface(app, document, editor, t) {
     app.voidState.pages = pages;
     if (!pages.some((page) => page.k === app.voidState.page)) app.voidState.page = pages[0]?.k;
   }
-  const lang = app.language === "es" ? "es" : "en", k = app.voidState.page;
+  const lang = editor.findLanguage ?? (app.language === "es" ? "es" : "en"), k = app.voidState.page;
   editor.page = k; editor.language = lang;
   editor.textSelections ??= new Map();
   const selectionEditor = { resourceId: editor.resourceId, page: k, language: lang, textSelections: editor.textSelections };
+  if (editor.pendingFindSelection) {
+    selectionEditor.textSelections.set(textDraftKey(editor.resourceId, k, lang), editor.pendingFindSelection);
+    editor.pendingFindSelection = null;
+    editor.restoreCaret = true;
+  }
   const page = pages.find((item) => item.k === k);
   const value = () => textDraft(editor, editor.resourceId, k, lang) ?? page?.[lang] ?? "";
   const editable = canEditResources(app) && !editor.authoritative.readOnly && typeof page?.[lang] === "string";
   const focused = app.mode === "focus", sourceMode = Boolean(editor.sourceMode && !focused);
-  const surface = element(document, "div", { class: `void-surface${editor.saveState === "not-saved" ? " is-not-saved" : ""}` });
+  const finding = !focused && !sourceMode && app.voidFind?.open;
+  const surface = element(document, "div", { class: `void-surface${editor.saveState === "not-saved" ? " is-not-saved" : ""}${finding ? " is-finding" : ""}` });
   const host = element(document, "div", { class: "void-page reading-card", "data-void": "true", hidden: sourceMode ? "" : null });
   const title = element(document, "h2", { class: "void-title", "data-void-title": "true", text: editor.authoritative.document.title,
     contenteditable: editable && !focused ? "plaintext-only" : "false", role: "textbox", "aria-label": t("resourceTitle") });
@@ -2144,6 +2160,17 @@ function voidSurface(app, document, editor, t) {
   if (watchUnit) tools.append(element(document, "span", { class: "void-attached", text: unitDisplayName(unitById(app, watchUnit)) }));
   tools.append(button("void-watch", t(app.editors.watch?.state === "watching" ? "finalWatching" : "finalWatch"), () => app.editors.watch?.state === "watching" ? stopEditorWatch(app) : followEditor(app), { disabled: watchUnit ? null : "" }));
   if (!focused) {
+    const findButton = button("toggle-find", t("findReplace"), () => {
+      app.voidFind ??= { finder: createTextFinder({ createWorker: app.createFindWorker }), resourceId: editor.resourceId, query: '', replacement: '', scope: 'document', options: { caseSensitive: false, wholeWord: false, regularExpression: false }, matches: [], current: 0, generation: 0 };
+      app.voidFind.open = !app.voidFind.open;
+      if (!app.voidFind.open) { clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++; app.voidFind.pending = false; }
+      else { editor.sourceMode = false; scheduleVoidFind(app); }
+      renderShell(app);
+    }, { "aria-pressed": String(Boolean(app.voidFind?.open)), class: "btn void-find-toggle" });
+    const searchIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), searchPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    searchIcon.setAttribute('class', 'icon'); searchIcon.setAttribute('viewBox', '0 0 24 24'); searchIcon.setAttribute('aria-hidden', 'true');
+    searchPath.setAttribute('d', 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6'); searchIcon.append(searchPath); findButton.replaceChildren(searchIcon);
+    tools.append(findButton);
     tools.append(button("toggle-source", t("sourceLabel"), () => { editor.captureSelection(); editor.sourceMode = !editor.sourceMode; editor.restoreCaret = true; renderShell(app); }, { "aria-pressed": String(sourceMode) }));
     tools.append(button("enter-focus", t("focus"), () => { editor.captureSelection(); editor.restoreCaret = true; enterFocus(app.voidState); app.mode = "focus"; renderShell(app); }));
   }
@@ -2186,9 +2213,14 @@ function voidSurface(app, document, editor, t) {
   editor.updateFormats = updateFormats;
   body.addEventListener("keyup", updateFormats); body.addEventListener("pointerup", updateFormats);
   surface.append(tools);
+  if (finding) surface.append(voidFindBar(app, document, editor, t));
   if (editor.saveState === "not-saved") surface.append(element(document, "div", { class: "void-save-error", "data-void-error": "true", role: "alert" },
     icon(document, "alert"), element(document, "span", { text: t("voidSaveError") }), button("retry-void-save", t("retry"), () => editor.voidSaver?.retry().catch(() => {}))));
   surface.append(host, sourceCard, formatBar);
+  const find = app.voidFind;
+  const hits = finding ? find.matches.filter((match) => match.resourceId === editor.resourceId && match.k === k && match.lang === lang) : [];
+  host.setAttribute('data-find-hits', String(hits.length));
+  highlightFind(document, body, hits, find?.matches[find.current]);
   if (focused) {
     surface.append(element(document, "p", { class: "void-focus-hint", "data-focus-hint": "true", text: t("focusHint") }));
     const dots = element(document, "div", { class: "void-page-dots" });
@@ -2214,7 +2246,104 @@ function queueVoid(app, editor) {
   const snapshot = JSON.parse(draftSnapshot(editor));
   if (editor.titleDraft !== undefined) snapshot.document.title = editor.titleDraft;
   editor.voidSaver.queue(JSON.stringify(snapshot));
+  if (app.voidFind?.open) scheduleVoidFind(app);
   syncViewerDirty(app);
+}
+
+function scheduleVoidFind(app) {
+  const find = app.voidFind;
+  clearTimeout(find.timer); find.finder.cancel(); find.generation++;
+  find.matches = []; find.current = 0; find.error = null; find.pending = true;
+  find.timer = setTimeout(() => { void runVoidFind(app); }, 120);
+}
+
+async function runVoidFind(app) {
+  const find = app.voidFind, generation = find.generation, editor = app.editors.current;
+  try {
+    const drafts = find.scope === 'all' ? [...app.editors.drafts.values()].filter((item) => item.kind === 'void') : [editor];
+    for (const draft of drafts) {
+      await draft.voidSaver?.flush();
+      if (draft.dirty) throw Object.assign(new Error('The draft must be saved first.'), { code: 'find_unsaved' });
+    }
+    if (find.generation !== generation || app.disposed || !find.open) return;
+    const matches = await find.finder.find(app.api, editor, find.query, { ...find.options }, find.scope);
+    if (find.generation !== generation || app.disposed) return;
+    find.matches = matches;
+    const index = matches.findIndex((match) => match.resourceId === editor.resourceId && match.k === editor.page && match.lang === editor.language);
+    find.current = Math.max(0, index);
+  } catch (error) {
+    if (find.generation !== generation || app.disposed || error.code === 'canceled') return;
+    find.error = error.code ?? 'find_unavailable';
+  } finally {
+    if (find.generation === generation && !app.disposed) { find.pending = false; renderShell(app); }
+  }
+}
+
+function voidFindBar(app, document, editor, t) {
+  const find = app.voidFind;
+  const bar = element(document, 'section', { class: 'void-find-bar', 'data-find-bar': 'true', 'aria-label': t('findReplace') });
+  const input = (name, label) => {
+    const field = element(document, 'input', { type: 'text', 'aria-label': label, 'data-find-field': name, 'data-keep': `void-find|${name}`, disabled: find.busy ? '' : null });
+    field.value = find[name];
+    field.addEventListener('input', () => { find[name] = field.value; if (name === 'query') scheduleVoidFind(app); renderShell(app); });
+    return field;
+  };
+  const button = (action, label, onclick, attributes = {}) => element(document, 'button', { type: 'button', class: 'btn', 'data-action': action, text: label, 'aria-label': label, title: label, onclick, ...attributes });
+  const unavailable = find.pending || find.busy || find.error || !find.matches.length;
+  const row = element(document, 'div', { class: 'void-find-row' }, element(document, 'div', { class: 'void-find-input' }, input('query', t('findReplace')),
+    element(document, 'span', { 'data-find-count': 'true', role: 'status', 'aria-live': 'polite', text: t('findCount', { current: find.matches.length ? find.current + 1 : 0, total: find.matches.length }) })));
+  for (const [key, glyph, label] of [['caseSensitive', 'Aa', 'findCase'], ['wholeWord', 'W', 'findWord'], ['regularExpression', '.*', 'findRegex']]) {
+    const toggle = button(`find-${key}`, t(label), () => { find.options[key] = !find.options[key]; scheduleVoidFind(app); renderShell(app); }, { class: 'void-find-option', 'aria-pressed': String(find.options[key]), disabled: find.busy ? '' : null });
+    toggle.textContent = glyph; row.append(toggle);
+  }
+  row.append(button('find-previous', t('findPrevious'), () => selectVoidMatch(app, -1), { class: 'void-find-nav', disabled: unavailable ? '' : null }), button('find-next', t('findNext'), () => selectVoidMatch(app, 1), { class: 'void-find-nav', disabled: unavailable ? '' : null }));
+  row.children[row.children.length - 2].textContent = '↑'; row.children[row.children.length - 1].textContent = '↓';
+  bar.append(row, element(document, 'div', { class: 'void-find-row' }, element(document, 'div', { class: 'void-replace-input' }, input('replacement', t('findReplacement'))),
+    button('replace-match', t('findReplaceOne'), () => applyVoidReplace(app, false), { disabled: unavailable || !canEditResources(app) ? '' : null }),
+    button('replace-all', t('findReplaceAll', { count: find.matches.length }), () => applyVoidReplace(app, true), { class: 'btn primary', disabled: unavailable || !canEditResources(app) ? '' : null })));
+  const scopes = element(document, 'div', { class: 'void-find-scopes' });
+  for (const [scope, label] of [['document', 'findDocument'], ['all', 'findAll']]) scopes.append(button(`find-${scope}`, t(label), () => { find.scope = scope; scheduleVoidFind(app); renderShell(app); }, { 'aria-pressed': String(find.scope === scope), disabled: find.busy ? '' : null }));
+  scopes.append(element(document, 'span', { text: t('findUndoHint') }));
+  bar.append(scopes);
+  if (find.undoId) bar.append(button('undo-replace', t('undo'), () => applyVoidReplace(app, false, true), { disabled: find.busy ? '' : null }));
+  if (find.error) bar.append(element(document, 'p', { 'data-find-error': find.error, role: 'alert', text: text(app.language, ({ pattern_too_slow: 'findSlow', invalid_pattern: 'findInvalid', too_many_matches: 'findTooMany', find_unsaved: 'findUnsaved', undo_conflict: 'findUndoConflict', range_changed: 'findChanged', revision_conflict: 'findChanged' })[find.error] ?? 'actionFailed') }));
+  if (find.operation) bar.append(button('retry-replace', t('retry'), () => applyVoidReplace(app, false, find.undoPending)));
+  return bar;
+}
+
+async function selectVoidMatch(app, direction) {
+  const find = app.voidFind;
+  find.current = (find.current + direction + find.matches.length) % find.matches.length;
+  const match = find.matches[find.current];
+  find.resourceId = match.resourceId;
+  if (app.editors.current.resourceId !== match.resourceId) await openEditor(app.api, app.editors, { id: match.resourceId, kind: 'void' });
+  const editor = app.editors.current;
+  if (editor.resourceId !== match.resourceId) return;
+  editor.page = match.k; editor.findLanguage = match.lang;
+  if (app.voidState?.resourceId === match.resourceId) app.voidState.page = match.k;
+  editor.pendingFindSelection = { start: sourceBoundary(match.source, match.start, 'end'), end: sourceBoundary(match.source, match.end, 'start') };
+  renderShell(app);
+}
+
+async function applyVoidReplace(app, all, undo = false) {
+  const find = app.voidFind;
+  if (find.busy) return;
+  const matches = all ? find.matches : [find.matches[find.current]].filter(Boolean);
+  if (!undo && !matches.length && !find.operation) return;
+  const drafts = [...app.editors.drafts.values()].filter((editor) => editor.dirty && (undo || matches.some((match) => match.resourceId === editor.resourceId)));
+  if (drafts.length) { find.error = 'find_unsaved'; renderShell(app); return; }
+  find.busy = true; find.error = null; find.undoPending = undo;
+  clearTimeout(find.timer); find.finder.cancel(); find.generation++;
+  renderShell(app);
+  try {
+    const result = undo ? await undoReplace(app.api, app.editors, find.undoId, find.operation)
+      : await replaceMatches(app.api, app.editors, matches, find.replacement, find.options.regularExpression, find.operation);
+    find.operation = null; find.undoId = undo ? null : result.data.changeId;
+    find.busy = false;
+    for (const editor of app.editors.drafts.values()) if (editor.kind === 'void' && editor.dirty && result.data.editors.some((value) => value.id === editor.resourceId)) queueVoid(app, editor);
+    scheduleVoidFind(app);
+  } catch (error) { find.error = error.code; find.operation = app.api.uncertain.has(error.operation?.id) ? error.operation : null; }
+  finally { find.busy = false; if (!app.disposed) renderShell(app); }
 }
 
 async function loadVoidAssets(app, editor, source) {

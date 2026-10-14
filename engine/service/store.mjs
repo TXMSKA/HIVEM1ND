@@ -684,6 +684,37 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
     beforeRevision: null, afterBytes: journalBytes(record), private: true } };
 }
 
+export function prepareReplaceUndo(context, id, resourceIds, entries) {
+  const recordPath = path.join(context.store.localDirectory, 'replace-undo', `${id}.json`);
+  const record = { format: 'hivem1nd-replace-undo-v1', id, resourceIds, undone: false,
+    entries: entries.map((entry) => ({ resource: entry.resource, recordPath: entry.recordPath, target: entry.target,
+      afterRevision: revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null })) };
+  return { resource: `replace-undo:${id}`, recordPath, beforeRevision: null, afterBytes: journalBytes(record), private: true };
+}
+
+export async function readReplaceUndo(context, changeId) {
+  if (!isUuid(changeId)) throw new CoreError(404, 'change_not_found', 'The replace operation does not exist.');
+  const file = path.join(context.store.localDirectory, 'replace-undo', `${changeId}.json`);
+  const bytes = await readBytes(context.store, file);
+  if (!bytes) throw new CoreError(404, 'change_not_found', 'The replace operation does not exist.');
+  const record = JSON.parse(bytes);
+  if (record.format !== 'hivem1nd-replace-undo-v1' || record.id !== changeId || record.undone) {
+    throw new CoreError(409, 'undo_conflict', 'The replace operation cannot be undone.');
+  }
+  const entries = [];
+  for (const entry of record.entries) {
+    const destination = resolveAuthorized(context.store, entry.target ?? entry.recordPath);
+    const current = await readBytes(context.store, destination);
+    if (revisionOf(current) !== entry.afterRevision) throw new CoreError(409, 'undo_conflict', 'A changed text or comments record prevents undo.');
+    entries.push({ resource: entry.resource, recordPath: destination, target: entry.target, beforeRevision: entry.afterRevision,
+      beforeBytes: current, afterBytes: entry.beforeBytesBase64 === null ? null : Buffer.from(entry.beforeBytesBase64, 'base64'),
+      ...(entry.beforeBytesBase64 === null ? { operation: 'delete' } : {}) });
+  }
+  entries.push({ resource: `replace-undo:${changeId}`, recordPath: file, beforeRevision: revisionOf(bytes),
+    afterBytes: journalBytes({ ...record, undone: true }), private: true });
+  return { resourceIds: record.resourceIds, entries };
+}
+
 export async function undoChange(context, changeId) {
   if (!isUuid(changeId)) throw new CoreError(404, 'change_not_found', 'The change does not exist.');
   if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Only the desktop can undo a change.');
