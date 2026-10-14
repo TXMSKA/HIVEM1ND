@@ -34,7 +34,7 @@ async function world(t) {
   context.ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: context.now, machine: fixture.machine });
   const unit = await readDetail(context, 'units', UNIT);
   const input = { confirmed: true, expectedRevision: unit.revision };
-  const start = () => enqueueStart(context, { unitId: UNIT, client: 'codex', stateRevision: unit.revision });
+  const start = () => enqueueStart(context, { unitId: UNIT, client: 'codex', runMode: 'chat', stateRevision: unit.revision });
   return { fixture, context, file, unit, input, signaled, start };
 }
 

@@ -146,7 +146,7 @@ test('a fresh GUI start enters Relay once before its first stdio editor call, wi
   const { fixture, service, projects, editor, ownedPids, adapters } = state;
   const file = path.join(fixture.paths.mind, 'user', 'state', 'one.md');
   const context = { store: fixture.store, paths: service.runtime.paths, projects, ownedPids, adapters, credentials: service.credentials, now: () => fixture.clock.now, beat: service.runtime.beat, principal: { audience: 'desktop', unitId: 'root:master' } };
-  const started = await enqueueStart(context, { unitId: UNIT, client: 'codex', stateRevision: hashBytes(await readFile(file)) });
+  const started = await enqueueStart(context, { unitId: UNIT, client: 'codex', runMode: 'chat', stateRevision: hashBytes(await readFile(file)) });
   assert.equal(started.result.state, 'started', JSON.stringify(started.result));
   const directory = path.join(fixture.paths.mind, 'user', 'relay', 'wake', 'policies');
   const names = await readdir(directory);
@@ -173,7 +173,7 @@ test('ordinary configured startup loads exact machine project paths for native l
   const login = await request({ origin, token: service.bootstrap.secret, closed: false }, { path: '/api/v1/auth/local', body: { embedded: false, hostOrigin: null, look: null, language: null } });
   assert.equal(login.status, 201);
   const desktop = { origin, token: login.json.data.token, closed: false };
-  const started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { client: 'codex', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
+  const started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { client: 'codex', runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
   assert.equal(started.status, 202, JSON.stringify(started.json));
   assert.equal(started.json.data.state, 'started', JSON.stringify(started.json));
   assert.equal(await readFile(path.join(fixture.root, 'native-cwd.txt'), 'utf8'), projects[0].localPath);

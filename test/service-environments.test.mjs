@@ -79,7 +79,7 @@ test('scoped native launch and task review use the scoped state authority', asyn
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() }, projects: [{ name: 'shop', localPath: fixture.root }], adapters: { codex: adapter }, principal: { unitId: 'root:master', audience: 'desktop' }, ownedPids: new Set() };
   const loaded = await loadTask(context, 'project:shop:007'); assert.equal(loaded.toId, 'project:shop:worker'); assert.equal(reviewAuthority(loaded).reviewable, false);
   await assert.rejects(() => changeStatus(context, loaded.id, { status: 'done', expectedRevision: loaded.revision }), { code: 'forbidden' });
-  const started = await enqueueStart(context, { unitId: 'project:shop:worker', client: 'codex', stateRevision: hashBytes(Buffer.from(state)) });
+  const started = await enqueueStart(context, { unitId: 'project:shop:worker', client: 'codex', runMode: 'chat', stateRevision: hashBytes(Buffer.from(state)) });
   assert.equal(started.result.state, 'started'); await adapter.close();
   context.ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, machine: fixture.machine });
   const chat = (await createChat(context, { members: ['project:shop:worker'] })).chat;
