@@ -873,3 +873,17 @@ test('expired asks stay readable and do not count as active Waiting', async (t) 
   await writeFile(path.join(directory, 'result.json'), JSON.stringify({ state: 'denied' }));
   assert.equal((await readProjection(context)).waiting.some((item) => item.approvalId === id), false);
 });
+
+test('Send to agent persists separately from theme and language', async (t) => {
+  const fixture = await mind(t);
+  const context = serviceContext(fixture);
+  await patchSettings(context, { sendToAgent: false, expectedRevision: null });
+  const file = path.join(fixture.paths.mind, 'user', 'gui', 'settings.json');
+  const before = await readFile(file);
+  assert.equal(JSON.parse(before).sendToAgent, false);
+  await patchSettings(context, { language: 'es', expectedRevision: revisionOf(before) });
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(saved.sendToAgent, false);
+  assert.equal(saved.language, 'es');
+  await assert.rejects(patchSettings(context, { sendToAgent: 'false', expectedRevision: revisionOf(await readFile(file)) }), { code: 'invalid_body' });
+});

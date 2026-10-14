@@ -214,9 +214,11 @@ export async function patchLayout(context, input) {
 export async function patchSettings(context, input) {
   const hasLook = Object.prototype.hasOwnProperty.call(input ?? {}, 'look');
   const hasLanguage = Object.prototype.hasOwnProperty.call(input ?? {}, 'language');
-  if (!hasLook && !hasLanguage) throw new CoreError(422, 'invalid_body', 'Settings need a look or a language.');
+  const hasSendToAgent = Object.hasOwn(input ?? {}, 'sendToAgent');
+  if (!hasLook && !hasLanguage && !hasSendToAgent) throw new CoreError(422, 'invalid_body', 'Settings need a look or a language.');
   if (hasLook && input.look !== 'modern' && input.look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
   if (hasLanguage && input.language !== 'en' && input.language !== 'es') throw new CoreError(422, 'invalid_body', 'The language is not supported.');
+  if (hasSendToAgent && typeof input.sendToAgent !== 'boolean') throw new CoreError(422, 'invalid_body', 'Send to agent must be a boolean.');
   const current = await readJson(context, 'user/gui/settings.json');
   const settings = {
     ...(current.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }),
@@ -224,6 +226,7 @@ export async function patchSettings(context, input) {
   };
   if (hasLook) settings.look = input.look;
   if (hasLanguage) settings.language = input.language;
+  settings.sendToAgent = hasSendToAgent ? input.sendToAgent : settings.sendToAgent ?? true;
   const bytes = Buffer.from(`${canonicalJson(settings)}\n`);
   const events = [{ name: 'settings.changed', data: { settings, revision: hashBytes(bytes) } }];
   return finish(context, {

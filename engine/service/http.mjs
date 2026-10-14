@@ -1001,7 +1001,7 @@ function allowedBody(route) {
     'DELETE /units/:unitId/approval-grants/:grantId': ['expectedRevision'],
     'POST /tasks/:taskId/status': ['status', 'expectedRevision', 'note'],
     'POST /tasks/:taskId/undo': ['expectedRevision'],
-    'PATCH /settings': ['look', 'language', 'expectedRevision'],
+    'PATCH /settings': ['look', 'language', 'sendToAgent', 'expectedRevision'],
     'POST /settings/home-network': ['enabled', 'addresses'],
     'POST /auth/local': ['embedded', 'hostOrigin', 'look', 'language'],
     'POST /auth/home': ['key', 'code'],
