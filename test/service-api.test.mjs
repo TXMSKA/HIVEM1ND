@@ -1410,12 +1410,21 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(savedText, 200, 'replace text');
   hit('PUT', '/void/texts/:resourceId');
-  const matchRevision = (await call(port, 'GET', `/api/v1/editors/${textId}/comments`, { token })).json.data.commentsRevision;
-  const replacedMatches = await call(port, 'POST', '/api/v1/void/replace', { token,
-    body: { items: [{ resourceId: textId, k: 'Intro.Welcome', lang: 'en', start: 0, end: 2, expectedText: 'Hi', replacement: 'Hello', expectedRevision: savedText.json.data.revision }], expectedCommentsRevisions: { [textId]: matchRevision } },
-    headers: { 'idempotency-key': randomUUID() } });
-  expectStatus(replacedMatches, 200, 'replace matches'); hit('POST', '/void/replace');
-  expectStatus(await call(port, 'POST', `/api/v1/void/replace/${replacedMatches.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 200, 'undo replaced matches');
+  const replaceSource = (await call(port, 'GET', `/api/v1/void/texts/${textId}`, { token })).json.data;
+  const replaceBody = { items: [{ resourceId: textId, k: 'Intro.Welcome', lang: 'en', start: 0, end: 5, expectedText: replaceSource.document.pages[0].en.slice(0, 5),
+    replacement: 'Howdy', expectedRevision: replaceSource.revision }], expectedCommentsRevisions: { [textId]: replaceSource.commentsRevision } };
+  const replaceDenied = await call(port, 'POST', '/api/v1/void/replace', { token, body: { ...replaceBody, pattern: 'Hello' }, headers: { 'idempotency-key': randomUUID() } });
+  assert.ok([400, 422].includes(replaceDenied.status), `replace boundary ${replaceDenied.status}`);
+  const replacedMatches = await call(port, 'POST', '/api/v1/void/replace', { token, body: replaceBody, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(replacedMatches, 200, 'replace matches');
+  assert.equal(replacedMatches.json.data.matches, 1);
+  hit('POST', '/void/replace');
+  const replaceUndoMissing = await call(port, 'POST', `/api/v1/void/replace/${randomUUID()}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(replaceUndoMissing, 404, 'undo unknown replace');
+  const replaceUndone = await call(port, 'POST', `/api/v1/void/replace/${replacedMatches.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(replaceUndone, 200, 'undo replace');
+  assert.equal(replaceUndone.json.data.undoOf, replacedMatches.json.data.changeId);
+  assert.equal((await call(port, 'GET', `/api/v1/void/texts/${textId}`, { token })).json.data.document.pages[0].en, replaceSource.document.pages[0].en);
   hit('POST', '/void/replace/:changeId/undo');
 
   const watch = await call(port, 'POST', '/api/v1/watch', {
