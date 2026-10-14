@@ -1379,6 +1379,7 @@ async function mutate(fx, request, route, body, principal, requestId) {
     }
     await route.checkPreconditions(body);
     const prepared = await route.prepare(body, principal, key);
+    await fixtureTouchHistory(fx, prepared, principal);
     await fixtureTouchLibrary(fx, prepared);
     const response = prepared.status === 204 ? null : success(fx, prepared.data, requestId, planCursor(fx, prepared.events.length), prepared.sync ?? "local");
     const createdAt = clock(fx).toISOString();
@@ -1826,6 +1827,9 @@ function routeTable() {
     { pattern: "/void/texts/:resourceId/proposals/:proposalId/answer", POST: { capability: "proposal.answer", validate: validateProposalAnswer } },
     { pattern: "/void/texts/:resourceId/proposals", GET: { query: ["q", "limit", "cursor", "state"] } },
     { pattern: "/editors/:resourceId/attachments", GET: { query: [] } },
+    { pattern: "/editors/:resourceId/history", GET: { query: ["limit", "cursor"] } },
+    { pattern: "/editors/:resourceId/history/:historyId/restore", POST: { capability: "editor.write", validate: validateHistoryAnswer } },
+    { pattern: "/editors/:resourceId/conflict", POST: { capability: "editor.write", validate: (body) => validateHistoryAnswer(body, true) } },
     { pattern: "/editors/:resourceId/comments", GET: { query: ["q", "limit", "cursor", "status"] }, POST: { capability: "comment.write", validate: validateComment } },
     { pattern: "/editors/:resourceId/comments/:threadId/replies", POST: { capability: "comment.write", validate: validateReply } },
     { pattern: "/editors/:resourceId/comments/:threadId", PATCH: { capability: "comment.write", validate: validateThread } },
@@ -2093,6 +2097,16 @@ async function readData(fx, snap, spec, params, query) {
     const items = editor.threads.filter((thread) => status === "all" || thread.status === status);
     const result = page(items, query, spec.GET.query, (thread, q) => JSON.stringify(thread).toLowerCase().includes(q), []);
     return { ...result, commentsRevision: editor.commentsRevision };
+  }
+  if (pattern === "/editors/:resourceId/history") {
+    const editor = requireEditor(snap, params.resourceId);
+    let marked = false;
+    const items = (await fixtureHistory(fx, editor)).map((item) => {
+      const current = !marked && item.source?.kind !== "draft" && item.revision === editor.revision && item.commentsRevision === editor.commentsRevision;
+      marked ||= current;
+      return { ...item, current };
+    });
+    return page(items, query, spec.GET.query, () => true, []);
   }
   if (pattern === "/editors/:resourceId/assets/:assetId") throw new HttpError(404, "asset_not_found", "The asset was not found.");
   throw new HttpError(404, "not_found", "The route was not found.");
@@ -4104,13 +4118,130 @@ async function fixtureTouchLibrary(fx, prepared) {
     const planned = prepared.writes.find((write) => write.path === library.file);
     if (planned) library.value = JSON.parse(Buffer.from(planned.afterBytesBase64, "base64"));
     const item = library.value.items[id];
-    library.value.items[id] = { ...item, title: item?.title ?? editor.title, folderId: item?.folderId ?? null, updatedAt: clock(fx).toISOString() };
+    const documentWrite = prepared.writes.find((write) => write.path === editorFile(fx, editor.project, editor.path));
+    const before = await readOptional(editorFile(fx, editor.project, editor.path));
+    const document = documentWrite?.afterBytesBase64 ? JSON.parse(Buffer.from(documentWrite.afterBytesBase64, 'base64')) : null;
+    const changedTitle = document && (!before || JSON.parse(before).title !== document.title);
+    const restoredTitle = edits.some((event) => event.resourceId === id && event.data?.operation === 'restore');
+    library.value.items[id] = { ...item, title: changedTitle && !restoredTitle ? document.title : item?.title ?? editor.title, folderId: item?.folderId ?? null, updatedAt: clock(fx).toISOString() };
     const write = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
     if (planned) Object.assign(planned, write);
     else prepared.writes.push(write);
     prepared.events.push(fixtureLibraryEvent(editor.project, editor.kind, write));
     if (prepared.data?.id === id) Object.assign(prepared.data, { libraryRevision: write.afterRevision, updatedAt: clock(fx).toISOString() });
   }
+}
+
+function validateHistoryAnswer(body, conflict = false) {
+  const keys = conflict ? ["decision", "document", "expectedRevision", "expectedCommentsRevision"] : ["expectedRevision", "expectedCommentsRevision"];
+  requireObject(body, keys); requireKeys(body, keys); revisionField(body.expectedRevision);
+  if (body.expectedCommentsRevision !== null) revisionField(body.expectedCommentsRevision);
+  if (conflict && !["keep-mine", "reload"].includes(body.decision)) throw new HttpError(422, "invalid_body", "The conflict answer is not valid.");
+}
+
+async function fixtureHistory(fx, editor) {
+  const directory = editorFile(fx, editor.project, `docs/flows/history/${editor.id}`), items = [];
+  for (const entry of await listDir(directory)) {
+    if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
+    const item = JSON.parse(await readFile(join(directory, entry.name), "utf8"));
+    if (item.format !== "hivem1nd-editor-history-v1" || item.resourceId !== editor.id) throw new HttpError(409, "corrupt_resource", "The history metadata is not valid.");
+    items.push(item);
+  }
+  return items.sort((a, b) => b.at.localeCompare(a.at) || (b.sequence ?? 0) - (a.sequence ?? 0) || b.id.localeCompare(a.id));
+}
+
+function fixtureSnapshot(fx, editor, document, comments, operation, sequence, principal, provenance = {}) {
+  for (const bytes of [document, comments]) if (bytes?.length > 16_000_000) throw new HttpError(413, "resource_too_large", "A history object exceeds 16 MB.");
+  const id = uuid(), root = editorFile(fx, editor.project, `docs/flows/history/${editor.id}/${id}`);
+  const metadata = { format: "hivem1nd-editor-history-v1", id, resourceId: editor.id, at: clock(fx).toISOString(), by: principal.unitId ?? "root:master", operation,
+    documentPath: editor.path, commentsPath: comments ? relative(join(fx.tree.root, "repositories", editor.project), commentsPath(fx, editor)).replaceAll("\\", "/") : null,
+    revision: sha256(document), commentsRevision: comments ? sha256(comments) : null, title: editor.title, sequence,
+    source: { kind: principal.audience === "agent" ? "mcp" : "gui", id: LOCAL_MACHINE, unitId: principal.unitId ?? "root:master" }, ...provenance };
+  return [fixtureWrite(`${root}.json`, null, Buffer.from(stableJson(metadata))), fixtureWrite(`${root}.document.json`, null, document),
+    ...(comments ? [fixtureWrite(`${root}.comments.json`, null, comments)] : [])];
+}
+
+async function fixtureTouchHistory(fx, prepared, principal) {
+  const edits = prepared.events.filter((event) => ["blueprint.changed", "void.changed", "comment.changed", "void.proposal.changed"].includes(event.name));
+  for (const id of new Set(edits.map((event) => event.resourceId))) {
+    const editor = prepared.data?.id === id ? prepared.data : (await projection(fx)).editors.find((item) => item.id === id);
+    if (!editor || editor.readOnly) continue;
+    const directory = editorFile(fx, editor.project, `docs/flows/history/${id}/`);
+    const initial = prepared.writes.filter((write) => write.path.startsWith(directory) && /^[0-9a-f-]{36}\.json$/.test(write.path.split(/[\\/]/).at(-1)));
+    if (!initial.length) {
+      const file = editorFile(fx, editor.project, editor.path), sidecar = commentsPath(fx, editor);
+      const before = await readOptional(file), beforeComments = await readOptional(sidecar);
+      const documentWrite = prepared.writes.find((write) => write.path === file), commentWrite = prepared.writes.find((write) => write.path === sidecar);
+      const document = documentWrite ? Buffer.from(documentWrite.afterBytesBase64, "base64") : before;
+      const comments = commentWrite ? commentWrite.operation === "delete" ? null : Buffer.from(commentWrite.afterBytesBase64, "base64") : beforeComments;
+      const records = await fixtureHistory(fx, editor);
+      let sequence = Math.max(0, ...records.map((item) => item.sequence ?? 0));
+      if (before && !records.some((item) => item.revision === sha256(before) && item.commentsRevision === (beforeComments ? sha256(beforeComments) : null))) {
+        const previous = records.find((item) => item.revision === sha256(before));
+        prepared.writes.push(...fixtureSnapshot(fx, editor, before, beforeComments, "conflict", ++sequence, principal,
+          { by: previous?.by ?? "root:master", source: previous?.source ?? { kind: "external", id: LOCAL_MACHINE, unitId: null } }));
+      }
+      const resourceEvents = edits.filter((event) => event.resourceId === id);
+      const code = resourceEvents.find((event) => ["restore", "conflict", "rename"].includes(event.data?.operation))?.data.operation;
+      let operation = code ?? (resourceEvents.some((event) => event.name === "void.proposal.changed") ? "proposal" : resourceEvents.some((event) => event.name === "comment.changed") ? "comment" : before ? editor.kind === "void" ? "text-edit" : "board-edit" : "create");
+      if (!code && before && JSON.parse(before).title !== JSON.parse(document).title) operation = "rename";
+      prepared.writes.push(...fixtureSnapshot(fx, editor, document, comments, operation, ++sequence, principal));
+      if (!documentWrite) prepared.writes.push(fixtureWrite(file, before, before));
+      if (!commentWrite && beforeComments) prepared.writes.push(fixtureWrite(sidecar, beforeComments, beforeComments));
+    }
+    for (const write of prepared.writes.filter((write) => write.path.startsWith(directory) && /^[0-9a-f-]{36}\.json$/.test(write.path.split(/[\\/]/).at(-1)))) {
+      const item = JSON.parse(Buffer.from(write.afterBytesBase64, "base64"));
+      prepared.events.push({ name: "editor.history.changed", resourceId: id, data: { resourceId: id, historyId: item.id, revision: item.revision } });
+    }
+  }
+}
+
+async function readOptional(file) {
+  try { return await readFile(file); } catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
+
+async function prepareHistoryAnswer(fx, params, body, principal) {
+  const editor = await editorFor(fx, params.resourceId);
+  if (editor.revision !== body.expectedRevision || editor.commentsRevision !== body.expectedCommentsRevision) throw new HttpError(409, "revision_conflict", "The editor changed since it was read.");
+  const file = editorFile(fx, editor.project, editor.path), current = await readFile(file), comments = await readOptional(commentsPath(fx, editor));
+  const records = await fixtureHistory(fx, editor);
+  let sequence = Math.max(0, ...records.map((item) => item.sequence ?? 0));
+  const writes = [];
+  let document, restoredComments = comments, restoredTitle;
+  const operation = params.historyId ? "restore" : "conflict";
+  if (params.historyId) {
+    const item = records.find((record) => record.id === params.historyId);
+    if (!item) throw new HttpError(404, "history_not_found", "The history version does not exist.");
+    const root = editorFile(fx, editor.project, `docs/flows/history/${editor.id}/${item.id}`);
+    const bytes = await readOptional(`${root}.document.json`);
+    restoredComments = await readOptional(`${root}.comments.json`);
+    if (!bytes || sha256(bytes) !== item.revision || (restoredComments ? sha256(restoredComments) : null) !== item.commentsRevision) throw new HttpError(409, "corrupt_resource", "The history bytes do not match their revisions.");
+    document = JSON.parse(bytes);
+    restoredTitle = item.title ?? document.title;
+  } else {
+    const draft = Buffer.from(stableJson(body.document));
+    writes.push(...fixtureSnapshot(fx, editor, draft, comments, "conflict", ++sequence, principal, { source: { kind: "draft", id: LOCAL_MACHINE, unitId: principal.unitId } }));
+    document = body.decision === "keep-mine" ? structuredClone(body.document) : structuredClone(editor.document);
+  }
+  if (editor.kind === "blueprint") { validateSketch(document); assertCompatible(editor.document, document); }
+  else { validateTextPut({ document, expectedRevision: editor.revision }); assertTextCompatible(editor.document, document); }
+  if (editor.kind === "void") document.rev = (editor.document.rev ?? 0) + 1;
+  if (!records.some((item) => item.revision === editor.revision && item.commentsRevision === editor.commentsRevision)) {
+    const previous = records.find((item) => item.revision === editor.revision);
+    writes.push(...fixtureSnapshot(fx, editor, current, comments, "conflict", ++sequence, principal, { by: previous?.by ?? "root:master", source: previous?.source ?? { kind: "external", id: LOCAL_MACHINE, unitId: null } }));
+  }
+  const result = editor.kind === "void" ? await writeText(fx, editor, document, { operation }) : await writeBoard(fx, editor, document, { operation });
+  result.writes.push(...writes, ...fixtureSnapshot(fx, { ...editor, title: restoredTitle ?? document.title }, Buffer.from(stableJson(document)), restoredComments, operation, ++sequence, principal));
+  if (restoredTitle) {
+    const library = await fixtureLibrary(fx, editor.project);
+    library.value.items[editor.id] = { ...library.value.items[editor.id], title: restoredTitle };
+    result.writes.push(fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value))));
+    result.data.title = restoredTitle;
+  }
+  if (restoredComments || comments) result.writes.push(fixtureWrite(commentsPath(fx, editor), comments, restoredComments));
+  result.data.commentsRevision = restoredComments ? sha256(restoredComments) : null;
+  result.data.threads = restoredComments ? JSON.parse(restoredComments).threads : [];
+  return result;
 }
 
 function fixtureRemapResource(value, before, after) {
@@ -4288,12 +4419,17 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
   const write = fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value)));
   writes.push(write);
   events.push(fixtureLibraryEvent(editor.project, editor.kind, write));
+  if (operation === "patch" && body.title !== undefined) events.push({ name: editor.kind === "void" ? "void.changed" : "blueprint.changed", resourceId: id, data: { resourceId: id, revision: editor.revision, operation: "rename" } });
   moved.libraryRevision = destination === library ? write.afterRevision : sha256(Buffer.from(stableJson(destination.value)));
   const undo = operation === "move" ? await fixtureLibraryUndo(fx, writes, [id, moved.id], [{ name: "view.changed", global: true, data: { collections: ["editors"] } }]) : null;
   return { status: 200, data: operation === "move" ? { editor: moved, previousId: id, ...undo } : moved, writes, events };
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/editors/:resourceId/history/:historyId/restore" || pattern === "/editors/:resourceId/conflict") {
+    if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop can restore or answer a conflict.");
+    return prepareHistoryAnswer(fx, params, body, principal);
+  }
   if (pattern === "/library/folders") return prepareFixtureFolder(fx, null, body);
   if (pattern === "/library/folders/:folderId") return prepareFixtureFolder(fx, params.folderId, body);
   if (pattern === "/editors/:resourceId/library") return prepareFixtureEditorLibrary(fx, "patch", params.resourceId, body);

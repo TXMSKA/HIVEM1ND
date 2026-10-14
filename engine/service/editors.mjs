@@ -296,9 +296,16 @@ async function commit(context, entries, events = [], response) {
 
 async function commitEditor(context, entries, events, response) {
   bindProjects(context.store, context.projects ?? []);
+  await historyEdits(context, entries, events);
   await libraryEdits(context, entries, events);
+  if (response?.body?.id) {
+    const resource = response.body;
+    const library = entries.find((entry) => entry.recordPath === inside(projectOf(context, resource.project).localPath, 'docs/flows/library.json'));
+    if (library) Object.assign(resource, parseJson(library.afterBytes).items[resource.id], { libraryRevision: hashBytes(library.afterBytes) });
+  }
   const prepared = entries.map((entry) => rewriteEntry(context, entry));
   for (const entry of prepared) {
+    if (entry.target && entry.afterBytes?.length > TEXT_LIMIT) fail(413, 'resource_too_large', 'An editor object exceeds 16 MB.');
     const file = entry.target
       ? path.resolve((context.projects ?? []).find((item) => item.name === entry.target.project)?.localPath ?? '', ...entry.target.path.split('/'))
       : entry.recordPath;
@@ -1862,7 +1869,7 @@ function libraryEvent(library, kind, bytes = jsonBytes(library.value)) {
 }
 
 async function libraryEdits(context, entries, events) {
-  const edits = events.filter((event) => ['blueprint.changed', 'void.changed', 'comment.changed'].includes(event.name));
+  const edits = events.filter((event) => ['blueprint.changed', 'void.changed', 'comment.changed', 'void.proposal.changed'].includes(event.name));
   if (!edits.length) return;
   const catalogEntry = entries.find((entry) => entry.recordPath === catalogFile(context));
   const catalog = catalogEntry ? parseJson(catalogEntry.afterBytes) : (await readCatalog(context)).value;
@@ -1884,8 +1891,9 @@ async function libraryEdits(context, entries, events) {
     const previous = library.value.items[resource.id];
     const current = document ? await loadBytes(file) : null;
     const changedTitle = document && (!current.bytes || parseJson(current.bytes).title !== document.title);
+    const restoredTitle = edits.some((event) => event.resourceId === resource.id && event.data?.operation === 'restore');
     library.value.items[resource.id] = { ...previous, folderId: previous?.folderId ?? null,
-      title: changedTitle ? document.title : previous?.title ?? document?.title ?? resource.title ?? resource.legacyId, updatedAt: clock(context) };
+      title: changedTitle && !restoredTitle ? document.title : previous?.title ?? document?.title ?? resource.title ?? resource.legacyId, updatedAt: clock(context) };
     kinds.set(`${resource.project}:${resource.kind}`, { library, kind: resource.kind });
   }
   for (const library of libraries.values()) {
@@ -1896,17 +1904,198 @@ async function libraryEdits(context, entries, events) {
   for (const { library, kind } of kinds.values()) events.unshift(libraryEvent(library, kind));
 }
 
-async function initialHistory(context, entry, document, comments) {
+async function initialHistory(context, entry, document, comments, operation = 'create', provenance = {}) {
+  for (const bytes of [document, comments]) if (bytes && bytes.length > TEXT_LIMIT) fail(413, 'resource_too_large', 'A history object exceeds 16 MB.');
   const project = projectOf(context, entry.project);
   const id = randomUUID();
   const relative = `docs/flows/history/${entry.id}/${id}`;
   const metadata = { format: 'hivem1nd-editor-history-v1', id, resourceId: entry.id, at: clock(context),
-    by: context.principal?.unitId ?? 'root:master', operation: 'create', documentPath: entry.path,
-    commentsPath: path.relative(project.localPath, commentsPath({ project, entry })).replaceAll('\\', '/'),
-    revision: hashBytes(document), commentsRevision: revisionOf(comments) };
+    by: actor(context).authorId, operation, documentPath: entry.path,
+    commentsPath: comments ? path.relative(project.localPath, commentsPath({ project, entry })).replaceAll('\\', '/') : null,
+    revision: hashBytes(document), commentsRevision: revisionOf(comments), title: parseJson(document).title,
+    source: { kind: ({ desktop: 'gui', agent: 'mcp', cli: 'cli', hook: 'hook' })[context.principal?.audience] ?? 'service', id: context.paths.machine, unitId: actor(context).authorId }, ...provenance };
   return [record(inside(project.localPath, `${relative}.json`), null, jsonBytes(metadata)),
     record(inside(project.localPath, `${relative}.document.json`), null, document),
     ...(comments ? [record(inside(project.localPath, `${relative}.comments.json`), null, comments)] : [])];
+}
+
+async function historyRecords(context, found) {
+  const directory = inside(found.project.localPath, `docs/flows/history/${found.entry.id}`);
+  await assertNoLinks(directory);
+  const items = [];
+  for (const name of await readdir(directory).catch((error) => { if (error.code === 'ENOENT') return []; throw error; })) {
+    if (!/^[0-9a-f-]{36}\.json$/.test(name)) continue;
+    const loaded = await loadBytes(path.join(directory, name), context.store);
+    if (!loaded.bytes) continue;
+    if (loaded.bytes.length > TEXT_LIMIT) fail(413, 'resource_too_large', 'A history object exceeds 16 MB.');
+    const item = parseJson(loaded.bytes);
+    if (item.format !== 'hivem1nd-editor-history-v1' || !isUuid(item.id) || name !== `${item.id}.json`
+      || item.resourceId !== found.entry.id || !Number.isFinite(Date.parse(item.at))
+      || !/^[0-9a-f]{64}$/.test(item.revision) || item.commentsRevision !== null && !/^[0-9a-f]{64}$/.test(item.commentsRevision)
+      || !['create', 'rename', 'board-edit', 'sketch', 'text-edit', 'comment', 'proposal', 'conflict', 'restore'].includes(item.operation)) {
+      fail(409, 'corrupt_resource', 'The history metadata is not valid.');
+    }
+    parseUnitId(item.by);
+    items.push(item);
+  }
+  return items.sort((a, b) => b.at.localeCompare(a.at) || (b.sequence ?? 0) - (a.sequence ?? 0) || b.id.localeCompare(a.id));
+}
+
+function historyEvent(item) {
+  return { name: 'editor.history.changed', resourceId: item.resourceId,
+    data: { resourceId: item.resourceId, historyId: item.id, revision: item.revision } };
+}
+
+function historyOperation(events, before, after, kind) {
+  const operation = events.find((event) => ['restore', 'conflict', 'rename'].includes(event.data?.operation))?.data.operation;
+  if (operation) return operation;
+  if (events.some((event) => event.name === 'void.proposal.changed')) return 'proposal';
+  if (events.some((event) => event.name === 'comment.changed')) return 'comment';
+  if (!before) return 'create';
+  const left = parseJson(before), right = parseJson(after);
+  if (left.title !== right.title && canonicalJson({ ...left, title: right.title, ...(kind === 'void' ? { rev: right.rev } : {}) }) === canonicalJson(right)) return 'rename';
+  if (kind === 'void') return 'text-edit';
+  const strokes = (value) => { const nodes = []; eachNode(value, (node) => { if (node?.kind === 'pen') nodes.push(node); }); return canonicalJson(nodes); };
+  return strokes(left) !== strokes(right) ? 'sketch' : 'board-edit';
+}
+
+async function historyEdits(context, entries, events) {
+  const edits = events.filter((event) => ['blueprint.changed', 'void.changed', 'comment.changed', 'void.proposal.changed'].includes(event.name));
+  if (!edits.length) return;
+  const plannedCatalog = entries.find((entry) => entry.recordPath === catalogFile(context));
+  const catalog = plannedCatalog ? parseJson(plannedCatalog.afterBytes) : (await readCatalog(context)).value;
+  for (const resourceId of new Set(edits.map((event) => event.resourceId))) {
+    const entry = catalog.resources.find((item) => item.id === resourceId);
+    if (!entry || entry.readOnly) continue;
+    const project = projectOf(context, entry.project), found = { project, entry, store: context.store };
+    const prepared = entries.filter((item) => item.recordPath?.startsWith(`${inside(project.localPath, `docs/flows/history/${resourceId}`)}${path.sep}`) && /^[0-9a-f-]{36}\.json$/.test(path.basename(item.recordPath)));
+    if (prepared.length) { events.unshift(...prepared.map((item) => historyEvent(parseJson(item.afterBytes)))); continue; }
+    const file = inside(project.localPath, entry.path), before = await loadBytes(file, context.store), comments = await loadComments(found);
+    const documentEntry = entries.find((item) => item.recordPath === file);
+    const commentsEntry = entries.find((item) => item.recordPath === comments.file);
+    const documentBytes = documentEntry ? documentEntry.afterBytes : before.bytes, commentBytes = commentsEntry ? commentsEntry.afterBytes : comments.bytes;
+    const records = await historyRecords(context, found);
+    let sequence = records.reduce((maximum, item) => Math.max(maximum, item.sequence ?? 0), 0);
+    if (before.bytes && !records.some((item) => item.revision === before.revision && item.commentsRevision === comments.revision)) {
+      const previous = records.find((item) => item.revision === before.revision);
+      const kept = await initialHistory(context, entry, before.bytes, comments.bytes, 'conflict', { sequence: ++sequence,
+        by: previous?.by ?? 'root:master', source: previous?.source ?? { kind: 'external', id: context.paths.machine, unitId: null } });
+      entries.push(...kept);
+      events.unshift(historyEvent(parseJson(kept[0].afterBytes)));
+    }
+    if (!documentEntry) entries.push(record(file, before.revision, before.bytes));
+    if (!commentsEntry) entries.push(comments.bytes ? record(comments.file, comments.revision, comments.bytes) : byteEntry(comments.file, null, null));
+    const operation = historyOperation(edits.filter((event) => event.resourceId === resourceId), before.bytes, documentBytes, entry.kind);
+    const libraryEntry = entries.find((item) => item.recordPath === inside(project.localPath, 'docs/flows/library.json'));
+    const titleChanged = before.bytes && parseJson(before.bytes).title !== parseJson(documentBytes).title;
+    const library = libraryEntry ? parseJson(libraryEntry.afterBytes) : (await loadLibrary(context, entry.project)).value;
+    const title = titleChanged && operation !== 'restore' ? parseJson(documentBytes).title : library.items[resourceId]?.title ?? parseJson(documentBytes).title;
+    const external = edits.some((event) => event.resourceId === resourceId && event.data?.operation === 'import');
+    const snapshots = await initialHistory(context, entry, documentBytes, commentBytes, operation, { sequence: ++sequence, ...(title ? { title } : {}),
+      ...(external ? { source: { kind: 'external', id: context.paths.machine, unitId: null } } : {}) });
+    entries.push(...snapshots);
+    events.unshift(historyEvent(parseJson(snapshots[0].afterBytes)));
+  }
+}
+
+export async function listHistory(context, id, query = {}) {
+  await requireAttachment(context, id);
+  const found = await resourceOf(context, id), records = await historyRecords(context, found);
+  const document = await loadBytes(inside(found.project.localPath, found.entry.path), context.store), comments = await loadComments(found);
+  let marked = false;
+  const items = records.map((item) => {
+    const current = !marked && item.source?.kind !== 'draft' && item.revision === document.revision && item.commentsRevision === comments.revision;
+    marked ||= current;
+    return { id: item.id, resourceId: id, at: item.at, by: item.by, operation: item.operation, revision: item.revision, commentsRevision: item.commentsRevision, current, ...(item.source ? { source: item.source } : {}) };
+  });
+  return paginate(items, { ...query, filters: { resourceId: id }, snapshot: hashText(`${document.revision}\n${comments.revision}\n${records.map((item) => item.id).join('\n')}`) });
+}
+
+async function historySnapshot(context, found, historyId) {
+  if (!isUuid(historyId)) fail(404, 'history_not_found', 'The history version does not exist.');
+  const item = (await historyRecords(context, found)).find((record) => record.id === historyId);
+  if (!item) fail(404, 'history_not_found', 'The history version does not exist.');
+  const root = inside(found.project.localPath, `docs/flows/history/${found.entry.id}/${historyId}`);
+  const document = await loadBytes(`${root}.document.json`, context.store), comments = await loadBytes(`${root}.comments.json`, context.store);
+  for (const loaded of [document, comments]) if (loaded.bytes?.length > TEXT_LIMIT) fail(413, 'resource_too_large', 'A history object exceeds 16 MB.');
+  if (!document.bytes || document.revision !== item.revision || comments.revision !== item.commentsRevision) fail(409, 'corrupt_resource', 'The history bytes do not match their revisions.');
+  const value = (found.entry.kind === 'void' ? validateText : validateBoard)(parseJson(document.bytes));
+  if (comments.bytes && !Array.isArray(parseJson(comments.bytes).threads)) fail(409, 'corrupt_resource', 'The history comments are not valid.');
+  return { item, document, comments, value };
+}
+
+async function restoreDocument(context, found, document, commentBytes, operation, extraEntries = []) {
+  const current = parseJson(found.loaded.bytes);
+  preserveUnknown(current, document);
+  if (document.id !== current.id) fail(422, 'invalid_document', 'The document identity cannot change.');
+  const entries = [...extraEntries];
+  if (found.entry.kind === 'void') {
+    document.rev = (current.rev || 0) + 1;
+    const changes = textChanges(current, document), at = clock(context);
+    if (changes.length) {
+      const lines = `${changes.map((change) => JSON.stringify({ at, rev: document.rev, ...change, operation })).join('\n')}\n`;
+      entries.push((await historyEntry(found.file, null, lines)).entry);
+    }
+    const original = await loadBytes(`${stemOf(found.file)}.orig.json`);
+    if (!original.bytes) entries.push(record(`${stemOf(found.file)}.orig.json`, null, found.loaded.bytes));
+  } else {
+    const index = await loadBytes(indexFile(found.project));
+    entries.push(record(indexFile(found.project), index.revision, jsonBytes(mergeIndex(index.bytes ? parseJson(index.bytes) : null, document))));
+  }
+  const comments = await loadComments(found), bytes = jsonBytes(document);
+  if (comments.bytes && commentBytes) preserveUnknown(parseJson(comments.bytes), parseJson(commentBytes));
+  entries.push(record(found.file, found.loaded.revision, bytes));
+  if (commentBytes === null) entries.push(byteEntry(comments.file, comments.bytes, null));
+  else if (commentBytes) entries.push(record(comments.file, comments.revision, commentBytes));
+  const events = found.entry.kind === 'void' ? [voidEvent(found.entry.id, hashBytes(bytes), document.rev, operation)] : boardEvents(context, found.entry.id, hashBytes(bytes), operation);
+  const editor = await shown(context, found.entry, document, hashBytes(bytes));
+  editor.commentsRevision = revisionOf(commentBytes);
+  editor.threads = projectComments(commentBytes ? parseJson(commentBytes) : { threads: [] }, found.entry.id).threads;
+  editor.openThreads = editor.threads.filter((thread) => thread.status !== 'resolved').length;
+  await commit(context, entries, events, { status: 200, body: editor });
+  if (found.entry.kind === 'void') rememberExternal(context, found.entry.id, hashBytes(bytes), document);
+  return editor;
+}
+
+export async function restoreHistory(context, id, historyId, input) {
+  desktopLibrary(context);
+  return withLocalChanges(context.store, async () => {
+    const resource = await resourceOf(context, id);
+    const found = await (resource.entry.kind === 'void' ? textBundle(context, id) : boardFile(context, id));
+    checkRevision(found.loaded.bytes, input.expectedRevision);
+    checkRevision((await loadComments(found)).bytes, input.expectedCommentsRevision);
+    const snapshot = await historySnapshot(context, found, historyId);
+    const library = await loadLibrary(context, found.entry.project);
+    const title = snapshot.item.title ?? snapshot.value.title;
+    if (title) library.value.items[id] = { ...library.value.items[id], title };
+    return restoreDocument(context, found, snapshot.value, snapshot.comments.bytes, 'restore', [record(library.file, library.revision, jsonBytes(library.value))]);
+  });
+}
+
+export async function resolveConflict(context, id, input) {
+  desktopLibrary(context);
+  if (!['keep-mine', 'reload'].includes(input.decision)) fail(422, 'invalid_body', 'The conflict answer must be keep-mine or reload.');
+  return withLocalChanges(context.store, async () => {
+    const resource = await resourceOf(context, id);
+    const found = await (resource.entry.kind === 'void' ? textBundle(context, id) : boardFile(context, id));
+    checkRevision(found.loaded.bytes, input.expectedRevision);
+    const comments = await loadComments(found);
+    checkRevision(comments.bytes, input.expectedCommentsRevision);
+    const draft = (found.entry.kind === 'void' ? validateText : validateBoard)(input.document);
+    if (draft.id !== found.document.id) fail(422, 'invalid_document', 'The document identity cannot change.');
+    const records = await historyRecords(context, found), sequence = records.reduce((maximum, item) => Math.max(maximum, item.sequence ?? 0), 0);
+    const entries = await initialHistory(context, found.entry, jsonBytes(draft), comments.bytes, 'conflict', { sequence: sequence + 1,
+      source: { kind: 'draft', id: context.paths.machine, unitId: actor(context).authorId } });
+    if (!records.some((item) => item.revision === found.loaded.revision && item.commentsRevision === comments.revision)) {
+      const previous = records.find((item) => item.revision === found.loaded.revision);
+      entries.push(...await initialHistory(context, found.entry, found.loaded.bytes, comments.bytes, 'conflict', { sequence: sequence + 2,
+        by: previous?.by ?? 'root:master', source: previous?.source ?? { kind: 'external', id: context.paths.machine, unitId: null } }));
+    }
+    const document = input.decision === 'keep-mine' ? draft : found.document;
+    const next = await initialHistory(context, found.entry, found.entry.kind === 'void' ? jsonBytes({ ...document, rev: (found.document.rev || 0) + 1 }) : jsonBytes(document), comments.bytes, 'conflict', { sequence: sequence + 3 });
+    entries.push(...next);
+    return restoreDocument(context, found, document, comments.bytes, 'conflict', entries);
+  });
 }
 
 function createdEditor(context, entry, document, bytes, comments, library) {
@@ -2166,9 +2355,13 @@ export async function patchEditorLibrary(context, id, input) {
     if (Object.hasOwn(input, 'folderId')) { validateFolder(bundle.library, input.folderId, bundle.entry.kind); item.folderId = input.folderId; }
     item.updatedAt = clock(context);
     bundle.library.value.items[id] = item;
-    const entries = [byteEntry(bundle.library.file, bundle.library.bytes, jsonBytes(bundle.library.value)), byteEntry(bundle.file, bundle.loaded.bytes, bundle.loaded.bytes)];
-    const editor = { ...await readEditor(context, id), ...item, libraryRevision: hashBytes(jsonBytes(bundle.library.value)) };
-    await libraryCommit(context, entries, [libraryEvent(bundle.library, bundle.entry.kind)], { status: 200, body: editor });
+    const document = bundle.entry.readOnly ? null : parseJson(bundle.loaded.bytes);
+    const bytes = bundle.loaded.bytes;
+    const entries = [byteEntry(bundle.library.file, bundle.library.bytes, jsonBytes(bundle.library.value)), byteEntry(bundle.file, bundle.loaded.bytes, bytes)];
+    const editor = { ...await readEditor(context, id), ...item, document: bundle.entry.readOnly ? null : document, revision: hashBytes(bytes), libraryRevision: hashBytes(jsonBytes(bundle.library.value)) };
+    const events = [libraryEvent(bundle.library, bundle.entry.kind)];
+    if (Object.hasOwn(input, 'title') && !bundle.entry.readOnly) events.push(bundle.entry.kind === 'void' ? voidEvent(id, hashBytes(bytes), document.rev, 'rename') : boardEvents(context, id, hashBytes(bytes), 'rename')[0]);
+    await commit(context, entries, events, { status: 200, body: editor });
     return editor;
   });
 }

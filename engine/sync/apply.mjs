@@ -248,6 +248,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     if (!loses) continue;
     for (const index of indexes) {
       const item = prepared[index], previous = prior[index];
+      if (item.raw && item.change.target.kind === 'project' && item.change.target.path.startsWith('docs/flows/history/')) continue;
       const ops = item.raw && !previous.localBytes?.equals(item.raw) ? [conflictOp(previous.located, item.raw, item.change)] : [];
       plans[index] = { version: previous.localVersion, ops, events: conflictEvents(item, ops) };
       const key = targetKey(item.change.target);
@@ -627,6 +628,7 @@ function registriesInPack(prepared) {
 }
 
 function isImmutable(item) {
+  if (item.change.target.kind === 'project' && /^docs\/flows\/history\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(item.change.target.path)) return true;
   if (RESULT_FORMATS.has(item.record?.format)) return true;
   if (item.record?.format === 'hivem1nd-session-request-v1' || item.record?.format === 'hivem1nd-approval-v1' || item.record?.format === 'hivem1nd-approval-answer-v1' || item.record?.format === 'hivem1nd-read-v1') return true;
   return /(^|\/)inbox\/[^/]+\/[^/]+\.md$/.test(item.change.target.path) || /(^|\/)archive\/[^/]+\/[^/]+\.md$/.test(item.change.target.path);

@@ -38,7 +38,8 @@ import {
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
-import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
+import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
+import * as editorUi from "./editors.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
@@ -55,11 +56,13 @@ import {
   handleActivity,
   loadCatalog,
   loadComments,
-  discardEditorDraft,
+  loadHistory,
+  restoreEditorHistory,
+  resolveEditorConflict,
+  editorDraftDocument,
   noteComment,
   noteRemote,
   openEditor,
-  reapplyEditorDraft,
   refreshRemoteEditor,
   registerResource,
   replyComment,
@@ -71,7 +74,7 @@ import {
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
+import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
@@ -706,6 +709,10 @@ async function onStream(app, event) {
   if (editors && event?.name === "editor.activity") {
     const followed = handleActivity(editors, data);
     if (followed.follow) await revealWatched(app, editors, data);
+  }
+  if (editors && event?.name === "editor.history.changed" && editors.current?.resourceId === data.resourceId) {
+    editors.current.historyStale = true;
+    if (editors.current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
   }
   if (editors && event?.name === "watch.changed") {
     const nextId = applyWatch(editors, data);
@@ -1983,20 +1990,29 @@ function boardConflict(app, document, editor, t) {
   const banner = element(document, "div", { class: "board-conflict", "data-board-overlay": "conflict", "data-conflict": "true" }, element(document, "span", { text: t("outsideChange") }));
   const pending = app.activity.get(`board:${editor.resourceId}`);
   const unconfirmed = editor.boardSaving || app.api.uncertain.has(pending?.operation?.id);
-  for (const [key, action] of [["showChanges", "show-changes"], ["keepMine", "reapply-draft"], ["reloadBoard", "discard-draft"]]) banner.append(element(document, "button", { type: "button", class: "btn", "data-action": action, text: t(key), disabled: key !== "showChanges" && unconfirmed ? "" : null, onclick: () => {
+  const uncertainDecision = editor.historyOperation?.body?.decision;
+  for (const [key, action] of [["showChanges", "show-changes"], ["keepMine", "reapply-draft"], ["reloadBoard", "discard-draft"]]) banner.append(element(document, "button", { type: "button", class: "btn", "data-action": action, text: t(key), disabled: key !== "showChanges" && (unconfirmed || editor.historyPending || uncertainDecision && uncertainDecision !== (key === "keepMine" ? "keep-mine" : "reload")) ? "" : null, onclick: async () => {
     if (key === "showChanges") { editor.showChanges = !editor.showChanges; renderShell(app); return; }
-    if (key === "keepMine") {
-      if (!reapplyEditorDraft(app.editors)) return;
-      app.activity.delete(`board:${editor.resourceId}`);
-      saveBoardDraft(app, editor);
-    }
-    else { discardEditorDraft(app.editors); syncViewerDirty(app); }
-    editor.showChanges = false; renderShell(app);
+    await answerEditorConflict(app, editor, key === "keepMine" ? "keep-mine" : "reload");
   } }));
   if (editor.showChanges) banner.append(element(document, "div", { class: "board-change-preview", "data-board-changes": "true" },
     element(document, "section", {}, element(document, "strong", { text: t("boardLocalVersion") }), element(document, "pre", { text: JSON.stringify(boardDocument(editor), null, 2) })),
     element(document, "section", {}, element(document, "strong", { text: t("boardIncomingVersion") }), element(document, "pre", { text: JSON.stringify(editor.conflict.remote?.document, null, 2) }))));
   return banner;
+}
+
+async function answerEditorConflict(app, editor, decision) {
+  try {
+    const pending = resolveEditorConflict(app.api, app.editors, decision, editor.historyOperation);
+    renderShell(app);
+    if (!await pending) return;
+    app.activity.delete(`board:${editor.resourceId}`);
+    editor.showChanges = false;
+    if (editor.kind === "blueprint") await loadAssets(app.api, editor);
+    if (editor.historyOpen) await loadHistory(app.api, app.editors);
+    syncViewerDirty(app);
+  } catch (error) { app.actionNote = actionText(app.language, error.code); }
+  renderShell(app);
 }
 
 function voidSurface(app, document, editor, t) {
@@ -2222,27 +2238,21 @@ function renderEditorSurfaces(app, t) {
       class: "btn",
       "data-action": "discard-draft",
       text: t("discardDraft"),
-      onclick: () => {
-        const resourceId = editors.current?.resourceId;
-        discardEditorDraft(editors);
-        if (resourceId) {
-          draftMap(app, "nodes").delete(resourceId);
-          if (editors.current) editors.current.nodeDraft = "";
-        }
-        syncViewerDirty(app);
-        renderShell(app);
-      },
+      disabled: current.historyPending || current.historyOperation && current.historyOperation.body?.decision !== "reload" ? "" : null,
+      onclick: () => answerEditorConflict(app, current, "reload"),
     }));
     resource.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "reapply-draft",
       text: t("reapplyDraft"),
-      onclick: () => {
-        reapplyEditorDraft(editors);
-        renderShell(app);
-      },
+      disabled: current.historyPending || current.historyOperation && current.historyOperation.body?.decision !== "keep-mine" ? "" : null,
+      onclick: () => answerEditorConflict(app, current, "keep-mine"),
     }));
+    resource.append(element(document, "button", { type: "button", class: "btn", "data-action": "show-changes", text: t("showChanges"), onclick: () => { current.showChanges = !current.showChanges; renderShell(app); } }));
+    if (current.showChanges) resource.append(element(document, "div", { "data-editor-changes": "true" },
+      element(document, "pre", { "aria-label": t("boardLocalVersion"), text: JSON.stringify(editorDraftDocument(current), null, 2) }),
+      element(document, "pre", { "aria-label": t("boardIncomingVersion"), text: JSON.stringify(current.conflict.remote?.document, null, 2) })));
   }
   if (current?.kind === "blueprint" && current.authoritative?.document) resource.append(boardSurface(app, document, current, t));
   if (current?.kind === "void" && current.authoritative?.document) resource.append(voidSurface(app, document, current, t));
@@ -2262,6 +2272,40 @@ function renderEditorSurfaces(app, t) {
   if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
   if (!current) return surfaces;
+  if (!current.authoritative.readOnly) {
+    const historyLabel = (key) => {
+      if (Object.hasOwn(DICTIONARIES[app.language] ?? DICTIONARIES.en, key)) return t(key);
+      return { history: ["History", "Historial"], restoreVersion: ["Restore", "Restaurar"], currentVersion: ["Current", "Actual"] }[key][app.language === "es" ? 1 : 0];
+    };
+    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: historyLabel("history"), "aria-expanded": String(Boolean(current.historyOpen)), onclick: async () => {
+      current.historyOpen = !current.historyOpen;
+      if (current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
+      renderShell(app);
+    } }));
+    if (current.historyOpen) {
+      const onRestore = async (item) => {
+        try {
+          const pending = restoreEditorHistory(app.api, editors, item, current.historyOperation); renderShell(app);
+          await pending; await loadHistory(app.api, editors); syncViewerDirty(app);
+        } catch (error) { app.actionNote = actionText(app.language, error.code); }
+        renderShell(app);
+      };
+      const panel = editorUi.renderEditorHistory?.(document, current.history ?? [], t, onRestore)
+        ?? element(document, "section", { class: "editor-history", "aria-label": historyLabel("history") }, element(document, "h2", { text: historyLabel("history") }));
+      if (!editorUi.renderEditorHistory) {
+        for (const item of current.history ?? []) {
+          const row = element(document, "article", { class: "history-row", "data-history-id": item.id }, element(document, "p", { text: `${item.by} · ${item.at}` }));
+          row.append(item.current ? element(document, "span", { class: "history-current", text: historyLabel("currentVersion") }) : element(document, "button", { type: "button", class: "btn", text: historyLabel("restoreVersion"), "data-action": "restore-history", onclick: () => onRestore(item) }));
+          panel.append(row);
+        }
+      }
+      for (const button of panel.querySelectorAll("button")) {
+        const historyId = button.closest("[data-history-id]")?.getAttribute("data-history-id");
+        button.disabled = !canEditResources(app) || current.dirty || Boolean(current.historyPending) || Boolean(current.historyOperation && !current.historyOperation.path.endsWith(`/${historyId}/restore`));
+      }
+      surfaces.catalog = panel;
+    }
+  }
   if (current.attachmentResource !== current.resourceId) {
     current.attachmentChoice = new Set(current.attached ?? []);
     current.attachmentResource = current.resourceId;

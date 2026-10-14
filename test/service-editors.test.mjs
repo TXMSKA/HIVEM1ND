@@ -10,9 +10,10 @@ import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from '../engine/service/editors.mjs';
+import { listHistory, restoreHistory, resolveConflict, setCommentStatus } from '../engine/service/editors.mjs';
 import { legacyModuleUrls } from '../gui/app/main.mjs';
 import { undoChange } from '../engine/service/store.mjs';
-import { atomicWrite, commitTransaction, recoverTransactions } from '../engine/service/store.mjs';
+import { atomicWrite, commitTransaction, recoverTransactions, withReceipt } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { clearUnit, createWatch, disposeViewer, recordActivity, resolveActivity, start as startWatch, stop as stopWatch } from '../engine/service/watch.mjs';
 import { plain } from '../features/void/text.mjs';
@@ -22,7 +23,7 @@ import { openOrigin, readHead, readOriginPack } from '../engine/sync/origin.mjs'
 import { createPulse } from '../engine/sync/pulse.mjs';
 import { openSync } from '../engine/sync/store.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
-import { createStore } from '../engine/service/store.mjs';
+import { createStore, revisionOf } from '../engine/service/store.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { WEBP } from './media-fixture.mjs';
@@ -210,6 +211,204 @@ function managementRevisions(editor) {
   return { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
     expectedAttachmentRevision: editor.attachmentRevision, expectedLibraryRevision: editor.libraryRevision };
 }
+
+async function savedHistoryBytes(localPath, resourceId, item) {
+  const root = path.join(localPath, 'docs/flows/history', resourceId, item.id);
+  return { document: await readFile(`${root}.document.json`), comments: await readFile(`${root}.comments.json`).catch((error) => { if (error.code === 'ENOENT') return null; throw error; }),
+    metadata: JSON.parse(await readFile(`${root}.json`, 'utf8')) };
+}
+
+test('History versions every board title comment node and sketch with trusted author source and complete pagination', async (t) => {
+  const { context, localPath } = await shop(t);
+  await seedAttachedUnits(context, ['project:shop:executor']);
+  let editor = await createBoard(context, { project: 'shop', document: sketch('history-board'), attached: ['project:shop:executor'] });
+  const initial = editor;
+  editor = await patchEditorLibrary(context, editor.id, { title: 'Renamed board', expectedRevision: editor.revision, expectedLibraryRevision: editor.libraryRevision });
+  const comment = await createComment(context, editor.id, { text: 'Keep this note', anchor: { label: 'Canvas' }, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  await replyComment(context, editor.id, comment.thread.id, { text: 'Reply', expectedCommentsRevision: comment.commentsRevision });
+  editor = await readEditor(context, editor.id);
+  await setCommentStatus(context, editor.id, comment.thread.id, { status: 'resolved', expectedCommentsRevision: editor.commentsRevision });
+  editor = await readEditor(context, editor.id);
+  const screen = editor.document.screens[0];
+  const agent = { ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } };
+  const box = rectangleNode(structuredClone(editor.document), { x: 20, y: 20, w: 100, h: 80 }, { stroke: '#123456', strokeWidth: 2 });
+  box.id = 'history-box';
+  editor = (await addNode(agent, editor.id, { screenId: screen.id, parentId: screen.root.id, node: box, expectedRevision: editor.revision })).editor;
+  editor = await updateNode(agent, editor.id, 'history-box', { changes: { w: 120 }, expectedRevision: editor.revision });
+  editor = await removeNode(agent, editor.id, 'history-box', { expectedRevision: editor.revision });
+  const drawn = structuredClone(editor.document);
+  drawn.screens[0].root.kids.push({ id: 'history-pen', name: 'Stroke', t: 'vector', kind: 'pen', place: { x: 0, y: 0 }, w: 100, h: 100, d: 'M0 0 L100 100', stroke: '#123456', strokeWidth: 2, opacity: 1 });
+  editor = await replaceBoard(agent, editor.id, { document: drawn, expectedRevision: editor.revision });
+  const history = await listHistory(context, editor.id, { limit: 100 });
+  assert.deepEqual(history.items.map((item) => item.operation), ['sketch', 'board-edit', 'board-edit', 'board-edit', 'comment', 'comment', 'comment', 'rename', 'create']);
+  assert.equal(history.items[0].current, true); assert.equal(history.items.filter((item) => item.current).length, 1);
+  assert.equal(history.items[0].by, 'project:shop:executor'); assert.equal(history.items[0].source.kind, 'mcp');
+  assert.equal(history.items.at(-1).by, 'root:master');
+  const first = await listHistory(context, editor.id, { limit: 2 });
+  const second = await listHistory(context, editor.id, { limit: 2, cursor: first.nextCursor });
+  assert.deepEqual([...first.items, ...second.items].map((item) => item.id), history.items.slice(0, 4).map((item) => item.id));
+  for (const item of history.items) {
+    const saved = await savedHistoryBytes(localPath, editor.id, item);
+    assert.equal(revisionOf(saved.document), item.revision); assert.equal(revisionOf(saved.comments), item.commentsRevision);
+    assert.equal(saved.metadata.source.unitId, item.by);
+  }
+  const renamed = history.items.find((item) => item.operation === 'rename');
+  assert.equal((await savedHistoryBytes(localPath, editor.id, renamed)).metadata.title, 'Renamed board');
+  editor = await restoreHistory(context, editor.id, history.items.at(-1).id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(editor.title, initial.title); assert.equal(editor.threads.length, 0);
+  const restored = await restoreHistory(context, editor.id, history.items[0].id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(restored.title, 'Renamed board'); assert.equal(restored.threads[0].status, 'resolved');
+  assert.equal(restored.document.screens[0].root.kids.at(-1).kind, 'pen');
+});
+
+test('Void History retains range proposal and comment bytes through Restore and restore-back with monotonic rev and original deltas', async (t) => {
+  const { context, localPath, fixture } = await shop(t);
+  let editor = await createText(context, { project: 'shop', path: 'docs/history-text.json', document: release() });
+  const original = await readFile(path.join(localPath, 'docs/history-text.orig.json'));
+  const initial = (await listHistory(context, editor.id)).items[0];
+  const comment = await createComment(context, editor.id, { text: 'Suggestion', anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' }, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  const proposal = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello', expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
+  editor = (await answerProposal(context, editor.id, proposal.proposal.id, { decision: 'accept', expectedRevision: editor.revision, expectedCommentsRevision: proposal.editor.commentsRevision })).editor;
+  editor = (await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 8, expectedText: 'Hello', replacement: 'Updated', expectedRevision: editor.revision })).editor;
+  const bytes = await readFile(path.join(localPath, editor.path)), comments = await readFile(path.join(localPath, 'docs/history-text.comments.json'));
+  const current = (await listHistory(context, editor.id)).items[0];
+  const operations = (await listHistory(context, editor.id)).items.map((item) => item.operation);
+  assert.deepEqual(operations, ['text-edit', 'proposal', 'proposal', 'comment', 'create']);
+  const writes = fixture.store.writes.length;
+  await assert.rejects(() => restoreHistory(context, editor.id, initial.id, { expectedRevision: editor.revision, expectedCommentsRevision: null }), { code: 'revision_conflict' });
+  assert.equal(fixture.store.writes.length, writes);
+  editor = await restoreHistory(context, editor.id, initial.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(editor.document.rev, 3); assert.deepEqual(editor.document.pages, release().pages); assert.equal(editor.threads.length, 0);
+  editor = await restoreHistory(context, editor.id, current.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(editor.document.rev, 4); assert.deepEqual(editor.document.pages, JSON.parse(bytes).pages); assert.equal(editor.document.note, 'keep');
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/history-text.comments.json')), comments);
+  assert.deepEqual(await readFile(path.join(localPath, 'docs/history-text.orig.json')), original);
+  assert.equal((await readFile(path.join(localPath, 'docs/history-text.versions.jsonl'), 'utf8')).trim().split('\n').length, 4);
+  const restoredHistory = await listHistory(context, editor.id);
+  assert.equal(restoredHistory.items[0].operation, 'restore'); assert.equal(restoredHistory.items[0].current, true);
+});
+
+test('both conflict answers keep exact incoming bytes and the person draft and their authors for both editor kinds', async (t) => {
+  for (const kind of ['blueprint', 'void']) for (const decision of ['keep-mine', 'reload']) await t.test(`${kind} ${decision}`, async (t) => {
+    const { context, localPath } = await shop(t);
+    await seedAttachedUnits(context, ['project:shop:executor']);
+    let editor = kind === 'void' ? await createText(context, { project: 'shop', path: 'docs/conflict.json', document: release(), attached: ['project:shop:executor'] }) : await createBoard(context, { project: 'shop', document: sketch('conflict'), attached: ['project:shop:executor'] });
+    const draft = structuredClone(editor.document), incoming = structuredClone(editor.document);
+    draft.title = 'Person draft'; incoming.title = 'Agent version';
+    const agent = { ...context, principal: { audience: 'agent', unitId: 'project:shop:executor' } };
+    editor = await (kind === 'void' ? replaceText : replaceBoard)(agent, editor.id, { document: incoming, expectedRevision: editor.revision });
+    const incomingBytes = await readFile(path.join(localPath, editor.path)), draftBytes = Buffer.from(`${JSON.stringify(draft, null, 2)}\n`);
+    editor = await resolveConflict(context, editor.id, { decision, document: draft, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+    const history = (await listHistory(context, editor.id, { limit: 100 })).items;
+    const incomingCopy = history.find((item) => item.revision === revisionOf(incomingBytes) && item.by === 'project:shop:executor');
+    const draftCopy = history.find((item) => item.revision === revisionOf(draftBytes) && item.source?.kind === 'draft');
+    assert.ok(incomingCopy); assert.ok(draftCopy); assert.equal(draftCopy.by, 'root:master');
+    assert.deepEqual((await savedHistoryBytes(localPath, editor.id, incomingCopy)).document, incomingBytes);
+    assert.deepEqual((await savedHistoryBytes(localPath, editor.id, draftCopy)).document, draftBytes);
+    assert.equal(editor.document.title, decision === 'keep-mine' ? 'Person draft' : 'Agent version');
+    editor = await restoreHistory(context, editor.id, draftCopy.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+    assert.equal(editor.document.title, 'Person draft');
+    editor = await restoreHistory(context, editor.id, incomingCopy.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+    assert.equal(editor.document.title, 'Agent version');
+  });
+});
+
+test('History refuses malformed snapshots missing bytes unknown-field loss and oversized objects before any write', async (t) => {
+  const { context, localPath, fixture } = await shop(t);
+  let editor = await createText(context, { project: 'shop', path: 'docs/invalid-history.json', document: release() });
+  const original = (await listHistory(context, editor.id)).items[0];
+  const root = path.join(localPath, 'docs/flows/history', editor.id, original.id), saved = await readFile(`${root}.document.json`);
+  let writes = fixture.store.writes.length;
+  await writeFile(`${root}.document.json`, '{invalid');
+  await assert.rejects(() => restoreHistory(context, editor.id, original.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision }), { code: 'corrupt_resource' });
+  assert.equal(fixture.store.writes.length, writes); await writeFile(`${root}.document.json`, saved);
+  const next = { ...editor.document, extension: { retained: true } };
+  editor = await replaceText(context, editor.id, { document: next, expectedRevision: editor.revision });
+  writes = fixture.store.writes.length;
+  await assert.rejects(() => restoreHistory(context, editor.id, original.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision }), { code: 'unsupported_fields_lost' });
+  await assert.rejects(() => resolveConflict(context, editor.id, { decision: 'reload', document: { ...editor.document, huge: 'x'.repeat(16_000_000) }, expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision }), { code: 'resource_too_large' });
+  assert.equal(fixture.store.writes.length, writes);
+  const names = await readdir(path.dirname(root)); assert.equal(names.length, 6);
+  await assert.rejects(() => restoreHistory({ ...context, principal: { audience: 'phone' } }, editor.id, original.id, {}), { code: 'forbidden' });
+});
+
+test('editor edit and Restore recover with their complete History after every journal interruption', async (t) => {
+  for (const fault of [{ afterPrepared: true }, { afterRenames: 1 }, { afterRenames: 4 }, { beforeReceipt: true }, { afterStage: true }, { afterReceipt: true }]) await t.test(JSON.stringify(fault), async (t) => {
+    const { context, fixture } = await shop(t);
+    let editor = await createText(context, { project: 'shop', path: 'docs/recovered-history.json', document: release() });
+    const original = (await listHistory(context, editor.id)).items[0];
+    fixture.store.fault = { ...fault };
+    await assert.rejects(() => replaceText(context, editor.id, { document: { ...editor.document, title: 'Recovered' }, expectedRevision: editor.revision }), { code: 'injected_crash' });
+    await recoverTransactions(fixture.store); editor = await readEditor(context, editor.id);
+    const current = (await listHistory(context, editor.id)).items[0]; assert.equal(current.current, true); assert.equal(current.operation, 'rename');
+    fixture.store.fault = { ...fault };
+    await assert.rejects(() => restoreHistory(context, editor.id, original.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision }), { code: 'injected_crash' });
+    await recoverTransactions(fixture.store); editor = await readEditor(context, editor.id);
+    assert.equal(editor.title, release().title); assert.equal((await listHistory(context, editor.id)).items.length, 3);
+    editor = await restoreHistory(context, editor.id, current.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+    assert.equal(editor.title, 'Recovered');
+  });
+});
+
+test('conflict and Restore receipt recovery replays the saved editor once without losing a version', async (t) => {
+  for (const operation of ['conflict', 'restore']) await t.test(operation, async (t) => {
+    const { context, fixture } = await shop(t);
+    let editor = await createText(context, { project: 'shop', path: 'docs/receipt-history.json', document: release() });
+    const initial = (await listHistory(context, editor.id)).items[0];
+    editor = await replaceText(context, editor.id, { document: { ...editor.document, title: 'Incoming' }, expectedRevision: editor.revision });
+    const body = { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
+      ...(operation === 'conflict' ? { decision: 'reload', document: { ...editor.document, title: 'Draft' } } : {}) };
+    const input = { principal: 'fixture-history', key: randomUUID(), requestId: randomUUID(), method: 'POST', path: `/history/${operation}`, body };
+    const run = (receipt) => operation === 'conflict' ? resolveConflict({ ...context, receipt }, editor.id, body) : restoreHistory({ ...context, receipt }, editor.id, initial.id, body);
+    fixture.store.fault = { beforeReceipt: true };
+    await assert.rejects(() => withReceipt(fixture.store, input, run), { code: 'injected_crash' });
+    await recoverTransactions(fixture.store);
+    const count = (await listHistory(context, editor.id)).total;
+    const result = await withReceipt(fixture.store, input, run);
+    assert.equal(result.replayed, true); assert.equal(result.body.id, editor.id);
+    assert.equal(result.body.document.title, operation === 'conflict' ? 'Incoming' : release().title);
+    assert.deepEqual(result.body, await readEditor(context, editor.id));
+    assert.equal((await listHistory(context, editor.id)).total, count);
+  });
+});
+
+test('History HTTP uses exact revision bodies paginated reads desktop-only writes and stable receipt replay', async (t) => {
+  const fixture = await makeCoreFixture(), localPath = path.join(fixture.root, 'history-http');
+  await mkdir(localPath, { recursive: true });
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [{ name: 'shop', localPath }] });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  const local = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = local.json.data.token;
+  const created = await call(core.http.port, 'POST', '/api/v1/void/texts', { token, headers: { 'idempotency-key': randomUUID() }, body: { project: 'shop', path: 'docs/history.json', document: release() } });
+  const editor = created.json.data, url = `/api/v1/editors/${editor.id}/history`;
+  const history = await call(core.http.port, 'GET', `${url}?limit=1`, { token });
+  assert.equal(history.status, 200); assert.equal(history.json.data.items[0].operation, 'create');
+  assert.equal((await call(core.http.port, 'GET', `${url}?unknown=true`, { token })).status, 400);
+  assert.equal((await call(core.http.port, 'GET', url)).status, 401);
+  const restore = `${url}/${history.json.data.items[0].id}/restore`, body = { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision };
+  const missing = await call(core.http.port, 'POST', restore, { token, headers: { 'idempotency-key': randomUUID() }, body: { expectedRevision: editor.revision } });
+  assert.equal(missing.status, 422);
+  const extra = await call(core.http.port, 'POST', restore, { token, headers: { 'idempotency-key': randomUUID() }, body: { ...body, extra: true } });
+  assert.equal(extra.status, 400); assert.equal(extra.json.error.code, 'unknown_field');
+  const headers = { 'idempotency-key': randomUUID() }, restored = await call(core.http.port, 'POST', restore, { token, headers, body });
+  assert.equal(restored.status, 200); assert.equal(restored.json.data.document.rev, 1);
+  const replay = await call(core.http.port, 'POST', restore, { token, headers, body });
+  assert.equal(replay.status, 200); assert.deepEqual(replay.json.data, restored.json.data); assert.equal(replay.json.meta.replayed, true);
+  assert.equal((await call(core.http.port, 'GET', url, { token })).json.data.total, 2);
+});
+
+test('initial History written by earlier tasks remains readable and restores its title without added provenance fields', async (t) => {
+  const { context, localPath } = await shop(t);
+  let editor = await createBoard(context, { project: 'shop', document: sketch('earlier-history') });
+  const initial = (await listHistory(context, editor.id)).items[0], file = path.join(localPath, 'docs/flows/history', editor.id, `${initial.id}.json`);
+  const metadata = JSON.parse(await readFile(file, 'utf8'));
+  delete metadata.title; delete metadata.source; delete metadata.sequence;
+  await writeFile(file, JSON.stringify(metadata));
+  editor = await patchEditorLibrary(context, editor.id, { title: 'Later title', expectedRevision: editor.revision, expectedLibraryRevision: editor.libraryRevision });
+  assert.equal((await listHistory(context, editor.id)).total, 2);
+  editor = await restoreHistory(context, editor.id, initial.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(editor.title, 'Cart');
+});
 
 test('library folders validate ancestry and create resources atomically in the selected kind', async (t) => {
   const { context, fixture, localPath } = await shop(t);

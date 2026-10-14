@@ -138,7 +138,8 @@ function catalogAllows(catalog, projectName, relative) {
   }
   if (allowed.has(relative)) return true;
   if (mine.some((resource) => relative.startsWith(`docs/flows/history/${resource.id}/`)
-    && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.split('/').at(-1)))) return true;
+    && isUuid(relative.slice(`docs/flows/history/${resource.id}/`.length).replace(/\.(document\.|comments\.)?json$/, ''))
+    && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.slice(`docs/flows/history/${resource.id}/`.length)))) return true;
   return (blueprint || mine.some((item) => item.kind === 'void')) && /^docs\/flows\/assets\/[^/]+$/.test(relative);
 }
 
@@ -416,6 +417,10 @@ async function commitLocked(store, prepared) {
     checkRevision(current, entry.beforeRevision ?? null);
     const afterBytes = operation === 'delete' ? null : Buffer.isBuffer(entry.afterBytes) ? entry.afterBytes : Buffer.from(entry.afterBytesBase64 ?? '', 'base64');
     const afterRevision = revisionOf(afterBytes);
+    if (canonical?.path.startsWith('docs/flows/history/') && operation !== 'delete') {
+      if (afterBytes.length > 16_000_000) throw new CoreError(413, 'resource_too_large', 'A history object exceeds 16 MB.');
+      if (current && !current.equals(afterBytes)) throw new CoreError(409, 'corrupt_resource', 'An immutable history object cannot be replaced.');
+    }
     if (Object.hasOwn(entry, 'afterRevision') && entry.afterRevision !== undefined && entry.afterRevision !== afterRevision) {
       throw new CoreError(409, 'revision_conflict', 'The prepared bytes do not match the declared revision.', { currentRevision: revisionOf(current) });
     }

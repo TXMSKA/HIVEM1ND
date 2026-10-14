@@ -11,12 +11,12 @@ export const EVENT_NAMES = [
   'task.changed', 'layout.changed', 'settings.changed', 'home.changed', 'blueprint.changed',
   'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed',
   'editor.asset.created', 'viewer.changed', 'editor.activity', 'watch.changed', 'sync.changed',
-  'sync.conflict', 'issue.changed', 'library.changed', 'editor.removed',
+  'sync.conflict', 'issue.changed', 'library.changed', 'editor.removed', 'editor.history.changed',
 ];
 
 const SOURCE_KINDS = new Set(['gui', 'phone', 'cli', 'mcp', 'hook', 'sync', 'service']);
 const GLOBAL_EVENTS = new Set(['service.changed', 'settings.changed', 'sync.changed', 'sync.conflict', 'stream.reset', 'stream.ready']);
-const EDITOR_EVENTS = new Set(['blueprint.changed', 'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed', 'editor.asset.created', 'editor.activity']);
+const EDITOR_EVENTS = new Set(['blueprint.changed', 'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed', 'editor.asset.created', 'editor.activity', 'editor.history.changed']);
 const VIEWER_EVENTS = new Set(['viewer.changed', 'watch.changed']);
 const SECRET_KEYS = new Set(['endpoint', 'token', 'key', 'code', 'nativeSessionId', 'authorization', 'secret', 'pipe']);
 const RETAIN_MS = 600000;
@@ -47,7 +47,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     }
     const resourceId = event.resourceId ?? event.data?.resourceId ?? null;
     const revision = event.revision ?? event.data?.revision ?? null;
-    if (resourceId && revision && revisionRelation(latestRevision(event.name, resourceId), revision) === 'equal') {
+    if (event.name !== 'editor.history.changed' && resourceId && revision && revisionRelation(latestRevision(event.name, resourceId), revision) === 'equal') {
       return { emitted: false, duplicate: true, id: null };
     }
     sequence += 1;

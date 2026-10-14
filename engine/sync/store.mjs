@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashBytes, hashText, uuidV8 } from '../service/identity.mjs';
+import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } from '../service/store.mjs';
 import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
@@ -565,9 +565,13 @@ export async function projectPathSet(project, options = {}) {
     add(resource.path);
     for (const sidecar of sidecars(resource)) add(sidecar);
     const history = path.join(project.localPath, 'docs', 'flows', 'history', resource.id ?? '');
-    if (/^[0-9a-f-]{36}$/.test(resource.id ?? '')) {
+    if (isUuid(resource.id)) {
       for (const name of await readdir(history).catch((error) => { if (error.code === 'ENOENT') return []; throw error; })) {
-        if (/^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(name)) add(`docs/flows/history/${resource.id}/${name}`);
+        if (/^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(name) && isUuid(name.replace(/\.(document\.|comments\.)?json$/, ''))) {
+          add(`docs/flows/history/${resource.id}/${name}`);
+          const snapshot = path.join(history, name);
+          if (name.endsWith('.document.json') && await isRegular(snapshot)) for (const asset of referencedAssets(await readFile(snapshot))) add(asset);
+        }
       }
     }
     const absolute = path.join(project.localPath, ...String(resource.path).split('/'));
@@ -576,8 +580,9 @@ export async function projectPathSet(project, options = {}) {
     }
   }
   for (const relative of options.historyPaths ?? []) {
-    if (resources.some((resource) => relative.startsWith(`docs/flows/history/${resource.id}/`))
-      && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.split('/').at(-1))) add(relative);
+    if (resources.some((resource) => isUuid(resource.id) && relative.startsWith(`docs/flows/history/${resource.id}/`)
+      && /^[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(relative.slice(`docs/flows/history/${resource.id}/`.length))
+      && isUuid(relative.split('/').at(-1).replace(/\.(document\.|comments\.)?json$/, '')))) add(relative);
   }
   for (const bytes of options.documents ?? []) for (const asset of referencedAssets(bytes)) add(asset);
   await addRegisteredAssets(options.mind, resources, add);

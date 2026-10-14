@@ -113,7 +113,14 @@ async function projectSidecar(context, change, file) {
   if (!project) return null;
   if (file === 'docs/flows/library.json') return { events: ['blueprint', 'void'].map((kind) => ({ name: 'library.changed',
     data: { project: project.name, kind, revision: change.hash ?? null } })), collections: ['editors'] };
-  if (file.startsWith('docs/flows/history/')) return { events: [], collections: ['editors'] };
+  if (file.startsWith('docs/flows/history/')) {
+    const history = /^docs\/flows\/history\/([0-9a-f-]{36})\/([0-9a-f-]{36})\.json$/.exec(file);
+    if (!history || change.operation === 'delete') return { events: [], collections: ['editors'] };
+    const item = await jsonAt(project.localPath, file);
+    if (item.format !== 'hivem1nd-editor-history-v1' || item.resourceId !== history[1] || item.id !== history[2]) throw new Error('Imported history metadata is not valid.');
+    return { events: [{ name: 'editor.history.changed', resourceId: item.resourceId,
+      data: { resourceId: item.resourceId, historyId: item.id, revision: item.revision } }], collections: ['editors'] };
+  }
   if (file.endsWith('.orig.json') || file.endsWith('.versions.jsonl')) return { events: [], collections: ['editors'] };
   const isComments = file.endsWith('.comments.json') || /^docs\/flows\/comments\/[^/]+\.json$/.test(file);
   const isAsset = /^docs\/flows\/assets\/[^/]+\.(png|jpg|webp)$/.test(file);

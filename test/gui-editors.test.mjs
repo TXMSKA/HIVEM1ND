@@ -3,6 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request } from "../gui/app/api.mjs";
+import { editorDraftDocument, loadHistory, resolveEditorConflict, restoreEditorHistory } from "../gui/app/editors.mjs";
 import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundary, validUtf16Boundary } from "../gui/app/markup.mjs";
 import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
@@ -1142,4 +1143,70 @@ test("Watch never replaces a board gesture or draft and off leaves committed con
   editors.current.boardGesture = false; editors.watch = null;
   assert.equal(handleActivity(editors, activity).follow, false);
   assert.equal(editors.focus.nodeId, "label"); assert.equal(editors.current.authoritative.document.title, "Full");
+});
+
+test("both editor conflict answers persist the draft before replacing it and History restores both versions", async (t) => {
+  for (const kind of ["blueprint", "void"]) for (const decision of ["keep-mine", "reload"]) await t.test(`${kind} ${decision}`, async (t) => {
+    const fixture = await createGuiFixture(); t.after(() => fixture.close());
+    const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+    await loadCatalog(api, editors, kind);
+    const summary = editors.catalog.find((item) => !item.readOnly);
+    const current = await openEditor(api, editors, summary);
+    const local = structuredClone(current.authoritative.document);
+    if (kind === "blueprint") { local.title = "Person draft"; setBoardDraft(current, local); }
+    else {
+      const page = local.pages[0], lang = typeof page.en === "string" ? "en" : "es";
+      current.draftKey = { k: page.k, lang }; current.draftText = "Person draft";
+      current.textDrafts.set(`${current.resourceId}\0${page.k}\0${lang}`, current.draftText); current.dirty = true;
+      page[lang] = current.draftText;
+    }
+    const file = join(fixture.root, "repositories", current.authoritative.project, current.authoritative.path), incoming = structuredClone(current.authoritative.document);
+    incoming.title = "Incoming version";
+    await writeFile(file, JSON.stringify(incoming)); await fixture.control.refresh();
+    noteRemote(editors, { resourceId: current.resourceId, revision: "f".repeat(64) }); await refreshRemoteEditor(api, editors, current.resourceId);
+    assert.deepEqual(editorDraftDocument(current), local);
+    await resolveEditorConflict(api, editors, decision);
+    assert.equal(current.dirty, false); assert.equal(current.conflict, null);
+    assert.equal(current.authoritative.document.title, decision === "keep-mine" ? local.title : "Incoming version");
+    const history = await loadHistory(api, editors);
+    const draftVersion = history.find((item) => item.source?.kind === "draft"), incomingVersion = history.find((item) => item.source?.kind === "external");
+    assert.ok(draftVersion); assert.ok(incomingVersion); assert.equal(draftVersion.by, "root:master");
+    const result = await restoreEditorHistory(api, editors, draftVersion);
+    assert.ok(result); assert.deepEqual(current.authoritative.document.pages ?? current.authoritative.document.screens, local.pages ?? local.screens);
+    await restoreEditorHistory(api, editors, incomingVersion);
+    assert.equal(current.authoritative.document.title, "Incoming version");
+    assert.equal((await loadHistory(api, editors)).filter((item) => item.current).length, 1);
+  });
+});
+
+test("conflict persistence failure leaves every draft and selection intact and its retry preserves later typing", async () => {
+  const editors = createEditors(), board = fullBoard(), revision = "a".repeat(64);
+  const current = { resourceId: "board", kind: "blueprint", revision, baseRevision: revision, authoritative: { id: "board", revision, document: board }, editGeneration: 1, dirty: true, boardDraft: { ...board, title: "Draft" },
+    conflict: { remote: { id: "board", revision: "b".repeat(64), commentsRevision: null, document: { ...board, title: "Incoming" } } } };
+  editors.current = current; editors.drafts.set("board", current);
+  const failing = commentApi(async () => { throw new Error("Offline"); });
+  await assert.rejects(() => resolveEditorConflict(failing, editors, "reload"));
+  assert.equal(current.boardDraft.title, "Draft"); assert.equal(current.conflict.remote.document.title, "Incoming");
+  const retained = current.historyOperation; assert.ok(retained);
+  setBoardDraft(current, { ...board, title: "Later typing" });
+  const retry = commentApi(async (_url, options) => {
+    assert.equal(JSON.parse(options.body).document.title, "Draft");
+    return jsonResponse({ id: "board", revision: "c".repeat(64), commentsRevision: null, document: { ...board, title: "Incoming" } });
+  });
+  await resolveEditorConflict(retry, editors, "reload", retained);
+  assert.equal(current.boardDraft.title, "Later typing"); assert.equal(current.dirty, true); assert.equal(current.baseRevision, "c".repeat(64));
+});
+
+test("History restore binds both current revisions and refuses to replace an unsaved draft", async () => {
+  const editors = createEditors(), board = fullBoard();
+  const current = { resourceId: "board", kind: "blueprint", revision: "a".repeat(64), commentsRevision: "b".repeat(64), authoritative: { document: board }, dirty: true, boardDraft: { ...board, title: "Unsaved" } };
+  editors.current = current;
+  const api = commentApi(async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), { expectedRevision: "a".repeat(64), expectedCommentsRevision: "b".repeat(64) });
+    return jsonResponse({ id: "board", revision: "c".repeat(64), commentsRevision: null, document: board });
+  });
+  assert.equal(await restoreEditorHistory(api, editors, { id: "snapshot" }), false);
+  current.dirty = false; current.boardDraft = null;
+  await restoreEditorHistory(api, editors, { id: "snapshot" });
+  assert.equal(current.commentsRevision, null); assert.equal(current.revision, "c".repeat(64));
 });

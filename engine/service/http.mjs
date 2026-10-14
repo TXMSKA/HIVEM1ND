@@ -18,6 +18,7 @@ import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from './editors.mjs';
+import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 
@@ -118,6 +119,9 @@ const ROUTES = [
   ['GET', '/void/texts/:resourceId/proposals', 'editor.read', 'DPA', 'editor'],
   ['POST', '/void/texts/:resourceId/proposals/:proposalId/answer', 'proposal.answer', 'D', 'editor'],
   ['GET', '/editors/:resourceId/attachments', 'editor.read', 'DPA', 'editor'],
+  ['GET', '/editors/:resourceId/history', 'editor.read', 'DPA', 'editor'],
+  ['POST', '/editors/:resourceId/history/:historyId/restore', 'editor.write', 'D', 'editor'],
+  ['POST', '/editors/:resourceId/conflict', 'editor.write', 'D', 'editor'],
   ['PUT', '/editors/:resourceId/attachments', 'editor.write', 'D', 'editor'],
   ['GET', '/editors/:resourceId/comments', 'editor.read', 'DPA', 'editor'],
   ['POST', '/editors/:resourceId/comments', 'comment.write', 'DA', 'editor'],
@@ -809,6 +813,7 @@ function allowedQuery(route) {
     '/library/folders': [...list, 'project', 'kind'],
     '/void/texts/:resourceId/proposals': [...list, 'state'],
     '/editors/:resourceId/comments': [...list, 'status'],
+    '/editors/:resourceId/history': list,
     '/events': ['unitId', 'chatId', 'resourceId'],
   };
   return table[route.template] ?? [];
@@ -942,6 +947,8 @@ function validateLibraryBody(route, body) {
   const required = {
     'POST /library/folders': ['project', 'kind', 'title', 'parentId', 'expectedRevision'],
     'POST /blueprint/boards/import': ['project', 'path', 'title', 'folderId', 'legacyResourceId', 'document', 'expectedRevision'],
+    'POST /editors/:resourceId/history/:historyId/restore': ['expectedRevision', 'expectedCommentsRevision'],
+    'POST /editors/:resourceId/conflict': ['decision', 'document', 'expectedRevision', 'expectedCommentsRevision'],
     'PATCH /library/folders/:folderId': ['project', 'expectedRevision'],
     'DELETE /library/folders/:folderId': ['project', 'confirmed', 'expectedRevision'],
     'PATCH /editors/:resourceId/library': ['expectedRevision', 'expectedLibraryRevision'],
@@ -1017,6 +1024,8 @@ function allowedBody(route) {
     'POST /void/texts/:resourceId/ranges': ['k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'mode', 'threadId', 'expectedCommentsRevision'],
     'POST /void/texts/:resourceId/proposals/:proposalId/answer': ['decision', 'expectedRevision', 'expectedCommentsRevision'],
     'PUT /editors/:resourceId/attachments': ['attached', 'expectedRevision'],
+    'POST /editors/:resourceId/history/:historyId/restore': ['expectedRevision', 'expectedCommentsRevision'],
+    'POST /editors/:resourceId/conflict': ['decision', 'document', 'expectedRevision', 'expectedCommentsRevision'],
     'POST /editors/:resourceId/comments': ['text', 'expectedRevision', 'expectedCommentsRevision', 'anchor'],
     'POST /editors/:resourceId/comments/:threadId/replies': ['text', 'expectedCommentsRevision'],
     'PATCH /editors/:resourceId/comments/:threadId': ['status', 'expectedCommentsRevision'],
@@ -1108,6 +1117,9 @@ async function editorRoute(route, domain, params, query, body) {
   if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'PATCH') return { status: 200, body: await updateNode(domain, id, params.nodeId, body) };
   if (route.template === '/blueprint/boards/:resourceId/nodes/:nodeId' && route.method === 'DELETE') return { status: 200, body: await removeNode(domain, id, params.nodeId, body) };
   if (route.template === '/editors/:resourceId/attachments' && route.method === 'GET') return { status: 200, body: await readAttachments(domain, id) };
+  if (route.template === '/editors/:resourceId/history') return { status: 200, body: await listHistory(domain, id, query) };
+  if (route.template === '/editors/:resourceId/history/:historyId/restore') return { status: 200, body: await restoreHistory(domain, id, params.historyId, body) };
+  if (route.template === '/editors/:resourceId/conflict') return { status: 200, body: await resolveConflict(domain, id, body) };
   if (route.template === '/editors/:resourceId/attachments' && route.method === 'PUT') return { status: 200, body: await writeAttachments(domain, id, body) };
   if (route.template === '/editors/:resourceId/comments' && route.method === 'GET') return { status: 200, body: await listComments(domain, id, query) };
   if (route.template === '/editors/:resourceId/comments' && route.method === 'POST') {

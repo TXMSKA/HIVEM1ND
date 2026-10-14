@@ -249,6 +249,9 @@ export async function openEditor(api, editors, summary) {
     drawColor: saved?.drawColor ?? "text",
     selectedNodeId: saved?.selectedNodeId ?? null,
     conflictCopies: saved?.conflictCopies ?? [],
+    history: [],
+    historyOpen: saved?.historyOpen ?? false,
+    historyOperation: saved?.historyOperation ?? null,
     draftKey: saved?.draftKey ?? null,
     textDrafts: saved?.textDrafts ?? new Map(),
     commentText: saved?.commentText ?? "",
@@ -281,6 +284,7 @@ export async function openEditor(api, editors, summary) {
     releaseAssets(next);
     return editors.current;
   }
+  if (next.historyOpen) await loadHistory(api, editors);
   return next;
 }
 
@@ -602,10 +606,94 @@ export function reapplyEditorDraft(editors) {
 }
 
 function keepConflictCopies(current, remote) {
-  if (current.kind !== "blueprint") return;
   current.conflictCopies ??= [];
-  current.conflictCopies.push({ local: { document: structuredClone(boardDocument(current)), revision: current.baseRevision, author: "root:master" },
+  current.conflictCopies.push({ local: { document: editorDraftDocument(current), revision: current.baseRevision, author: "root:master" },
     remote: structuredClone(remote) });
+}
+
+export function editorDraftDocument(current) {
+  if (current.kind === "blueprint") return structuredClone(boardDocument(current));
+  const document = structuredClone(current.authoritative.document);
+  for (const [key, value] of current.textDrafts ?? []) {
+    const [id, k, lang] = key.split("\0");
+    if (id === current.resourceId) {
+      const page = document.pages.find((item) => item.k === k);
+      if (page) page[lang] = value;
+    }
+  }
+  if (current.draftKey) {
+    const { k, lang } = current.draftKey;
+    const page = document.pages.find((item) => item.k === k);
+    if (page) page[lang] = current.draftText;
+  }
+  return document;
+}
+
+export async function loadHistory(api, editors) {
+  const current = editors.current;
+  if (!current) return [];
+  const ticket = current.historyTicket = (current.historyTicket ?? 0) + 1;
+  const page = await collectPages(api, "/editors/:resourceId/history", { params: { resourceId: current.resourceId }, limit: 50 });
+  if (editors.current !== current || current.historyTicket !== ticket) return current.history ?? [];
+  current.history = page.items;
+  current.historyStale = false;
+  return page.items;
+}
+
+function acceptHistoryEditor(editors, current, record, draft, generation) {
+  const laterTyping = (current.editGeneration ?? 0) !== generation || JSON.stringify(editorDraftDocument(current)) !== JSON.stringify(draft);
+  current.authoritative = record;
+  current.revision = record.revision;
+  current.baseRevision = record.revision;
+  current.commentsRevision = record.commentsRevision ?? null;
+  current.priorCommentsRevisions = new Set();
+  current.attachmentRevision = record.attachmentRevision ?? null;
+  current.threads = record.threads ?? [];
+  current.attached = record.attached ?? [];
+  current.boardView = null;
+  current.conflict = null;
+  current.remoteStale = false;
+  current.historyStale = true;
+  if (!laterTyping) {
+    current.boardDraft = null;
+    current.draftText = "";
+    current.draftKey = null;
+    current.textDrafts = new Map();
+    current.dirty = false;
+  }
+  editors.drafts.set(current.resourceId, current);
+  return record;
+}
+
+export async function resolveEditorConflict(api, editors, decision, retained = null) {
+  const current = editors.current, remote = current?.conflict?.remote;
+  if (!remote || current.boardSaving) return false;
+  if (current.historyPending) return current.historyPending;
+  if (retained && retained.body?.decision !== decision) return false;
+  const draft = retained?.body?.document ?? editorDraftDocument(current), generation = current.editGeneration ?? 0;
+  current.historyPending = perform(api, { method: "POST", path: "/editors/:resourceId/conflict", params: { resourceId: current.resourceId },
+    body: { decision, document: draft, expectedRevision: remote.revision, expectedCommentsRevision: Object.hasOwn(remote, "commentsRevision") ? remote.commentsRevision : current.commentsRevision ?? null } }, retained)
+    .then((result) => {
+      keepConflictCopies(current, remote);
+      acceptHistoryEditor(editors, current, result.data, draft, generation);
+      current.historyOperation = null;
+      return result;
+    }).catch((error) => { current.historyOperation = api.uncertain?.has(error.operation?.id) ? error.operation : null; throw error; })
+    .finally(() => { current.historyPending = null; });
+  return current.historyPending;
+}
+
+export async function restoreEditorHistory(api, editors, item, retained = null) {
+  const current = editors.current;
+  if (!current || current.dirty || current.boardSaving || current.historyPending) return false;
+  if (retained && !retained.path.endsWith(`/${item.id}/restore`)) return false;
+  const draft = editorDraftDocument(current), generation = current.editGeneration ?? 0;
+  current.historyPending = perform(api, { method: "POST", path: "/editors/:resourceId/history/:historyId/restore", params: { resourceId: current.resourceId, historyId: item.id },
+    body: { expectedRevision: current.revision, expectedCommentsRevision: current.commentsRevision ?? null } }, retained)
+    .then((result) => { acceptHistoryEditor(editors, current, result.data, draft, generation); current.historyOperation = null; return result; })
+    .catch((error) => { current.historyOperation = api.uncertain?.has(error.operation?.id) ? error.operation : null; throw error; })
+    .finally(() => { current.historyPending = null; });
+  return current.historyPending;
 }
 
 export function markDirty(api, editors, capabilities, dirty) {

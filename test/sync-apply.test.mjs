@@ -9,6 +9,7 @@ import { createStore } from '../engine/service/store.mjs';
 import { undoChange } from '../engine/service/store.mjs';
 import { createGroup, patchGroup, removeGroup } from '../engine/service/groups.mjs';
 import { createFolder, createText, moveEditor, readEditor, removeEditor } from '../engine/service/editors.mjs';
+import { listHistory, replaceText, resolveConflict, restoreHistory } from '../engine/service/editors.mjs';
 import { readCollection, readProjection } from '../engine/service/projection.mjs';
 import { importedSidecarEvents } from '../engine/service/import-events.mjs';
 import { applyPack, compareVersions, recoverIncomingGroups } from '../engine/sync/apply.mjs';
@@ -924,3 +925,85 @@ async function freePort() {
   await new Promise((resolve) => server.close(resolve));
   return port;
 }
+
+test('complete History conflict answers and Restore sync and recover with exact immutable objects and imported events', async (t) => {
+  const { fixture, desktop, laptop } = await world(t);
+  for (const sync of [desktop, laptop]) {
+    const localPath = path.join(fixture.root, `${sync.machine}-history`);
+    await mkdir(localPath, { recursive: true }); sync.projects = [{ name: 'shop', localPath }];
+  }
+  const source = { store: laptop.store, paths: laptop.paths, sync: laptop, projects: laptop.projects, now: () => fixture.clock.now, principal: { audience: 'desktop', unitId: 'root:master' } };
+  const destination = { ...source, store: desktop.store, paths: desktop.paths, sync: desktop, projects: desktop.projects };
+  let sequence = 0;
+  async function transfer(crash = false) {
+    const changes = await listStaged(laptop), groups = new Map();
+    for (const change of changes) { const ids = groups.get(change.transactionId) ?? []; ids.push(change.id); groups.set(change.transactionId, ids); }
+    const objects = await Promise.all([...new Set(changes.map((change) => change.hash).filter(Boolean))].map(async (hash) => ({ hash, raw: await readObject(laptop, hash) })));
+    const bytes = encodePack({ machine: 'LAPTOP', sequence: ++sequence, changes, objects, transactions: [...groups].map(([id, changeIds]) => ({ id, changeIds })) });
+    if (crash) {
+      desktop.applyFault = { afterWrites: 2 };
+      await assert.rejects(() => applyPack(desktop, bytes), { code: 'injected_crash' });
+      await recoverIncomingGroups(desktop);
+    }
+    const applied = await applyPack(desktop, bytes); assert.equal(applied.status, 'applied');
+    for (const change of changes.filter((item) => /^docs\/flows\/history\/.+\/[0-9a-f-]{36}\.json$/.test(item.target.path))) {
+      const imported = await importedSidecarEvents(destination, change);
+      assert.equal(imported.events[0].name, 'editor.history.changed');
+      assert.equal(imported.events[0].data.historyId, JSON.parse(await readObject(laptop, change.hash)).id);
+    }
+    await ackPublished(laptop, changes.map((change) => change.id));
+  }
+  let editor = await createText(source, { project: 'shop', path: 'docs/history.json', document: { title: 'Initial', rev: 2, extra: { kept: true }, pages: [{ k: 'A', en: 'Before' }] } });
+  await transfer(true); fixture.clock.now += 1;
+  const original = (await listHistory(source, editor.id)).items[0];
+  editor = await replaceText(source, editor.id, { document: { ...editor.document, pages: [{ k: 'A', en: 'Incoming' }] }, expectedRevision: editor.revision });
+  await transfer(); fixture.clock.now += 1;
+  const draft = { ...editor.document, pages: [{ k: 'A', en: 'Person draft' }] };
+  editor = await resolveConflict(source, editor.id, { document: draft, decision: 'reload', expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  await transfer(true); fixture.clock.now += 1;
+  const history = (await listHistory(source, editor.id)).items;
+  assert.deepEqual((await listHistory(destination, editor.id)).items, history);
+  for (const item of history) for (const suffix of ['.json', '.document.json', '.comments.json']) {
+    const relative = `docs/flows/history/${editor.id}/${item.id}${suffix}`;
+    assert.deepEqual(await readFile(path.join(desktop.projects[0].localPath, relative)), await readFile(path.join(laptop.projects[0].localPath, relative)));
+  }
+  editor = await restoreHistory(source, editor.id, original.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  await transfer(true); fixture.clock.now += 1;
+  assert.equal((await readEditor(destination, editor.id)).document.pages[0].en, 'Before');
+  const draftVersion = history.find((item) => item.source?.kind === 'draft');
+  editor = await restoreHistory(source, editor.id, draftVersion.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  await transfer();
+  assert.equal((await readEditor(destination, editor.id)).document.pages[0].en, 'Person draft');
+  assert.deepEqual((await listHistory(destination, editor.id)).items, (await listHistory(source, editor.id)).items);
+});
+
+test('history sync refuses nested paths and overwritten snapshot bytes while retaining versions from a losing edit', async (t) => {
+  const { fixture, desktop, laptop } = await world(t);
+  for (const sync of [desktop, laptop]) {
+    const localPath = path.join(fixture.root, `${sync.machine}-history-conflict`);
+    await mkdir(localPath, { recursive: true }); sync.projects = [{ name: 'shop', localPath }];
+  }
+  const context = { store: laptop.store, paths: laptop.paths, sync: laptop, projects: laptop.projects, now: () => fixture.clock.now };
+  let editor = await createText(context, { project: 'shop', path: 'docs/shared.json', document: { title: 'Shared', pages: [{ k: 'A', en: 'Initial' }] } });
+  async function stagedPack(sequence) {
+    const changes = await listStaged(laptop), groups = new Map();
+    for (const change of changes) { const ids = groups.get(change.transactionId) ?? []; ids.push(change.id); groups.set(change.transactionId, ids); }
+    const objects = await Promise.all([...new Set(changes.map((change) => change.hash).filter(Boolean))].map(async (hash) => ({ hash, raw: await readObject(laptop, hash) })));
+    return { changes, bytes: encodePack({ machine: 'LAPTOP', sequence, changes, objects, transactions: [...groups].map(([id, changeIds]) => ({ id, changeIds })) }) };
+  }
+  const initial = await stagedPack(1); await applyPack(desktop, initial.bytes); await ackPublished(laptop, initial.changes.map((item) => item.id));
+  fixture.clock.now += 1;
+  const old = (await listHistory(context, editor.id)).items[0];
+  const target = { kind: 'project', project: 'shop', path: `docs/flows/history/${editor.id}/${old.id}.document.json` }, changed = Buffer.from('{}');
+  await assert.rejects(() => applyPack(desktop, pack([put(target, changed)], [{ hash: hashBytes(changed), raw: changed }], { sequence: 2 })), { code: 'corrupt_resource' });
+  await assert.rejects(() => applyPack(desktop, pack([put({ ...target, path: `docs/flows/history/${editor.id}/nested/${old.id}.document.json` }, changed)], [{ hash: hashBytes(changed), raw: changed }], { sequence: 2 })), { code: 'invalid_pack' });
+  editor = await replaceText(context, editor.id, { document: { ...editor.document, pages: [{ k: 'A', en: 'Older incoming edit' }] }, expectedRevision: editor.revision });
+  const remote = await stagedPack(2);
+  const localContext = { ...context, store: desktop.store, paths: desktop.paths, sync: desktop, projects: desktop.projects };
+  fixture.clock.now += 1;
+  const local = await readEditor(localContext, editor.id);
+  await replaceText(localContext, editor.id, { document: { ...local.document, pages: [{ k: 'A', en: 'Newer local edit' }] }, expectedRevision: local.revision });
+  await applyPack(desktop, remote.bytes);
+  assert.equal((await readEditor(localContext, editor.id)).document.pages[0].en, 'Newer local edit');
+  assert.ok((await listHistory(localContext, editor.id)).items.some((item) => item.revision === editor.revision));
+});
