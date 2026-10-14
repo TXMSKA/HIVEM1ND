@@ -47,14 +47,31 @@ function integerPoint(x, y) {
 
 export function indexNodes(document) {
   const nodes = new Map();
-  for (const screen of document?.screens ?? []) walk(screen?.root, screen, []);
+  for (const screen of document?.screens ?? []) walk(screen?.root, screen, [], number(screen.x), number(screen.y));
   return nodes;
 
-  function walk(node, screen, ancestors) {
+  function walk(node, screen, ancestors, parentX, parentY) {
     if (!node?.id) return;
-    nodes.set(node.id, { node, screen, ancestors });
-    for (const child of node.kids ?? []) walk(child, screen, [...ancestors, node]);
+    const x = parentX + number(node.place?.x), y = parentY + number(node.place?.y);
+    nodes.set(node.id, { node, screen, ancestors, parentX, parentY, x, y });
+    for (const child of node.kids ?? []) walk(child, screen, [...ancestors, node], x, y);
   }
+}
+
+export function boardDocument(editor) {
+  return editor.boardDraft ?? editor.authoritative?.document ?? editor.document;
+}
+
+export function parentPoint(board, nodeId, point) {
+  const item = indexNodes(board).get(nodeId);
+  return item ? { x: point.x - item.parentX, y: point.y - item.parentY } : null;
+}
+
+export function setBoardDraft(editor, document) {
+  if (!editor.boardDraft) editor.baseRevision = editor.revision;
+  editor.boardDraft = document;
+  editor.editGeneration = (editor.editGeneration ?? 0) + 1;
+  editor.dirty = true;
 }
 
 export function hitBoardNode(document, point) {
@@ -70,14 +87,15 @@ export function hitBoardNode(document, point) {
 }
 
 export function renderBoard(document, host, editor) {
-  const board = editor.authoritative?.document ?? editor.document;
+  const board = boardDocument(editor);
   host.replaceChildren();
   if (!board) return;
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("class", "board-svg");
   svg.setAttribute("role", "tree");
   svg.setAttribute("aria-label", typeof board.title === "string" && board.title ? board.title : "Board");
-  const bounds = boardBounds(board);
+  const bounds = editor.boardView ?? boardBounds(board);
+  editor.boardView = bounds;
   svg.setAttribute("viewBox", `${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`);
   const focus = editor.focus?.screenId ?? "";
   if (editor.panned && editor.focus?.nodeId) {
@@ -89,6 +107,14 @@ export function renderBoard(document, host, editor) {
     group.setAttribute("data-screen", screen.id);
     group.setAttribute("transform", `translate(${number(screen.x)} ${number(screen.y)})`);
     if (screen.id === focus) group.setAttribute("data-focus", "true");
+    const background = document.createElementNS(SVG, "rect");
+    background.setAttribute("class", "board-screen-background");
+    background.setAttribute("width", String(number(screen.w))); background.setAttribute("height", String(number(screen.h)));
+    background.setAttribute("rx", String(number(screen.root?.radius)));
+    const title = document.createElementNS(SVG, "text");
+    title.setAttribute("class", "board-screen-title"); title.setAttribute("x", "2"); title.setAttribute("y", "-18");
+    title.textContent = screen.title ?? screen.id;
+    group.append(background, title);
     group.append(renderNode(document, screen.root, editor));
     svg.append(group);
   }
@@ -105,6 +131,7 @@ export function renderNode(document, node, editor) {
   if (editor.focus?.nodeId && node.id === editor.focus.nodeId) group.setAttribute("data-highlight", "true");
   if (node.name) group.setAttribute("data-name", String(node.name));
   group.setAttribute("transform", `translate(${number(node.place?.x)} ${number(node.place?.y)})`);
+  if (Number.isFinite(node.opacity) && node.opacity >= 0 && node.opacity <= 1) group.setAttribute("opacity", String(node.opacity));
   const body = node.clip === true ? clippedGroup(document, group, node) : group;
   body.append(drawNode(document, node, editor));
   for (const child of node.kids ?? []) body.append(renderNode(document, child, editor));
@@ -146,15 +173,24 @@ export async function removeNode(api, editor, nodeId, retained = null) {
 }
 
 export async function replaceBoard(api, editor, document, retained = null) {
-  const result = await perform(api, {
+  const generation = editor.editGeneration ?? 0;
+  const submitted = retained?.body?.document ?? document;
+  editor.boardSaving = { document: structuredClone(submitted), generation };
+  let result;
+  try { result = await perform(api, {
     method: "PUT",
     path: "/blueprint/boards/:resourceId",
     params: { resourceId: editor.resourceId },
     body: { document, expectedRevision: editor.revision },
-  }, retained);
+  }, retained); } finally { editor.boardSaving = null; }
+  if (editor.conflict?.remote && editor.conflict.remote.revision !== result.data.revision) return result;
   acceptBoard(editor, result.data);
-  editor.dirty = false;
-  editor.conflict = null;
+  editor.baseRevision = result.data.revision;
+  if ((editor.editGeneration ?? 0) === generation && (!editor.boardDraft || JSON.stringify(editor.boardDraft) === JSON.stringify(submitted))) {
+    editor.boardDraft = null;
+    editor.dirty = false;
+    editor.conflict = null;
+  }
   return result;
 }
 
@@ -246,18 +282,26 @@ function hitNode(node, point) {
   if (node.kids?.length) {
     for (let index = node.kids.length - 1; index >= 0; index -= 1) {
       const childPoint = { x: point.x - rect.x, y: point.y - rect.y };
-      if (clip && !inside(clip, point)) continue;
+      if (clip && !inRoundedRect(clip, point, node.radius)) continue;
       const found = hitNode(node.kids[index], childPoint);
       if (found) return found;
     }
   }
-  if (!inside(rect, point)) return null;
+  if (!inRoundedRect(rect, point, node.radius)) return null;
   if (node.kind === "circle" && !inEllipse(rect, point)) return null;
   return node.id;
 }
 
 function inside(rect, point) {
   return point.x >= rect.x && point.y >= rect.y && point.x <= rect.x + rect.w && point.y <= rect.y + rect.h;
+}
+
+function inRoundedRect(rect, point, radius = 0) {
+  if (!inside(rect, point)) return false;
+  const r = Math.min(number(radius), rect.w / 2, rect.h / 2);
+  const cx = Math.max(rect.x + r, Math.min(point.x, rect.x + rect.w - r));
+  const cy = Math.max(rect.y + r, Math.min(point.y, rect.y + rect.h - r));
+  return (point.x - cx) ** 2 + (point.y - cy) ** 2 <= r ** 2;
 }
 
 function inEllipse(rect, point) {
@@ -278,6 +322,7 @@ function clippedGroup(document, group, node) {
   rect.setAttribute("y", "0");
   rect.setAttribute("width", String(Math.max(number(node.w), 0)));
   rect.setAttribute("height", String(Math.max(number(node.h), 0)));
+  rect.setAttribute("rx", String(number(node.radius)));
   clip.append(rect);
   const inner = document.createElementNS(SVG, "g");
   inner.setAttribute("clip-path", `url(#${id})`);
@@ -315,6 +360,7 @@ function drawNode(document, node, editor) {
     return image;
   }
   const shape = document.createElementNS(SVG, node.kind === "circle" ? "ellipse" : "rect");
+  shape.setAttribute("fill", "none");
   if (node.kind === "circle") {
     shape.setAttribute("cx", String(width / 2));
     shape.setAttribute("cy", String(height / 2));
@@ -325,6 +371,7 @@ function drawNode(document, node, editor) {
     shape.setAttribute("y", "0");
     shape.setAttribute("width", String(width));
     shape.setAttribute("height", String(height));
+    shape.setAttribute("rx", String(number(node.radius)));
   }
   applyPaint(shape, node);
   return shape;
@@ -333,8 +380,10 @@ function drawNode(document, node, editor) {
 function drawText(document, node, height) {
   const text = document.createElementNS(SVG, "text");
   text.textContent = String(node.value ?? "");
-  text.setAttribute("x", "0");
-  text.setAttribute("y", String(Math.min(Math.max(height, 8), 16)));
+  const size = Number.isFinite(node.size) && node.size >= 1 && node.size <= 1000 ? node.size : 14;
+  text.setAttribute("font-size", String(size));
+  text.setAttribute("x", String(node.align === "center" ? number(node.w) / 2 : node.align === "right" ? number(node.w) : 0));
+  text.setAttribute("y", String(size));
   const color = paint(node.color);
   if (color) text.setAttribute("fill", color);
   const font = safeFont(node.font);
@@ -376,6 +425,7 @@ function drawIcon(document, node, width, height) {
 
 function painted(document, node, tag, width, height) {
   const shape = document.createElementNS(SVG, tag);
+  shape.setAttribute("fill", "none");
   shape.setAttribute("data-kind", node.kind || tag);
   if (tag === "ellipse") {
     shape.setAttribute("cx", String(width / 2));
@@ -432,7 +482,7 @@ function applyPaint(shape, node) {
   const stroke = paint(node.stroke);
   if (stroke) shape.setAttribute("stroke", stroke);
   if (Number.isFinite(node.strokeWidth) && node.strokeWidth >= 0 && node.strokeWidth <= 100) shape.setAttribute("stroke-width", String(node.strokeWidth));
-  if (Number.isFinite(node.opacity) && node.opacity >= 0 && node.opacity <= 1) shape.setAttribute("opacity", String(node.opacity));
+  if (typeof node.dash === "string" && /^[\d .]+$/.test(node.dash)) shape.setAttribute("stroke-dasharray", node.dash);
 }
 
 function renderLink(document, board, link) {
@@ -455,14 +505,14 @@ function renderLink(document, board, link) {
   return line;
 }
 
-function boardBounds(board) {
+export function boardBounds(board) {
   const screens = board.screens ?? [];
-  if (!screens.length) return { x: 0, y: 0, w: 1, h: 1 };
+  if (!screens.length) return { x: -70, y: -100, w: 900, h: 760 };
   const left = Math.min(...screens.map((screen) => number(screen.x)));
   const top = Math.min(...screens.map((screen) => number(screen.y)));
   const right = Math.max(...screens.map((screen) => number(screen.x) + number(screen.w)));
   const bottom = Math.max(...screens.map((screen) => number(screen.y) + number(screen.h)));
-  return { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) };
+  return { x: left - 70, y: top - 140, w: Math.max(900, right - left + 140), h: Math.max(760, bottom - top + 200) };
 }
 
 function paint(value) {
@@ -478,7 +528,7 @@ function safeFont(value) {
 }
 
 function safePath(value) {
-  return typeof value === "string" && value.length <= 4000 && /^[MmLlHhVvCcSsQqTtAaZz0-9eE ,.-]+$/.test(value);
+  return typeof value === "string" && value.length <= 100000 && /^[MmLlHhVvCcSsQqTtAaZz0-9eE ,.+-]+$/.test(value);
 }
 
 function number(value) {
@@ -520,4 +570,83 @@ export function handStrokeNode(id, points, color, marker = false) {
   return { id, name: marker ? 'Marker stroke' : 'Pen stroke', t: 'vector', kind: 'pen',
     place: { x: minX, y: minY }, w: width, h: height, d, fill: 'none', stroke: color,
     strokeWidth: 2.2, opacity: 1 };
+}
+
+export function addBoardFrame(board, id, point, size, colors, sketch = false) {
+  if ((board.screens?.length ?? 0) >= 500 || indexNodes(board).size >= 10000) throw new RangeError("The board is full.");
+  if (![point.x, point.y, size.w, size.h].every(Number.isFinite)) throw new RangeError("Invalid frame geometry.");
+  const screen = { id, title: sketch ? "Hand sketch" : "Frame", pageId: board.pages?.[0]?.id ?? "main",
+    x: point.x, y: point.y, w: Math.min(16000, Math.max(1, size.w)), h: Math.min(16000, Math.max(1, size.h)),
+    root: { id: `${id}-root`, name: sketch ? "Hand sketch" : "Frame", t: "box", dir: "stack",
+      place: { x: 0, y: 0 }, w: Math.min(16000, Math.max(1, size.w)), h: Math.min(16000, Math.max(1, size.h)),
+      radius: sketch ? 18 : 0, clip: true, fill: colors.card, stroke: colors.accent, strokeWidth: 2.2, kids: [],
+      ...(sketch ? { sketch: true, dash: "6 5" } : {}) } };
+  board.screens ??= [];
+  board.pages ??= [];
+  if (!board.pages.length) board.pages.push({ id: "main", title: "Main", objects: [], order: [], start: null });
+  board.screens.push(screen);
+  board.pages[0].order ??= [];
+  board.pages[0].order.push(id);
+  board.pages[0].start ??= id;
+  return screen;
+}
+
+export function appendBoardNode(board, screenId, parentId, node) {
+  const item = indexNodes(board).get(parentId);
+  if (!item || item.screen.id !== screenId || item.node.t !== "box" || item.ancestors.length + 1 > 30 || indexNodes(board).size >= 10000) {
+    throw new RangeError("The board cannot hold this node.");
+  }
+  item.node.kids.push(node);
+}
+
+export function sketchStroke(board, screen, id, points, color, marker = false) {
+  const bounded = points.slice(0, 180).map((point) => ({
+    x: Math.max(15, Math.min(285, point.x - screen.x)),
+    y: Math.max(24, Math.min(524, point.y - screen.y)),
+  }));
+  const node = handStrokeNode(id, bounded, color, marker);
+  if (marker) node.opacity = 0.4;
+  appendBoardNode(board, screen.id, screen.root.id, node);
+  return node;
+}
+
+export function touchedStrokes(board, from, to = from, tolerance = 4) {
+  const found = [];
+  for (const item of indexNodes(board).values()) {
+    const node = item.node;
+    if (node.t !== "vector" || node.kind !== "pen") continue;
+    const values = /^\s*M[-\d.eE ,]+(?:\s*L[-\d.eE ,]+)+\s*$/.test(node.d ?? "")
+      ? node.d.match(/-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi)?.map(Number) : null;
+    if (!values) continue;
+    const points = [];
+    for (let i = 0; i < values.length; i += 2) points.push({ x: item.x + values[i] * node.w / 100, y: item.y + values[i + 1] * node.h / 100 });
+    for (let i = 1; i < points.length; i += 1) {
+      if (segmentsTouch(from, to, points[i - 1], points[i], tolerance + (node.strokeWidth ?? 2.2) / 2)) { found.push(node.id); break; }
+    }
+  }
+  return found;
+}
+
+function segmentsTouch(a, b, c, d, radius) {
+  const cross = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const distance = (p, q, r) => {
+    const length = (r.x - q.x) ** 2 + (r.y - q.y) ** 2;
+    const t = length ? Math.max(0, Math.min(1, ((p.x - q.x) * (r.x - q.x) + (p.y - q.y) * (r.y - q.y)) / length)) : 0;
+    return Math.hypot(p.x - q.x - t * (r.x - q.x), p.y - q.y - t * (r.y - q.y));
+  };
+  const intersects = cross(a, b, c) * cross(a, b, d) <= 0 && cross(c, d, a) * cross(c, d, b) <= 0
+    && Math.max(a.x, b.x) >= Math.min(c.x, d.x) && Math.max(c.x, d.x) >= Math.min(a.x, b.x)
+    && Math.max(a.y, b.y) >= Math.min(c.y, d.y) && Math.max(c.y, d.y) >= Math.min(a.y, b.y);
+  return intersects || Math.min(distance(a, c, d), distance(b, c, d), distance(c, a, b), distance(d, a, b)) <= radius;
+}
+
+export function boardColors(document, host) {
+  const computed = document.defaultView?.getComputedStyle?.(host);
+  const colors = {};
+  for (const [name, token] of Object.entries({ text: "--text", accent: "--accent", wait: "--waiting", card: "--card" })) {
+    const value = computed?.getPropertyValue(token).trim();
+    if (!paint(value) || value === "none") throw new RangeError("The board color is unavailable.");
+    colors[name] = value;
+  }
+  return colors;
 }

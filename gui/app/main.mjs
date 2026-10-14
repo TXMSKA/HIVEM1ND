@@ -38,7 +38,7 @@ import {
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
-import { addNode, boardCommentAnchor, editedBoard, hitBoardNode, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, uploadAsset } from "./blueprint.mjs";
+import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
@@ -65,6 +65,7 @@ import {
   replyComment,
   resolveComment,
   setAttachments,
+  expandAttachments,
   startWatch,
   stopWatch,
 } from "./editors.mjs";
@@ -337,6 +338,7 @@ export function navigate(app, mode) {
 }
 
 export function renderShell(app) {
+  if (app.editors?.current?.boardGesture) return;
   app.rendering = true;
   try {
     paintShell(app);
@@ -409,6 +411,7 @@ function textDraftsDiffer(editor) {
 
 function editorFormsDirty(editor) {
   if (!editor) return false;
+  if (editor.boardDraft) return true;
   if (editor.commentText) return true;
   if (editor.nodeDraft) return true;
   if (textDraftsDiffer(editor)) return true;
@@ -1485,50 +1488,166 @@ function queueCatalog(app, kind) {
 }
 
 function boardSurface(app, document, editor, t) {
-  const host = element(document, "div", { class: "board-host" });
-  editor.focus = app.editors.focus;
+  const host = element(document, "div", { class: "board-host", "data-board-tool": editor.boardTool ?? "select" });
+  const canvas = element(document, "div", { class: "board-canvas" });
+  app.editors.selectedNodeId = editor.selectedNodeId ?? null;
+  editor.focus = app.editors.focus?.resourceId === editor.resourceId ? app.editors.focus : null;
   editor.viewport = app.editors.viewport;
-  editor.panned = app.editors.panned === true;
-  renderBoard(document, host, editor);
-  const choose = (target) => chooseBoardTarget(app, editor, target);
-  host.addEventListener("click", (event) => {
-    if (event.target?.closest?.("[data-toolbar='board']")) return;
-    const marked = event.target?.closest?.("[data-node]");
-    const screenMarked = event.target?.closest?.("[data-screen]");
-    const svg = host.querySelector("svg");
-    const point = boardPoint(svg, event);
-    if (marked?.getAttribute?.("data-node")) {
-      choose({
-        kind: "node",
-        nodeId: marked.getAttribute("data-node"),
-        screenId: marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null,
-        x: point.x,
-        y: point.y,
-      });
-    } else if (screenMarked?.getAttribute?.("data-screen")) {
-      choose({ kind: "screen", screenId: screenMarked.getAttribute("data-screen"), x: point.x, y: point.y });
-    } else {
-      const hit = hitBoardNode(editor.authoritative.document, point);
-      if (hit?.nodeId) choose({ kind: "node", nodeId: hit.nodeId, screenId: hit.screenId, x: point.x, y: point.y });
-      else choose({ kind: "canvas", x: point.x, y: point.y });
+  editor.panned = app.editors.panned === true && !editor.boardDraft;
+  const repaint = () => { renderBoard(document, canvas, editor); paintBoardSelection(app, document, host, editor, t); };
+  host.append(canvas, boardToolbar(app, document, editor, t), boardProperties(app, document, editor, t));
+  const editable = canEditResources(app) && !editor.authoritative.readOnly;
+  let gesture = null, suppressClick = false;
+  const targetAt = (event) => {
+    const point = boardPoint(canvas.querySelector("svg"), event);
+    const screenId = event.target?.getAttribute?.("data-screen");
+    if (screenId) return { kind: "screen", screenId, ...point };
+    const hit = hitBoardNode(boardDocument(editor), point);
+    return hit ? { kind: "node", ...hit, ...point } : { kind: "canvas", ...point };
+  };
+  const nativeStrokeHits = (event) => {
+    const ids = [];
+    for (const path of canvas.querySelectorAll("path[data-kind='pen']")) {
+      if (!path.isPointInStroke || !path.getScreenCTM || !canvas.querySelector("svg").createSVGPoint) continue;
+      const cursor = canvas.querySelector("svg").createSVGPoint(); cursor.x = event.clientX; cursor.y = event.clientY;
+      if (path.isPointInStroke(cursor.matrixTransform(path.getScreenCTM().inverse()))) ids.push(path.closest("[data-node]").getAttribute("data-node"));
     }
+    return ids;
+  };
+  const cancel = () => {
+    if (!gesture) return;
+    editor.boardDraft = gesture.previous && JSON.stringify(gesture.previous) !== JSON.stringify(editor.authoritative.document) ? gesture.previous : null;
+    editor.dirty = Boolean(editor.boardDraft) || gesture.dirty && Boolean(editor.commentText || editor.nodeDraft);
+    const pointerId = gesture.pointerId;
+    gesture = null;
+    editor.boardGesture = false;
+    host.releasePointerCapture?.(pointerId);
+    renderShell(app);
+  };
+  host.addEventListener("pointerdown", (event) => {
+    if (gesture || event.button > 0) return;
+    if (event.target?.closest?.("button, input, textarea, details, [data-toolbar]")) {
+      if (!event.target?.closest?.("[data-resize]")) return;
+    }
+    const target = targetAt(event), board = boardDocument(editor), tool = editor.boardTool ?? "select";
+    const corner = event.target?.closest?.("[data-resize]")?.getAttribute("data-resize") ?? null;
+    if (tool === "comment") { chooseBoardTarget(app, editor, target); editor.commentPopover = true; renderShell(app); return; }
+    if (tool === "text") { if (editable) insertBoardText(app, editor, target, document, host); return; }
+    if (!editable || editor.conflict) return;
+    if (tool === "select" && !corner) chooseBoardTarget(app, editor, target, false);
+    const item = indexNodes(board).get(corner ? editor.selectedNodeId : target.nodeId);
+    if (tool === "select" && !item) { renderShell(app); return; }
+    const sketch = tool === "draw" ? [...(board.screens ?? [])].reverse().find((screen) => screen.root?.sketch && target.x >= screen.x && target.x <= screen.x + screen.w && target.y >= screen.y && target.y <= screen.y + screen.h) : null;
+    if (tool === "draw" && !sketch && editor.drawTool !== "eraser") return;
+    if (editor.boardErasing || (tool === "draw" && editor.drawTool === "eraser" && editor.boardDraft)) return;
+    gesture = { pointerId: event.pointerId, tool, corner, item, sketch, start: target, points: [target], previous: editor.boardDraft,
+      dirty: editor.dirty, base: structuredClone(board), removed: new Set(), moved: false };
+    if (tool === "draw" && editor.drawTool === "eraser") {
+      for (const id of [...touchedStrokes(board, target), ...nativeStrokeHits(event)]) gesture.removed.add(id);
+      gesture.moved = gesture.removed.size > 0;
+    }
+    editor.boardGesture = true;
+    suppressClick = true;
+    host.setPointerCapture?.(event.pointerId);
+    event.preventDefault?.();
+  });
+  host.addEventListener("pointermove", (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const point = boardPoint(canvas.querySelector("svg"), event), current = gesture;
+    const next = structuredClone(current.base);
+    current.moved ||= Math.hypot(point.x - current.start.x, point.y - current.start.y) > 0.5;
+    if (current.tool === "select") {
+      const start = parentPoint(current.base, current.item.node.id, current.start), end = parentPoint(current.base, current.item.node.id, point);
+      Object.assign(indexNodes(next).get(current.item.node.id).node, dragNodeGeometry(current.item.node, end.x - start.x, end.y - start.y, current.corner));
+    } else if (current.tool === "frame") {
+      addBoardFrame(next, "preview-frame", { x: Math.min(point.x, current.start.x), y: Math.min(point.y, current.start.y) },
+        { w: Math.abs(point.x - current.start.x), h: Math.abs(point.y - current.start.y) }, boardColors(document, host));
+    } else if (editor.drawTool === "eraser") {
+      const last = current.points.at(-1);
+      for (const id of touchedStrokes(current.base, last, point)) current.removed.add(id);
+      // Native SVG geometry also covers retained curves from Lite boards.
+      for (const id of nativeStrokeHits(event)) current.removed.add(id);
+      current.points.push(point);
+      for (const item of indexNodes(next).values()) if (item.node.kids) item.node.kids = item.node.kids.filter((node) => !current.removed.has(node.id));
+    } else {
+      if (current.points.length < 180) current.points.push(point); else current.points[current.points.length - 1] = point;
+      sketchStroke(next, current.sketch, "preview-stroke", current.points, boardColors(document, host)[editor.drawColor ?? "text"], editor.drawTool === "marker");
+    }
+    editor.boardDraft = next;
+    repaint();
+  });
+  host.addEventListener("pointerup", (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const current = gesture;
+    gesture = null;
+    editor.boardGesture = false;
+    host.releasePointerCapture?.(event.pointerId);
+    if (!current.moved) { editor.boardDraft = current.previous && JSON.stringify(current.previous) !== JSON.stringify(editor.authoritative.document) ? current.previous : null; renderShell(app); return; }
+    if (current.tool === "draw" && editor.drawTool === "eraser") {
+      editor.boardDraft = current.previous;
+      editor.boardErasing = true;
+      editorAct(app, `erase:${editor.resourceId}`, t("eraser"), async (record) => {
+        try {
+        for (const id of current.removed) {
+          if (!indexNodes(editor.authoritative.document).has(id)) continue;
+          await removeNode(app.api, editor, id, record.operation);
+          record.operation = null;
+        }
+        } finally { editor.boardErasing = false; }
+      });
+      return;
+    }
+    const next = editor.boardDraft;
+    if (current.tool === "frame") {
+      const frame = next.screens.at(-1), id = `frame-${operationId()}`;
+      frame.id = id; frame.root.id = `${id}-root`;
+      next.pages[0].order = next.pages[0].order.map((item) => item === "preview-frame" ? id : item);
+      if (next.pages[0].start === "preview-frame") next.pages[0].start = id;
+    } else if (current.tool === "draw") {
+      const stroke = indexNodes(next).get("preview-stroke").node; stroke.id = `stroke-${operationId()}`;
+    }
+    editor.boardDraft = current.previous;
+    setBoardDraft(editor, next);
+    saveBoardDraft(app, editor);
+  });
+  host.addEventListener("pointercancel", cancel);
+  host.addEventListener("lostpointercapture", cancel);
+  host.addEventListener("click", (event) => {
+    if (event.target?.closest?.("button, input, textarea, details, [data-toolbar]")) return;
+    if (suppressClick) { suppressClick = false; return; }
+    const target = targetAt(event);
+    chooseBoardTarget(app, editor, target);
+    if (editor.boardTool === "comment") { editor.commentPopover = true; renderShell(app); }
   });
   host.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    const marked = event.target?.closest?.("[data-node]");
-    const nodeId = marked?.getAttribute?.("data-node");
-    if (!nodeId) return;
-    event.preventDefault?.();
-    choose({
-      kind: "node",
-      nodeId,
-      screenId: marked.closest?.("[data-screen]")?.getAttribute("data-screen") ?? null,
-      x: 0,
-      y: 0,
-    });
+    if (event.target?.closest?.("input, textarea")) return;
+    if (event.key === "Escape") { cancel(); editor.commentPopover = false; return; }
+    const nodeId = event.target?.closest?.("[data-node]")?.getAttribute("data-node") ?? editor.selectedNodeId;
+    const item = indexNodes(boardDocument(editor)).get(nodeId);
+    if (["Enter", " ", "c", "C"].includes(event.key) && item) {
+      event.preventDefault?.();
+      chooseBoardTarget(app, editor, { kind: "node", nodeId, screenId: item.screen.id, x: item.x, y: item.y }, false);
+      if (event.key.toLowerCase() === "c") editor.commentPopover = true;
+      renderShell(app);
+    } else if (editable && item && !editor.conflict && !editor.boardErasing && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      event.preventDefault?.();
+      const step = event.shiftKey ? 10 : 1, next = structuredClone(boardDocument(editor));
+      Object.assign(indexNodes(next).get(nodeId).node, dragNodeGeometry(item.node,
+        event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0,
+        event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0));
+      setBoardDraft(editor, next); saveBoardDraft(app, editor);
+    }
   });
+  repaint();
+  document.defaultView?.requestAnimationFrame?.(() => { if (host.isConnected) paintBoardSelection(app, document, host, editor, t); });
+  return host;
+}
+
+function boardProperties(app, document, editor, t) {
+  const host = element(document, "details", { class: "board-properties" });
+  host.append(element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: "⋯" }));
   const nodes = editor.authoritative.document.screens?.[0];
-  const tools = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
+  const tools = element(document, "div", { class: "board-property-fields" });
   const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
   name.addEventListener("input", () => {
@@ -1584,7 +1703,7 @@ function boardSurface(app, document, editor, t) {
     onclick: () => commentOnNode(app, editor),
   }, t("comment")));
   if (canEditResources(app)) appendStructureTools(app, document, editor, t, tools);
-  host.append(tools, boardOutline(app, document, editor, t));
+  host.append(element(document, "div", { class: "board-property-menu" }, tools, boardOutline(app, document, editor, t)));
   for (const issue of editor.assetIssues ?? []) {
     host.append(element(document, "p", { "data-asset-issue": issue.code, text: t("assetMissing") }));
   }
@@ -1653,24 +1772,28 @@ function findBoardNode(node, id) {
   return null;
 }
 
-function chooseBoardTarget(app, editor, target) {
+function chooseBoardTarget(app, editor, target, render = true) {
   const located = { resourceId: editor.resourceId, x: target.x ?? 0, y: target.y ?? 0 };
   if (target.kind === "node") {
     app.editors.selectedNodeId = target.nodeId;
-    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: target.screenId, resourceId: editor.resourceId };
+    editor.selectedNodeId = target.nodeId;
+    app.editors.focus = { screenId: target.screenId, nodeId: target.nodeId, resourceId: editor.resourceId };
     app.editors.commentTarget = { ...located, kind: "node", nodeId: target.nodeId, screenId: target.screenId };
   } else if (target.kind === "screen") {
     app.editors.selectedNodeId = null;
-    app.editors.focus = { ...(app.editors.focus ?? {}), screenId: target.screenId, resourceId: editor.resourceId };
+    editor.selectedNodeId = null;
+    app.editors.focus = { screenId: target.screenId, nodeId: null, resourceId: editor.resourceId };
     app.editors.commentTarget = { ...located, kind: "screen", screenId: target.screenId };
   } else {
+    app.editors.selectedNodeId = null;
+    editor.selectedNodeId = null;
     app.editors.commentTarget = { ...located, kind: "canvas" };
   }
-  renderShell(app);
+  if (render) renderShell(app);
 }
 
 function boardOutline(app, document, editor, t) {
-  const board = editor.authoritative?.document;
+  const board = boardDocument(editor);
   const tree = element(document, "div", { class: "board-outline", role: "tree", "aria-label": t("boardOutline") });
   for (const screen of board?.screens ?? []) {
     const title = typeof screen.title === "string" && screen.title ? screen.title : screen.id;
@@ -1686,8 +1809,8 @@ function appendOutlineNodes(app, document, editor, tree, node, screen) {
     kind: "node",
     nodeId: node.id,
     screenId: screen.id,
-    x: Number(node.place?.x) || 0,
-    y: Number(node.place?.y) || 0,
+    x: indexNodes(boardDocument(editor)).get(node.id)?.x ?? 0,
+    y: indexNodes(boardDocument(editor)).get(node.id)?.y ?? 0,
     label: node.name || node.id,
   }));
   for (const child of node.kids ?? []) appendOutlineNodes(app, document, editor, tree, child, screen);
@@ -1705,12 +1828,175 @@ function outlineButton(app, document, editor, target) {
 }
 
 function boardPoint(svg, event) {
-  if (!svg?.createSVGPoint || !svg.getScreenCTM) return { x: event.offsetX ?? 0, y: event.offsetY ?? 0 };
+  if (!svg?.createSVGPoint || !svg.getScreenCTM?.()) return { x: event.offsetX ?? 0, y: event.offsetY ?? 0 };
   const point = svg.createSVGPoint();
   point.x = event.clientX;
   point.y = event.clientY;
   const local = point.matrixTransform(svg.getScreenCTM().inverse());
   return { x: local.x, y: local.y };
+}
+
+function boardToolbar(app, document, editor, t) {
+  const bar = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
+  const tools = element(document, "div", { class: "board-tools" });
+  const paths = { select: "M5 3v16l4-5 4 7 3-2-4-7h7z", frame: "M4 4h16v16H4z", text: "M4 5h16M12 5v15M8 20h8", draw: "M4 20l4-1L20 7l-4-4L4 15z", comment: "M4 5h16v12H9l-5 4z" };
+  for (const tool of ["select", "frame", "text", "draw", "comment"]) {
+    const label = t(`board${tool[0].toUpperCase()}${tool.slice(1)}`);
+    const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg"); glyph.setAttribute("viewBox", "0 0 24 24"); glyph.setAttribute("class", "icon"); glyph.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", paths[tool]); glyph.append(path);
+    tools.append(element(document, "button", { type: "button", class: "board-tool", "data-board-tool": tool, "aria-label": label, title: label,
+      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && (!canEditResources(app) || editor.authoritative.readOnly) ? "" : null,
+      onclick: () => {
+        editor.boardTool = tool; editor.commentPopover = false;
+        if (tool === "draw" && !boardDocument(editor).screens?.some((screen) => screen.root?.sketch)) {
+          const board = structuredClone(boardDocument(editor));
+          const reference = board.screens.find((screen) => screen.id === app.editors.focus?.screenId) ?? board.screens.at(-1);
+          addBoardFrame(board, `sketch-${operationId()}`, { x: (reference?.x ?? 0) + 350, y: (reference?.y ?? 0) + 120 }, { w: 300, h: 560 }, boardColors(document, app.root), true);
+          editor.boardView = boardBounds(board); setBoardDraft(editor, board); saveBoardDraft(app, editor);
+        }
+        renderShell(app);
+      } }, glyph));
+  }
+  bar.append(tools, element(document, "span", { class: "board-divider", "aria-hidden": "true" }));
+  if (editor.boardTool === "draw") {
+    for (const color of ["text", "accent", "wait"]) bar.append(element(document, "button", { type: "button", class: `board-swatch board-swatch-${color}`,
+      "data-draw-color": color, "aria-label": t(`boardColor${color[0].toUpperCase()}${color.slice(1)}`), "aria-pressed": String((editor.drawColor ?? "text") === color),
+      onclick: () => { editor.drawColor = color; renderShell(app); } }, element(document, "span", { "aria-hidden": "true" })));
+    for (const tool of ["pen", "marker", "eraser"]) bar.append(element(document, "button", { type: "button", class: "board-draw-tool", "data-draw-tool": tool,
+      "aria-pressed": String((editor.drawTool ?? "pen") === tool), text: t(tool), onclick: () => { editor.drawTool = tool; renderShell(app); } }));
+    bar.append(element(document, "span", { class: "board-divider", "aria-hidden": "true" }));
+  }
+  return bar;
+}
+
+function saveBoardDraft(app, editor) {
+  syncViewerDirty(app);
+  if (editor.conflict || activityPending(app, `board:${editor.resourceId}`)) return;
+  return editorAct(app, `board:${editor.resourceId}`, text(app.language, "savingDocument"), async (record) => {
+    try {
+      while (editor.boardDraft && !editor.boardGesture && !editor.conflict) {
+        await replaceBoard(app.api, editor, structuredClone(editor.boardDraft), record.operation);
+        record.operation = null;
+      }
+      syncViewerDirty(app);
+    } catch (error) {
+      if (error.code === "revision_conflict") {
+        editor.remoteStale = true;
+        await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
+      }
+      throw error;
+    }
+  });
+}
+
+function insertBoardText(app, editor, target, document, host) {
+  const board = structuredClone(boardDocument(editor));
+  const hit = indexNodes(board).get(target.nodeId);
+  const parent = hit?.node.t === "box" ? hit : hit?.ancestors.length ? indexNodes(board).get(hit.ancestors.at(-1).id) : null;
+  if (!parent) return;
+  const node = { id: `text-${operationId()}`, name: "Text", t: "text", value: "Text", size: 14, weight: 400, align: "left",
+    color: boardColors(document, host).text, place: { x: target.x - parent.x, y: target.y - parent.y }, w: 160, h: 24 };
+  appendBoardNode(board, parent.screen.id, parent.node.id, node);
+  editor.selectedNodeId = node.id; app.editors.selectedNodeId = node.id; editor.boardTool = "select";
+  setBoardDraft(editor, board); saveBoardDraft(app, editor);
+}
+
+function boardPixel(svg, host, point) {
+  if (!svg?.createSVGPoint || !svg.getScreenCTM?.()) return point;
+  const cursor = svg.createSVGPoint(); cursor.x = point.x; cursor.y = point.y;
+  const projected = cursor.matrixTransform(svg.getScreenCTM()), bounds = host.getBoundingClientRect();
+  return { x: projected.x - bounds.left + (host.scrollLeft ?? 0), y: projected.y - bounds.top + (host.scrollTop ?? 0) };
+}
+
+function paintBoardSelection(app, document, host, editor, t) {
+  const properties = host.querySelector(".board-properties");
+  if (properties) { properties.hidden = true; host.append(properties); }
+  for (const node of host.querySelectorAll("[data-board-overlay]")) node.remove();
+  const svg = host.querySelector(".board-svg"), board = boardDocument(editor);
+  const point = (value) => boardPixel(svg, host, value);
+  const position = (node, value) => { const pixel = point(value); node.style.left = `${pixel.x}px`; node.style.top = `${pixel.y}px`; return node; };
+  const item = indexNodes(board).get(editor.selectedNodeId);
+  if (item && ["select", "comment"].includes(editor.boardTool ?? "select")) {
+    const start = point(item), end = point({ x: item.x + item.node.w, y: item.y + item.node.h });
+    const outline = position(element(document, "div", { class: "board-selection", "data-board-overlay": "selection" }), item);
+    outline.style.width = `${end.x - start.x}px`; outline.style.height = `${end.y - start.y}px`; host.append(outline);
+    if ((editor.boardTool ?? "select") === "select" && canEditResources(app) && !editor.authoritative.readOnly && !editor.conflict) {
+      for (const corner of ["nw", "ne", "sw", "se"]) host.append(position(element(document, "button", { type: "button", class: "board-resize",
+        "data-board-overlay": "handle", "data-resize": corner, "aria-label": t("boardResize", { corner }),
+        onkeydown: (event) => {
+          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+          event.preventDefault?.(); event.stopPropagation?.();
+          const next = structuredClone(boardDocument(editor));
+          Object.assign(indexNodes(next).get(item.node.id).node, dragNodeGeometry(item.node, event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0,
+            event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0, corner));
+          setBoardDraft(editor, next); saveBoardDraft(app, editor);
+        } }), { x: item.x + (corner.includes("e") ? item.node.w : 0), y: item.y + (corner.includes("s") ? item.node.h : 0) }));
+      const bar = element(document, "div", { class: "board-element-bar", "data-board-overlay": "element", "aria-label": t("boardElement") },
+        element(document, "strong", { text: item.node.name }), element(document, "span", { class: "board-dimensions", text: `${Math.round(item.node.w)} × ${Math.round(item.node.h)}` }));
+      const fill = element(document, "input", { type: "color", "aria-label": t("boardFill"), "data-node-fill": item.node.id });
+      fill.value = /^#[\da-f]{6}$/i.test(item.node.fill ?? item.node.color ?? "") ? item.node.fill ?? item.node.color : boardColors(document, app.root).card;
+      fill.addEventListener("change", () => {
+        const next = structuredClone(boardDocument(editor)), node = indexNodes(next).get(item.node.id).node;
+        node[node.t === "text" && node.fill === undefined ? "color" : "fill"] = fill.value;
+        setBoardDraft(editor, next); saveBoardDraft(app, editor);
+      });
+      bar.append(element(document, "label", {}, fill, t("boardFill")));
+      if (item.node.t === "text") {
+        const value = element(document, "input", { type: "text", maxlength: "20000", "data-node-text": item.node.id, "data-keep": keepId("board-text", editor.resourceId, item.node.id), "aria-label": t("boardText") });
+        value.value = item.node.value;
+        value.addEventListener("input", () => {
+          const next = structuredClone(boardDocument(editor)); indexNodes(next).get(item.node.id).node.value = value.value;
+          setBoardDraft(editor, next); saveBoardDraft(app, editor);
+        });
+        bar.append(value);
+      }
+      if (properties) { properties.hidden = false; bar.append(properties); }
+      const pixel = point({ x: item.x, y: item.y + item.node.h }); bar.style.left = `${pixel.x - 30}px`; bar.style.top = `${pixel.y + 16}px`; host.append(bar);
+    }
+  }
+  for (const [index, thread] of (editor.threads ?? []).filter((thread) => !thread.pending && thread.status !== "resolved").entries()) {
+    const anchor = thread.anchor;
+    if (!anchor?.point) continue;
+    const pin = position(element(document, "button", { type: "button", class: "board-comment-pin", "data-board-overlay": "pin", "data-comment-pin": thread.id,
+      "aria-label": t("boardCommentNumber", { count: index + 1 }), text: index + 1, onclick: () => {
+        app.editors.commentTarget = { resourceId: editor.resourceId, kind: anchor.element ? "node" : anchor.screen ? "screen" : "canvas",
+          nodeId: anchor.element, screenId: anchor.screen, ...anchor.point };
+        editor.commentPopover = true; renderShell(app);
+      } }), anchor.point); host.append(pin);
+  }
+  if (editor.commentPopover) {
+    const anchor = currentCommentAnchor(app);
+    if (!anchor) return;
+    const popover = element(document, "div", { class: "board-comment-popover", "data-board-overlay": "comment", role: "dialog", "aria-label": t("boardComment") }, element(document, "p", { class: "board-breadcrumb", text: anchor.path.join(" / ") }));
+    const field = element(document, "textarea", { "data-board-comment": "true", "data-keep": keepId("board-comment", editor.resourceId), "aria-label": t("boardComment") }); field.value = editor.commentText ?? "";
+    const submit = element(document, "button", { type: "button", class: "btn primary", text: t("boardComment"), disabled: !field.value.trim() ? "" : null, onclick: () => {
+      sendEditorComment(app, editor, anchor, field.value); editor.commentPopover = false;
+    } });
+    field.addEventListener("input", () => { editor.commentText = field.value; submit.disabled = !field.value.trim(); syncViewerDirty(app); });
+    popover.append(field, element(document, "div", { class: "board-comment-actions" }, element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => { editor.commentPopover = false; renderShell(app); } }), submit));
+    const pixel = point(anchor.point); popover.style.left = `${Math.max(0, Math.min(host.clientWidth - 320, pixel.x + 32))}px`; popover.style.top = `${pixel.y}px`; host.append(popover);
+  }
+  if (editor.conflict) host.append(boardConflict(app, document, editor, t));
+}
+
+function boardConflict(app, document, editor, t) {
+  const banner = element(document, "div", { class: "board-conflict", "data-board-overlay": "conflict", "data-conflict": "true" }, element(document, "span", { text: t("outsideChange") }));
+  const pending = app.activity.get(`board:${editor.resourceId}`);
+  const unconfirmed = editor.boardSaving || app.api.uncertain.has(pending?.operation?.id);
+  for (const [key, action] of [["showChanges", "show-changes"], ["keepMine", "reapply-draft"], ["reloadBoard", "discard-draft"]]) banner.append(element(document, "button", { type: "button", class: "btn", "data-action": action, text: t(key), disabled: key !== "showChanges" && unconfirmed ? "" : null, onclick: () => {
+    if (key === "showChanges") { editor.showChanges = !editor.showChanges; renderShell(app); return; }
+    if (key === "keepMine") {
+      if (!reapplyEditorDraft(app.editors)) return;
+      app.activity.delete(`board:${editor.resourceId}`);
+      saveBoardDraft(app, editor);
+    }
+    else { discardEditorDraft(app.editors); syncViewerDirty(app); }
+    editor.showChanges = false; renderShell(app);
+  } }));
+  if (editor.showChanges) banner.append(element(document, "div", { class: "board-change-preview", "data-board-changes": "true" },
+    element(document, "section", {}, element(document, "strong", { text: t("boardLocalVersion") }), element(document, "pre", { text: JSON.stringify(boardDocument(editor), null, 2) })),
+    element(document, "section", {}, element(document, "strong", { text: t("boardIncomingVersion") }), element(document, "pre", { text: JSON.stringify(editor.conflict.remote?.document, null, 2) }))));
+  return banner;
 }
 
 function voidSurface(app, document, editor, t) {
@@ -1929,7 +2215,7 @@ function renderEditorSurfaces(app, t) {
   );
   resource.append(tools);
   if (app.libraryToast) resource.append(renderLibraryToast(app, t));
-  if (current?.conflict) {
+  if (current?.conflict && current.kind !== "blueprint") {
     resource.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
     resource.append(element(document, "button", {
       type: "button",
@@ -1983,7 +2269,7 @@ function renderEditorSurfaces(app, t) {
   const choice = current.attachmentChoice;
   const units = app.unitList?.catalog ?? [];
   const chips = element(document, "div", { class: "attach-chips", "data-attached": [...choice].join(" ") });
-  for (const id of choice) {
+  for (const id of current.attached ?? []) {
     const unit = units.find((item) => item.id === id);
     chips.append(element(document, "span", { class: "chip", "data-chip": id, text: unit?.unit || id }));
   }
@@ -1992,11 +2278,11 @@ function renderEditorSurfaces(app, t) {
     type: "button",
     class: "btn",
     "data-action": "attach",
-    text: t("attach"),
+    text: t(current.kind === "blueprint" ? "attachAgents" : "attach"),
     onclick: () => openAttachChooser(app),
   }));
   actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
+  if (current.kind !== "blueprint" || watch?.watchId) actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
     await stopWatch(app.api, editors, record.operation);
   }) }, t("stopWatch")));
   if (current.attachmentConflict) {
@@ -2013,7 +2299,12 @@ function renderEditorSurfaces(app, t) {
       },
     }));
   }
-  tools.append(chips, actions);
+  if (current.kind === "blueprint") {
+    if (!(current.attached?.length)) chips.append(element(document, "span", { class: "field-hint", text: t("noAgentsAttached") }));
+    const toolbar = resource.querySelector("[data-toolbar='board']");
+    toolbar?.append(chips);
+    if (current.boardTool !== "draw") toolbar?.append(actions);
+  } else tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
   if (!(current.threads?.length)) {
     comments.append(element(document, "p", {
@@ -2110,7 +2401,9 @@ function saveAttachments(app) {
   const editors = editorsOf(app);
   const choice = editors.current?.attachmentChoice;
   return editorAct(app, `attach:${editors.current?.resourceId ?? "none"}`, text(app.language, "attach"), async (record) => {
-    await setAttachments(app.api, editors, [...(choice ?? [])], record.operation);
+    const units = app.unitList?.catalog ?? [...app.store.indexes.units.values()];
+    const groups = [...app.store.indexes.groups.values()];
+    await setAttachments(app.api, editors, expandAttachments(units, groups, [...(choice ?? [])]), record.operation);
   });
 }
 
@@ -2147,7 +2440,7 @@ function setCommentEnabled(button, enabled) {
 
 function currentCommentAnchor(app) {
   const editor = app.editors?.current;
-  const board = editor?.authoritative?.document ?? editor?.document;
+  const board = editor?.kind === "blueprint" ? boardDocument(editor) : editor?.authoritative?.document ?? editor?.document;
   if (!editor || !board) return null;
   if (editor.kind === "void") {
     const host = app.root.querySelector?.("[data-void]");
@@ -2334,27 +2627,29 @@ function openAttachChooser(app) {
   if (!current || document.querySelector?.("[data-form='attach']")) return;
   const choice = current.attachmentChoice ?? new Set();
   current.attachmentChoice = choice;
+  current.attachmentChoiceRevision = current.attachmentRevision;
   const dialog = element(document, "dialog", { class: "dialog", "data-form": "attach" });
   const form = element(document, "form", { method: "dialog" });
-  const heading = element(document, "h2", { text: text(app.language, "chooseUnits") });
+  const heading = element(document, "h2", { text: text(app.language, "attachAgents") });
   labelDialog(dialog, heading);
   const search = element(document, "input", {
     type: "search",
     "data-attach-search": "true",
-    "aria-label": text(app.language, "search"),
+    "aria-label": text(app.language, "searchUnitsGroups"),
+    placeholder: text(app.language, "searchUnitsGroups"),
   });
   const list = element(document, "div", { class: "attach-choices", role: "listbox" });
   const paint = () => {
     const query = search.value.trim().toLowerCase();
-    const units = (app.unitList?.catalog ?? [])
-      .filter((unit) => !query || String(unit.unit ?? "").toLowerCase().includes(query))
-      .slice(0, 40);
-    list.replaceChildren(...units.map((unit) => element(document, "button", {
+    const units = (app.unitList?.catalog ?? []).map((unit) => ({ id: unit.id, label: unitDisplayName(unit), kind: "unit", search: `${unit.id} ${unit.unit} ${unit.alias ?? ""}` }));
+    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: group.title, kind: "group", search: group.title }));
+    const entries = [...units, ...groups].filter((entry) => !query || entry.search.toLowerCase().includes(query));
+    list.replaceChildren(...entries.map((unit) => element(document, "button", {
       type: "button",
-      class: "btn",
-      "data-attach-unit": unit.id,
+      class: "attach-choice",
+      [unit.kind === "unit" ? "data-attach-unit" : "data-attach-group"]: unit.id,
       "aria-pressed": choice.has(unit.id) ? "true" : "false",
-      text: `${choice.has(unit.id) ? "* " : ""}${unit.unit}`,
+      text: unit.label,
       onclick: () => {
         if (choice.has(unit.id)) choice.delete(unit.id);
         else if (choice.size >= 256) editors.error = { code: "invalid_body" };
@@ -2362,13 +2657,15 @@ function openAttachChooser(app) {
         paint();
       },
     })));
+    try { confirm.textContent = text(app.language, "attachCount", { count: expandAttachments(app.unitList?.catalog ?? [], [...app.store.indexes.groups.values()], [...choice]).length }); }
+    catch { confirm.textContent = text(app.language, "tooLarge"); }
   };
   search.addEventListener("input", paint);
   const confirm = element(document, "button", {
     type: "button",
     class: "btn primary",
     "data-action": "save-attachments",
-    text: text(app.language, "attach"),
+    text: text(app.language, "attachCount", { count: choice.size }),
   });
   confirm.addEventListener("click", async () => {
     if (confirm.getAttribute("aria-busy") === "true") return;
@@ -2401,7 +2698,7 @@ function openAttachChooser(app) {
     class: "btn",
     "data-action": "cancel-form",
     text: text(app.language, "cancel"),
-    onclick: () => dialog.close(),
+    onclick: () => { current.attachmentChoice = new Set(current.attached); delete current.attachmentChoiceRevision; dialog.close(); },
   }));
   dialog.append(form);
   dialog.addEventListener("close", () => {
@@ -2410,7 +2707,11 @@ function openAttachChooser(app) {
   });
   document.body.append(dialog);
   paint();
-  if (typeof dialog.showModal === "function") dialog.showModal();
+  const bounds = app.root.querySelector(".board-host")?.getBoundingClientRect() ?? app.root.getBoundingClientRect();
+  dialog.style.left = `${Math.max(12, Math.min(document.defaultView.innerWidth - 312, bounds.left + bounds.width / 2 - 150))}px`;
+  dialog.style.top = `${bounds.top + 64}px`;
+  if (dialog.show) dialog.show(); else dialog.setAttribute("open", "");
+  search.focus?.();
 }
 
 function submitRegister(app, kind) {
@@ -2629,11 +2930,10 @@ function addBoardLink(app, editor) {
 
 function saveBoardStructure(app, editor, edit, onSaved) {
   if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
-  const next = editedBoard(editor.authoritative, edit);
-  editorAct(app, `structure:${editor.resourceId}`, text(app.language, "working"), async (record) => {
-    await replaceBoard(app.api, editor, next.document, record.operation);
-    onSaved?.();
-  });
+  const next = editedBoard({ document: boardDocument(editor), revision: editor.revision }, edit);
+  setBoardDraft(editor, next.document);
+  const saved = saveBoardDraft(app, editor);
+  saved?.then(() => { if (!editor.boardDraft && !editor.conflict) { onSaved?.(); syncViewerDirty(app); } });
 }
 
 function replaceVoidDocument(app, editor) {

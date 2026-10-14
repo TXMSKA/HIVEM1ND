@@ -1,5 +1,5 @@
 import { createOperation, perform, request } from "./api.mjs";
-import { loadAssets, releaseAssets } from "./blueprint.mjs";
+import { boardDocument, loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
 import { element, icon } from "./components.mjs";
@@ -242,6 +242,13 @@ export async function openEditor(api, editors, summary) {
     attached: result.data.attached ?? [],
     threads: result.data.threads ?? [],
     draftText: saved?.draftText ?? "",
+    boardDraft: saved?.boardDraft ?? null,
+    editGeneration: saved?.editGeneration ?? 0,
+    boardTool: saved?.boardTool ?? "select",
+    drawTool: saved?.drawTool ?? "pen",
+    drawColor: saved?.drawColor ?? "text",
+    selectedNodeId: saved?.selectedNodeId ?? null,
+    conflictCopies: saved?.conflictCopies ?? [],
     draftKey: saved?.draftKey ?? null,
     textDrafts: saved?.textDrafts ?? new Map(),
     commentText: saved?.commentText ?? "",
@@ -250,6 +257,7 @@ export async function openEditor(api, editors, summary) {
     conflict: saved?.conflict ?? null,
     notices: saved?.notices ?? [],
   };
+  if (next.boardDraft && next.baseRevision !== result.data.revision) next.conflict = { revision: result.data.revision, remote: result.data };
   const previousAssets = saved?.assets;
   next.assets = new Map();
   next.assetIssues = [];
@@ -285,6 +293,17 @@ export async function createResource(api, kind, input, retained = null) {
   return perform(api, { method: "POST", path, body: input }, retained);
 }
 
+export function expandAttachments(units, groups, selected) {
+  const valid = new Set(units.map((unit) => unit.id));
+  const expanded = new Set();
+  for (const id of selected) {
+    const group = groups.find((item) => `group:${item.id}` === id && !item.deleted);
+    for (const member of group ? group.members : [id]) if (valid.has(member)) expanded.add(member);
+  }
+  if (expanded.size > 256) throw Object.assign(new Error("Too many attached units."), { code: "invalid_body" });
+  return [...expanded];
+}
+
 export async function setAttachments(api, editors, attached, retained = null) {
   const current = editors.current;
   if (!current) throw Object.assign(new Error("No editor is open."), { code: "invalid_body" });
@@ -295,10 +314,13 @@ export async function setAttachments(api, editors, attached, retained = null) {
     method: "PUT",
     path: "/editors/:resourceId/attachments",
     params: { resourceId: current.resourceId },
-    body: { attached: unique, expectedRevision: current.attachmentRevision },
+    body: { attached: unique, expectedRevision: Object.hasOwn(current, "attachmentChoiceRevision") ? current.attachmentChoiceRevision : current.attachmentRevision },
   }, retained);
   current.attached = result.data.attached;
   current.attachmentRevision = result.data.revision;
+  delete current.attachmentChoiceRevision;
+  current.attachmentChoice = new Set(result.data.attached);
+  current.attachmentConflict = null;
   current.notices = result.data.notifications ?? [];
   return result;
 }
@@ -394,7 +416,7 @@ export function stopWatch(api, editors, retained = null) {
 export function handleActivity(editors, activity) {
   editors.activity = activity ?? null;
   const watch = editors.watch;
-  const armed = !editors.pendingStop && watch?.state === "watching" && activity?.unitId === watch.unitId && activity?.resourceId === watch.resourceId;
+  const armed = !editors.pendingStop && !editors.current?.boardDraft && !editors.current?.boardGesture && watch?.state === "watching" && activity?.unitId === watch.unitId && activity?.resourceId === watch.resourceId;
   if (!armed) return { follow: false, focus: editors.focus, viewport: editors.viewport, kind: activity?.kind ?? null };
   const focus = activity.focus;
   if (focus && (typeof focus.screenId === "string" || typeof focus.nodeId === "string")) {
@@ -513,13 +535,22 @@ export function reconcileEditor(editors, record, generation) {
   if (!id || editors.tickets.get(id) !== generation) return false;
   const current = editors.drafts.get(id) ?? (editors.current?.resourceId === id ? editors.current : null);
   if (!current) return false;
-  if (current.dirty) {
+  if (current.boardSaving && JSON.stringify(record.document) === JSON.stringify(current.boardSaving.document)) {
+    current.authoritative = record;
+    current.revision = record.revision;
+    current.baseRevision = record.revision;
+    current.remoteStale = false;
+    if (!current.conflict?.remote || current.conflict.remote.revision === record.revision) current.conflict = null;
+    return true;
+  }
+  if (current.dirty || current.boardDraft || current.boardGesture) {
     current.conflict = { revision: record.revision, remote: record };
     current.remoteStale = false;
     editors.drafts.set(id, current);
     return true;
   }
   current.authoritative = record;
+  if (current.kind === "blueprint") current.boardView = null;
   current.revision = record.revision ?? current.revision;
   current.baseRevision = record.revision ?? current.baseRevision;
   current.commentsRevision = record.commentsRevision ?? current.commentsRevision;
@@ -536,6 +567,9 @@ export function discardEditorDraft(editors) {
   const current = editors.current;
   const remote = current?.conflict?.remote;
   if (!current || !remote) return false;
+  keepConflictCopies(current, remote);
+  current.boardDraft = null;
+  current.editGeneration = (current.editGeneration ?? 0) + 1;
   current.dirty = false;
   current.draftText = "";
   current.draftKey = null;
@@ -554,12 +588,24 @@ export function reapplyEditorDraft(editors) {
   const current = editors.current;
   const remote = current?.conflict?.remote;
   if (!current?.dirty || !remote?.revision) return false;
+  keepConflictCopies(current, remote);
+  if (current.kind === "blueprint") {
+    current.boardDraft ??= structuredClone(current.authoritative.document);
+    current.authoritative = remote;
+  }
   current.baseRevision = remote.revision;
   current.revision = remote.revision;
   current.conflict = null;
   current.remoteStale = false;
   editors.drafts.set(current.resourceId, current);
   return true;
+}
+
+function keepConflictCopies(current, remote) {
+  if (current.kind !== "blueprint") return;
+  current.conflictCopies ??= [];
+  current.conflictCopies.push({ local: { document: structuredClone(boardDocument(current)), revision: current.baseRevision, author: "root:master" },
+    remote: structuredClone(remote) });
 }
 
 export function markDirty(api, editors, capabilities, dirty) {

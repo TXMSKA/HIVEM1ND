@@ -7,6 +7,16 @@ import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundar
 import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
   addNode,
+  addBoardFrame,
+  appendBoardNode,
+  boardCommentAnchor,
+  boardDocument,
+  dragNodeGeometry,
+  indexNodes,
+  parentPoint,
+  setBoardDraft,
+  sketchStroke,
+  touchedStrokes,
   collectAssetRefs,
   editedBoard,
   hitBoardNode,
@@ -43,6 +53,7 @@ import {
   replyComment,
   resolveComment,
   setAttachments,
+  expandAttachments,
   startWatch,
   stopWatch,
 } from "../gui/app/editors.mjs";
@@ -50,6 +61,7 @@ import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 import { text } from "../gui/app/i18n.mjs";
 import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
+import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
 
 test("desktop import opens the real registered board beside its module with pages links styles and sketches", async (t) => {
   const fixture = await createGuiFixture(); t.after(() => fixture.close());
@@ -1023,4 +1035,111 @@ test('board asset references retain the core filename including extension', () =
   ] } }] });
   assert.deepEqual(refs.allowed, [{ src: 'assets/' + filename, id: filename }]);
   assert.deepEqual(refs.rejected, ['docs/flows/assets/' + filename, 'https://invalid.example/image.png']);
+});
+
+test("nested geometry, overlap and rounded clipping share the painted coordinate domain", () => {
+  const board = fullBoard();
+  const root = board.screens[0].root; root.place = { x: 7, y: 9 };
+  const clip = root.kids[1]; clip.place = { x: 20, y: 30 }; clip.radius = 18;
+  clip.kids = [{ id: "under", name: "Under", t: "box", dir: "stack", kids: [], place: { x: 10, y: 12, future: true }, w: 40, h: 30 },
+    { id: "over", name: "Over", t: "text", value: "Continue", place: { x: 10, y: 12, future: true }, w: 40, h: 30, size: 24, weight: 700, align: "center", color: "#112233" }];
+  board.screens[0].x = 100; board.screens[0].y = 200;
+  const item = indexNodes(board).get("over");
+  assert.deepEqual([item.x, item.y, item.parentX, item.parentY], [137, 251, 127, 239]);
+  assert.deepEqual(parentPoint(board, "over", { x: 155, y: 260 }), { x: 28, y: 21 });
+  assert.equal(hitBoardNode(board, { x: 147, y: 260 }).nodeId, "over");
+  assert.equal(hitBoardNode(board, { x: 128, y: 240 }).nodeId, "label");
+  Object.assign(item.node, dragNodeGeometry(item.node, 8, 5, "nw"));
+  assert.deepEqual(item.node.place, { x: 18, y: 17, future: true });
+  assert.equal(item.node.w, 32); assert.equal(item.node.h, 25);
+  assert.deepEqual(boardCommentAnchor(board, { kind: "node", nodeId: "over", x: 147, y: 260 }).path, ["Empty", "Root", "Clip", "Over"]);
+  const nodes = nodesOf(renderNode(svgDocument(), root, {}));
+  const text = nodes.find((node) => node.tag === "text" && node.textContent === "Continue");
+  assert.equal(text.getAttribute("font-size"), "24"); assert.equal(text.getAttribute("font-weight"), "700");
+  assert.equal(text.getAttribute("x"), "16"); assert.equal(text.getAttribute("text-anchor"), "middle");
+  const clipped = nodes.find((node) => node.tag === "clipPath");
+  assert.equal(clipped.children[0].getAttribute("rx"), "18");
+  assert.ok(nodes.some((node) => node.tag === "rect" && node.getAttribute("rx") === "18"));
+});
+
+test("sketches persist in ordinary bounded board JSON, retain Lite fields and erase only touched strokes", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  const board = fullBoard(); board.legacySketch = { future: "retained-lite", screens: [] };
+  board.links = [];
+  const colors = { card: "#211a27", accent: "#bdcd79" };
+  const frame = addBoardFrame(board, "hand", { x: 350, y: 120 }, { w: 300, h: 560 }, colors, true);
+  const pen = sketchStroke(board, frame, "pen-stroke", [{ x: 360, y: 100 }, { x: 1000, y: 900 }], "#f5f1f6");
+  const marker = sketchStroke(board, frame, "marker-stroke", [{ x: 370, y: 150 }, { x: 400, y: 190 }], "#e6c06f", true);
+  assert.deepEqual(pen.place, { x: 15, y: 24 }); assert.equal(pen.w, 270); assert.equal(pen.h, 500);
+  assert.equal(marker.opacity, 0.4); assert.equal(marker.strokeWidth, 2.2);
+  assert.deepEqual(touchedStrokes(board, { x: 367, y: 149 }, { x: 374, y: 154 }).sort(), ["marker-stroke", "pen-stroke"]);
+  assert.deepEqual(touchedStrokes(board, { x: 580, y: 160 }), []);
+  validateSketch(board);
+  const created = await createResource(api, "blueprint", { project: "shop", document: board });
+  const editor = await openEditor(api, editors, created.data);
+  assert.deepEqual(editor.authoritative.document, board);
+  await removeNode(api, editor, marker.id);
+  await openEditor(api, editors, created.data);
+  assert.equal(indexNodes(editors.current.authoritative.document).has(marker.id), false);
+  assert.equal(indexNodes(editors.current.authoritative.document).has(pen.id), true);
+  assert.deepEqual(editors.current.authoritative.document.legacySketch, board.legacySketch);
+  const crowded = fullBoard(); crowded.screens[0].root.kids = Array.from({ length: 9999 }, (_, i) => ({ id: `node-${i}`, t: "text", place: { x: 0, y: 0 } }));
+  assert.throws(() => appendBoardNode(crowded, "empty", "root", marker), RangeError);
+  const deep = fullBoard(); let parent = deep.screens[0].root; parent.kids = [];
+  for (let i = 0; i < 30; i++) { const child = { id: `level-${i}`, t: "box", kids: [], place: { x: 0, y: 0 } }; parent.kids.push(child); parent = child; }
+  assert.throws(() => appendBoardNode(deep, "empty", parent.id, marker), RangeError);
+});
+
+test("whole-board acknowledgments retain later typing and a newer remote conflict", async () => {
+  const editors = createEditors(), board = fullBoard(), revision = "a".repeat(64);
+  const editor = { resourceId: "board", kind: "blueprint", revision, baseRevision: revision, authoritative: { id: "board", revision, document: board } };
+  editors.current = editor; editors.drafts.set("board", editor); editors.tickets.set("board", 1);
+  let release; const hold = new Promise((resolve) => { release = resolve; });
+  const api = commentApi(async (_url, init) => { await hold; return jsonResponse({ id: "board", revision: "b".repeat(64), document: JSON.parse(init.body).document }); });
+  const first = structuredClone(board); first.screens[0].root.kids[0].value = "First"; setBoardDraft(editor, first);
+  const saving = replaceBoard(api, editor, first);
+  const second = structuredClone(first); second.screens[0].root.kids[0].value = "Later typing"; setBoardDraft(editor, second);
+  const own = { id: "board", revision: "b".repeat(64), document: first };
+  noteRemote(editors, { resourceId: "board", revision: own.revision }); reconcileEditor(editors, own, 1);
+  assert.equal(editor.conflict, null); release(); await saving;
+  assert.equal(boardDocument(editor).screens[0].root.kids[0].value, "Later typing"); assert.equal(editor.dirty, true);
+  assert.equal(editor.baseRevision, own.revision);
+  const remote = { id: "board", revision: "c".repeat(64), document: { ...board, title: "Incoming" }, by: "project:shop:executor-shop" };
+  reconcileEditor(editors, remote, 1);
+  assert.equal(editor.conflict.remote.by, "project:shop:executor-shop");
+  assert.equal(reapplyEditorDraft(editors), true);
+  assert.equal(editor.conflictCopies[0].local.document.screens[0].root.kids[0].value, "Later typing");
+  assert.deepEqual(editor.conflictCopies[0].remote, remote);
+  reconcileEditor(editors, { ...remote, revision: "d".repeat(64) }, 1);
+  assert.equal(discardEditorDraft(editors), true);
+  assert.equal(editor.boardDraft, null); assert.equal(boardDocument(editor).title, "Incoming");
+  assert.equal(editor.conflictCopies.length, 2);
+});
+
+test("group attachments expand canonical members once and bind the chooser's attachment revision", async () => {
+  const units = [{ id: "project:shop:executor-shop" }, { id: "env:web:overlord-web" }];
+  const groups = [{ id: "one", members: units.map((unit) => unit.id) }, { id: "two", members: [units[0].id] }];
+  const expanded = expandAttachments(units, groups, ["group:one", "group:two", units[0].id]);
+  assert.deepEqual(expanded, units.map((unit) => unit.id));
+  let sent;
+  const editors = { current: { resourceId: "board", attachmentRevision: "b".repeat(64), attachmentChoiceRevision: "a".repeat(64) } };
+  await setAttachments(commentApi(async (_url, init) => { sent = JSON.parse(init.body); return jsonResponse({ attached: expanded, revision: "c".repeat(64) }); }), editors, expanded);
+  assert.equal(sent.expectedRevision, "a".repeat(64));
+  assert.equal(Object.hasOwn(editors.current, "attachmentChoiceRevision"), false);
+});
+
+test("Watch never replaces a board gesture or draft and off leaves committed content available", () => {
+  const editors = createEditors();
+  editors.current = { resourceId: "board", authoritative: { document: fullBoard() }, boardDraft: { title: "Local draft" } };
+  editors.watch = { state: "watching", resourceId: "board", unitId: "project:shop:executor-shop" };
+  editors.focus = { nodeId: "label" }; editors.viewport = { x: 1, y: 2, scale: 2 };
+  const activity = { resourceId: "board", unitId: "project:shop:executor-shop", focus: { nodeId: "overflow", screenId: "empty" } };
+  assert.equal(handleActivity(editors, activity).follow, false);
+  assert.deepEqual(editors.current.boardDraft, { title: "Local draft" }); assert.equal(editors.viewport.scale, 2);
+  editors.current.boardDraft = null; editors.current.boardGesture = true;
+  assert.equal(handleActivity(editors, activity).follow, false);
+  editors.current.boardGesture = false; editors.watch = null;
+  assert.equal(handleActivity(editors, activity).follow, false);
+  assert.equal(editors.focus.nodeId, "label"); assert.equal(editors.current.authoritative.document.title, "Full");
 });

@@ -1144,6 +1144,11 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const legacyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.mjs");
+  await writeFile(legacyFile, 'import { board } from "blueprint/board.mjs";\nimport { col, text } from "blueprint/kit.mjs";\nexport default board({ id: "legacy-cart", title: "Legacy cart", screens: [{ id: "cart", title: "Cart", root: col({ w: 300, h: 560 }, text("Actual legacy cart")) }] });\n');
+  const indexFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "index.json");
+  const index = JSON.parse(await readFile(indexFile, "utf8")); index.push({ id: "legacy-cart", title: "Legacy cart" });
+  await writeFile(indexFile, JSON.stringify(index));
+  await fixture.control.refresh();
   const originalFile = join(fixture.root, "repositories", "shop", "docs", "release.orig.json");
   const legacyBytes = await readFile(legacyFile);
   const originalBytes = await readFile(originalFile);
@@ -1162,6 +1167,8 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   await waitFor(() => desktop.root.querySelector("[data-legacy]")?.textContent === "docs/flows/boards/legacy-cart.mjs", "The original module path was not shown.");
   assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
   click(desktop.root.querySelector("[data-action='copy-json']"));
+  await waitFor(() => desktop.app.editors.error || desktop.root.querySelector("[data-action='resize-screen']"), "The copy returned no result.");
+  assert.equal(desktop.app.editors.error?.code ?? null, null, desktop.app.editors.error?.message);
   await waitFor(() => desktop.app.editors.current?.authoritative?.legacy == null && desktop.root.querySelector("[data-action='resize-screen']"), "The JSON copy did not open.");
   assert.deepEqual(await readFile(legacyFile), legacyBytes);
   const copied = writes.find((item) => item.method === "POST" && item.body?.document?.id === "legacy-cart");
@@ -1898,8 +1905,8 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   const comments = desktop.root.querySelector("[data-editor-column='comments']");
   const tools = resource.querySelector("[data-editor-tools]");
   assert.equal(tools.querySelector("[data-watch]")?.getAttribute("data-watch"), "off");
-  assert.equal(tools.querySelector("[data-action='attach']") != null, true);
-  assert.equal(tools.querySelector("[data-action='watch']") != null, true);
+  assert.equal(resource.querySelector("[data-toolbar='board']").querySelector("[data-action='attach']") != null, true);
+  assert.equal(resource.querySelector("[data-toolbar='board']").querySelector("[data-action='watch']") != null, true);
   assert.equal(columnIndex(resource, tools) < columnIndex(resource, resource.querySelector(".board-host")), true);
   assert.equal(resource.querySelector("[data-node-name]") != null, true);
   assert.equal(resource.querySelector("[data-comment]"), null);
@@ -2484,6 +2491,7 @@ test("editor events refresh attachments, assets, delivery and conflicts", async 
   click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
   await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-comment]"), "The board did not open.");
   desktop.app.editors.selectedNodeId = "kept-node";
+  desktop.app.editors.current.selectedNodeId = "kept-node";
   typeInput(desktop.root.querySelector("[data-comment]"), "Keep this draft", 0, 4);
 
   await fixture.control.emit("editor.attachments.changed", {
@@ -3698,15 +3706,16 @@ test("the board toolbar is one row on the canvas", async (t) => {
   assert.equal(toolbar.className.includes("board-toolbar"), true);
   assert.equal(host.querySelectorAll("[role='toolbar']").length, 1);
   assert.equal(columnIndex(resource, editorTools) < columnIndex(resource, host), true);
-  assert.equal(editorTools.querySelector("[data-action='attach']") != null, true);
-  assert.equal(editorTools.querySelector("[data-action='watch']") != null, true);
+  assert.equal(toolbar.querySelector("[data-action='attach']") != null, true);
+  assert.equal(toolbar.querySelector("[data-action='watch']") != null, true);
   assert.equal(comments.querySelector("[data-toolbar='board']"), null);
   assert.equal(comments.querySelector("[data-comment]") != null, true);
-  const actions = [...toolbar.querySelectorAll("[data-action]")].map((node) => node.getAttribute("data-action"));
-  assert.deepEqual(actions, ["add-node", "patch-node", "remove-node", "comment-node", "resize-screen", "move-page", "move-screen", "add-link"]);
-  assert.equal(toolbar.querySelector("[data-action='add-node']").className.includes("primary"), true);
-  assert.equal(toolbar.querySelector("[data-node-name]") != null, true);
-  assert.equal(toolbar.querySelector("[data-asset]") != null, true);
+  const tools = [...toolbar.querySelectorAll("[data-board-tool]")];
+  assert.deepEqual(tools.map((node) => node.getAttribute("data-board-tool")), ["select", "frame", "text", "draw", "comment"]);
+  assert.deepEqual(tools.map((node) => node.getAttribute("aria-label")), ["Select", "Frame", "Text", "Draw", "Comment"]);
+  assert.equal(tools[0].getAttribute("aria-pressed"), "true");
+  assert.equal(host.querySelector(".board-properties").querySelector("[data-node-name]") != null, true);
+  assert.equal(host.querySelector(".board-properties").querySelector("[data-asset]") != null, true);
   assert.equal(host.querySelector(".board-outline") != null, true);
   const css = await readFile("gui/app/styles.css", "utf8");
   const rule = css.match(/\.board-host > \.board-toolbar \{[\s\S]*?\}/)?.[0] ?? "";
@@ -3748,9 +3757,15 @@ test("the GUI import graph stays inside its ownership table", async () => {
     seen.add(rel);
     assert.equal(owned.has(rel), true, rel);
     const source = await readFile(file, "utf8");
-    assert.equal(source.includes("import("), false, rel);
+    const audited = rel === "gui/app/main.mjs" ? source.slice(0, source.indexOf("async function exportLegacyDocument")) + source.slice(source.indexOf("export async function importLegacyBoard")) : source;
+    assert.equal(audited.includes("import("), false, rel);
+    if (rel === "gui/app/main.mjs") {
+      assert.match(source, /iframe\.setAttribute\("sandbox", "allow-scripts"\)/);
+      assert.match(source, /connect-src 'none'/);
+    }
     const specifiers = [...source.matchAll(/from "([^"]+)"/g)].map((match) => match[1]);
     for (const specifier of specifiers) {
+      if (rel === "test/gui-fixture.mjs" && ["../features/blueprint/server.mjs", "../features/blueprint/review/sketch-format.mjs"].includes(specifier)) continue;
       assert.equal(specifier.startsWith(".") || specifier.startsWith("node:"), true, specifier);
       assert.equal(/engine|cli|features|https?:|node_modules/.test(specifier), false, specifier);
       if (specifier.startsWith("node:")) {
@@ -3962,6 +3977,8 @@ function createTestDocument(width = 390) {
     parent: null,
     innerWidth: width,
     innerHeight: 844,
+    getComputedStyle() { return { getPropertyValue: (name) => ({ "--text": "#f5f1f6", "--accent": "#bdcd79", "--waiting": "#e6c06f", "--card": "#211a27" })[name] ?? "" }; },
+    btoa, URL, setTimeout, clearTimeout,
     listeners: new Map(),
     addEventListener(type, handler) {
       const list = this.listeners.get(type) ?? [];
@@ -4012,9 +4029,28 @@ function createTestDocument(width = 390) {
       isConnected: true,
       style: {},
       dataset: {},
+      contentWindow: tag === "iframe" ? {} : null,
+      getContext() { return { measureText: (value) => ({ width: String(value).length * 8 }) }; },
+      set src(url) {
+        this._src = url;
+        if (tag !== "iframe") return;
+        const frame = this;
+        Promise.resolve().then(async () => {
+          const html = await (await fetch(url)).text();
+          const scriptUrl = html.match(/<script type="module" src="([^"]+)"/)[1];
+          const script = await (await fetch(scriptUrl)).text();
+          const prior = globalThis.document;
+          globalThis.document = document;
+          try {
+            const parent = { postMessage(data) { for (const handler of view.listeners.get("message") ?? []) handler({ source: frame.contentWindow, data }); } };
+            await new Function("parent", `return (async () => { ${script} })()`)(parent);
+          } finally { if (prior === undefined) delete globalThis.document; else globalThis.document = prior; }
+        });
+      },
       ownerDocument: document,
       setAttribute(name, value) {
         this.attributes.set(name, String(value));
+        if (name === "class") this.className = String(value);
         if (name.startsWith("data-")) {
           const key = name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
           this.dataset[key] = String(value);
@@ -4479,6 +4515,216 @@ function changeSelect(node, value) {
   node.value = value;
   for (const handler of node.listeners.get("change") ?? []) handler({ target: node, currentTarget: node });
 }
+
+async function openedBoardDesktop(t, onFetch) {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], onFetch); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(".shell") && desktop.app.layout === "desktop", "The desktop shell did not open.");
+  navigate(desktop.app, "blueprint");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board library did not load.");
+  const board = desktop.app.editors.catalog.find((item) => item.title === "Cart");
+  renderShell(desktop.app); click(desktop.root.querySelector(`[data-id="${board.id}"]`));
+  await waitFor(() => desktop.root.querySelector(".board-svg"), "The board did not open.");
+  return { ...desktop, fixture, board };
+}
+
+function boardEvent(host, type, target, x, y, more = {}) {
+  for (const handler of host.listeners.get(type) ?? []) handler({ target, pointerId: 1, button: 0, offsetX: x, offsetY: y, clientX: x, clientY: y, preventDefault() {}, ...more });
+}
+
+test("board drag and resize use parent coordinates at zoom, cancel without writes, and move by keyboard", async (t) => {
+  const writes = [];
+  const desktop = await openedBoardDesktop(t, (url, init) => { if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) writes.push(JSON.parse(init.body)); });
+  const { app, root } = desktop, editor = app.editors.current;
+  const board = structuredClone(editor.authoritative.document);
+  board.screens[0].x = 100; board.screens[0].y = 200;
+  board.screens[0].root.kids.push({ id: "nested", name: "Nested", t: "box", dir: "stack", place: { x: 30, y: 40 }, w: 180, h: 120, kids: [
+    { id: "nested-text", name: "Text", t: "text", value: "Editable", size: 24, color: "#f5f1f6", place: { x: 10, y: 12, future: "kept" }, w: 80, h: 30, future: "node kept" },
+  ] });
+  const { replaceBoard, indexNodes } = await import("../gui/app/blueprint.mjs");
+  await replaceBoard(app.api, editor, board); renderShell(app); writes.length = 0;
+  const zoom = (host) => {
+    const svg = host.querySelector(".board-svg");
+    svg.createSVGPoint = () => ({ x: 0, y: 0, matrixTransform(matrix) { return matrix.convert(this); } });
+    svg.getScreenCTM = () => ({ convert: (point) => ({ x: point.x * 2, y: point.y * 2 }), inverse: () => ({ convert: (point) => ({ x: point.x / 2, y: point.y / 2 }) }) });
+  };
+  let host = root.querySelector(".board-host"); zoom(host);
+  boardEvent(host, "pointerdown", host.querySelector("[data-node='nested-text']"), 300, 510);
+  boardEvent(host, "pointermove", host, 320, 520);
+  boardEvent(host, "pointercancel", host, 320, 520);
+  assert.equal(editor.boardDraft, null); assert.equal(writes.length, 0);
+  host = root.querySelector(".board-host");
+  zoom(host); boardEvent(host, "pointerdown", host.querySelector("[data-node='nested-text']"), 300, 510);
+  boardEvent(host, "pointermove", host, 320, 520); boardEvent(host, "pointerup", host, 320, 520);
+  await waitFor(() => !editor.boardDraft && writes.length === 1, "The nested drag did not save.");
+  let node = indexNodes(editor.authoritative.document).get("nested-text").node;
+  assert.deepEqual(node.place, { x: 20, y: 17, future: "kept" }); assert.equal(node.future, "node kept");
+  host = root.querySelector(".board-host"); zoom(host);
+  const handle = host.querySelector("[data-resize='nw']"); assert.ok(handle);
+  boardEvent(host, "pointerdown", handle, 300, 514); boardEvent(host, "pointermove", host, 320, 524); boardEvent(host, "pointerup", host, 320, 524);
+  await waitFor(() => !editor.boardDraft && writes.length === 2, "The resize did not save.");
+  node = indexNodes(editor.authoritative.document).get("nested-text").node;
+  assert.deepEqual(node.place, { x: 30, y: 22, future: "kept" }); assert.equal(node.w, 70); assert.equal(node.h, 25);
+  host = root.querySelector(".board-host"); boardEvent(host, "keydown", host.querySelector("[data-node='nested-text']"), 0, 0, { key: "ArrowRight", shiftKey: true });
+  await waitFor(() => !editor.boardDraft && writes.length === 3, "Keyboard movement did not save.");
+  assert.equal(indexNodes(editor.authoritative.document).get("nested-text").node.place.x, 40);
+  assert.equal(editor.authoritative.document.sentinel, board.sentinel);
+});
+
+test("Draw stores pen and marker strokes, cancels previews and erases through node removals", async (t) => {
+  const deletes = [];
+  const desktop = await openedBoardDesktop(t, (url, init) => { if (init?.method === "DELETE" && String(url).includes("/nodes/")) deletes.push(String(url)); });
+  const { app, root } = desktop, editor = app.editors.current;
+  click(root.querySelector("button[data-board-tool='draw']"));
+  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.some((screen) => screen.root.sketch), "The hand frame did not save.");
+  const frame = editor.authoritative.document.screens.find((screen) => screen.root.sketch);
+  assert.deepEqual([frame.x, frame.y, frame.w, frame.h, frame.root.radius, frame.root.dash], [350, 120, 300, 560, 18, "6 5"]);
+  const stroke = async (tool, end) => {
+    click(root.querySelector(`[data-draw-tool='${tool}']`));
+    const host = root.querySelector(".board-host");
+    boardEvent(host, "pointerdown", host.querySelector(`[data-screen='${frame.id}']`), 370, 150);
+    boardEvent(host, "pointermove", host, ...end); boardEvent(host, "pointerup", host, ...end);
+    await waitFor(() => !editor.boardDraft && app.activity.get(`board:${editor.resourceId}`)?.phase !== "pending", "The stroke did not save.");
+  };
+  await stroke("pen", [430, 230]); await stroke("marker", [400, 190]);
+  let strokes = editor.authoritative.document.screens.find((screen) => screen.id === frame.id).root.kids;
+  assert.equal(strokes.length, 2); assert.equal(strokes[0].strokeWidth, 2.2); assert.equal(strokes[1].opacity, 0.4);
+  let host = root.querySelector(".board-host");
+  boardEvent(host, "pointerdown", host.querySelector(`[data-screen='${frame.id}']`), 380, 180); boardEvent(host, "pointermove", host, 460, 250);
+  boardEvent(host, "keydown", host, 0, 0, { key: "Escape" });
+  assert.equal(editor.boardDraft, null);
+  await stroke("eraser", [410, 205]);
+  await waitFor(() => app.activity.get(`erase:${editor.resourceId}`)?.phase === "success", "The eraser did not finish.");
+  strokes = editor.authoritative.document.screens.find((screen) => screen.id === frame.id).root.kids;
+  assert.equal(strokes.length, 0); assert.equal(deletes.length, 2);
+  const read = (await request(app.api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: editor.resourceId } })).data.document;
+  assert.equal(read.screens.find((screen) => screen.id === frame.id).root.kids.length, 0);
+  const { addNode } = await import("../gui/app/blueprint.mjs");
+  await addNode(app.api, editor, { screenId: "empty", parentId: editor.authoritative.document.screens[0].root.id,
+    node: { id: "lite-stroke", name: "Retained Lite stroke", t: "vector", kind: "pen", place: { x: 40, y: 100 }, w: 80, h: 80,
+      d: "M0 0 L100 100", fill: "none", stroke: "#f5f1f6", strokeWidth: 2.2, future: "Lite metadata" } });
+  renderShell(app); host = root.querySelector(".board-host");
+  boardEvent(host, "pointerdown", host.querySelector("[data-screen='empty']"), 80, 140);
+  boardEvent(host, "pointerup", host, 80, 140);
+  await waitFor(() => app.activity.get(`erase:${editor.resourceId}`)?.phase === "success" && deletes.length === 3, "The eraser ignored a retained Lite stroke outside the hand frame.");
+  assert.equal(editor.authoritative.document.screens[0].root.kids.some((node) => node.id === "lite-stroke"), false);
+});
+
+test("the board attach picker searches groups and aliases and commits canonical unique members", async (t) => {
+  const desktop = await openedBoardDesktop(t), { app, root, document } = desktop;
+  await waitFor(() => app.unitList?.catalog?.length, "Units did not load.");
+  const members = ["project:shop:executor-shop", "env:web:overlord-web"];
+  const group = await createGroup(app.api, "Checkout launch", members);
+  app.store.indexes.groups.set(group.data.id, group.data);
+  app.editors.current.attachmentChoice = new Set();
+  click(root.querySelector("[data-action='attach']"));
+  const chooser = document.querySelector("[data-form='attach']");
+  assert.equal(chooser.querySelector("[data-attach-search]").getAttribute("aria-label"), "Search units and groups");
+  typeInput(chooser.querySelector("[data-attach-search]"), "Checkout", 0, 0);
+  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
+  click(chooser.querySelector("[data-attach-group]"));
+  typeInput(chooser.querySelector("[data-attach-search]"), "executor-shop", 0, 0);
+  click(chooser.querySelector("[data-attach-unit='project:shop:executor-shop']"));
+  assert.equal(chooser.querySelector("[data-action='save-attachments']").textContent, "Attach 2");
+  click(chooser.querySelector("[data-action='save-attachments']"));
+  await waitFor(() => document.querySelector("[data-form='attach']") == null, "The picker did not save.");
+  assert.deepEqual([...app.editors.current.attached].sort(), [...members].sort());
+});
+
+test("board text saves later typing, comments pin full anchors, and conflict controls retain both versions", async (t) => {
+  let release, held = false; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  const desktop = await openedBoardDesktop(t, async (url, init) => {
+    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/") && !held) { held = true; await hold; }
+  });
+  const { app, root } = desktop, editor = app.editors.current;
+  let host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  typeInput(root.querySelector("[data-node-text='label']"), "First typing", 0, 0);
+  await waitFor(() => held, "The first save did not start.");
+  typeInput(root.querySelector("[data-node-text='label']"), "Later typing", 0, 0); release();
+  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens[0].root.kids[0].value === "Later typing", "An older acknowledgment replaced later typing.");
+  click(root.querySelector("button[data-board-tool='comment']")); host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  assert.equal(root.querySelector(".board-breadcrumb").textContent, "Empty cart / Root / Label");
+  typeInput(root.querySelector("[data-board-comment]"), "Anchored note", 0, 0);
+  click(root.querySelector(".board-comment-actions").querySelector(".primary"));
+  await waitFor(() => editor.threads.some((thread) => !thread.pending && thread.messages?.some((message) => message.text === "Anchored note")), "The comment did not save.");
+  const thread = editor.threads.find((thread) => thread.messages?.some((message) => message.text === "Anchored note"));
+  assert.ok(root.querySelector(`[data-comment-pin='${thread.id}']`));
+  assert.equal(thread.anchor.element, "label");
+  const { setBoardDraft } = await import("../gui/app/blueprint.mjs");
+  const local = structuredClone(editor.authoritative.document); local.title = "Local draft"; setBoardDraft(editor, local);
+  const remote = { ...editor.authoritative, revision: "f".repeat(64), document: { ...editor.authoritative.document, title: "Incoming board" }, by: "project:shop:executor-shop" };
+  editor.conflict = { remote, revision: remote.revision }; renderShell(app);
+  click(root.querySelector("[data-action='show-changes']"));
+  assert.equal(root.querySelector("[data-board-changes]").querySelectorAll("pre").length, 2);
+  click(root.querySelector("[data-action='discard-draft']"));
+  assert.equal(editor.authoritative.document.title, "Incoming board");
+  assert.equal(editor.conflictCopies.at(-1).local.document.title, "Local draft");
+  assert.equal(editor.conflictCopies.at(-1).remote.by, "project:shop:executor-shop");
+});
+
+test("a preceding save never commits a pointer preview that is later canceled", async (t) => {
+  let release; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  let count = 0;
+  const { app, root } = await openedBoardDesktop(t, async (url, init) => {
+    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) { count++; if (count === 1) await hold; }
+  });
+  const editor = app.editors.current;
+  let host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  typeInput(root.querySelector("[data-node-text='label']"), "Committed text", 0, 0);
+  await waitFor(() => count === 1, "The preceding save did not start.");
+  host = root.querySelector(".board-host");
+  boardEvent(host, "pointerdown", host.querySelector("[data-node='label']"), 20, 24);
+  boardEvent(host, "pointermove", host, 60, 64); release();
+  await waitFor(() => app.activity.get(`board:${editor.resourceId}`)?.phase === "success", "The preceding save did not finish.");
+  assert.equal(root.querySelector(".board-host"), host);
+  boardEvent(host, "pointercancel", host, 60, 64);
+  assert.equal(count, 1); assert.equal(editor.boardDraft, null);
+  assert.equal(editor.authoritative.document.screens[0].root.kids[0].place.x, 12);
+  assert.equal(editor.authoritative.document.screens[0].root.kids[0].value, "Committed text");
+});
+
+test("Frame and Text create normal nodes and Fill edits the selection in place", async (t) => {
+  const { app, root } = await openedBoardDesktop(t), editor = app.editors.current;
+  click(root.querySelector("button[data-board-tool='frame']"));
+  let host = root.querySelector(".board-host");
+  boardEvent(host, "pointerdown", host, 500, 120); boardEvent(host, "pointermove", host, 800, 680); boardEvent(host, "pointerup", host, 800, 680);
+  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.length === 2, "The new frame did not save.");
+  const frame = editor.authoritative.document.screens.at(-1);
+  assert.deepEqual([frame.x, frame.y, frame.w, frame.h], [500, 120, 300, 560]);
+  click(root.querySelector("button[data-board-tool='text']")); host = root.querySelector(".board-host");
+  boardEvent(host, "pointerdown", host, 520, 150);
+  await waitFor(() => !editor.boardDraft && root.querySelector("[data-node-text]"), "The new text did not save.");
+  let node = editor.authoritative.document.screens.at(-1).root.kids.at(-1);
+  assert.deepEqual(node.place, { x: 20, y: 30 }); assert.equal(node.t, "text");
+  const fill = root.querySelector("[data-node-fill]"); changeSelect(fill, "#bdcd79");
+  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.at(-1).root.kids.at(-1).color === "#bdcd79", "Fill did not save.");
+  assert.equal(editor.authoritative.document.sentinel, "document-sentinel");
+});
+
+test("Keep mine rebases a rejected board write under a new operation and retains the remote version", async (t) => {
+  let release, puts = 0; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  const { app, root } = await openedBoardDesktop(t, async (url, init) => {
+    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) { puts++; if (puts === 1) await hold; }
+  });
+  const editor = app.editors.current, original = structuredClone(editor.authoritative.document);
+  const host = root.querySelector(".board-host");
+  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
+  typeInput(root.querySelector("[data-node-text='label']"), "Keep local typing", 0, 0);
+  await waitFor(() => puts === 1, "The local write did not start.");
+  const remote = { ...original, title: "Committed remotely" };
+  const operation = createOperation({ method: "PUT", path: `/blueprint/boards/${editor.resourceId}`, body: { document: remote, expectedRevision: editor.revision } });
+  await request(app.api, operation.method, operation.path, { operation }); release();
+  await waitFor(() => app.activity.get(`board:${editor.resourceId}`)?.phase === "error" && editor.conflict?.remote, "The stale write did not retain a conflict.");
+  const failedId = app.activity.get(`board:${editor.resourceId}`).operation.id;
+  click(root.querySelector("[data-action='reapply-draft']"));
+  await waitFor(() => !editor.boardDraft && app.activity.get(`board:${editor.resourceId}`)?.phase === "success", "Keep mine retried the rejected revision.");
+  assert.equal(puts, 3); assert.notEqual(app.activity.get(`board:${editor.resourceId}`).operation?.id, failedId);
+  assert.equal(editor.authoritative.document.screens[0].root.kids[0].value, "Keep local typing");
+  assert.deepEqual(editor.conflictCopies.at(-1).remote.document, remote);
+});
 
 function libraryMenu(desktop, entry, action) {
   click(desktop.root.querySelector(`[data-library-more="${entry.id}"]`));
