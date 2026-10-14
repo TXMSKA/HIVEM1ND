@@ -217,3 +217,57 @@ function line(document, value) {
   node.textContent = String(value ?? "");
   return node;
 }
+
+export function continuousSave({ save, revision, onState = () => {}, delayMs = 400 }) {
+  let value = '';
+  let generation = 0;
+  let savedGeneration = 0;
+  let attempt = null;
+  let operation = null;
+  let error = null;
+  let timer = null;
+  let running = null;
+  let closed = false;
+  function report(state) { if (!closed) onState({ state, value, generation, revision, error }); }
+  function flush() {
+    clearTimeout(timer);
+    timer = null;
+    if (closed) return Promise.resolve();
+    if (running) return running;
+    if (error) return Promise.reject(error);
+    running = (async () => {
+      while (!closed && savedGeneration < generation) {
+        attempt ??= { value, generation, revision };
+        report('saving');
+        try {
+          const result = await save(attempt.value, attempt.revision, operation);
+          const editor = result.data?.editor ?? result.data ?? result;
+          revision = editor.revision ?? revision;
+          savedGeneration = attempt.generation;
+          attempt = null;
+          operation = null;
+        } catch (failure) {
+          error = failure;
+          operation = failure.operation ?? operation;
+          report('not-saved');
+          throw failure;
+        }
+      }
+      report('saved');
+    })().finally(() => { running = null; });
+    return running;
+  }
+  return {
+    queue(nextValue) {
+      value = nextValue;
+      generation += 1;
+      report('saving');
+      clearTimeout(timer);
+      if (!error && !closed) timer = setTimeout(() => { void flush().catch(() => {}); }, delayMs);
+    },
+    flush,
+    retry() { error = null; return flush(); },
+    dispose() { closed = true; clearTimeout(timer); timer = null; },
+    get dirty() { return savedGeneration < generation; },
+  };
+}
