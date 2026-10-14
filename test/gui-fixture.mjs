@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { prepareLegacyExport } from "../features/blueprint/server.mjs";
 import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
+import { boundaryInsideTag, plainText, validUtf16Boundary } from "../gui/app/markup.mjs";
 import {
   FIXTURE_HOME_CODE,
   FIXTURE_HOME_KEY,
@@ -3109,7 +3110,7 @@ function validateBoardAnchor(anchor) {
 }
 
 function fixturePlain(source) {
-  return String(source ?? "").replaceAll("<b>", "").replaceAll("</b>", "").replaceAll("<i>", "").replaceAll("</i>");
+  return plainText(source);
 }
 
 function assertVoidAnchorMatches(editor, anchor) {
@@ -3117,6 +3118,7 @@ function assertVoidAnchorMatches(editor, anchor) {
   const source = page?.[anchor.lang];
   if (typeof source !== "string") throw new HttpError(409, "anchor_changed", "The anchor no longer matches.");
   const plain = fixturePlain(source);
+  if (!validUtf16Boundary(plain, anchor.start) || !validUtf16Boundary(plain, anchor.end) || anchor.end <= anchor.start) throw new HttpError(422, "invalid_range", "The anchor splits a character.");
   const prefix = plain.slice(Math.max(0, anchor.start - 48), anchor.start);
   const quote = plain.slice(anchor.start, anchor.end);
   const suffix = plain.slice(anchor.end, anchor.end + 48);
@@ -3744,18 +3746,7 @@ function validTextBoundary(source, offset) {
 }
 
 function insideTag(source, offset) {
-  const tags = ["<b>", "</b>", "<i>", "</i>"];
-  let index = 0;
-  while (index < source.length) {
-    const tag = tags.find((item) => source.startsWith(item, index));
-    if (!tag) {
-      index += 1;
-      continue;
-    }
-    if (offset > index && offset < index + tag.length) return true;
-    index += tag.length;
-  }
-  return false;
+  return boundaryInsideTag(source, offset);
 }
 
 async function mutableText(fx, resourceId, expectedRevision) {

@@ -6,17 +6,9 @@
 // The text of a page as the reader shows it: the lines and paragraph breaks the
 // reader draws, without the bold and italic marks. Comment offsets count in
 // this text, so they do not move when a mark is added or removed.
-export function plain(text) {
-  const lines = String(text ?? '').split('\n');
-  let out = '';
-  let gap = '';
-  lines.forEach((line, at) => {
-    if (line === '') return;
-    out += gap + line.replace(/<\/?[bi]>/g, '');
-    gap = lines[at + 1] === '' ? '\n\n' : '\n';
-  });
-  return out;
-}
+import { plainText } from '../../gui/app/markup.mjs';
+
+export function plain(text) { return plainText(text); }
 
 // Hirschberg keeps two score rows only; identical ends are trimmed first, so a
 // routine edit of a long page costs almost nothing.

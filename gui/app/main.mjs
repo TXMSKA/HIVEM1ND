@@ -82,7 +82,8 @@ import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel 
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, enterFocus, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceDocument, saveRange, selectedPlainRange, showTools, sourceReplacement, textAnchor, textDraft, textDraftKey } from "./void.mjs";
+import { answerProposal, captureTextSelection, documentSaver, draftSnapshot, enterFocus, formatSelection, leaveFocus, loadProposals, moveFocus, noteProposal, rememberTextDraft, renderDocument, renderProposal, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
+import { assetIdentity, plainOffsets, plainText, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
@@ -175,7 +176,7 @@ export async function mount(root, env = globalThis) {
     if (id && !app.aliasEdit) { event.preventDefault?.(); beginAlias(app, id, row?.id); }
   });
   const revealFocusTools = () => {
-    if (app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
+    if (app.rendering || app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
     showTools(app.voidState);
     renderShell(app);
   };
@@ -342,7 +343,7 @@ export function navigate(app, mode) {
 }
 
 export function renderShell(app) {
-  if (app.editors?.current?.boardGesture) return;
+  if (app.editors?.current?.boardGesture || app.editors?.current?.textComposing) return;
   app.rendering = true;
   try {
     paintShell(app);
@@ -383,6 +384,7 @@ function paintShell(app) {
   syncLiveRegions(app);
   paintActivity(app, shell);
   restoreInputFocus(app);
+  app.editors?.current?.restoreSelection?.();
   finishList(app);
   finishMap(app);
   syncChatReads(app);
@@ -415,6 +417,7 @@ function textDraftsDiffer(editor) {
 
 function editorFormsDirty(editor) {
   if (!editor) return false;
+  if (editor.titleDraft !== undefined && editor.titleDraft !== editor.authoritative?.document?.title) return true;
   if (editor.boardDraft) return true;
   if (editor.commentText) return true;
   if (editor.nodeDraft) return true;
@@ -493,6 +496,7 @@ function keepParts(key) {
 }
 
 function captureInputs(app) {
+  app.editors?.current?.captureSelection?.();
   const drafts = inputDrafts(app);
   if (!drafts.fields) drafts.fields = new Map();
   const active = app.root.ownerDocument?.activeElement;
@@ -574,6 +578,8 @@ export function dispose(app) {
   clearTimeout(app.libraryToastTimer);
   for (const record of app.activity?.values() ?? []) record.cancel?.();
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
+  app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onVoidSelection);
+  for (const editor of app.editors?.drafts?.values() ?? []) editor.voidSaver?.dispose();
   app.api.live && (app.api.live.stopped = true);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
     if (!list) continue;
@@ -2020,80 +2026,229 @@ async function answerEditorConflict(app, editor, decision) {
 function voidSurface(app, document, editor, t) {
   editor.focus = app.editors.focus;
   const pages = editor.authoritative.document.pages ?? [];
-  const lang = app.language === "es" ? "es" : "en";
   if (!app.voidState || app.voidState.resourceId !== editor.resourceId) {
     const requested = editor.page ?? editor.focus?.k;
-    app.voidState = {
-      mode: app.mode,
-      tools: app.mode !== "focus",
-      page: pages.some((page) => page.k === requested) ? requested : pages[0]?.k,
-      pages,
-      resourceId: editor.resourceId,
-    };
+    app.voidState = { mode: app.mode, tools: app.mode !== "focus", page: pages.some((page) => page.k === requested) ? requested : pages[0]?.k, pages, resourceId: editor.resourceId };
   } else {
     app.voidState.pages = pages;
     if (!pages.some((page) => page.k === app.voidState.page)) app.voidState.page = pages[0]?.k;
   }
-  editor.page = app.voidState.page;
-  editor.language = lang;
-  const host = element(document, "div", { class: "void-page reading-card", "data-void": "true" });
-  renderDocument(document, host, editor);
-  const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
-  const page = pages.find((item) => item.k === editor.page);
-  const stored = textDraft(editor, editor.resourceId, editor.page, lang);
-  const source = element(document, "textarea", { "data-source": "true", "data-draft-key": `${editor.resourceId}:${editor.page}:${lang}`, "data-keep": keepId("source", editor.resourceId, editor.page, lang) });
-  source.value = stored === undefined ? (page?.[lang] ?? "") : stored;
-  source.addEventListener("input", () => {
-    rememberTextDraft(editor, editor.resourceId, editor.page, lang, source.value);
-    syncViewerDirty(app);
+  const lang = app.language === "es" ? "es" : "en", k = app.voidState.page;
+  editor.page = k; editor.language = lang;
+  editor.textSelections ??= new Map();
+  const selectionEditor = { resourceId: editor.resourceId, page: k, language: lang, textSelections: editor.textSelections };
+  const page = pages.find((item) => item.k === k);
+  const value = () => textDraft(editor, editor.resourceId, k, lang) ?? page?.[lang] ?? "";
+  const editable = canEditResources(app) && !editor.authoritative.readOnly && typeof page?.[lang] === "string";
+  const focused = app.mode === "focus", sourceMode = Boolean(editor.sourceMode && !focused);
+  const surface = element(document, "div", { class: `void-surface${editor.saveState === "not-saved" ? " is-not-saved" : ""}` });
+  const host = element(document, "div", { class: "void-page reading-card", "data-void": "true", hidden: sourceMode ? "" : null });
+  const title = element(document, "h2", { class: "void-title", "data-void-title": "true", text: editor.authoritative.document.title,
+    contenteditable: editable && !focused ? "plaintext-only" : "false", role: "textbox", "aria-label": t("resourceTitle") });
+  title.addEventListener("input", () => {
+    editor.titleDraft = title.textContent;
+    editor.editGeneration = (editor.editGeneration ?? 0) + 1;
+    editor.dirty = true;
+    queueVoid(app, editor);
   });
-  const sourceEdit = trackDisclosure(app, element(document, "details", { class: "source-edit", "data-source-edit": "true" }), keepId("source-edit", editor.resourceId, editor.page, lang));
-  sourceEdit.append(element(document, "summary", { text: t("editSource") }));
-  sourceEdit.append(labeledField(document, t("sourceLabel"), t("sourceHint"), source));
-  sourceEdit.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "save-range",
-    text: t("send"),
-    onclick: () => saveVoid(app, editor, source.value),
-  }));
-  tools.append(sourceEdit);
-  if (app.mode === "focus") {
-    tools.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "leave-focus",
-      text: t("returnToDocument"),
-      onclick: () => {
-        leaveFocus(app.voidState);
-        app.mode = "document";
-        renderShell(app);
-      },
-    }));
-    tools.append(element(document, "p", { class: "field-hint", "data-focus-hint": "true", text: t("focusHint") }));
-  } else {
-    tools.append(element(document, "button", {
-      type: "button", class: "btn", "data-action": "enter-focus",
-      text: t("focus"),
-      onclick: () => {
-        enterFocus(app.voidState);
-        app.mode = "focus";
-        renderShell(app);
-      },
-    }));
+  if (editor.titleDraft !== undefined) title.textContent = editor.titleDraft;
+  const body = element(document, "div", { class: "void-body", "data-void-body": "true", contenteditable: editable ? "true" : "false", role: "textbox", "aria-multiline": "true", "aria-label": t("document"), lang });
+  renderDocument(document, body, editor);
+  host.append(title, element(document, "p", { class: "void-subtitle", text: editor.authoritative.document.subtitle ?? k }), body);
+  const source = element(document, "textarea", { class: "void-source-input", "data-source": "true", "aria-label": t("sourceLabel"), "data-keep": keepId("source", editor.resourceId, k, lang), readonly: editable ? null : "" });
+  source.value = value();
+  const sourceCard = element(document, "section", { class: "void-source", "data-source-edit": "true", hidden: sourceMode ? null : "" }, labeledField(document, t("sourceLabel"), t("sourceCaretHint"), source));
+  const selectionHost = sourceMode ? source : body;
+  editor.captureSelection = () => {
+    if (!selectionHost.isConnected) return;
+    const active = document.activeElement;
+    const range = captureTextSelection(document, selectionHost, selectionEditor, value(), sourceMode);
+    if (range && (active === selectionHost || selectionHost.contains?.(active))) editor.restoreCaret = true;
+  };
+  editor.restoreSelection = () => {
+    if (!editor.restoreCaret) return;
+    editor.restoreCaret = false;
+    restoreTextSelection(document, selectionHost, selectionEditor, value(), sourceMode);
+  };
+  const apply = (change) => {
+    if (!change || !editable) return;
+    selectionEditor.textSelections.set(textDraftKey(editor.resourceId, k, lang), { start: change.start, end: change.end });
+    rememberTextDraft(editor, editor.resourceId, k, lang, change.source);
+    source.value = change.source;
+    renderDocument(document, body, editor);
+    restoreTextSelection(document, body, selectionEditor, change.source);
+    updateFormats();
+    queueVoid(app, editor);
+  };
+  let composing = false, composition = null;
+  body.addEventListener("compositionstart", () => { composing = true; editor.textComposing = true; composition = { source: value(), text: plainText(value()) }; });
+  body.addEventListener("compositionend", () => { composing = false; editor.textComposing = false; reconcileInput(); composition = null; });
+  const renderedText = () => body.textContent ?? "";
+  function reconcileInput() {
+    if (composing || !editable) return;
+    const before = composition?.text ?? plainText(value()), after = renderedText();
+    let start = 0, end = before.length, nextEnd = after.length;
+    while (start < end && start < nextEnd && before[start] === after[start]) start += 1;
+    while (end > start && nextEnd > start && before[end - 1] === after[nextEnd - 1]) { end -= 1; nextEnd -= 1; }
+    while (!validUtf16Boundary(before, start) || !validUtf16Boundary(after, start)) start -= 1;
+    while (!validUtf16Boundary(before, end)) end += 1;
+    while (!validUtf16Boundary(after, nextEnd)) nextEnd += 1;
+    if (before !== after) apply(replaceVisible(composition?.source ?? value(), { start, end }, after.slice(start, nextEnd)));
   }
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "comment-quote",
-    onclick: () => commentOnQuote(app, editor),
-  }, t("comment")));
-  if (canEditResources(app) && app.mode === "document") {
-    syncStructureDraft(app, editor);
-    const title = editorField(document, app, t, "documentTitle", "resourceTitle", "document-title");
-    tools.append(title, element(document, "button", {
-      type: "button", class: "btn", "data-action": "replace-document",
-      onclick: () => replaceVoidDocument(app, editor),
-    }, t("replaceDocument")));
+  body.addEventListener("input", reconcileInput);
+  body.addEventListener("beforeinput", (event) => {
+    if (composing || event.isComposing || event.cancelable === false || !editable) return;
+    const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
+    const target = event.getTargetRanges?.()[0];
+    let range = target ? plainOffsets(target.startContainer, target.startOffset, target.endContainer, target.endOffset)
+      : selection?.anchorNode && body.contains?.(selection.anchorNode) && body.contains?.(selection.focusNode) ? plainOffsets(selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset) : null;
+    if (!range) range = { start: 0, end: 0 };
+    const caret = captureTextSelection(document, body, selectionEditor, value());
+    if (range.start === range.end && caret && caret.start === caret.end) range.sourceStart = caret.start;
+    let inserted = event.data ?? "";
+    const input = event.inputType ?? "insertText";
+    if (input === "insertParagraph" || input === "insertLineBreak") inserted = "\n";
+    else if (["insertFromPaste", "insertFromDrop"].includes(input)) inserted = event.dataTransfer?.getData("text/plain") ?? inserted;
+    else if (input.startsWith("delete")) {
+      inserted = "";
+      if (range.start === range.end && !target) {
+        const visible = plainText(value());
+        if (input.endsWith("Backward")) { range.start = Math.max(0, range.start - 1); if (!validUtf16Boundary(visible, range.start)) range.start -= 1; }
+        else { range.end = Math.min(visible.length, range.end + 1); if (!validUtf16Boundary(visible, range.end)) range.end += 1; }
+      }
+    } else if (input.startsWith("format")) {
+      const format = { formatBold: "bold", formatItalic: "italic", formatStrikeThrough: "strikethrough" }[input];
+      event.preventDefault(); if (format) apply(formatSelection(value(), range, format)); return;
+    } else if (!input.startsWith("insert")) return;
+    event.preventDefault();
+    apply(replaceVisible(value(), range, inserted));
+  });
+  source.addEventListener("input", () => {
+    if (!editable) return;
+    rememberTextDraft(editor, editor.resourceId, k, lang, source.value);
+    captureTextSelection(document, source, selectionEditor, source.value, true);
+    queueVoid(app, editor);
+  });
+  const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
+  const button = (action, label, work, attributes = {}) => {
+    const control = element(document, "button", { type: "button", class: "btn", "data-action": action, "aria-label": label, title: label, text: label, onclick: work, ...attributes });
+    control.addEventListener("pointerdown", () => editor.captureSelection());
+    return control;
+  };
+  const watchUnit = editor.attached?.[0];
+  const attach = button("void-attach", t("finalAttached"), () => openEditorForm(app, "attach"));
+  if (focused) {
+    tools.append(button("leave-focus", t("document"), () => { editor.captureSelection(); editor.restoreCaret = true; editor.sourceMode = false; leaveFocus(app.voidState); app.mode = "document"; renderShell(app); }));
+    tools.append(element(document, "span", { text: t("voidPage", { page: pages.findIndex((page) => page.k === k) + 1, pages: pages.length }) }));
+  } else tools.append(attach);
+  if (watchUnit) tools.append(element(document, "span", { class: "void-attached", text: unitDisplayName(unitById(app, watchUnit)) }));
+  tools.append(button("void-watch", t(app.editors.watch?.state === "watching" ? "finalWatching" : "finalWatch"), () => app.editors.watch?.state === "watching" ? stopEditorWatch(app) : followEditor(app), { disabled: watchUnit ? null : "" }));
+  if (!focused) {
+    tools.append(button("toggle-source", t("sourceLabel"), () => { editor.captureSelection(); editor.sourceMode = !editor.sourceMode; editor.restoreCaret = true; renderShell(app); }, { "aria-pressed": String(sourceMode) }));
+    tools.append(button("enter-focus", t("focus"), () => { editor.captureSelection(); editor.restoreCaret = true; enterFocus(app.voidState); app.mode = "focus"; renderShell(app); }));
   }
-  if (app.mode === "focus") return element(document, "div", { class: "focus-document" }, host, tools);
-  return element(document, "div", {}, host, tools);
+  const status = element(document, "span", { class: "void-save-status", "data-void-save": editor.saveState ?? "saved", role: "status", "aria-live": "polite", text: t(editor.saveState === "saving" ? "voidSaving" : editor.saveState === "not-saved" ? "voidNotSaved" : "saved") });
+  tools.append(status);
+  const formatBar = element(document, "div", { class: "void-format-bar", "data-format-bar": "true", role: "toolbar", "aria-label": t("voidFormat"), hidden: "" });
+  const formatCopy = { h1: "H1", h2: "H2", h3: "H3" };
+  for (const format of TEXT_FORMATS) {
+    if (format === "h1" || format === "list") formatBar.append(element(document, "span", { class: "void-format-divider", role: "separator" }));
+    const label = formatCopy[format] ?? t(format === "comment" ? "comment" : `void${format[0].toUpperCase() + format.slice(1)}`);
+    const control = button(format === "comment" ? "comment-quote" : `format-${format}`, label, async () => {
+      const range = selectedPlainRange(document.getSelection?.() ?? document.defaultView?.getSelection?.()) ?? editor.visibleSelection;
+      if (!range) return;
+      if (format === "comment") { commentOnQuote(app, editor); return; }
+      if (format === "link" || format === "image") { voidFormatTarget(app, editor, format, range, apply); return; }
+      apply(formatSelection(value(), range, format));
+    }, { "data-format": format });
+    const glyph = { bold: "B", italic: "I", strikethrough: "S", list: "☷", quote: "❞", code: "<>", link: "↗", table: "⊞", image: "▧", comment: "◌" }[format] ?? label;
+    control.textContent = glyph;
+    control.addEventListener("pointerdown", (event) => { event.preventDefault(); editor.captureSelection(); });
+    formatBar.append(control);
+  }
+  function updateFormats() {
+    const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
+    const valid = !sourceMode && editable && selection?.anchorNode && body.contains?.(selection.anchorNode) && body.contains?.(selection.focusNode);
+    editor.visibleSelection = valid ? selectedPlainRange(selection) : null;
+    formatBar.hidden = !editor.visibleSelection;
+    if (formatBar.hidden) formatBar.setAttribute("hidden", ""); else formatBar.removeAttribute("hidden");
+    const rect = selection?.rangeCount ? selection.getRangeAt?.(0)?.getBoundingClientRect?.() : null;
+    const ground = surface.getBoundingClientRect?.();
+    if (rect && ground && formatBar.style?.setProperty) {
+      formatBar.style.setProperty("left", `${Math.max(4, Math.min(rect.left - ground.left, ground.width - 460))}px`);
+      formatBar.style.setProperty("top", `${Math.max(44, rect.top - ground.top - 44)}px`);
+    }
+  }
+  if (!app.onVoidSelection) {
+    app.onVoidSelection = () => { app.editors?.current?.captureSelection?.(); app.editors?.current?.updateFormats?.(); };
+    document.addEventListener?.("selectionchange", app.onVoidSelection);
+  }
+  editor.updateFormats = updateFormats;
+  body.addEventListener("keyup", updateFormats); body.addEventListener("pointerup", updateFormats);
+  surface.append(tools);
+  if (editor.saveState === "not-saved") surface.append(element(document, "div", { class: "void-save-error", "data-void-error": "true", role: "alert" },
+    icon(document, "alert"), element(document, "span", { text: t("voidSaveError") }), button("retry-void-save", t("retry"), () => editor.voidSaver?.retry().catch(() => {}))));
+  surface.append(host, sourceCard, formatBar);
+  if (focused) {
+    surface.append(element(document, "p", { class: "void-focus-hint", "data-focus-hint": "true", text: t("focusHint") }));
+    const dots = element(document, "div", { class: "void-page-dots" });
+    for (const page of pages) dots.append(button("void-page", t("voidPage", { page: pages.indexOf(page) + 1, pages: pages.length }), () => { editor.captureSelection(); app.voidState.page = page.k; editor.restoreCaret = true; renderShell(app); }, { "data-page-dot": page.k, "aria-pressed": String(page.k === k) }));
+    surface.append(dots);
+  }
+  updateFormats();
+  void loadVoidAssets(app, editor, value());
+  return surface;
+}
+
+function queueVoid(app, editor) {
+  if (!editor.voidSaver) editor.voidSaver = documentSaver(app.api, editor, ({ state }) => {
+    syncViewerDirty(app);
+    if (app.disposed) return;
+    const status = app.root.querySelector?.("[data-void-save]");
+    if (status && app.editors.current === editor) {
+      status.setAttribute("data-void-save", state);
+      status.textContent = text(app.language, state === "saving" ? "voidSaving" : state === "not-saved" ? "voidNotSaved" : "saved");
+      if (state === "not-saved" || app.root.querySelector?.("[data-void-error]")) renderShell(app);
+    }
+  });
+  const snapshot = JSON.parse(draftSnapshot(editor));
+  if (editor.titleDraft !== undefined) snapshot.document.title = editor.titleDraft;
+  editor.voidSaver.queue(JSON.stringify(snapshot));
+  syncViewerDirty(app);
+}
+
+async function loadVoidAssets(app, editor, source) {
+  const references = [...new Set(tokenizeMarkup(source).map((token) => token.image).filter(Boolean))];
+  editor.assets ??= new Map();
+  editor.loadingAssets ??= new Set();
+  for (const src of references) {
+    if (!assetIdentity(src) || editor.assets.has(src) || editor.loadingAssets.has(src)) continue;
+    editor.loadingAssets.add(src);
+    try {
+      const image = await fetchAsset(app.api, { url: `/api/v1/editors/${encodeURIComponent(editor.resourceId)}/assets/${assetIdentity(src)}` });
+      editor.assets.set(src, image);
+      if (!app.disposed && app.editors.current === editor) renderShell(app);
+    } catch { editor.assets.set(src, null); }
+    finally { editor.loadingAssets.delete(src); }
+  }
+}
+
+function voidFormatTarget(app, editor, format, range, apply) {
+  const document = app.root.ownerDocument, t = (key) => text(app.language, key);
+  const dialog = element(document, "dialog", { class: "dialog", "data-void-format-dialog": format });
+  const heading = element(document, "h2", { text: t(format === "link" ? "voidLink" : "voidImage") });
+  labelDialog(dialog, heading);
+  const input = element(document, "input", { type: "text", "data-format-target": "true" });
+  const error = element(document, "p", { role: "alert", class: "field-error" });
+  const original = textDraft(editor, editor.resourceId, editor.page, editor.language) ?? editor.authoritative.document.pages.find((page) => page.k === editor.page)[editor.language];
+  dialog.append(heading, labeledField(document, t("voidTarget"), t(format === "link" ? "voidLinkHint" : "voidImageHint"), input), error,
+    element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => dialog.close() }),
+    element(document, "button", { type: "button", class: "btn primary", text: t("apply"), "data-action": "apply-format-target", onclick: () => {
+      try { apply(formatSelection(original, range, format, input.value)); dialog.close(); }
+      catch { error.textContent = t("voidInvalidTarget"); }
+    } }));
+  dialog.addEventListener("close", () => { dialog.remove(); editor.restoreCaret = true; editor.restoreSelection?.(); });
+  document.body.append(dialog); dialog.showModal(); input.focus();
 }
 
 function appendProposals(app, document, host, editor, t) {
@@ -2107,24 +2262,6 @@ function appendProposals(app, document, host, editor, t) {
   }
 }
 
-function saveVoid(app, editor, value) {
-  const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
-  const lang = app.language === "es" ? "es" : "en";
-  const current = page?.[lang] ?? "";
-  rememberTextDraft(editor, editor.resourceId, page.k, lang, value);
-  const bounds = sourceReplacement(current, value);
-  editorAct(app, `void-range:${editor.resourceId}:${page.k}:${lang}`, text(app.language, "savingDocument"), async (record) => {
-    try {
-      await saveRange(app.api, editor, page.k, lang, bounds.start, bounds.end, bounds.replacement, record.operation);
-      editor.textDrafts?.delete(textDraftKey(editor.resourceId, page.k, lang));
-      if (editor.draftKey?.k === page.k && editor.draftKey?.lang === lang) editor.draftText = "";
-      syncViewerDirty(app);
-    } catch (error) {
-      editor.conflict = { ...(editor.conflict ?? {}), code: error.code, draftKey: { k: page.k, lang } };
-      throw error;
-    }
-  });
-}
 
 function commentOnQuote(app, editor) {
   const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
@@ -2133,7 +2270,7 @@ function commentOnQuote(app, editor) {
   const document = app.root.ownerDocument;
   const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
   if (host && selection?.anchorNode && !host.contains(selection.anchorNode)) return;
-  const range = selectedPlainRange(selection);
+  const range = selectedPlainRange(selection) ?? editor.visibleSelection;
   if (!page || !range) {
     explain(app, "quoteNeedsSelection");
     return;
@@ -2156,15 +2293,23 @@ function answerVoid(app, editor, proposal, decision) {
 function onFocusKey(app, event) {
   if (app.mode !== "focus" || !app.voidState) return;
   if (event.key === "Escape" && !app.root.ownerDocument.querySelector?.("dialog[open]")) {
+    app.editors.current?.captureSelection?.();
+    if (app.editors.current) { app.editors.current.restoreCaret = true; app.editors.current.sourceMode = false; }
     leaveFocus(app.voidState);
     app.mode = "document";
     renderShell(app);
-    app.root.querySelector?.("[data-action='enter-focus']")?.focus?.();
+    const editor = app.editors.current;
+    if (!editor?.textSelections?.has(textDraftKey(editor.resourceId, editor.page, editor.language))) {
+      app.root.querySelector?.("[data-action='enter-focus']")?.focus?.();
+    }
+    event.preventDefault();
     return;
   }
   const tag = event.target?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) return;
+  if (tag === "INPUT" || tag === "TEXTAREA") return;
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+  app.editors.current?.captureSelection?.();
+  if (app.editors.current) app.editors.current.restoreCaret = true;
   moveFocus(app.voidState, event.key);
   event.preventDefault();
   renderShell(app);
@@ -2443,8 +2588,14 @@ function selectEditor(app, summary) {
   const name = summary.title || summary.id;
   editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
     const before = editors.error;
+    const previous = editors.drafts.get(summary.id);
     await openEditor(app.api, editors, summary);
     if (editors.error && editors.error !== before) throw editors.error;
+    if (previous?.kind === "void" && editors.current?.resourceId === summary.id) {
+      Object.assign(previous, editors.current);
+      editors.current = previous;
+      editors.drafts.set(summary.id, previous);
+    }
   });
 }
 
@@ -3029,21 +3180,6 @@ function saveBoardStructure(app, editor, edit, onSaved) {
   saved?.then(() => { if (!editor.boardDraft && !editor.conflict) { onSaved?.(); syncViewerDirty(app); } });
 }
 
-function replaceVoidDocument(app, editor) {
-  if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
-  const title = editorDraft(app).documentTitle.trim();
-  if (!title) {
-    explain(app, "titleRequired");
-    return;
-  }
-  const savedTitle = editorDraft(app).documentTitle;
-  const next = structuredClone(editor.authoritative.document);
-  next.title = title;
-  editorAct(app, `void-doc:${editor.resourceId}`, text(app.language, "savingDocument"), async (record) => {
-    await replaceDocument(app.api, editor, next, record.operation);
-    releaseFormDraft(app, "resources", "documentTitle", savedTitle);
-  });
-}
 
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];

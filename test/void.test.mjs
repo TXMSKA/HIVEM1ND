@@ -124,7 +124,21 @@ const select = (text, quote, extra = {}) => ({ k: 'Intro.Welcome', lang: 'en', q
 
 test('plain text keeps the lines and the paragraph breaks the reader draws and drops the marks', () => {
   assert.equal(plain(PAGES[0].en), 'Welcome\nFirst line here.\n\nSecond paragraph of the text.');
-  assert.equal(plain('<i>a</i> < b >\n\n\nc\n'), 'a < b >\n\nc');
+  assert.equal(plain('<i>a</i> < b >\n\n\nc\n'), 'a < b >\n\n\nc\n');
+  assert.equal(plain('# Title\r\n\r\n<b>A😀</b> **bold** _italic_ ~~gone~~\r\n- item\r\n> quote\r\n`<b>code</b>`\r\n'),
+    'Title\n\nA😀 bold italic gone\nitem\nquote\n<b>code</b>\n');
+});
+
+test('Markdown comments retain plain offsets and relocate to the exact bilingual source passage', () => {
+  const source = '# Title\r\n\r\n<b>A😀</b> **passage**\r\n';
+  const visible = plain(source), start = visible.indexOf('😀');
+  const anchor = createAnchor(visible, start, start + 2, 'es', 'One');
+  const pages = [{ k: 'One', en: 'Other text', es: `Before\r\n${source}`, future: true }];
+  const found = place(pages, { anchor });
+  assert.equal(found.start, start + 7); assert.equal(found.end, start + 9);
+  assert.equal(pages[0].es.slice(found.sourceStart, found.sourceEnd), '😀');
+  assert.equal(found.exact, true);
+  assert.throws(() => createAnchor(visible, start + 1, start + 2, 'es', 'One'), RangeError);
 });
 
 test('the word diff reports inserted and removed words as runs', () => {
@@ -200,7 +214,7 @@ test('a comment is saved next to the document in the full Void format and found 
   assert.deepEqual(thread.anchor, { lang: 'en', quote: 'First line here.', prefix: 'Welcome\n', suffix: '\n\nSecond paragraph of the text.', k: 'Intro.Welcome', start: 8, end: 24 });
 
   const doc = (await api('/api/doc')).body;
-  assert.deepEqual(doc.threads[0].place, { start: 8, end: 24, exact: true });
+  assert.deepEqual(doc.threads[0].place, { start: 8, end: 24, exact: true, sourceStart: 15, sourceEnd: 31 });
   assert.deepEqual(doc.agent, { unit: 'executor-alpha', awake: true });
   assert.equal(JSON.parse(await readFile(file, 'utf8')).pages[0].en, PAGES[0].en, 'the document itself is not touched');
 });
@@ -433,7 +447,7 @@ test('a comment written into the comments file from outside reaches the open pag
   await writeFile(comments, JSON.stringify(saved, null, 2) + '\n');
   const event = await live.next('comments');
   assert.deepEqual(event.threads[0].messages.map((m) => m.author), ['person', 'executor-alpha']);
-  assert.deepEqual(event.threads[0].place, { start: 8, end: 24, exact: true });
+  assert.deepEqual(event.threads[0].place, { start: 8, end: 24, exact: true, sourceStart: 15, sourceEnd: 31 });
   await api('/api/comment', { op: 'status', id: saved.threads[0].id, status: 'resolved' });
   assert.equal((await live.next('comments')).threads[0].status, 'resolved', 'the person\'s own comment reaches every page');
 });

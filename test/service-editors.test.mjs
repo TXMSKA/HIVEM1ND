@@ -1030,6 +1030,28 @@ test('a Void document keeps orig, one history step and unknown fields', async (t
   assert.equal((await readFile(path.join(localPath, 'docs', 'release.versions.jsonl'), 'utf8')).trim().split('\n').length, 1);
 });
 
+test('Markdown ranges and anchors reject split syntax and characters without writing', async (t) => {
+  const { context, fixture } = await shop(t);
+  const source = '# Title\r\n\r\n<b>A😀</b> **passage**\r\n';
+  const document = { ...release(), future: { keep: true }, pages: [{ k: 'One', en: source, es: '_Texto_', future: 7 }] };
+  const created = await createText(context, { project: 'shop', path: 'docs/markdown.json', document });
+  const commentsRevision = (await readComments(context, created.id)).commentsRevision;
+  const before = fixture.store.writes.length, rendered = plain(source), start = rendered.indexOf('😀');
+  const comment = { text: 'Keep this character', sendToAgent: false, expectedRevision: created.revision, expectedCommentsRevision: commentsRevision };
+  await assert.rejects(() => createComment(context, created.id, { ...comment, anchor: { k: 'One', lang: 'en', start: start + 1, end: start + 2, quote: rendered.slice(start + 1, start + 2) } }), { status: 422, code: 'invalid_range' });
+  const syntax = source.indexOf('**') + 1;
+  await assert.rejects(() => replaceRange(context, created.id, { k: 'One', lang: 'en', start: syntax, end: syntax + 1, expectedText: '*', replacement: '', expectedRevision: created.revision }), { status: 422, code: 'invalid_range' });
+  assert.equal(fixture.store.writes.length, before);
+  const noted = await createComment(context, created.id, { ...comment, anchor: { k: 'One', lang: 'en', start, end: start + 2, quote: '😀' } });
+  assert.equal(source.slice(noted.thread.place.sourceStart, noted.thread.place.sourceEnd), '😀');
+  const changed = structuredClone(created.document);
+  changed.pages[0].en = `Before\r\n${source}`;
+  const saved = await replaceText(context, created.id, { document: changed, expectedRevision: created.revision });
+  assert.equal(saved.document.pages[0].es, '_Texto_');
+  assert.deepEqual(saved.document.future, { keep: true });
+  assert.equal(saved.document.pages[0].future, 7);
+});
+
 test('ranges reject split characters and tags, and a proposal accepts once', async (t) => {
   const { context } = await shop(t);
   const created = await createText(context, { project: 'shop', path: 'docs/release.json', document: release() });
@@ -1045,7 +1067,7 @@ test('ranges reject split characters and tags, and a proposal accepts once', asy
     text: 'Clarify',
     expectedRevision: removed.editor.revision,
     expectedCommentsRevision: (await readComments(context, created.id)).commentsRevision,
-    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 1, quote: plain(removed.editor.document.pages[0].en).slice(0, 1) },
+    anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 2, quote: plain(removed.editor.document.pages[0].en).slice(0, 2) },
   });
   const proposed = await replaceRange(context, created.id, {
     k: 'Intro.Welcome', lang: 'en', start: 0, end: 2, expectedText: removed.editor.document.pages[0].en.slice(0, 2), replacement: 'Hi',

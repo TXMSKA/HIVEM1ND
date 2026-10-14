@@ -1,5 +1,5 @@
 import { perform, request } from "./api.mjs";
-import { boundaryInsideTag, createTextAnchor, plainOffsets, plainText, rangeRequest, renderMarkup, validUtf16Boundary } from "./markup.mjs";
+import { assetIdentity, boundaryInsideTag, createTextAnchor, plainCaretFromSource, plainOffsets, plainText, rangeRequest, renderMarkup, runMetadata, sourceBoundary, tokenizeMarkup, validLink, validUtf16Boundary } from "./markup.mjs";
 
 export function renderDocument(document, host, editor) {
   host.replaceChildren();
@@ -11,13 +11,13 @@ export function renderDocument(document, host, editor) {
   const block = document.createElement("article");
   block.dataset.page = page.k;
   block.dataset.language = editor.language ?? "en";
-  const source = page[block.dataset.language] ?? "";
   if (editor.focus?.k === page.k) {
     block.dataset.highlight = "true";
     if (Number.isInteger(editor.focus.start) && Number.isInteger(editor.focus.end)) block.dataset.range = `${editor.focus.start}:${editor.focus.end}`;
     if (editor.focus.lang) block.dataset.language = editor.focus.lang;
   }
-  block.append(renderMarkup(document, source));
+  const source = textDraft(editor, editor.resourceId, page.k, block.dataset.language) ?? page[block.dataset.language] ?? "";
+  block.append(renderMarkup(document, source, { assets: editor.assets }));
   host.append(block);
 }
 
@@ -33,6 +33,8 @@ export function textDraft(editor, resourceId, k, lang) {
 }
 
 export function rememberTextDraft(editor, resourceId, k, lang, value) {
+  if (!editor.dirty) editor.baseRevision = editor.revision;
+  editor.editGeneration = (editor.editGeneration ?? 0) + 1;
   if (!editor.textDrafts) editor.textDrafts = new Map();
   editor.textDrafts.set(textDraftKey(resourceId, k, lang), value);
   editor.draftKey = { k, lang };
@@ -76,6 +78,7 @@ export function selectedPlainRange(selection) {
 }
 
 export async function saveRange(api, editor, k, lang, start, end, replacement, retained = null) {
+  const generation = editor.editGeneration ?? 0;
   const body = rangeRequest({ document: editor.authoritative?.document ?? editor.document, revision: editor.revision }, k, lang, start, end, replacement);
   const result = await perform(api, {
     method: "POST",
@@ -86,13 +89,14 @@ export async function saveRange(api, editor, k, lang, start, end, replacement, r
   const saved = result.data?.editor;
   acceptText(editor, saved);
   if (saved?.document || saved?.revision) {
-    editor.dirty = false;
-    editor.conflict = null;
+    if ((editor.editGeneration ?? 0) === generation && !editor.textDrafts?.size) editor.dirty = false;
+    if (!editor.conflict?.remote || editor.conflict.remote.revision === saved.revision) editor.conflict = null;
   }
   return result;
 }
 
-export async function replaceDocument(api, editor, document, retained = null) {
+export async function replaceDocument(api, editor, document, retained = null, expectedRevision = editor.revision) {
+  const generation = editor.editGeneration ?? 0;
   const next = structuredClone(document);
   delete next.rev;
   delete next.history;
@@ -100,11 +104,11 @@ export async function replaceDocument(api, editor, document, retained = null) {
     method: "PUT",
     path: "/void/texts/:resourceId",
     params: { resourceId: editor.resourceId },
-    body: { document: next, expectedRevision: editor.revision },
+    body: { document: next, expectedRevision },
   }, retained);
   acceptText(editor, result.data);
-  editor.dirty = false;
-  editor.conflict = null;
+  if ((editor.editGeneration ?? 0) === generation && !editor.textDrafts?.size) editor.dirty = false;
+  if (!editor.conflict?.remote || editor.conflict.remote.revision === result.data.revision) editor.conflict = null;
   return result;
 }
 
@@ -192,12 +196,147 @@ export function showTools(state) {
 }
 
 export function textAnchor(editor, k, lang, plainStart, plainEnd) {
-  const source = (editor.authoritative?.document ?? editor.document).pages.find((page) => page.k === k)[lang];
+  const source = textDraft(editor, editor.resourceId, k, lang) ?? (editor.authoritative?.document ?? editor.document).pages.find((page) => page.k === k)[lang];
   return createTextAnchor(source, k, lang, plainStart, plainEnd);
 }
 
 export function visibleText(source) {
   return plainText(source);
+}
+
+export const TEXT_FORMATS = ["bold", "italic", "strikethrough", "h1", "h2", "h3", "list", "quote", "code", "link", "table", "image", "comment"];
+
+export function formatSelection(source, range, format, target = "") {
+  if (!range || range.end <= range.start || !validUtf16Boundary(plainText(source), range.start) || !validUtf16Boundary(plainText(source), range.end)) return null;
+  let start = sourceBoundary(source, range.start, "end"), end = sourceBoundary(source, range.end, "start");
+  if (start == null || end == null || end < start) return null;
+  let value = source.slice(start, end), replacement;
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const marks = { bold: "**", italic: "_", strikethrough: "~~" };
+  const inlineLines = (wrap) => value.split(/(\r\n|\r|\n)/).map((line) => {
+    if (!line || /^[\r\n]+$/.test(line)) return line;
+    const prefix = /^(?:#{1,3}|[-+*]|\d+\.|>)\s+/.exec(line)?.[0] ?? "";
+    return prefix + wrap(line.slice(prefix.length));
+  }).join("");
+  if (marks[format]) replacement = inlineLines((line) => marks[format] + line + marks[format]);
+  else if (["h1", "h2", "h3", "list", "quote"].includes(format)) {
+    start = source.lastIndexOf("\n", start - 1) + 1;
+    const lineEnd = source.indexOf("\n", Math.max(start, end - 1));
+    end = lineEnd < 0 ? source.length : source[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    value = source.slice(start, end);
+    const prefix = format[0] === "h" ? "#".repeat(Number(format[1])) + " " : format === "list" ? "- " : "> ";
+    replacement = value.split(/\r?\n/).map((line) => prefix + line.replace(/^(?:#{1,3}|[-+*]|\d+\.|>)\s+/, "")).join(newline);
+  } else if (format === "code") replacement = value.includes("\n") || value.includes("`") ? "```" + newline + value + newline + "```" : "`" + value + "`";
+  else if (format === "link" || format === "image") {
+    if (!(format === "link" ? validLink(target) : assetIdentity(target))) throw new RangeError("The target is not valid.");
+    replacement = inlineLines((line) => (format === "image" ? "!" : "") + "[" + line.replace(/[\\\[\]]/g, "\\$&") + "](" + target + ")");
+  } else if (format === "table") {
+    const rows = value.split(/\r?\n/).map((line) => line.split("\t").map((cell) => cell.replaceAll("|", "\\|")));
+    const count = Math.max(2, ...rows.map((row) => row.length));
+    const rowText = (row) => "| " + Array.from({ length: count }, (_, i) => row[i] ?? "").join(" | ") + " |";
+    replacement = [rowText(rows[0]), rowText(Array(count).fill("---")), ...rows.slice(1).map(rowText)].join(newline);
+  } else return null;
+  return { source: source.slice(0, start) + replacement + source.slice(end), start, end: start + replacement.length };
+}
+
+export function replaceVisible(source, range, value) {
+  const visible = plainText(source);
+  if (!range || range.end < range.start || !validUtf16Boundary(visible, range.start) || !validUtf16Boundary(visible, range.end)) throw new RangeError("The selection splits a character.");
+  const caretToken = tokenizeMarkup(source).find((token) => token.type === "text" && range.start >= token.plainStart && range.start <= token.plainEnd);
+  const at = range.start === range.end && validUtf16Boundary(source, range.sourceStart) ? range.sourceStart
+    : range.start === range.end && caretToken ? caretToken.boundaries?.[range.start - caretToken.plainStart] ?? caretToken.sourceStart + range.start - caretToken.plainStart
+    : sourceBoundary(source, range.start, "end");
+  if (at == null) return { source: value, start: value.length, end: value.length };
+  const changes = [];
+  for (const token of tokenizeMarkup(source)) {
+    if (token.type !== "text") continue;
+    const start = Math.max(range.start, token.plainStart), end = Math.min(range.end, token.plainEnd);
+    if (end <= start) continue;
+    const from = token.boundaries?.[start - token.plainStart] ?? token.sourceStart + start - token.plainStart;
+    const to = token.boundaries?.[end - token.plainStart] ?? token.sourceStart + end - token.plainStart;
+    changes.push({ start: from, end: to });
+  }
+  let next = source;
+  for (const change of changes.reverse()) next = next.slice(0, change.start) + next.slice(change.end);
+  const inserted = String(value).replace(/\r\n?|\n/g, source.includes("\r\n") ? "\r\n" : "\n").replace(/[\\`*_~[\]]/g, "\\$&");
+  next = next.slice(0, at) + inserted + next.slice(at);
+  return { source: next, start: at + inserted.length, end: at + inserted.length };
+}
+
+export function captureTextSelection(document, host, editor, source, sourceMode = false) {
+  let range;
+  if (sourceMode) range = { start: host.selectionStart ?? 0, end: host.selectionEnd ?? 0, backward: host.selectionDirection === "backward" };
+  else {
+    const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
+    if (!selection?.anchorNode || !host.contains?.(selection.anchorNode) || !host.contains?.(selection.focusNode)) return null;
+    const plain = plainOffsets(selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset);
+    if (!plain) return null;
+    const previous = editor.textSelections?.get(textDraftKey(editor.resourceId, editor.page, editor.language));
+    const tokens = tokenizeMarkup(source);
+    const point = (offset, affinity) => {
+      const run = tokens.find((token) => token.type === "text" && offset >= token.plainStart && offset <= token.plainEnd);
+      return run ? run.boundaries?.[offset - run.plainStart] ?? run.sourceStart + offset - run.plainStart : sourceBoundary(source, offset, affinity);
+    };
+    const start = previous && plainCaretFromSource(tokens, previous.start) === plain.start ? previous.start : point(plain.start, "end");
+    const end = previous && plainCaretFromSource(tokens, previous.end) === plain.end ? previous.end : point(plain.end, "start");
+    range = { start, end, backward: plainOffsets(selection.anchorNode, selection.anchorOffset, selection.anchorNode, selection.anchorOffset)?.start > plain.start };
+  }
+  if (!validUtf16Boundary(source, range.start) || !validUtf16Boundary(source, range.end)) return null;
+  editor.textSelections ??= new Map();
+  editor.textSelections.set(textDraftKey(editor.resourceId, editor.page, editor.language), range);
+  return range;
+}
+
+export function restoreTextSelection(document, host, editor, source, sourceMode = false) {
+  const range = editor.textSelections?.get(textDraftKey(editor.resourceId, editor.page, editor.language));
+  if (!range || !validUtf16Boundary(source, range.start) || !validUtf16Boundary(source, range.end)) return false;
+  host.focus?.();
+  if (sourceMode) { host.setSelectionRange?.(range.start, range.end, range.backward ? "backward" : "forward"); return true; }
+  const tokens = tokenizeMarkup(source), start = plainCaretFromSource(tokens, range.start), end = plainCaretFromSource(tokens, range.end);
+  const nodes = [];
+  const walk = (node) => { if (runMetadata(node)) nodes.push(node); else for (const child of node.childNodes ?? node.children ?? []) walk(child); };
+  walk(host);
+  const point = (offset) => {
+    for (const node of nodes) { const run = runMetadata(node); if (offset >= run.plainStart && offset <= run.plainEnd) return [node, offset - run.plainStart]; }
+    return [host, 0];
+  };
+  const a = point(start), b = point(end), selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
+  if (selection?.setBaseAndExtent) selection.setBaseAndExtent(...(range.backward ? b : a), ...(range.backward ? a : b));
+  else if (document.createRange && selection?.addRange) {
+    const domRange = document.createRange(); domRange.setStart(...a); domRange.setEnd(...b); selection.removeAllRanges(); selection.addRange(domRange);
+  }
+  return true;
+}
+
+// One controller serializes every page/language of a resource under its revision.
+export function documentSaver(api, editor, onState = () => {}, delayMs = 400) {
+  return continuousSave({ revision: editor.revision, delayMs, onState: (state) => { editor.saveState = state.state; onState(state); }, save: async (snapshot, revision, retained) => {
+    const { document, generation, drafts } = JSON.parse(snapshot);
+    editor.boardSaving = { document: { ...document, rev: (editor.authoritative?.document?.rev ?? 0) + 1 } };
+    try {
+      const result = await replaceDocument(api, editor, document, retained, revision);
+      if ((editor.editGeneration ?? 0) === generation) {
+        for (const [key, value] of drafts) if (editor.textDrafts?.get(key) === value) editor.textDrafts.delete(key);
+        if (editor.titleDraft === document.title) delete editor.titleDraft;
+      }
+      if (!editor.textDrafts?.size) { editor.draftText = ""; editor.draftKey = null; }
+      editor.dirty = Boolean(editor.textDrafts?.size) || (editor.editGeneration ?? 0) !== generation;
+      return result;
+    } catch (failure) {
+      if (failure.code === "revision_conflict") editor.conflict ??= { code: failure.code };
+      throw failure;
+    } finally { editor.boardSaving = null; }
+  } });
+}
+
+export function draftSnapshot(editor) {
+  const document = structuredClone(editor.authoritative?.document ?? editor.document);
+  if (editor.titleDraft !== undefined) document.title = editor.titleDraft;
+  for (const page of document.pages) for (const lang of Object.keys(page)) {
+    const value = textDraft(editor, editor.resourceId, page.k, lang);
+    if (value !== undefined) page[lang] = value;
+  }
+  return JSON.stringify({ document, generation: editor.editGeneration ?? 0, drafts: [...(editor.textDrafts ?? [])] });
 }
 
 function acceptText(editor, data) {
@@ -261,7 +400,7 @@ export function continuousSave({ save, revision, onState = () => {}, delayMs = 4
     queue(nextValue) {
       value = nextValue;
       generation += 1;
-      report('saving');
+      report(error ? 'not-saved' : 'saving');
       clearTimeout(timer);
       if (!error && !closed) timer = setTimeout(() => { void flush().catch(() => {}); }, delayMs);
     },

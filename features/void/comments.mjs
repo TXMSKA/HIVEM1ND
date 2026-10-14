@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { plain } from './text.mjs';
+import { sourceBoundary, validUtf16Boundary } from '../../gui/app/markup.mjs';
 
 export const PERSON = 'person';
 export const MAX_COMMENT = 4000;
@@ -22,7 +23,7 @@ export function emptyComments(name) {
 }
 
 export function createAnchor(text, start, end, lang, k) {
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > text.length || end <= start) throw new RangeError('Invalid comment selection');
+  if (end <= start || !validUtf16Boundary(text, start) || !validUtf16Boundary(text, end)) throw new RangeError('Invalid comment selection');
   return {
     lang,
     quote: text.slice(start, end),
@@ -104,7 +105,9 @@ export function place(pages, thread) {
   const page = pages.find((p) => p.k === anchor?.k);
   if (!page || typeof page[anchor.lang] !== 'string') return null;
   const found = findAnchor(plain(page[anchor.lang]), anchor);
-  return found && { start: found.start, end: found.end, exact: found.exact };
+  if (!found || !validUtf16Boundary(plain(page[anchor.lang]), found.start) || !validUtf16Boundary(plain(page[anchor.lang]), found.end)) return null;
+  return { start: found.start, end: found.end, exact: found.exact,
+    sourceStart: sourceBoundary(page[anchor.lang], found.start, 'end'), sourceEnd: sourceBoundary(page[anchor.lang], found.end, 'start') };
 }
 
 export function addThread(comments, { anchor, text, to, now = new Date() }) {

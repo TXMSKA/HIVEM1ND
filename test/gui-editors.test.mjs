@@ -4,8 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request } from "../gui/app/api.mjs";
 import { editorDraftDocument, loadHistory, resolveEditorConflict, restoreEditorHistory } from "../gui/app/editors.mjs";
-import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundary, validUtf16Boundary } from "../gui/app/markup.mjs";
-import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
+import { boundaryInsideTag, plainCaretFromSource, plainText, rangeRequest, renderMarkup, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "../gui/app/markup.mjs";
+import { answerProposal, documentSaver, draftSnapshot, enterFocus, formatSelection, leaveFocus, moveFocus, rememberTextDraft, replaceVisible, saveRange, selectedPlainRange, showTools, textDraft, TEXT_FORMATS } from "../gui/app/void.mjs";
 import {
   addNode,
   addBoardFrame,
@@ -495,6 +495,104 @@ test("blueprint edits keep unknown fields and refuse a lossy save", async (t) =>
   assert.ok(orphan);
   assert.equal(orphan.place, null);
   assert.equal(editors.current.authoritative.document.sentinel, "document-sentinel");
+});
+
+test("Void formats keep exact source, CRLF, and collapsed or unsafe selections unchanged", () => {
+  const source = "One\r\nTwo";
+  const expected = {
+    bold: "**One**\r\n**Two**", italic: "_One_\r\n_Two_", strikethrough: "~~One~~\r\n~~Two~~",
+    h1: "# One\r\n# Two", h2: "## One\r\n## Two", h3: "### One\r\n### Two",
+    list: "- One\r\n- Two", quote: "> One\r\n> Two", code: "```\r\nOne\r\nTwo\r\n```",
+    link: "[One](https://example.test/docs)\r\n[Two](https://example.test/docs)",
+    table: "| One |  |\r\n| --- | --- |\r\n| Two |  |",
+    image: "![One](assets/11111111-1111-4111-8111-111111111111.png)\r\n![Two](assets/11111111-1111-4111-8111-111111111111.png)",
+  };
+  for (const format of TEXT_FORMATS) {
+    const target = format === "image" ? "assets/11111111-1111-4111-8111-111111111111.png" : "https://example.test/docs";
+    const change = formatSelection(source, { start: 0, end: 7 }, format, target);
+    if (format === "comment") assert.equal(change, null);
+    else assert.equal(change.source, expected[format], format);
+    assert.equal(formatSelection(source, { start: 2, end: 2 }, format), null);
+  }
+  assert.equal(formatSelection("A😀B", { start: 2, end: 3 }, "bold"), null);
+  assert.throws(() => formatSelection("Word", { start: 0, end: 4 }, "link", "javascript:alert(1)"));
+  assert.throws(() => formatSelection("Word", { start: 0, end: 4 }, "image", "assets/../secret.png"));
+  assert.equal(formatSelection("One\r\nTwo", { start: 1, end: 2 }, "h2").source, "## One\r\nTwo");
+});
+
+test("Markdown, legacy, code, tables and literal HTML share reversible UTF-16 and newline offsets", () => {
+  const source = "\r\n# Title\r\n\r\n<b>A😀</b> **bold** _italic_ ~~gone~~\r\n- One\r\n- Two\r\n> quote\r\n`<b>code</b>`\r\n\r\n\r\n";
+  const visible = "\nTitle\n\nA😀 bold italic gone\nOne\nTwo\nquote\n<b>code</b>\n\n\n";
+  assert.equal(plainText(source), visible);
+  const tokens = tokenizeMarkup(source);
+  for (let at = 0; at <= visible.length; at++) {
+    if (!validUtf16Boundary(visible, at)) { assert.equal(sourceBoundary(source, at), null); continue; }
+    for (const affinity of ["start", "end"]) {
+      const boundary = sourceBoundary(source, at, affinity);
+      assert.ok(validUtf16Boundary(source, boundary), `${at} ${affinity}`);
+      assert.equal(plainCaretFromSource(tokens, boundary), at, `${at} ${affinity}`);
+    }
+  }
+  const table = "| Left | Right |\r\n| --- | --- |\r\n| A\\|B | C |";
+  assert.equal(plainText(table), "Left\tRight\nA|B\tC");
+  assert.equal(plainText("```\r\n<b>literal</b>\r\n```"), "<b>literal</b>");
+  const raw = '<script>alert(1)</script><img src=x onerror=run()> [X](javascript:run()) ![X](data:image/png;base64,x)';
+  const rendered = renderMarkup(fakeDocument(), raw);
+  assert.equal(textOf(rendered), raw);
+  assert.equal(hasTag(rendered, "SCRIPT"), false); assert.equal(hasTag(rendered, "IMG"), false);
+  const image = "![local](assets/11111111-1111-4111-8111-111111111111.png)";
+  assert.equal(hasTag(renderMarkup(fakeDocument(), image), "IMG"), false);
+  const assets = new Map([["assets/11111111-1111-4111-8111-111111111111.png", { url: "blob:verified" }]]);
+  assert.equal(hasTag(renderMarkup(fakeDocument(), image, { assets }), "IMG"), true);
+  assert.equal(hasTag(renderMarkup(fakeDocument(), "[site](https://example.test)"), "A"), true);
+});
+
+test("in-place typing preserves unedited markup, empty strings, newlines and surrogate pairs", () => {
+  const source = "# Title\r\n\r\n<b>A😀</b> **bold**\r\n";
+  const visible = plainText(source), start = visible.indexOf("😀");
+  const change = replaceVisible(source, { start, end: start + 2 }, "😊");
+  assert.equal(change.source, source.replace("😀", "😊"));
+  assert.equal(replaceVisible("<b>word</b>", { start: 0, end: 0 }, "X").source, "<b>Xword</b>");
+  assert.equal(replaceVisible("**word**", { start: 0, end: 4 }, "").source, "****");
+  assert.equal(plainText("****"), "");
+  assert.equal(replaceVisible("", { start: 0, end: 0 }, "**literal**").source, "\\*\\*literal\\*\\*");
+  assert.equal(plainText(replaceVisible("One\r\n", { start: 4, end: 4 }, "Two").source), "One\nTwo");
+  assert.throws(() => replaceVisible(source, { start: start + 1, end: start + 2 }, ""));
+  assert.equal(selectedPlainRange({ isCollapsed: true }), null);
+});
+
+test("one document saver retains later typing and retries its exact failed operation across pages and languages", async () => {
+  const revision = "a".repeat(64);
+  const document = { title: "Title", sentinel: { future: true }, pages: [{ k: "One", en: "Before", es: "Antes", sentinel: 7 }, { k: "Two", en: "Other", es: "Otro" }], rev: 1, history: [] };
+  const editor = { resourceId: "text", revision, authoritative: { document, revision } };
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const attempts = [], states = [];
+  const api = createApi({ location: { origin: "http://127.0.0.1:9", pathname: "/", search: "", hash: "#session=fixture" }, history: { replaceState() {} }, fetch: async (_url, init) => {
+    const body = JSON.parse(init.body); attempts.push({ key: init.headers["Idempotency-Key"], body });
+    if (attempts.length === 1) { await gate; throw new Error("Response lost"); }
+    return jsonResponse({ id: "text", revision: String(attempts.length).repeat(64), document: { ...body.document, rev: attempts.length } });
+  } });
+  const saver = documentSaver(api, editor, ({ state }) => states.push(state), 10000);
+  rememberTextDraft(editor, "text", "One", "en", "First"); saver.queue(draftSnapshot(editor));
+  const pending = saver.flush();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  rememberTextDraft(editor, "text", "One", "en", "Later");
+  rememberTextDraft(editor, "text", "Two", "es", "Después"); saver.queue(draftSnapshot(editor));
+  release(); await assert.rejects(pending);
+  assert.equal(editor.saveState, "not-saved");
+  assert.equal(textDraft(editor, "text", "One", "en"), "Later");
+  await saver.retry(); saver.dispose();
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(attempts[2].body.expectedRevision, "2".repeat(64));
+  assert.equal(attempts[2].body.document.pages[0].en, "Later");
+  assert.equal(attempts[2].body.document.pages[0].es, "Antes");
+  assert.equal(attempts[2].body.document.pages[1].es, "Después");
+  assert.deepEqual(attempts[2].body.document.sentinel, { future: true });
+  assert.equal(attempts[2].body.document.pages[0].sentinel, 7);
+  assert.equal(editor.dirty, false); assert.equal(editor.textDrafts.size, 0); assert.equal(editor.draftText, "");
+  assert.equal(states.at(-1), "saved");
 });
 
 test("void edits keep source boundaries, history and proposals", async (t) => {

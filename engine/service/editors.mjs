@@ -9,6 +9,7 @@ import { paginate } from './projection.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { createAnchor, findAnchor, place } from '../../features/void/comments.mjs';
 import { plain } from '../../features/void/text.mjs';
+import { boundaryInsideTag, validUtf16Boundary } from '../../gui/app/markup.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { openSync } from '../sync/store.mjs';
@@ -1431,11 +1432,7 @@ function assertRange(source, start, end) {
     return previous >= 0xd800 && previous <= 0xdbff && here >= 0xdc00 && here <= 0xdfff;
   };
   if (splitsPair(start) || splitsPair(end)) fail(422, 'invalid_range', 'The range splits a character.');
-  for (const match of source.matchAll(/<\/?[bi]>/g)) {
-    const from = match.index;
-    const to = from + match[0].length;
-    if ((start > from && start < to) || (end > from && end < to)) fail(422, 'invalid_range', 'The range splits a markup tag.');
-  }
+  if (boundaryInsideTag(source, start) || boundaryInsideTag(source, end)) fail(422, 'invalid_range', 'The range splits markup syntax.');
 }
 
 function applySlice(source, start, end, replacement, expected) {
@@ -1663,6 +1660,8 @@ function validateAnchor(found, document, anchor) {
     const source = page?.[anchor.lang];
     if (typeof source !== 'string') fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
     const rendered = plain(source);
+    if (!Number.isInteger(anchor.start) || !Number.isInteger(anchor.end) || anchor.end <= anchor.start
+      || !validUtf16Boundary(rendered, anchor.start) || !validUtf16Boundary(rendered, anchor.end)) fail(422, 'invalid_range', 'The anchor splits a character or lies outside the text.');
     if (rendered.slice(anchor.start, anchor.end) !== anchor.quote) fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
     return createAnchor(rendered, anchor.start, anchor.end, anchor.lang, anchor.k);
   }

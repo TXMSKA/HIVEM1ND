@@ -5,7 +5,7 @@ import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, createGroup, setUnitAlias, startSession } from "../gui/app/actions.mjs";
-import { textDraft } from "../gui/app/void.mjs";
+import { documentSaver, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
@@ -118,7 +118,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("session="), false);
   const main = sources[2][1];
   const imports = [...new Set([...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]))].sort();
-  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
+  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./markup.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[4][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);
@@ -1218,11 +1218,12 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
-  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-action='replace-document']"), "The text did not open.");
+  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-void-title]"), "The text did not open.");
   const textRevision = desktop.app.editors.current.revision;
   const textRev = desktop.app.editors.current.authoritative.document.rev;
-  typeInput(desktop.root.querySelector("[data-field='document-title']"), "Revised notes", 0, 13);
-  click(desktop.root.querySelector("[data-action='replace-document']"));
+  const title = desktop.root.querySelector("[data-void-title]");
+  title.textContent = "Revised notes";
+  for (const handler of title.listeners.get("input") ?? []) handler();
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.title === "Revised notes", "The document replacement was not saved.");
   const replaced = writes.filter((item) => item.method === "PUT" && item.body?.document?.pages && !item.body.document.screens).at(-1);
   assert.equal(replaced.body.expectedRevision, textRevision);
@@ -1292,22 +1293,18 @@ test("void drafts stay with their page and comments use the rendered selection",
   const original = source.value;
   const broken = original.replace("<b>", "<");
   typeInput(source, broken, 0, 1);
-  click(desktop.root.querySelector("[data-action='save-range']"));
-  await waitFor(() => writes.some((item) => item.method === "POST" && item.url.includes("/ranges") && item.body.replacement === broken), "The unsafe range was not saved.");
-  const ranged = writes.filter((item) => item.method === "POST" && item.url.includes("/ranges")).at(-1).body;
-  assert.equal(ranged.start, 0);
-  assert.equal(ranged.end, original.length);
-  assert.equal(ranged.expectedText, original);
-  assert.equal(ranged.k, "Intro.Welcome");
-  assert.equal(ranged.lang, "en");
+  await desktop.app.editors.current.voidSaver.flush();
+  const ranged = writes.filter((item) => item.method === "PUT" && item.url.includes("/void/texts/")).at(-1).body;
+  assert.equal(ranged.document.pages.find((page) => page.k === "Intro.Welcome").en, broken);
+  assert.equal(ranged.document.pages.find((page) => page.k === "Intro.Welcome").es, desktop.app.editors.current.authoritative.document.pages[0].es);
   await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.k === "Intro.Welcome")?.en === broken
     && desktop.root.querySelector("[data-source]")?.value === broken, "The saved text was not shown.");
   await delay(150);
 
   const kept = `${broken} kept`;
-  desktop.app.editors.current.revision = "a".repeat(64);
+  fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, status: 409, code: "revision_conflict" });
   typeInput(desktop.root.querySelector("[data-source]"), kept, 0, 4);
-  click(desktop.root.querySelector("[data-action='save-range']"));
+  await assert.rejects(desktop.app.editors.current.voidSaver.flush());
   await waitFor(() => desktop.app.editors.current?.conflict?.code === "revision_conflict", "The conflict draft was discarded.");
   assert.equal(desktop.root.querySelector("[data-source]").value, kept);
   assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), kept);
@@ -1851,7 +1848,7 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.endsWith("!"), "The source draft was discarded with the other forms.");
-  click(desktop.root.querySelector("[data-action='save-range']"));
+  await desktop.app.editors.current.voidSaver?.flush();
   await waitFor(() => !(desktop.app.editors.current?.textDrafts?.size), "The source draft was not saved.");
   await waitFor(() => dirtyPatches().some((item) => item.body.dirty === false) && dirtyMessages().some((item) => item.value === false), "Saving the last draft did not clear the dirty flag.");
   assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
@@ -1929,7 +1926,9 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.equal(textTools.querySelector("[data-action='watch']") != null, true);
   assert.equal(textResource.querySelector("[data-source]") != null, true);
   assert.equal(textResource.querySelector("[data-draft]"), null);
-  assert.equal(textResource.querySelector("[data-action='save-range']") != null, true);
+  assert.equal(textResource.querySelector("[data-action='save-range']"), null);
+  assert.equal(textResource.querySelector("[data-action='replace-document']"), null);
+  assert.equal(textResource.querySelector("[data-void-body]").getAttribute("contenteditable"), "true");
   assert.equal(textComments.querySelector("[data-comment]") != null, true);
   assert.equal(textComments.querySelector("[data-source]"), null);
 
@@ -2104,7 +2103,7 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   const fresh = desktop.root.querySelector("[data-action='enter-focus']");
   assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
   assert.equal(fresh != null && fresh !== stale, true);
-  assert.equal(desktop.document.activeElement, fresh);
+  assert.equal(desktop.document.activeElement === fresh, true);
   assert.equal(fresh.closest("[data-editor-layout]")?.getAttribute("data-editor-layout"), "document");
   navigate(desktop.app, "focus");
   assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
@@ -2116,6 +2115,112 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   assert.match(focusCss, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
   assert.match(focusCss, /\[data-mode="focus"\] \.foot[\s\S]*display:\s*none/);
   assert.match(focusCss, /box-shadow:\s*none/);
+});
+
+test("Void keeps the source selection and draft through formatting, Source, Focus and page arrows", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-void-body]"), "The document did not open.");
+  const editor = desktop.app.editors.current;
+  editor.voidSaver = documentSaver(desktop.app.api, editor, () => {}, 10000);
+  const source = "# Title\r\n\r\n<b>A😀</b> **bold**\r\nSecond";
+  typeInput(desktop.root.querySelector("[data-source]"), source, 0, 0);
+  renderShell(desktop.app);
+  const selection = {
+    get isCollapsed() { return this.anchorNode === this.focusNode && this.anchorOffset === this.focusOffset; },
+    setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset) { Object.assign(this, { anchorNode, anchorOffset, focusNode, focusOffset }); },
+  };
+  desktop.document.getSelection = () => selection;
+  const body = desktop.root.querySelector("[data-void-body]");
+  const emoji = textNodes(body).find((node) => node.textContent === "A😀");
+  selection.setBaseAndExtent(emoji, 3, emoji, 1);
+  body.focus();
+  editor.captureSelection(); editor.updateFormats();
+  const bar = desktop.root.querySelector("[data-format-bar]");
+  assert.equal(bar.getAttribute("hidden"), null);
+  assert.deepEqual(bar.querySelectorAll("[data-format]").map((node) => node.getAttribute("data-format")),
+    ["bold", "italic", "strikethrough", "h1", "h2", "h3", "list", "quote", "code", "link", "table", "image", "comment"]);
+  click(desktop.root.querySelector("[data-action='toggle-source']"));
+  let input = desktop.root.querySelector("[data-source]");
+  assert.equal(input.value, source);
+  assert.equal(input.selectionStart, source.indexOf("😀"));
+  assert.equal(input.selectionEnd, source.indexOf("😀") + 2);
+  assert.equal(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`).backward, true);
+  click(desktop.root.querySelector("[data-action='toggle-source']"));
+  assert.equal(selection.anchorOffset, 3); assert.equal(selection.focusOffset, 1);
+  click(desktop.root.querySelector("[data-format='bold']"));
+  const formatted = source.replace("😀", "**😀**");
+  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), formatted);
+  const formattedEmoji = textNodes(desktop.root.querySelector("[data-void-body]")).find((node) => node.textContent === "😀");
+  selection.setBaseAndExtent(formattedEmoji, 2, formattedEmoji, 2);
+  editor.captureSelection(); editor.updateFormats();
+  assert.equal(desktop.root.querySelector("[data-format-bar]").getAttribute("hidden"), "");
+  const caret = { ...editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`) };
+  click(desktop.root.querySelector("[data-action='enter-focus']"));
+  assert.equal(desktop.app.editors.current === editor, true);
+  assert.equal(editor.page, "Intro.Welcome");
+  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "ArrowRight", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
+  assert.equal(editor.page, "Notes.Next");
+  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "ArrowLeft", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
+  assert.equal(editor.page, "Intro.Welcome");
+  assert.deepEqual(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`), caret);
+  for (const handler of desktop.root.listeners.get("pointermove") ?? []) handler();
+  assert.equal(desktop.root.querySelector("[data-tools]").getAttribute("data-tools"), "visible");
+  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "Escape", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
+  assert.equal(desktop.app.mode, "document");
+  assert.equal(desktop.app.editors.current.resourceId, notes.id);
+  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), formatted);
+  assert.deepEqual(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`), caret);
+  assert.equal(desktop.root.querySelector("[data-action='save-range']"), null);
+  assert.equal(desktop.root.querySelector("[data-action='replace-document']"), null);
+  desktop.app.language = "es"; renderShell(desktop.app);
+  assert.equal(editor.language, "es");
+  desktop.app.language = "en"; renderShell(desktop.app);
+  click(desktop.root.querySelector("[data-action='toggle-source']"));
+  input = desktop.root.querySelector("[data-source]");
+  assert.equal(input.value, formatted);
+  assert.equal(input.selectionStart, caret.start); assert.equal(input.selectionEnd, caret.end);
+});
+
+test("Void shows Not saved and retries the captured operation before saving later typing", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const attempts = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], (url, init) => {
+    if (init.method === "PUT" && String(url).includes("/void/texts/")) attempts.push({ key: init.headers["Idempotency-Key"], body: JSON.parse(init.body) });
+  });
+  t.after(() => dispose(desktop.app));
+  navigate(desktop.app, "document");
+  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
+  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
+  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  await waitFor(() => desktop.root.querySelector("[data-source]"), "The document did not open.");
+  const editor = desktop.app.editors.current;
+  fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, dropAfterCommit: true });
+  typeInput(desktop.root.querySelector("[data-source]"), "**First 😀**", 2, 2);
+  await assert.rejects(editor.voidSaver.flush());
+  assert.equal(desktop.root.querySelector("[data-void-save]").textContent, "Not saved");
+  assert.equal(desktop.root.querySelector("[data-void-error]").querySelector("span").textContent, text("en", "voidSaveError"));
+  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), "**First 😀**");
+  typeInput(desktop.root.querySelector("[data-source]"), "**Later 😀**", 2, 2);
+  click(desktop.root.querySelector("[data-action='retry-void-save']"));
+  await waitFor(() => editor.saveState === "saved", "The retained save and later typing did not finish.");
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.notEqual(attempts[2].key, attempts[1].key);
+  assert.equal(attempts[2].body.document.pages[0].en, "**Later 😀**");
+  assert.equal(editor.authoritative.document.pages[0].en, "**Later 😀**");
+  assert.equal(editor.textDrafts.size, 0);
+  assert.equal(editor.authoritative.document.sentinel, "void-sentinel");
+  assert.equal(editor.authoritative.document.pages[0].sentinel, "void-page-sentinel");
+  assert.equal(desktop.root.querySelector("[data-void-error]"), null);
+  assert.equal(desktop.root.querySelector("[data-void-save]").textContent, "Saved");
 });
 
 test("mounted map circles use translated status and keep pan", async (t) => {
@@ -2356,9 +2461,7 @@ test("a shell refresh keeps the focused editor field and its caret", async (t) =
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not appear.");
-  const sourceEdit = desktop.root.querySelector("[data-source-edit]");
-  sourceEdit.setAttribute("open", "");
-  sourceEdit.open = true;
+  click(desktop.root.querySelector("[data-action='toggle-source']"));
   let typed = "";
   for (const letter of ["A", "B", "C"]) {
     const source = desktop.root.querySelector("[data-source]");
@@ -2371,7 +2474,7 @@ test("a shell refresh keeps the focused editor field and its caret", async (t) =
     renderShell(desktop.app);
     const again = desktop.root.querySelector("[data-source]");
     const edit = desktop.root.querySelector("[data-source-edit]");
-    assert.equal(edit.getAttribute("open") != null, true);
+    assert.equal(edit.getAttribute("hidden"), null);
     assert.equal(again.value, typed);
     assert.equal(desktop.document.activeElement, again);
     assert.equal(again.selectionStart, typed.length);
@@ -2610,7 +2713,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   click(desktop.root.querySelector("[data-action='enter-focus']"));
   for (const handler of desktop.root.listeners?.get("focusin") ?? []) handler();
   assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "visible");
-  assert.equal(desktop.root.querySelector("[data-action='leave-focus']")?.textContent, "Return to document");
+  assert.equal(desktop.root.querySelector("[data-action='leave-focus']")?.textContent, "Document");
   assert.equal(desktop.root.querySelector("[data-focus-hint]") != null, true);
   click(desktop.root.querySelector("[data-action='leave-focus']"));
   assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
@@ -4077,9 +4180,10 @@ function createTestDocument(width = 390) {
       querySelector(selector) { return find(this, selector, false); },
       querySelectorAll(selector) { return find(this, selector, true); },
       focus() { this.ownerDocument.activeElement = this; },
-      setSelectionRange(start, end) {
+      setSelectionRange(start, end, direction = "none") {
         this.selectionStart = start;
         this.selectionEnd = end;
+        this.selectionDirection = direction;
       },
       contains(node) {
         let current = node;
@@ -4985,6 +5089,7 @@ test("text deletion retries one operation and restores the selected draft with t
   const entry = app.editors.catalog.find((item) => item.title === "Release notes");
   click(root.querySelector(`[data-id="${entry.id}"]`));
   await waitFor(() => root.querySelector("[data-source]"), "The text did not open.");
+  app.editors.current.voidSaver = documentSaver(app.api, app.editors.current, () => {}, 10000);
   typeInput(root.querySelector("[data-source]"), "Unsent source", 2, 5);
   const current = app.editors.current;
   libraryMenu(desktop, entry, "delete");
@@ -5071,6 +5176,7 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   const textEntry = desktop.app.editors.catalog.find((item) => item.id === sourceText.data.id);
   click(desktop.root.querySelector(`[data-id="${textEntry.id}"]`));
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The real text did not open.");
+  desktop.app.editors.current.voidSaver = documentSaver(desktop.app.api, desktop.app.editors.current, () => {}, 10000);
   typeInput(desktop.root.querySelector("[data-source]"), "Unsaved text", 2, 6);
   libraryMenu(desktop, textEntry, "move");
   await waitFor(() => desktop.document.querySelector('[data-form="library-move"]'), "The text destination chooser did not open.");
