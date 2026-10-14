@@ -7,6 +7,7 @@ import { boundaryInsideTag, plainText, rangeRequest, renderMarkup, sourceBoundar
 import { answerProposal, enterFocus, leaveFocus, moveFocus, saveRange, showTools } from "../gui/app/void.mjs";
 import {
   addNode,
+  collectAssetRefs,
   editedBoard,
   hitBoardNode,
   loadAssets,
@@ -393,7 +394,7 @@ test("blueprint edits keep unknown fields and refuse a lossy save", async (t) =>
     ] } }],
   }, { x: 50, y: 50 }).nodeId, "dot");
   const asset = await uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Buffer.from(PNG, "base64") });
-  assert.match(asset.src, /^docs\/flows\/assets\//);
+  assert.match(asset.src, /^assets\/[0-9a-f-]{36}\.(png|jpg|webp)$/);
   assert.equal(asset.objectUrl, "blob:asset");
   asset.revoke();
   assert.equal(revoked, true);
@@ -587,7 +588,7 @@ test("reopening a board reloads referenced images and draws clipped styled nodes
   const created = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
   await openEditor(api, editors, { id: created.data.id, kind: "blueprint" });
   const asset = await uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Buffer.from(PNG, "base64") });
-  const missingSrc = "docs/flows/assets/11111111-1111-4111-8111-111111111111.png";
+  const missingSrc = "assets/11111111-1111-4111-8111-111111111111.png";
   await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "photo", name: "Photo", t: "image", place: { x: 4, y: 4 }, w: 16, h: 16, src: asset.src } });
   await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "missing-image", name: "Missing", t: "image", place: { x: 8, y: 8 }, w: 16, h: 16, src: missingSrc } });
   await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "remote-image", name: "Remote", t: "image", place: { x: 12, y: 12 }, w: 16, h: 16, src: "https://evil.example/pixel.png" } });
@@ -1012,4 +1013,14 @@ test('board vectors use their declared dimensions and keep the stroke width', ()
   assert.equal(vector.getAttribute('transform'), 'scale(2.7 5)');
   assert.equal(vector.getAttribute('vector-effect'), 'non-scaling-stroke');
   assert.equal(vector.getAttribute('stroke-width'), '2.2');
+});
+
+test('board asset references retain the core filename including extension', () => {
+  const filename = '11111111-1111-4111-8111-111111111111.png';
+  const refs = collectAssetRefs({ screens: [{ root: { kids: [
+    { t: 'image', src: 'assets/' + filename }, { t: 'image', src: 'assets/' + filename },
+    { t: 'image', src: 'docs/flows/assets/' + filename }, { t: 'image', src: 'https://invalid.example/image.png' },
+  ] } }] });
+  assert.deepEqual(refs.allowed, [{ src: 'assets/' + filename, id: filename }]);
+  assert.deepEqual(refs.rejected, ['docs/flows/assets/' + filename, 'https://invalid.example/image.png']);
 });

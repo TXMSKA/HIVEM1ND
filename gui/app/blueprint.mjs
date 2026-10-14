@@ -182,7 +182,7 @@ export function releaseAssets(editor) {
   editor?.assets?.clear?.();
 }
 
-const ASSET_SRC = /^docs\/flows\/assets\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.(?:png|jpe?g|webp)$/;
+const ASSET_SRC = /^assets\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|webp))$/;
 
 export function collectAssetRefs(document) {
   const allowed = [];

@@ -3545,18 +3545,17 @@ async function prepareDeleteNode(fx, params, body) {
 
 async function prepareAsset(fx, resourceId, body) {
   const editor = await editorFor(fx, resourceId);
-  if (editor.readOnly) throw new HttpError(409, "read_only_resource", "The resource is read only.");
-  const bytes = Buffer.from(body.bytesBase64, "base64");
-  if (bytes.length > 10 * 1024 * 1024) throw new HttpError(413, "asset_too_large", "The asset is too large.");
+  if (editor.readOnly) throw new HttpError(409, 'read_only_resource', 'The resource is read only.');
+  const bytes = Buffer.from(body.bytesBase64, 'base64');
+  if (bytes.length > 10_000_000) throw new HttpError(413, 'asset_too_large', 'The asset is too large.');
   const extension = imageExtension(bytes, body.contentType);
-  const assetId = uuid();
-  const src = `docs/flows/assets/${assetId}.${extension}`;
-  return {
-    status: 201,
-    data: { id: assetId, src, contentType: body.contentType, url: `/api/v1/editors/${resourceId}/assets/${assetId}` },
-    writes: [{ path: editorFile(fx, editor.project, src), beforeRevision: null, afterRevision: sha256(bytes), afterBytesBase64: bytes.toString("base64") }],
-    events: [],
-  };
+  const assetId = uuid() + '.' + extension;
+  const src = 'assets/' + assetId;
+  const revision = sha256(bytes);
+  return { status: 201, data: { id: assetId, src, contentType: body.contentType, bytes: bytes.length, revision,
+    url: '/api/v1/editors/' + resourceId + '/assets/' + assetId },
+    writes: [{ path: editorFile(fx, editor.project, 'docs/flows/' + src), beforeRevision: null,
+      afterRevision: revision, afterBytesBase64: bytes.toString('base64') }], events: [] };
 }
 
 function validateTextPut(body) {
@@ -3788,19 +3787,20 @@ async function writeText(fx, editor, document, change) {
 
 async function readAsset(fx, resourceId, assetId) {
   const editor = requireEditor(await projection(fx), resourceId);
-  const folder = editorFile(fx, editor.project, "docs/flows/assets");
-  for (const extension of ["png", "jpg", "webp"]) {
-    const file = join(folder, `${assetId}.${extension}`);
-    try {
-      const bytes = await readFile(file);
-      const contentType = extension === "png" ? "image/png" : extension === "jpg" ? "image/jpeg" : "image/webp";
-      imageExtension(bytes, contentType);
-      return { bytes, contentType };
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-    }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp)$/.test(assetId)) {
+    throw new HttpError(404, 'asset_not_found', 'The asset was not found.');
   }
-  throw new HttpError(404, "asset_not_found", "The asset was not found.");
+  const extension = assetId.split('.').at(-1);
+  const file = editorFile(fx, editor.project, 'docs/flows/assets/' + assetId);
+  try {
+    const bytes = await readFile(file);
+    const contentType = extension === 'png' ? 'image/png' : extension === 'jpg' ? 'image/jpeg' : 'image/webp';
+    imageExtension(bytes, contentType);
+    return { bytes, contentType };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(404, 'asset_not_found', 'The asset was not found.');
+  }
 }
 
 function imageExtension(bytes, contentType) {
