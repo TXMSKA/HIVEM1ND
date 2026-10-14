@@ -183,6 +183,10 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     const raw = change.operation === 'delete' ? null : incoming.objects.get(change.hash);
     return { change, raw, record: parseRecord(raw), headers: parseHeaders(raw) };
   });
+  if (prepared.some(item => item.change.target.kind === 'mind' && /^user\/(?:additions|features|knowledge)\//.test(item.change.target.path))) {
+    const { validateAdditionBundle } = await import('../service/additions.mjs');
+    await validateAdditionBundle(sync, prepared.map(item => ({ target: item.change.target, bytes: item.raw, deleted: item.change.operation === 'delete' })), decoded.header.machine);
+  }
   const ownerBindings = await mergeOwnerBindings(sync, bindings);
   for (const item of prepared) absorbOwnerRecord(ownerBindings, item.record);
   const missingOwners = [];
@@ -240,7 +244,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     plans.push(planChange(item, localBytes, localVersion, located, tombstones));
     if (plans[plans.length - 1].version) versions.targets[key] = plans[plans.length - 1].version;
   }
-  const libraryGroups = new Set(prepared.filter((item) => item.change.transactionId && item.change.target.path === 'docs/flows/library.json').map((item) => item.change.transactionId));
+  const libraryGroups = new Set(prepared.filter((item) => item.change.transactionId && (item.change.target.path === 'docs/flows/library.json' || item.change.target.path.startsWith('user/additions/'))).map((item) => item.change.transactionId));
   for (const id of libraryGroups) {
     const indexes = prepared.map((item, index) => item.change.transactionId === id ? index : -1).filter((index) => index >= 0);
     const loses = indexes.some((index) => plans[index].version?.id !== prepared[index].change.id

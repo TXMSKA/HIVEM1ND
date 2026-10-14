@@ -902,3 +902,18 @@ test('all six looks persist while existing high-contrast remains compatible', as
     revision = revisionOf(bytes);
   }
 });
+
+test('a locally registered zero-unit project appears with provenance without creating a lead or an agent', async t => {
+  const fixture = await mind(t), context = { ...serviceContext(fixture), projects: [{ name: 'empty', localPath: fixture.root }] };
+  let view = await readProjection(context);
+  assert.deepEqual(view.projects[0].unitIds, []); assert.equal(view.projects[0].available, true);
+  const directory = path.join(fixture.paths.mind, 'user', 'projects', 'empty'); await mkdir(directory, { recursive: true });
+  const provenance = { format: 'hivem1nd-product-v1', title: 'Empty repository', additionId: randomUUID(), origin: 'acme/empty', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) } };
+  await writeFile(path.join(directory, 'product.json'), JSON.stringify(provenance));
+  view = await readProjection(context);
+  assert.equal(view.projects[0].additionId, provenance.additionId); assert.deepEqual(view.projects[0].pin, provenance.pin);
+  assert.deepEqual(view.units, []); assert.deepEqual(view.leads, []); assert.equal(view.counts.projects, 1);
+  assert.equal((await readCollection(context, 'projects')).items[0].origin, provenance.origin);
+  await writeFile(path.join(directory, 'product.json'), JSON.stringify({ ...provenance, removed: true }));
+  assert.deepEqual((await readProjection(context)).projects, []);
+});

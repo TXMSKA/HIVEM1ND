@@ -22,7 +22,7 @@ import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
 import { mutateMachineSettings, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
-import { assertAdditionRequest, cancelAdditionPreview, cancelAdditionUpload, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditionPreview, retryAdditionPreview, writeAdditionChunk } from './additions.mjs';
+import { applyAdditions, assertAdditionRequest, cancelAdditionPreview, cancelAdditionUpload, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditions, readAdditionPreview, removeAddition, retryAdditionPreview, writeAdditionChunk } from './additions.mjs';
 
 const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n';
 
@@ -105,6 +105,9 @@ const ROUTES = [
   ['GET', '/additions/previews/:previewId', 'settings.write', 'D', 'addition', 'read'],
   ['DELETE', '/additions/previews/:previewId', 'settings.write', 'D', 'addition', 'cancel'],
   ['POST', '/additions/previews/:previewId/retry', 'settings.write', 'D', 'addition', 'retry'],
+  ['GET', '/additions', 'settings.write', 'D', 'addition', 'list'],
+  ['POST', '/additions', 'settings.write', 'D', 'addition', 'apply'],
+  ['DELETE', '/additions/:additionId', 'settings.write', 'D', 'addition', 'remove'],
   ['POST', '/settings/agents/scan', 'settings.write', 'D', 'settingsMutation', 'scan'],
   ['POST', '/settings/agents/find', 'settings.write', 'D', 'settingsMutation', 'find'],
   ['POST', '/settings/agents/:client/preview', 'settings.write', 'D', 'settingsMutation', 'preview'],
@@ -831,6 +834,7 @@ function rejectUnknownQuery(route, query) {
 function allowedQuery(route) {
   const list = ['q', 'limit', 'cursor'];
   const table = {
+    '/additions': route.method === 'GET' ? ['machine'] : [],
     '/view': ['project'],
     '/units': [...list, 'project', 'machine', 'leadId', 'status', 'archived'],
     '/leads': [...list, 'project'],
@@ -905,7 +909,7 @@ function operationFor(route, credential, body) {
 
 async function objectFor(route, domain, credential, params, body) {
   if (route.handler === 'addition') {
-    await assertAdditionRequest(domain, route.collection, body, params.previewId ?? params.uploadId ?? null);
+    await assertAdditionRequest(domain, route.collection, body, params.previewId ?? params.uploadId ?? params.additionId ?? null);
     return {};
   }
   if (credential?.audience === 'phone' && route.handler === 'answerApproval' && body?.decision === 'approve-always') {
@@ -1043,6 +1047,8 @@ function allowedBody(route) {
     'POST /additions/previews': ['machine', 'source', 'updateOf'],
     'DELETE /additions/previews/:previewId': [],
     'POST /additions/previews/:previewId/retry': [],
+    'POST /additions': ['machine', 'previewId', 'selections', 'expectedContentRevision', 'expectedProjectRevision', 'confirmed'],
+    'DELETE /additions/:additionId': ['machine', 'confirmed', 'expectedRevision'],
     'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
@@ -1122,7 +1128,7 @@ function domainContext(options, credential, bus) {
     paths: options.paths,
     now: options.now ?? (() => Date.now()),
     bus,
-    projects: options.projects ?? [],
+    projects: options.settingsOwner?.projects ?? options.projects ?? [],
     watch: options.watch ?? null,
     wake: options.wake ?? null,
     ownedPids: options.ownedPids ?? new Set(),
@@ -1253,13 +1259,14 @@ async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
   if (route.handler === 'addition') {
+    if (route.collection === 'list') return { status: 200, body: await readAdditions(domain, query.machine ?? domain.paths.machine) };
     const operations = { upload: openAdditionUpload, inspect: inspectAddition, chunk: writeAdditionChunk, read: readAdditionPreview,
-      cancel: cancelAdditionPreview, cancelUpload: cancelAdditionUpload, retry: retryAdditionPreview };
+      cancel: cancelAdditionPreview, cancelUpload: cancelAdditionUpload, retry: retryAdditionPreview, apply: applyAdditions, remove: removeAddition };
     const operation = operations[route.collection];
-    const id = params.previewId ?? params.uploadId;
+    const id = params.previewId ?? params.uploadId ?? params.additionId;
     const result = id ? await operation(domain, id, body ?? {}) : await operation(domain, body);
     return { status: ['cancel', 'cancelUpload'].includes(route.collection) ? 204 : route.collection === 'upload' ? 201
-      : ['inspect', 'retry'].includes(route.collection) ? 202 : 200, body: result ?? null };
+      : route.collection === 'apply' ? 201 : ['inspect', 'retry'].includes(route.collection) ? 202 : 200, body: result ?? null };
   }
   if (route.handler === 'editor') return editorRoute(route, domain, params, query, body, credential);
   if (route.handler === 'watch') return watchRoute(route, domain, params, body, credential);

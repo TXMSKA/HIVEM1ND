@@ -13,6 +13,82 @@ import { hashBytes } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { requestApproval } from '../engine/service/approvals.mjs';
+import { readScopedAdditions } from '../engine/service/additions.mjs';
+import { bindManualAdditionContent } from '../engine/relay/local-wake.mjs';
+import { closeBridge, createNativeLaunch, dispatchNative, openBridge } from '../engine/service/bridge.mjs';
+
+async function scopedPackage(context, requirements = []) {
+  const id = randomUUID(), content = Buffer.from('---\nname: pdf\nruntime: none\n---\nPDF support\n');
+  const file = path.join(context.paths.mind, 'user', 'features', 'pdf', 'SKILL.md');
+  await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, content);
+  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' },
+    sourcePath: '.', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) }, license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z', requirements,
+    scope: { everyUnit: false, units: [UNIT], groups: [] }, unitCount: 1, machine: 'DESKTOP', projectId: null, installedAt: new Date(context.now()).toISOString(), updatedAt: new Date(context.now()).toISOString(), removed: false,
+    files: [{ path: 'user/features/pdf/SKILL.md', hash: hashBytes(content), bytes: content.length }] };
+  const manifest = path.join(context.paths.mind, 'user', 'additions', `${id}.json`);
+  await mkdir(path.dirname(manifest), { recursive: true }); await writeFile(manifest, JSON.stringify(record));
+  return { id, file, manifest, content };
+}
+
+test('two canonical units on one client receive different native scoped channels and verified manual sessions cannot widen them', async t => {
+  const { context, file, fixture } = await world(t), imported = await scopedPackage(context);
+  const second = 'project:shop:second', secondFile = path.join(fixture.paths.mind, 'user', 'state', 'second.md');
+  await writeFile(secondFile, `unit: second\nunit-id: ${second}\nrole: executor\nstate: in\nmachine: DESKTOP\n`);
+  const channels = new Map(), transcript = [...CODEX]; let count = 0;
+  const adapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript, scopedContent: {
+    async bind(proof, read) { channels.set(proof.nativeSessionId, { proof, read }); return { ...proof, bound: true }; }, runtimeAvailable: async () => true,
+  } });
+  const original = adapter.create.bind(adapter);
+  adapter.create = async request => { transcript[2] = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { thread: { id: `scoped-${++count}` } } }); return original(request); };
+  context.adapters.codex = adapter; t.after(() => adapter.close());
+  const selected = await start(context, file, { runMode: 'chat' });
+  const unselected = await enqueueStart(context, { unitId: second, client: 'codex', model: 'strong', stateRevision: hashBytes(await readFile(secondFile)), runMode: 'chat' });
+  const firstSession = await readDetail(context, 'sessions', selected.result.sessionId), secondSession = await readDetail(context, 'sessions', unselected.result.sessionId);
+  assert.equal((await channels.get(firstSession.nativeSessionId).read())[0].addition.id, imported.id);
+  assert.deepEqual(await channels.get(secondSession.nativeSessionId).read(), []);
+  const bridge = await openBridge({ paths: context.paths, adapters: context.adapters, now: context.now }); t.after(() => closeBridge(bridge));
+  const policies = path.join(context.paths.mind, 'user', 'relay', 'wake', 'policies'); await mkdir(policies, { recursive: true });
+  const grants = [];
+  for (const session of [firstSession, secondSession]) {
+    await writeFile(path.join(policies, `${session.id}.json`), JSON.stringify({ key: session.id, enabled: true, generation: 'scoped', deadlineAt: new Date(context.now() + 60000).toISOString(),
+      binding: { unitId: session.unitId, nativeSessionId: session.nativeSessionId, client: 'codex', machine: 'DESKTOP' } }));
+    const launch = createNativeLaunch(bridge, { unitId: session.unitId, client: 'codex', contentReader: proof => readScopedAdditions(context, proof) });
+    launch.ready(session.nativeSessionId); grants.push(launch);
+  }
+  const scopedCall = (index, input = {}) => dispatchNative(bridge.endpoint, grants[index].env.HIVEM1ND_SERVICE_GRANT, 'content', input);
+  assert.equal((await scopedCall(0))[0].addition.id, imported.id); assert.deepEqual(await scopedCall(1), []);
+  assert.deepEqual(Buffer.from((await scopedCall(0, { additionId: imported.id, path: 'SKILL.md', offset: 0 })).bytesBase64, 'base64'), imported.content);
+  await assert.rejects(scopedCall(1, { additionId: imported.id, path: 'SKILL.md' }), { code: 'forbidden' });
+  await assert.rejects(scopedCall(0, { unitId: second }), { code: 'forbidden' });
+  const otherNative = await adapter.create({ unitId: second });
+  const manual = await registerNative(context, { client: 'codex', unitId: second, nativeSessionId: otherNative.nativeSessionId });
+  const proof = { unitId: second, client: 'codex', nativeSessionId: otherNative.nativeSessionId, machine: 'DESKTOP', sessionId: manual.sessionId };
+  await bindManualAdditionContent(context, proof); assert.deepEqual(await channels.get(proof.nativeSessionId).read(), []);
+  await assert.rejects(bindManualAdditionContent(context, { ...proof, unitId: UNIT }), { code: 'scope_unavailable' });
+  await assert.rejects(readScopedAdditions(context, { ...proof, unitId: UNIT, sessionId: selected.result.sessionId }), { code: 'scope_unavailable' });
+  assert.deepEqual(await readFile(imported.file), imported.content);
+  assert.deepEqual(await readdir(fixture.home), []);
+  await stopSession(context, selected.result.sessionId, { confirmed: true });
+  await assert.rejects(channels.get(firstSession.nativeSessionId).read(), { code: 'scope_unavailable' });
+});
+
+test('unsupported scope and missing runtimes refuse a launch before a native process or installer is created', async t => {
+  const first = await world(t), imported = await scopedPackage(first.context);
+  await assert.rejects(start(first.context, first.file), { code: 'scope_unavailable' });
+  assert.equal(first.calls.create, 0); assert.deepEqual(await readFile(imported.file), imported.content);
+  const requestId = (await readdir(path.join(first.context.paths.mind, 'user', 'relay', 'requests', 'DESKTOP')))[0].slice(0, -5);
+  const failed = await readStartRequest(first.context, requestId, { readOnly: true });
+  assert.equal(failed.result.state, 'failed'); assert.equal(failed.result.error.code, 'scope_unavailable');
+  assert.equal((await consumeStart(first.context, requestId)).result.error.code, 'scope_unavailable'); assert.equal(first.calls.create, 0);
+  const second = await world(t), python = await scopedPackage(second.context, ['Python']); let creates = 0;
+  second.context.adapters.codex.capabilities.scopedContent = true;
+  second.context.adapters.codex.bindContent = async () => ({ bound: true });
+  second.context.adapters.codex.runtimeAvailable = async () => false;
+  second.context.adapters.codex.create = async () => { creates++; throw new Error('Must not launch'); };
+  await assert.rejects(start(second.context, second.file), error => error.code === 'runtime_unavailable' && error.details.requirement === 'Python');
+  assert.equal(creates, 0); assert.deepEqual(await readFile(python.file), python.content);
+  for (const client of ['codex', 'claude', 'cursor']) assert.equal(createNativeAdapter(client, { fixture: true }).capabilities.scopedContent, false);
+});
 
 const UNIT = 'project:shop:executor-shop';
 const CODEX = [

@@ -68,6 +68,38 @@ test('Content selections and preferences replicate together without changing a p
   assert.equal(clients.some(name => ['.codex', '.agents', '.claude', '.cursor'].includes(name)), false);
 });
 
+test('accepted content hashes scopes and provenance sync as one bundle without local previews credentials or checkout bytes', async t => {
+  const { fixture, desktop, laptop } = await world(t);
+  const id = uuidV8(['accepted-pdf']), skill = Buffer.from('---\nname: pdf\nruntime: none\n---\nPDF support\n'), license = Buffer.from('MIT License\n');
+  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' },
+    sourcePath: '.', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) }, license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z', requirements: [],
+    scope: { everyUnit: false, units: ['root:executor'], groups: [] }, unitCount: 1, machine: 'LAPTOP', projectId: null, installedAt: AT, updatedAt: AT, removed: false,
+    files: [{ path: 'user/features/pdf/SKILL.md', hash: hashBytes(skill), bytes: skill.length }, { path: 'user/features/pdf/LICENSE', hash: hashBytes(license), bytes: license.length }] };
+  const manifest = Buffer.from(JSON.stringify(record));
+  const entries = [{ target: { kind: 'mind', path: `user/additions/${id}.json` }, bytes: manifest },
+    { target: { kind: 'mind', path: 'user/features/pdf/SKILL.md' }, bytes: skill }, { target: { kind: 'mind', path: 'user/features/pdf/LICENSE' }, bytes: license }];
+  const transactionId = uuidV8(['accepted-bundle']);
+  const changes = await stageTransaction(laptop, entries, { transactionId, at: AT });
+  const objects = await Promise.all(changes.map(async change => ({ hash: change.hash, raw: await readObject(laptop, change.hash) })));
+  const bytes = encodePack({ machine: 'LAPTOP', sequence: 1, changes, objects, transactions: [{ id: transactionId, changeIds: changes.map(change => change.id) }] });
+  assert.equal((await applyPack(desktop, bytes)).status, 'applied');
+  assert.deepEqual(JSON.parse(await readFile(path.join(desktop.paths.mind, 'user', 'additions', `${id}.json`))), record);
+  assert.deepEqual(await readFile(path.join(desktop.paths.mind, 'user', 'features', 'pdf', 'SKILL.md')), skill);
+  const content = await readContent({ ...desktop, now: desktop.now });
+  assert.equal(content.features.find(item => item.id === 'feature:pdf').additionId, id);
+  assert.deepEqual(content.features.find(item => item.id === 'feature:pdf').scope, record.scope);
+  for (const privateValue of [laptop.paths.localDirectory, 'previewPath', 'principalHash', 'credential', 'checkout']) assert.equal(objects.some(item => item.raw.toString().includes(privateValue)), false);
+  assert.equal((await eligibleTargets(desktop)).some(target => target.path === `user/additions/${id}.json`), false);
+  assert.equal((await readdir(desktop.paths.localDirectory)).includes('additions'), false);
+  const before = await readFile(path.join(desktop.paths.mind, 'user', 'features', 'pdf', 'SKILL.md'));
+  const changed = Buffer.from('Tampered imported bytes');
+  await assert.rejects(applyPack(desktop, pack([put({ kind: 'mind', path: 'user/features/pdf/SKILL.md' }, changed, { at: LATER })], [{ hash: hashBytes(changed), raw: changed }], { sequence: 2 })), { code: 'invalid_pack' });
+  const privateManifest = Buffer.from(JSON.stringify({ ...record, previewPath: laptop.paths.localDirectory }));
+  await assert.rejects(applyPack(desktop, pack([put({ kind: 'mind', path: `user/additions/${id}.json` }, privateManifest, { at: LATER })], [{ hash: hashBytes(privateManifest), raw: privateManifest }], { sequence: 2 })), { code: 'invalid_pack' });
+  assert.deepEqual(await readFile(path.join(desktop.paths.mind, 'user', 'features', 'pdf', 'SKILL.md')), before);
+  assert.equal(await readFile(path.join(fixture.home, '.agents', 'skills', 'pdf', 'SKILL.md')).then(() => true, () => false), false);
+});
+
 function put(target, raw, extra = {}) {
   const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
   return {

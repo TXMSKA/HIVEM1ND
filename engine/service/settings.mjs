@@ -5,11 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverAgents, discoverContent, loadAdapters } from '../discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine, prepareContentAgentAssets } from '../install.mjs';
-import { machineSettingsPath, readMachineRecord } from '../records.mjs';
+import { machineRecordPath, machineSettingsPath, readMachineRecord, serializeMachineRecord } from '../records.mjs';
+import { parseRoutes } from '../relay/store.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName } from './identity.mjs';
 import { answersFor, readProjection } from './projection.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { atomicWrite, checkRevision, commitChange, readBytes, revisionOf, withLocks } from './store.mjs';
+import { atomicWrite, checkRevision, commitChange, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
@@ -121,8 +122,14 @@ function reportShape(record, machine) {
     exact(folder, ['id', 'path', 'environment', 'repositories']);
     if (!isUuid(folder.id) || !text(folder.path) || folder.environment !== null && !text(folder.environment, 128) || !Array.isArray(folder.repositories)) fail(422, 'corrupt_resource', 'A project folder is not valid.');
     for (const project of folder.repositories) {
-      exact(project, ['id', 'title', 'path', 'registered']);
+      exact(project, ['id', 'title', 'path', 'registered', 'additionId', 'origin', 'pin']);
       if (!text(project.id, 128) || !text(project.title, 240) || !text(project.path) || typeof project.registered !== 'boolean') fail(422, 'corrupt_resource', 'A registered project is not valid.');
+      if (project.additionId != null && !isUuid(project.additionId) || project.origin != null && !text(project.origin, 2048)) fail(422, 'corrupt_resource', 'The project provenance is not valid.');
+      if (project.pin != null) {
+        exact(project.pin, ['kind', 'value', 'digest']);
+        if (!['commit', 'version', 'snapshot'].includes(project.pin.kind) || !text(project.pin.value, 128) || !/^[a-f0-9]{64}$/.test(project.pin.digest ?? '')) fail(422, 'corrupt_resource', 'The project pin is not valid.');
+      }
+      if (project.additionId && project.path !== `additions/repositories/${project.additionId}`) fail(422, 'corrupt_resource', 'An owned checkout path cannot enter the shared report.');
     }
   }
   // Grant payloads are projected by the approvals owner; reject local transport/configuration material at every depth.
@@ -196,9 +203,10 @@ async function publishOwnedSettings(context, section) {
   const folders = new Map();
   for (const project of context.projects ?? []) {
     if (!project.localPath || project.eligible === false) continue;
-    const parent = path.dirname(project.localPath);
+    const parent = project.additionId ? 'Owned repositories' : path.dirname(project.localPath);
     if (!folders.has(parent)) folders.set(parent, { id: uuidV8(['settings-folder', machine, parent]), path: parent, environment: project.environment ?? null, repositories: [] });
-    folders.get(parent).repositories.push({ id: project.name, title: project.title ?? project.name, path: project.localPath, registered: true });
+    folders.get(parent).repositories.push({ id: project.name, title: project.title ?? project.name, path: project.additionId ? `additions/repositories/${project.additionId}` : project.localPath,
+      registered: true, additionId: project.additionId ?? null, origin: project.origin ?? null, pin: project.pin ?? null });
   }
   const view = await readProjection(context);
   const unitGrants = view.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant })));
@@ -629,7 +637,8 @@ export async function validateSettingsSyncRecord(sync, target, raw, machine, inc
   const resultMatch = /^user\/relay\/settings-results\/([^/]+)\/([^/]+)\.json$/.exec(file);
   if (!reportMatch && !requestMatch && !resultMatch) return;
   const owner = (reportMatch ?? requestMatch ?? resultMatch)[1];
-  if (owner !== machine || !raw) fail(422, 'invalid_record_owner', 'Only the owning machine may publish Settings records.');
+  if (owner !== machine || !raw && !reportMatch) fail(422, 'invalid_record_owner', 'Only the owning machine may publish Settings records.');
+  if (!raw) return;
   const record = JSON.parse(raw);
   if (reportMatch) { reportShape(record, owner); return; }
   const context = { ...sync, now: sync.now };
@@ -652,6 +661,10 @@ function contentExclusions(content) {
 }
 
 export async function readContent(context) {
+  return withLocalChanges(context.store, () => readOwnedContent(context));
+}
+
+async function readOwnedContent(context) {
   const owner = ownerOf(context);
   const roots = [owner.kitPath ?? context.paths.mind, context.paths.mind, path.join(context.paths.mind, 'user')];
   const catalog = new Map();
@@ -661,9 +674,18 @@ export async function readContent(context) {
   const { record } = await readMachineRecord(context.paths.mind, context.paths.machine);
   const excluded = new Set(record?.excluded ?? []);
   const included = item => saved ? (item.type === 'feature' ? saved.includedFeatures : saved.includedKnowledge).includes(item.id) : !excluded.has(item.name) && !excluded.has(item.id) && !(item.type === 'knowledge' && excluded.has('knowledge'));
+  const { readAdditionContent } = await import('./additions.mjs');
+  const additions = (await readAdditionContent(context)).filter(item => item.kind !== 'repository');
+  const imported = new Map(additions.map(item => [`${item.kind === 'skill' ? 'feature' : 'knowledge'}:${item.name}`, item]));
+  const provenance = item => {
+    const addition = imported.get(item.id);
+    return { additionId: addition?.id ?? null, origin: addition?.source.display ?? null, pin: addition?.pin ?? null, scope: addition?.scope ?? null,
+      unitCount: addition?.unitCount ?? 0, removable: Boolean(addition), revision: addition?.revision ?? null };
+  };
+  const visible = item => !imported.get(item.id)?.removed;
   return { revision: revisionOf(source),
-    features: [...catalog.values()].filter(item => item.type === 'feature').map(item => ({ id: item.id, title: item.name, category: ['planning', 'quality', 'continuity'].includes(item.category) ? item.category : 'other', included: included(item) })),
-    knowledge: [...catalog.values()].filter(item => item.type === 'knowledge').map(item => ({ id: item.id, title: item.name, included: included(item) })),
+    features: [...catalog.values()].filter(item => item.type === 'feature' && visible(item)).map(item => ({ id: item.id, title: item.name, category: ['planning', 'quality', 'continuity'].includes(item.category) ? item.category : 'other', included: included(item), ...provenance(item) })),
+    knowledge: [...catalog.values()].filter(item => item.type === 'knowledge' && visible(item)).map(item => ({ id: item.id, title: item.name, included: included(item), ...provenance(item) })),
     preferences: saved?.preferences ?? { ...DEFAULT_PREFERENCES, keepExistingPreferencesFirst: record?.keepExistingPreferences !== false, updateChecks: record?.updateCheck === 'daily' ? 'daily' : 'off' } };
 }
 
@@ -703,4 +725,71 @@ export async function writeContent(context, input) {
 
 function preferenceBlock(preferences) {
   return `<!-- HIVEM1ND Settings preferences -->\nAddress style: ${preferences.addressStyle}\nKeep existing preferences first: ${preferences.keepExistingPreferencesFirst ? 'yes' : 'no'}\nCheck for updates: ${preferences.updateChecks}\n\n${preferences.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
+}
+
+function replaceListSection(source, title, lines) {
+  const pattern = new RegExp(`(^## ${title}\\r?\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm');
+  if (!pattern.test(source)) return `${source}${source.endsWith('\n') || !source ? '' : '\n'}\n## ${title}\n${lines.join('\n')}\n`;
+  return source.replace(pattern, (_match, header) => `${header}${lines.join('\n')}\n\n`);
+}
+
+// Plan the existing route, machine mapping and signed report together. Checkout
+// bytes are owner-local and must already be verified before this plan commits.
+export async function prepareAdditionProjects(context, additions, { checkOnly = false, remove = false } = {}) {
+  const service = ownerOf(context), machine = context.paths.machine;
+  const report = await readPublishedSettings(context, machine);
+  if (!additions.length) return { entries: [], events: [], revision: report?.projects.revision ?? null };
+  const routePath = absolute(context, 'user/routes.md'), routeBytes = await readBytes(context.store, routePath);
+  const routes = parseRoutes(routeBytes?.toString('utf8') ?? '');
+  const mappingPath = machineRecordPath(context.paths.mind, machine), mappingBytes = await readBytes(context.store, mappingPath);
+  const { record: legacy } = await readMachineRecord(context.paths.mind, machine);
+  const mappings = [...(legacy?.paths ?? [])], entries = [];
+  for (const addition of additions) {
+    const file = absolute(context, `user/projects/${addition.name}/product.json`);
+    await assertNoLinks(file, { root: context.paths.mind });
+    const before = await readBytes(context.store, file), product = before ? JSON.parse(before) : null;
+    const owns = product?.additionId === addition.id;
+    if (!owns && (before || routes.projects.some(project => project.name.toLowerCase() === addition.name.toLowerCase())
+      || (context.projects ?? service.projects ?? []).some(project => project.name.toLowerCase() === addition.name.toLowerCase())
+      || mappings.some(mapping => mapping.name.toLowerCase() === addition.name.toLowerCase()))) fail(409, 'name_conflict', 'The repository name already belongs to a registered project.');
+    if (checkOnly) continue;
+    const existing = mappings.findIndex(mapping => mapping.name === addition.name);
+    if (remove) { if (existing >= 0) mappings.splice(existing, 1); }
+    else {
+      if (!path.isAbsolute(addition.localPath ?? '')) fail(422, 'invalid_path', 'The owned checkout has no verified local mapping.');
+      await assertNoLinks(addition.localPath, { root: context.paths.localDirectory });
+      const mapping = { name: addition.name, path: addition.localPath };
+      if (existing >= 0) mappings[existing] = mapping; else mappings.push(mapping);
+    }
+    const after = bytes({ ...product, format: 'hivem1nd-product-v1', title: addition.title, additionId: addition.id, origin: addition.source.display, pin: addition.pin, removed: remove });
+    entries.push({ resource: `addition-project:${addition.name}`, recordPath: file, beforeRevision: revisionOf(before), beforeBytes: before, afterBytes: after });
+  }
+  if (checkOnly) return { entries: [], events: [], revision: report?.projects.revision ?? null };
+  const names = new Set(additions.map(item => item.name));
+  const routeLines = (routeBytes?.toString('utf8').match(/^## Projects\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? '').trimEnd().split(/\r?\n/)
+    .filter(line => ![...names].some(name => line.startsWith(`- ${name}`) && /^[\s(]|$/.test(line.slice(name.length + 2))));
+  if (!remove) routeLines.push(...additions.map(item => `- ${item.name}`));
+  const routeAfter = Buffer.from(replaceListSection(routeBytes?.toString('utf8') ?? '', 'Projects', routeLines.filter(Boolean)));
+  const initialMachine = legacy ?? { machine, mind: context.paths.mind, setup: 'done', agents: [], paths: [], excluded: [] };
+  const mappingAfter = Buffer.from(replaceListSection(mappingBytes?.toString('utf8') ?? serializeMachineRecord(initialMachine), 'Paths', mappings.map(item => `- ${item.name}: ${item.path}`)));
+  entries.push({ resource: 'addition-project-routes', recordPath: routePath, beforeRevision: revisionOf(routeBytes), beforeBytes: routeBytes, afterBytes: routeAfter },
+    { resource: `addition-project-mapping:${machine}`, recordPath: mappingPath, beforeRevision: revisionOf(mappingBytes), beforeBytes: mappingBytes, afterBytes: mappingAfter, private: true });
+  const folders = (report?.projects.folders ?? []).map(folder => ({ ...folder, repositories: folder.repositories.filter(repository => !names.has(repository.id)) })).filter(folder => folder.repositories.length);
+  if (!remove) {
+    const folder = { id: uuidV8(['settings-folder', machine, 'Owned repositories']), path: 'Owned repositories', environment: null,
+      repositories: additions.map(item => ({ id: item.name, title: item.title, path: `additions/repositories/${item.id}`, registered: true,
+        additionId: item.id, origin: item.source.display, pin: item.pin })) };
+    const existing = folders.find(item => item.id === folder.id);
+    if (existing) existing.repositories.push(...folder.repositories); else folders.push(folder);
+  }
+  const projects = { folders }, projectRevision = revision(projects);
+  const base = report ? (({ publicKey, signature, ...body }) => body)(report) : {
+    format: 'hivem1nd-machine-settings-v1', machine, locations: { mind: context.paths.mind, staging: context.paths.staging },
+    service: { machine, state: 'running', version: '3.0.0', startedAt: stamp(context), startWithWindows: false, revision: null },
+    agents: { revision: revision([]), items: [] }, permissions: { revision: revision({ unitGrants: [], agentPermissions: [] }), unitGrants: [], agentPermissions: [] } };
+  const afterReport = await signed(service, { ...base, reportedAt: stamp(context), projects: { ...projects, revision: projectRevision } });
+  reportShape(afterReport, machine);
+  const reportPath = machineSettingsPath(context.paths.mind, machine), beforeReport = await readBytes(context.store, reportPath);
+  entries.push({ resource: `settings-report:${machine}`, recordPath: reportPath, beforeRevision: revisionOf(beforeReport), beforeBytes: beforeReport, afterBytes: bytes(afterReport) });
+  return { entries, revision: projectRevision, events: [{ name: 'machine.settings.changed', data: { machine, section: 'projects', reportedAt: afterReport.reportedAt, revision: projectRevision } }] };
 }

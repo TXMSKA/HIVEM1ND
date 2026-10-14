@@ -18,6 +18,12 @@ export async function importedSidecarEvents(context, change) {
   if (change.target?.kind === 'project') return projectSidecar(context, change, file);
   const event = (name, data, extra = {}) => ({ name, data, ...extra });
   const changed = (events, collections) => ({ events, collections });
+  const addition = /^user\/additions\/([a-f0-9-]{36})\.json$/.exec(file);
+  if (addition) {
+    const record = change.operation === 'delete' ? null : await jsonAt(context.paths.mind, file);
+    return changed([event('additions.changed', { additionId: addition[1], operation: record?.removed ? 'remove' : 'update', revision: change.hash ?? null }),
+      event('settings.content.changed', { revision: null })], ['projects']);
+  }
   const settingsReport = /^user\/machines\/([^/]+)\/settings\.json$/.exec(file);
   if (settingsReport) {
     if (change.operation === 'delete') return changed([], ['machines']);

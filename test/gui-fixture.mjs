@@ -891,6 +891,10 @@ async function loadProjects(fx, units) {
       product: null,
     });
   }
+  for (const { value, hash } of await fixtureAcceptedAdditions(fx)) if (value.kind === "repository" && !value.removed && !projects.some(item => item.id === value.projectId)) {
+    projects.push({ id: value.projectId, title: value.title, environment: null, unitIds: [], available: value.machine === LOCAL_MACHINE, product: null,
+      additionId: value.id, origin: value.source.display, pin: value.pin, revision: hash });
+  }
   return projects.sort((left, right) => left.id.localeCompare(right.id, "en"));
 }
 
@@ -1773,10 +1777,22 @@ function matchPath(pattern, pathname) {
 
 function fixtureAdditionValidator(operation) {
   return body => {
-    const fields = { upload: ["machine", "name"], chunk: ["path", "index", "total", "base64"], inspect: ["machine", "source", "updateOf"] }[operation];
+    const fields = { upload: ["machine", "name"], chunk: ["path", "index", "total", "base64"], inspect: ["machine", "source", "updateOf"],
+      apply: ["machine", "previewId", "selections", "expectedContentRevision", "expectedProjectRevision", "confirmed"], remove: ["machine", "confirmed", "expectedRevision"] }[operation];
     requireObject(body, fields); requireKeys(body, fields);
     if (operation !== "chunk" && body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "Open Add on the selected owning machine.");
     if (operation === "upload" && (typeof body.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.name))) throw new HttpError(422, "invalid_source", "The folder name is invalid.");
+    if (["apply", "remove"].includes(operation) && body.confirmed !== true) throw new HttpError(422, "invalid_body", "Confirmation is required.");
+    if (operation === "apply") {
+      if (!/^[0-9a-f-]{36}$/.test(body.previewId ?? "") || !Array.isArray(body.selections) || !body.selections.length
+        || new Set(body.selections.map(item => item.candidateId)).size !== body.selections.length) throw new HttpError(422, "invalid_body", "Choose distinct reviewed candidates.");
+      for (const selection of body.selections) {
+        requireObject(selection, ["candidateId", "scope"]); requireKeys(selection, ["candidateId", "scope"]);
+        requireObject(selection.scope, ["everyUnit", "units", "groups"]); requireKeys(selection.scope, ["everyUnit", "units", "groups"]);
+        if (typeof selection.scope.everyUnit !== "boolean" || !Array.isArray(selection.scope.units) || !Array.isArray(selection.scope.groups)
+          || selection.scope.everyUnit && (selection.scope.units.length || selection.scope.groups.length)) throw new HttpError(422, "invalid_scope", "Choose Every unit or specific units and groups.");
+      }
+    }
     if (operation === "inspect") {
       if (body.updateOf !== null && !/^[0-9a-f-]{36}$/.test(body.updateOf ?? "")) throw new HttpError(422, "invalid_body", "The update identity is invalid.");
       const source = body.source;
@@ -1801,14 +1817,23 @@ function fixtureAdditionValidator(operation) {
   };
 }
 
-function fixtureAdditionAccess(fx, principal, params, body) {
+async function fixtureAdditionAccess(fx, principal, params, body) {
   fx.additionUploads ??= new Map(); fx.additionPreviews ??= new Map();
   if (principal.audience !== "desktop") throw new HttpError(403, "forbidden", "Only the desktop may inspect additions.");
   const uploadId = params.uploadId ?? body?.source?.uploadId;
-  const record = params.previewId ? fx.additionPreviews.get(params.previewId) : uploadId ? fx.additionUploads.get(uploadId) : null;
-  if ((params.previewId || uploadId) && !record) throw new HttpError(404, "preview_not_found", "The local review was not found.");
+  const previewId = params.previewId ?? body?.previewId;
+  const record = previewId ? fx.additionPreviews.get(previewId) : uploadId ? fx.additionUploads.get(uploadId) : null;
+  if ((previewId || uploadId) && !record) throw new HttpError(404, "preview_not_found", "The local review was not found.");
   if (!record) return null;
   if (record.principalId !== principal.id || record.machine !== LOCAL_MACHINE) throw new HttpError(403, "forbidden", "The preview belongs to another owner.");
+  if (previewId) {
+    const consumed = await readJsonFile(join(fx.local, "addition-accepted", `${previewId}.json`)).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    if (consumed) {
+      if (consumed.value.principalId !== principal.id) throw new HttpError(403, "forbidden", "The accepted binding belongs to another owner.");
+      if (Date.parse(consumed.value.retainedUntil) <= fx.nowMs) throw new HttpError(409, "preview_expired", "The accepted binding expired.");
+      record.preview.state = "accepted"; record.preview.result = consumed.value.result;
+    }
+  }
   if (Date.parse(record.expiresAt) <= fx.nowMs && record.preview?.state !== "accepted") {
     record.chunks?.clear(); record.cancelled = true;
     throw new HttpError(409, "preview_expired", "The local review expired. Inspect the source again.");
@@ -1824,16 +1849,100 @@ function fixtureAdditionCandidates(pin, folder) {
   return [{ id: deterministicUuid("addition-candidate-pdf"), kind: "skill", name: "pdf", title: "pdf", description: "Reads PDF files", path: ".", supported: true,
     blockedReason: null, requirements: ["Python"], check },
   { id: deterministicUuid("addition-candidate-tool"), kind: "tool-server", name: "acme-files", title: "acme-files", description: "Available after 3.0", path: "tools",
-    supported: false, blockedReason: "after_3_0", requirements: ["Node.js"], check: { ...check, eligible: false } }];
+    supported: false, blockedReason: "after_3_0", requirements: ["Node.js"], check: { ...check, eligible: false } },
+  { id: deterministicUuid("addition-candidate-docs"), kind: "docs", name: "manual", title: "manual", description: "Documentation", path: "docs", supported: true, blockedReason: null, requirements: [], check: { ...check, runtime: { ok: true, verified: true, requirements: [] } } },
+  { id: deterministicUuid("addition-candidate-repository"), kind: "repository", name: "landing-site", title: "landing-site", description: "Git repository", path: ".", supported: true, blockedReason: null, requirements: [], check: { ...check, runtime: { ok: true, verified: true, requirements: [] } } }];
+}
+
+async function fixtureAcceptedAdditions(fx) {
+  const items = [];
+  for (const entry of await listDir(join(fx.tree.user, "additions"))) if (entry.isFile() && /^[a-f0-9-]{36}\.json$/.test(entry.name)) items.push(await readJsonFile(join(fx.tree.user, "additions", entry.name)));
+  return items;
+}
+
+async function fixtureAdditionProjects(fx, machine, base, pending = []) {
+  const records = new Map((await fixtureAcceptedAdditions(fx)).map(item => [item.value.id, item.value]));
+  for (const item of pending) records.set(item.id, item);
+  const additions = [...records.values()].filter(item => item.kind === "repository" && item.machine === machine && !item.removed);
+  const folders = structuredClone(base.folders ?? []);
+  for (const folder of folders) for (const item of folder.repositories) Object.assign(item, { additionId: item.additionId ?? null, origin: item.origin ?? null, pin: item.pin ?? null });
+  if (additions.length) folders.push({ id: deterministicUuid(`owned-additions:${machine}`), path: "Owned repositories", environment: null,
+    repositories: additions.map(item => ({ id: item.projectId, title: item.title, path: `additions/repositories/${item.id}`, registered: true, additionId: item.id, origin: item.source.display, pin: item.pin })) });
+  return { revision: additions.length ? sha256(stableJson({ folders })) : base.revision ?? null, folders };
+}
+
+async function prepareFixtureAcceptance(fx, record, body, principal) {
+  const consumedPath = join(fx.local, "addition-accepted", `${record.id}.json`), consumed = await readJsonFile(consumedPath).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+  if (consumed) {
+    if (consumed.value.hash !== hashBody(body) || consumed.value.principalId !== principal.id) throw new HttpError(409, "preview_changed", "This preview was already consumed with another selection.");
+    return { status: 201, data: consumed.value.result, writes: [], events: [] };
+  }
+  if (record.preview.state !== "ready") throw new HttpError(409, "preview_changed", "Complete the source check first.");
+  const snap = await projection(fx), choices = { units: snap.units.filter(item => item.id !== "root:master" && !item.removed).map(item => ({ id: item.id, title: item.alias ?? item.unit })),
+    groups: (snap.groups ?? []).filter(item => !item.deleted).map(item => ({ id: item.id, title: item.title, members: [...item.members] })) };
+  if (sha256(JSON.stringify(choices)) !== record.preview.scopeRevision) throw new HttpError(409, "scope_changed", "The reviewed scope changed.");
+  const contentPath = join(fx.tree.user, "gui", "content.json"), priorContent = await readOptional(contentPath);
+  const currentProjects = await readData(fx, snap, { pattern: "/settings/projects", principal }, {}, new URLSearchParams());
+  if ((priorContent ? sha256(priorContent) : null) !== body.expectedContentRevision || body.expectedContentRevision !== record.preview.contentRevision
+    || body.expectedProjectRevision !== currentProjects.revision || body.expectedProjectRevision !== record.preview.projectRevision) throw new HttpError(409, "revision_conflict", "Content or projects changed since review.");
+  const existing = await fixtureAcceptedAdditions(fx), items = [], writes = [], events = [];
+  const priorReport = await readData(fx, snap, { pattern: "/settings/content", principal }, {}, new URLSearchParams());
+  const content = priorContent ? JSON.parse(priorContent) : { format: "hivem1nd-content-settings-v1", includedFeatures: priorReport.features.filter(item => item.included).map(item => item.id), includedKnowledge: priorReport.knowledge.filter(item => item.included).map(item => item.id),
+    preferences: { addressStyle: "impersonal", additionalInstructions: "", keepExistingPreferencesFirst: true, updateChecks: "off" } };
+  for (const selection of body.selections) {
+    const candidate = record.preview.candidates.find(item => item.id === selection.candidateId);
+    if (!candidate?.supported) throw new HttpError(422, "unsupported_addition", "That addition is not supported.");
+    if (!candidate.check.eligible) throw new HttpError(422, "check_failed", "The source check failed.");
+    if (existing.some(item => item.value.name.toLowerCase() === candidate.name.toLowerCase() && item.value.id !== record.updateOf)) throw new HttpError(409, "name_conflict", "An addition already owns that name.");
+    const ids = new Set(selection.scope.everyUnit ? choices.units.map(item => item.id) : selection.scope.units);
+    for (const groupId of selection.scope.groups) {
+      const group = choices.groups.find(item => item.id === groupId); if (!group) throw new HttpError(409, "scope_changed", "A selected group changed.");
+      for (const id of group.members) ids.add(id);
+    }
+    if (candidate.kind === "repository" ? selection.scope.everyUnit || ids.size || selection.scope.groups.length : !ids.size || [...ids].some(id => !choices.units.some(unit => unit.id === id))) throw new HttpError(422, "invalid_scope", "Select available units for Content, or no scope for a repository.");
+    const id = record.updateOf ?? deterministicUuid(`accepted:${record.id}:${candidate.id}`), at = clock(fx).toISOString();
+    const value = { id, kind: candidate.kind, name: candidate.name, title: candidate.title, source: { kind: record.source.kind === "folder" ? "folder" : record.source.url.includes("npmjs") ? "registry" : "git", display: record.preview.sourceDisplay, url: record.source.url ?? null },
+      sourcePath: candidate.path, pin: record.preview.pin, license: candidate.check.license.value, publishedAt: candidate.check.age.publishedAt,
+      requirements: candidate.requirements, scope: structuredClone(selection.scope), unitCount: candidate.kind === "repository" ? 0 : ids.size, machine: body.machine,
+      projectId: candidate.kind === "repository" ? candidate.name : null, installedAt: at, updatedAt: at, removed: false };
+    const file = join(fx.tree.user, "additions", `${id}.json`), before = await readOptional(file), after = Buffer.from(stableJson(value));
+    writes.push(fixtureWrite(file, before, after)); items.push({ ...value, revision: sha256(after) });
+    if (candidate.kind !== "repository") {
+      const key = candidate.kind === "skill" ? "includedFeatures" : "includedKnowledge", prefix = candidate.kind === "skill" ? "feature" : "knowledge";
+      if (!content[key].includes(`${prefix}:${candidate.name}`)) content[key].push(`${prefix}:${candidate.name}`);
+    }
+    events.push({ name: "additions.changed", global: true, data: { additionId: id, operation: record.updateOf ? "update" : "add", revision: sha256(after) } });
+  }
+  let contentRevision = body.expectedContentRevision;
+  if (items.some(item => item.kind !== "repository")) {
+    const after = Buffer.from(stableJson(content)); contentRevision = sha256(after); writes.push(fixtureWrite(contentPath, priorContent, after));
+    events.push({ name: "settings.content.changed", global: true, data: { revision: contentRevision } });
+  }
+  const undo = await fixtureLibraryUndo(fx, writes, items.map(item => item.id), [{ name: "view.changed", global: true, data: { collections: ["projects"] } }]);
+  const pendingProjects = await fixtureAdditionProjects(fx, body.machine, { ...currentProjects, folders: currentProjects.folders.filter(folder => folder.path !== "Owned repositories") }, items);
+  const result = { items, ...undo, contentRevision, projectRevision: pendingProjects.revision };
+  if (items.some(item => item.kind === "repository")) events.push({ name: "machine.settings.changed", global: true, data: { machine: body.machine, section: "projects", reportedAt: clock(fx).toISOString(), revision: result.projectRevision } });
+  writes.push(fixtureWrite(consumedPath, null, Buffer.from(stableJson({ hash: hashBody(body), principalId: principal.id, retainedUntil: new Date(fx.nowMs + DAY_MS).toISOString(), result }))));
+  return { status: 201, data: result, writes, events };
 }
 
 async function prepareFixtureAddition(fx, pattern, params, body, principal) {
   const prepared = (status, data, apply) => ({ status, data, writes: [], events: [], apply });
+  if (pattern === "/additions/:additionId") {
+    const item = (await fixtureAcceptedAdditions(fx)).find(item => item.value.id === params.additionId);
+    if (!item) throw new HttpError(404, "addition_not_found", "The accepted addition was not found.");
+    if (item.value.removed || item.hash !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The accepted addition changed.");
+    const file = join(fx.tree.user, "additions", `${item.value.id}.json`), after = Buffer.from(stableJson({ ...item.value, removed: true, updatedAt: clock(fx).toISOString() }));
+    const writes = [fixtureWrite(file, await readFile(file), after)], undo = await fixtureLibraryUndo(fx, writes, [item.value.id], [{ name: "settings.content.changed", global: true, data: { revision: null } }]);
+    return { status: 200, data: { additionId: item.value.id, ...undo, revision: sha256(after) }, writes,
+      events: [{ name: "additions.changed", global: true, data: { additionId: item.value.id, operation: "remove", revision: sha256(after) } }] };
+  }
   if (pattern === "/additions/uploads") {
     const id = uuid(), expiresAt = new Date(fx.nowMs + 900000).toISOString();
     return prepared(201, { uploadId: id, expiresAt }, () => fx.additionUploads.set(id, { id, name: body.name, machine: body.machine, principalId: principal.id, expiresAt, chunks: new Map(), cancelled: false }));
   }
-  const record = fixtureAdditionAccess(fx, principal, params, body);
+  const record = await fixtureAdditionAccess(fx, principal, params, body);
+  if (pattern === "/additions") return prepareFixtureAcceptance(fx, record, body, principal);
   if (pattern.endsWith("/chunks")) {
     if (record.sealed) throw new HttpError(409, "source_changed", "The upload is already under review.");
     const prior = record.chunks.get(`${body.path.toLowerCase()}:${body.index}`);
@@ -1854,26 +1963,31 @@ async function prepareFixtureAddition(fx, pattern, params, body, principal) {
     const pin = { kind: record ? "snapshot" : body.source.url.includes("npmjs") ? "version" : "commit", value: record ? digest : body.source.url.includes("npmjs") ? "1.2.3" : "a".repeat(40), digest };
     const choices = { units: snap.units.filter(item => item.id !== "root:master" && !item.removed).map(item => ({ id: item.id, title: item.alias ?? item.unit })),
       groups: (snap.groups ?? []).filter(item => !item.deleted).map(item => ({ id: item.id, title: item.title, members: [...item.members] })) };
+    const content = await readOptional(join(fx.tree.user, "gui", "content.json"));
+    const projects = await readData(fx, snap, { pattern: "/settings/projects", principal }, {}, new URLSearchParams());
     const preview = { id, machine: body.machine, state: "inspecting", sourceDisplay: record?.name ?? body.source.url, pin, candidates: [], choices,
-      scopeRevision: sha256(JSON.stringify(choices)), contentRevision: null, projectRevision: null, expiresAt, error: null, result: null };
+      scopeRevision: sha256(JSON.stringify(choices)), contentRevision: content ? sha256(content) : null, projectRevision: projects.revision, expiresAt, error: null, result: null };
     return prepared(202, preview, () => { if (record) record.sealed = id; fx.additionPreviews.set(id, { id, machine: body.machine, principalId: principal.id, expiresAt,
-      preview: structuredClone(preview), source: body.source, attempt: 1, cancelled: false }); });
+      preview: structuredClone(preview), source: body.source, updateOf: body.updateOf, attempt: 1, cancelled: false }); });
   }
   if (pattern.endsWith("/retry")) {
     const preview = record.preview.state === "failed" ? { ...record.preview, state: "inspecting", candidates: [], error: null } : record.preview;
     return prepared(202, preview, () => { if (record.preview.state === "failed") record.attempt++; record.preview = structuredClone(preview); });
   }
+  if (params.previewId && await readOptional(join(fx.local, "addition-accepted", `${params.previewId}.json`))) return prepared(204, null, () => {});
   return prepared(204, null, () => { if (record.preview?.state !== "accepted") { record.cancelled = true; record.chunks?.clear(); if (record.source?.uploadId) fx.additionUploads.get(record.source.uploadId)?.chunks.clear(); } });
 }
 
 function routeTable() {
   return [
+    { pattern: '/additions', GET: { capability: 'settings.write', query: ['machine'] }, POST: { capability: 'settings.write', validate: fixtureAdditionValidator('apply') } },
     { pattern: '/additions/uploads', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('upload'), runtime: true } },
     { pattern: '/additions/uploads/:uploadId/chunks', PUT: { capability: 'settings.write', validate: fixtureAdditionValidator('chunk'), runtime: true } },
     { pattern: '/additions/uploads/:uploadId', DELETE: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
     { pattern: '/additions/previews', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('inspect'), runtime: true } },
     { pattern: '/additions/previews/:previewId', GET: { capability: 'settings.write', query: [] }, DELETE: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
     { pattern: '/additions/previews/:previewId/retry', POST: { capability: 'settings.write', validate: validateEmpty, runtime: true } },
+    { pattern: '/additions/:additionId', DELETE: { capability: 'settings.write', validate: fixtureAdditionValidator('remove') } },
     { pattern: "/view", GET: { query: ["project"] } },
     { pattern: "/units", GET: { query: ["q", "limit", "cursor", "project", "machine", "leadId", "status", "archived"] } },
     { pattern: "/units", POST: { capability: "unit.create", validate: validateUnit } },
@@ -2240,9 +2354,15 @@ async function handleRead(fx, principal, spec, params, query, requestId) {
 
 async function readData(fx, snap, spec, params, query) {
   const pattern = spec.pattern;
+  if (pattern === '/additions') {
+    const machine = query.get('machine') ?? LOCAL_MACHINE;
+    return { machine, readOnly: machine !== LOCAL_MACHINE, items: (await fixtureAcceptedAdditions(fx)).filter(item => !item.value.removed && item.value.machine === machine).map(item => ({ ...item.value, revision: item.hash })) };
+  }
   if (pattern === '/additions/previews/:previewId') {
     if ([...query.keys()].length) throw new HttpError(400, "invalid_query", "The query is not valid.");
-    const record = fixtureAdditionAccess(fx, spec.principal, params, null);
+    const record = await fixtureAdditionAccess(fx, spec.principal, params, null);
+    const consumed = await readJsonFile(join(fx.local, "addition-accepted", `${record.id}.json`)).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    if (consumed) return { ...record.preview, state: 'accepted', result: consumed.value.result };
     if (record.preview.state === 'inspecting') {
       const failed = record.source.url?.includes('timeout') && record.attempt < 2;
       record.preview.state = failed ? 'failed' : 'ready';
@@ -2412,7 +2532,7 @@ async function readData(fx, snap, spec, params, query) {
       }) };
     }
     if (pattern === "/settings/permissions") return { ...common, ...(machine === LOCAL_MACHINE ? await fixturePermissions(fx, snap) : reported?.permissions ?? { revision: null, unitGrants: [], agentPermissions: [] }) };
-    if (pattern === "/settings/projects") return { ...common, ...(reported?.projects ?? { revision: null, folders: [] }) };
+    if (pattern === "/settings/projects") return { ...common, ...await fixtureAdditionProjects(fx, machine, reported?.projects ?? { revision: null, folders: [] }) };
     const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
     return { settings: snap.settings.settings, revision: snap.settings.revision, selectedMachine: machine, readOnly, reportedAt: common.reportedAt,
       service: machine === LOCAL_MACHINE ? { machine, state: selected?.state ?? "unknown", version: selected?.version ?? null, startedAt: reported?.service.startedAt ?? null, startWithWindows: config?.value.startWithWindows === true, revision: config?.hash ?? null } : reported?.service ?? { machine, state: "unknown", version: null, startedAt: null, startWithWindows: false, revision: null },
@@ -2442,6 +2562,13 @@ async function readData(fx, snap, spec, params, query) {
       }
       report[field] = [...catalog.values()];
     }
+    for (const { value, hash } of await fixtureAcceptedAdditions(fx)) if (value.kind !== "repository") {
+      const field = value.kind === "skill" ? "features" : "knowledge", id = `${value.kind === "skill" ? "feature" : "knowledge"}:${value.name}`;
+      report[field] = report[field].filter(item => item.id !== id);
+      if (!value.removed) report[field].push({ id, title: value.title, ...(field === "features" ? { category: "other" } : {}), included: saved ? saved.value[field === "features" ? "includedFeatures" : "includedKnowledge"].includes(id) : true,
+        additionId: value.id, origin: value.source.display, pin: value.pin, scope: value.scope, unitCount: value.unitCount, removable: true, revision: hash });
+    }
+    for (const item of [...report.features, ...report.knowledge]) if (!Object.hasOwn(item, "additionId")) Object.assign(item, { additionId: null, origin: null, pin: null, scope: null, unitCount: 0, removable: false, revision: null });
     return report;
   }
   if (pattern === "/viewer") {
@@ -2785,7 +2912,7 @@ async function handleApi(fx, request, response, audience) {
   } catch {
     throw new HttpError(400, "invalid_json", "The JSON body is not valid.");
   }
-  if (spec.pattern.startsWith('/additions')) { spec.validate(body); fixtureAdditionAccess(fx, principal, matched.params, body); }
+  if (spec.pattern.startsWith('/additions')) { spec.validate(body); await fixtureAdditionAccess(fx, principal, matched.params, body); }
   const concrete = `/api/v1${apiPath.split("/").map((part, index) => index === 0 ? part : decodeOnce(part)).join("/")}`;
   const route = {
     ...spec,

@@ -139,6 +139,20 @@ export function explicitWakeAttach(client, nativeSessionId) {
   return { nativeSessionId, sessionId: nativeSessionId, requireRegistration: true };
 }
 
+export async function bindManualAdditionContent(context, proof) {
+  const { additionsForUnit, readScopedAdditions } = await import('../service/additions.mjs');
+  const adapter = context.adapters?.[proof.client];
+  if (proof.machine !== context.paths.machine || await adapter?.confirm?.(proof) !== true) throw new CoreError(503, 'scope_unavailable', 'The manual session has no verified native binding.');
+  const selected = await additionsForUnit(context, proof.unitId);
+  if (!selected.length && adapter.capabilities?.scopedContent !== true) return { bound: false };
+  if (adapter.capabilities?.scopedContent !== true || !adapter.bindContent) throw new CoreError(503, 'scope_unavailable', 'The app cannot enforce scoped content for this session.');
+  const read = () => readScopedAdditions(context, proof);
+  await read();
+  const result = await adapter.bindContent(proof, read);
+  if (result?.bound !== true) throw new CoreError(503, 'scope_unavailable', 'The app did not confirm its scoped content binding.');
+  return result;
+}
+
 export function localWakeChildEnv(client, env = process.env) {
   const result = {};
   for (const key of [...BASE_ENV, ...(getWakeAdapter(client)?.workerEnvKeys ?? [])]) {

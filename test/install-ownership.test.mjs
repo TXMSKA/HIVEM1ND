@@ -311,6 +311,28 @@ test('prepared setup client changes cannot be applied directly or through a comb
   assert.deepEqual(await legacyTreeInventory(fixture.homeDir), before);
 });
 
+test('evolve neither installs accepted scoped skills globally nor prunes their content, manifests or foreign retained edits', async t => {
+  const fixture = await makeFixture(t);
+  await writeKit(fixture, { 'roles/executor.md': '---\nname: executor\n---\nExecutor\n' });
+  const id = '11111111-1111-4111-8111-111111111111';
+  const main = await writeMind(fixture, 'user/features/pdf/SKILL.md', '---\nname: pdf\n---\nImported PDF\n');
+  const support = await writeMind(fixture, 'user/features/pdf/support.txt', 'Owned support\n');
+  const manifest = await writeMind(fixture, `user/additions/${id}.json`, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: false }));
+  const pack = await writeMind(fixture, 'user/knowledge/manual/features/escaped/SKILL.md', '---\nname: escaped\n---\nPrivate knowledge support\n');
+  await writeMind(fixture, 'user/additions/22222222-2222-4222-8222-222222222222.json', JSON.stringify({ format: 'hivem1nd-addition-v1', kind: 'docs', name: 'manual', removed: false }));
+  const expected = await Promise.all([main, support, manifest, pack].map(file => readFile(file)));
+  await writeMachine(fixture, 'TEST', Object.fromEntries(await Promise.all([main, support, manifest, pack].map(async file => [file, hashContent(await readFile(file))]))));
+  const plan = await prepareContentAgentAssets({ ...fixture, agents: [{ name: 'codex', mode: 'on-demand' }] });
+  assert.equal(plan.items.some(item => item.path.includes(`${path.sep}pdf${path.sep}`) || item.path.includes(`${path.sep}escaped${path.sep}`)), false);
+  assert.equal((await run(fixture)).completed, true);
+  assert.deepEqual(await Promise.all([main, support, manifest, pack].map(file => readFile(file))), expected);
+  await writeFile(manifest, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: true }));
+  await writeFile(main, '---\nname: pdf\n---\nForeign retained edit\n');
+  const removed = await prepareContentAgentAssets({ ...fixture, agents: [{ name: 'codex', mode: 'on-demand' }] });
+  assert.equal(removed.items.some(item => item.path.includes(`${path.sep}pdf${path.sep}`)), false);
+  assert.match(await readFile(main, 'utf8'), /Foreign retained edit/);
+});
+
 test('managed Content review preserves foreign client bytes and refuses changed selected files', async t => {
   const fixture = await makeFixture(t);
   await writeKit(fixture, { 'features/qa.md': '---\nname: qa\ndescription: QA fixture.\n---\n\n# QA\n' });

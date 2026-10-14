@@ -79,6 +79,9 @@ export function resolveAuthorized(store, target) {
 function assertAllowed(store, target) {
   if (target && typeof target === 'object' && target.kind === 'project') return resolveRegistered(store, target).resolved;
   const resolved = path.resolve(target);
+  if (store.localDirectory && path.relative(store.localDirectory, resolved).replaceAll('\\', '/').toLowerCase().startsWith('additions/repositories/')) {
+    throw new CoreError(422, 'unsafe_path', 'Owned checkout publication requires its separate byte-verified recovery record.');
+  }
   if (![store.mindPath, store.localDirectory].some((root) => root && isInside(root, resolved))) {
     throw new CoreError(422, 'unsafe_path', 'Refusing to write outside the mind or local service directory.');
   }
@@ -397,6 +400,11 @@ export async function commitTransaction(store, prepared) {
 }
 
 async function commitLocked(store, prepared) {
+  if (prepared.sync && prepared.entries.some(entry => entry.recordPath && /^user\/(?:additions|features|knowledge)\//.test(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')))) {
+    const { validateAdditionBundle } = await import('./additions.mjs');
+    await validateAdditionBundle({ store, paths: { mind: store.mindPath }, now: store.now }, prepared.entries.filter(entry => !entry.private && entry.recordPath && isInside(store.mindPath, entry.recordPath)).map(entry => ({
+      target: { kind: 'mind', path: path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/') }, bytes: entry.afterBytes, deleted: entry.operation === 'delete' })), prepared.sync.machine);
+  }
   const checked = [];
   const beforeCatalog = await catalogSnapshot(store);
   const catalog = await catalogSnapshot(store, prepared.entries);
@@ -464,6 +472,7 @@ async function commitLocked(store, prepared) {
     sync: prepared.sync ?? null,
     conflicts: [],
     catalogs: { before: beforeCatalog, after: catalog },
+    additionAcceptance: prepared.additionAcceptance === true,
   };
   if (entries.length === 1) {
     journal.resource = entries[0].resource;
@@ -588,6 +597,10 @@ async function recoverOne(store, id) {
       currentRevision: item.revision,
     }));
     if (conflicts.length > 0) {
+      if (fresh.additionAcceptance) for (const item of classified.filter(item => item.state === 'applied')) {
+        const before = item.entry.beforeBytesBase64;
+        await applyJournalEntry(store, { ...item.entry, operation: before === null ? 'delete' : 'put', afterBytesBase64: before }, item.entry.target ?? item.recordPath);
+      }
       for (const item of classified) store.hidden.delete(item.recordPath);
       const response = conflictReceiptBody(fresh, conflicts);
       const receipt = fresh.receipt ? { ...fresh.receipt, status: 409, response } : null;
@@ -677,10 +690,10 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
     entries: entries.map((entry) => {
       // A record inside the M1ND stays a M1ND record even when a registered project folder contains the M1ND.
       const mindRecord = (item) => Boolean(context.store.mindPath) && isInside(context.store.mindPath, entry.recordPath) && isInside(item.localPath, context.store.mindPath);
-      const project = entry.recordPath ? context.store.projects.find((item) => isInside(item.localPath, entry.recordPath) && !mindRecord(item)) : null;
+      const project = entry.recordPath && !entry.private ? context.store.projects.find((item) => isInside(item.localPath, entry.recordPath) && !mindRecord(item)) : null;
       const target = entry.target ?? (project ? { kind: 'project', project: project.name, path: path.relative(project.localPath, entry.recordPath).replaceAll('\\', '/') } : null);
       return { resource: target ? `project:${target.project}:${target.path}` : entry.resource, recordPath: entry.recordPath, target,
-        afterRevision: entry.operation === 'delete' ? null : revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null };
+        afterRevision: entry.operation === 'delete' ? null : revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null, private: entry.private === true };
     }), events };
   return { undoUntil, entry: { resource: `change-undo:${id}`, recordPath: path.join(directory, `${id}.json`),
     beforeRevision: null, afterBytes: journalBytes(record), private: true } };
@@ -732,19 +745,27 @@ export async function undoChange(context, changeId) {
     const entries = [];
     for (const entry of record.entries) {
       const destination = entry.target ?? entry.recordPath;
-      if (revisionOf(await readBytes(context.store, resolveAuthorized(context.store, destination))) !== entry.afterRevision) throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
+      const current = await readBytes(context.store, resolveAuthorized(context.store, destination));
+      if (revisionOf(current) !== entry.afterRevision) throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
       entries.push({ resource: entry.resource, recordPath: entry.recordPath, ...(entry.target ? { target: entry.target } : {}),
         beforeRevision: entry.afterRevision, operation: entry.beforeBytesBase64 === null ? 'delete' : 'put',
-        afterBytes: entry.beforeBytesBase64 === null ? null : Buffer.from(entry.beforeBytesBase64, 'base64') });
+        beforeBytes: current, afterBytes: entry.beforeBytesBase64 === null ? null : Buffer.from(entry.beforeBytesBase64, 'base64'), private: entry.private === true });
     }
     const id = randomUUID();
     entries.push({ resource: `change-undo:${changeId}`, recordPath, beforeRevision: revisionOf(bytes),
       afterBytes: journalBytes({ ...record, undone: true, undoOf: id }), private: true });
     try {
-      return await commitChange(context, { id, entries, events: record.events,
+      const result = await commitChange(context, { id, entries, events: record.events,
         response: { status: 200, body: { changeId: id, undoOf: changeId, resourceIds: record.resourceIds } } });
+      if (record.events.some(event => event.name === 'additions.changed')) {
+        const { pruneAdditionDirectories } = await import('./additions.mjs');
+        for (const entry of entries) if (entry.operation === 'delete' && entry.beforeBytes && /^user\/additions\/[a-f0-9-]{36}\.json$/.test(path.relative(context.paths.mind, entry.recordPath).replaceAll('\\', '/'))) await pruneAdditionDirectories(context, JSON.parse(entry.beforeBytes));
+        const { refreshAdditionProjects } = await import('./service.mjs');
+        await refreshAdditionProjects(context);
+      }
+      return result;
     } catch (error) {
-      if (error?.code === 'revision_conflict') throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
+      if (error?.code === 'revision_conflict' || error?.code === 'invalid_pack' && record.events.some(event => event.name === 'additions.changed')) throw new CoreError(409, 'undo_conflict', 'A changed record prevents undo.');
       throw error;
     }
   });

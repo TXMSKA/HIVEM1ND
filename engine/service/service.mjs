@@ -4,7 +4,7 @@ import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CoreError, canonicalJson, hashBytes, uuidV8, validateName } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateName } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
 import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
 import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
@@ -107,6 +107,7 @@ export async function startService(options, retained = null) {
       now: options.now,
       relay: handle.relay,
       paths,
+      additionContext: handle.runtime.settingsOwner,
       operations: bridgeOperations(handle.relay, options, bridgeRuntime),
       ownerShutdown: async (binding, { afterReply = false } = {}) => {
         const expected = handle.shutdown;
@@ -255,7 +256,21 @@ async function configuredProjects(paths) {
     });
     if (!state) { projects.push(unavailable); continue; }
     if (!state.isDirectory()) throw new CoreError(422, 'invalid_path', 'A registered project path must be a directory.');
-    projects.push({ name: project.name, localPath: await realpath(localPath), eligible: true });
+    const product = await readRecord(path.join(paths.mind, 'user', 'projects', project.name, 'product.json'));
+    const provenance = product ? JSON.parse(product) : null;
+    if (provenance?.removed) continue;
+    if (provenance?.additionId) {
+      if (!isUuid(provenance.additionId) || !/^[a-f0-9]{64}$/.test(provenance.pin?.digest ?? '')) throw new CoreError(409, 'destination_changed', 'The accepted repository ownership changed.');
+      const expected = path.join(paths.localDirectory, 'additions', 'repositories', provenance.additionId, provenance.pin.digest);
+      if (path.resolve(localPath) !== path.resolve(expected)) throw new CoreError(409, 'destination_changed', 'The owned checkout mapping changed.');
+      const recoveryPath = path.join(paths.localDirectory, 'additions', 'repository-recovery', `${provenance.additionId}-${provenance.pin.digest}.json`);
+      await assertNoLinks(recoveryPath, { root: paths.localDirectory });
+      const recovery = JSON.parse(await readFile(recoveryPath));
+      const expectedOwner = hashBytes(Buffer.from(canonicalJson([paths.mindKey, paths.machine, path.resolve(paths.localDirectory)])));
+      if (recovery.format !== 'hivem1nd-addition-checkout-v1' || recovery.id !== provenance.additionId || recovery.ownerHash !== expectedOwner || canonicalJson(recovery.pin) !== canonicalJson(provenance.pin)) throw new CoreError(409, 'destination_changed', 'The checkout recovery ownership changed.');
+    }
+    projects.push({ name: project.name, localPath: await realpath(localPath), eligible: true,
+      ...(provenance?.additionId ? { additionId: provenance.additionId, origin: provenance.origin, pin: provenance.pin, title: provenance.title } : {}) });
   }
   return projects;
 }
@@ -287,6 +302,19 @@ export async function attachOrStart(options, port = options.guardPort) {
     throw new CoreError(503, 'service_unavailable', 'The running service could not be verified.');
   }
   return { attached: true, port, bootstrap, active, mutated: false };
+}
+
+export async function refreshAdditionProjects(context) {
+  const owner = context.additionOwner ?? context.settingsOwner ?? context;
+  const registered = (await configuredProjects(context.paths)).filter(project => project.additionId);
+  const previous = context.projects ?? owner.projects ?? [];
+  const names = new Set(registered.map(project => project.name));
+  const next = [...previous.filter(project => !project.additionId && !names.has(project.name)), ...registered];
+  const arrays = new Set([context.projects, owner.projects, context.sync?.projects, owner.sync?.projects].filter(Array.isArray));
+  for (const projects of arrays) projects.splice(0, projects.length, ...next);
+  context.projects ??= next; owner.projects ??= context.projects;
+  bindProjects(context.store, context.projects);
+  return context.projects;
 }
 
 export function restartService(handle) {
@@ -543,6 +571,7 @@ export async function writeBeat(options, state) {
 }
 
 export async function composeCore(options) {
+  options.projects ??= await configuredProjects(servicePathsFor(options));
   if (options.store && options.projects) bindProjects(options.store, options.projects);
   const paths = servicePathsFor(options);
   const bus = options.bus ?? createEventBus({ now: options.now, machine: paths.machine, mind: paths.mind });
@@ -744,6 +773,8 @@ async function openServiceSync(options, paths) {
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   runtime.settingsOwner = createSettingsOwner({ ...options, paths, now, sync, pulse, ledger, bus: runtime.bus, startedAt: runtime.startedAt });
+  await recoverTransactions(options.store);
+  await refreshAdditionProjects(runtime.settingsOwner);
   try {
     try {
       await recoverIncomingGroups(sync);

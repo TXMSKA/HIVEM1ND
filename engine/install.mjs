@@ -758,7 +758,20 @@ export async function listInstallableAssets(roots, excludedNames = new Set(), re
   const warnings = [];
   const keptByName = new Map();
   for (const root of sources) {
-    for (const asset of await readRootAssets(root, excludedNames)) {
+    const scoped = new Set(excludedNames);
+    // Imported packages retain separate ownership even after removal leaves
+    // foreign edits behind; those bytes must never become global client assets.
+    const directory = path.join(root.path, 'additions');
+    for (const name of await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; })) {
+      if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+      const file = path.join(directory, name), info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('Imported Content ownership is unavailable.');
+      const imported = JSON.parse(await readFile(file));
+      if (imported.format !== 'hivem1nd-addition-v1') throw new Error('Imported Content ownership is invalid.');
+      if (imported.kind === 'skill') scoped.add(`feature:${imported.name}`);
+      if (imported.kind === 'docs') scoped.add(`knowledge:${imported.name}`);
+    }
+    for (const asset of await readRootAssets(root, scoped)) {
       if (retiredSources.has(normalizePath(asset.sourcePath))) continue;
       asset.supportFiles = asset.supportFiles.filter((support) => !retiredSources.has(normalizePath(path.join(path.dirname(asset.sourcePath), support.relativePath))));
       addAsset(asset, root);

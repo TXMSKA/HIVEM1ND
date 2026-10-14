@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { createCredentialStore } from './security.mjs';
+import { bindManualAdditionContent } from '../relay/local-wake.mjs';
 
 const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake', 'policy', 'shutdown']);
 
@@ -24,6 +25,7 @@ export async function openBridge(options = {}) {
     launches: new Map(),
     adapters: options.adapters ?? {},
     paths: options.paths ?? null,
+    additionContext: options.additionContext ?? null,
     now: options.now ?? (() => Date.now()),
     relay: options.relay ?? null,
     operations: options.operations ?? {},
@@ -79,7 +81,8 @@ export function createNativeLaunch(bridge, request) {
     throw new CoreError(422, 'invalid_binding', 'The native launch binding is incomplete.');
   }
   const secret = randomBytes(32).toString('base64url');
-  const launch = { unitId, client: request.client, machine: bridge.paths.machine, nativeSessionId: null, token: null };
+  const launch = { unitId, client: request.client, machine: bridge.paths.machine, nativeSessionId: null, token: null,
+    contentReader: request.contentReader ?? null };
   bridge.launches.set(secret, launch);
   return {
     env: { HIVEM1ND_SERVICE_BRIDGE: bridge.endpoint, HIVEM1ND_SERVICE_GRANT: secret },
@@ -209,7 +212,7 @@ export async function initializeNativeEntry({ controller, bridge, request, regis
 
 async function nativeOperation(bridge, secret, operation, input) {
   const launch = bridge.launches.get(secret);
-  if (!launch?.nativeSessionId || !['attach', 'hook', 'policy'].includes(operation)) {
+  if (!launch?.nativeSessionId || !['attach', 'hook', 'policy', 'content'].includes(operation)) {
     throw new CoreError(403, 'native_login_unverified', 'The native launch has not been verified.');
   }
   if (input.nativeSessionId != null && input.nativeSessionId !== launch.nativeSessionId
@@ -221,6 +224,17 @@ async function nativeOperation(bridge, secret, operation, input) {
   const adapter = bridge.adapters?.[proof.client];
   if (await adapter?.confirm?.(proof) !== true) throw new CoreError(403, 'native_login_unverified', 'The native process is no longer attached.');
   const bound = await boundSession(bridge, proof, launch.unitId);
+  if (operation === 'content') {
+    if (typeof launch.contentReader !== 'function') throw new CoreError(503, 'scope_unavailable', 'The native content channel is unavailable.');
+    if (Object.keys(input).some(key => !['additionId', 'path', 'offset'].includes(key))) throw new CoreError(403, 'forbidden', 'The scoped content binding cannot be changed.');
+    const packages = await launch.contentReader({ ...proof, sessionId: bound.sessionId });
+    if (!Object.keys(input).length) return packages.map(item => ({ addition: item.addition, files: item.files.map(file => ({ path: file.path, bytes: Buffer.from(file.bytesBase64, 'base64').length })) }));
+    const file = packages.find(item => item.addition.id === input.additionId)?.files.find(item => item.path === input.path);
+    if (!file) throw new CoreError(403, 'forbidden', 'This content is unavailable to the bound unit.');
+    const bytes = Buffer.from(file.bytesBase64, 'base64'), offset = input.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0 || offset > bytes.length) throw new CoreError(422, 'invalid_body', 'The content offset is invalid.');
+    return { bytesBase64: bytes.subarray(offset, offset + 65536).toString('base64'), offset, total: bytes.length };
+  }
   if (operation === 'policy') {
     const selected = input.binding ?? {};
     if (selected.unit !== parseUnitId(proof.unitId).unit || selected.unitId && selected.unitId !== proof.unitId
@@ -261,6 +275,7 @@ export async function attachNative(bridge, proof) {
   const confirmed = adapter?.confirm ? await adapter.confirm({ ...proof, unitId: unit.id }) : false;
   if (confirmed !== true) throw new CoreError(409, 'stop_unavailable', 'Native attachment needs a verified handshake.');
   const bound = await boundSession(bridge, proof, unit.id);
+  if (bridge.additionContext) await bindManualAdditionContent({ ...bridge.additionContext, adapters: bridge.adapters }, { ...proof, unitId: unit.id, sessionId: bound.sessionId });
   const previous = bridge.agents.get(unit.id);
   if (previous) bridge.credentials.revoke(previous);
   const issued = bridge.credentials.issue({

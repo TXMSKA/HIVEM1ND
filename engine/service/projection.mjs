@@ -342,9 +342,10 @@ async function loadMind(context) {
   const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
   const registered = new Set((context.projects ?? []).filter((item) => item?.localPath).map((item) => item.name));
   const projects = [];
-  for (const name of await childNames(mind, 'user/projects')) {
+  for (const name of [...new Set([...await childNames(mind, 'user/projects'), ...registered])]) {
     const product = await readJsonRecord(mind, `user/projects/${name}/product.json`, 'hivem1nd-product-v1', issues);
-    projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
+    if (!product?.value && !registered.has(name) && !units.some(unit => unit.scope?.kind === 'project' && unit.scope.name === name)) continue;
+    if (!product?.value?.removed) projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
   }
   projects.sort((left, right) => left.id.localeCompare(right.id));
   return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
@@ -447,6 +448,9 @@ function projectRecord(name, product, units, available) {
     title: typeof product?.title === 'string' ? product.title : name,
     unitIds: units.filter((unit) => unit.scope?.kind === 'project' && unit.scope?.name === name && unit.id).map((unit) => unit.id).sort(),
     available,
+    additionId: product?.additionId ?? null,
+    origin: product?.origin ?? null,
+    pin: product?.pin ?? null,
     product: shaped || stage || typeof product?.updated === 'string'
       ? {
           stage,

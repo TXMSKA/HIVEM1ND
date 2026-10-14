@@ -11,6 +11,7 @@ import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocks } from './store.mjs';
 import { readAgentPermissions } from './settings.mjs';
+import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
@@ -110,6 +111,7 @@ export function createNativeAdapter(client, options = {}) {
       stop: true,
       exactApproval: false,
       modelSelection: models.length > 0,
+      scopedContent: typeof options.scopedContent?.bind === 'function',
     },
     models,
     async probe() {
@@ -192,6 +194,15 @@ export function createNativeAdapter(client, options = {}) {
       if (!session?.child || session.child.exitCode != null || session.child.killed === true) return false;
       if (proof.unitId && session.unitId && proof.unitId !== session.unitId) return false;
       return true;
+    },
+    async bindContent(proof, read) {
+      if (!this.capabilities.scopedContent || await this.confirm(proof) !== true) throw new CoreError(503, 'scope_unavailable', 'The client cannot enforce scoped content for this session.');
+      const result = await options.scopedContent.bind({ ...proof }, read);
+      if (result?.bound !== true || result.unitId !== proof.unitId || result.nativeSessionId !== proof.nativeSessionId) throw new CoreError(503, 'scope_unavailable', 'The client did not confirm its scoped content binding.');
+      return { bound: true };
+    },
+    async runtimeAvailable(requirement) {
+      return options.scopedContent?.runtimeAvailable ? options.scopedContent.runtimeAvailable(requirement) : false;
     },
     async registered(request, registration, context) {
       const session = sessions.get(registration.nativeSessionId);
@@ -618,6 +629,19 @@ async function launch(context, request) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
   const adapter = adapterFor(context, request.client);
+  try {
+    const additions = await additionsForUnit(context, request.unitId);
+    if (additions.length && (adapter.capabilities?.scopedContent !== true || typeof adapter.bindContent !== 'function')) throw new CoreError(503, 'scope_unavailable', 'The client cannot enforce scoped content for this session.');
+    for (const addition of additions) for (const requirement of addition.record.requirements) {
+      if (await adapter.runtimeAvailable?.(requirement) !== true) throw new CoreError(503, 'runtime_unavailable', `Required runtime unavailable: ${requirement}.`, { requirement });
+    }
+  } catch (error) {
+    await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
+    await writeResult(context, request, 'failed', null, { code: error instanceof CoreError ? error.code : 'scope_unavailable', message: error instanceof CoreError ? error.message : 'The scoped content check could not be verified.' });
+    throw error;
+  }
+  const contentReader = proof => readScopedAdditions(context, { unitId: request.unitId, client: request.client,
+    nativeSessionId: proof.nativeSessionId, sessionId: uuidV8(['session', context.paths.machine, request.client, proof.nativeSessionId, request.unitId]) });
   const permissions = (await readAgentPermissions(context)).filter(item => item.client === request.client && parseUnitId(request.unitId).project !== null);
   const permissionBinding = { repository: cwd, permissionIds: permissions.map(item => item.id) };
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
@@ -626,7 +650,8 @@ async function launch(context, request) {
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
   let created;
   try {
-    created = await adapter.create({ ...request, cwd, agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository: cwd })) });
+    created = await adapter.create({ ...request, cwd, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+      agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository: cwd })) });
   } catch (error) {
     if (error?.ownedPid) {
       context.ownedPids ??= new Set();
@@ -648,6 +673,11 @@ async function launch(context, request) {
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
   try {
+    if (adapter.capabilities?.scopedContent) {
+      const proof = { unitId: request.unitId, client: request.client, nativeSessionId: created.nativeSessionId, machine: context.paths.machine, sessionId: registration.sessionId };
+      const bound = await adapter.bindContent(proof, () => contentReader(proof));
+      if (bound?.bound !== true) throw new CoreError(503, 'scope_unavailable', 'The client did not confirm its scoped content binding.');
+    }
     await adapter.registered?.({ ...request, gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository: cwd }) }, registration, context);
   } catch (error) {
     await stopSession(context, registration.sessionId, { confirmed: true });
