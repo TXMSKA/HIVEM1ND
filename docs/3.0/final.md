@@ -2,7 +2,7 @@
 
 Date: 2026-10-13. Owner: the Overmind. Status: general plan; the detailed integration plan is written from it by Codex (section 5).
 
-The Blueprint board `hivem1nd-3-flow` ("HIVEM1ND 3.0", `docs/flows/boards/hivem1nd-3-flow.mjs`, 87 screens) is the source of truth for the product requirements of 3.0: what a person sees and does, every state and every text. A screen is named by its reference, row and place: `2.4` is the fourth screen of row 2. Rows: 1 setup and first run, 2 the Map, 3 chats and what waits on the person, 4 Blueprint, 5 Void, 6 settings and the service, 7 the phone. Each screen's `note` states its behavior. Where this plan, `contract.md`, `plan-core.md` or `plan-gui.md` disagree with the board, the board wins for what a person sees and does; the contract wins for wire formats, and a wire format the board needs and the contract lacks is added to the contract first.
+The Blueprint board `hivem1nd-3-flow` ("HIVEM1ND 3.0", `docs/flows/boards/hivem1nd-3-flow.mjs`, 93 screens) is the source of truth for the product requirements of 3.0: what a person sees and does, every state and every text. A screen is named by its reference, row and place: `2.4` is the fourth screen of row 2. Rows: 1 setup and first run, 2 the Map, 3 chats and what waits on the person, 4 Blueprint, 5 Void, 6 settings and the service, 7 the phone. Each screen's `note` states its behavior. Where this plan, `contract.md`, `plan-core.md` or `plan-gui.md` disagree with the board, the board wins for what a person sees and does; the contract wins for wire formats, and a wire format the board needs and the contract lacks is added to the contract first.
 
 ## 1. Sources
 
@@ -36,6 +36,7 @@ The Blueprint board `hivem1nd-3-flow` ("HIVEM1ND 3.0", `docs/flows/boards/hivem1
 21. The phone answers asks with Approve and Deny only; standing approvals and pushes are answered on the computer (7.5, 7.6). Five wrong codes lock pairing for 10 minutes (7.3). Settings shows while phone access is open (6.1).
 22. Accessibility: status is told by shape as well as colour (filled, thick ring, thin ring), interactive targets are 32 px or more, icon-only controls carry names, and muted text meets 4.5:1 on every look.
 23. Add to M1ND (2.19 to 2.22, added on 2026-10-13): a + Add button in the bar of every mode, before Waiting, and an Add button in Settings, Content (6.8), open one window. It takes a link to a Git repository or a registry, or a dropped folder; reads the files behind it (SKILL.md, a tool manifest, a package file, a docs tree) and lists what it found, each part of a mixed repository on its own. Before anything is copied it shows the check: the commit or version it pins, the license, its age (7 days or more), that no install script runs, and what it needs to run; then the units or groups that may use it. A skill lands in Content next to the kit's own, with its origin and Remove; a repository lands as a project without an Overlord on the Map and in Hierarchy; docs land as a knowledge pack. Updates wait for a yes and go through the same check. In 3.0: skills, repositories and docs. Tool servers that need npm or Python come after 3.0, through the Connect review (6.3).
+24. Runs and supervision (3.12 to 3.17, added on 2026-10-13): a group runs a plan with roles, coordinator, planner, builder and reviewer, each given by the person to a unit of the group or to an agent connected on the machine. Only the coordinator opens sessions; no agent opens another. Each role confirms its start within 3 minutes, and every step is written to the run log as it happens, from the agent's own events where its command line emits them (Codex `--json`, Cursor `stream-json`) and otherwise from its hooks and Relay messages. Relay reads the log every 5 minutes without spending tokens: in execution 10 minutes without a step is a stall, in planning 30; the coordinator is told first, then the Overseer, then the person, and every 30 minutes the coordinator gets a summary. A task ends only with the agent's own report and the end of its process, and what it left running is closed. Every message of a run is followed until it is read: sent again once after 5 minutes and reported after 10. The plan sets the message budget, one per task; the roles agree extra messages up to half the plan, each logged with its reason, and past that the person is asked. While a run is open, the coordinator's wake does not expire.
 
 ## 3. Where the candidate stands
 
@@ -69,6 +70,7 @@ DONE means present and matching the board; PARTIAL means short of it; MISSING me
 | 6.12 | 30 s request limit | MISMATCH: 15 s (`gui/app/api.mjs`) |
 | 7.3, 7.5 | Phone lock, no standing approvals on the phone | MISSING |
 | 2.19 to 2.22, 6.8 | Add to M1ND | MISSING |
+| 3.12 to 3.17 | Runs with roles, run log and supervision | MISSING |
 
 ## 4. Work packages
 
@@ -87,6 +89,7 @@ Each package lists its screens. The integration plan splits each into tasks with
 - P10. Phone (7.1 to 7.7): decision 21.
 - P11. Accessibility across rows: decision 22.
 - P13. Add to M1ND (2.19 to 2.22, 6.8): decision 23. The + Add button, the window, recognition of skills, repositories and docs, the check, the unit choice, placement with origin and Remove, pinned updates. Contract first.
+- P14. Runs and supervision (3.12 to 3.17): decision 24. Roles per run, the run log, start confirmation, stall and unread detection with escalation, the message budget with extensions, closing what a task leaves running, and the coordinator's wake kept while a run is open. Contract first.
 - P12. Verification: every screen compared with the running GUI at 1440 by 900 (phone at 390 by 844), element by element, with captures; tests for each new route and state; `npm test`, `test:core`, `lint` and `build` green.
 
 ## 5. How the work runs

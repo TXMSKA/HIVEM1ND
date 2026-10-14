@@ -932,6 +932,168 @@ const accepted = () =>
     over: [toast("Task 029 accepted", "Undo")],
   });
 
+// ---- runs: roles, the run log and what keeps a run from stalling ----------------------------------
+
+const GROUP_SIDE = { open: "checkout-launch", groupSel: "checkout-launch" };
+const GROUP_FIELD = { groupSel: "checkout-launch" };
+
+/** One line of a run log: when, which role, what happened, and its state. */
+const logLine = (when, role, event, { state = "done", detail = null } = {}) =>
+  row(
+    { name: `log-${slug(`${when}-${event}`)}`, label: event, gap: 10, pad: [6, 2], align: "start" },
+    mono(when, 11.5, { color: "mute" }),
+    state === "busy" ? spinner(13) : state === "fail" ? ic("alert", 13, ERR) : state === "wait" ? ic("alert", 13, "wait") : ic("check", 13, "mute"),
+    col({ grow: 1, gap: 2 }, row({ gap: 6 }, t(role, 12.5, { weight: 700 }), t(event, 12.5, { color: "body", lines: 1 })), detail ? t(detail, 11.5, { color: "mute" }) : null),
+  );
+
+/** A problem in a run: what happened, what did not change, who was told, and the way out. */
+const runAlert = (title, body, told, actions, kind = "wait") =>
+  col(
+    { name: "run-alert", label: title, gap: 8, pad: [12, 14], radius: 14, fill: kind === "error" ? ERR_SOFT : "waitSoft", stroke: kind === "error" ? ERR : "wait" },
+    row({ gap: 8 }, ic("alert", 15, kind === "error" ? ERR : "wait"), t(title, 13.5, { weight: 700 })),
+    t(body, 12.5, { color: "body" }),
+    row({ gap: 6 }, ic("bell", 12, "mute"), t(told, 11.5, { color: "mute" })),
+    row({ gap: 6 }, ...actions),
+  );
+
+const RUN_START = [
+  logLine("21:02", "Coordinator", "Run started, execution, 10 tasks"),
+  logLine("21:02", "Planner", "Confirmed its start", { detail: "Codex CLI, new session" }),
+  logLine("21:14", "Planner", "Plan checked: 10 tasks"),
+  logLine("21:15", "Builder", "Confirmed its start, task 1", { detail: "Cursor CLI on DESKTOP" }),
+  logLine("21:22", "Builder", "Tasks 1 to 3 committed"),
+];
+
+/** The group's inspector while a run is open: its roles, its budget and its log instead of the chat. */
+function runPanel({ statusText = "Run: task 4 of 10", status = "busy", used = "4 of 10", log = [], tail = null }) {
+  return panel(
+    L, "left", { name: "inspector", label: "Inspector", w: 366 },
+    inspectorHead(L, {
+      glyph: "folder",
+      title: "Checkout launch",
+      monoTitle: false,
+      sub: row({ gap: 6 }, status === "busy" ? spinner(10) : dot(status), t(statusText, 12.5, { color: "mute" })),
+      right: [row({ gap: 6 }, avatars(L), ibtn(L, "dots", "more", "Run log, stop run, group"))],
+    }),
+    facts(L, [
+      ["Coordinator", mono("overlord-web", 12.5, { color: "text" })],
+      ["Mode", t("Execution", 13, { color: "text" })],
+      ["Messages", t(used, 13, { color: "text" })],
+      ["Last check", t("Relay, 1 min ago", 13, { color: "text" })],
+    ]),
+    conversation(L, heading(L, "Run log"), col({ gap: 0 }, ...log), tail),
+    composer(L, "Message the group", "Every member and every role sees it", "users"),
+  );
+}
+
+const runScreen = (inspector, rest = {}) => mapScreen({ sideOpts: GROUP_SIDE, field: GROUP_FIELD, inspector, ...rest });
+
+const roleField = (role, value) => field(role, value, { select: true });
+
+const runStart = () =>
+  mapScreen({
+    sideOpts: GROUP_SIDE,
+    field: GROUP_FIELD,
+    inspector: groupPanel(),
+    over: [
+      scrim(),
+      dialog({
+        title: "Start a run in Checkout launch",
+        sub: "Each role goes to a unit of the group or to an agent connected on this machine. Only the coordinator opens sessions; no agent opens another.",
+        w: 560,
+        kids: [
+          field("Plan", "Cart empty state, 10 tasks", { select: true, glyph: "pen" }),
+          col({ gap: 6 }, label("Mode"), segment([["Planning", false], ["Execution", true]], "run-mode")),
+          pairOf(roleField("Coordinator", "overlord-web, Claude Code"), roleField("Planner", "Codex CLI, new session")),
+          pairOf(roleField("Builder", "Cursor CLI, one session per task"), roleField("Reviewer", "The planner's session, reopened")),
+          row(
+            { gap: 10, pad: [10, 12], radius: 12, fill: "card" },
+            ic("mail", 15, "mute"),
+            col({ grow: 1, gap: 2 }, t("10 messages, one per task", 13.5, { weight: 700 }), t("Up to 5 more are agreed between the roles, each with its reason; past that you are asked.", 12, { color: "mute" })),
+          ),
+        ],
+        actions: [button(L, "Cancel", "ghost", null, "cancel"), button(L, "Start run", "pri", "play", "start-run")],
+      }),
+    ],
+  });
+
+const runLog = () =>
+  runScreen(runPanel({ log: [...RUN_START, logLine("21:23", "Builder", "Confirmed its start, task 4"), logLine("21:25", "Builder", "Running the tests", { state: "busy", detail: "4 min" })], tail: row({ gap: 6 }, button(L, "Stop step", "ghost", "stop", "stop-step"), t("Stops the tests; the task stays open", 12, { color: "mute" })) }));
+
+const runNoStart = () =>
+  runScreen(
+    runPanel({
+      status: "wait",
+      statusText: "Run: task 4 did not start",
+      log: [...RUN_START, logLine("21:23", "Builder", "Task 4 sent"), logLine("21:26", "Builder", "No start confirmation", { state: "wait" })],
+      tail: runAlert(
+        "The builder did not start task 4",
+        "Cursor CLI gave no sign of starting within 3 minutes. Nothing in the repository changed.",
+        "overlord-web was told at 21:26",
+        [button(L, "Retry", "pri", "retry", "retry-start"), button(L, "Use another agent", "plain", null, "another-agent"), button(L, "Stop run", "ghost", null, "stop-run")],
+      ),
+    }),
+    { waiting: 3 },
+  );
+
+const runStalled = () =>
+  runScreen(
+    runPanel({
+      status: "wait",
+      statusText: "Run: no progress on task 4",
+      log: [...RUN_START, logLine("21:23", "Builder", "Confirmed its start, task 4"), logLine("21:25", "Builder", "Running the tests", { state: "wait", detail: "No new step since 21:25" })],
+      tail: runAlert(
+        "No progress from the builder for 10 minutes",
+        "Last step: running the tests since 21:25. The tests may be hung; the task's changes are kept.",
+        "overlord-web was told at 21:35; next the Overseer at 21:40, then you at 21:45",
+        [button(L, "Stop step", "pri", "stop", "stop-step"), button(L, "Retry task", "plain", "retry", "retry-task"), button(L, "Stop run", "ghost", null, "stop-run")],
+      ),
+    }),
+    { waiting: 3 },
+  );
+
+const runNotRead = () =>
+  runScreen(
+    runPanel({
+      statusText: "Run: waiting for the review",
+      used: "10 of 10",
+      log: [
+        logLine("22:31", "Builder", "Task 10 committed"),
+        logLine("22:31", "Coordinator", "Review asked of the reviewer"),
+        logLine("22:36", "Coordinator", "Not read in 5 min, sent again", { state: "wait" }),
+        logLine("22:41", "Coordinator", "Still not read", { state: "fail" }),
+      ],
+      tail: runAlert(
+        "The review request was not read",
+        "Sent at 22:31 and again at 22:36; the reviewer's session has not read it. No answer is assumed.",
+        "The Overseer was told at 22:41",
+        [button(L, "Open the reviewer", "pri", null, "open-reviewer"), button(L, "Send again", "plain", "retry", "send-again")],
+        "error",
+      ),
+    }),
+    { waiting: 3 },
+  );
+
+const runExtension = () =>
+  runScreen(
+    runPanel({
+      status: "wait",
+      statusText: "Run: asks for 2 more",
+      used: "10 of 10, 5 more agreed",
+      log: [
+        logLine("22:12", "Builder", "Two tests fail on task 9", { state: "wait" }),
+        logLine("22:13", "Builder", "2 more agreed with the planner", { detail: "To ask how an empty cart is detected" }),
+        logLine("22:20", "Builder", "Asks for 2 more, past half the plan", { state: "wait" }),
+      ],
+      tail: ask(
+        L,
+        [ic("mail", 15, "text"), t("2 more messages for task 9", 13, { color: "text" })],
+        [button(L, "Approve", "pri", "check", "approve-more"), button(L, "Deny", "ghost", null, "deny-more")],
+      ),
+    }),
+    { waiting: 3 },
+  );
+
 // ---- Blueprint ----------------------------------------------------------------------------------------
 
 const BOARD_FOLDERS = (cart = "sel", flow = null) => [
@@ -1959,6 +2121,12 @@ const DESK = {
     ["approval-sent", "Answer sent", approvalSent, "Approve answers at once; the card shows the answer is on its way until the unit confirms it."],
     ["send-back", "Send back", sendBack, "Sending a task back needs a note: the unit reads it."],
     ["accepted", "Accepted", accepted, "Accepting closes the review; the notice offers Undo."],
+    ["start-run", "Start a run", runStart, "A group runs a plan with roles: coordinator, planner, builder and reviewer, each given to a unit of the group or to an agent connected on the machine. Only the coordinator opens sessions, so no agent opens another. The plan sets the message budget, one per task."],
+    ["run-log", "The run log", runLog, "Every role confirms its start and every step is logged as it happens, from the agent's own events, with how long the current step has run. Relay reads the log every 5 minutes without spending tokens, and every 30 minutes the coordinator gets a summary."],
+    ["no-start", "It did not start", runNoStart, "A role that gives no sign of starting within 3 minutes is reported at once, with what did not change and who was told."],
+    ["stalled", "No progress", runStalled, "In execution, 10 minutes without a new step is a stall; in planning, 30. The coordinator is told first, then the Overseer, then the person. A task ends only with the agent's own report and the end of its process, and anything it left running is closed."],
+    ["not-read", "Not read", runNotRead, "Every message of a run is followed until it is read: after 5 minutes it is sent again once, after 10 it is reported. A message is never taken as read without the recipient's confirmation."],
+    ["extension", "More messages", runExtension, "The roles agree extra messages among themselves, up to half the plan, each logged with its reason. Past that the person is asked, and the ask waits with the others."],
   ],
   blueprint: [
     ["board", "A board", bpBoard, "The library on the left, the board in the middle, comments on the right. The library is the one Void uses: search, filters, folders, and New board and New folder at the top."],
