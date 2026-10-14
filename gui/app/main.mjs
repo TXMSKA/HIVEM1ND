@@ -471,9 +471,10 @@ function paintShell(app) {
   document.title = `${heading} · HIVEM1ND`;
   const workspace = renderWorkspace(app, t, view, counts);
   workspace.setAttribute("id", "workspace");
+  workspace.setAttribute("tabindex", "-1");
   if (app.layout === 'phone') shell.append(element(document, 'div', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
   shell.append(
-    element(document, "a", { class: "skip", href: "#workspace", text: t("skipToContent") }),
+    element(document, "a", { class: "skip", href: "#workspace", text: t("skipToContent"), onclick: () => app.root.querySelector("[id='workspace']")?.focus() }),
     element(document, "h1", { class: "sr", text: heading }),
     renderBar(app, t, counts),
     workspace,
@@ -620,8 +621,8 @@ function captureInputs(app) {
     if (node === active) focused = { kind: "field", id: key, start: draft.start, end: draft.end };
   }
   if (!focused) {
-    const action = active?.getAttribute?.("data-action");
-    if (action && /^[a-z0-9-]+$/.test(action)) focused = { kind: "action", id: action };
+    const action = app.root.contains(active) && active?.getAttribute?.("data-action");
+    if (action) focused = { kind: "action", id: action };
   }
   drafts.focus = focused;
   if (!drafts.disclosures) drafts.disclosures = new Map();
@@ -651,7 +652,8 @@ function restoreInputFocus(app) {
   const focus = drafts.focus;
   if (!focus?.id) return;
   if (focus.kind === "action") {
-    app.root.querySelector?.(`[data-action="${focus.id}"]`)?.focus?.();
+    const control = [...app.root.querySelectorAll("[data-action]")].find(node => node.getAttribute("data-action") === focus.id && !node.disabled);
+    (control ?? app.root.querySelector("[id='workspace']"))?.focus?.();
     return;
   }
   const node = app.root.querySelector?.(`[data-keep="${focus.id}"]`);
@@ -984,6 +986,7 @@ function renderBar(app, t, counts) {
       modes.append(element(document, "button", {
         type: "button",
         class: "mode",
+        "data-action": `mode-${mode}`,
         "aria-pressed": String(app.mode === mode),
         onclick: () => navigate(app, mode),
       }, icon(document, mode), t(mode)));
@@ -999,6 +1002,7 @@ function renderBar(app, t, counts) {
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
+    "data-action": "open-settings",
     "aria-pressed": String(app.mode === "settings"),
     "aria-label": t("settings"),
     onclick: () => navigate(app, "settings"),
@@ -1006,6 +1010,7 @@ function renderBar(app, t, counts) {
   const inspector = element(document, "button", {
     type: "button",
     class: "icon-button",
+    "data-action": "toggle-inspector",
     "aria-label": t(app.inspectorOpen ? "closeInspector" : "openInspector"),
     onclick: () => {
       app.inspectorTouched = true;
@@ -1058,6 +1063,7 @@ function renderWorkspace(app, t, view, counts) {
     tabs.append(element(document, "button", {
       type: "button",
       class: "tab",
+      "data-action": `tab-${tab}`,
       "aria-pressed": String(app.tab === tab),
       onclick: () => navigate(app, tab),
     }, icon(document, tab), t(tab)));
@@ -3753,7 +3759,7 @@ function settingsSurface(app, document, t) {
     },
   });
   if (outcomeVisible(app) && app.actionScope === "settings") panel.append(element(document, "p", {
-    class: "settings-toast", role: app.actionTone === "error" ? "alert" : "status", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
+    class: "settings-toast", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
   }));
   return panel;
 }
@@ -3902,7 +3908,9 @@ function mountSettingsDialog(app, dialog, opener) {
   dialog.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); dialog.close(); return; }
     if (event.key !== "Tab") return;
-    const controls = [...dialog.querySelectorAll("button, input, textarea, summary")].filter(node => !node.disabled);
+    const controls = [...dialog.querySelectorAll("button, input, select, textarea, summary")].filter(node => !node.disabled && !node.closest("[hidden]")
+      && node.getAttribute("tabindex") !== "-1" && node.getAttribute("type") !== "hidden"
+      && (!node.closest("details") || node.tagName === "SUMMARY" || node.closest("details").getAttribute("open") !== null || node.closest("details").open));
     if (event.shiftKey && dialog.ownerDocument.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
     else if (!event.shiftKey && dialog.ownerDocument.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
   });
@@ -3920,7 +3928,7 @@ function reviewSettingsAgent(app, agent, mode, target) {
     const path = `/settings/agents/${encodeURIComponent(agent.id)}/preview`;
     const result = await commitSettingsMutation(app, record, "POST", path, { machine, mode, target, allowGit: false });
     if (app.disposed || state.machine !== machine || app.mode !== "settings") return;
-    const review = { agent, machine, target, preview: result.data, selected: new Set(result.data.changes.filter(change => !change.optional && change.selected).map(change => change.id)) };
+    const review = { agent, machine, target, opener, preview: result.data, selected: new Set(result.data.changes.filter(change => !change.optional && change.selected).map(change => change.id)) };
     const t = (key, variables) => text(app.language, key, variables);
     const dialog = renderClientReview(app.root.ownerDocument, review, t, {
       onCopy: async ids => {
@@ -3955,7 +3963,8 @@ function applySettingsReview(app, dialog, review, ids) {
     const result = await commitSettingsMutation(app, record, "POST", path, { machine: review.machine, previewId: review.preview.previewId, changeIds: ids, expectedRevision: review.preview.revision });
     dialog.close();
     await loadSettingsSections(app);
-    app.root.querySelector(`[data-agent="${review.agent.id}"] button`)?.focus();
+    const invoker = app.root.querySelector(`[data-action="${review.opener}"]`) ?? app.root.querySelector(`[data-agent="${review.agent.id}"] button`);
+    invoker?.focus();
     showOutcome(app, text(app.language, "settingsConnected"), "settings_connected", "status", "settings");
     return result;
   }).catch(error => {
@@ -3981,7 +3990,6 @@ function disconnectSettingsAgent(app, agent) {
   dialog.className += " settings-review";
   dialog.setAttribute("data-settings-disconnect", agent.id);
   dialog.addEventListener("close", () => restoreInvoker(app, `settings-disconnect-${agent.id}`));
-  dialog.addEventListener("close", () => app.root.querySelector(`[data-agent="${agent.id}"] button`)?.focus());
 }
 
 function findSettingsAgent(app, agent) {
@@ -4664,7 +4672,7 @@ function paintActivity(app, shell) {
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;
-  const region = element(document, "div", { class: "activity", "aria-live": "polite", "data-activity-region": "true" });
+  const region = element(document, "div", { class: "activity", "data-activity-region": "true" });
   if (pending.length) shell.setAttribute("aria-busy", "true");
   for (const record of pending) {
     const notice = element(document, "div", { "data-activity": record.key, style: "display:flex;align-items:center;background:var(--waiting-soft);padding:10px 12px;border-radius:14px;gap:10px" });
@@ -4815,14 +4823,15 @@ function renderSignedOut(app) {
   const state = app.phoneEnded ? 'ended' : locked ? 'locked' : app.phoneError === 'phoneCodeMismatch' ? 'error' : 'pair';
   const gate = element(document, "section", { class: "gate phone-gate", "data-phone-state": state });
   gate.append(element(document, 'header', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
-  const content = element(document, 'div', { class: 'phone-gate-content' });
+  const content = element(document, 'div', { class: 'phone-gate-content', id: 'phone-gate-workspace', tabindex: '-1' });
+  gate.append(element(document, 'a', { class: 'skip', href: '#phone-gate-workspace', text: t('skipToContent'), onclick: () => content.focus() }));
   if (state === 'locked' || state === 'ended') {
     const title = state === 'locked' ? 'phonePairingLocked' : 'phoneAccessEnded';
     const stateIcon = icon(document, 'alert');
     if (state === 'ended') stateIcon.querySelector('path').setAttribute('d', 'M3 9a15 15 0 0 1 18 0M6 12a10 10 0 0 1 12 0M9 15a5 5 0 0 1 6 0M12 18h.01');
     document.title = `${t(title)} · HIVEM1ND`;
     content.append(element(document, 'div', { class: 'phone-state-icon' }, stateIcon),
-      element(document, 'h2', { text: t(title) }), element(document, 'p', { text: t(`${title}Body`), role: 'status' }));
+      element(document, 'h1', { text: t(title) }), element(document, 'p', { text: t(`${title}Body`), role: 'status' }));
     if (locked) {
       content.setAttribute('data-locked-until', app.phoneLockedUntil);
       clearTimeout(app.phoneLockTimer);
@@ -4833,9 +4842,9 @@ function renderSignedOut(app) {
     } }));
   } else {
     document.title = `${t('phoneOpenMind')} · HIVEM1ND`;
-    content.append(brand(document).querySelector('.mark'), element(document, 'h2', { text: t('phoneOpenMind') }),
+    content.append(brand(document).querySelector('.mark'), element(document, 'h1', { text: t('phoneOpenMind') }),
       element(document, 'p', { id: 'phone-code-guidance', text: t('phoneCodePrompt') }));
-    const feedback = element(document, 'div', { class: 'phone-code-feedback', id: 'phone-code-error', role: 'status' });
+    const feedback = element(document, 'div', { class: 'phone-code-feedback', id: 'phone-code-error', role: app.phoneError ? 'alert' : null, 'aria-atomic': 'true' });
     if (app.phoneError) {
       feedback.append(element(document, 'p', { class: 'phone-code-error', text: t(app.phoneError) }));
       if (Number.isInteger(app.phoneTriesLeft)) feedback.append(element(document, 'p', { 'data-tries-left': String(app.phoneTriesLeft), text: t('phoneTriesLeft', { count: app.phoneTriesLeft }) }));
@@ -4857,6 +4866,7 @@ function renderPhoneError(app, error) {
   else if (error?.code === "auth_rate_limited") app.phoneError = "rateLimited";
   else app.phoneError = "phoneCodeMismatch";
   renderSignedOut(app);
+  app.root.querySelector("[data-home-code]")?.focus();
 }
 
 async function submitCode(app, code) {
@@ -4976,6 +4986,7 @@ function ensureLive(app) {
     class: "live",
     role: "status",
     "aria-live": "polite",
+    "aria-atomic": "true",
     "data-live": "status",
   });
   app.liveError = placeLive(document, body, app.liveError, {
@@ -4983,6 +4994,7 @@ function ensureLive(app) {
     class: "live",
     role: "alert",
     "aria-live": "assertive",
+    "aria-atomic": "true",
     "data-live": "error",
   });
 }
@@ -5007,11 +5019,13 @@ function releaseSettledAction(app) {
 function syncLiveRegions(app) {
   releaseSettledAction(app);
   ensureLive(app);
-  app.liveStatus.textContent = "";
-  app.liveError.textContent = "";
-  if (!outcomeVisible(app)) return;
-  const region = app.actionTone === "error" ? app.liveError : app.liveStatus;
-  region.textContent = app.actionNote;
+  const visible = outcomeVisible(app);
+  const pending = [...(app.activity?.values() ?? [])].filter(record => record.phase === "pending" && (record.scope ?? noteScope(app)) === noteScope(app));
+  const status = pending.length ? pending.map(record => record.announcement ??= `${record.label}. ${sendText(app, "takingLonger")}. ${sendText(app, "waiting", { seconds: record.elapsed ?? 0 })}`).join(" ")
+    : visible && app.actionTone !== "error" ? app.actionNote : "";
+  const error = visible && app.actionTone === "error" ? app.actionNote : "";
+  if (app.liveStatus.textContent !== status) app.liveStatus.textContent = status;
+  if (app.liveError.textContent !== error) app.liveError.textContent = error;
 }
 
 function brand(document) {
@@ -6082,21 +6096,21 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
     dialog.remove();
     restoreInvoker(app, opener);
   });
-  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) {
-    dialog.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") { event.preventDefault?.(); dialog.close(); return; }
-      if (event.key !== "Tab") return;
-      const controls = [...dialog.querySelectorAll("button, input, select, textarea, summary")].filter((node) => !node.disabled && !node.closest("[hidden]"));
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault?.(); last?.focus?.(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault?.(); first?.focus?.(); }
-    });
-    form.addEventListener("submit", (event) => { event.preventDefault?.(); confirm.click?.(); });
-  }
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault?.(); dialog.close(); return; }
+    if (event.key !== "Tab") return;
+    const controls = [...dialog.querySelectorAll("button, input, select, textarea, summary")].filter((node) => !node.disabled && !node.closest("[hidden]")
+      && node.getAttribute("tabindex") !== "-1" && node.getAttribute("type") !== "hidden"
+      && (!node.closest("details") || node.tagName === "SUMMARY" || node.closest("details").getAttribute("open") !== null || node.closest("details").open));
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault?.(); last?.focus?.(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault?.(); first?.focus?.(); }
+  });
+  form.addEventListener("submit", (event) => { event.preventDefault?.(); confirm.click?.(); });
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") dialog.showModal();
-  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) enabled[0]?.focus?.();
+  (enabled.find(control => !control.closest("[hidden], details")) ?? cancel)?.focus?.();
 }
 
 function appendInput(document, form, name, label, value, options = {}) {

@@ -5828,3 +5828,272 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   assert.equal(textDraft(desktop.app.editors.current, textEntry.id, "Intro.Welcome", "en"), "Unsaved text");
   assert.equal(desktop.root.querySelector("[data-source]").value, "Unsaved text");
 });
+
+function accessibilityRules(css) {
+  return [...css.replaceAll("\r\n", "\n").matchAll(/([^{}]+)\{([^{}]+)\}/g)].map(([, selectors, body]) => ({
+    selectors: selectors.trim().split(",").map(value => value.trim()),
+    values: Object.fromEntries([...body.matchAll(/([\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()])),
+  }));
+}
+
+function accessibilityPalette(rules, look) {
+  return Object.assign({}, ...rules.filter(rule => rule.selectors.includes(":root")).map(rule => rule.values),
+    ...rules.filter(rule => rule.selectors.includes(`[data-look="${look}"]`)).map(rule => rule.values));
+}
+
+function accessibilityColor(value) {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return [...value.slice(1).matchAll(/../g)].map(part => parseInt(part[0], 16)).concat(1);
+  assert.match(value, /^rgba\([\d.,\s]+\)$/);
+  return value.match(/[\d.]+/g).map(Number);
+}
+
+function accessibilityComposite(foreground, background) {
+  return foreground.slice(0, 3).map((value, index) => value * foreground[3] + background[index] * (1 - foreground[3])).concat(1);
+}
+
+function accessibilityLuminance(color) {
+  return color.slice(0, 3).map(channel => channel / 255)
+    .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+}
+
+function accessibilityRatio(foreground, background) {
+  const a = accessibilityLuminance(foreground), b = accessibilityLuminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function accessibilityMatrix(rules) {
+  const rows = [];
+  for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+    const palette = accessibilityPalette(rules, look);
+    const base = ["bg", "panel", "card", "card2", "ground", "me"].map(name => [name, accessibilityColor(palette[`--${name}`])]);
+    const surfaces = base.concat(["accent-soft", "waiting-soft", "ring-soft", "error-soft"].flatMap(name =>
+      base.filter(([surface]) => ["panel", "card", "card2"].includes(surface))
+        .map(([surface, background]) => [`${name}/${surface}`, accessibilityComposite(accessibilityColor(palette[`--${name}`]), background)])));
+    surfaces.push(["focus-black", [0, 0, 0, 1]]);
+    for (const [surface, background] of surfaces) {
+      for (const role of ["mute", "body", "text"]) {
+        const raw = surface === "focus-black" && role !== "mute" ? role === "body" ? "#d8d4cc" : "#f1efe9" : palette[`--${role}`];
+        const foreground = accessibilityComposite(accessibilityColor(raw), background);
+        rows.push({ look, role, surface, raw, background, foreground, ratio: accessibilityRatio(foreground, background) });
+      }
+    }
+  }
+  return rows;
+}
+
+function accessibilityEvidenceRow(row) {
+  const rgb = color => color.slice(0, 3).map(value => value.toFixed(6)).join(", ");
+  return `| ${row.look} | ${row.role} | ${row.surface} | ${row.raw} | ${rgb(row.background)} | ${rgb(row.foreground)} | ${row.ratio.toFixed(6)} |`;
+}
+
+test("T062 measures exact six-look text and alpha surfaces and retains its evidence", async () => {
+  const css = await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8");
+  const rules = accessibilityRules(css);
+  const evidence = await readFile(new URL("./gui-browser.md", import.meta.url), "utf8");
+  const rows = accessibilityMatrix(rules);
+  assert.equal(rows.length, 342);
+  for (const row of rows) {
+    assert.ok(row.ratio >= 4.5, `${row.look} ${row.role} ${row.surface}: ${row.ratio}`);
+    assert.ok(evidence.includes(accessibilityEvidenceRow(row)), `Missing measured pair: ${row.look} ${row.role} ${row.surface}`);
+  }
+  for (const selector of [".comment-send:disabled", ".comment-preference.no-agents", ".settings-panel .btn:disabled"]) {
+    assert.equal(rules.find(rule => rule.selectors.includes(selector)).values.opacity, "1", selector);
+  }
+  for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+    const own = accessibilityPalette(rules, look);
+    for (const parent of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+      const nested = Object.assign({}, accessibilityPalette(rules, parent),
+        ...rules.filter(rule => rule.selectors.includes(":where(.look-preview)")).map(rule => rule.values),
+        ...rules.filter(rule => rule.selectors.includes(`[data-look="${look}"]`)).map(rule => rule.values));
+      for (const token of Object.keys(own).filter(key => key.startsWith("--"))) assert.equal(nested[token], own[token], `${parent}/${look}/${token}`);
+    }
+  }
+});
+
+test("T062 retains local faces, minimum hit geometry, zoom reflow and status shapes", async () => {
+  const css = await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8");
+  const rules = accessibilityRules(css);
+  const declaration = selector => Object.assign({}, ...rules.filter(rule => rule.selectors.includes(selector)).map(rule => rule.values));
+  assert.equal(declaration("button")["min-inline-size"], "32px");
+  assert.equal(declaration("button")["min-block-size"], "32px");
+  for (const selector of ["a[href]", "summary", "textarea", '[contenteditable="true"]']) {
+    assert.equal(declaration(selector)["min-inline-size"], "32px");
+    assert.equal(declaration(selector)["min-block-size"], "32px");
+  }
+  for (const [selector, width, height] of [[".icon-button", 36, 36], [".board-tool", 32, 32], [".board-resize", 32, 32],
+    [".board-swatch", 32, 32], [".comment-send", 34, 34], [".map-handle", 44, 44], [".phone-code-cell", 40, 50]]) {
+    assert.equal(parseFloat(declaration(selector).width), width, selector);
+    assert.equal(parseFloat(declaration(selector).height), height, selector);
+    assert.ok(width >= 32 && height >= 32, selector);
+  }
+  for (const selector of [".segmented .segment", ".comment-preference-label", ".settings-content-item", ".settings-change label"]) {
+    assert.equal(declaration(selector)["min-height"], "32px", selector);
+  }
+  assert.equal(declaration(".board-resize::before").width, "9px");
+  assert.equal(declaration(".board-resize::before").height, "9px");
+  assert.equal(declaration(".phone-code-input").height, "100%");
+  assert.equal(declaration(".phone-gate")["overflow-y"], "auto");
+  assert.match(css, /\.settings-looks\s*\{\s*grid-template-columns:\s*repeat\(auto-fit, minmax\(166px, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 360px\)[\s\S]*grid-template-columns: repeat\(3, 40px\)/);
+  assert.match(css, /prefers-reduced-motion: reduce[\s\S]*animation: none !important/);
+  assert.equal(declaration('[data-mode="focus"]')["--bg"], "#000000");
+  assert.equal(declaration(":root")["--qr-dark"], "#000000");
+  assert.equal(declaration(":root")["--qr-light"], "#ffffff");
+  assert.match(declaration('.status-dot[data-status="waiting"]')["box-shadow"], /2px/);
+  assert.match(declaration(".status-dot")["box-shadow"], /1\.5px/);
+  assert.equal(declaration('.status-dot[data-status="working"]')["box-shadow"], "none");
+  for (const sheet of [css, await readFile(new URL("../gui/styles.css", import.meta.url), "utf8")]) {
+    const faces = [...sheet.matchAll(/@font-face\s*\{([^}]+)\}/g)].map(([, body]) => body);
+    assert.equal(faces.length, 4);
+    for (const [weight, style, filename] of [[400, "normal", "atkinson-400.woff2"], [400, "italic", "atkinson-400-italic.woff2"],
+      [700, "normal", "atkinson-700.woff2"], [700, "italic", "atkinson-700-italic.woff2"]]) {
+      const face = faces.find(body => body.includes(`url("./${filename}")`));
+      assert.ok(face);
+      assert.ok(face.includes(`font-weight: ${weight}`) && face.includes(`font-style: ${style}`));
+      assert.ok(face.includes('font-family: "Atkinson Hyperlegible"') && face.includes("font-display: swap"));
+    }
+  }
+});
+
+test("T062 keeps keyboard control identity, skips to the workspace and announces each outcome once", async t => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, "The desktop did not load.");
+  const { app, root, document } = desktop;
+  for (const language of ["en", "es"]) for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+    app.language = language; app.look = look; renderShell(app);
+    click(root.querySelector("a.skip"));
+    assert.equal(document.activeElement, root.querySelector("[id='workspace']"));
+    assert.equal(document.activeElement.getAttribute("tabindex"), "-1");
+    const mode = root.querySelector("[data-action='mode-map']"); mode.focus();
+    renderShell(app);
+    assert.equal(document.activeElement, root.querySelector("[data-action='mode-map']"));
+    const tab = root.querySelector("[data-action='tab-chats']"); tab.focus(); click(tab);
+    assert.equal(document.activeElement, root.querySelector("[data-action='tab-chats']"));
+    for (const button of root.querySelectorAll("button")) {
+      const copy = node => node.getAttribute?.("aria-hidden") === "true" ? "" : `${node.textContent ?? ""} ${(node.children ?? []).map(copy).join(" ")}`;
+      assert.ok((button.getAttribute("aria-label") || copy(button)).trim(), "An icon control has no accessible name.");
+    }
+    assert.equal(root.querySelectorAll("h1").length, 1);
+  }
+  const status = document.querySelector("[data-live='status']");
+  let value = status.textContent, writes = 0;
+  Object.defineProperty(status, "textContent", { configurable: true, get: () => value, set: next => { writes++; value = next; } });
+  app.actionNote = "A measured action completed."; app.actionTone = "status"; app.actionScope = "unit";
+  renderShell(app);
+  assert.equal(writes, 1);
+  assert.equal(status.getAttribute("aria-atomic"), "true");
+  for (let index = 0; index < 10; index++) renderShell(app);
+  assert.equal(writes, 1);
+  app.actionNote = "A second action completed."; renderShell(app);
+  assert.equal(writes, 2);
+  app.actionNote = null; renderShell(app);
+  assert.equal(status.textContent, "");
+  const pending = { phase: "pending", key: "measured-action", label: "Measuring", scope: "unit", elapsed: 3 };
+  app.activity ??= new Map();
+  app.activity.set(pending.key, pending); renderShell(app);
+  const pendingCopy = status.textContent, pendingWrites = writes;
+  assert.ok(pendingCopy.includes("3 s"));
+  pending.elapsed = 4; renderShell(app);
+  assert.equal(writes, pendingWrites);
+  assert.equal(status.textContent, pendingCopy);
+  app.activity.delete(pending.key);
+  app.actionNote = "A second action completed."; renderShell(app);
+  assert.equal(writes, pendingWrites + 1);
+  assert.equal(status.textContent, app.actionNote);
+});
+
+test("T062 dialogs wrap enabled visible controls, close on Escape and restore a replaced invoker", async () => {
+  const { element, showDialog, announce } = await import("../gui/app/components.mjs");
+  const { document, root } = createTestDocument();
+  const invoker = element(document, "button", { "data-action": "open-dialog", text: "Open" });
+  root.append(invoker); invoker.focus();
+  const dialog = showDialog(document, { title: "Measured dialog", body: "Retained copy", cancel: "Cancel", confirm: "Confirm", onConfirm() {} });
+  const hidden = element(document, "div", { hidden: "" }, element(document, "input", {}));
+  const closed = element(document, "details", {}, element(document, "summary", { text: "Details" }), element(document, "input", {}));
+  dialog.append(hidden, closed);
+  const buttons = dialog.querySelectorAll("button");
+  const key = (key, shiftKey = false) => { let prevented = false; for (const listener of dialog.listeners.get("keydown") ?? []) listener({ key, shiftKey, preventDefault() { prevented = true; } }); return prevented; };
+  buttons[0].focus(); assert.equal(key("Tab", true), true);
+  assert.equal(document.activeElement, closed.querySelector("summary"));
+  assert.equal(key("Tab"), true); assert.equal(document.activeElement, buttons[0]);
+  buttons[1].disabled = true;
+  const replacement = element(document, "button", { "data-action": "open-dialog", text: "Open" });
+  root.replaceChildren(replacement);
+  assert.equal(key("Escape"), true);
+  assert.equal(document.activeElement, replacement);
+  announce(root, "Changed once");
+  const region = root.querySelector("[data-announce]");
+  let value = region.textContent, writes = 0;
+  Object.defineProperty(region, "textContent", { get: () => value, set: next => { value = next; writes++; } });
+  announce(root, "Changed once"); assert.equal(writes, 0);
+  announce(root, "Changed again"); assert.equal(writes, 1);
+});
+
+test("T062 Settings focus survives report redraws and a disabled preview cannot choose a look", async t => {
+  const { app, root, document } = await settingsApp(t);
+  const startup = root.querySelector("[data-start-with-windows]"); startup.focus();
+  renderShell(app);
+  assert.equal(document.activeElement, root.querySelector("[data-start-with-windows]"));
+  root.querySelector("[data-language='es']").focus(); renderShell(app);
+  assert.equal(document.activeElement, root.querySelector("[data-language='es']"));
+  click(root.querySelector("[data-action='settings-machine']"));
+  const menu = root.querySelector(".settings-machine-menu");
+  for (const listener of menu.listeners.get("keydown") ?? []) listener({ key: "End", preventDefault() {} });
+  assert.equal(document.activeElement, menu.querySelectorAll("button").at(-1));
+  for (const listener of menu.listeners.get("keydown") ?? []) listener({ key: "Escape", preventDefault() {} });
+  assert.equal(document.activeElement, root.querySelector("[data-action='settings-machine']"));
+  const { renderLookPreview } = await import("../gui/app/settings.mjs");
+  let chosen = 0;
+  const button = renderLookPreview(document, { id: "coffee-cat", label: "Toxic" }, false, () => { chosen++; });
+  button.disabled = true;
+  click(button.querySelector(".look-preview"));
+  assert.equal(chosen, 0);
+});
+
+test("T062 phone navigation retains focus after redraw and six code cells use one tab stop", async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const phone = await bootApp(fixture.phoneUrl, 390, []); t.after(() => dispose(phone.app));
+  await waitFor(() => phone.root.querySelector(".phone-nav"), "The phone did not load.");
+  const button = phone.root.querySelector("[data-phone-mode='waiting']"); button.focus(); click(button);
+  assert.equal(phone.document.activeElement, phone.root.querySelector("[data-phone-mode='waiting']"));
+  const form = renderCodeEntry(phone.document, key => text("en", key), () => {});
+  assert.equal(form.querySelectorAll("input").length, 1);
+  assert.equal(form.querySelectorAll("[data-code-cell]").length, 6);
+  assert.equal(form.querySelectorAll("[tabindex]").length, 0);
+});
+
+test("T062 Enter submits the unit form through its reviewed action and Escape restores focus", async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector("[data-action='new-unit']"), "The unit control did not load.");
+  const opener = desktop.root.querySelector("[data-action='new-unit']"); opener.focus(); click(opener);
+  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit dialog did not open.");
+  const dialog = desktop.document.querySelector("[data-form='unit']");
+  const form = dialog.querySelector("form"), confirm = dialog.querySelector("[data-action='confirm-form']");
+  confirm.click = () => click(confirm);
+  let prevented = false;
+  for (const handler of form.listeners.get("submit") ?? []) handler({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(dialog.querySelector("[name='unit']").getAttribute("aria-invalid"), "true");
+  assert.equal(desktop.document.activeElement, dialog.querySelector("[name='unit']"));
+  for (const handler of dialog.listeners.get("keydown") ?? []) handler({ key: "Escape", preventDefault() {} });
+  assert.equal(desktop.document.activeElement, desktop.root.querySelector("[data-action='new-unit']"));
+});
+
+test("T062 pairing has one heading and a skip destination and restores the code field on rejection", async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const phone = await bootApp(new URL(fixture.phoneUrl).origin, 390, []); t.after(() => dispose(phone.app));
+  assert.equal(phone.root.querySelectorAll("h1").length, 1);
+  click(phone.root.querySelector("a.skip"));
+  assert.equal(phone.document.activeElement, phone.root.querySelector("[id='phone-gate-workspace']"));
+  typeInput(phone.root.querySelector("[data-home-code]"), "000000", 6, 6);
+  for (const handler of phone.root.querySelector("[data-code-entry]").listeners.get("submit") ?? []) handler({ preventDefault() {} });
+  await waitFor(() => phone.root.querySelector("[data-tries-left]"), "Pairing did not reject the code.");
+  assert.equal(phone.document.activeElement, phone.root.querySelector("[data-home-code]"));
+  assert.equal(phone.root.querySelector("[id='phone-code-error']").getAttribute("role"), "alert");
+  assert.equal(phone.root.querySelectorAll("h1").length, 1);
+});

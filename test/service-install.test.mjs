@@ -1279,6 +1279,31 @@ test('release packaging uses the served browser modules', async (t) => {
   await assert.rejects(() => assertReleaseAssets(app), /browser asset main\.mjs/);
 });
 
+test('the actual installer payload archives all four byte-identical local font faces', async () => {
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+  const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
+  const files = await collectPayload({ packageRoot, lock, executable: Buffer.from('isolated runtime fixture'), license: Buffer.from('isolated license fixture'), includeBrowser: true });
+  assert.deepEqual(missingPackagedBrowserAssets(new Set(files.map(file => file.name))), []);
+  const names = ['atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2'];
+  const fonts = files.filter(file => names.some(name => file.name === `gui/app/${name}`));
+  assert.equal(fonts.length, 4);
+  const artifact = build({ files: fonts, release: true, browserAssets: 'packaged' });
+  const entries = readArchive(artifact.zip);
+  const manifest = JSON.parse(entries.find(entry => entry.name === 'manifest.json').data);
+  for (const name of names) {
+    const entry = entries.find(file => file.name === `gui/app/${name}`);
+    const original = await readFile(path.join(packageRoot, 'docs', 'flows', 'assets', name));
+    assert.deepEqual(entry.data, original);
+    const item = manifest.files.find(file => file.name === entry.name);
+    assert.equal(item.bytes, original.length);
+    assert.equal(item.sha256, createHash('sha256').update(original).digest('hex'));
+    const missing = new Set(files.map(file => file.name));
+    missing.delete(entry.name);
+    assert.deepEqual(missingPackagedBrowserAssets(missing), [entry.name]);
+  }
+  assert.equal(BROWSER_ASSETS.filter(name => name.endsWith('.woff2')).length, 4);
+});
+
 test('runtime ownership survives absent registration.json', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));

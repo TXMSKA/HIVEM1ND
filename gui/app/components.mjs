@@ -156,9 +156,14 @@ export function showDialog(document, { title, body, confirm, cancel, retry, onCo
   dialog.append(heading, copy, actions);
   dialog.addEventListener("close", () => {
     dialog.remove();
-    invoker?.focus?.();
+    const action = invoker?.getAttribute?.("data-action");
+    const replacement = action && [...document.querySelectorAll("[data-action]")].find(node => node.getAttribute("data-action") === action);
+    (replacement || invoker)?.focus?.();
   });
-  dialog.addEventListener("keydown", (event) => trapFocus(dialog, event));
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); dialog.close(); }
+    else trapFocus(dialog, event);
+  });
   document.body.append(dialog);
   dialog.showModal();
   cancelButton.focus();
@@ -173,11 +178,10 @@ export function announce(host, message) {
   const document = host.ownerDocument;
   let region = host.querySelector("[data-announce]");
   if (!region) {
-    region = element(document, "div", { class: "sr", "aria-live": "polite", "data-announce": "true" });
+    region = element(document, "div", { class: "sr", "aria-live": "polite", "aria-atomic": "true", "data-announce": "true" });
     host.append(region);
   }
-  region.textContent = "";
-  region.textContent = message;
+  if (region.textContent !== message) region.textContent = message;
 }
 
 export function setBusy(control, busy) {
@@ -193,7 +197,9 @@ function appendChild(document, node, child) {
 
 function trapFocus(dialog, event) {
   if (event.key !== "Tab") return;
-  const controls = [...dialog.querySelectorAll("button, [href], input, select, textarea")].filter((item) => !item.disabled);
+  const controls = [...dialog.querySelectorAll("button, [href], input, select, textarea, summary")].filter((item) => !item.disabled
+    && item.getAttribute("tabindex") !== "-1" && item.getAttribute("type") !== "hidden" && !item.closest("[hidden], [aria-hidden='true']")
+    && !insideClosedDetails(item));
   if (!controls.length) return;
   const first = controls[0];
   const last = controls.at(-1);
@@ -204,6 +210,16 @@ function trapFocus(dialog, event) {
     event.preventDefault();
     first.focus();
   }
+}
+
+function insideClosedDetails(node) {
+  let parent = node.parentElement ?? node.parentNode;
+  while (parent) {
+    if (parent.tagName === "DETAILS" && !parent.open && parent.getAttribute("open") === null
+      && node !== parent.querySelector("summary")) return true;
+    parent = parent.parentElement ?? parent.parentNode;
+  }
+  return false;
 }
 
 export function namedIconButton(document, glyph, label, onClick) {

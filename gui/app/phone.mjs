@@ -122,6 +122,7 @@ export function renderPhone(document, t, modes, current, onNavigate, iconFor) {
     nav.append(element(document, "button", {
       type: "button",
       "data-phone-mode": mode,
+      "data-action": `phone-${mode}`,
       "aria-pressed": String(current === mode),
       onclick: () => onNavigate?.(mode),
     }, icon, t(mode)));

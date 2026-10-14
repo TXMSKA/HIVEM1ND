@@ -30,11 +30,15 @@ const STATIC_FILES = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/atkinson-400.woff2", ["app/atkinson-400.woff2", "font/woff2"]],
+  ["/atkinson-400-italic.woff2", ["app/atkinson-400-italic.woff2", "font/woff2"]],
+  ["/atkinson-700.woff2", ["app/atkinson-700.woff2", "font/woff2"]],
+  ["/atkinson-700-italic.woff2", ["app/atkinson-700-italic.woff2", "font/woff2"]],
 ]);
 
 const STATIC_HEADERS = {
   "Cache-Control": "no-store",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",

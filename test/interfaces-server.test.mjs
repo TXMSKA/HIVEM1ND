@@ -88,6 +88,32 @@ test("wizard serves the four-step board layout with authenticated assets",async 
  const {server}=await start();context.after(()=>server.close());const script=await(await fetch(server.origin+'/app.js')).text();const styles=await(await fetch(server.origin+'/styles.css')).text();assert.match(script,/sessionStorage/);assert.match(script,/renderLocation/);assert.match(script,/renderService/);assert.match(script,/renderReady/);assert.doesNotMatch(script,/renderAgents|renderProjects|originKind|installMode/);assert.match(styles,/width:\s*640px/);assert.match(styles,/border-radius:\s*24px/);assert.match(styles,/--accent:\s*#bdcd79/);assert.match(styles,/\[hidden\]/);assert.match(styles,/@media/);
 });
 
+test("wizard serves only the four local Atkinson faces with a same-origin font policy", async context => {
+  const { server } = await start();
+  context.after(() => server.close());
+  const faces = ["atkinson-400.woff2", "atkinson-400-italic.woff2", "atkinson-700.woff2", "atkinson-700-italic.woff2"];
+  for (const name of faces) {
+    const response = await fetch(`${server.origin}/${name}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "font/woff2");
+    assert.match(response.headers.get("content-security-policy"), /font-src 'self'/);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(bytes.subarray(0, 4).toString("ascii"), "wOF2");
+    assert.deepEqual(bytes, await readFile(new URL(`../docs/flows/assets/${name}`, import.meta.url)));
+    const head = await fetch(`${server.origin}/${name}`, { method: "HEAD" });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get("content-type"), "font/woff2");
+    assert.equal((await head.arrayBuffer()).byteLength, 0);
+  }
+  for (const name of ["atkinson-500.woff2", "other.woff2", "app/atkinson-400.woff2", "OFL-atkinson.txt"]) {
+    assert.equal((await fetch(`${server.origin}/${name}`)).status, 404);
+  }
+  const css = await (await fetch(`${server.origin}/styles.css`)).text();
+  assert.equal([...css.matchAll(/@font-face\s*\{/g)].length, 4);
+  assert.match(css, /--font:\s*"Atkinson Hyperlegible", system-ui, sans-serif/);
+  for (const name of faces) assert.ok(css.includes(`url("./${name}")`));
+});
+
 test("API accepts token-authenticated same-origin GET without Origin", async (context) => {
   const { server } = await start();
   context.after(() => server.close());

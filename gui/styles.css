@@ -1,3 +1,8 @@
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 400; font-display: swap; src: url("./atkinson-400.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 400; font-display: swap; src: url("./atkinson-400-italic.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 700; font-display: swap; src: url("./atkinson-700.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 700; font-display: swap; src: url("./atkinson-700-italic.woff2") format("woff2"); }
+
 :root {
   color-scheme: dark;
   --bg: #0f0b13; --panel: #18121d; --card: #211a27; --card2: #2b2232;
@@ -7,7 +12,8 @@
   --waiting-soft: rgba(230,192,111,0.12); --working: #8fd19e;
   --error: #e58e7c; --error-soft: rgba(229,142,124,0.12); --error-ink: #1d0b08;
   --scrim: rgba(4,2,6,0.62);
-  font-family: 'Atkinson Hyperlegible', 'Segoe UI', sans-serif;
+  --font: "Atkinson Hyperlegible", system-ui, sans-serif;
+  font-family: var(--font);
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

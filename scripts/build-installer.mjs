@@ -613,6 +613,7 @@ export async function referencedBrowserFiles(assetDir) {
       if (error?.code === 'ENOENT') throw new Error(`Release packaging needs browser asset ${name}.`);
       throw error;
     }
+    if (name.endsWith('.woff2')) continue;
     for (const ref of browserReferences(text)) {
       if (!seen.has(ref)) pending.push(ref);
     }

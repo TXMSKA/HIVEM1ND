@@ -35,6 +35,7 @@ export const BROWSER_STATIC_FILES = Object.freeze([
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
+  'atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2',
 ]);
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
@@ -1631,6 +1632,7 @@ function retryAfter(retryAt, now) {
 }
 
 function contentType(name) {
+  if (name.endsWith('.woff2')) return 'font/woff2';
   if (name.endsWith('.svg')) return 'image/svg+xml; charset=utf-8';
   if (name.endsWith('.css')) return 'text/css; charset=utf-8';
   if (name.endsWith('.mjs') || name.endsWith('.js')) return 'text/javascript; charset=utf-8';

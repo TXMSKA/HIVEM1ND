@@ -297,6 +297,7 @@ function renderGeneral(document, model, t, actions) {
     choice(document, "language", "es", t("spanish"), model.language === "es", actions.onLanguage));
   for (const button of language.children) button.disabled = !model.canWrite;
   const startup = element(document, "input", { type: "checkbox", "data-start-with-windows": "true", "aria-label": t("settingsStartup") });
+  startup.setAttribute("data-action", "settings-startup");
   startup.checked = service.startWithWindows === true;
   startup.disabled = !model.canWrite || model.readOnly || model.loading;
   startup.addEventListener("change", () => actions.onStartup?.(startup.checked));
@@ -413,7 +414,7 @@ function renderContent(document, model, t, actions) {
   if (!content) return element(document, "p", { text: t("loadingList") });
   const draft = model.contentDraft ?? content;
   const select = (item, field) => {
-    const input = element(document, "input", { type: "checkbox", "data-content-item": item.id });
+    const input = element(document, "input", { type: "checkbox", "data-content-item": item.id, "data-action": `settings-content-${item.id}` });
     input.checked = item.included;
     input.disabled = !model.canWrite;
     input.addEventListener("change", () => actions.onContentItem?.(field, item.id, input.checked));
@@ -438,7 +439,7 @@ function renderContent(document, model, t, actions) {
   instructions.addEventListener("input", () => actions.onPreference?.("additionalInstructions", instructions.value, false));
   preferences.append(styles, labeledField(document, t("settingsInstructions"), t("settingsInstructionsHint"), instructions));
   for (const [key, title] of [["keepExistingPreferencesFirst", "settingsKeepPreferences"], ["updateChecks", "settingsUpdates"]]) {
-    const input = element(document, "input", { type: "checkbox", "data-preference": key });
+    const input = element(document, "input", { type: "checkbox", "data-preference": key, "data-action": `settings-preference-${key}` });
     input.checked = key === "updateChecks" ? draft.preferences[key] === "daily" : draft.preferences[key];
     input.disabled = !model.canWrite;
     input.addEventListener("change", () => actions.onPreference?.(key, key === "updateChecks" ? input.checked ? "daily" : "off" : input.checked));
@@ -550,6 +551,7 @@ function choice(document, kind, value, label, selected, onChoose) {
   return element(document, "button", {
     type: "button",
     class: selected ? "btn is-selected" : "btn",
+    "data-action": `settings-${kind}-${value}`,
     [`data-${kind}`]: value,
     "aria-pressed": selected ? "true" : "false",
     text: label,
@@ -576,9 +578,10 @@ export const LOOK_OPTIONS = Object.freeze([
 ]);
 export function renderLookPreview(document, look, selected, onChoose) {
   const button = element(document, 'button', { type: 'button', class: 'look-choice',
+    'data-action': `settings-look-${look.id}`,
     'aria-label': look.label, 'aria-pressed': String(selected), onclick: () => onChoose?.(look.id) });
   const preview = element(document, 'span', { class: 'look-preview', 'data-look': look.id, 'aria-hidden': 'true' });
-  preview.addEventListener('click', event => { event.stopPropagation?.(); onChoose?.(look.id); });
+  preview.addEventListener('click', event => { if (button.disabled) return; event.stopPropagation?.(); onChoose?.(look.id); });
   preview.append(element(document, 'span', { class: 'look-preview-bar' },
     element(document, 'span', { class: 'look-preview-mark' }),
     element(document, 'span', { class: 'look-preview-modes' })));

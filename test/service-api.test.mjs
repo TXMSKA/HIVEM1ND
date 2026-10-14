@@ -312,6 +312,26 @@ test('phone writes are rejected and static absence leaves the API usable', async
   assert.equal(served.raw, owned);
 });
 
+test('app serves the exact four local Atkinson fonts as WOFF2 and rejects other font paths', async t => {
+  const { core } = await boot(t, { assetDir: path.resolve('gui/app') });
+  const names = ['atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2'];
+  for (const name of names) {
+    const response = await fetch(`http://127.0.0.1:${core.http.port}/app/${name}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'font/woff2');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual(bytes, await readFile(new URL(`../docs/flows/assets/${name}`, import.meta.url)));
+    assert.equal(bytes.subarray(0, 4).toString('ascii'), 'wOF2');
+  }
+  for (const name of ['other.woff2', 'atkinson-500.woff2', 'atkinson-400.woff', 'OFL-atkinson.txt', '%252e%252e/atkinson-400.woff2', 'nested/atkinson-400.woff2']) {
+    const response = await call(core.http.port, 'GET', `/app/${name}`);
+    assert.equal(response.status, 404, name);
+  }
+  const { core: unpackaged } = await boot(t, { missingAssets: true });
+  assert.equal((await call(unpackaged.http.port, 'GET', '/app/atkinson-400.woff2')).status, 503);
+});
+
 test('event streams replay from a cursor without leaking credentials', async (t) => {
   const { core, token } = await boot(t);
   const opened = await new Promise((resolve, reject) => {
