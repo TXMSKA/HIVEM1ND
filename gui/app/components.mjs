@@ -205,3 +205,9 @@ function trapFocus(dialog, event) {
     first.focus();
   }
 }
+
+export function namedIconButton(document, glyph, label, onClick) {
+  if (typeof label !== 'string' || !label.trim()) throw new TypeError('An icon button needs an accessible name.');
+  return element(document, 'button', { type: 'button', class: 'icon-button', 'aria-label': label,
+    title: label, onclick: onClick }, icon(document, glyph));
+}
