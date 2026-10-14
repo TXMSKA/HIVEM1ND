@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -6,6 +7,7 @@ import path from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { legacyTreeInventory } from "../engine/legacy-copy.mjs";
 import { stubAclRunner } from "../engine/service/security.mjs";
 import { createWizardServer } from "../gui/server.mjs";
 
@@ -392,8 +394,43 @@ test("browser API completes the real setup engine inside an isolated home", asyn
   assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), `${kitVersion}\n`);
 });
 
-test("setup detects accurate repository and folder counts without editing projects",async context=>{
- const scratch=await mkdtemp(path.join(os.tmpdir(),'hivem1nd-setup-counts-'));context.after(()=>rm(scratch,{recursive:true,force:true}));const homeDir=path.join(scratch,'home'),mindPath=path.join(scratch,'mind');for(const name of ['GitHub/repo1','GitHub/repo2','Unity/repo3'])await mkdir(path.join(homeDir,name,'.git'),{recursive:true});const server=await createWizardServer({sessionOptions:{kitPath:path.dirname(path.dirname(fileURLToPath(import.meta.url))),mindPath,homeDir,hostname:'INTERFACE-TEST',language:'en',env:{},aclRunner:stubAclRunner()}});context.after(()=>server.close());const headers={Authorization:'Bearer '+server.token,Origin:server.origin,'Content-Type':'application/json'};const post=values=>fetch(server.origin+'/api/v1/answer',{method:'POST',headers,body:JSON.stringify({values})});assert.equal((await post({})).status,200);assert.equal((await post({mindPath})).status,200);assert.equal((await post({removeProject:0})).status,400);assert.equal((await fetch(server.origin+'/api/v1/install',{method:'POST',headers,body:JSON.stringify({confirm:true,conflicts:{}})})).status,200);const step=(await(await fetch(server.origin+'/api/v1/step',{headers})).json()).data;const projects=step.summary.find(row=>row.id==='projects');assert.equal(projects.repositories,3);assert.equal(projects.folders,2);assert.equal(projects.value,'3 repositories in 2 folders');
+test("setup detects accurate repository and folder counts without editing projects", async (context) => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-setup-counts-"));
+  context.after(() => rm(scratch, { recursive: true, force: true }));
+  const homeDir = path.join(scratch, "home");
+  const mindPath = path.join(scratch, "mind");
+  const directories = ["GitHub/repo1", "GitHub/repo2", "Unity/repo3"].map((name) => path.join(homeDir, name));
+  for (const directory of directories) {
+    await mkdir(directory, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], {
+      cwd: directory, shell: false, windowsHide: true, timeout: 30000, stdio: "ignore",
+    });
+    await writeFile(path.join(directory, "source.txt"), "Unchanged project bytes.\n");
+  }
+  const before = await Promise.all(directories.map(legacyTreeInventory));
+  const server = await createWizardServer({
+    sessionOptions: {
+      kitPath: path.dirname(path.dirname(fileURLToPath(import.meta.url))),
+      mindPath, homeDir, hostname: "INTERFACE-TEST", language: "en", env: {}, aclRunner: stubAclRunner(),
+    },
+  });
+  context.after(() => server.close());
+  const headers = { Authorization: `Bearer ${server.token}`, Origin: server.origin, "Content-Type": "application/json" };
+  const post = (values) => fetch(`${server.origin}/api/v1/answer`, {
+    method: "POST", headers, body: JSON.stringify({ values }),
+  });
+  assert.equal((await post({})).status, 200);
+  assert.equal((await post({ mindPath })).status, 200);
+  assert.equal((await post({ removeProject: 0 })).status, 400);
+  assert.equal((await fetch(`${server.origin}/api/v1/install`, {
+    method: "POST", headers, body: JSON.stringify({ confirm: true, conflicts: {} }),
+  })).status, 200);
+  const step = (await (await fetch(`${server.origin}/api/v1/step`, { headers })).json()).data;
+  const projects = step.summary.find((row) => row.id === "projects");
+  assert.equal(projects.repositories, 3);
+  assert.equal(projects.folders, 2);
+  assert.equal(projects.value, "3 repositories in 2 folders");
+  assert.deepEqual(await Promise.all(directories.map(legacyTreeInventory)), before);
 });
 
 test("Folder Change uses the native bridge with an editable browser fallback",async context=>{
