@@ -174,8 +174,13 @@ test('ordinary configured startup loads exact machine project paths for native l
   const login = await request({ origin, token: service.bootstrap.secret, closed: false }, { path: '/api/v1/auth/local', body: { embedded: false, hostOrigin: null, look: null, language: null } });
   assert.equal(login.status, 201);
   const desktop = { origin, token: login.json.data.token, closed: false };
-  const started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { client: 'codex', runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
+  let started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { client: 'codex', runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
   assert.equal(started.status, 202, JSON.stringify(started.json));
+  // The route queues the start; the same request reports the verified launch.
+  for (const deadline = Date.now() + 5000; ['queued', 'starting'].includes(started.json.data.state) && Date.now() < deadline;) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    started = await request(desktop, { method: 'GET', path: `/api/v1/session-requests/${started.json.data.requestId}` });
+  }
   assert.equal(started.json.data.state, 'started', JSON.stringify(started.json));
   assert.equal(await readFile(path.join(fixture.root, 'native-cwd.txt'), 'utf8'), projects[0].localPath);
   const created = await request(desktop, { path: '/api/v1/void/texts', headers: { 'idempotency-key': randomUUID() }, body: { project: 'shop', path: 'docs/configured.json', document: { title: 'Configured', rev: 0, pages: [{ k: 'body', en: 'Registered repository' }] }, attached: [UNIT] } });
