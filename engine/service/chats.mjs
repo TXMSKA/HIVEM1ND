@@ -690,3 +690,35 @@ function headerMap(bytes) {
 export async function ensureChatDir(context, id) {
   await mkdir(path.dirname(chatPath(context, id)), { recursive: true });
 }
+
+// Bootstrap is private model input; it is never an authored message or a read receipt.
+export async function contextBootstrap(context, unitId) {
+  const state = await readUnitState(context, parseUnitId(unitId));
+  if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
+  const role = headerMap(state.bytes).get('role');
+  const records = [];
+  for (const relative of ['rules.md', `roles/${role}.md`, state.relative]) {
+    const bytes = await readBytes(context.store, absolute(context, relative));
+    records.push({ resource: relative, revision: revisionOf(bytes), text: bytes?.toString('utf8') ?? '' });
+  }
+  const result = canonicalJson({ unitId, role, resources: ['inbox', 'tasks', 'content'], records });
+  if (result.length > 12000) throw new CoreError(409, 'context_unavailable', 'The current M1ND bootstrap exceeds the supported input budget.');
+  return result;
+}
+
+export async function contextHistory(context, unitId) {
+  const root = absolute(context, 'user/relay/chats');
+  let names;
+  try { names = await readdir(root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const history = []; let size = 0;
+  for (const id of names) {
+    const bytes = await readBytes(context.store, chatPath(context, id));
+    if (!bytes || !parseChat(bytes, id).members.includes(unitId)) continue;
+    for (const record of [{ relative: `user/relay/chats/${id}/chat.md`, bytes }, ...await chatRecords(context, id)]) {
+      size += record.bytes.length;
+      if (size > 16000000) throw new CoreError(409, 'context_unavailable', 'The chat checkpoint exceeds its supported bound.');
+      history.push({ path: record.relative, revision: revisionOf(record.bytes), bytes: record.bytes.toString('base64') });
+    }
+  }
+  return history;
+}

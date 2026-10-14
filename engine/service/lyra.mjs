@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, isUuid, parseTaskId, parseUnitId } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { createAppTokenStore, protectLocalFile, verifyLocalPermissions } from './security.mjs';
-import { atomicWrite } from './store.mjs';
+import { atomicWrite, commitTransaction, readBytes, revisionOf } from './store.mjs';
+import { contextBootstrap } from './chats.mjs';
 
 const APP = Object.freeze({ id: 'hivem1nd', name: 'HIVEM1ND', kind: 'app' });
 const MODES = ['fast', 'normal', 'thinking'];
@@ -238,6 +239,13 @@ function boundedRequest(input, choice, tools) {
   return body;
 }
 
+export function measureLyraContext(input, choice, tools = []) {
+  const body = boundedRequest(input, choice, tools);
+  return { used: null, capacity: null, unit: 'characters', estimated: true,
+    budgets: { message: { used: Math.max(...body.messages.map(message => message.content.length)), capacity: 8000 },
+      appContext: { used: body.context.length, capacity: 12000 }, history: { used: body.messages.reduce((sum, message) => sum + message.content.length, 0), capacity: 16000 } } };
+}
+
 async function* ndjson(body, signal) {
   const reader = body?.getReader(); if (!reader) fail('lyra_protocol_error');
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -267,6 +275,7 @@ export async function streamLyraTurn(connection, input, handlers = {}) {
   try {
     const choice = resolveLyraChoice(input.choice, await connection.call('GET', '/v1/models', undefined, signal));
     const body = boundedRequest(input, choice, tools);
+    await handlers.onOutbound?.(measureLyraContext(input, choice, tools));
     const response = await connection.chat(body, signal);
     if (!/^application\/x-ndjson(?:;|$)/i.test(response.headers.get('content-type') ?? '')) { await response.body?.cancel(); fail('lyra_protocol_error'); }
     await handlers.onAccepted?.();
@@ -334,7 +343,7 @@ export function openLyraAdapter(options = {}) {
         const connection = await reconnect(context.paths ? context : { ...context, paths: { localDirectory: context.localDirectory } });
         const models = catalogModels(await connection.call('GET', '/v1/models'));
         return { id: 'lyra', title: 'Lyra', connected: models.length > 0, availability: models.length ? 'granted' : 'models-unavailable', models,
-          quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: true, context: { known: false, compact: false } };
+          quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: true, context: { known: true, compact: true } };
       } catch (error) {
         return { id: 'lyra', title: 'Lyra', connected: false, availability: ['lyra_pending', 'lyra_revoked', 'lyra_scopes_required'].includes(error.code) ? error.code : 'lyra_offline',
           models: [], quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: true, context: { known: false, compact: false } };
@@ -347,7 +356,8 @@ export function openLyraAdapter(options = {}) {
       resolveLyraChoice(request.runsIn, await connection.call('GET', '/v1/models'));
       await registerLyraTools(connection);
       const nativeSessionId = randomUUID(), executionId = randomUUID();
-      sessions.set(nativeSessionId, { request, connection, executionId, nativeSessionId, unitId: request.unitId, stopped: false, turn: null, messages: [] });
+      sessions.set(nativeSessionId, { request, connection, executionId, nativeSessionId, unitId: request.unitId, stopped: false, turn: null,
+        messages: request.retainedContext?.messages ?? [], replacements: new Map() });
       return { nativeSessionId, executionId, pid: null, owned: true };
     },
     async confirm(proof) {
@@ -373,7 +383,7 @@ export function openLyraAdapter(options = {}) {
     async send(input) {
       const session = sessions.get(input.nativeSessionId);
       if (!session || session.stopped || input.unitId && input.unitId !== session.unitId) return { submitted: false };
-      if (session.turn) return { submitted: false, deferred: true };
+      if (session.turn || session.contextUpdating) return { submitted: false, deferred: true };
       const key = input.messageIds?.length ? canonicalJson(input.messageIds) : null;
       session.submissions ??= new Set();
       if (key && session.submissions.has(key)) return { submitted: true };
@@ -392,6 +402,69 @@ export function openLyraAdapter(options = {}) {
     async observe(input) {
       const session = sessions.get(input?.nativeSessionId);
       return { activity: session ? session.turn ? 'busy' : 'idle' : null, quota: null };
+    },
+    async readContext(input) { return sessions.get(input.nativeSessionId)?.meter ?? null; },
+    async contextBusy(input) { return Boolean(sessions.get(input.nativeSessionId)?.turn); },
+    async reserveContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || session.turn || session.contextUpdating) return false;
+      session.contextUpdating = true; return true;
+    },
+    async releaseContext(input) { const session = sessions.get(input.nativeSessionId); if (session) session.contextUpdating = false; },
+    async checkpointContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session) fail('context_unavailable', 409);
+      return { client: 'lyra', messages: session.messages, bootstrap: session.bootstrap ?? session.request.bootstrap ?? '' };
+    },
+    async summarizeContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || session.turn) fail('context_unavailable', 409);
+      const connection = await reconnect(session.context);
+      const history = canonicalJson(input.checkpoint.messages);
+      let summary = '';
+      for (let offset = 0; offset < history.length; offset += 7400) {
+        let output = '';
+        const messages = [...(summary ? [{ role: 'assistant', content: summary }] : []), { role: 'user',
+          content: `Summarize this conversation segment with the previous summary in at most 8000 characters. Retain decisions, constraints and pending work. Return only the summary; do not call tools.\n${history.slice(offset, offset + 7400)}` }];
+        await streamLyraTurn(connection, { messages, context: input.bootstrap, language: 'en', choice: session.request.runsIn },
+          { tools: [], deadlineMs: options.deadlineMs, onEvent: event => {
+            if (event.type === 'text') output += event.text;
+            if (output.length > 8000) fail('context_unavailable', 409);
+          } });
+        if (!output.trim() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(output)) fail('context_unavailable', 409);
+        summary = output;
+      }
+      return summary;
+    },
+    async prepareContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || session.turn) fail('context_unavailable', 409);
+      await session.tools.verify();
+      const connection = await reconnect(session.context);
+      resolveLyraChoice(session.request.runsIn, await connection.call('GET', '/v1/models'));
+      const messages = input.summary === null ? [] : [{ role: 'assistant', content: input.summary }];
+      if (typeof input.bootstrap !== 'string' || input.bootstrap.length > 12000 || messages.some(message => message.content.length > 8000)) fail('context_unavailable', 409);
+      const replacement = { acknowledged: true, generationId: randomUUID(), summary: input.summary, messages, bootstrap: input.bootstrap };
+      session.replacements.set(input.requestId, replacement);
+      return replacement;
+    },
+    async reconcileContext(input) {
+      const replacement = sessions.get(input.nativeSessionId)?.replacements.get(input.requestId);
+      return replacement ? { acknowledged: true, requestId: input.requestId, generationId: replacement.generationId,
+        replacement, summary: replacement.summary, bootstrap: replacement.bootstrap } : null;
+    },
+    async commitContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || session.turn || canonicalJson(session.replacements.get(input.requestId)) !== canonicalJson(input.replacement)) return false;
+      if (session.appliedContext === input.requestId) return true;
+      const file = path.join(session.request.probeDirectory, 'lyra-context.json'), before = await readBytes(session.context.store, file);
+      const value = { unitId: session.unitId, sessionId: session.registration.sessionId, messages: input.replacement.messages, bootstrap: input.replacement.bootstrap };
+      await commitTransaction(session.context.store, { id: randomUUID(), entries: [{ resource: file, recordPath: file, private: true,
+        beforeRevision: revisionOf(before), afterBytes: Buffer.from(canonicalJson(value)) }], events: [] });
+      session.messages = value.messages; session.bootstrap = value.bootstrap;
+      session.meter = null;
+      session.appliedContext = input.requestId;
+      return true;
     },
     async stop(input) {
       const session = [...sessions.values()].find(item => item.executionId === input.executionId && (!input.sessionId || item.registration?.sessionId === input.sessionId));
@@ -425,10 +498,10 @@ export function openLyraAdapter(options = {}) {
       if (saved && (saved.unitId !== session.unitId || saved.sessionId !== session.registration.sessionId)) fail('scope_unavailable', 409);
       let messages = [...(saved?.messages ?? session.messages), { role: 'user', content: text }];
       while (messages.length > 30 || messages.reduce((sum, message) => sum + message.content.length, 0) > 16000 && messages.length > 1) messages.shift();
-      const context = JSON.stringify({ unitId: session.unitId, role: session.tools.role, taskId: session.request.taskId, resources: session.tools.resources });
+      const context = saved?.bootstrap ?? session.bootstrap ?? await contextBootstrap(session.context, session.unitId);
       let output = '';
       const checkpoint = async () => {
-        await atomicWrite(session.context.store, file, Buffer.from(canonicalJson({ unitId: session.unitId, sessionId: session.registration.sessionId, messages })));
+        await atomicWrite(session.context.store, file, Buffer.from(canonicalJson({ unitId: session.unitId, sessionId: session.registration.sessionId, messages, bootstrap: context })));
         await protectLocalFile(file, { store: session.context.store });
       };
       boundedRequest({ messages, context, language: 'en' }, session.request.runsIn, session.tools.names);
@@ -436,6 +509,10 @@ export function openLyraAdapter(options = {}) {
       await streamLyraTurn(connection, { messages, context, language: 'en', choice: session.request.runsIn }, {
         signal: controller.signal, tools: session.tools.names, deadlineMs: options.deadlineMs,
         onAccepted: () => accept(true),
+        onOutbound: meter => {
+          session.meter = meter;
+          import('./context.mjs').then(({ readContext }) => readContext({ ...session.context, principal: { audience: 'desktop' } }, session.registration.sessionId)).catch(() => {});
+        },
         onStarted: event => { turn.started = true; return lifecycle.onLocalStarted?.(event); },
         onToolCall: (event, signal) => session.tools.call(event, signal),
         onEvent: async event => {

@@ -20,12 +20,11 @@ export async function createUnit(context, input, options = {}) {
     if (input.fresh !== undefined && typeof input.fresh !== 'boolean') throw new CoreError(422, 'invalid_body', 'Fresh must be a boolean.');
   }
   if (input?.clusterId) input = await deriveClusterUnit(context, input);
-  const run = () => createPrepared(context, input);
-  if (!options.receipt) return run();
-  return withReceipt(context.store, options.receipt, async (receipt) => {
+  const run = () => options.receipt ? withReceipt(context.store, options.receipt, async (receipt) => {
     const prepared = await prepareCreate(context, input);
     return finish(context, prepared, { ...prepared.transaction, receipt });
-  });
+  }) : createPrepared(context, input);
+  return input.role === 'overseer' ? withLocks(context.store, ['overseer:create'], run) : run();
 }
 
 async function createPrepared(context, input) {

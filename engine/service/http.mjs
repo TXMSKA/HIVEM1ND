@@ -16,7 +16,8 @@ import { openClusterEditor, readClusterChanges, readClusterGit } from './cluster
 import { answerDiscoveryOffer, createClusterLink, removeClusterLink } from './settings.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
+import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
+import { clearContext, compactContext, dismissContext, readContext } from './context.mjs';
 import { createEventBus } from './events.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replaceTextMatches, undoTextReplace, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
@@ -64,6 +65,8 @@ const ROUTES = [
   ['GET', '/session-requests/:requestId', 'read', 'DPA', 'detail', 'sessions'],
   ['POST', '/session-requests/:requestId/cancel', 'session.start', 'D', 'cancelStart'],
   ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
+  ['GET', '/sessions/:sessionId/context', 'read', 'D', 'readContext'],
+  ['POST', '/sessions/:sessionId/context', 'session.start', 'D', 'renewContext'],
   ['GET', '/layout', 'read', 'DP', 'layout'],
   ['PATCH', '/layout', 'layout.write', 'D', 'patchLayout'],
   ['GET', '/chats', 'read', 'DPA', 'collection', 'chats'],
@@ -929,6 +932,10 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
+  if (['readContext', 'renewContext'].includes(route.handler)) {
+    authorize(credential, route.operation);
+    await contextSession(domain, params.sessionId);
+  }
   if (['createClusterAgent', 'createOverseer', 'setUnitRunsIn'].includes(route.handler)) {
     clusterOwner(domain, body?.machine, { write: true });
     if (body.useAsDefault === true) authorize(credential, 'settings.write');
@@ -1017,6 +1024,8 @@ function bodyExpect(route) {
 
 function rejectUnknown(route, body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return;
+  if (route.handler === 'renewContext' && (!['compact', 'clear', 'dismiss'].includes(body.action)
+    || !/^[a-f0-9]{64}$/.test(body.expectedRevision))) throw new CoreError(422, 'invalid_body', 'A context action and its exact revision are required.');
   if (route.handler === 'enqueueStart' && ['client', 'model', 'effort', 'runsIn'].some(key => Object.hasOwn(body, key))) throw new CoreError(422, 'unsupported_launch_choice', 'Change the stored Runs in choice before starting a session.');
   if (['createClusterAgent', 'createOverseer', 'setUnitRunsIn'].includes(route.handler)) {
     if (!body.runsIn || !Object.hasOwn(body, 'expectedRevision') || route.handler !== 'createOverseer' && typeof body.useAsDefault !== 'boolean'
@@ -1090,6 +1099,7 @@ function allowedBody(route) {
     'PATCH /units/:unitId/runs-in': ['machine', 'runsIn', 'useAsDefault', 'expectedRevision'],
     'POST /session-requests/:requestId/cancel': [],
     'POST /sessions/:sessionId/stop': ['confirmed'],
+    'POST /sessions/:sessionId/context': ['action', 'expectedRevision'],
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
     'POST /chats': ['members', 'title'],
     'POST /groups': ['title', 'members'],
@@ -1400,6 +1410,11 @@ async function invoke(route, scope) {
   if (route.handler === 'stopSession') {
     const stopped = await stopSession(domain, params.sessionId, body ?? {});
     return { status: 202, body: { sessionId: stopped.sessionId, state: 'stopping' } };
+  }
+  if (route.handler === 'readContext') return { status: 200, body: await readContext(domain, params.sessionId) };
+  if (route.handler === 'renewContext') {
+    const renew = { compact: compactContext, clear: clearContext, dismiss: dismissContext }[body.action];
+    return { status: 202, body: await renew(domain, params.sessionId, body) };
   }
   if (route.handler === 'cancelStart') {
     const canceled = await cancelStart(domain, params.requestId);

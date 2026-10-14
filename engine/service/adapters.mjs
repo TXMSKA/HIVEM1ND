@@ -17,6 +17,7 @@ import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOpera
 import { assertNoLinks } from './paths.mjs';
 import { protectLocalFile } from './security.mjs';
 import { discoverLyra, openLyraAdapter } from './lyra.mjs';
+import { contextBootstrap } from './chats.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
@@ -215,6 +216,8 @@ export function createNativeAdapter(client, options = {}) {
         record.timeoutMs = options.timeoutMs ?? 30000;
         record.launchChoice = request.runsIn ?? null;
         record.permissionRequest = request;
+        record.contextBootstrap = request.bootstrap ?? '';
+        record.contextMessages = request.retainedContext?.messages ?? [];
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
         sessions.set(opened.nativeSessionId, record);
         if (client === 'claude') pumpClaude(record);
@@ -256,6 +259,9 @@ export function createNativeAdapter(client, options = {}) {
     async registered(request, registration, context) {
       const session = sessions.get(registration.nativeSessionId);
       if (session && context) {
+        session.contextOwner = context;
+        session.registration = registration;
+        await persistNativeContext(session);
         session.gitPermissions = request.gitPermissions;
         session.onCompleted = async () => {
           if (!session.taskTerminal || request.runMode !== 'task') return;
@@ -282,6 +288,7 @@ export function createNativeAdapter(client, options = {}) {
     },
     async send(input = {}) {
       const session = sessions.get(input?.nativeSessionId);
+      if (session?.contextUpdating) return { submitted: false, deferred: true };
       if (!session?.child || session.child.exitCode != null || session.child.killed === true) return { submitted: false };
       const text = typeof input.text === 'string' ? input.text : '';
       try {
@@ -294,6 +301,74 @@ export function createNativeAdapter(client, options = {}) {
     },
     async observe() {
       return { activity: null, quota: null };
+    },
+    async readContext(proof) {
+      const session = sessions.get(proof.nativeSessionId);
+      return session?.contextMeter ?? null;
+    },
+    async contextBusy(proof) {
+      const session = sessions.get(proof.nativeSessionId);
+      return Boolean(session?.turnId || session?.submission || session?.busy);
+    },
+    async reserveContext(proof) {
+      const session = sessions.get(proof.nativeSessionId);
+      if (!session || session.contextUpdating || session.turnId || session.submission || session.busy) return false;
+      session.contextUpdating = true;
+      return true;
+    },
+    async releaseContext(proof) { const session = sessions.get(proof.nativeSessionId); if (session) session.contextUpdating = false; },
+    async checkpointContext(proof) {
+      const session = sessions.get(proof.nativeSessionId);
+      if (!session) throw new CoreError(409, 'context_unavailable', 'The native context is unavailable.');
+      const threadId = session.contextThreadId ?? session.nativeSessionId;
+      let history = null;
+      if (client === 'codex' && session.rpc && proof.cached !== true) {
+        const result = await session.rpc.call('thread/read', { threadId, includeTurns: true });
+        if (result.result?.thread?.id !== threadId || Buffer.byteLength(canonicalJson(result.result.thread)) > 1048576) throw unavailable();
+        history = result.result.thread;
+      }
+      return { client, threadId, history, messages: session.contextMessages ?? [] };
+    },
+    async summarizeContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || fixture || !['codex', 'cursor'].includes(client)) throw new CoreError(409, 'context_unavailable', 'This transport has no verified summary operation.');
+      const messages = input.checkpoint?.history ?? input.checkpoint?.messages ?? [];
+      const text = `Summarize this conversation in at most 8000 characters. Retain decisions, pending work and constraints. Return only the summary. Do not call tools.\n${canonicalJson(messages)}`;
+      if (Buffer.byteLength(text) > PROMPT_MAX) throw new CoreError(409, 'context_unavailable', 'The native summary input exceeds its bound.');
+      const threadId = await newContextThread(client, session, '');
+      session.permissionRequest.contextOnlyThreads ??= new Set();
+      session.permissionRequest.contextOnlyThreads.add(threadId);
+      return nativeSummary(client, session, threadId, text);
+    },
+    async prepareContext(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || fixture || !['codex', 'cursor'].includes(client) || session.turnId || session.submission || session.busy) throw new CoreError(409, 'context_unavailable', 'This transport cannot safely replace its current context.');
+      session.contextReplacements ??= new Map();
+      if (session.contextReplacements.has(input.requestId)) return session.contextReplacements.get(input.requestId);
+      const bootstrap = input.summary === null ? input.bootstrap : `${input.bootstrap}\nConversation summary:\n${input.summary}`;
+      const threadId = await newContextThread(client, session, bootstrap);
+      const replacement = { acknowledged: true, generationId: randomUUID(), summary: input.summary, threadId, bootstrap,
+        messages: input.summary ? [{ role: 'assistant', content: input.summary }] : [] };
+      session.contextReplacements.set(input.requestId, replacement);
+      return replacement;
+    },
+    async reconcileContext(input) {
+      const replacement = sessions.get(input.nativeSessionId)?.contextReplacements?.get(input.requestId);
+      return replacement ? { acknowledged: true, requestId: input.requestId, generationId: replacement.generationId,
+        replacement, summary: replacement.summary, bootstrap: replacement.bootstrap } : null;
+    },
+    async commitContext(input) {
+      const session = sessions.get(input.nativeSessionId), replacement = input.replacement;
+      if (!session || session.contextReplacements?.get(input.requestId)?.threadId !== replacement?.threadId) return false;
+      if (session.appliedContext === input.requestId) return true;
+      session.contextThreadId = replacement.threadId;
+      session.permissionRequest.contextNativeSessionId = replacement.threadId;
+      session.contextBootstrap = replacement.bootstrap;
+      session.contextMessages = replacement.messages;
+      session.contextMeter = null;
+      await persistNativeContext(session);
+      session.appliedContext = input.requestId;
+      return true;
     },
     async requestPermission(nativeRequest) {
       const choice = (nativeRequest?.options ?? []).find((option) => option === 'allow-once' || option === 'reject-once');
@@ -413,6 +488,7 @@ export async function enqueueStart(context, input) {
     model: choice.model,
     runsIn: choice,
     effort: choice.effort,
+    fresh: role !== 'overseer' || !/^fresh:\s*false\s*$/m.test(state.toString('utf8').split(/\r?\n\r?\n/, 1)[0]),
     leadId: input.leadId ?? null,
     job: input.job ?? null,
     prompt,
@@ -566,6 +642,13 @@ async function stopOwnedSession(context, sessionId, input) {
     throw new CoreError(409, 'stop_unavailable', 'The session is not an owned native process.');
   }
   const adapter = adapterFor(context, journal.client);
+  const native = await adapter.checkpointContext?.({ ...registration, cached: true });
+  if (native) {
+    const file = path.join(context.paths.localDirectory, 'contexts', sessionId, 'native.json');
+    const before = await readBytes(context.store, file);
+    await commitTransaction(context.store, { id: randomUUID(), entries: [{ resource: file, recordPath: file, private: true,
+      beforeRevision: revisionOf(before), afterBytes: jsonBytes(native) }], events: [] });
+  }
   if (adapter.capabilities?.stop !== true || typeof adapter.stop !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot stop this session.');
   const stopped = await adapter.stop({ owned: true, pid: journal.pid, executionId: journal.executionId, sessionId });
   if (stopped.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native process did not acknowledge the stop.');
@@ -681,6 +764,28 @@ async function registrationFor(context, sessionId) {
   return cli ? { ...latest, launchKind: 'cli', runMode: cli.runMode, taskId: cli.taskId } : latest;
 }
 
+export async function contextSession(context, sessionId) {
+  const registration = await registrationFor(context, sessionId);
+  if (!registration) throw new CoreError(404, 'session_not_found', 'The session does not exist.');
+  if (registration.machine !== context.paths.machine) throw new CoreError(409, 'machine_unavailable', 'Renew context on its immutable owner.');
+  const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.phase === 'registered');
+  const adapter = adapterFor(context, registration.client);
+  if (!ownsSessionExecution(context, journal) || await adapter.confirm(registration) !== true) throw new CoreError(409, 'context_unavailable', 'The native context is not owned and live.');
+  return { registration, adapter };
+}
+
+async function previousContext(context, request) {
+  if (request.fresh !== false) return null;
+  const journals = (await listJournals(context)).filter(item => item.unitId === request.unitId && item.client === request.client
+    && item.sessionId && item.requestId !== request.id).sort((a, b) => (b.contextSequence ?? 0) - (a.contextSequence ?? 0)
+      || String(b.at).localeCompare(String(a.at)));
+  for (const journal of journals) {
+    const bytes = await readBytes(context.store, path.join(context.paths.localDirectory, 'contexts', journal.sessionId, 'native.json'));
+    if (bytes) return JSON.parse(bytes);
+  }
+  return null;
+}
+
 async function launch(context, request) {
   if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) {
     return { status: 200, request, result: await cancelOwnedStart(context, request), replayed: true };
@@ -739,7 +844,7 @@ async function launch(context, request) {
       return { ...context, principal: { audience: 'agent', unitId: request.unitId,
         sessionId: uuidV8(['session', context.paths.machine, request.client, created.nativeSessionId, request.unitId]) } };
     };
-    created = await adapter.create({ ...request, cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+    created = await adapter.create({ ...request, bootstrap: await contextBootstrap(context, request.unitId), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
       nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
@@ -767,7 +872,10 @@ async function launch(context, request) {
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
   if (scope) await bindLaunchScope(context, scope.scope, registration, pid, created.executionId);
-  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
+  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId,
+    contextSequence: Math.max(0, ...journals.map(item => item.contextSequence ?? 0)) + 1, createAttempted: true, ...permissionBinding, at: stamp(context) });
+  const { createContext } = await import('./context.mjs');
+  await createContext(context, registration, adapter);
   try {
     if (adapter.capabilities?.scopedContent) {
       const proof = { unitId: request.unitId, client: request.client, nativeSessionId: created.nativeSessionId, machine: context.paths.machine, sessionId: registration.sessionId };
@@ -821,10 +929,7 @@ async function preload(context, request) {
   if (await readJson(context, markerPath)) return null;
   const messageId = request.id;
   const assignment = request.prompt ?? `Carry out assigned task ${request.taskId}.`;
-  const lifecycle = request.runMode === 'task'
-    ? `After terminal delivery or failure of ${request.taskId ?? 'this task'}, call session_complete with outcome delivered or failed. The CLI closes only after native completion.`
-    : 'This chat remains open until explicitly stopped. Use session_open to request another connected CLI with approval.';
-  const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\nrun-mode: ${request.runMode}\ntask-id: ${request.taskId ?? ''}\ntimestamp: ${stamp(context)}\n\n${assignment}\n\n${lifecycle}\n`);
+  const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\nrun-mode: ${request.runMode}\ntask-id: ${request.taskId ?? ''}\ntimestamp: ${stamp(context)}\n\n${assignment}\n`);
   const message = `${inboxDirectory(parseUnitId(request.unitId))}/${stamp(context).replace(/[-:]/g, '').replace('.000Z', '').replace('T', '-')}-${context.paths.machine}-${messageId}.md`;
   await commit(context, [
     { relative: markerPath, bytes: jsonBytes({ requestId: request.id, messageId }) },
@@ -1170,12 +1275,13 @@ function releaseSession(sessions, pid) {
 }
 
 async function submitCodex(session, text) {
+  rememberContextInput(session, text);
   const input = [{ type: 'text', text }];
   // turn/steer echoes turnId. turn/start is the call that returns turn.id.
   const expected = typeof session.turnId === 'string' && session.turnId ? session.turnId : null;
   const started = expected
-    ? await session.rpc.call('turn/steer', { threadId: session.nativeSessionId, expectedTurnId: expected, input })
-    : await session.rpc.call('turn/start', { threadId: session.nativeSessionId, input,
+    ? await session.rpc.call('turn/steer', { threadId: session.contextThreadId ?? session.nativeSessionId, expectedTurnId: expected, input })
+    : await session.rpc.call('turn/start', { threadId: session.contextThreadId ?? session.nativeSessionId, input,
       ...(session.launchChoice ? { model: session.launchChoice.model, effort: session.launchChoice.effort } : {}) });
   if (expected) {
     const turnId = started?.result?.turnId;
@@ -1189,9 +1295,10 @@ async function submitCodex(session, text) {
 }
 
 async function submitCursor(session, text) {
+  rememberContextInput(session, text);
   const prompted = await session.rpc.call('session/prompt', {
-    sessionId: session.nativeSessionId,
-    prompt: [{ type: 'text', text }],
+    sessionId: session.contextThreadId ?? session.nativeSessionId,
+    prompt: [{ type: 'text', text: session.contextBootstrap ? `${session.contextBootstrap}\n${text}` : text }],
   });
   if (!prompted?.result || typeof prompted.result !== 'object') return { submitted: false, ambiguous: true };
   if (typeof prompted.result.stopReason === 'string') await session.onCompleted?.();
@@ -1206,6 +1313,7 @@ async function localResult(context, request, state, sessionId, error) {
 }
 
 async function submitClaude(session, text) {
+  rememberContextInput(session, text);
   if (session.submission) return { submitted: false, ambiguous: true };
   let timer;
   const submitted = new Promise((resolve) => {
@@ -1258,6 +1366,8 @@ async function pumpClaude(session) {
 
 function startupInstruction(request) {
   const lines = [`Unit: ${request.unitId ?? ''}`];
+  if (request.bootstrap) lines.push(request.bootstrap);
+  if (request.retainedContext?.messages?.length) lines.push(`Kept native context: ${canonicalJson(request.retainedContext.messages)}`);
   if (typeof request.job === 'string' && request.job) lines.push(`Job: ${request.job}`);
   if (typeof request.leadId === 'string' && request.leadId) lines.push(`Lead: ${request.leadId}`);
   lines.push('Read the unit role, job and lead from the registered files and stay ready.');
@@ -1293,7 +1403,7 @@ function noteTurn(session, message) {
   const turn = params.turn;
   const turnId = turn && typeof turn === 'object' && !Array.isArray(turn) ? turn.id : null;
   if (typeof params.threadId !== 'string' || typeof turnId !== 'string' || !turnId) return;
-  if (params.threadId !== session.nativeSessionId) return;
+  if (params.threadId !== (session.contextThreadId ?? session.nativeSessionId)) return;
   if (!Array.isArray(session.closedTurns)) session.closedTurns = [];
   if (session.closedTurns.length >= 16) session.closedTurns.shift();
   session.closedTurns.push(turnId);
@@ -1355,6 +1465,7 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
         break;
       }
       if (message?.method && message.id == null) {
+        noteContext(session, message);
         if (message.method === 'serverRequest/resolved') nativeRequests.get(message.params?.requestId)?.abort.abort();
         if (message.method === 'item/started' && message.params?.item?.id) {
           if (request.nativeItems.size >= 256) request.nativeItems.delete(request.nativeItems.keys().next().value);
@@ -1444,6 +1555,17 @@ async function codexHandshake(rpc, request) {
   rpc.notify('initialized');
   const account = await rpc.call('account/read', {});
   if (!accountReady(account)) throw unavailable();
+  const params = codexThreadParams(request);
+  const thread = await rpc.call(request.retainedContext?.threadId ? 'thread/fork' : 'thread/start',
+    { ...params, ...(request.retainedContext?.threadId ? { threadId: request.retainedContext.threadId } : {}) });
+  if (!thread.result?.thread?.id) throw unavailable();
+  if (request.runsIn && (thread.result.model !== request.runsIn.model || thread.result.reasoningEffort !== request.runsIn.effort
+    || thread.result.sandbox?.type !== 'readOnly')) throw new CoreError(409, 'scope_unavailable', 'The client did not confirm its effective native policy and launch choice.');
+  request.nativeSessionId = thread.result.thread.id;
+  return thread.result.thread.id;
+}
+
+function codexThreadParams(request) {
   const params = { cwd: request.cwd };
   if (request.nativeMcp) {
     const { name, command, args } = request.nativeMcp;
@@ -1455,12 +1577,8 @@ async function codexHandshake(rpc, request) {
     params.sandbox = 'read-only';
     params.config = { ...params.config, model_reasoning_effort: request.runsIn.effort };
   }
-  const thread = await rpc.call('thread/start', params);
-  if (!thread.result?.thread?.id) throw unavailable();
-  if (request.runsIn && (thread.result.model !== request.runsIn.model || thread.result.reasoningEffort !== request.runsIn.effort
-    || thread.result.sandbox?.type !== 'readOnly')) throw new CoreError(409, 'scope_unavailable', 'The client did not confirm its effective native policy and launch choice.');
-  request.nativeSessionId = thread.result.thread.id;
-  return thread.result.thread.id;
+  if (request.bootstrap) params.config = { ...params.config, developer_instructions: startupInstruction(request) };
+  return params;
 }
 
 async function cursorHandshake(rpc, request) {
@@ -1496,7 +1614,8 @@ export async function nativePermissionReply(message, request = {}) {
   const permission = async operation => {
     if (typeof request.nativePermission !== 'function' || request.nativeBoundary?.verified !== true) return false;
     const nativeId = params.threadId ?? params.sessionId ?? message.session_id ?? request.nativeSessionId;
-    if (!request.nativeSessionId || nativeId !== request.nativeSessionId) return false;
+    if (!request.nativeSessionId || nativeId !== (request.contextNativeSessionId ?? request.nativeSessionId)
+      || request.contextOnlyThreads?.has(nativeId)) return false;
     try { return await request.nativePermission({ ...operation, id: message.id ?? message.request_id, protocol: request.runsIn?.client,
       nativeSessionId: request.nativeSessionId, payload: operation.payload ?? params }, request.nativeBoundary) === true; } catch { return false; }
   };
@@ -1526,7 +1645,8 @@ export async function nativePermissionReply(message, request = {}) {
   if (['execCommandApproval', 'applyPatchApproval'].includes(message.method)) return reply({ decision: 'denied' });
   if (['fs/read_text_file', 'fs/write_text_file'].includes(message.method)) {
     try {
-      if (!request.nativeSessionId || params.sessionId !== request.nativeSessionId) throw unavailable();
+      if (!request.nativeSessionId || params.sessionId !== (request.contextNativeSessionId ?? request.nativeSessionId)
+        || request.contextOnlyThreads?.has(params.sessionId)) throw unavailable();
       if (message.method === 'fs/read_text_file') {
         const result = await request.scopedRead?.({ path: params.path });
         if (!result) throw unavailable();
@@ -1665,6 +1785,82 @@ async function probeNativeChoices(client, options, context) {
       await assertNoLinks(directory); await rm(directory, { recursive: true, force: true });
     }
   }
+}
+
+async function persistNativeContext(session) {
+  if (!session.contextOwner || !session.registration) return;
+  const context = session.contextOwner, file = path.join(context.paths.localDirectory, 'contexts', session.registration.sessionId, 'native.json');
+  const before = await readBytes(context.store, file);
+  const after = jsonBytes({ client: session.registration.client, threadId: session.contextThreadId ?? session.nativeSessionId,
+    messages: session.contextMessages ?? [] });
+  if (before?.equals(after)) return;
+  await commitTransaction(context.store, { id: randomUUID(), entries: [{ resource: file, recordPath: file, private: true,
+    beforeRevision: revisionOf(before), afterBytes: after }], events: [] });
+}
+
+function rememberContextInput(session, text) {
+  session.contextMessages ??= [];
+  session.contextMessages.push({ role: 'user', content: text });
+  if (Buffer.byteLength(canonicalJson(session.contextMessages)) > PROMPT_MAX) session.contextIncomplete = true;
+}
+
+function noteContext(session, message) {
+  const params = message.params ?? {}, active = session.contextThreadId ?? session.nativeSessionId;
+  session.summaryObserver?.(message);
+  if ((params.threadId ?? params.sessionId) !== active) return;
+  if (message.method === 'thread/tokenUsage/updated') {
+    const used = params.tokenUsage?.last?.totalTokens, capacity = params.tokenUsage?.modelContextWindow;
+    session.contextMeter = Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(capacity) && capacity > 0
+      ? { used, capacity, unit: 'tokens', estimated: false } : null;
+    const owner = session.contextOwner;
+    if (owner) import('./context.mjs').then(({ readContext }) => readContext({ ...owner, principal: { audience: 'desktop', unitId: 'root:master' } }, session.registration.sessionId)).catch(() => {});
+  }
+  if (message.method === 'item/completed' && params.item?.type === 'agentMessage' && typeof params.item.text === 'string') {
+    session.contextMessages ??= [];
+    session.contextMessages.push({ role: 'assistant', content: params.item.text });
+  }
+  if (message.method === 'session/update' && params.update?.sessionUpdate === 'agent_message_chunk' && typeof params.update.content?.text === 'string') {
+    session.contextMessages ??= [];
+    const last = session.contextMessages.at(-1);
+    if (last?.role === 'assistant') last.content += params.update.content.text;
+    else session.contextMessages.push({ role: 'assistant', content: params.update.content.text });
+  }
+}
+
+async function newContextThread(client, session, bootstrap) {
+  const request = session.permissionRequest;
+  if (client === 'codex') {
+    const response = await session.rpc.call('thread/start', codexThreadParams({ ...request, bootstrap }));
+    if (!response.result?.thread?.id || response.result.model !== request.runsIn.model
+      || response.result.reasoningEffort !== request.runsIn.effort || response.result.sandbox?.type !== 'readOnly') throw unavailable();
+    return response.result.thread.id;
+  }
+  return cursorHandshake(session.rpc, { ...request });
+}
+
+async function nativeSummary(client, session, threadId, text) {
+  let output = '', complete, fail, timer;
+  const done = new Promise((resolve, reject) => { complete = resolve; fail = reject;
+    timer = setTimeout(() => reject(new CoreError(409, 'context_unavailable', 'The native summary was not confirmed.')), session.timeoutMs); });
+  session.summaryObserver = message => {
+    const params = message.params ?? {};
+    if ((params.threadId ?? params.sessionId) !== threadId) return;
+    if (message.method === 'item/completed' && params.item?.type === 'agentMessage') output += params.item.text ?? '';
+    if (message.method === 'session/update' && params.update?.sessionUpdate === 'agent_message_chunk') output += params.update.content?.text ?? '';
+    if (output.length > 8000) fail(new CoreError(409, 'context_unavailable', 'The native summary exceeds its bound.'));
+    if (message.method === 'turn/completed') params.turn?.status === 'completed' ? complete(output) : fail(unavailable());
+  };
+  done.catch(() => {});
+  try {
+    if (client === 'codex') {
+      const response = await session.rpc.call('turn/start', { threadId, input: [{ type: 'text', text }], model: session.launchChoice.model, effort: session.launchChoice.effort });
+      if (!response.result?.turn?.id) throw unavailable();
+      return await done;
+    }
+    const response = await session.rpc.call('session/prompt', { sessionId: threadId, prompt: [{ type: 'text', text }] });
+    if (response.result?.stopReason !== 'end_turn') throw unavailable();
+    return output;
+  } finally { clearTimeout(timer); session.summaryObserver = null; }
 }
 
 function sendLine(child, message) {

@@ -6,7 +6,7 @@ import { DESKTOP } from './security.mjs';
 
 export const EVENT_NAMES = [
   'stream.ready', 'stream.reset', 'service.changed', 'unit.changed', 'view.changed',
-  'session.changed', 'session.request.changed', 'chat.changed', 'cluster.changed', 'group.changed', 'message.created', 'message.read',
+  'session.changed', 'session.request.changed', 'session.context', 'chat.changed', 'cluster.changed', 'group.changed', 'message.created', 'message.read',
   'notification.changed', 'approval.requested', 'approval.answered', 'approval.grant.changed',
   'task.changed', 'layout.changed', 'settings.changed', 'home.changed', 'blueprint.changed',
   'void.changed', 'editor.attachments.changed', 'comment.changed', 'void.proposal.changed',

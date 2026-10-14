@@ -13,6 +13,7 @@ import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, wa
 import { createPulse } from '../sync/pulse.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
+import { recoverContexts } from './context.mjs';
 import { createRelay, parseRoutes } from '../relay/store.mjs';
 import { machineRecordPath, parseMachineRecord } from '../records.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
@@ -150,6 +151,7 @@ export async function startService(options, retained = null) {
     options.store.ownedExecutions = bridgeRuntime.ownedExecutions;
     handle.runtime.settingsOwner.adapters = { ...handle.runtime.settingsOwner.adapters, lyra: bridgeRuntime.adapters.lyra };
     handle.bridge.adapters = handle.adapters.adapters;
+    await recoverContexts({ ...options, paths, bus, now: options.now ?? (() => Date.now()) });
     handle.http = await createHttpServer({
       ...options,
       assetDir: options.assetDir ?? fileURLToPath(new URL('../../gui/app/', import.meta.url)),
@@ -597,6 +599,7 @@ export async function composeCore(options) {
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
   const bootstrap = { valid: false, secret: null, secretBytes: null, file: null, record: null };
   const runtime = await openServiceSync({ ...options, paths, bus }, paths);
+  await recoverContexts({ ...options, paths, bus, now: options.now ?? (() => Date.now()) });
   const http = await createHttpServer({
     ...options,
     assetDir: options.assetDir ?? fileURLToPath(new URL('../../gui/app/', import.meta.url)),
