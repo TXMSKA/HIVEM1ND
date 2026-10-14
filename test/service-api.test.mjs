@@ -836,6 +836,11 @@ test('every contract route has a success result and an authority or boundary fai
   await mkdir(origin, { recursive: true });
   await mkdir(localPath, { recursive: true });
   const paths = { ...fixture.paths, origin };
+  const permissionId = randomUUID();
+  await writeFile(path.join(paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{
+    id: permissionId, machine: fixture.machine, client: 'codex', actions: ['git.commit', 'git.push'],
+    scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master',
+  }] }));
   const transcript = [
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"hivem1nd","title":"HIVEM1ND","version":"3.0.0"}}}',
     '{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/work","model":"strong"}}',
@@ -847,12 +852,11 @@ test('every contract route has a success result and an authority or boundary fai
     now: () => fixture.clock.now,
     projects: [{ name: 'shop', localPath }],
     adapters: { codex: createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }) },
-    // Later tasks supply the reviewed configuration, permission and cluster executors.
+    // Later tasks supply the reviewed configuration and cluster executors.
     settingsHandlers: {
       preview: async ({ context }) => ({ previewId: randomUUID(), revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, expiresAt: new Date(fixture.clock.now + 30000).toISOString(), changes: [], restartRequired: false }),
       apply: async ({ context, id }) => ({ machine: fixture.machine, client: id, state: 'connected', revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, keptCopies: 0 }),
       disconnect: async ({ context, id }) => ({ machine: fixture.machine, client: id, state: 'disconnected', revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision }),
-      revoke: async ({ context, id }) => ({ permissionId: id, state: 'revoked', revision: (await readMachineSettings(context, fixture.machine, 'permissions')).revision }),
       folder: async ({ context }) => readMachineSettings(context, fixture.machine, 'projects'),
       removeProject: async ({ context, id }) => ({ projectId: id, changeId: randomUUID(), undoUntil: new Date(fixture.clock.now + 10000).toISOString(), revision: (await readMachineSettings(context, fixture.machine, 'projects')).revision }),
       service: async ({ context, input }) => ({ ...(await readMachineSettings(context)).service, startWithWindows: input.startWithWindows }),
@@ -906,7 +910,7 @@ test('every contract route has a success result and an authority or boundary fai
   const projectsReport = await call(port, 'GET', '/api/v1/settings/projects', { token });
   const contentReport = await readContent(core.runtime.settingsOwner);
   const previewId = randomUUID();
-  const permissionId = randomUUID();
+  assert.deepEqual(permissionsReport.json.data.agentPermissions.map(item => item.id), [permissionId]);
   const settingsRoutes = [
     ['POST', '/settings/agents/scan', '/settings/agents/scan', { machine: fixture.machine }],
     ['POST', '/settings/agents/find', '/settings/agents/find', { machine: fixture.machine, client: 'codex', path: knownBinary }],
@@ -930,6 +934,16 @@ test('every contract route has a success result and an authority or boundary fai
     expectStatus(result, template === '/settings/service/restart' ? 202 : 200, template);
     const replay = await call(port, method, `/api/v1${target}`, { token, body, headers: { 'idempotency-key': key } });
     assert.deepEqual(replay.json.data, result.json.data);
+    if (template === '/settings/permissions/:permissionId') {
+      assert.equal(result.json.data.permissionId, permissionId);
+      assert.equal(result.json.data.state, 'revoked');
+      const report = await call(port, 'GET', '/api/v1/settings/permissions', { token });
+      assert.deepEqual(report.json.data.agentPermissions, []);
+      assert.equal(report.json.data.revision, result.json.data.revision);
+      const missing = await call(port, method, `/api/v1${target}`, { token, body: { ...body, expectedRevision: report.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+      expectStatus(missing, 404, 'Settings missing permission');
+      assert.equal(missing.json.error.code, 'permission_not_found');
+    }
     expectStatus(await call(port, method, `/api/v1${target}`, { token, body: { ...body, unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'Settings unknown body');
     assert.equal(routeTable().find(route => route.method === method && route.template === template).operation, 'settings.write');
     for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, method, `/api/v1${target}`, { token: denied, body, headers: { 'idempotency-key': randomUUID() } }), 403, 'Settings authority');
