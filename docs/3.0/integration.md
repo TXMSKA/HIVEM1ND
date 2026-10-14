@@ -12,12 +12,12 @@ The branch, HEAD and merge base were verified on 2026-10-13. The supplied board 
 - `npm run build`: exit 1. Source syntax checks completed, then `scripts/build.mjs:44` failed while running `npm pack`: `EPERM`, syscall `open`, in the npm cache temporary directory. No test cases run by build, so test pass/fail counts do not apply. The package archive gate remains failed. No source fix is inferred from a cache permission failure.
 
 The four scripts were invoked again after the board revision to 83 screens. Windows commands use `npm.cmd`, the same npm scripts, because PowerShell blocks `npm.ps1`; no execution policy was changed.
-The baseline is evidence about the supplied candidate. Proposed test code below has not been implemented or run. Browser checks are future gates, not observations from this planning session.
-Document checks passed: 64 sequential tasks, 36 MECHANICAL and 28 JUDGMENT, no forward dependencies, eleven contract blocks and 83 unique screen entries in the seven required row counts. Literal edit programs for T001, T002 and T048 passed a read-only simulation with writes intercepted in memory. The final documentation lint inspected 231 files with zero issues; the build baseline remains failed.
+The baseline is evidence about the supplied candidate. At the original planning baseline, proposed test code had not been implemented or run. Browser checks are future gates, not observations from this planning session.
+Original document checks passed: 64 sequential tasks, 36 MECHANICAL and 28 JUDGMENT, no forward dependencies, eleven contract blocks and 83 unique screen entries in the seven required row counts. Literal edit programs for T001, T002 and T048 passed a read-only simulation with writes intercepted in memory. The original final documentation lint inspected 231 files with zero issues; the build baseline remains failed.
 
 ## Governing requirements
 
-Only `final.md` decisions 1 to 23 and packages P0 to P13 apply. After the P13 addition at `10b62b4`, the final board has row counts 10, 22, 11, 14, 11, 12 and 7, totaling 87 screens. The baseline and its original document-check counts remain historical evidence. T001 to T006 are committed and their task text is retained.
+Only `final.md` decisions 1 to 25 and packages P0 to P15 apply. The 91-screen `hivem1nd-3-flow` board and the 17-screen `hivem1nd-3-start` board are joint sources; start wins on disagreement. References use `start 2.4` for the new board. The latter replaces fourteen old visual references in T064; 108 references yield 94 active states and 14 documented replacements. T001 to T044 are committed and their complete task text remains unchanged. Baseline counts remain historical.
 Older references in resolved review comments are historical. Current screen references and notes govern. The earlier 67-screen specification, sync picker, four Settings tabs and phone standing approvals are superseded.
 
 MECHANICAL tasks contain literal patches or complete additions and tests. JUDGMENT tasks remain with the planner, who resolves the named implementation decision and implements the task before its dependents proceed.
@@ -28,6 +28,12 @@ All new tests use temporary fixture data and injected OS/native runners. No test
 Visual shorthand uses CSS pixels throughout: `padding 10x14` means 10 vertical and 14 horizontal pixels; `padding 10x12x10x14` means top/right/bottom/left; `24/700` means 24-pixel text at weight 700; `14.5/body` means 14.5-pixel text with the body token. Width, height, radius, gap, coordinates and hit-target values are literal. Board token aliases map `acc` to `--accent`, `accInk` to `--accent-ink`, `accSoft` to `--accent-soft`, `wait` to `--waiting`, `waitSoft` to `--waiting-soft`, `ok` to `--working`, and other names to their matching CSS custom properties. A token name never authorizes choosing another color.
 
 ## Contract amendments, before implementation
+
+Replan review on 2026-10-14, against branch head 29647b5 and the start board at 1fad70c: T046, T047, T048, T049, T050, T056, T057, T058 and T066 retain their complete text and scope. T045 retains implementation/Proof and gains only the explicit named-stash resume instruction. T051/T052/T053/T055 revise machine reports, configuration and permission boundaries; T059 revises phone hierarchy integration; T060/T061/T062 extend active-state coverage; T065/T067/T068/T069/T070/T071 reconcile Add with canonical clusters and zero-agent repository acceptance. T054 is replaced by Content in T051 and links in T078/T091; T072 is replaced by T094. T063/T064 become the joint final gates. No committed T001 to T044 task text is changed.
+
+P15 adds 22 tasks, 12 MECHANICAL and 10 JUDGMENT. The complete plan has 94 task numbers: 53 MECHANICAL, 39 JUDGMENT and 2 RETIRED. Future task Proof commands have not been claimed as executed. Planning-only checks run the literal proposed pure modules/tests in memory, without creating source/test files or opening services; full native/browser/build verification remains an execution gate.
+
+Planning checks on 2026-10-14: all 33 proposed P13/P15 JavaScript blocks parse; 35 literal tests pass in memory, with 0 failed, 0 canceled and 0 skipped. The C13/C14/C15 insertion program passes with writes intercepted and all earlier contract bytes retained. T001 to T044 and the nine kept task sections match the committed text; all 94 task numbers are unique, dependencies precede their consumers and none depends on a retired task. The GUI list has 91 flow entries, 17 start entries and 14 explicit replacements. Documentation lint inspects 231 files with 0 issues. These checks do not constitute a native, browser or package-build pass.
 
 T001 inserts the following normative text into `docs/3.0/contract.md`. Existing authentication, idempotency, byte revisions, journal recovery, origin ownership, limits and unknown-field retention continue to apply.
 Each block identifies its insertion section. Where an existing sentence or route disagrees, the block replaces that definition, rather than leaving two normative definitions.
@@ -2144,6 +2150,7 @@ test('caret mapping keeps markup boundaries and source offsets distinct', () => 
 
 - Screens: 5.4, 5.5, 5.7, 5.10, 5.11. Decisions: 8, 19, 22. Kind: JUDGMENT.
 - Files: `features/void/text.mjs`, `plain`; `features/void/comments.mjs`, source/plain anchor relocation; `features/void/reader.html`, existing selection/editor semantics used as reference; `gui/app/markup.mjs`, tokenizer/render/offset metadata; `gui/app/void.mjs`, Document/save/caret/focus integration; `gui/app/main.mjs`, `voidSurface`, `saveVoid`, selection/format/source/focus tools; `engine/service/editors.mjs`, source and anchor validation; `gui/app/i18n.mjs`, format/save/source strings; `gui/app/styles.css`, in-place/format/source/focus rules; `test/void.test.mjs`, `test/service-editors.test.mjs`, `test/gui-editors.test.mjs`, `test/gui-shell.test.mjs`, `test/gui-fixture.mjs`.
+- Resume: implementation scope and Proof remain unchanged. Before execution, find the stash by the exact subject `T045 partial (Void editor), stopped for the start-working replan 2026-10-14`, verify its seven paths are engine/service/editors.mjs, features/void/comments.mjs, features/void/text.mjs, gui/app/i18n.mjs, gui/app/main.mjs, gui/app/markup.mjs and gui/app/void.mjs, then apply that stash once without dropping it. Inspect and finish its partial changes under this task's original file boundary. A conflict or another path stops the apply until reconciled; no unrelated stash is applied. This planning session does not apply it.
 - Change: decide the lossless Markdown/legacy token mapping, newline normalization and browser editing model. Adapt existing Void behavior, stable k/language blocks and safe DOM rendering; do not build a parallel document format. Render Markdown and legacy b/i consistently in core and browser. Keep raw unsupported HTML literal. Validate link protocols and project asset identity. A selected passage shows exactly Bold/Italic/Strikethrough, H1/H2/H3, List/Quote/Code/Link/Table/Image/Comment in that order; collapsed selection hides it. Continuous save uses T042, retained editor drafts and generation-aware acknowledgment. Not saved appears at failure, Retry retains its exact operation; the current saveVoid's unconditional draft deletion must be removed. Source shows exact Markdown and caret via T044; returning preserves page/language/selection. Focus retains pure black, same text/draft/caret, arrows and mouse/Escape behavior.
 - Visual: document 640x760, top 70, padding 44x56, radius 20, panel; title 26/700, subtitle 13/mute, body 15.5/1.65, heading 16/700; format bar gap 1, padding 4, radius 12, card2, line2, controls 32/radius 7, icons 14; selectionaccent-soft/caret 2x20accent. Source 640x760, top 70, padding 36x40, gap 6, radius 20, mono 13/1.6. Not-saved banner top 66, error-soft, radius 14, Retry; document top 110, height 720. Focus text 640, top 120, gap 18, title 28, body 17/1.8, caret 2x22; tools top 18, padding 8x10, gap 10, radius 14, panel/line; page dots 22 selected/8 other at bottom 28.
 - Copy: `Saving` / `Guardando`; `Saved` / `Guardado`; `Not saved` / `Sin guardar`; `The change was not saved: the M1ND folder did not answer. The text stays here.` / `No se guardó el cambio: la carpeta del M1ND no respondió. El texto permanece aquí.`; `Bold` / `Negrita`; `Italic` / `Cursiva`; `Strikethrough` / `Tachado`; `List` / `Lista`; `Quote` / `Cita`; `Code` / `Código`; `Link` / `Enlace`; `Table` / `Tabla`; `Image` / `Imagen`; `Source` / `Fuente`; `The source view keeps the caret where it was in the Document view.` / `La vista de fuente conserva la posición del cursor de la vista Documento.`; `Document` / `Documento`; `Page {page} of {pages}` / `Página {page} de {pages}`.
@@ -2375,50 +2382,47 @@ test('look previews keep wire identity separate from visible names', () => {
 
 #### T051. Publish machine-owned Settings reports and route mutations to their owner
 
-- Screens: 6.1, 6.2, 6.4, 6.6, 6.8. Decisions: 7, 12, 13. Kind: JUDGMENT.
-- Files: new `engine/service/settings.mjs`, `readMachineSettings`, `scanAgents`, `findAgent`, `readContent`, `writeContent`; `engine/service/http.mjs`, C09 GET/mutation/schema/body/query; `engine/service/service.mjs`, composeCore/settings owner execution/report publication; `engine/service/projection.mjs`, service/locations/sanitized report; `engine/records.mjs`, machine report compatibility; `engine/discovery.mjs`, existing agents/content/projects discovery; `engine/sync/store.mjs`, eligible machine report records; `engine/service/import-events.mjs`, machine.settings.changed; `test/service-settings.test.mjs`, new; `test/service-api.test.mjs`, `test/sync-apply.test.mjs`, `test/gui-fixture.mjs`.
-- Change: decide authenticated remote owner request/result records using existing service request infrastructure, with revision checks and offline read-only reports. Implement C09 schema exactly. Agents/Permissions/Projects/Locations are per selected machine; look/language/person comment preference and Content remain shared. Scanning/find is bounded, uses known adapters and never executes arbitrary binary/path commands. Reports include found version, connected CLI vs optional app, mode and change count. Publish sanitized machine-owned reports only; never client file contents, kept copies or credentials. Locations are actual paths from servicePaths, not the board's sample staging path. Offline mutation returns machine_unavailable, not local fallback.
-- Tests: each route read/mutation/unknown-field; machine report integrity and last-report offline fallback; no secret/config-content serialization; remote owner-only execution; stale/replayed request; scan repeated idempotency; available/missing clients; malformed/unavailable paths; content preference retention and machine scope.
-- Proof: `node --test test/service-settings.test.mjs test/service-api.test.mjs test/sync-apply.test.mjs`; zero failures; a selected offline machine causes zero local configuration writes.
+- Screens: 6.1, 6.2, 6.4, 6.6, 6.8. Decisions: 7, 12, 13, 25. Kind: JUDGMENT.
+- Files: `engine/install.mjs`, managed Content preview/application; `test/setup-knowledge.test.mjs`, `test/install-ownership.test.mjs`; new `engine/service/settings.mjs`, `readMachineSettings`, `scanAgents`, `findAgent`, `readContent`, `writeContent`; `engine/service/http.mjs`, C09 GET/mutation/schema/body/query; `engine/service/service.mjs`, composeCore/settings owner execution/report publication; `engine/service/projection.mjs`, service/locations/sanitized report; `engine/records.mjs`, machine report compatibility; `engine/discovery.mjs`, existing agents/content/projects discovery; `engine/sync/store.mjs`, eligible machine report records; `engine/service/import-events.mjs`, machine.settings.changed; `test/service-settings.test.mjs`, new; `test/service-api.test.mjs`, `test/sync-apply.test.mjs`, `test/gui-fixture.mjs`.
+- Change: implement Content discovery, managed inclusion/preference writes and ownership-preserving client preview/application formerly in T054. Preserve feature/knowledge data and shared preferences. Do not create root/environment discovery UI or auto-register discoveries: the first-open repository offer and cluster links are T078/T091. Settings reports expose existing registered projects for compatibility; T078 extends them with cluster links. Client reports are extended by T079/T080 with verified model/effort/mode/quota capabilities and by T078 with links; no quota is invented from installation.
+  Decide: decide authenticated remote owner request/result records using existing service request infrastructure, with revision checks and offline read-only reports. Implement C09 schema exactly. Agents/Permissions/Projects/Locations are per selected machine; look/language/person comment preference and Content remain shared. Scanning/find is bounded, uses known adapters and never executes arbitrary binary/path commands. Reports include found version, connected CLI vs optional app, mode and change count. Publish sanitized machine-owned reports only; never client file contents, kept copies or credentials. Locations are actual paths from servicePaths, not the board's sample staging path. Offline mutation returns machine_unavailable, not local fallback.
+- Tests: each route read/mutation/unknown-field; machine report integrity and last-report offline fallback; no secret/config-content serialization; remote owner-only execution; stale/replayed request; scan repeated idempotency; available/missing clients; malformed/unavailable paths; content preference retention and machine scope; feature categories planning/quality/continuity plus other, all knowledge packs, addressStyle/additionalInstructions/keepExistingPreferencesFirst/updateChecks, shared preference sync and unchanged foreign preferences.
+- Proof: `node --test test/service-settings.test.mjs test/service-api.test.mjs test/sync-apply.test.mjs test/setup-knowledge.test.mjs test/install-ownership.test.mjs`; zero failures; a selected offline machine causes zero local configuration writes.
 - Depends on: T005, T048. Commit message: `Read and change Settings on the selected machine`.
 
 #### T052. Review exact client configuration changes before applying them
 
 - Screens: 6.2, 6.3. Decisions: 12. Kind: JUDGMENT.
 - Files: `engine/service/settings.mjs`, preview/apply/disconnect exports; `engine/relay/config.mjs`, `buildClientConfig`, `atomicConfigWrite`, `configureRelayClient`, `unconfigureRelayClient`, backup merge/restore; `engine/install.mjs`, owned preview/apply assets; `engine/service/http.mjs`, client preview/apply/disconnect; `engine/service/adapters.mjs`, connected-client readiness and explicit reload; `test/service-settings.test.mjs`, `test/relay-config.test.mjs`, `test/install-ownership.test.mjs`, `test/gui-fixture.mjs`.
-- Change: decide protected preview binding, backup restoration and selected session scope without granting broad client permissions. Auto/On demand and app connect first produce a read-only preview with exact file descriptions, hashes and selected changes. Changes needed are pending until explicit Apply; Copy changes writes only clipboard text. Use existing pure configuration transforms and kept `.relay-backup` primitive; retain credential bytes through opaque local state rather than echoing them in preview. Hash drift invalidates preview. Keep original copies before every selected write and rollback partial writes. Disconnect restores owned original entries while preserving later foreign edits, or reports configuration_changed. Optional git change remains unchecked. Required client reload happens only under its reviewed action and owned sessions; never kill unrelated app work.
+- Change: decide protected preview binding, backup restoration and selected session scope without granting broad client permissions. Auto/On demand and app connect first produce a read-only preview with exact file descriptions, hashes and selected changes. Changes needed are pending until explicit Apply; Copy changes writes only clipboard text. Use existing pure configuration transforms and kept `.relay-backup` primitive; retain credential bytes through opaque local state rather than echoing them in preview. Hash drift invalidates preview. Keep original copies before every selected write and rollback partial writes. Disconnect restores owned original entries while preserving later foreign edits, or reports configuration_changed. Optional git change remains unchecked. Required client reload happens only under its reviewed action and owned sessions; never kill unrelated app work. Review any later P15 native scope policy/model capability changes with the same hash-bound ownership and kept-copy guarantees; connection alone does not prove cluster write enforcement.
 - Tests: zero writes on preview/copy/cancel, exact 2required changes, optional git initiallyfalse, stale hash, selected subset, partial failure rollback, foreign entries/secret fields preserved, Disconnect kept-copy restore/foreign drift, mode/app separate, target client/machine binding, one apply on retry.
 - Proof: `node --test test/service-settings.test.mjs test/relay-config.test.mjs test/install-ownership.test.mjs`; zero failures and all preview/cancel/copy cases have no filesystem mutation.
 - Depends on: T051. Commit message: `Review client configuration changes before applying them`.
 
 #### T053. Scope and revoke permissions and classify desktop-only asks
 
-- Screens: 3.4, 6.3, 6.5, 7.5, 7.6. Decisions: 11, 12, 21. Kind: JUDGMENT.
+- Screens: 3.4, 6.3, 6.5, 7.5, 7.6. Decisions: 11, 12, 21, 25. Kind: JUDGMENT.
 - Files: `engine/service/settings.mjs`, local agent permission ledger/revocation; `engine/service/approvals.mjs`, action normalization, desktop-only response/owner application; `engine/service/adapters.mjs`, session-scoped capability injection and trusted git classification; `engine/service/http.mjs`, permission routes and pre-receipt authorization; `engine/service/security.mjs`, safe permission details; `engine/service/projection.mjs`, sanitized unit grants/agent permissions; `test/service-settings.test.mjs`, `test/service-approvals.test.mjs`, `test/service-auth.test.mjs`, `test/service-sessions.test.mjs`, `test/gui-fixture.mjs`.
-- Change: decide a trusted structured classification for direct git.push and process.run push asks. Never determine phone authority from a display string or naive `git push` substring. Add `desktopOnly:boolean` to Approval projection, derived by the service/adapter from the normalized action; it is not an agent-controlled false override. Phone rejects desktopOnly answers before receipt replay, grants or notices. Agent git permission applies only to sessions HIVEM1ND starts on selected machine, stays separate from unit standing grants, and never authorizes performing a git operation without its explicit instruction. Revoke unit grants uses existing owner tombstones; Revoke agent permission prevents future affected operations/sessions and preserves unrelated configuration/permissions.
+- Change: define reviewed session-scoped git permissions and revocation here; T079 enforces cluster write roots, native permissions and explicit Git intent at every client boundary. A permission is capability, never an instruction to commit/push. No root/environment automatic repository grant is introduced.
+  Decide: decide a trusted structured classification for direct git.push and process.run push asks. Never determine phone authority from a display string or naive `git push` substring. Add `desktopOnly:boolean` to Approval projection, derived by the service/adapter from the normalized action; it is not an agent-controlled false override. Phone rejects desktopOnly answers before receipt replay, grants or notices. Agent git permission applies only to sessions HIVEM1ND starts on selected machine, stays separate from unit standing grants, and never authorizes performing a git operation without its explicit instruction. Revoke unit grants uses existing owner tombstones; Revoke agent permission prevents future affected operations/sessions and preserves unrelated configuration/permissions.
 - Tests: explicit optional grant=false, scoped permitted launched session vs manual/foreign session, revocation blocks next request, owner remote tombstones, no global approval pattern, phone approve-always/push rejects before receipt; ordinary build, session.open and one-time commit approve/deny work, display spoof does not change desktopOnly, ambiguous normalization reports unsupported capability.
 - Proof: `node --test test/service-settings.test.mjs test/service-approvals.test.mjs test/service-auth.test.mjs test/service-sessions.test.mjs`; zero failures; no standing/push permission can be created by phone.
 - Depends on: T022, T052. Commit message: `Scope permissions to units machines and owned sessions`.
 
 #### T054. Maintain project registration and shared Content without touching repository bytes
 
-- Screens: 6.6, 6.7, 6.8. Decisions: 13, 16. Kind: JUDGMENT.
-- Files: `engine/service/settings.mjs`, project/content operations; `engine/discovery.mjs`, `discoverProjects`, `discoverContent`, preference discovery; `engine/setup.mjs`, defaults reuse boundary; `engine/install.mjs`, managed content plan; `engine/records.mjs`, registration/preferences serialization; `engine/service/projection.mjs`, excluded project units/editors; `engine/service/http.mjs`, project/content routes; `test/service-settings.test.mjs`, `test/setup-projects.test.mjs`, `test/setup-knowledge.test.mjs`, `test/install-ownership.test.mjs`, `test/gui-fixture.mjs`.
-- Change: decide registration exclusions and content preview/apply reuse so remove/readd is visibility, never disk deletion. Implement C09 root folders/optional environments/bounded auto-discovery, explicit remove repository confirmation and ten-second Undo. Removing hides that project's units/boards/texts for the selected machine while preserving tasks/files/other machines; readding restores them. Content includes feature categories planning/quality/continuity plus fallback other, knowledge packs and preferences addressStyle/additionalInstructions/keepExistingPreferencesFirst/updateChecks. Defaults/detected data are actual, not fixed sample rows. Any client configuration writes still use T052's preview/apply; preserve person/foreign preferences and managed ownership.
-- Tests: register/discover/remove/readd/Undo, repo bytes hashes unchanged, offline machine read-only, exclusion persists rescans, environment retained, knowledge future modules/fallback category, shared content preference sync, existing preferences precedence, preview denial no client changes.
-- Proof: `node --test test/service-settings.test.mjs test/setup-projects.test.mjs test/setup-knowledge.test.mjs test/install-ownership.test.mjs`; zero failures and repository byte hashes do not change on unregister/Undo.
-- Depends on: T028, T051, T052, T053. Commit message: `Manage project visibility and shared Content from Settings`.
+- Kind: RETIRED. Content discovery/preferences and managed inclusion are implemented by rewritten T051; cluster links, repository offer/import/removal and unchanged-file Undo replace Projects registration in T078/T091.
 
 #### T055. Render five Settings tabs, machine selection and reviewed client changes
 
-- Screens: 6.1 to 6.9. Decisions: 7, 12, 13, 14, 16, 21, 22. Kind: JUDGMENT.
+- Screens: 6.1 to 6.9. Decisions: 7, 12, 13, 14, 16, 21, 22, 25. Kind: JUDGMENT.
 - Files: `gui/app/settings.mjs`, `renderSettings`, General/Agents/Permissions/Projects/Content/review views; `gui/app/main.mjs`, `settingsSurface`, selected machine/load/mutation/toast; `gui/app/i18n.mjs`, Settings strings; `gui/app/styles.css`, settings sections/rows/tabs; `test/gui-shell.test.mjs`, `test/gui-fixture.mjs`, `test/gui-data.mjs`.
-- Change: decide keyboard tabs, selected machine state and focus restoration from nested review/confirmation dialogs. General order and columns are the verification list below. Mount T050's six previews, with miniature three-panel content in each own palette. Remove visible origin/sync choice and replace it with disabled Relay+ Coming soon. Phone-open state shows expiry/phone count/Close access and actual QR dialog. Agents has CLI first and optional named app, detected versions, Auto/On demand, Review changes, Scan again, Find manually; mode/app actions open review rather than mutating directly. Review shows exact selected changes, scoped optional unchecked git permission, kept copy/Disconnect/restart note, Cancel/Copy changes/Apply count. Permissions lists standing unit grants and agent permissions with named Revoke. Projects displays actual roots/environment/repos, Add folder/removal confirmation/Undo. Content uses actual features/knowledge/preferences. Offline machine shows latest report read-only and clear cause. Keep existing QR verification/12hour expiry, never print or store opening secrets.
+- Change: decide keyboard tabs, selected machine state and focus restoration from nested review/confirmation dialogs. General order and columns are the verification list below. Mount T050's six previews, with miniature three-panel content in each own palette. Remove visible origin/sync choice and replace it with disabled Relay+ Coming soon. Phone-open state shows expiry/phone count/Close access and actual QR dialog. Agents has CLI first and optional named app, detected versions, Auto/On demand, Review changes, Scan again, Find manually; mode/app actions open review rather than mutating directly. Review shows exact selected changes, scoped optional unchecked git permission, kept copy/Disconnect/restart note, Cancel/Copy changes/Apply count. Permissions lists standing unit grants and agent permissions with named Revoke. Projects displays a read-only compatibility projection of existing repository links at this stage; T091 mounts the cluster-link list and creation/removal controls after migration. Do not build the retired roots/environment/Add folder UI. Content uses actual features/knowledge/preferences. Offline machine shows latest report read-only and clear cause. Keep existing QR verification/12hour expiry, never print or store opening secrets.
 - Visual: Settings body 818, padding 8x120, gap 16; title 22/700; tab bar padding 4, gap 4, radius 12, panel, line; five tab cells 7x14, gap 7, radius 9, selected card2/text 13.5/600; machine picker padding 8x12, radius 12; menu 320, padding 6, gap 2, radius 14, card2, line2 atx 1000, y112. Columns gap 16; sections padding 20, gap 12, radius 18, panel, line. Agent row 68, gap 14, padding 0x14, radius 14, card, avatar 34; identity width 200; app column 190; mode 196 wide. Review dialog 600, padding 24, gap 18, radius 22; change padding 10x12, gap 12, radius 12, card, tick 18. Content preferences 420 wide. QR dialog 600, QR scanner 220plusquietzone, columns gap 22; minimum QR rendering retains 225 CSSpx per existing encoder contract.
-- Copy: `General` / `General`; `Agents` / `Agentes`; `Permissions` / `Permisos`; `Projects` / `Proyectos`; `Content` / `Contenido`; `Machine` / `Máquina`; `Command line (CLI): runs your units` / `Línea de comandos (CLI): ejecutar las unidades`; `Desktop app: optional` / `Aplicación de escritorio: opcional`; `Auto` / `Automático`; `On demand` / `Bajo demanda`; `Connected` / `Conectado`; `Review changes` / `Revisar cambios`; `Scan again` / `Volver a buscar`; `Find manually` / `Buscar manualmente`; `Not found on this machine` / `No se encontró en esta máquina`; `Optional permission` / `Permiso opcional`; `Copy changes` / `Copiar cambios`; `Apply {count} changes` / `Aplicar {count} cambios`; `Disconnect` / `Desconectar`; `Standing approvals` / `Aprobaciones permanentes`; `Agent permissions` / `Permisos de agentes`; `Revoke` / `Revocar`; `Project folders` / `Carpetas de proyectos`; `Add folder` / `Agregar carpeta`; `No environment` / `Sin entorno`; `Remove repository` / `Quitar repositorio`; `Features` / `Funciones`; `Knowledge packs` / `Paquetes de conocimiento`; `Preferences` / `Preferencias`; `Address style` / `Estilo de trato`; `Impersonal` / `Impersonal`; `Formal` / `Formal`; `Explanatory` / `Explicativo`; `Additional instructions` / `Instrucciones adicionales`; `Keep existing preferences first` / `Conservar primero las preferencias existentes`; `Check for updates` / `Buscar actualizaciones`; `Daily` / `Diariamente`; `Start with Windows` / `Iniciar con Windows`; `Restart service` / `Reiniciar el servicio`; `Locations` / `Ubicaciones`; `Staging` / `Staging`; `Close access` / `Cerrar el acceso`.
-- Tests: five tabs/machine switch, offline read-only, own-palette previews/immediate apply, mode review before writing, copy/cancel no mutation, optional unchecked permission, Revoke exact grant, repo confirmation/Undo no disk change, Content actual data, phone access count/expiry/secret cleanup, duplicate request key/revision failures.
+- Copy: `General` / `General`; `Agents` / `Agentes`; `Permissions` / `Permisos`; `Projects` / `Proyectos`; `Content` / `Contenido`; `Machine` / `Máquina`; `Command line (CLI): runs your units` / `Línea de comandos (CLI): ejecutar las unidades`; `Desktop app: optional` / `Aplicación de escritorio: opcional`; `Auto` / `Automático`; `On demand` / `Bajo demanda`; `Connected` / `Conectado`; `Review changes` / `Revisar cambios`; `Scan again` / `Volver a buscar`; `Find manually` / `Buscar manualmente`; `Not found on this machine` / `No se encontró en esta máquina`; `Optional permission` / `Permiso opcional`; `Copy changes` / `Copiar cambios`; `Apply {count} changes` / `Aplicar {count} cambios`; `Disconnect` / `Desconectar`; `Standing approvals` / `Aprobaciones permanentes`; `Agent permissions` / `Permisos de agentes`; `Revoke` / `Revocar`; `Cluster links` / `Enlaces de clústeres`; `Link a folder` / `Vincular una carpeta`; `No link` / `Sin vínculo`; `Remove repository` / `Quitar repositorio`; `Features` / `Funciones`; `Knowledge packs` / `Paquetes de conocimiento`; `Preferences` / `Preferencias`; `Address style` / `Estilo de trato`; `Impersonal` / `Impersonal`; `Formal` / `Formal`; `Explanatory` / `Explicativo`; `Additional instructions` / `Instrucciones adicionales`; `Keep existing preferences first` / `Conservar primero las preferencias existentes`; `Check for updates` / `Buscar actualizaciones`; `Daily` / `Diariamente`; `Start with Windows` / `Iniciar con Windows`; `Restart service` / `Reiniciar el servicio`; `Locations` / `Ubicaciones`; `Staging` / `Staging`; `Close access` / `Cerrar el acceso`.
+- Tests: five tabs/machine switch, offline read-only, own-palette previews/immediate apply, mode review before writing, copy/cancel no mutation, optional unchecked permission, Revoke exact grant, existing link report with no auto-discovery import, Content actual data, phone access count/expiry/secret cleanup, duplicate request key/revision failures.
 - Proof: `node --test test/gui-shell.test.mjs test/gui-fixture.test.mjs test/service-settings.test.mjs`; zero failures and GUI matches 6.1 to 6.9 in en/es.
-- Depends on: T050, T053, T054. Commit message: `Present machine-aware Settings and configuration review`.
+- Depends on: T050, T051, T052, T053. Commit message: `Present machine-aware Settings and configuration review`.
 
 #### T056. Recover a stopped service through its verified launcher
 
@@ -2591,9 +2595,9 @@ T059 adds real HTTP receipt/DOM tests, including widened phone/narrow desktop au
 
 #### T059. Render pairing, locked access and the restricted phone surface
 
-- Screens: 7.1 to 7.7, 6.1, 6.9. Decisions: 21, 22. Kind: JUDGMENT.
+- Screens: 7.1 to 7.7, 6.1, 6.9. Decisions: 21, 22, 25. Kind: JUDGMENT.
 - Files: `gui/app/phone.mjs`, `renderCodeEntry`, exchange; `gui/app/main.mjs`, `renderSignedOut`, `renderPhoneError`, `submitCode`, phone hierarchy/chat/waiting/expired views; `gui/app/inspector.mjs`, desktopOnly readable cards; `gui/app/i18n.mjs`, phone strings; `gui/app/styles.css`, code cells/phone states; `test/gui-fixture.mjs`, C10 authority/lock behavior; `test/gui-shell.test.mjs`, `test/service-auth.test.mjs`, `test/service-home-stream.test.mjs`, `test/service-api.test.mjs`.
-- Change: decide one accessible six-character input with six visible cells and server-derived error/lock state. Pairing never stores/echoes codes or credentials. First four failures show triesLeft from details; fifth shows Pairing locked until server lockedUntil, no submit; replacement grant unlocks immediately. Phone chats use existing conversations only. Ordinary asks show Approve/Deny; standing approval options and push asks have only the readable computer-required guidance; session.open retains ordinary Approve/Deny. Reviews show Accept/Send back with required note and server reviewability; no Undo or editing controls. Twelve-hour expiry/desktop close/restart clears credentials/data and shows Type a new code. Preserve existing exact LAN network/audience checks and independent actual QR encoder.
+- Change: decide one accessible six-character input with six visible cells and server-derived error/lock state. Pairing never stores/echoes codes or credentials. First four failures show triesLeft from details; fifth shows Pairing locked until server lockedUntil, no submit; replacement grant unlocks immediately. Phone chats use existing conversations only; T093 adapts the final hierarchy to the same migrated cluster tree, with no person node and no extra inbox surface. Ordinary asks show Approve/Deny; standing approval options and push asks have only the readable computer-required guidance; session.open retains ordinary Approve/Deny. Reviews show Accept/Send back with required note and server reviewability; no Undo or editing controls. Twelve-hour expiry/desktop close/restart clears credentials/data and shows Type a new code. Preserve existing exact LAN network/audience checks and independent actual QR encoder.
 - Visual: 390x844, phone 28radius; status 44, title 52, bottom navigation 64; pair content padding 60x24x24, gap 18, mark 56, title 22/700, body 14center; cells 40x50, gap 8, radius 12, card, accent filled/line2 empty, error on failure; locked/closed padding 120x28x24, gap 16, circle 64/icon 28. Hierarchy padding 6x10, rows 11x10, indent 24/42; chat padding 14, gap 12. All targets 32 minimum, phone targets 44where existing.
 - Copy: `Open your M1ND` / `Abrir el M1ND`; `Type the code shown on your computer, in Settings, Open on the phone.` / `Introducir el código que aparece en el equipo, en Configuración, Abrir en el teléfono.`; `Or scan the QR code with the camera.` / `También se puede escanear el código QR con la cámara.`; `Opening` / `Abriendo`; `That code does not match.` / `El código no coincide.`; `Check it on the computer and try again; {count} tries left.` / `Comprobar el código en el equipo y reintentar; quedan {count} intentos.`; `Try again` / `Reintentar`; `Pairing locked` / `Vinculación bloqueada`; `Five codes did not match. Pairing stays locked for 10 minutes; a new code from the computer unlocks it at once.` / `Cinco códigos no coincidieron. La vinculación permanece bloqueada durante 10 minutos; un código nuevo desde el equipo la desbloquea de inmediato.`; `Standing approvals and pushes are answered on the computer.` / `Las aprobaciones permanentes y los pushes se responden en el equipo.`; `Access ended` / `Acceso finalizado`; `Phone access lasts 12 hours. Open it again from the computer: Settings, Open on the phone.` / `El acceso desde el teléfono dura 12 horas. Abrirlo de nuevo desde el equipo: Configuración, Abrir en el teléfono.`; `Type a new code` / `Introducir un código nuevo`.
 - Tests: six cells/accessibility, paste/backspace/normalization, no storage, servercounts 4to 1, exact 10min/replacement unlock, no reply credentials in an error, widenedphone/narrowdesktop, HTTP standing/push rejection before receipt and allowed one-time session.open answers, no existing conversation creation, review note/lead gating, 12hour/close/restart revocation, actual QR decoding/Settings phone count. Replace old phone-standing-approval expected successes explicitly.
@@ -2604,7 +2608,7 @@ T059 adds real HTTP receipt/DOM tests, including widened phone/narrow desktop au
 
 #### T060. Distinguish working, waiting and idle by shape
 
-- Screens: all 83. Decisions: 22. Kind: MECHANICAL.
+- Screens: the active states of both boards. Decisions: 22, 25. Kind: MECHANICAL.
 - Files: `gui/app/styles.css`, status-dot and map-status; `test/final-status-shapes.test.mjs`, new.
 - Change: replace the complete status-dot declarations with:
 
@@ -2646,7 +2650,7 @@ test('status shapes remain distinguishable without their colors', async () => {
 
 #### T061. Give icon controls names and minimum hit targets
 
-- Screens: all 83. Decisions: 22. Kind: MECHANICAL.
+- Screens: the active states of both boards. Decisions: 22, 25. Kind: MECHANICAL.
 - Files: `gui/app/components.mjs`, new namedIconButton; `gui/app/styles.css`, minimum targets; `test/final-named-control.test.mjs`, new. Every new icon-only control in T016/T029/T035/T045/T055/T059 uses this helper or its same literal attribute contract.
 - Change: append:
 
@@ -2696,9 +2700,10 @@ test('icon buttons require an accessible name and retain a hidden decorative ico
 
 #### T062. Measure six-theme contrast, keyboard flow and target geometry
 
-- Screens: all 83. Decisions: 14, 22. Kind: JUDGMENT.
+- Screens: the active states of both boards. Decisions: 14, 22, 25. Kind: JUDGMENT.
 - Files: `gui/app/styles.css`, font declarations and measured role/fill corrections; `gui/styles.css`, setup font declarations; `gui/app/atkinson-400.woff2`, `gui/app/atkinson-400-italic.woff2`, `gui/app/atkinson-700.woff2`, `gui/app/atkinson-700-italic.woff2`, new byte-identical copies of the corresponding files in `docs/flows/assets/`; `engine/service/http.mjs`, `BROWSER_STATIC_FILES` and `contentType`; `gui/server.mjs`, font entries in `STATIC_FILES`; `scripts/build-installer.mjs`, packaged asset checks; `gui/app/components.mjs`, focus/naming corrections; `gui/app/main.mjs`, tab/dialog focus restoration; `gui/app/settings.mjs`, `gui/app/phone.mjs`, final control focus; `test/gui-shell.test.mjs`, accessibility state checks; `test/service-api.test.mjs`, font MIME/allowlist cases; `test/interfaces-server.test.mjs`, wizard font serving; `test/service-install.test.mjs`, font packaging; `test/gui-browser.md`, actual measurements/capture paths.
-- Change: decide the smallest palette/fill corrections needed for every muted-text/background pair to meet 4.5: 1 and every interactive target 32 px. Measure alpha-composited colors and actual states in all six looks, including disabled hints, card2, Toxic sections, Focus hints and own-palette previews. Use quiet theme line hues/fills; never solve container contrast with bright/white borders. Preserve pure-black Focus and QR scanner colors. Observe keyboard order, one heading/skip link, Enter/Escape, dialogs, focus restoration, 32hittargets/9visiblehandles, 200%zoom, reduced motion and status shape distinctions. Correct muted colors only from measured evidence, not a color-name guess.
+- Change: measure the existing six looks and already available states now; T091/T093/T094 extend the same measurements to the start board and T064 performs the complete final inventory. Remove no committed component merely to match the old graph.
+  Decide: decide the smallest palette/fill corrections needed for every muted-text/background pair to meet 4.5: 1 and every interactive target 32 px. Measure alpha-composited colors and actual states in all six looks, including disabled hints, card2, Toxic sections, Focus hints and own-palette previews. Use quiet theme line hues/fills; never solve container contrast with bright/white borders. Preserve pure-black Focus and QR scanner colors. Observe keyboard order, one heading/skip link, Enter/Escape, dialogs, focus restoration, 32hittargets/9visiblehandles, 200%zoom, reduced motion and status shape distinctions. Correct muted colors only from measured evidence, not a color-name guess.
   Use the board's Atkinson Hyperlegible face from the four existing local font files. Add four `@font-face` rules named `Atkinson Hyperlegible`, with normal/italic styles and weights 400/700, `font-display: swap`, and the respective relative WOFF 2 URLs. Set `--font` to `"Atkinson Hyperlegible", system-ui, sans-serif` and use that face in setup. Permit only the four exact font basenames through app static serving, with `font/woff2`; wizard routes `/atkinson-400.woff2`, `/atkinson-400-italic.woff2`, `/atkinson-700.woff2`, `/atkinson-700-italic.woff2` map to those files under `gui/app/`. Verify actual package inclusion and both hosts' serving. No installer or font download is required.
 - Tests: contrast matrix with exact foreground/background/composite ratio and selector/state; icon controls named; keyboard order/focus restoration; phone cells; target bounding rectangles; no clipped final item at zoom; grayscale/status shape; screen reader live announcements are neither silent nor repeated.
 - Proof: `node --test test/gui-shell.test.mjs test/service-api.test.mjs test/interfaces-server.test.mjs test/service-install.test.mjs`; zero failures, packaged fonts served as `font/woff2`, plus every measured pair at least 4.5: 1 and target at least 32 pixels recorded in `test/gui-browser.md`. Node tests alone do not satisfy this browser gate.
@@ -2706,18 +2711,18 @@ test('icon buttons require an accessible name and retain a hidden decorative ico
 
 ### P13. Add to M1ND
 
-Execute T065 to T072 in the order below after T062 and before T063. Retain these task numbers despite their position before the final gates. P13 extends C09 and T054; it does not replace the Settings reports, existing content preferences or repository visibility rules. The earlier tasks remain unchanged. No final gate begins with an unfinished P13 task.
+Execute the kept T065 to T071 after T062, then P15 and T063; T072 is retired. Retain these task numbers despite their position before the final gates. P13 extends C09 and rewritten T051; P15 replaces registration UI with cluster links; it does not replace the Settings reports, existing content preferences or repository visibility rules. Committed T001 to T044 remain unchanged. No final gate begins with an unfinished kept P13 or P15 task.
 
 The board's tool-server row is recognized but disabled in 3.0. Python used by a selected skill is a runtime requirement, not authorization to install Python or start a tool server. Source acquisition writes protected local staging; copying into the M1ND and registering a project occur only after the check and explicit confirmation. The code blocks below are future implementation instructions, not code installed by this documentation change.
 
 #### T065. Define the Add to M1ND contract
 
-- Screens: 2.19 to 2.22, 6.8 and the shared desktop bar in Map, Blueprint, Void and Settings. Decisions: 23. Kind: MECHANICAL.
+- Screens: 2.19 to 2.22, 6.8 and the shared desktop bar in Map, Blueprint, Void and Settings. Decisions: 23, 25. Kind: MECHANICAL.
 - Files: `docs/3.0/contract.md`, section `### 2.7. Layout and settings`, addition C12 immediately below the heading. Existing C01 to C11 remain intact.
 - Change: insert the following exact normative text. C12 extends the Content and project reports in C09 and governs the new operations, fields and ownership rules.
 
 ```text
-Final integration amendment C12: Add to M1ND.
+Final integration amendment C12: Add to M1ND. Cluster terminology and placement are amended by C13 before P15 code.
 
 Add to M1ND accepts skills, repositories and docs. Tool servers are recognition-only candidates with supported:false and blockedReason:"after_3_0"; selection, placement and updates of tool servers return 422 unsupported_addition. No acquisition, inspection or placement runs package install scripts, Git hooks, imported scripts, npm, Python or a tool server. A skill's declared runtime requirements are shown as a caution and apply only to its selected units. Source checks are evidence about the accepted bytes, not a claim that imported instructions are trusted.
 
@@ -2735,7 +2740,7 @@ POST /additions/previews accepts {machine:Name,source:Source,updateOf:UUID|null}
 
 POST /additions/previews/:previewId/retry accepts {} and returns 202 Preview. It retries a failed inspection under the same owner-bound preview ID and immutable resolved pin, with a new per-attempt operation identity retained through response loss. If no pin was resolved, resolve the original source again and require a new displayed check before acceptance. A resolved pin cannot silently change on Retry. Replayed initial POST only reconciles its initial response; it does not restart a failed inspection. An inspecting or accepted preview is returned without starting another acquisition. An expired unaccepted review returns 409 preview_expired. Lost acceptance responses use the accepted preview result or exact original acceptance receipt, never a second placement.
 
-POST /additions accepts {machine:Name,previewId:UUID,selections:[{candidateId:UUID,scope:Scope}],expectedContentRevision:Revision|null,expectedProjectRevision:Revision|null,confirmed:true} and returns 201 {items:Addition[],changeId:UUID,undoUntil:Time,contentRevision:Revision|null,projectRevision:Revision|null}. At least one supported, eligible candidate and one allowed unit are required. A mixed selection commits as one recoverable acceptance, with exact receipt replay and no partial visible registration. A consumed preview cannot create another addition. A changed staged hash, scope or destination returns 409 and leaves the accepted state unchanged. Updates use POST /additions/previews with updateOf bound to the existing addition and the same source identity; they show the same check and require the same explicit acceptance. The old pin remains active until replacement commits. No background update changes accepted bytes.
+POST /additions accepts {machine:Name,previewId:UUID,selections:[{candidateId:UUID,scope:Scope}],expectedContentRevision:Revision|null,expectedProjectRevision:Revision|null,confirmed:true} and returns 201 {items:Addition[],changeId:UUID,undoUntil:Time,contentRevision:Revision|null,projectRevision:Revision|null}. At least one supported eligible candidate is required. Skills/docs need a nonempty allowed scope. A repository requires the canonical empty scope {everyUnit:false,units:[],groups:[]} and unitCount:0; acceptance creates its registered link without an agent or content grant. A mixed selection commits as one recoverable acceptance, with exact receipt replay and no partial visible registration. A consumed preview cannot create another addition. A changed staged hash, scope or destination returns 409 and leaves the accepted state unchanged. Updates use POST /additions/previews with updateOf bound to the existing addition and the same source identity; they show the same check and require the same explicit acceptance. The old pin remains active until replacement commits. No background update changes accepted bytes.
 
 GET /additions accepts machine?:Name and returns 200 {machine:Name,readOnly:boolean,items:Addition[]}. DELETE /additions/:additionId accepts {machine:Name,confirmed:true,expectedRevision:Revision} and returns 200 {additionId:UUID,changeId:UUID,undoUntil:Time,revision:Revision}. Remove revokes future scoped availability, archives owned imported content and provenance, preserves foreign edits and kit content, and uses the existing 10-second POST /changes/:changeId/undo. Undo checks post-change revisions. Scope controls service-owned session availability, including verified manually registered app sessions; it is not a global skill installation. Unknown client scope support fails closed. No Add operation changes client configuration without the existing C09 concrete preview/apply review.
 
@@ -2763,7 +2768,7 @@ console.log('Inserted Add to M1ND amendment C12.');
 
 - Tests: no runtime test is added for a documentation-only task. The contract lint and the explicit insertion guard validate this change.
 - Proof: the program prints `Inserted Add to M1ND amendment C12.`; `npm.cmd run lint` exits 0 with zero issues; the diff contains one C12 and unchanged C01 to C11.
-- Depends on: T001, T054, T062. Commit message: `Define the Add to M1ND contract`.
+- Depends on: T001, T051, T062. Commit message: `Define the Add to M1ND contract`.
 
 #### T066. Recognize separate parts in a bounded source manifest
 
@@ -2919,9 +2924,10 @@ test('unsafe inventories fail before any candidate can be accepted', () => {
 
 #### T067. Bind check eligibility and deduplicate unit scope
 
-- Screens: 2.20, 2.21. Decisions: 23. Kind: MECHANICAL.
+- Screens: 2.20, 2.21. Decisions: 23, 25. Kind: MECHANICAL.
 - Files: new `engine/service/addition-check.mjs`, all code below; new `test/service-addition-check.test.mjs`, all tests below.
-- Change: create the pure check and scope module. The acquisition task supplies verified evidence; this module cannot infer a date, license or successful script policy from source claims. Runtime needs remain a caution, with actual selected-session support checked by T069.
+- Change: retain the JSON field groups for backward-compatible C12 scope IDs. P15 maps these IDs to migrated clusters and resolves current canonical members; no second grouping is created. The pure scope/check implementation below remains otherwise unchanged.
+  Create: create the pure check and scope module. The acquisition task supplies verified evidence; this module cannot infer a date, license or successful script policy from source claims. Runtime needs remain a caution, with actual selected-session support checked by T069.
 
 ```js
 import { CoreError } from './identity.mjs';
@@ -3014,9 +3020,9 @@ test('group and direct selection produce four distinct allowed units', () => {
 
 #### T068. Acquire immutable sources into owner-bound local previews
 
-- Screens: 2.19, 2.20. Decisions: 23. Kind: JUDGMENT.
+- Screens: 2.19, 2.20. Decisions: 23, 25. Kind: JUDGMENT.
 - Files: new `engine/service/addition-source.mjs`, `acquireAdditionSource`, `receiveAdditionChunk`, `disposeAdditionSource`, pin/license/date evidence and safe extraction; new `engine/service/additions.mjs`, `openAdditionUpload`, `writeAdditionChunk`, `inspectAddition`, `readAdditionPreview`, `cancelAdditionPreview`, `retryAdditionPreview`; `engine/service/http.mjs`, C12 upload/preview routes, `allowedBody`, `bodyLimitFor`, `objectFor`, `credentialFor`, `mutate`; `engine/service/service.mjs`, `composeCore`, injected acquisition runner and owner routing; `engine/service/security.mjs`, protected preview storage and safe error projection; new `test/service-addition-source.test.mjs`; new `test/service-additions.test.mjs`, preview/upload cases; `test/service-api.test.mjs`, desktop/phone/agent request matrix; `test/gui-fixture.mjs`, independent C12 preview/upload protocol.
-- Change: settle exact Git/registry provider resolution and safe extraction while implementing C12 without another installer. Public registry links resolve package metadata/archive bytes directly; they never invoke a package manager. Git acquisition uses a bounded injected runner with hooks, credential helpers, submodules and external filters disabled, no shell, sanitized environment and no inherited private credentials. Every redirect/DNS address is checked before connecting. The full pin and manifest hash bind the staged bytes, not the mutable source link. Implement a timed inspection job returning 202 before the GUI waits, with authenticated polling of the same preview ID. Per-job acquisition ends at 30000 ms with source_timeout; other transport failures use source_unavailable and do not claim a timeout. Failure projects a safe code and retryable state. Jobs and uploads expire at 15 minutes, and owner/principal checks precede staging reads, writes and receipt lookup. Implement the C12 same-preview retry transition and preserve consumed owner/request/hash/result bindings for 24 hours; fifteen-minute review expiry only disposes unaccepted staging. Reject Add-route phone/agent audiences with `403 forbidden` before the existing generic phone mutation branch. Expose the privately bound unit/group choice snapshot and scopeRevision in Preview.
+- Change: settle exact Git/registry provider resolution and safe extraction while implementing C12 without another installer. Public registry links resolve package metadata/archive bytes directly; they never invoke a package manager. Git acquisition uses a bounded injected runner with hooks, credential helpers, submodules and external filters disabled, no shell, sanitized environment and no inherited private credentials. Every redirect/DNS address is checked before connecting. The full pin and manifest hash bind the staged bytes, not the mutable source link. Implement a timed inspection job returning 202 before the GUI waits, with authenticated polling of the same preview ID. Per-job acquisition ends at 30000 ms with source_timeout; other transport failures use source_unavailable and do not claim a timeout. Failure projects a safe code and retryable state. Jobs and uploads expire at 15 minutes, and owner/principal checks precede staging reads, writes and receipt lookup. Implement the C12 same-preview retry transition and preserve consumed owner/request/hash/result bindings for 24 hours; fifteen-minute review expiry only disposes unaccepted staging. Reject Add-route phone/agent audiences with `403 forbidden` before the existing generic phone mutation branch. Expose the privately bound unit/cluster choice snapshot (C12 groups field retains migrated IDs) and scopeRevision in Preview.
   Stage only under the verified local `L/additions/` root, using `assertLocalStaging`, `assertNoLinks`, `atomicWriteFile` and injected `protectLocalFile`. Validate every path with T066 before extracting or joining it; enforce link/device/size/chunk collision limits across the complete tree. Incomplete files cannot enter recognition. Preserve arbitrary binary support files without rendering their bytes. Resolve each part's nearest declared license and pinned commit/release date; do not substitute MIT, a download date or mtime. Local folder snapshots without credible date evidence remain inspectable with failed age check and a literal reason from T071. Source metadata is data, never code. Verify and augment T066 runtime hints from package engines, declared dependencies and script entry points without running them; an empty extension-derived array alone cannot prove that no runtime is needed. Unknown runtime evidence fails the check. Apply T066 recognition and T067 check per candidate. Unsupported tools remain disabled rows, with no install action.
   A dropped folder is uploaded through the chunk API; an absolute path or File.path supplied over HTTP is never accepted. Scope revisions and target Content/project revisions are captured for T069. Candidate requirements include verified declarative metadata, not only extension hints. Existing update targets bind kind, name and source identity; inspection leaves their accepted bytes active. Back and Cancel dispose only unaccepted local resources and never modify either source or M1ND. Repeated inspection, chunk upload and timeout retry retain operation/preview identity. No real network service, client configuration, native session or package manager is used by tests.
 - Tests: in `test/service-addition-source.test.mjs`, use injected transport/runner fixtures for Git full pin, registry exact version/digest, mixed-source extraction, dropped chunks, root skill, nested skills, docs and disabled tool. Include 7-day boundary/unknown/future date, missing license, package postinstall that writes a sentinel if executed, private-network redirect, credential URL, bad digest, truncated archive, link/hardlink/device/traversal/device-name/alternate-stream/case collision, 1025 files, 16 MiB plus one file, 64 MiB plus one tree, interrupted/repeated/conflicting chunks, abort at 30000 ms and 15-minute expiry. Sentinels remain absent and fake execution counters remain zero. In `test/service-additions.test.mjs` and `test/service-api.test.mjs`, test exact bodies, wrong owner/machine/principal, offline selected machine, phone/agent rejection before staging/receipt, safe diagnostics with secret sentinel absent, preview cancellation and update inspection with hashes of M1ND/client/source unchanged. The fixture returns independent protocol records, not production recognition results.
@@ -3025,19 +3031,20 @@ test('group and direct selection produce four distinct allowed units', () => {
 
 #### T069. Accept scoped content and projects with recoverable ownership
 
-- Screens: 2.20, 2.21, 2.22, 6.8. Decisions: 23. Kind: JUDGMENT.
-- Files: `engine/service/additions.mjs`, `applyAdditions`, `removeAddition`, `readAdditions`, `readScopedAdditions`, acceptance/update recovery; `engine/service/settings.mjs`, T054 Content/project report extensions and registration reuse; `engine/install.mjs`, `installableAssetRoots`, `listInstallableAssets`, `planAgentAssets`, imported-content exclusion from global client installation; `engine/service/adapters.mjs`, `launch`, verified per-session content availability; `engine/service/bridge.mjs`, `createNativeLaunch`, native scoped capability binding; `engine/relay/local-wake.mjs`, verified manually registered app-session binding; `engine/service/projection.mjs`, `projectRecord`, zero-unit projects and provenance; `engine/service/service.mjs`, `configuredProjects`, selected-owner publication and project refresh; `engine/service/store.mjs`, owned content transaction authorization and `bindProjects`; `engine/service/http.mjs`, C12 read/apply/remove schema/authorization/dispatch; `engine/service/import-events.mjs`, accepted addition events; `engine/sync/store.mjs`, `stageTransaction`, accepted content/provenance eligibility; `engine/sync/apply.mjs`, imported bundle validation; `test/service-additions.test.mjs`, acceptance/scope/update/remove/Undo/recovery cases; `test/install-ownership.test.mjs`; `test/service-sessions.test.mjs`; `test/service-projection.test.mjs`; `test/sync-apply.test.mjs`; `test/gui-fixture.mjs`, independent accepted records and report extensions.
-- Change: decide publication/recovery of local repository checkouts before the existing registration transaction, and implement all C12 accepted-state operations. Reuse T054 registration, machine path mapping, report publication and revision rules; refresh store/project/sync bindings without a service restart. The original dropped folder is not registered by an inferred path. Its uploaded snapshot and a downloaded repository are published to a protected owned checkout under `L/additions/repositories/<additionId>/`, with a byte-verified recovery record, then registered. The original dropped source is never rewritten. The ordinary M1ND journal does not authorize arbitrary repository-tree writes. Never fabricate an Overlord or unit to make the project appear.
-  Skills use private `user/features/<name>/`, including their SKILL.md and support files; docs use private `user/knowledge/<name>/`. Preserve the reviewed license/NOTICE bytes in the owned package; an inherited license above the candidate root is included as its owned LICENSE file only after hash verification and collision checks. Preserve kit categories, private-name precedence and person preferences. Include accepted additions in T054 reports with origin, pin, scope, actual unit count, Remove and revision. Additions retain a separately owned manifest and tombstone; generic kit evolve cannot replace, delete or globally install them. Reuse owned file/hash planning, but do not send scoped assets through the current all-client `planAgentAssets` loop.
+- Screens: 2.20, 2.21, 2.22, 6.8. Decisions: 23, 25. Kind: JUDGMENT.
+- Files: `engine/service/additions.mjs`, `applyAdditions`, `removeAddition`, `readAdditions`, `readScopedAdditions`, acceptance/update recovery; `engine/service/settings.mjs`, T051 Content/project report extensions and registration reuse; `engine/install.mjs`, `installableAssetRoots`, `listInstallableAssets`, `planAgentAssets`, imported-content exclusion from global client installation; `engine/service/adapters.mjs`, `launch`, verified per-session content availability; `engine/service/bridge.mjs`, `createNativeLaunch`, native scoped capability binding; `engine/relay/local-wake.mjs`, verified manually registered app-session binding; `engine/service/projection.mjs`, `projectRecord`, zero-unit projects and provenance; `engine/service/service.mjs`, `configuredProjects`, selected-owner publication and project refresh; `engine/service/store.mjs`, owned content transaction authorization and `bindProjects`; `engine/service/http.mjs`, C12 read/apply/remove schema/authorization/dispatch; `engine/service/import-events.mjs`, accepted addition events; `engine/sync/store.mjs`, `stageTransaction`, accepted content/provenance eligibility; `engine/sync/apply.mjs`, imported bundle validation; `test/service-additions.test.mjs`, acceptance/scope/update/remove/Undo/recovery cases; `test/install-ownership.test.mjs`; `test/service-sessions.test.mjs`; `test/service-projection.test.mjs`; `test/sync-apply.test.mjs`; `test/gui-fixture.mjs`, independent accepted records and report extensions.
+- Change: retain recoverable source/content acceptance and existing repository registration as compatibility data. T078 converts every accepted repository to exactly one linked cluster and T094 selects it, with no separate Without an Overlord project circle. Preserve provenance and owned checkout bytes; Add scope IDs refer to migrated clusters through the existing groups wire field. T079/T080 apply per-session content visibility and write permissions after migration. No global installation or prompt-only scope enforcement is accepted as final proof. Permit repository-only acceptance with zero agents and canonical empty scope; skills/docs still require T067 nonempty scope. Never fabricate an agent or global grant to pass scope validation.
+  Decide: decide publication/recovery of local repository checkouts before the existing registration transaction, and implement all C12 accepted-state operations. Reuse existing project mapping and T051 report publication, machine path mapping, report publication and revision rules; refresh store/project/sync bindings without a service restart. The original dropped folder is not registered by an inferred path. Its uploaded snapshot and a downloaded repository are published to a protected owned checkout under `L/additions/repositories/<additionId>/`, with a byte-verified recovery record, then registered. The original dropped source is never rewritten. The ordinary M1ND journal does not authorize arbitrary repository-tree writes. Never fabricate an Overlord or unit to make the project appear.
+  Skills use private `user/features/<name>/`, including their SKILL.md and support files; docs use private `user/knowledge/<name>/`. Preserve the reviewed license/NOTICE bytes in the owned package; an inherited license above the candidate root is included as its owned LICENSE file only after hash verification and collision checks. Preserve kit categories, private-name precedence and person preferences. Include accepted additions in T051 reports with origin, pin, scope, actual unit count, Remove and revision. Additions retain a separately owned manifest and tombstone; generic kit evolve cannot replace, delete or globally install them. Reuse owned file/hash planning, but do not send scoped assets through the current all-client `planAgentAssets` loop.
   Decide and prove the adapter-specific boundary that makes selected content available only to the canonical selected unit's service-owned CLI or verified app session. Resolve groups at use; prevent exposure through global client skills roots, a shared unfiltered retrieval route or merely an instruction to ignore content. A client without an enforceable scoped mechanism returns `scope_unavailable`, preserving accepted bytes and other clients. Runtime requirements do not create a tool process, install a runtime or broaden git/shell permission. If a required runtime is unavailable, return `runtime_unavailable` with the explicit requirement; no fallback installer. Configuration changes use T052 review/apply.
   Acceptance rechecks hashes, eligibility, current Content/project/scope revisions and local owner. A mixed selection is one recoverable transaction with the original receipt; any failing part leaves no partial visible Content/project registration. New-name collisions never replace kit/private content. Updates replace only owned accepted bytes after a new reviewed pin; foreign edits yield `destination_changed`, and the prior pin stays active until commit. Removal archives only owned imported content/provenance and revokes future availability; repository source/checkout bytes stay. Ten-second Undo shares T014/T028 revision gates. Publish source-free events and sync only the accepted shared bundle; do not sync absolute checkout paths or preview/staging credentials.
 - Tests: `test/service-additions.test.mjs` must cover skill+support placement, docs knowledge pack placement, mixed atomic acceptance, C09 field retention, actual four-unit count, no global/client write, unit/group-only availability, group membership changes, deleted unit/group, unsupported client, unavailable Python, no runtime/script launch on Add, duplicate acceptance/receipt replay, stale preview/hash/scope/name/destination, shared Content sync, local repo mapping, zero-unit project projection, no fabricated unit/lead, interrupted checkout publication/registration/content write with verified reopen, update inspection without replacement, rejected update preserving prior pin, successful owned update, foreign edit preservation, Remove and valid/expired/conflicting Undo. `test/install-ownership.test.mjs` verifies evolve cannot globally install or prune accepted scoped content. `test/service-sessions.test.mjs` verifies two units on the same client see different allowed additions and verified manual sessions do not widen scope. `test/sync-apply.test.mjs` verifies accepted hashes/scopes/provenance on a second machine and absence of local preview paths, credentials and checkout bytes. Repository source/checkout inventories remain identical after Remove/Undo.
 - Proof: `node --test test/service-additions.test.mjs test/service-settings.test.mjs test/install-ownership.test.mjs test/service-sessions.test.mjs test/service-projection.test.mjs test/sync-apply.test.mjs`; 0 failures, 0 canceled; rejected acceptance produces no partial visibility, unselected sessions receive no imported assets, and Remove/Undo leave repository bytes identical.
-- Depends on: T014, T028, T052, T053, T054, T068. Commit message: `Accept scoped additions without replacing existing content`.
+- Depends on: T014, T028, T051, T052, T053, T068. Commit message: `Accept scoped additions without replacing existing content`.
 
 #### T070. Retain Add operations through uncertain responses
 
-- Screens: 2.19 to 2.22, 6.8. Decisions: 23. Kind: MECHANICAL.
+- Screens: 2.19 to 2.22, 6.8. Decisions: 23, 25. Kind: MECHANICAL.
 - Files: new `gui/app/add-api.mjs`, complete module below; new `test/gui-add-api.test.mjs`, complete tests below. Existing API deadlines and credentials are reused, not replaced.
 - Change: create:
 
@@ -3160,8 +3167,8 @@ test('Retry preserves the original Add operation body and idempotency identity',
 
 #### T071. Render the Add discovery and check windows
 
-- Screens: 2.19, 2.20, 2.21, 6.8 and shared desktop Add buttons. Decisions: 23. Kind: MECHANICAL.
-- Files: new `gui/app/add-view.mjs`, complete copy/renderer below; `gui/app/styles.css`, append the complete CSS below; new `test/add-dom-fixture.mjs`, complete isolated DOM fixture below; new `test/gui-add-view.test.mjs`, complete tests below. T072 wires these renderers into the existing shell.
+- Screens: 2.19, 2.20, 2.21, 6.8 and shared desktop Add buttons. Decisions: 23, 25. Kind: MECHANICAL.
+- Files: new `gui/app/add-view.mjs`, complete copy/renderer below; `gui/app/styles.css`, append the complete CSS below; new `test/add-dom-fixture.mjs`, complete isolated DOM fixture below; new `test/gui-add-view.test.mjs`, complete tests below. T094 wires these renderers into the existing shell.
 - Change: create the module. All product copy is literal below. Source descriptions remain third-party data, rendered with textContent. Never interpolate them into HTML or translate their instructions. Model fields are `language`, `stage` (`source` or `check`), `link`, `preview`, `selected` (candidate IDs), `scopes` (candidate-ID keyed Scope), `choices` (`units:[{id,title}]`, `groups:[{id,title,members}]`), `busy`, and `errorCode`. Actions are `onInspect`, `onDrop`, `onSelect`, `onScope`, `onContinue`, `onBack`, `onCancel`, `onAccept`, `onRetry`. Renderer output does not authorize a write.
 
 ```js
@@ -3176,6 +3183,7 @@ export const ADD_COPY = Object.freeze({
   skill: ['Skill', 'Skill'], repository: ['Repository', 'Repositorio'], docs: ['Docs', 'Documentación'],
   'tool-server': ['Tool server', 'Servidor de herramientas'],
   docsDescription: ['Documentation', 'Documentación'], repositoryDescription: ['Git repository', 'Repositorio Git'],
+  repositoryScope: ['A repository becomes a cluster. Its first agent can be added after acceptance.', 'El repositorio se convierte en un clúster. Se puede agregar el primer agente después de la confirmación.'],
   toolDescription: ['Available after 3.0', 'Disponible después de 3.0'],
   cancel: ['Cancel', 'Cancelar'], back: ['Back', 'Volver'], continue: ['Continue', 'Continuar'],
   inspect: ['Reading the source', 'Leyendo el origen'], adding: ['Adding', 'Agregando'],
@@ -3196,19 +3204,19 @@ export const ADD_COPY = Object.freeze({
   native: ['Native executable', 'Ejecutable nativo'],
   onlyUnits: ['only in the units below', 'solo en las unidades seleccionadas'],
   who: ['Who can use it', 'Quién puede utilizarlo'], every: ['Every unit', 'Todas las unidades'],
-  groupOne: ['Group, 1 unit', 'Grupo, 1 unidad'], groupMany: ['Group, {count} units', 'Grupo, {count} unidades'],
+  groupOne: ['Cluster, 1 agent', 'Clúster, 1 agente'], groupMany: ['Cluster, {count} agents', 'Clúster, {count} agentes'],
   originOne: ['from {source}, 1 unit', 'de {source}, 1 unidad'], originMany: ['from {source}, {count} units', 'de {source}, {count} unidades'],
   addedOne: ['{name} added for 1 unit', '{name} agregado para 1 unidad'], addedMany: ['{name} added for {count} units', '{name} agregado para {count} unidades'],
   remove: ['Remove', 'Quitar'], undo: ['Undo', 'Deshacer'], retry: ['Retry', 'Reintentar'],
   checkUpdates: ['Check for updates', 'Comprobar actualizaciones'],
   removeTitle: ['Remove {name}?', '¿Quitar {name}?'],
   removeContent: ['Its added content and access are removed. Kit content and source files stay. Undo is available for 10 s.', 'Se quitan el contenido agregado y su acceso. Se conservan el contenido del kit y los archivos de origen. Deshacer está disponible durante 10 s.'],
-  removeRepository: ['The project leaves the Map and Hierarchy. Repository files and work stay. Undo is available for 10 s.', 'El proyecto se quita del Mapa y la Jerarquía. Se conservan los archivos del repositorio y el trabajo. Deshacer está disponible durante 10 s.'],
-  projectOrigin: ['Project from {source}', 'Proyecto de {source}'],
-  noUnits: ['No units yet', 'Sin unidades todavía'],
-  repoPinned: ['The repository is pinned at commit {pin}. Add its first unit to start working on it.', 'El repositorio está fijado al commit {pin}. Agregar la primera unidad para comenzar a trabajar.'],
-  newUnit: ['New unit in {project}', 'Nueva unidad en {project}'],
-  repoAdded: ['{project} added', '{project} agregado'], newUnitShort: ['New unit', 'Nueva unidad'],
+  removeRepository: ['The repository link is removed. The cluster, agents and files stay. Undo is available for 10 s.', 'Se quita el vínculo del repositorio. Se conservan el clúster, los agentes y los archivos. Deshacer está disponible durante 10 s.'],
+  projectOrigin: ['Cluster from {source}', 'Clúster de {source}'],
+  noUnits: ['No agents yet', 'Todavía no hay agentes'],
+  repoPinned: ['The repository is pinned at commit {pin}. Add its first agent to start working on it.', 'El repositorio está fijado al commit {pin}. Agregar el primer agente para comenzar a trabajar.'],
+  newUnit: ['New agent in {project}', 'Nuevo agente en {project}'],
+  repoAdded: ['{project} added', '{project} agregado'], newUnitShort: ['New agent', 'Nuevo agente'],
   newProject: ['new', 'nuevo'],
   failureHint: ['The selection is kept. Retry checks the saved operation before sending it again.', 'Se conserva la selección. Reintentar comprueba la operación guardada antes de volver a enviarla.'],
   error_source_unavailable: ['The source could not be read. Check the link and retry.', 'No se pudo leer el origen. Comprobar el enlace y reintentar.'],
@@ -3307,7 +3315,9 @@ export function renderAdd(document, model, actions) {
         checkLine(document, check.runtime.ok, check.runtime.requirements.length ? t('needs', {
           requirements: check.runtime.requirements.map(name => name === 'Native executable' ? t('native') : name).join(', '),
         }) : t(check.runtime.verified === false ? 'unknownRuntime' : 'noRuntime'), check.runtime.requirements.length ? t('onlyUnits') : null));
-      block.append(checks, element(document, 'p', { class: 'add-field-label', text: t('who') }));
+      block.append(checks);
+      if (item.kind === 'repository') { block.append(element(document, 'p', { class: 'add-field-label', text: t('repositoryScope') })); dialog.append(block); continue; }
+      block.append(element(document, 'p', { class: 'add-field-label', text: t('who') }));
       const scope = model.scopes[item.id] ?? { everyUnit: false, units: [], groups: [] };
       const choices = element(document, 'div', { class: 'add-scope' });
       choices.append(choice(document, t('every'), scope.everyUnit, model.busy,
@@ -3330,7 +3340,7 @@ export function renderAdd(document, model, actions) {
   controls.append(button(document, t(model.stage === 'check' ? 'back' : 'cancel'), model.stage === 'check' ? 'add-back' : 'add-cancel',
     model.stage === 'check' ? actions.onBack : actions.onCancel, model.busy));
   const valid = selected.length > 0 && selected.every(item => item.supported && item.check.eligible
-    && (model.scopes[item.id]?.everyUnit || model.scopes[item.id]?.units.length || model.scopes[item.id]?.groups.length));
+    && (item.kind === 'repository' || model.scopes[item.id]?.everyUnit || model.scopes[item.id]?.units.length || model.scopes[item.id]?.groups.length));
   const next = button(document, model.busy ? t(model.stage === 'check' ? 'adding' : 'inspect')
     : model.errorCode ? t('retry') : model.stage === 'check' ? accept : t('continue'), model.stage === 'check' ? 'add-confirm' : 'add-continue',
     model.errorCode ? actions.onRetry : model.stage === 'check' ? actions.onAccept : actions.onContinue,
@@ -3448,7 +3458,7 @@ test('the check precedes unit selection and runtime caution does not imply insta
   const view = renderAdd(document, { ...model, stage: 'check' }, {});
   const text = copy(view);
   for (const value of ['Add pdf', 'Pinned to commit 4f2c9e1', 'MIT license', 'Older than 7 days, no install scripts',
-    'Its scripts run Python', 'only in the units below', 'Who can use it', 'Every unit', 'Checkout launch', 'Group, 3 units', 'adjutant', 'Back']) assert.ok(text.includes(value), value);
+    'Its scripts run Python', 'only in the units below', 'Who can use it', 'Every unit', 'Checkout launch', 'Cluster, 3 agents', 'adjutant', 'Back']) assert.ok(text.includes(value), value);
   assert.ok(text.indexOf('MIT license') < text.indexOf('Who can use it'));
   assert.equal(nodes(view).filter(node => node.getAttribute('data-check-ok') === 'false').length, 1);
   const buttons = nodes(view).filter(node => node.tagName === 'BUTTON');
@@ -3479,31 +3489,1086 @@ test('failed inspection retains an enabled Retry and unknown evidence is shown w
   assert.doesNotMatch(copy(view), /No executable runtime required/);
   const versioned = renderAdd(document, { ...model, preview: { ...model.preview, pin: { kind: 'version', value: '12.34.56-rc.10' } } }, {});
   assert.match(copy(versioned), /12\.34\.56-rc\.10/);
+  const repository = renderAdd(document, { ...model, stage: 'check', selected: ['repo'], scopes: {},
+    preview: { ...model.preview, candidates: [{ ...pdf, id: 'repo', kind: 'repository' }] } }, {});
+  assert.match(copy(repository), /A repository becomes a cluster/);
+  assert.equal(nodes(repository).find(node => node.getAttribute('data-action') === 'add-confirm').getAttribute('disabled'), null);
 });
 ```
 
-- Proof: `node --test test/gui-add-view.test.mjs test/gui-shell.test.mjs`; 4 new tests and existing shell tests pass, 0 failed, 0 canceled. Browser verification of exact bounds, all six looks, keyboard order, disabled tools and both languages is completed in T072/T064; this DOM fixture is not browser evidence.
+- Proof: `node --test test/gui-add-view.test.mjs test/gui-shell.test.mjs`; 4 new tests and existing shell tests pass, 0 failed, 0 canceled. Browser verification of exact bounds, all six looks, keyboard order, disabled tools and both languages is completed in T094/T064; this DOM fixture is not browser evidence.
 - Depends on: T062, T067, T070. Commit message: `Render Add discovery checks and selected unit scopes`.
 
 #### T072. Connect one Add window and show projects without units
 
-- Screens: 2.19 to 2.22, 6.8 and every shared desktop bar. Decisions: 23. Kind: JUDGMENT.
-- Files: new `gui/app/add-controller.mjs`, `openAdd`, `closeAdd`, source upload/inspection/check/accept/retry state and retained operations; `gui/app/main.mjs`, `renderBar`, mount/dispose, `settingsSurface`, project selection/inspector, shared modal and event refresh; `gui/app/settings.mjs`, T055 Content Add/provenance/Remove; `gui/app/hierarchy.mjs`, `buildHierarchy`, `flattenVisibleHierarchy`, zero-unit projects; `gui/app/map.mjs`, `createMap`, project circles and hit/selection integration; `gui/app/map-geometry.mjs`, `groupOriginsFor`, registered zero-unit project anchors; `gui/app/inspector.mjs`, `renderProject`; `gui/app/state.mjs`, project/addition report and retained Add draft, `additions.changed`; `engine/service/http.mjs`, `BROWSER_STATIC_FILES` add exact basenames `add-api.mjs`, `add-view.mjs`, `add-controller.mjs`; `test/gui-add-controller.test.mjs`, new; `test/gui-shell.test.mjs`; `test/gui-map.test.mjs`; `test/gui-fixture.mjs`; `test/gui-data.mjs`; `test/service-integration.test.mjs`; `test/service-api.test.mjs`; `test/gui-browser.md`, P13 observations only.
-- Change: decide modal lifecycle/focus and project hit behavior, then compose T070/T071 against the completed T055 shell. The common desktop bar places the 32-pixel-or-larger `addButton` after modes and before Waiting, with icon 15, gap 6, padding 7x13, radius 11 in Modern and 8 in Nocturne, accent fill/ink, 13/700 label. Content's Features heading has its own Add with plus, using that same `openAdd` controller. Map, Blueprint, Void and Settings open the same one 600-pixel dialog, preserving their underlying selection, unsaved editor text and invoker. Phone and agent/embed audiences without desktop settings.write do not get this control or an alternate import path.
-  The source step has the link/drop affordance, detection progress and separate candidate rows from T071. Debounce changed links by 300 ms; Enter inspects immediately; source reads carry the same retained operation and submit `{kind:"link",url:link}`. Source-type resolution is owned by the service, not guessed from a URL hostname in the browser. Chunk a dropped regular-file tree into 65536-byte chunks, rejecting symlinks and oversized/deep/duplicate paths before uploading; directory handles are traversed only within the dropped root. Never serialize File.path. Cancel disposes the owned preview/upload only. Continue selects the check stage without an acceptance request; Back retains candidate choices and scopes without repeating acquisition. Mixed selections show each part's check and scope in source order. Every unit clears explicit unit/group selections; explicit unit/group selection clears Every unit. Unit IDs and group IDs remain canonical, aliases affect labels only. C12 revision/eligibility rechecks remain authoritative.
-  The accept button is the only placement request. It disables controls, displays a spinner in the pressed control and `Adding`, and retains exact fields/operation through response loss. A 30-second timeout ends local waiting, keeps the selection and offers Retry; reconciliation reads the same preview/receipt before another send. Preview state `accepted` settles from its stored result; state `failed` retries inspection through its C12 retry route using a retained per-attempt operation, not by replaying the initial 202. Close cannot claim cancellation of a committed Add. Group membership drift and expired checks require a new review, not a blind resubmission. Error keys and literal bilingual explanations come from T071; raw Git/package/script output never reaches the DOM. Returning from Cancel/Back/removal/Undo restores keyboard focus. Remove shows T071's confirmation with the actual name and correct content/repository explanation, then calls the C12 operation; Undo uses the existing ten-second change route.
-  After skill acceptance open Settings, Content with its checked `renderAddedContent` row, actual origin and deduplicated unit count, Remove, and `addedOne`/`addedMany` toast with Undo. Docs appear in Knowledge packs with the same provenance/ownership affordances. Preserve all kit Features, Knowledge packs and Preferences. The imported origin text is a named Check for updates button, at least 32 pixels tall; it calls onUpdate and opens the same window/check/scopes and labels its new pin; the accepted old pin remains visible until replacement commits. No update is silently accepted on app open, event refresh, retry or a Settings checkbox.
-  A repository acceptance loads the real `/projects` collection and selects its project in Hierarchy, Map and inspector. A project with `unitIds:[]` is represented as a project, not a synthetic Unit. Add it under Without an Overlord, with grid icon, zero count and its real project ID. On the board fixture place the new project circle at x320/y575 with diameter 46; real empty projects use the existing free-position layout placement and store their anchor in `layout.groups["project:" + projectId]` using its existing x/y position format. Never put a project ID in the UnitId-only `layout.nodes` map. Show the literal `new` / `nuevo` badge for a newly added empty project in Hierarchy and the zero count on its Map circle; after a real unit is created, show the actual count. `renderProject` uses the existing 366-pixel inspector, grid/title, origin subtitle `projectOrigin`, centered body padding 32/gap 12, title `noUnits` at 16/700, `repoPinned` at 13.5/mute/center, and primary `newUnit` button. It prefills the existing New unit dialog with that project and no Overlord, rather than creating a unit automatically. Success toast uses `repoAdded` and `newUnitShort`; count rises only after real unit creation.
-  Project/addition events refresh report data while preserving the current mode, editor drafts and other inspector/chat state. Serve all three new browser module basenames through the existing exact static allowlist and verify they are packaged. Correct only measured P13 contrast/geometry/focus defects in the named files using current quiet theme tokens. Do not introduce a second desktop host, new package dependency, tool Connect UI or installer.
-- Tests: `test/gui-add-controller.test.mjs` covers both entry points sharing one modal, en/es source/check, disabled tool, mixed selections, default no grant, actual canonical group/direct deduplication, 300 ms debounce/Enter, dropped chunk order/size and File.path exclusion, Continue/Back/Cancel with no acceptance, safe error mapping, in-button busy state, lost response and same-operation Retry, expired/stale checks, accepted Content placement/Undo, docs knowledge row, Remove confirmation/revision/foreign-edit failure and update check leaving old pin active. `test/gui-shell.test.mjs` checks Add before Waiting in Map/Blueprint/Void/Settings and absent on phone, Content Add opening the same controller, 32-pixel targets/names/focus restoration. `test/gui-map.test.mjs` checks a zero-unit registered project in Hierarchy/Map, project selection distinct from unit selection, inspector and prefilled New unit, no fabricated unit/lead, position persistence and subsequent real count. `test/service-integration.test.mjs` performs actual-core acceptance/read-back/reopen/sync/remove/Undo with injected acquisition/native/OS runners; fixture-only visual success cannot satisfy this integration test. `test/service-api.test.mjs` checks all three browser files' static MIME/allowlist. Observe 2.19 to 2.22 and the 6.8 Add control in both languages at 1440x900 and 720x600, all six looks, keyboard-only, 200% zoom and reduced motion; record actual outcomes in `test/gui-browser.md`.
-- Proof: `node --test test/gui-add-api.test.mjs test/gui-add-view.test.mjs test/gui-add-controller.test.mjs test/gui-shell.test.mjs test/gui-map.test.mjs test/gui-fixture.test.mjs test/service-integration.test.mjs test/service-api.test.mjs`; 0 failed, 0 canceled; the named browser observations pass with recorded actual viewport/target/contrast evidence. T063/T064 remain the subsequent full-suite and 87-screen acceptance gates.
-- Depends on: T016, T055, T062, T069, T070, T071. Commit message: `Connect Add to M1ND across desktop modes and Content`.
+- Kind: RETIRED. T094 retains the shared Add controller, Content controls, retry/Undo and static modules, and selects accepted repositories as clusters through T078/T091 instead of project circles under Without an Overlord.
+
+### P15. Start working, plans and supervision
+
+Execute T073 to T094 after the kept P13 tasks and before T063. These tasks subsume the unimplemented P14; no separate run-log inspector or role-selection modal is built. Cluster UUIDs reuse migrated group UUIDs and their chats. The only final grouping is clusters. T001 to T044 retain their complete text; P15 amends their resulting behavior where decision 25 replaces it. The execution order is T045 to T053, T055 to T071 with the task dependencies below, T073 to T094, T063, T064; T054 and T072 are retired.
+
+#### T073. Define clusters launch choices and supervised plans
+
+- Screens: every start screen; 2.19 to 2.22, 6.2 to 6.8 and the replaced 2.7 to 2.14, 3.12 to 3.15. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: docs/3.0/contract.md, sections 2.2, 2.3 and 5, exact additions C13, C14 and C15 below. No prior text is deleted; these additions explicitly supersede its incompatible clauses.
+- Change: insert the first block immediately after ### 2.2. Units, person migration, sessions, and wake policies.
+
+~~~text
+Final integration amendment C13: clusters and start working.
+
+Decision 25 supersedes the visible My groups, root person node, projects without an Overlord, old New unit and client-only Start session flows. root:master remains an authenticated author/recipient, never a Map node. Cluster is the sole grouping entity: {id:UUID,title:string,parentId:UUID|null,link:{kind:"repository",projectId:Name}|{kind:"folder",folderId:UUID}|{kind:"none"},members:UnitId[],chatId:UUID,deleted:boolean,revision:Revision}. Title uses existing Group validation. Empty members are allowed. Parent chains are acyclic and machine-local links are resolved through the selected owner's mapping. Existing groups migrate preserving UUID, chatId, history, members, archive state and Undo identity. /groups and the C12 Scope.groups field remain compatibility aliases for canonical clusters; there is no independent group collection. A cluster scope expands active members of selected clusters and their descendants, deduplicates canonical IDs and excludes master, removed units and deleted clusters. Ambiguous legacy multiple-cluster membership requires explicit assignment before a write-capable launch; no cloning, lost history or guessed reporting change. Unit adds clusterId:UUID|null. Folder/repository parents do not automatically rewrite lead-id; new Overlords/Executors derive their lead from the cluster and its existing chain.
+
+Canonical cluster records reuse P/gui/groups/<id>.json, upgraded to format hivem1nd-cluster-v1; old group bytes and Undo snapshots are retained by the migration journal. There is one record/UUID/chat identity and compatibility readers accept old format until upgraded. No parallel P/gui/clusters collection is introduced.
+
+A repository link maps to one canonical Git common-directory identity. Worktrees belong to that repository, listed inside it with actual path/branch; they are never offered as separate repositories. A folder link allows a bounded subtree; an unlinked cluster permits conversation/planning but no file write without an explicit outside-scope approval. Cluster link changes do not retroactively widen a running session's immutable approved scope. Resolve real paths, symlinks/junctions, case and creation identity before authority; cwd is not a write permission. Ordinary M1ND record writes remain service operations scoped to the actor, not a blanket filesystem grant. Root Overseer/Adjutant/environment roles can launch with multiple registered projects using an owned private session directory, never an arbitrary repository as an implicit write grant.
+
+First-open discovery is read-only and bounded to the existing four-level repository search, skips links and inaccessible folders, verifies Git common-dir/worktree identity, groups canonical repositories by containing folder and shows one filterable offer. Selection is initially on as drawn, but no repository, folder cluster or mapping is imported before confirmed:true. Not now records only the dismissed offer; reopen does not repeatedly import or show the same offer. Existing registered repositories are migrated as accepted links, not rediscovered consent. Acceptance creates one linked folder cluster per accepted containing folder and one repository cluster inside it, atomically and idempotently. Empty selections create no cluster. The person can create repository/folder/unlinked clusters later. Add to M1ND repository acceptance projects through the same canonical repository/cluster mapping, not a second project circle. Content and source checkout ownership, pins, scope, Remove and Undo retain C12.
+
+Machine reports add clusterLinks:[{clusterId,title,kind,projectId:Name|null,localPath:string|null,available:boolean}], connectedClients:[ClientCapability], discoveryOffer:{id:UUID,revision:Revision,groups:[{id:string,title:string,path:string,repositories:[{id:string,name:string,projectId:Name|null,remote:string|null,worktrees:[{id:string,path:string,branch:string|null}]}]}],dismissed:boolean}|null. No absolute path is synced as shared cluster metadata. Settings Projects displays these links, not old root/environment registration controls. Removing a link/cluster asks what leaves and stays, preserves repository/source files, history/tasks and unrelated leads, archives its chat and offers the existing ten-second guarded Undo. Reject removal with unresolved owned processes until acknowledged safe stop; do not cascade-delete agents.
+
+RunsIn is {client:"claude"|"codex"|"cursor"|"lyra",model:string,effort:string|null,mode:null|"fast"|"normal"|"thinking"}. External clients have nonnull verified effort and mode:null; Lyra has effort:null and a supported mode. Store it on the unit and in its immutable session-start snapshot. It is applied to the real native request/arguments, never only written in a prompt. ClientCapability is {id,title,connected:boolean,models:[{id,title,efforts:string[],modes:string[]}],quota:{remainingPercent:number|null,period:string|null,known:boolean},scopeEnforced:boolean,context:{known:boolean,compact:boolean}}. Only connected clients appear in Runs in. Unsupported model/effort/mode or unproved write enforcement returns 422 unsupported_launch_choice or 409 scope_unavailable, never silent fallback. Unknown quota is shown as unavailable, not 100 percent or unlimited. Lyra has no quota; offer only installed, honorably selectable models and Fast/Normal/Thinking combinations. Per-machine defaultRunsIn is optional and changed only by the unchecked Use for new agents from now on choice. New agent asks only Executor/Overlord and Runs in; name, machine, folders and lead are derived deterministically from cluster identity and current records. Alias editing remains separate. Overseer creation offers external agent or local Lyra, Runs in, Start fresh every session checked, Later/Create; no session or model installation on creation alone.
+
+Context is {sessionId:UUID,generationId:UUID,revision:Revision,used:number|null,capacity:number|null,unit:"tokens"|"characters"|"unknown",percent:number|null,estimated:boolean,dismissed:boolean,budgets:null|{message:{used:integer,capacity:8000},appContext:{used:integer,capacity:12000},history:{used:integer,capacity:16000}},operation:null|{requestId:UUID,action:"compact"|"clear"|"dismiss",state:"pending"|"applied"|"failed",error:null|{code:string,message:string}}}. Protected state/checkpoints live in L/contexts/<sessionId>/; GET /sessions/:sessionId/context returns 200 Context to an authorized desktop before any private read. POST /sessions/:sessionId/context accepts {action:"compact"|"clear"|"dismiss",expectedRevision:Revision} and returns 202 {requestId:UUID,state:"pending",context:Context}. GET context and session.context invalidation reconcile the operation result; no invented upstream compact endpoint is called. Fresh is default for each new Overseer session; keep-context is explicit. Preserve authored chat history. At 80 percent or above offer Compact, Clear and Close. Unknown native telemetry is unavailable. Lyra has no model-window capacity: unit is characters, used/capacity are null, budgets contain the three separately measured enforced input dimensions, and percent is the maximum of their used/capacity ratios, explicitly labeled estimated input budget usage rather than token/model-window fullness. Its entire request must also fit the 100 KiB UTF-8 service bound. Compact verifies a summary, keeps history, rereads current M1ND and starts a new generation only after success; Clear clears active context, preserves history and rereads M1ND. Close dismisses only the current generation. None authorizes Git, plan completion or read acknowledgment.
+
+Private LaunchScope is {id:UUID,revision:Revision,sessionId:UUID,attemptId:UUID|null,unitId:UnitId|null,clusterId:UUID|null,clusterRevision:Revision|null,machine:Name,readScope:UnitId[],contentScope:{additionIds:UUID[],scopeRevision:Revision|null},writeRoots:[{realPath:string,identity:{kind:"windows-file-id"|"posix-inode"|"native-sandbox",value:string},gitCommonDir:string|null}],git:{commit:boolean,push:boolean,intentId:UUID|null}} at L/sessions/<sessionId>/scope.json. RunsIn grants no scope. Bind it before spawn to the reviewed native policy and attempt; cluster root changes cannot widen it. Revalidate current accepted-content membership/revocation on each tool use without widening approved write roots. An unlinked/root role has writeRoots:[] except the service-owned private context directory, which grants no project access. Ordinary M1ND writes use scoped service tools, never a blanket filesystem root.
+
+Agent inspector tabs are Chat and Work. Chat holds authored messages only, survives session closure and has one folded Started with line for role/M1ND/task. Bootstrap prompts, tool output and progress are not chat messages. Work holds bound session milestones, elapsed step time and Stop the step; Full transcript is in More with private sanitized bounded access. Inbox is unread authored messages per canonical recipient, not a second surface; explicit recipient acknowledgments alone reduce the count shown beside the agent in Hierarchy and on the Map. Selecting a node or viewing its sent messages does not mark its agent's inbox read. Cluster chat goes to its lead; an Executor without an Overlord plans for itself; a cluster with several agents and no lead asks the person who plans. Only the lead/coordinator opens other plan sessions. Message projection adds owner-derived channel:"message"|"bootstrap"|"work", authorId:string and recipientIds:string[]. New cluster-composer messages address the current lead only, or the sole Executor; a multiple-agent cluster with no selected lead retains the authored draft/message and asks the person who plans before dispatch. Chat membership still authorizes history reads but is not an instruction to wake every member. Explicit plan_send recipients are the chosen role actors. Historical deliveries retain their original recipients/receipts; migration never fabricates a new recipient acknowledgment. Only the owner classifies bootstrap from verified preload/request markers; caller-supplied channel/authorId/recipientIds cannot grant free control or another identity.
+
+GET /clusters accepts List,machine?:Name and returns List<Cluster>; GET /clusters/:clusterId returns 200 Cluster. POST /clusters accepts {title,parentId:UUID|null,link,machine:Name,confirmed:true} and returns 201 Cluster. PATCH /clusters/:clusterId accepts {title?:string,parentId?:UUID|null,link?:object,expectedRevision} and returns 200 Cluster. DELETE /clusters/:clusterId accepts {confirmed:true,expectedRevision} and returns 200 {clusterId,changeId,undoUntil}. POST /discovery/offers/:offerId/answer accepts {machine,repositoryIds:string[],confirmed:boolean,expectedRevision} and returns 200 {clusters:Cluster[],dismissed:boolean}. POST /clusters/:clusterId/agents accepts {role:"executor"|"overlord",runsIn:RunsIn,useAsDefault:boolean,expectedRevision} and returns 201 Unit. POST /overseer accepts {runsIn:RunsIn,fresh:boolean,expectedRevision:Revision|null} and returns 201 Unit. PATCH /units/:unitId/runs-in accepts {runsIn,useAsDefault:boolean,expectedRevision} and returns 200 Unit. GET /sessions/:sessionId/work and GET /sessions/:sessionId/transcript accept bounded List and are authorized before reading private evidence. GET /clusters/:clusterId/git returns 200 {remote:string|null,branch:string|null,dirtyCount:integer,lastCommit:{id:string,subject:string,at:Time}|null,revision:Revision}; GET /clusters/:clusterId/changes accepts List and returns bounded changed paths/statuses and safe diffs. POST /clusters/:clusterId/open-editor accepts {} and returns 202 {requestId}; it opens only the reviewed configured editor and verified link, never arbitrary shell text. Desktop alone creates/changes these resources; phone sees only its restricted existing chat/tree/ask projections. No auto-commit or push endpoint is introduced by Git reads or editor opening.
+
+All writes outside the current cluster root require exact person approval before execution for every connected client. Bridge native filesystem/shell/tool permission requests into structured owner approvals; never answer an actionable native request with generic -32601 or assume false ACP capabilities enforce scope. Reject when an adapter cannot prove the required boundary. Git capability git.commit and git.push is separate, unticked, per unit/session/machine/repository and revocable. Permission alone is not intent. Run approval explicitly includes the plan branch and per-task commits; push still needs its own explicit person instruction. Ordinary session exit, report, compact/clear or service shutdown authorizes no Git operation. /relay out alone records the handoff and releases claims; it authorizes no commit or push. Remove the existing command text that treats exit as blanket Git consent. Commit/push requires a separate explicit person instruction for named repository/paths/branch; automatic lifecycle shutdown never supplies it. Stage only the task's reviewed changed paths, preserve unrelated index/work, and reject changed branch/head/index preconditions. No plan branch is created and no commit/push occurs before Run confirmation.
+
+Owner-dependent cluster operations always name the selected machine: GET /clusters/:clusterId, GET /clusters/:clusterId/git and GET /clusters/:clusterId/changes require machine in query; PATCH/DELETE /clusters/:clusterId, POST /clusters/:clusterId/agents, POST /clusters/:clusterId/open-editor, POST /overseer and PATCH /units/:unitId/runs-in require machine in their body in addition to the keys above. The selected offline owner returns 409 machine_unavailable, never local execution. Session/context/work operations resolve their immutable session owner; plan/run operations resolve their immutable plan.machine. POST /plans additionally requires machine:Name and Plan stores machine:Name.
+
+POST /cluster-links accepts {machine:Name,kind:"repository"|"folder",path:string,expectedReportRevision:Revision} and returns 201 {link:{kind:"repository",projectId:Name}|{kind:"folder",folderId:UUID},revision:Revision}. This creates only a reviewed owner-local verified folder/repository mapping, not clusters, units or discovered imports. Resolve the selected absolute directory on that owner, reject links/invalid/missing paths and canonical collisions, preserve its files, and use the result in confirmed cluster creation/link PATCH. DELETE /cluster-links/:clusterId accepts {machine:Name,confirmed:true,expectedRevision:Revision} and returns 200 {clusterId:UUID,changeId:UUID,undoUntil:Time}; detach the association, preserve the cluster/agents/chat/files and kept path mappings for guarded Undo, and invalidate future write grants. This replaces the automatic root/environment discovery side effect of C09 project-folder registration. Ordinary session start now accepts {prompt?:string|null,runMode?:"task"|"chat",taskId?:TaskId|null,expectedRevision:Revision}; resolve client/model/effort from the unit's runsIn snapshot. Reject caller client/model/effort overrides with 422 unsupported_launch_choice until the person changes Runs in explicitly.
+
+Cluster creation and agent/Overseer creation require unit.create; cluster metadata/removal requires chat.manage; mapping/default choice changes require settings.write; context mutation requires session.start and scope-bound context ownership; editor opening requires read plus desktop audience. Reads require read. Existing exact Revision/receipt rules apply. Errors include 409 cluster_changed, 409 cluster_cycle, 409 scope_unresolved, 409 scope_unavailable, 409 git_changed, 409 git_unavailable, 409 context_unavailable, 422 unsupported_launch_choice, 422 invalid_cluster. Sanitized SSE invalidations are cluster.changed {clusterId,revision}, session.work {sessionId,sequence}, session.context {sessionId,revision}, unit.unread {unitId,count}; no native secrets or output.
+~~~
+
+Insert the second block immediately after ### 2.3. Session start request and result.
+
+~~~text
+Final integration amendment C14: plans inside the lead's chat and supervision.
+
+A plan is a revisioned structured card in the cluster lead's persistent chat, not a separate run-log inspector. It contains {id:UUID,clusterId:UUID,chatId:UUID,machine:Name,title:string,branch:string,mode:"planning"|"execution",revision:Revision,tasks:[{id:TaskId,title:string,actorId:string|null,assignment:Assignment,runsIn:RunsIn,state:"todo"|"busy"|"done"|"stuck"|"failed",step:string|null,stepAt:Time|null}],roles:{coordinator:Assignment,planner:Assignment,builder:Assignment,reviewer:Assignment},approved:boolean}. Assignments refer to active cluster members or verified connected clients on the owner machine; direct clients receive restricted per-plan actor identities, not fabricated units or impersonated leads. Reusing the planner as reviewer reopens only its verified conversation with review authority. Edit changes title/task assignments/launch choices under revision before Run; in-flight replacement explicitly stops/reconciles the previous owned attempt. A new plan drafted from Void or conversation waits for person approval before any build. Run confirms the exact revision, branch, ordered existing task IDs, role choices and per-task commits; it returns 202 launch intent, not a claim of started work. Nothing builds, creates a branch or commits before that yes. No model decides unilaterally who may open a session.
+
+PlanRole is "coordinator"|"planner"|"builder"|"reviewer". Assignment is {kind:"unit",unitId:UnitId,runsIn:RunsIn} or {kind:"client",client:Client,runsIn:RunsIn,reuseRole:null|"planner"}; client must equal runsIn.client and the runtime's machine supplies ownership. Only reviewer may reuseRole planner, with exactly the planner's client/model/machine and verified conversation/checkpoint. Unit assignment must be an active member of this cluster/descendants. Direct clients receive a private service-issued actor binding {runId:UUID,role:PlanRole,attemptId:UUID,sessionId:UUID,unitId:UnitId|null,machine:Name}; no caller supplies a native identity or credential.
+
+Runtime record is {id:UUID,planId:UUID,clusterId:UUID,machine:Name,mode:"planning"|"execution",state:"open"|"stopping"|"stopped"|"completed"|"failed",startedAt:Time,closedAt:Time|null,revision:Revision,taskIndex:integer,lastCheckedAt:Time|null,summarySlot:integer,budget:{base:integer,used:integer,extra:integer,roleExtra:integer,limit:integer},attempts:Attempt[],watches:Watch[],messages:TrackedMessage[],alerts:PlanAlert[]}. Attempt is {id:UUID,role:PlanRole,taskId:TaskId|null,sentAt:Time,confirmedAt:Time|null,resolved:boolean,sessionId:UUID|null,notifications:EscalationTarget[]}. Watch is {episodeId:UUID,attemptId:UUID,role:PlanRole,phase:"planning"|"execution",taskId:TaskId|null,lastStepAt:Time,resolved:boolean,notifications:EscalationTarget[]}. TrackedMessage is {id:UUID,sentAt:Time,recipients:[{actorId:string,readAt:Time|null,retriedAt:Time|null,notifications:EscalationTarget[]}]}. EscalationTarget is "coordinator"|"overseer"|"person". PlanAlert is {id:string,kind:"no_start"|"stalled"|"unread"|"extension"|"cleanup"|"wake_capped",attemptId:UUID|null,messageId:UUID|null,recipientId:string|null,at:Time,resolved:boolean,told:[{target:EscalationTarget,at:Time}],next:[{target:EscalationTarget,at:Time}],extensionId:UUID|null}. taskIndex is zero-based; base is the verified task count. Each active actor has a watch: planning gets 30 minutes even when another builder in that runtime has 10. At most one runtime is open/stopping per plan/cluster. Bind every event before ingest; owner timestamps and gap-free sequence allocate actual confirmations, milestones, reports, exits, cleanup, sends/reads/retries/escalations, budget decisions and closure. LogEntry is {id:UUID,sequence:integer,eventId:string,at:Time,role:PlanRole|null,taskId:TaskId|null,kind:string,key:string,state:"done"|"busy"|"wait"|"fail",values:object,source:"native"|"hook"|"relay"|"process"|"service"}. Duplicate evidence, byte output, heartbeats, ticks and model prose never refresh progress. Authored lead summaries stay in Chat; native steps/transcripts stay in Work. Pages use existing cursors, default 50/maximum 100. Shared owner data is P/gui/plans/<id>/plan.json and P/gui/runs/<id>/run.json with immutable log/<12-digit-sequence>.json; private evidence/ownership/receipts/leases stay in L/runs/<id>/. Existing journal/sync bounds and owner checks apply.
+
+Each dispatch confirms start within 180000 ms by a bound native initialization/hook/explicit Relay confirmation, never spawn alone. Arm a one-shot start deadline separately from Relay's 300000 ms token-free scan. Each executing watch stalls at 600000 ms without a real step; each planning watch at 1800000 ms, independently of other actors' progress. Unresolved no-start/stall/unread episodes warn on the same plan card with Stop/Retry and enter Waiting once. Notify lead/coordinator first, Overseer 300000 ms later and person another 300000 ms later. Failed delivery stays pending; real notification time is recorded and no earlier fake delivery is asserted. Recovery emits overdue levels in order. Every 1800000 ms send one durable deterministic summary to the lead, coalescing missed slots; scanning opens no agent and spends no tokens.
+
+Track each authored run message per actual recipient until its explicit acknowledgment of that message ID. Retry the original pointer once at 300000 ms and report at 600000 ms; never store a duplicate message or infer read from a reply, wake delivery or inspector view. Unresolved messages notify lead, Overseer and person in order with five-minute spacing from detection. Manual resend preserves message ID and does not reset deadlines or charge again. Budget consumes each distinct authored message once, not each recipient. Progress, scans, supervision/summary, read receipts and budget negotiations are logged control records with no budget charge. Two distinct authenticated roles may agree cumulative extra up to floor(base/2), each with a nonblank single-line reason of at most 1000 code units. Crossing that limit creates one person approval in Waiting, action plan.message.extend, pattern {runId,extensionId,count}, no standing approval and no phone answer. Pending/denied/replayed agreements cannot grant credit twice. Person approval is bound to that single extension. Budget exhaustion never suppresses control or escalation.
+
+Task done requires the agent's own delivered/failed report plus verified process exit and confirmed owned-leftover closure, in any arrival order. Tool completion, native turn end, task status, stdout closure or elapsed timeout alone never ends it. Observe parent exit independently of descendant-held pipes. Track process creation identity and owner-managed process group/job/native handles; never signal reused/arbitrary PIDs, service or unrelated/manual sessions. Stop the step targets only that owned step and keeps changes/task state. Retry waits for old attempt reconciliation/cleanup before another launch. Stop run remains stopping until owned processes close; uncertain cleanup returns 409 cleanup_unavailable and remains supervised. A finished agent's hung test cannot hold the driver indefinitely or be mistaken for continued progress.
+
+While a runtime is open/stopping its lead/coordinator owns a renewable run wake lease, independent of ordinary wake consent expiry and bound to verified canonical/native ownership. Newest registration may take it over without duplicate pointers. Lease grants no Git, arbitrary child launch, expired ordinary consent or authored-message bypass. Explicit revocation pauses dispatch and alerts the person. Closing the last owned runtime releases only that lease and keeps still-valid other policy. Restart recovers timers, log cursor, receipts and leases without duplicate launches. Lease ownership also includes the coordinator role and verified host conversation; a newer builder/reviewer registration with the same UnitId/client/machine cannot take it over. The lead uses an owned chat-lifetime session until its open plans settle, while task workers retain one-task closure. C14-approved task Assignment.runsIn overrides only that private immutable launch snapshot, never the stored agent/default or ordinary public session-start body.
+
+GET /plans accepts List,clusterId?:UUID; GET /plans/:planId returns 200 Plan. POST /plans accepts {clusterId,chatId,title,branch,mode,tasks,roles,expectedChatRevision} and returns 201 Plan; the service verifies actual task records and ownership. PATCH /plans/:planId accepts {title?:string,branch?:string,mode?:string,tasks?:object[],roles?:object,expectedRevision} and returns 200 Plan. POST /plans/:planId/run accepts {confirmed:true,expectedRevision} and returns 202 {runId,requestId}. GET /runs/:runId and GET /runs/:runId/log return 200 bounded runtime/log data. POST /runs/:runId/control accepts {action:"stop_step"|"retry_start"|"retry_task"|"replace_role"|"resend"|"stop_run",expectedRevision,attemptId?:UUID,role?:string,assignment?:object,messageId?:UUID,recipientId?:string}; extra keys are exact: attemptId for step/start/task, role/assignment for replacement, messageId/recipientId for resend, none for stop_run; returns 202 {runId,requestId}. Bound tools are plan_confirm_start, plan_step, plan_report, plan_dispatch, plan_send, plan_read, plan_extend and plan_agree, with the exact schemas in the following paragraph and existing actor proofs. Only lead/coordinator may dispatch, across every start/approval replay path; another role receives 403 plan_lead_required despite an earlier child grant. Ordinary sessions outside plans retain C03. Desktop reads/start/control use read/session.start/session.stop/chat.post; unbound/phone callers are rejected before receipts. Errors are 404 plan_not_found, 404 run_not_found, 409 plan_changed, 409 plan_already_open, 409 run_closed, 409 launch_ambiguous, 409 cleanup_unavailable, 409 budget_exhausted, 409 extension_approval_required, 409 wake_unavailable, 422 invalid_plan, 422 invalid_run_event, 422 invalid_extension. SSE invalidations are plan.changed {planId,revision}, run.changed {runId,revision}, run.log {runId,sequence}, run.alert {runId,alertId}, run.closed {runId,state}. Public records never include credential, environment, PID, native conversation identity or raw output.
+~~~
+
+The following additional C14 paragraph belongs immediately before that block's closing fence; the insertion program below also appends it from the fourth literal block to C14. It defines every plan tool wire rather than leaving argument choice to an executor.
+
+~~~text
+PlanTaskInput is {id:TaskId,title:string,assignment:Assignment}. POST/PATCH plan tasks use PlanTaskInput[], 1 to 10000 items, unique existing task IDs and nonblank titles up to 240 code units. Read task runsIn is derived from assignment.runsIn and cannot disagree with it. Read task actorId is its canonical UnitId or a service-issued "plan:<plan UUID>:<role>" ID for direct clients, never caller-controlled; assignment/runsIn supplies its displayed choice. Roles is the exact four-key object coordinator/planner/builder/reviewer:Assignment. Control role is PlanRole and assignment is Assignment. plan_confirm_start accepts {runId:UUID,attemptId:UUID,requestId:UUID}, returns 200 {confirmed:true,at:Time}. plan_step accepts {runId,attemptId,eventId:string,step:"tests"|"build"|"edit"|"plan"|"review"|"work",state:"started"|"completed",requestId}, returns 200 {sequence:integer}. plan_report accepts {runId,attemptId,outcome:"delivered"|"failed",summary:string,requestId}, returns 202 {accepted:true,taskState:"awaiting_exit"|"cleanup_pending"|"done"|"failed"}; report text is bounded by the existing message bound and safely projected. plan_dispatch accepts {runId,role:PlanRole,taskId:TaskId|null,expectedRevision,requestId}, returns 202 {attemptId:UUID,requestId:UUID}. plan_send accepts {runId,recipientRoles:PlanRole[],text:string,requestId}, returns 201 {messageId:UUID}; 1 to 4 unique roles and existing text bounds. plan_read accepts {runId,messageIds:UUID[],requestId}, returns 200 {messageIds:UUID[]}; only actual addressed IDs, at most200. plan_extend accepts {runId,count:integer,reason:string,expectedRevision,requestId}, returns 202 {extensionId:UUID,state:"pending",approvalId:UUID|null}. plan_agree accepts {runId,extensionId,expectedRevision,requestId}, returns 200 {extensionId,state:"approved"|"pending",budget:Budget}; only a different authenticated role can agree. Every omitted type for runId/attemptId/requestId/extensionId is UUID and expectedRevision is Revision. All keys listed are required, unknown keys rejected, callbacks cannot override actor identity, and each returned request/sequence/message identity is backed by the durable receipt. Budget is the exact five-integer C14 projection. Ordinary native session-start callers use C13's stored Runs in body, not the superseded client override.
+~~~
+
+Insert the third main block immediately after ## 5. MCP tools and hook interface.
+
+~~~text
+Final integration amendment C15: Lyra local application adapter.
+
+HIVEM1ND registers with the existing installed Lyra local service as {id:"hivem1nd",name:"HIVEM1ND",kind:"app"}, never kind cosmic. The person grants chat/models/tools scopes through Lyra's own app approval. Keep bootstrap/application tokens in protected machine-local storage only. The browser never receives them or calls Lyra directly. Detect and verify 127.0.0.1 service ownership/health; never install Lyra, pull/create a model or bypass it through Ollama. Reconnect/rediscover each new turn; do not assume a prior captured port survives idle/restart.
+
+Use GET /v1/models and POST /v1/chat with strict {messages:[{role:"user"|"assistant",content:string}],mode:"fast"|"normal"|"thinking",priority:"interactive"|"background",context:string,language:"en"|"es",memory:false,cloud:false,tools:string[],speak:false}. There is no model/profile request key, system role, compact endpoint or token meter. Fast/Normal resolve lyra-base; Thinking resolves lyra-thinking when installed, otherwise lyra-base. Canonicalize only the documented optional :latest suffix. Compare stored selected model to the proved resolver before every turn and to the first start event {mode,model,provider}; mismatch aborts with unsupported_launch_choice before tools. Unprovable physical Qwen-to-alias identity is not assumed. Offer only models/combinations the adapter can honor; label estimated context explicitly. Deep/cloud/alias creation/installation are outside this scope.
+
+Register one stable per-app private tool catalog with PUT /v1/tools, never per-unit competing catalogs. ToolDefinition has name,title:{en,es},description,inputSchema:{type:"object",properties,required,additionalProperties:false},effect:"read"|"change"|"send",private:true. Names are lowercase identifiers up to 48 characters, at most32 definitions and 16 selected tools per chat; schema maximum 2048 bytes,16 properties. Required names are m1nd_read, message_send, message_read, plan_confirm_start, plan_step, plan_report, plan_dispatch, plan_send, plan_read, plan_extend, plan_agree, file_read and file_write. Per-turn selection excludes unauthorized operations, notably dispatch for nonlead roles. Bind callbacks to the private service actor, never model-supplied unitId. Read may have kept permission; every change/send asks once in HIVEM1ND and outside-cluster/Git consent remains separate. Result POST /v1/tool-calls/:id/result omits decision for permission allowed or ordinary failed/unavailable results; for permission ask approval use {output:string,decision:"once"}, and ordinary denial {error:"denied",decision:"once"}. Never send always, and do not persist app-wide never for a one-session denial. Results are at most8000 characters with no secrets. Own-chat callbacks need no shared channel; HIVEM1ND is not in the trusted cross-app whitelist.
+
+m1nd_read input is {resourceId:string,cursor?:string,limit?:integer}, message_send {recipientIds:UnitId[],text:string}, message_read {messageIds:UUID[]}, file_read {path:string,start:integer,end:integer}, file_write {path:string,expectedRevision?:Revision,text:string}; authorize/resolve the resource or path from the captured actor and LaunchScope before reading or approving a write. Lyra's ToolProperty supports neither nullable types nor schema unions. Its file_write schema requires path/text and makes expectedRevision an optional string: omission maps to Core expectedRevision:null and permits creation only when the target does not exist; a present revision must match an existing target. Its plan_dispatch schema requires all C14 fields except taskId, which is an optional string: omission maps to Core taskId:null for a role launch. Explicit null is rejected at both Lyra-facing boundaries. Other plan tools retain the exact C14 fields and required keys. Represent UUID/Revision/TaskId as bounded strings, validate their actual Core syntax and actor ownership before dispatch, and do not send unsupported format:"uuid", oneOf, anyOf or type arrays. No tool accepts an authority, executable or callback-supplied unit/session identity. Titles map respectively to T088 keys readM1nd,sendMessage,readMessages,confirmPlan,reportStep,reportTask,dispatchTask,sendMessage,readMessages,requestMessages,agreeMessages,readFile,writeFile. Descriptions use those same literal English titles and each input schema has additionalProperties:false. The existing user-facing approval presents exact bounded operation details in both languages before change/send.
+
+Observe NDJSON start/thinking/text/tool_call/done/error with injected abortable transport. Start appears at first native output, not merely HTTP headers; queueing is not confirmed start. Launch responds through the HIVEM1ND async 202 boundary, while Lyra's execution stream follows its supported 125/305/905-second client deadlines and 120-second queue wait, not the GUI request's 30-second response limit. Abort disconnects the stream. Done ends the local turn, not task completion: the bound role still reports and its owned execution/cleanup must finish. Local context uses exact outgoing inputs and known Lyra character/history bounds, labeled estimated. Compact generates and verifies a local summary through normal chat, keeps original history and rereads M1ND; never call an invented compact route.
+~~~
+
+Execute this complete insertion program on stdin through node --input-type=module:
+
+~~~js
+import {readFile,writeFile} from 'node:fs/promises';
+const file='docs/3.0/contract.md';const plan=await readFile('docs/3.0/integration.md','utf8');
+const task=plan.split('#### T073. Define clusters launch choices and supervised plans')[1].split('#### T074.')[0];
+const extracted=[...task.matchAll(/~~~text\r?\n([\s\S]*?)\r?\n~~~/g)].map(m=>m[1]);
+const blocks=[extracted[0],extracted[1]+'\n\n'+extracted[2],extracted[3]];
+const headings=['### 2.2. Units, person migration, sessions, and wake policies','### 2.3. Session start request and result','## 5. MCP tools and hook interface'];
+let text=await readFile(file,'utf8');if(extracted.length!==4||text.includes('Final integration amendment C13:'))throw Error('Verify contract/task precondition');
+for(let i=0;i<3;i++){if(text.split(headings[i]).length!==2)throw Error('Missing or repeated insertion section');text=text.replace(headings[i],headings[i]+'\n\n'+blocks[i]+'\n');}
+await writeFile(file,text);console.log('Inserted C13 C14 C15; retained prior contract text');
+~~~
+
+- Tests: simulate insertion in memory and verify four literal blocks merged into three additions, one of each heading and unchanged C01 to C12. No product source is changed by this task.
+- Proof: npm.cmd run lint; 0 issues, insertion prints Inserted C13 C14 C15; retained prior contract text.
+- Depends on: T071. Commit message: `Define clusters launch choices and supervised plans`.
+
+#### T074. Resolve canonical cluster members and path boundaries
+
+- Screens: start 1.1, start 1.4, start 2.1 to start 2.6; 2.20. Decisions: 25. Kind: MECHANICAL.
+- Files: new engine/service/cluster-policy.mjs, complete module; new test/service-cluster-policy.test.mjs, complete tests.
+- Change: create the pure policy below. T078 supplies canonical cluster records and T079 supplies verified real absolute paths after resolving links and junctions; this helper alone is not filesystem enforcement.
+
+~~~js
+import path from 'node:path';
+import {CoreError} from './identity.mjs';
+export function clusterMembers(clusters, ids, units) {
+  const active=new Map(clusters.filter(c=>!c.deleted).map(c=>[c.id,c]));
+  const existing=new Set(units.filter(u=>u.id!=='root:master'&&!u.removed).map(u=>u.id));
+  const result=new Set();const visited=new Set();
+  function visit(id,chain=new Set()) {
+    if(chain.has(id))throw new CoreError(409,'cluster_cycle','Cluster parent cycle.');
+    if(visited.has(id))return;
+    const c=active.get(id);if(!c)throw new CoreError(409,'cluster_changed','A selected cluster is unavailable.');
+    const next=new Set(chain);next.add(id);
+    for(const member of c.members)if(existing.has(member))result.add(member);
+    for(const child of active.values())if(child.parentId===id)visit(child.id,next);
+    visited.add(id);
+  }
+  for(const id of ids)visit(id);
+  return [...result].sort();
+}
+export function withinClusterRoot(root, candidate, platform='win32') {
+  if(root==null)return false;
+  const paths=platform==='win32'?path.win32:path.posix;
+  if(!paths.isAbsolute(root)||!paths.isAbsolute(candidate))return false;
+  const left=platform==='win32'?root.toLowerCase():root;
+  const right=platform==='win32'?candidate.toLowerCase():candidate;
+  const relative=paths.relative(paths.normalize(left),paths.normalize(right));
+  return relative===''||(!relative.startsWith('..'+paths.sep)&&relative!=='..'&&!paths.isAbsolute(relative));
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from 'node:assert/strict';import test from 'node:test';
+import{clusterMembers,withinClusterRoot}from'../engine/service/cluster-policy.mjs';
+test('nested scope deduplicates members and excludes archived agents',()=>{
+  const units=[{id:'root:master'},{id:'project:shop:a'},{id:'project:shop:b'},{id:'project:shop:c',removed:true}];
+  const clusters=[{id:'folder',parentId:null,members:['root:master','project:shop:a']},{id:'repo',parentId:'folder',members:['project:shop:a','project:shop:b','project:shop:c']},
+    {id:'deleted',parentId:'folder',members:['project:shop:b'],deleted:true}];
+  assert.deepEqual(clusterMembers(clusters,['folder','repo'],units),['project:shop:a','project:shop:b']);
+  assert.throws(()=>clusterMembers(clusters,['deleted'],units),e=>e.code==='cluster_changed');
+  assert.throws(()=>clusterMembers([{id:'a',parentId:'b',members:[]},{id:'b',parentId:'a',members:[]}],['a'],[]),e=>e.code==='cluster_cycle');
+});
+test('path boundary rejects siblings relative paths and an unlinked cluster',()=>{
+  assert.equal(withinClusterRoot('C:/Web/shop','c:/web/SHOP/src/cart.mjs'),true);
+  assert.equal(withinClusterRoot('C:/Web/shop','C:/Web/shop-extra/cart.mjs'),false);
+  assert.equal(withinClusterRoot('C:/Web/shop','C:/Web/shop/../other/cart.mjs'),false);
+  assert.equal(withinClusterRoot(null,'C:/Web/shop'),false);
+  assert.equal(withinClusterRoot('/web/shop','relative','linux'),false);
+  assert.equal(withinClusterRoot('/web/shop','/web/Shop/a','linux'),false);
+});
+~~~
+
+- Proof: node --test test/service-cluster-policy.test.mjs; 2 passed, 0 failed, 0 canceled. T079 proves the native boundary.
+- Depends on: T073. Commit message: `Resolve nested cluster scope without changing agent identity`.
+
+#### T075. Validate one stored Runs in descriptor for every launch
+
+- Screens: start 1.2, start 2.3 to start 2.5. Decisions: 25. Kind: MECHANICAL.
+- Files: new engine/service/runs-in.mjs, complete module; new test/service-runs-in.test.mjs, complete tests.
+- Change: create. Capabilities come from verified adapter reports, never invented quota or board sample models. Unsupported selections never become defaults or prompt-only configuration.
+
+~~~js
+import {CoreError} from './identity.mjs';
+export function validateRunsIn(choice, clients) {
+  const keys=['client','model','effort','mode'];
+  const invalid=()=>{throw new CoreError(422,'unsupported_launch_choice','The selected launch choice cannot be applied.');};
+  if(!choice||Object.keys(choice).length!==4||Object.keys(choice).some(k=>!keys.includes(k)))invalid();
+  const client=clients.find(c=>c.id===choice.client&&c.connected===true);
+  const model=client?.models.find(m=>m.id===choice.model);if(!model)invalid();
+  if(choice.client==='lyra'){
+    if(choice.effort!==null||!['fast','normal','thinking'].includes(choice.mode)||!model.modes.includes(choice.mode))invalid();
+  }else if(choice.mode!==null||typeof choice.effort!=='string'||!model.efforts.includes(choice.effort))invalid();
+  return Object.freeze({client:choice.client,model:choice.model,effort:choice.effort,mode:choice.mode});
+}
+export function launchChoice(unit, clients) {
+  if(!unit.runsIn)throw new CoreError(409,'scope_unresolved','Choose Runs in before launching this agent.');
+  return validateRunsIn(unit.runsIn,clients);
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{validateRunsIn,launchChoice}from'../engine/service/runs-in.mjs';
+const clients=[{id:'codex',connected:true,models:[{id:'verified-model',efforts:['high','xhigh'],modes:[]}]},
+  {id:'lyra',connected:true,models:[{id:'lyra-base',efforts:[],modes:['fast','normal']},{id:'lyra-thinking',efforts:[],modes:['thinking']}]}];
+test('stored external choice is exact and rejects silent fallback',()=>{
+  const choice={client:'codex',model:'verified-model',effort:'xhigh',mode:null};
+  assert.deepEqual(launchChoice({runsIn:choice},clients),choice);
+  assert.throws(()=>validateRunsIn({...choice,effort:'max'},clients),e=>e.code==='unsupported_launch_choice');
+  assert.throws(()=>validateRunsIn({...choice,client:'cursor'},clients),e=>e.code==='unsupported_launch_choice');
+  assert.throws(()=>launchChoice({model:'verified-model'},clients),e=>e.code==='scope_unresolved');
+});
+test('local mode belongs to a resolvable installed model and has no effort',()=>{
+  const choice={client:'lyra',model:'lyra-thinking',effort:null,mode:'thinking'};
+  assert.deepEqual(validateRunsIn(choice,clients),choice);
+  for(const change of [{mode:'normal'},{effort:'high'},{model:'not-installed'},{model:'qwen3.5:9b'}])
+    assert.throws(()=>validateRunsIn({...choice,...change},clients),e=>e.code==='unsupported_launch_choice');
+  assert.throws(()=>validateRunsIn({...choice,extra:true},clients),e=>e.code==='unsupported_launch_choice');
+});
+~~~
+
+- Proof: node --test test/service-runs-in.test.mjs; 2 passed, 0 failed, 0 canceled. Actual native choice application is proved by T079/T080.
+- Depends on: T073. Commit message: `Validate exact stored agent model and effort choices`.
+
+#### T076. Project bounded Git state without exposing remote credentials
+
+- Screens: start 1.4, start 2.1, start 2.6 to start 2.8; 6.6. Decisions: 25. Kind: MECHANICAL.
+- Files: new engine/service/cluster-git-data.mjs, complete module; new test/service-cluster-git-data.test.mjs, complete tests.
+- Change: create these pure decoders. T078 owns the injected read-only Git runner. No subprocess starts here. Author and e-mail fields are not returned.
+
+~~~js
+import {CoreError}from'./identity.mjs';
+export function publicGitRemote(value) {
+  if(!value)return null;
+  try{const url=new URL(value);if(!['https:','http:','ssh:','git:'].includes(url.protocol))return null;
+    url.username='';url.password='';url.search='';url.hash='';return url.toString();
+  }catch{const match=String(value).match(/^(?:[^@\s]+@)?([a-zA-Z0-9.-]+):([^\s?#]+)$/);return match?match[1]+'/'+match[2]:null;}
+}
+export function parseGitStatus(value) {
+  if(typeof value!=='string'||Buffer.byteLength(value)>1048576)throw new CoreError(409,'git_unavailable','Git status exceeded its bound.');
+  const parts=value.split('\0');const result=[];
+  for(let i=0;i<parts.length;i++){
+    if(!parts[i])continue;const record=parts[i];if(record.length<4||record[2]!==' ')throw new CoreError(409,'git_unavailable','Git status was incomplete.');
+    const status=record.slice(0,2);const file=record.slice(3);let from=null;
+    if(/[RC]/.test(status)){from=parts[++i];if(!from)throw new CoreError(409,'git_unavailable','Git rename was incomplete.');}
+    result.push({path:file,status,from});if(result.length>10000)throw new CoreError(409,'git_unavailable','Too many Git changes.');
+  }
+  return result;
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{publicGitRemote,parseGitStatus}from'../engine/service/cluster-git-data.mjs';
+test('remote projection removes user information and opaque query and fragment',()=>{
+  const url=new URL('https://example.com/shop.git');url.username='fixture';url.password='fixture';url.search='?fixture=fixture';url.hash='fixture';
+  assert.equal(publicGitRemote(url.toString()),'https://example.com/shop.git');
+  assert.equal(publicGitRemote('file:///private/repo'),null);assert.equal(publicGitRemote('not a remote'),null);
+});
+test('NUL status retains renames and bounds malformed or oversized data',()=>{
+  assert.deepEqual(parseGitStatus(' M web/cart.mjs\0R  new name.mjs\0old name.mjs\0?? other.mjs\0'),
+    [{path:'web/cart.mjs',status:' M',from:null},{path:'new name.mjs',status:'R ',from:'old name.mjs'},{path:'other.mjs',status:'??',from:null}]);
+  assert.throws(()=>parseGitStatus('R  missing.mjs\0'),e=>e.code==='git_unavailable');
+  assert.throws(()=>parseGitStatus('x'.repeat(1048577)),e=>e.code==='git_unavailable');
+});
+~~~
+
+- Proof: node --test test/service-cluster-git-data.test.mjs; 2 passed, 0 failed, 0 canceled; no credential-bearing remote survives projection.
+- Depends on: T073. Commit message: `Decode bounded cluster Git state with safe remotes`.
+
+#### T077. Port maintained Relay continuity and wake limits into the owner service
+
+- Screens: start 2.8, start 2.9, start 4.1, start 4.2; 2.15, 2.16, 3.2, 3.6, 6.10. Decisions: 24, 25. Kind: JUDGMENT.
+- Files: engine/relay/store.mjs, createRelay/registration/host-conversation/holder/inbox/status; engine/relay/wake.mjs, createRelayWakeController/adopt/activity/takeover/consent/budgets; engine/relay/local-wake.mjs, wakePointer/validWakePointer; engine/relay/codex-wake.mjs, pointer validation; engine/relay/hooks.mjs, verified activity/continuity; engine/relay/mcp.mjs, service forwarding and compact status; new engine/relay/carry-over.mjs, verified host conversation helpers; engine/service/client.mjs, openRelayOperations/nativeOperations; engine/service/mcp.mjs, legacyCall/forwardedArgs; engine/service/bridge.mjs, handleRelayPolicy/handleNativeHook/initializeNativeEntry; engine/service/service.mjs, mergePolicy/adoptWake/bridgeOperations; cli/index.mjs, host identity/budget options and help only; features/relay-client-setup.md and files.md, ported Relay semantics only. Restore/adapt test/relay-carry-over.test.mjs and source regressions in test/relay-claude-wake.test.mjs, test/relay-hooks.test.mjs, test/relay-mcp.test.mjs, test/relay-more-agents.test.mjs, test/relay-store.test.mjs, test/relay-wake.test.mjs; test/relay-cli.test.mjs, test/relay-wake-aliases.test.mjs, test/service-native-bridge.test.mjs, test/service-mcp.test.mjs, test/service-sessions.test.mjs, test/sync-apply.test.mjs; new test/relay-port.test.mjs, source coverage manifest/intersections.
+- Change: read-only enumerate every source commit at execution, not only the listed samples:
+
+~~~powershell
+git -C C:\Users\ttasc\Web\HIVEM1ND-relay-host log --reverse --format="%H %s" d3ef43a..release/2.1
+git -C C:\Users\ttasc\Web\HIVEM1ND-relay-host diff --name-only d3ef43a release/2.1
+~~~
+
+  Inspect all diffs in actual chronological order, including ddb38ce, a5f820b, 1044b4a, 06f195d, 2248ce0, 8e2b960, ae1690a, 4561d49, 606e953 and the daily wake-cap additions present then. The earlier range also contained release-only 32ea6a0. Record each full hash, behavior, source regression names, adaptation and proof result in a comment manifest in test/relay-port.test.mjs. Retain 3.0 version/package/lock/release metadata and explicitly classify release-only commits. Newly found source tests are restored under their exact basenames or their meaningful cases are merged into the named target suites with manifest mapping. Never silently omit a later fix. A newly necessary target production path outside this list requires a planner file-boundary amendment before editing it.
+
+  Port chat unit/wake continuity through verified host conversations and MCP/hook restarts; newest-registration takeover; compact paged scoped status; at most five message IDs/senders/sanitized subjects in pointers; activity renewal and one-time notices; proved-dead retirement; sync inbox races; unanswered-only wake accounting. Port the source's actual daily cap, defaults, reset/calendar semantics, activity accounting and notices exactly as found when execution begins; do not invent a number from this document. Compose daily caps with the existing consent-window intersections and P15 plan budget; an open plan's non-expiring lease is not unlimited wake/model spending. At a cap, keep supervision and human escalation running without spending tokens. Preserve explicit revocation, failed/ambiguous submission identity and no pointer replay. Audited on 2026-10-14: 594e13529895d394e1d57572534ccb3372924832 adds maxDailyHandoffs default 200, integer 1..1000 via --max-daily-handoffs; day:{date,count,noticeAt} uses owner-local calendar midnight, not UTC/rolling24h. Submitted/ambiguous pointer batches count once, deferred/not_submitted zero; Cursor stop reserves before stdout and interrupted attempting recovery counts once. Activity resets unanswered wakeCount only, never daily count. New registration/restart carries maximum current-day canonical usage; urgent wakes also stop at cap. Status exposes dailyCount/dailyBudget/dailyResumesAt and one wakeNotice; polling resumes at local midnight if consent remains valid. Forward the field through attach/enable/service exact consent allowlists and mergePolicy/canonical aliases without resetting usage; include relay-cli source cases.
+
+  Source MCP owns Relay directly; target MCP forwards through connectNativeService. Do not copy/cherry-pick files wholesale or restore a separate wake worker. Preserve scopeLock, pinnedRegistration, proveBinding, commitFile, canonical UnitId/sessionId, current aliases, adopt, consentWindows and T022 session/editor tools. Match canonical UnitId/client/machine, never duplicate short names. Source hold uses its per-chat PID; target holder liveness must use verified session/native connection identity, never shared service PID or arbitrary supplied PID. Source global overview must retain target caller scope and strip native identities. Carry-over resolves a verified host conversation, never a caller path or last-active chat. Renewal does not revive expired/disabled/exhausted consent. All source worktree operations are read only.
+- Tests: preserve all source Relay behaviors, including the daily cap's source cases. Add restart/host isolation, same short name across projects, canonical/legacy aliases, stopped/unproved/foreign binding, consent and pending-pointer transfer without duplicate submission, source cap plus plan lease, one-time notices and renewal, answered-debt reset, live versus dead retirement, sync file arrival/disappearance, bounded scope-safe status, T022 session_open/session_complete/editor forwarding and exact approval ownership. No behavioral assertion is deleted merely because its standalone API was removed.
+- Proof: run every current target Relay suite and all adapted source Relay tests here, plus the service intersections below; 0 failed, 0 canceled. Passing only either branch's old test set does not satisfy this gate.
+
+~~~powershell
+node -e "const fs=require('node:fs'),cp=require('node:child_process');const relay=fs.readdirSync('test').filter(n=>/^relay.*[.]test[.]mjs$/.test(n)).map(n=>'test/'+n).sort();const extra=['service-native-bridge','service-mcp','service-sessions','service-approvals','service-auth','service-projection-wake','service-lifecycle','service-shutdown','sync-pack','sync-apply','interfaces-cli','secret-scan'].map(n=>'test/'+n+'.test.mjs');const r=cp.spawnSync(process.execPath,['--test',...relay,...extra],{stdio:'inherit'});if(r.error)throw r.error;process.exit(r.status??1)"
+~~~
+
+- Depends on: T022, T024, T073. Commit message: `Port maintained Relay continuity and wake limits`.
+
+#### T078. Migrate groups and accepted repositories into one cluster tree
+
+- Screens: start 1.1, start 1.3, start 1.4, start 2.1, start 2.2, start 2.6; 6.6, 6.7, 2.22. Decisions: 25. Kind: JUDGMENT.
+- Files: engine/service/groups.mjs, projectGroup and compatibility delegation; engine/service/service.mjs, composeCore/recovery invokes migrateClusters once after journal recovery and before projection/routes/dispatch; new engine/service/clusters.mjs, migrateClusters/listClusters/readCluster/createCluster/patchCluster/removeCluster/clusterChoices; engine/discovery.mjs, discoverProjects/discoverHomeProjects canonical common-directory/worktree grouping; engine/service/settings.mjs, clusterLinks/createClusterLink/removeClusterLink/discoveryOffer/answerDiscoveryOffer and legacy project mapping; new engine/service/cluster-git.mjs, readClusterGit/readClusterChanges/openClusterEditor and injected Git runner; engine/service/units.mjs, cluster membership serialization/derived identity; engine/service/projection.mjs, cluster tree/members/report; engine/service/http.mjs, C13 cluster/discovery/Git/editor routes and exact body authorization; engine/service/store.mjs, cluster journal authorization/Undo; engine/service/import-events.mjs and engine/service/events.mjs, cluster invalidations; engine/sync/store.mjs and engine/sync/apply.mjs, shared metadata/private roots/owner validation; engine/service/additions.mjs, accepted repository-to-cluster mapping and scope snapshot; test/service-clusters.test.mjs and test/service-cluster-git.test.mjs, new; test/service-groups.test.mjs, test/setup-projects.test.mjs, test/discovery.test.mjs, test/service-settings.test.mjs, test/service-additions.test.mjs, test/service-api.test.mjs, test/sync-apply.test.mjs, test/sync-pack.test.mjs.
+- Change: decide the migration/recovery manifest using the existing group/chat journal. Preserve active/deleted group IDs, history, membership, Undo and lead fields; permit empty clusters and parent links without a parallel grouping. Existing accepted project records become repository-linked clusters; newly found repositories remain only discovery offers. Overlapping legacy memberships require explicit cluster choice before write-capable launch; preserve the ambiguity in records instead of guessing or cloning an agent. Migrate once, reopen idempotently and recover interruptions without duplicated chats/links.
+
+  Read Git identities with an injected executable runner, shell:false, Windows hidden, optional locks disabled, hooks/filters/credential helpers disabled and bounded 30-second operation, 1 MiB output. Use rev-parse --git-common-dir, rev-parse --show-toplevel and worktree list --porcelain -z to fold existing worktrees; inspect command support before claiming success and return git_unavailable on unsupported/malformed results. Read status --porcelain=v1 -z, symbolic branch/HEAD, remote and last commit metadata without fetch or mutation. T076 sanitizes remotes/status; exclude author/e-mail and secret-bearing diffs from public results. Changes pagination/patch reads are bounded and authorized to the actual linked repo; binary changes show paths/status only. A displayed branch/remote is read data, never authorization to checkout or push.
+
+  First-open offer groups repositories by real containing folders, filter preserves hidden selections, parent checkbox applies to its canonical repositories, worktree IDs cannot inflate Import count. Not now and confirmed selection use revision/receipt checks, no auto-import on scan/reopen. Folder/repository/unlinked creation and link removal preserve bytes and use existing ten-second Undo. Keep per-machine private paths; sync only shared IDs/links/history. Settings Projects is the cluster-link report. Add repository acceptance and removal map through the same cluster identity and preserve owned source checkout/provenance. An empty repository cluster remains visible without fabricating an agent or Overlord. Opening its editor uses an existing configured reviewed launcher/verified path, never arbitrary shell text.
+- Tests: migration with active/archived groups, overlapping memberships, old Undo and interrupted restart; existing projects versus unaccepted discoveries; .git directory and worktree file with shared common dir, nested folders, inaccessible/link folders, four-level bound, selected subset/filter/Not now/replay, no source writes; all cluster routes/cycles/empty members/foreign owner/offline machine; root-to-repository parent links and flattened scope; clean/dirty/rename/detached/binary/no remote Git, safe credential projection, bounded diff and no fetch/checkout/commit/push; accepted Add duplicate identity/Remove/Undo retaining checkout bytes.
+- Proof: node --test test/service-clusters.test.mjs test/service-cluster-git.test.mjs test/service-cluster-policy.test.mjs test/service-groups.test.mjs test/discovery.test.mjs test/setup-projects.test.mjs test/service-settings.test.mjs test/service-additions.test.mjs test/service-api.test.mjs test/sync-pack.test.mjs test/sync-apply.test.mjs; 0 failed, 0 canceled; source/repository byte hashes are unchanged by discovery/import/link removal.
+- Depends on: T028, T051, T053, T069, T073, T074, T076. Commit message: `Migrate accepted groups and repositories into linked clusters`.
+
+#### T079. Apply launch choices and enforce cluster and Git authority
+
+- Screens: start 1.2, start 2.1 to start 2.8, start 4.2; 6.2, 6.3, 6.5. Decisions: 12, 24, 25. Kind: JUDGMENT.
+- Files: engine/service/units.mjs and engine/service/state.mjs, clusterId/runsIn/fresh headers and default derivation; engine/service/settings.mjs, defaultRunsIn/capabilities/scoped Git grants; engine/records.mjs, parseFrontmatter retained state fields; engine/service/projection.mjs, Unit.runsIn/clusterId/fresh and machine capability projection; test/service-projection.test.mjs; engine/service/identity.mjs, Client supports lyra without adding a unit role; engine/service/adapters.mjs, probeClients/enqueueStart/launch/launchArgs/registeredProjectCwd/native handshakes/openRpc/permission bridge/immutable launch snapshots; new engine/service/file-access.mjs, readScopedFile/writeScopedFile and verified path/revision/ownership helper for local tool callbacks; new test/service-file-access.test.mjs; engine/service/approvals.mjs, structured outside-root/Git approval and revoke; engine/service/security.mjs, capability enforcement before receipts; engine/service/bridge.mjs, verified session policy and client-only plan bindings; engine/relay/hooks.mjs, all supported native filesystem/process permission events; engine/service/mcp.mjs and engine/service/client.mjs, role-bound start/permission tools; engine/service/http.mjs, C13 agent/runs-in/overseer bodies and permission checks; gui/app/actions.mjs, startSession no client-only fallback; test/gui-actions.test.mjs, stored-choice session request regression; commands/relay.md, explicit-command versus automatic-close boundary; test/service-launch-choice.test.mjs and test/service-write-scope.test.mjs, new; test/service-sessions.test.mjs, test/service-approvals.test.mjs, test/service-auth.test.mjs, test/service-mcp.test.mjs, test/service-native-bridge.test.mjs, test/relay-hooks.test.mjs, test/service-settings.test.mjs, test/interfaces-cli.test.mjs.
+- Change: decide and prove each installed client's actual model/effort and sandbox/permission protocol using its supported native API. Current explicit Codex model reaches thread/start, but stored unit.model is not used; Claude/ACP selection and all effort fields are missing. Store one runsIn descriptor and apply it at every new/reopened task, chat and plan launch. Reject unsupported choices before spawn. Obtain real quota/capability reports; unknown quota remains unknown, Lyra has no quota, board sample values are fixtures only. No model choice is proved by a prompt line. New agent derives a unique deterministic role-cluster name with a numeric suffix on collision, machine, folders and nearest existing lead; persist optional default only when explicitly checked. Keep canonical IDs/aliases and do not create builder units.
+
+  Replace the single-project cwd fallback: root roles use an owned L/sessions/<sessionId>/ working directory, folder/repository cluster roles use the verified link. Unlinked roles can converse/plan from an owned private directory with no project write roots. Read context across authorized clusters is separate from write permission. Resolve realpath/junction escape, nonexistent-target nearest verified ancestor and process identity before access. Implement native permission events for file edit/write and indirect shell/tool writes for every connected client, including ACP/application-server requests that currently return -32601. Preserve exact request/option IDs through approval, denial, expiration, replay and native response. Plain cwd, false filesystem capabilities and a prompt instruction do not enforce scope. Fail scope_unavailable rather than advertising a write-capable connection whose boundary is unproved; reject unsafe bypass flags. Native manual sessions retain their identity but cannot be claimed as scope-enforced without verified native policy.
+
+  Keep T053's git.commit/git.push grants unticked and separately revocable for the exact session/unit/machine/repository. Require explicit intent in addition to capability. Run confirmation covers the named plan branch and per-task commits; no push consent is inferred. Validate branch/head/index/path snapshot before writing; stage only reviewed task-owned paths, never git add -A over another person's work. Preserve unrelated staged changes and refuse ambiguity with git_changed. Ending a CLI, reporting, compacting or shutdown does not call /relay out as permission. The current behavior is in commands/relay.md rather than a service-exit Git function: remove its blanket exit-as-consent rule. /relay out alone must keep changes/index/branches untouched, record the handoff and release claims; honor a separate explicit scoped commit/push instruction only. Outside-root approval is bounded to the exact operation and cannot widen the next session or all clusters.
+- Tests: capture actual native arguments/protocol model/effort for every supported client; stored settings used when no caller override; ordinary GUI session-start body excludes client/model/effort and retains prompt/runMode/taskId/expectedRevision, with retries retaining the original operation; changed capabilities/model unavailable/no prompt-only pass; multiple registered projects with root/environment sessions, unlinked planning with no write; direct/indirect/junction/case/nonexistent path escapes; structured native allow/deny/expired/replayed option responses without -32601; manual/foreign session refusal; review/default unchecked; separate Git capability versus explicit intent, Run authorized commit on exact branch/paths, push denied without intent, changed head/index/branch zero write, foreign staged bytes preserved, revoke prevents next operation, /relay out alone and automatic closure both causing zero Git, with separately instructed scoped commit/push honored.
+- Proof: node --test test/service-runs-in.test.mjs test/service-launch-choice.test.mjs test/service-write-scope.test.mjs test/service-file-access.test.mjs test/gui-actions.test.mjs test/service-sessions.test.mjs test/service-approvals.test.mjs test/service-auth.test.mjs test/service-mcp.test.mjs test/service-native-bridge.test.mjs test/relay-hooks.test.mjs test/service-settings.test.mjs test/interfaces-cli.test.mjs; 0 failed, 0 canceled; isolated injected transports demonstrate actual native policy and zero unauthorized Git writes.
+- Depends on: T022, T023, T052, T053, T073, T074, T075, T077, T078. Commit message: `Apply stored launch choices and enforce cluster write authority`.
+
+#### T080. Connect Lyra as a permission-bound local client
+
+- Screens: start 1.2, start 2.5, start 2.6 to start 2.9, start 3.1, start 4.1, start 4.2. Decisions: 24, 25. Kind: JUDGMENT.
+- Files: new engine/service/lyra.mjs, discoverLyra/openLyraAdapter/registerLyraTools/resolveLyraChoice/streamLyraTurn/closeLyraTurn; engine/service/adapters.mjs, adapter composition and local turn ownership; engine/service/settings.mjs, Lyra capability/model report; engine/service/file-access.mjs, shared scoped file callback boundary; engine/service/bridge.mjs and engine/service/mcp.mjs, fixed scoped tool callbacks; engine/service/security.mjs, protected app-token storage; engine/service/service.mjs, local transport lifecycle; new test/service-lyra.test.mjs and test/service-lyra-tools.test.mjs; test/service-sessions.test.mjs, test/service-auth.test.mjs, test/secret-scan.test.mjs. Lyra repository/product files are read only and never part of this commit.
+- Change: implement the verified C15 API through the native service, using the installed shared client's protocol and injected discovery/HTTP. Source API verified on 2026-10-14. Source evidence: Lyra packages/client/src/index.ts:130-220; packages/client/src/types.ts:114-146,189-198; packages/service/src/routes.ts:109-118,158-175,210; packages/service/src/store.ts:7,119-129; packages/service/src/runtime.ts:60-70,171-174,312-322. Register kind app, require granted chat/models/tools scopes and privately retain token; HIVEM1ND cannot register as trusted cosmic or expose shared tools through that whitelist. Discover a verified running service on 127.0.0.1, reconnect each launch/turn after idle/restart and do not start an installer/model pull/Ollama connection. Present permission pending/revoked/offline as actual availability, never pretend connected.
+
+  Resolve selected installed alias/mode through models on every turn, including Thinking's base fallback; canonicalize only :latest. Arbitrary physical Qwen model identity is not exposed by the API and cannot be guessed equal to an alias. Show catalog labels only when evidence supports them; reject unhonorable model/mode pairs before inference and verify first start event mode/model/provider local before any callback. Never send unknown model/profile/system keys, mutate shared Lyra settings or silently switch selected model. Keep Fast/Normal/Thinking only; no Deep/cloud feature is added. Lyra kind app queues as background even if interactive is requested; do not promise foreground priority. Reopen a local planner/reviewer from protected HIVEM1ND bounded messages/checkpoints, never a fabricated upstream session/resume API. Stream asynchronously behind immediate service 202, distinguish queue wait from confirmed start, respect Lyra's execution deadlines and abort/disconnect without applying the GUI response deadline to whole inference.
+
+  Register one fixed private app catalog once, max 32 definitions/16 selected/2048-byte schema/8000-character result. Use the actual ToolProperty subset: no nullable/union schemas, type arrays, oneOf, anyOf or UUID format. Make file_write.expectedRevision and plan_dispatch.taskId optional strings; omit them from required, translate absence to Core null, reject explicit null and validate present Core identifiers/revisions after actor binding. Missing file revision creates only a nonexistent target; an existing target requires its exact revision. All other required C14 keys remain required. Required tools m1nd_read, message_send, message_read and plan tools capture verified service actor identity; input fields cannot choose another unit or grant filesystem authority. Per-turn selected tool set is role-scoped; only lead has dispatch. Every send/change and outside-scope/Git action reuses exact person approval and omits decision for allowed reads/results and uses once for explicit one-time approval or denial; never persist a global deny or always rule. Local model cannot fabricate receipts, completion, consent or report ownership. Serialize tool registration to prevent concurrent role catalogs replacing each other. Use fixed title mappings from C15 and T088 and scoped resource IDs/excerpts so the M1ND can be read without returning secrets or unbounded files. Stop cancels only this owned HTTP execution/tools; a Lyra shared service PID is never a role process to terminate. Route file_read/file_write through T079's owner-verified path/revision boundary; environment and key files expose variable/key names only, never their values. A Lyra ask remains an explicit app permission; no model tool may convert its own call into consent.
+- Tests: kind app registration/pending/granted/scopes/revocation, bootstrap/token isolation, fake idle port change and reauthentication without second work, exact requests and unknown-field exclusion, installed alias/mode matrix and fallback mismatch, model changes between status/start, queued start/no fake confirmation, all stream events/truncated/error/deadline/abort, fixed private tools and role/session binding, catalog accepted by the actual strict ToolDefinition schema, optional revision/taskId omission mapped to Core null, explicit null rejected, valid/invalid UUID and revision strings validated before effects, new-file creation collision and existing-file revision mismatch causing zero writes, extra/foreign unitId rejected, read bounds, send/change denial/once/replay, no direct browser/token/cloud/install/alias/Ollama, local execution end/report/cleanup distinct, no shared-service kill.
+- Proof: node --test test/service-lyra.test.mjs test/service-lyra-tools.test.mjs test/service-sessions.test.mjs test/service-auth.test.mjs test/secret-scan.test.mjs; 0 failed, 0 canceled; fake transport confirms exact supported API, no Lyra file/settings writes and no secret in projections.
+- Depends on: T073, T075, T078, T079. Commit message: `Run local roles through the existing Lyra application API`.
+
+#### T081. Preserve chat history while renewing Overseer context
+
+- Screens: start 1.2, start 3.1, start 3.2. Decisions: 25. Kind: JUDGMENT.
+- Files: new engine/service/context.mjs, createContext/readContext/compactContext/clearContext/dismissContext; engine/service/adapters.mjs, fresh Overseer thread/reuse/native context telemetry/compact support; engine/service/lyra.mjs, exact outbound-context estimate and local summary; engine/service/units.mjs, first Overseer creation/fresh preference; engine/service/chats.mjs, context/bootstrap separation from authored history; engine/service/http.mjs, C13 context route; engine/service/service.mjs and engine/service/events.mjs, session.context recovery; new test/service-context.test.mjs; test/service-sessions.test.mjs, test/service-messaging.test.mjs, test/service-auth.test.mjs.
+- Change: decide per-adapter context proof and summary/new-context operation without a global mutable prompt. Overseer creation alone never starts inference. Start each new session fresh unless the person explicitly keeps context; retained history is not silently replayed as native context. Use an owned private cwd so several repositories do not block creation/launch. Context meter uses actual supported native telemetry, or labeled estimated exact-outbound-context accounting; unknown capacity is unavailable, never fabricated 18 or 82 percent. At 80 percent show Compact/Clear/Close. The start 3.2 note still names Start fresh/Keep going; current drawing and the person's explicit Compact/Clear direction govern.
+
+  Compact first obtains and validates a bounded local/native supported summary, keeps immutable original chat and context checkpoint, rereads current M1ND and commits the new generation only after native success. Lyra has no compact endpoint: normal local chat produces the summary with known 8000/message,12000 context and 16000 history-character bounds, with three separately measured character budgets and maximum-ratio estimated input-pressure percentage, never a fabricated model-window/token capacity. Keep each message 8000,appContext 12000,history 16000 and total UTF-8 request 100 KiB bounds distinct. Clear starts a fresh native context and rereads M1ND without deleting chat, tasks or messages. Close dismisses one notice generation and changes no inference state. A failed/ambiguous compact/clear retains the current history/context and original operation ID; Retry reconciles once. Do not interrupt another owned plan or infer /relay out/git/read consent from context replacement.
+- Tests: first prompt/Later/create no model run, unique Overseer, multiple projects, fresh default versus keep, actual/estimated/unknown telemetry, 79.9/80 threshold, notice dismissal generation, supported native compact, failed/ambiguous summary validation zero replacement, Clear preserving messages/history, Lyra exact bounded summary/unsupported endpoint exclusion, receipt replay/no duplicate generation/no Git/inbox side effects.
+- Proof: node --test test/service-context.test.mjs test/service-sessions.test.mjs test/service-messaging.test.mjs test/service-auth.test.mjs; 0 failed, 0 canceled; original authored chat and M1ND hashes survive Compact/Clear and failure.
+- Depends on: T078, T079, T080. Commit message: `Renew Overseer context without deleting authored history`.
+
+#### T082. Calculate per-agent supervision deadlines without token use
+
+- Screens: start 2.8, start 2.9, start 4.2. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new engine/service/run-policy.mjs, complete module; new test/service-run-policy.test.mjs, complete tests.
+- Change: create the pure policy. T085 validates/persists inputs; T086 acknowledges durable delivery IDs. Every active agent has its own watch, so one agent's progress cannot conceal another's stall.
+
+~~~js
+export const RUN_TIMING=Object.freeze({start:180000,scan:300000,execution:600000,planning:1800000,summary:1800000,retry:300000,unread:600000,escalation:300000});
+const time=v=>typeof v==='number'?v:Date.parse(v);
+export function dueRunActions(run,now){
+  if(!['open','stopping'].includes(run.state))return [];
+  if(!Number.isFinite(now))throw new TypeError('Invalid run clock');
+  const out=[];const levels=['coordinator','overseer','person'];
+  function escalation(kind,id,due,notifications,data){
+    levels.forEach((target,index)=>{const at=due+index*RUN_TIMING.escalation;
+      if(now>=at&&!notifications.includes(target))out.push({id:kind+':'+id+':'+target,kind,target,dueAt:at,...data});});
+  }
+  for(const a of run.attempts??[])if(!a.resolved&&a.confirmedAt==null)
+    escalation('no_start',a.id,time(a.sentAt)+RUN_TIMING.start,a.notifications??[],{attemptId:a.id,role:a.role});
+  for(const w of run.watches??[])if(!w.resolved)
+    escalation('stalled',w.episodeId,time(w.lastStepAt)+RUN_TIMING[w.phase??run.mode],w.notifications??[],{attemptId:w.attemptId,role:w.role});
+  for(const m of run.messages??[])for(const r of m.recipients)if(r.readAt==null){
+    const due=time(m.sentAt);const data={messageId:m.id,recipientId:r.actorId};
+    if(r.retriedAt==null&&now>=due+RUN_TIMING.retry)out.push({id:'retry:'+m.id+':'+r.actorId,kind:'unread_retry',dueAt:due+RUN_TIMING.retry,...data});
+    escalation('unread',m.id+':'+r.actorId,due+RUN_TIMING.unread,r.notifications??[],data);
+  }
+  const slot=Math.floor((now-time(run.startedAt))/RUN_TIMING.summary);
+  if(slot>(run.summarySlot??0))out.push({id:'summary:'+run.id+':'+slot,kind:'summary',target:'coordinator',slot,dueAt:time(run.startedAt)+slot*RUN_TIMING.summary});
+  return out.sort((a,b)=>a.dueAt-b.dueAt||a.id.localeCompare(b.id));
+}
+export function runTaskEndState({report,processExited,cleanupVerified}){
+  if(!['delivered','failed'].includes(report))return 'awaiting_report';
+  if(processExited!==true)return 'awaiting_exit';
+  if(cleanupVerified!==true)return 'cleanup_pending';
+  return report==='delivered'?'done':'failed';
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{RUN_TIMING,dueRunActions,runTaskEndState}from'../engine/service/run-policy.mjs';
+const base={id:'run',state:'open',mode:'execution',startedAt:0,summarySlot:0,attempts:[],watches:[],messages:[]};
+test('three-minute start and per-agent stalls escalate without resetting other agents',()=>{
+  const run={...base,attempts:[{id:'a',role:'builder',sentAt:0,confirmedAt:null,notifications:[]}]};
+  assert.deepEqual(dueRunActions(run,179999),[]);assert.equal(dueRunActions(run,180000)[0].target,'coordinator');
+  assert.deepEqual(dueRunActions(run,780000).map(a=>a.target),['coordinator','overseer','person']);
+  const watches=[{episodeId:'w1',attemptId:'1',role:'builder',lastStepAt:0},{episodeId:'w2',attemptId:'2',role:'reviewer',lastStepAt:599999}];
+  assert.deepEqual(dueRunActions({...base,watches},600000).map(a=>a.role),['builder']);
+  assert.equal(dueRunActions({...base,mode:'planning',watches},1799999).length,0);
+  assert.equal(dueRunActions({...base,mode:'planning',watches},1800000).filter(a=>a.kind==='stalled').length,1);
+  assert.equal(dueRunActions({...base,watches:[{...watches[0],phase:'planning'}]},600000).length,0);
+  assert.equal(RUN_TIMING.scan,300000);
+});
+test('one unread retry precedes ordered alerts and recovery coalesces summary slots',()=>{
+  const recipient={actorId:'reviewer',readAt:null,retriedAt:null,notifications:[]};
+  const run={...base,messages:[{id:'m',sentAt:0,recipients:[recipient,{actorId:'builder',readAt:1}]}]};
+  assert.equal(dueRunActions(run,299999).length,0);assert.equal(dueRunActions(run,300000)[0].kind,'unread_retry');
+  recipient.retriedAt=300000;assert.deepEqual(dueRunActions(run,600000).map(a=>a.target),['coordinator']);
+  recipient.notifications=['coordinator','overseer'];assert.equal(dueRunActions(run,1200000)[0].target,'person');
+  recipient.readAt=1200001;const actions=dueRunActions(run,7200000);assert.equal(actions.length,1);assert.equal(actions[0].slot,4);
+  assert.deepEqual(dueRunActions({...run,summarySlot:4},7200000),[]);
+  assert.deepEqual(dueRunActions({...run,state:'completed'},7200000),[]);
+});
+test('report process exit and owned cleanup are independently required',()=>{
+  assert.equal(runTaskEndState({processExited:true,cleanupVerified:true}),'awaiting_report');
+  assert.equal(runTaskEndState({report:'delivered',cleanupVerified:true}),'awaiting_exit');
+  assert.equal(runTaskEndState({report:'delivered',processExited:true}),'cleanup_pending');
+  assert.equal(runTaskEndState({report:'delivered',processExited:true,cleanupVerified:true}),'done');
+  assert.equal(runTaskEndState({report:'failed',processExited:true,cleanupVerified:true}),'failed');
+});
+~~~
+
+- Proof: node --test test/service-run-policy.test.mjs; 3 passed, 0 failed, 0 canceled; injected numeric clocks, no real wait or agent call.
+- Depends on: T073. Commit message: `Calculate per-agent plan supervision deadlines`.
+
+#### T083. Account for authored messages and logged extensions
+
+- Screens: start 2.7 to start 2.9. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new engine/service/run-budget.mjs, complete module; new test/service-run-budget.test.mjs, complete tests.
+- Change: create the pure ledger. Events are already authenticated agreements from T085/T086, not untrusted authority fields. Pending/denied negotiations are log entries and never call extend.
+
+~~~js
+import{CoreError,canonicalJson}from'./identity.mjs';
+const roles=new Set(['coordinator','planner','builder','reviewer']);
+const fail=(code)=>{throw new CoreError(code==='invalid_extension'?422:409,code,'The run budget event was rejected.');};
+export function createRunBudget(base){
+  if(!Number.isSafeInteger(base)||base<1||base>10000)fail('invalid_extension');
+  return{base,messages:[],extensions:[],events:[]};
+}
+export function projectRunBudget(ledger){
+  const extra=ledger.extensions.reduce((n,e)=>n+e.count,0);
+  return{base:ledger.base,used:ledger.messages.length,extra,roleExtra:ledger.extensions.filter(e=>e.authority==='roles').reduce((n,e)=>n+e.count,0),limit:ledger.base+extra};
+}
+export function applyRunBudget(ledger,event){
+  if(!event||typeof event.id!=='string'||!event.id||event.id.length>128)fail('invalid_extension');
+  const encoded=canonicalJson(event),prior=ledger.events.find(e=>e.id===event.id);
+  if(prior){if(prior.encoded!==encoded)fail('revision_conflict');return ledger;}
+  const next=structuredClone(ledger),budget=projectRunBudget(ledger);
+  if(event.kind==='spend'){
+    if(typeof event.messageId!=='string'||!event.messageId)fail('invalid_extension');
+    if(!next.messages.includes(event.messageId)){if(budget.used>=budget.limit)fail('budget_exhausted');next.messages.push(event.messageId);}
+  }else if(event.kind==='extend'){
+    if(!Number.isSafeInteger(event.count)||event.count<1||event.count>10000||!roles.has(event.requester)
+      ||typeof event.reason!=='string'||!event.reason.trim()||event.reason.length>1000||/[\x00-\x1f\x7f]/.test(event.reason))fail('invalid_extension');
+    if(event.authority==='roles'){
+      if(!roles.has(event.approver)||event.approver===event.requester)fail('invalid_extension');
+      if(budget.roleExtra+event.count>Math.floor(ledger.base/2))fail('extension_approval_required');
+    }else if(event.authority!=='person'||typeof event.approvalId!=='string'||!event.approvalId)fail('invalid_extension');
+    if(typeof event.extensionId!=='string'||!event.extensionId||next.extensions.some(e=>e.extensionId===event.extensionId))fail('revision_conflict');
+    next.extensions.push({extensionId:event.extensionId,count:event.count,reason:event.reason.trim(),requester:event.requester,approver:event.approver??null,authority:event.authority,approvalId:event.approvalId??null});
+  }else fail('invalid_extension');
+  next.events.push({id:event.id,encoded});return next;
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{createRunBudget,projectRunBudget,applyRunBudget}from'../engine/service/run-budget.mjs';
+const extra={id:'e',kind:'extend',extensionId:'x',count:2,reason:'Clarify the empty state',requester:'builder',approver:'planner',authority:'roles'};
+test('retries spend one message and changed event identity is rejected',()=>{
+  let ledger=createRunBudget(1);const send={id:'s',kind:'spend',messageId:'m'};
+  ledger=applyRunBudget(ledger,send);assert.equal(applyRunBudget(ledger,send),ledger);
+  ledger=applyRunBudget(ledger,{...send,id:'s2'});assert.equal(projectRunBudget(ledger).used,1);
+  assert.throws(()=>applyRunBudget(ledger,{...send,messageId:'other'}),e=>e.code==='revision_conflict');
+  assert.throws(()=>applyRunBudget(ledger,{id:'s3',kind:'spend',messageId:'m2'}),e=>e.code==='budget_exhausted');
+});
+test('odd plan count rounds half down and two distinct roles agree',()=>{
+  const ledger=applyRunBudget(createRunBudget(5),extra);assert.equal(projectRunBudget(ledger).limit,7);
+  assert.throws(()=>applyRunBudget(ledger,{...extra,id:'e2',extensionId:'x2',count:1}),e=>e.code==='extension_approval_required');
+  assert.throws(()=>applyRunBudget(createRunBudget(10),{...extra,approver:'builder'}),e=>e.code==='invalid_extension');
+  assert.throws(()=>applyRunBudget(createRunBudget(10),{...extra,reason:' '}),e=>e.code==='invalid_extension');
+});
+test('confirmed person extension never reapplies or increases the role allowance',()=>{
+  let ledger=applyRunBudget(createRunBudget(10),{...extra,count:5});
+  const event={...extra,id:'p',extensionId:'p',authority:'person',approvalId:'approved-once'};
+  ledger=applyRunBudget(ledger,event);assert.equal(applyRunBudget(ledger,event),ledger);
+  assert.deepEqual(projectRunBudget(ledger),{base:10,used:0,extra:7,roleExtra:5,limit:17});
+  assert.throws(()=>applyRunBudget(ledger,{...event,id:'p2'}),e=>e.code==='revision_conflict');
+});
+~~~
+
+- Proof: node --test test/service-run-budget.test.mjs; 3 passed, 0 failed, 0 canceled.
+- Depends on: T073. Commit message: `Count plan messages and authorized extensions exactly once`.
+
+#### T084. Normalize bounded agent milestones into Work records
+
+- Screens: start 2.8, start 2.9, start 4.2. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new engine/service/run-signals.mjs, complete module; new test/service-run-signals.test.mjs, complete tests.
+- Change: create this internal typed normalizer. T085 supplies verified source/attempt identity; raw native text and tool commands are not parser inputs.
+
+~~~js
+import{CoreError}from'./identity.mjs';
+const keys=new Set(['id','kind','source','role','taskId','at','step','outcome']);
+const kinds=new Set(['start','step_start','step_end','report','exit','cleanup']);
+const roles=new Set(['coordinator','planner','builder','reviewer']);
+const sources=new Set(['native','hook','relay','process']);
+const steps=new Set(['tests','build','edit','plan','review','work']);
+export function normalizeRunSignal(value){
+  const invalid=()=>{throw new CoreError(422,'invalid_run_event','Invalid bounded run evidence.');};
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!keys.has(k)))invalid();
+  if(typeof value.id!=='string'||!value.id||value.id.length>128||/[\x00-\x1f\x7f]/.test(value.id)
+    ||!kinds.has(value.kind)||!roles.has(value.role)||!sources.has(value.source))invalid();
+  const at=typeof value.at==='number'?value.at:typeof value.at==='string'?Date.parse(value.at):NaN;
+  if(!Number.isFinite(at)||!Number.isFinite(new Date(at).getTime()))invalid();
+  if(value.taskId!=null&&(typeof value.taskId!=='string'||!value.taskId||value.taskId.length>256))invalid();
+  const step=value.step??null,outcome=value.outcome??null;
+  if(value.kind.startsWith('step_')?!steps.has(step):step!==null)invalid();
+  if(value.kind==='report'?!['delivered','failed'].includes(outcome):outcome!==null)invalid();
+  if(['exit','cleanup'].includes(value.kind)&&value.source!=='process')invalid();
+  if(value.kind==='report'&&value.source==='process')invalid();
+  return{eventId:value.id,kind:value.kind,source:value.source,role:value.role,taskId:value.taskId??null,at:new Date(at).toISOString(),step,outcome};
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{normalizeRunSignal}from'../engine/service/run-signals.mjs';
+const base={id:'witness:1',kind:'start',source:'native',role:'builder',taskId:'project:shop:1',at:1000};
+test('verified witnesses have fixed bounded metadata and no raw text',()=>{
+  const signal=normalizeRunSignal({...base,kind:'step_start',step:'tests'});
+  assert.equal(signal.at,'1970-01-01T00:00:01.000Z');assert.equal(signal.step,'tests');assert.equal(signal.taskId,'project:shop:1');
+  assert.equal(normalizeRunSignal({...base,kind:'report',source:'relay',outcome:'delivered'}).outcome,'delivered');
+});
+test('byte chatter heartbeat arbitrary command and forged exits cannot be milestones',()=>{
+  for(const change of [{output:'private fixture'},{kind:'heartbeat'},{kind:'exit'},{kind:'cleanup',source:'relay'},
+    {kind:'report',source:'process',outcome:'delivered'},{at:'never'},{role:'executor'},{kind:'step_start',step:'arbitrary command'}])
+    assert.throws(()=>normalizeRunSignal({...base,...change}),e=>e.code==='invalid_run_event');
+});
+~~~
+
+- Proof: node --test test/service-run-signals.test.mjs; 2 passed, 0 failed, 0 canceled.
+- Depends on: T073. Commit message: `Normalize bound native milestones without storing raw output`.
+
+#### T085. Execute approved chat plans through one lead and verified task closure
+
+- Screens: start 2.6 to start 2.9, start 4.1, start 4.2; replaced 3.12 to 3.15. Decisions: 24, 25. Kind: JUDGMENT.
+- Files: new engine/service/plans.mjs, createPlan/readPlan/listPlans/editPlan/startPlan and immutable task/branch approval; new engine/service/runs.mjs, readRun/readRunLog/dispatchPlanRole/confirmPlanStart/ingestPlanSignal/reportPlanTask/controlRun/recoverRuns; new engine/service/run-processes.mjs, owned attempt/step/descendant cleanup; engine/service/adapters.mjs, native observation/completeSessionTask/registered/process ownership; engine/service/lyra.mjs, local execution handle/report/abort cleanup; engine/service/bridge.mjs, run actor credentials and verified events; engine/service/mcp.mjs and engine/service/client.mjs, eight C14 bound tools; engine/relay/mcp.mjs and engine/relay/hooks.mjs, forward genuine confirmation/milestone/report; engine/service/http.mjs, plan/run routes and strict bodies; engine/service/approvals.mjs, plan-lead selection and build approval binding; engine/service/cluster-git.mjs, approved branch/task commit operation and recovery; engine/service/chats.mjs, structured plan attachment and authored lead summaries; engine/service/projection.mjs, plans/current runtime/Work; engine/service/store.mjs, journal and private ownership entries; engine/service/service.mjs, singleton lifecycle recovery; engine/service/events.mjs and engine/service/import-events.mjs, plan/run/work invalidations; engine/sync/store.mjs and engine/sync/apply.mjs, owner-controlled metadata/logs; new test/service-plans.test.mjs, test/service-runs.test.mjs and test/service-run-processes.test.mjs; test/service-sessions.test.mjs, test/service-mcp.test.mjs, test/service-native-bridge.test.mjs, test/service-auth.test.mjs, test/service-api.test.mjs, test/sync-pack.test.mjs, test/sync-apply.test.mjs.
+- Change: decide the structured plan/chat attachment and direct-client role identity while keeping the lead's conversation as the only plan surface. Derive real ordered task IDs from accepted Void/task records or a new planner draft; validate all ownership/revisions before Run. A new draft is reviewed before build. Inline edits replace assignments and exact Runs in snapshots only under revision; card title/branch/tasks are actual records, not the board fixture. With an Overlord use its cluster lead; with a sole Executor let it plan; with several agents and no lead ask the person who plans and do not guess. Role choices are cluster members or connected clients; direct clients receive restricted actor identities and no synthetic units. Only the selected lead/coordinator can dispatch, including approval-replay/ordinary start paths; another role's existing child grant does not bypass it. Reopen planner as reviewer through the verified conversation with restricted review authority.
+
+  Run approval atomically freezes plan/task/branch/roles/message-base and commits the lead launch intent with its receipt, then prepares the explicitly approved plan branch under T079 Git preconditions. No unapproved build/branch/commit occurs. Reconcile branch preparation and spawn after crash/response loss; never repeat an ambiguous launch. Commit each completed task on that approved branch with only its reviewed changed paths; preserve foreign staged bytes. A native turn or task file is not completion. T082 requires the bound agent report, process exit and owned-leftover cleanup before settling task state or dispatching its successor. Commit uncertainty is logged and blocks claiming Task done and committed. Push remains separately instructed. Start the coordinator with runMode chat for the open plan and close only its owned role lease/session when the last plan settles; builders use task mode. Apply per-task approved Assignment.runsIn through the verified private launch intent without rewriting Unit.runsIn or accepting public overrides. Reconcile a reported existing task commit before making one, so a native approved commit and owner recovery never create duplicate commits.
+
+  Bind each native/hook/Relay event to canonical actor/attempt/session/task before T084. Capture actual protocol fixtures for all external clients and Lyra; observe current structured control channels without replacing their permission semantics. Initialization confirms start after binding, spawn/HTTP headers alone do not. Reject stale role events, changing witness payloads, raw text as milestones and fabricated report/exit. Allocate owner timestamp/sequence in one journal with state/budget/outbox intent; source clocks cannot postpone deadlines. Keep current attempts/watches/messages bounded and historic evidence paged. Persist witness/ledger dedup records separately rather than growing unbounded events arrays in run.json.
+
+  Observe parent exit independently of stdio held by descendants. Decide verified OS process-group/job/native-handle cleanup for Windows/Linux without signaling persisted or recycled PIDs. The agent's explicit report, exit and cleanup can arrive in any order; missing evidence stays open. A hung abandoned test is closed only if proved owned, records its cleanup and cannot hold the driver's parent-exit/report detection for hours. Stop the step targets the owned current tool, keeps changes/task and has no fake success if unsupported. Retry/replacement waits for old-attempt reconciliation/cleanup; Stop remains stopping until all owned work is closed. Lyra uses an owned execution/AbortSignal, never killing its shared service; done of a local stream alone does not mean task delivered. Keep private native IDs, PID, raw output and credentials out of public chat/log/sync. No extra workflow service or installer is introduced.
+- Tests: all C14 plan/run routes/schema/Revision/phone/unbound authorization before receipts, real plan/task resolution, new draft review, inline assignment edits, sole Executor/no-lead selection/Overlord lead, four roles/direct-client/reopened reviewer scope, nonlead launch denial with prior grants; exact branch/commit receipt and foreign index retention; startup/fast witness before prompt completion, per-agent milestones/heartbeat exclusion, duplicate/stale/forged event; sequence pagination/crash recovery; every report/exit/cleanup order; actual injected fake parent exit with child-held stdout and hung test; PID reuse/foreign/manual/service exclusion; cleanup failure/open supervision and retry no parallel duplicate; Lyra local turn/report distinction. No real agent, platform job, browser or model is started.
+- Proof: node --test test/service-plans.test.mjs test/service-runs.test.mjs test/service-run-processes.test.mjs test/service-run-policy.test.mjs test/service-run-signals.test.mjs test/service-sessions.test.mjs test/service-mcp.test.mjs test/service-native-bridge.test.mjs test/service-auth.test.mjs test/service-api.test.mjs test/sync-pack.test.mjs test/sync-apply.test.mjs; 0 failed, 0 canceled; the hung-child regression proves report/exit detection and verified cleanup with injected clocks, not a passing timeout.
+- Depends on: T024, T028, T077, T078, T079, T080, T081, T082, T083, T084. Commit message: `Execute approved chat plans with verified native task closure`.
+
+#### T086. Supervise plan progress unread delivery budgets and wake
+
+- Screens: start 2.8, start 2.9, start 4.1, start 4.2; 3.8. Decisions: 24, 25. Kind: JUDGMENT.
+- Files: new engine/service/run-supervision.mjs, openRunSupervisor/checkRuns/deliverRunActions/closeRunSupervisor/recoverOutbox; engine/service/runs.mjs, plan_send/plan_read/plan_extend/plan_agree/alert projection; engine/service/service.mjs, supervisor lifetime and lease recovery; engine/service/mcp.mjs and engine/service/client.mjs, bound tool authorization; engine/service/bridge.mjs, verified lead wake lease/adoption; engine/relay/wake.mjs, run lease with ordinary/daily consent caps; engine/relay/store.mjs, per-recipient acknowledgment/pointer transfer; engine/service/chats.mjs, postChat/postMailbox/readChat/readMailbox/queueNotice/deliverNotifications; engine/service/approvals.mjs, plan.message.extend and answers; engine/service/http.mjs, pre-receipt phone refusal; engine/service/projection.mjs, single Waiting plan warning/extension ask; new test/service-run-supervision.test.mjs and test/service-run-messaging.test.mjs; test/service-runs.test.mjs, test/service-approvals.test.mjs, test/service-messaging.test.mjs, test/service-projection-wake.test.mjs, test/service-lifecycle.test.mjs, test/service-shutdown.test.mjs, test/relay-wake.test.mjs, test/relay-wake-aliases.test.mjs, test/secret-scan.test.mjs.
+- Change: compose T082's deadlines and T083's budget with T077's maintained Relay, using the existing singleton and injected clock. Arm each three-minute start deadline independently of one five-minute scan over open/stopping plans. No scanner launches an agent, calls a model or spends tokens. Track every active actor's progress independently; another role's step or byte output does not reset it. Persist deterministic alert/outbox identities before delivery, reconcile actual acknowledgment and tell lead, Overseer, person in order at five-minute intervals. An unavailable lead remains visible but cannot suppress later scheduled human escalation. Recovery logs real delivery times, coalesces missed 30-minute summaries and leaves no orphan timers after closure. Warnings turn the plan card into wait state and enter Waiting exactly once, with the same Stop/Retry target, rather than an unrelated ask or log inspector.
+
+  Track intended recipient IDs until each explicitly reads the stored authored message; retry its pointer once at five minutes and report at ten. A lead reading its sent line is not the builder/reviewer's read. Transfer delivery identity across restart and newest registration, keep ambiguous submissions pending and do not charge/store a second message. Manual resend uses one control receipt, original message ID/deadline and no new budget charge. Cluster lead/group recipients and direct-client role inboxes share this exact message identity; preserve every authored line when a session closes.
+
+  Authenticate role/person agreement before applying the budget. Prevent ordinary Relay/chat sends from bypassing a run-bound actor's budget; owner-typed supervision/negotiation records cannot be impersonated as free model messages. Two distinct roles agree at most floor(base/2) cumulative extra with each reason logged. Beyond that, create one plan.message.extend approval in Waiting, never a standing or phone grant; deny/pending/stale/replay cannot increase credit. Exhaustion leaves scans, alerts and person approvals operational.
+
+  Renew the lead's run lease while open/stopping without rewriting ordinary consent, restarting a model or bypassing the source daily cap. Move only through verified canonical newest ownership and retain unanswered/daily counters. If daily cap prevents a model wake, keep the lease and emit person-visible capped status with resume time while token-free supervision continues. Explicit revocation pauses dispatch; closing the last run removes only its lease and preserves other valid policies/runs. Recover lease/outbox without delivered-pointer replay or shared-service-PID liveness.
+- Tests: injected exact 179999/180000,299999/300000,599999/600000 and planning 1799999/1800000 boundaries; each actor independent, failed/ambiguous delivery, coordinator offline escalation, crash/restart overdue order and coalesced summaries; sender/recipient identity and explicit reads, auto/manual retries once; spent/extended/denied/self-agreed/cross-half/phone/replayed budget and Waiting count; actual parent-report plus hung test remains supervised; long plan beyond ordinary expiry, explicit revoke, same-name different-cluster lease/counter isolation, multiple plans sharing lead and one unit serving different roles without wake/receipt theft, daily cap and local-midnight resumption without reset/bypass, closed cleanup timers and zero model calls in scans.
+- Proof: node --test test/service-run-policy.test.mjs test/service-run-budget.test.mjs test/service-run-supervision.test.mjs test/service-run-messaging.test.mjs test/service-runs.test.mjs test/service-approvals.test.mjs test/service-messaging.test.mjs test/service-projection-wake.test.mjs test/service-lifecycle.test.mjs test/service-shutdown.test.mjs test/relay-wake.test.mjs test/relay-wake-aliases.test.mjs test/secret-scan.test.mjs; 0 failed, 0 canceled; zero model/agent launches during supervision, logged budget decisions and durable cap-respecting lead wake.
+- Depends on: T021, T024, T053, T058, T077, T082, T083, T085. Commit message: `Supervise approved plans with durable escalation and lead wake`.
+
+#### T087. Retain cluster plan and context browser operations
+
+- Screens: every start screen; 6.6, 6.7. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new gui/app/start-api.mjs, complete module; new test/gui-start-api.test.mjs, complete tests.
+- Change: create. Existing credentials, exact route encoding, response deadline and frozen mutation identity remain authoritative. Requests never include a native executable, PID, token or client path.
+
+~~~js
+import{createOperation,request}from'./api.mjs';
+async function write(api,path,body,params,retained){
+  const operation=retained??createOperation({method:'POST',path,body,params});
+  try{return{...await request(api,operation.method,operation.path,{operation}),operation};}
+  catch(error){if(error&&typeof error==='object'&&error.operation==null)error.operation=operation;throw error;}
+}
+async function patch(api,path,body,params,retained){
+  const operation=retained??createOperation({method:'PATCH',path,body,params});
+  try{return{...await request(api,operation.method,operation.path,{operation}),operation};}
+  catch(error){if(error&&typeof error==='object'&&error.operation==null)error.operation=operation;throw error;}
+}
+export const getClusters=(api,query={})=>request(api,'GET','/clusters',{query});
+export const getClusterGit=(api,clusterId,machine)=>request(api,'GET','/clusters/:clusterId/git',{params:{clusterId},query:{machine}});
+export const getClusterChanges=(api,clusterId,machine,query={})=>request(api,'GET','/clusters/:clusterId/changes',{params:{clusterId},query:{...query,machine}});
+export const getSessionContext=(api,sessionId)=>request(api,'GET','/sessions/:sessionId/context',{params:{sessionId}});
+export const getSessionWork=(api,sessionId,query={})=>request(api,'GET','/sessions/:sessionId/work',{params:{sessionId},query});
+export const getSessionTranscript=(api,sessionId,query={})=>request(api,'GET','/sessions/:sessionId/transcript',{params:{sessionId},query});
+export const getRun=(api,runId)=>request(api,'GET','/runs/:runId',{params:{runId}});
+export const getRunLog=(api,runId,query={})=>request(api,'GET','/runs/:runId/log',{params:{runId},query});
+export function createCluster(api,input,retained=null){
+  const{title,parentId,link,machine}=input;return write(api,'/clusters',{title,parentId,link,machine,confirmed:true},undefined,retained);
+}
+export function answerRepositoryOffer(api,offerId,input,retained=null){
+  const{machine,repositoryIds,confirmed,expectedRevision}=input;return write(api,'/discovery/offers/:offerId/answer',{machine,repositoryIds,confirmed,expectedRevision},{offerId},retained);
+}
+export function createClusterAgent(api,clusterId,input,retained=null){
+  const{machine,role,runsIn,useAsDefault,expectedRevision}=input;return write(api,'/clusters/:clusterId/agents',{machine,role,runsIn,useAsDefault,expectedRevision},{clusterId},retained);
+}
+export function createOverseer(api,input,retained=null){
+  const{machine,runsIn,fresh,expectedRevision}=input;return write(api,'/overseer',{machine,runsIn,fresh,expectedRevision},undefined,retained);
+}
+export function setRunsIn(api,unitId,input,retained=null){
+  const{machine,runsIn,useAsDefault,expectedRevision}=input;return patch(api,'/units/:unitId/runs-in',{machine,runsIn,useAsDefault,expectedRevision},{unitId},retained);
+}
+export function changeContext(api,sessionId,input,retained=null){
+  const{action,expectedRevision}=input;return write(api,'/sessions/:sessionId/context',{action,expectedRevision},{sessionId},retained);
+}
+export function createPlan(api,input,retained=null){
+  const{machine,clusterId,chatId,title,branch,mode,tasks,roles,expectedChatRevision}=input;
+  return write(api,'/plans',{machine,clusterId,chatId,title,branch,mode,tasks,roles,expectedChatRevision},undefined,retained);
+}
+export function editPlan(api,planId,input,retained=null){
+  const body={expectedRevision:input.expectedRevision};for(const key of['title','branch','mode','tasks','roles'])if(Object.hasOwn(input,key))body[key]=input[key];
+  return patch(api,'/plans/:planId',body,{planId},retained);
+}
+export const runPlan=(api,planId,expectedRevision,retained=null)=>write(api,'/plans/:planId/run',{confirmed:true,expectedRevision},{planId},retained);
+export function controlPlan(api,runId,input,retained=null){
+  const body={action:input.action,expectedRevision:input.expectedRevision};
+  for(const key of['attemptId','role','assignment','messageId','recipientId'])if(Object.hasOwn(input,key))body[key]=input[key];
+  return write(api,'/runs/:runId/control',body,{runId},retained);
+}
+export const openClusterEditor=(api,clusterId,machine,retained=null)=>write(api,'/clusters/:clusterId/open-editor',{machine},{clusterId},retained);
+export function createClusterLink(api,input,retained=null){
+  const{machine,kind,path,expectedReportRevision}=input;
+  return write(api,'/cluster-links',{machine,kind,path,expectedReportRevision},undefined,retained);
+}
+export async function removeClusterLink(api,clusterId,input,retained=null){
+  const{machine,expectedRevision}=input;
+  const operation=retained??createOperation({method:'DELETE',path:'/cluster-links/:clusterId',params:{clusterId},body:{machine,confirmed:true,expectedRevision}});
+  try{return{...await request(api,operation.method,operation.path,{operation}),operation};}
+  catch(error){if(error&&typeof error==='object'&&error.operation==null)error.operation=operation;throw error;}
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{createApi}from'../gui/app/api.mjs';import*as ops from'../gui/app/start-api.mjs';
+const id='00000000-0000-8000-8000-000000000001',choice={client:'codex',model:'fixture-model',effort:'high',mode:null};
+function fixture(statuses=[]){const calls=[];const api=createApi({location:{origin:'http://127.0.0.1:4310',hash:''},history:{replaceState(){}},fetch:async(url,options)=>{
+  calls.push({path:new URL(url).pathname,query:Object.fromEntries(new URL(url).searchParams),method:options.method,body:options.body?JSON.parse(options.body):null,key:options.headers['Idempotency-Key']});
+  const status=statuses.shift()??200;return new Response(JSON.stringify({contract:'hivem1nd-gui-v3',data:{id},meta:{requestId:'fixture',readAt:'2026-10-14T00:00:00.000Z',eventCursor:'1',sync:'local'},
+    ...(status>=400?{error:{code:'service_unavailable',message:'Service unavailable'}}:{})}),{status,headers:{'Content-Type':'application/json'}});}});
+  api.token='public-fixture-token';return{api,calls};}
+test('browser operations expose the exact cluster plan and context routes',async()=>{
+  const{api,calls}=fixture();await ops.getClusters(api);await ops.getClusterGit(api,id,'DESKTOP');await ops.getClusterChanges(api,id,'DESKTOP');
+  await ops.getSessionWork(api,id);await ops.getSessionTranscript(api,id);await ops.getRun(api,id);await ops.getRunLog(api,id);
+  await ops.createCluster(api,{title:'ideas',parentId:null,link:{kind:'none'},machine:'DESKTOP',extra:true});
+  await ops.answerRepositoryOffer(api,id,{machine:'DESKTOP',repositoryIds:['repo'],confirmed:true,expectedRevision:'r'});
+  await ops.createClusterAgent(api,id,{machine:'DESKTOP',role:'executor',runsIn:choice,useAsDefault:false,expectedRevision:'r'});
+  await ops.createOverseer(api,{machine:'DESKTOP',runsIn:choice,fresh:true,expectedRevision:null});await ops.setRunsIn(api,'root:overseer',{machine:'DESKTOP',runsIn:choice,useAsDefault:false,expectedRevision:'r'});
+  await ops.changeContext(api,id,{action:'compact',expectedRevision:'r'});await ops.createPlan(api,{machine:'DESKTOP',clusterId:id,chatId:id,title:'Cart',branch:'cart-empty',mode:'execution',tasks:[],roles:{},expectedChatRevision:'r'});
+  await ops.editPlan(api,id,{title:'Changed',expectedRevision:'r',executable:'excluded'});await ops.runPlan(api,id,'r');
+  await ops.controlPlan(api,id,{action:'retry_task',attemptId:id,expectedRevision:'r',pid:42});await ops.openClusterEditor(api,id,'DESKTOP');
+  await ops.getSessionContext(api,id);await ops.createClusterLink(api,{machine:'DESKTOP',kind:'folder',path:'C:/Web',expectedReportRevision:'r'});
+  await ops.removeClusterLink(api,id,{machine:'DESKTOP',expectedRevision:'r'});
+  assert.deepEqual(calls.slice(0,7).map(c=>c.path),['/clusters','/clusters/'+id+'/git','/clusters/'+id+'/changes','/sessions/'+id+'/work','/sessions/'+id+'/transcript','/runs/'+id,'/runs/'+id+'/log'].map(p=>'/api/v1'+p));
+  assert.deepEqual(calls[7].body,{title:'ideas',parentId:null,link:{kind:'none'},machine:'DESKTOP',confirmed:true});
+  assert.deepEqual(calls[14].body,{title:'Changed',expectedRevision:'r'});
+  assert.deepEqual(calls[15].body,{confirmed:true,expectedRevision:'r'});
+  assert.deepEqual(calls[16].body,{action:'retry_task',attemptId:id,expectedRevision:'r'});
+  assert.ok(calls.slice(7).filter(c=>c.method!=='GET').every(c=>c.key));
+  assert.equal(calls[10].body.machine,'DESKTOP');assert.equal(calls[17].body.machine,'DESKTOP'); assert.equal(calls[1].query.machine,'DESKTOP'); assert.equal(calls[2].query.machine,'DESKTOP');
+  assert.equal(calls[18].path,'/api/v1/sessions/'+id+'/context');
+  assert.deepEqual(calls[19].body,{machine:'DESKTOP',kind:'folder',path:'C:/Web',expectedReportRevision:'r'});
+  assert.equal(calls[20].method,'DELETE');assert.equal(calls[20].body.confirmed,true);
+  await assert.rejects(ops.getRun(api,'../foreign'));
+});
+test('retry retains the approved plan revision and original operation identity',async()=>{
+  const{api,calls}=fixture([503,202]);let retained;
+  try{await ops.runPlan(api,id,'approved-revision');}catch(error){retained=error.operation;}
+  assert.ok(retained);await ops.runPlan(api,id,'changed-revision',retained);
+  assert.equal(calls[0].key,calls[1].key);assert.deepEqual(calls[0].body,calls[1].body);
+  assert.equal(calls[1].body.expectedRevision,'approved-revision');
+});
+~~~
+
+- Proof: node --test test/gui-start-api.test.mjs test/gui-transport.test.mjs; 2 new tests and existing transport tests pass, 0 failed, 0 canceled.
+- Depends on: T018, T078, T081, T085, T086. Commit message: `Retain cluster plan and context operation identities`.
+
+#### T088. Supply literal bilingual copy for the start workflow
+
+- Screens: every start screen; 2.19 to 2.22, 6.6, 6.7. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new gui/app/start-copy.mjs, complete dictionary/helper; new test/gui-start-copy.test.mjs, complete tests.
+- Change: create. Client/model/quota names come only from connected-client choices and agent facts; sample messages, task titles, paths and Git values are data, rendered with textContent. Product labels use this finite dictionary.
+
+~~~js
+export const START_COPY=Object.freeze({
+  clusters:['Clusters','Clústeres'],newCluster:['New cluster','Nuevo clúster'],name:['Name','Nombre'],linkedTo:['Linked to','Vinculado a'],
+  repository:['Repository','Repositorio'],folder:['Folder','Carpeta'],nothing:['Nothing','Nada'],noLink:['No link','Sin vínculo'],
+  nothingSelected:['Nothing selected','Sin selección'],selectHint:['Select a cluster or an agent.','Seleccionar un clúster o agente.'],
+  nothingHere:['Nothing here yet','Sin elementos todavía'],emptyHint:['Everything starts empty. Clusters and agents are added when you need them.','El inicio está vacío. Los clústeres y agentes se agregan cuando se necesitan.'],
+  noClusters:['No clusters yet. A cluster groups agents, and may be linked to a repository or a folder.','Todavía no hay clústeres. Un clúster agrupa agentes y puede vincularse a un repositorio o carpeta.'],
+  newClusterHint:['A cluster groups agents. It can be linked to a repository or a folder, which is where its agents may write, or to nothing.','Un clúster agrupa agentes. Puede vincularse a un repositorio o carpeta, donde sus agentes pueden escribir, o quedar sin vínculo.'],
+  unlinkedHint:['With nothing linked, its agents can talk and plan but cannot write files. A folder can be linked later.','Sin vínculo, los agentes pueden conversar y planificar, pero no escribir archivos. Se puede vincular una carpeta después.'],
+  noLinkBody:['No repository or folder: its agents can talk and plan, but have nowhere to write.','Sin repositorio ni carpeta: los agentes pueden conversar y planificar, pero no tienen un lugar para escribir.'],
+  linkFolder:['Link a folder','Vincular una carpeta'],clusterCreated:['Cluster {name} created','Clúster {name} creado'],undo:['Undo','Deshacer'],
+  reposFound:['{count} repositories found on this machine','{count} repositorios encontrados en esta máquina'],
+  reposHint:['They sit in {count} folders. Each folder becomes a cluster, with its repositories as clusters inside it. Nothing is imported until you say so, and nothing in them changes.','Se encuentran en {count} carpetas. Cada carpeta se convierte en un clúster, con sus repositorios como clústeres internos. No se importa ni se modifica nada sin confirmación.'],
+  filter:['Filter repositories','Filtrar repositorios'],worktreesHint:['Worktrees show inside their repository, not as repositories of their own.','Los worktrees aparecen dentro de su repositorio, sin convertirse en repositorios separados.'],
+  repositoryOne:['1 repository','1 repositorio'],repositoryMany:['{count} repositories','{count} repositorios'],more:['{count} more','{count} más'],
+  notNow:['Not now','Ahora no'],import:['Import {count}','Importar {count}'],createOverseer:['Create your Overseer','Crear el Overseer'],
+  overseerHint:['It watches over every cluster: it answers what is going on and hands work to each cluster’s lead. It runs only when you write to it.','Supervisa todos los clústeres: informa su estado y deriva el trabajo al responsable de cada uno. Solo se ejecuta al recibir un mensaje.'],
+  external:['External agent','Agente externo'],externalHint:['Claude Code, Codex or Cursor, with your own account. The strongest answers; uses that account’s quota.','Claude Code, Codex o Cursor, con una cuenta propia. Respuestas más capaces; se utiliza la cuota de esa cuenta.'],
+  local:['Local model','Modelo local'],localHint:['Lyra on this machine. Free and private, with no quota; slower and less capable.','Lyra en esta máquina. Gratis, privado y sin cuota; más lento y menos capaz.'],
+  runsIn:['Runs in','Se ejecuta en'],fresh:['Start fresh every session','Iniciar cada sesión desde cero'],
+  freshHint:['Recommended: it reads the M1ND again instead of carrying an old conversation. It tells you when its context is filling.','Recomendado: volver a leer el M1ND sin arrastrar una conversación anterior. Se avisa cuando el contexto está por llenarse.'],
+  later:['Later','Más tarde'],create:['Create','Crear'],cancel:['Cancel','Cancelar'],above:['Above every cluster','Por encima de todos los clústeres'],
+  overview:['Zoomed out: every cluster at once. Double click one to fly to it','Vista general: todos los clústeres. Hacer doble clic en uno para acercarse'],
+  inside:['Zoomed in on {name}, {count} repositories; zoom out to see every cluster again','Vista de {name}, {count} repositorios; alejar para volver a ver todos los clústeres'],
+  drag:['Drag the empty space to move around; Shift and drag to select','Arrastrar el espacio vacío para desplazarse; Mayús y arrastrar para seleccionar'],
+  yourClusters:['Your clusters','Clústeres'],allHint:['{folders} hold {count} repositories. Double click one to fly to it.','{folders} contienen {count} repositorios. Hacer doble clic en uno para acercarse.'],
+  repoCluster:['Cluster linked to a repository','Clúster vinculado a un repositorio'],unlinkedCluster:['Cluster with no link','Clúster sin vínculo'],
+  changedOne:['1 file changed, not committed','1 archivo modificado, sin commit'],changedMany:['{count} files changed, not committed','{count} archivos modificados, sin commit'],
+  lastCommit:['Last commit {elapsed} ago','Último commit hace {elapsed}'],changes:['Changes','Cambios'],openEditor:['Open in editor','Abrir en el editor'],
+  noAgents:['No agents yet','Todavía no hay agentes'],noAgentsHint:['No agents yet: New agent adds one.','Todavía no hay agentes: Nuevo agente permite agregar uno.'],
+  newAgent:['New agent','Nuevo agente'],newAgentIn:['New agent in {name}','Nuevo agente en {name}'],executor:['Executor','Executor'],overlord:['Overlord','Overlord'],
+  agentScope:['It writes only in {name}’s repository. Its name and machine are set for you and can be changed later.','Solo se escribe en el repositorio de {name}. El nombre y la máquina se asignan automáticamente y pueden cambiarse después.'],
+  agent:['Agent','Agente'],model:['Model','Modelo'],effort:['Effort','Esfuerzo'],mode:['Mode','Modo'],defaultChoice:['Use for new agents from now on','Utilizar para los agentes nuevos'],
+  weekQuota:['{percent}% of the week left','Queda el {percent}% de la semana'],quota:['{label}: {percent}% left','{label}: queda el {percent}%'],quotaUnknown:['Quota unavailable','Cuota no disponible'],
+  localQuota:['On this machine, no quota','En esta máquina, sin cuota'],light:['Light, runs on 16 GB','Ligero, funciona con 16 GB'],complete:['Complete, more capable','Completo, más capaz'],
+  low:['Low','Bajo'],medium:['Medium','Medio'],high:['High','Alto'],max:['Max','Máximo'],fast:['Fast','Rápido'],normal:['Normal','Normal'],thinking:['Thinking','Razonamiento'],
+  fastHint:['Brief, no thinking','Breve, sin razonamiento'],normalHint:['Fuller, no thinking','Más completo, sin razonamiento'],thinkingHint:['Thinks and checks','Razonar y comprobar'],
+  leads:['{lead} leads {members}','{lead} coordina a {members}'],messageCluster:['Message {name}','Enviar un mensaje a {name}'],goesToLead:['Goes to the cluster’s lead','Se envía al responsable del clúster'],
+  choosePlanner:['Choose who plans','Elegir quién planifica'],plan:['Plan: {title}','Plan: {title}'],startPlan:['Start a plan','Iniciar un plan'],run:['Run','Ejecutar'],edit:['Edit','Editar'],
+  editableHint:['Who does each task can be changed','Se puede cambiar quién realiza cada tarea'],commitsHint:['Each task is committed on {branch}','Cada tarea se guarda con un commit en {branch}'],
+  stop:['Stop','Detener'],stopStep:['Stop the step','Detener el paso'],retryTask:['Retry the task','Reintentar la tarea'],retry:['Retry','Reintentar'],
+  noStart:['{agent} did not confirm its start within 3 minutes. Its changes are kept; {lead} was told first.','{agent} no confirmó el inicio en 3 minutos. Se conservan los cambios; se avisó primero a {lead}.'],
+  stalled:['{agent} has shown no progress for {minutes} minutes. Its changes are kept; {lead} was told first.','{agent} no mostró avances durante {minutes} minutos. Se conservan los cambios; se avisó primero a {lead}.'],
+  unreadProblem:['{agent} has not read the message for 10 minutes. No answer is assumed; {lead} was told first.','{agent} no leyó el mensaje durante 10 minutos. No se supone una respuesta; se avisó primero a {lead}.'],
+  budget:['{used} of {base} messages','{used} de {base} mensajes'],extra:['{count} more agreed: {reason}','{count} mensajes adicionales acordados: {reason}'],
+  extension:['{count} more messages for task {task}','{count} mensajes adicionales para la tarea {task}'],approve:['Approve','Aprobar'],deny:['Deny','Denegar'],
+  context:['Context','Contexto'],contextFull:['{percent}% full','{percent}% utilizado'],contextEstimated:['Input budget {percent}% used, estimated','Presupuesto de entrada al {percent}%, estimado'],
+  contextUnknown:['Context usage unavailable','Uso del contexto no disponible'],contextNotice:['My context is {percent}% full','El contexto está al {percent}%'],
+  contextHint:['Answers get slower and less precise from here. Compact keeps a summary of this conversation; Clear starts empty and reads the M1ND again.','Las respuestas pueden ser más lentas y menos precisas. Compactar conserva un resumen de esta conversación; Limpiar inicia un contexto vacío y vuelve a leer el M1ND.'],
+  compact:['Compact','Compactar'],clear:['Clear','Limpiar'],close:['Close','Cerrar'],freshStatus:['Starts fresh every session','Iniciar cada sesión desde cero'],
+  messageOverseer:['Message the Overseer','Enviar un mensaje al Overseer'],across:['Across every cluster','En todos los clústeres'],
+  chat:['Chat','Chat'],work:['Work','Trabajo'],startedWith:['Started with','Contexto inicial'],startedSummary:['{role} of {cluster}, the M1ND, and the task {task}','{role} de {cluster}, el M1ND y la tarea {task}'],
+  workHint:['What the session is doing, step by step. Nothing here is a message.','Actividad de la sesión, paso a paso. Estos registros no son mensajes.'],
+  transcript:['Full transcript','Transcripción completa'],transcriptHint:['The full transcript opens from More','La transcripción completa se abre desde Más'],moreMenu:['More','Más'],
+  readsNext:['It reads your message at its next step','El mensaje se lee en el siguiente paso'],unread:['{count} unread','{count} sin leer'],minutes:['{count} min','{count} min'],
+  tests:['Running the tests','Ejecutando las pruebas'],build:['Running the build','Ejecutando la compilación'],editStep:['Editing files','Editando archivos'],planStep:['Checking the plan','Revisando el plan'],
+  review:['Reviewing the task','Revisando la tarea'],workStep:['Working on the task','Trabajando en la tarea'],confirmed:['Confirmed its start','Inicio confirmado'],
+  reported:['Task reported','Informe de la tarea recibido'],exited:['Process ended','Proceso finalizado'],cleaned:['Owned leftovers closed','Procesos restantes propios cerrados'],
+  pending:['Pending','Pendiente'],busy:['In progress','En curso'],done:['Done','Finalizado'],stuck:['Needs attention','Requiere atención'],failed:['Failed','Falló'],
+  clusterLinks:['Cluster links','Enlaces de clústeres'],removeLink:['Remove link','Quitar el vínculo'],removeHint:['The link leaves the cluster list. Files and work stay. Undo is available for 10 s.','El vínculo se quita de la lista de clústeres. Se conservan los archivos y el trabajo. Deshacer está disponible durante 10 s.'],
+  unavailable:['This action is unavailable for the current connection. Work is kept.','Esta acción no está disponible con la conexión actual. Se conserva el trabajo.'],
+  working:['Working','Procesando'],readM1nd:['Read the M1ND','Leer el M1ND'],sendMessage:['Send a message','Enviar un mensaje'],readMessages:['Read messages','Leer mensajes'],
+  confirmPlan:['Confirm plan start','Confirmar el inicio del plan'],reportStep:['Report a step','Informar un paso'],reportTask:['Report a task','Informar una tarea'],
+  dispatchTask:['Dispatch a task','Asignar una tarea'],requestMessages:['Request more messages','Solicitar más mensajes'],agreeMessages:['Agree more messages','Acordar más mensajes'],
+  readFile:['Read a file','Leer un archivo'],writeFile:['Write a file','Escribir un archivo'],
+  folderScope:['It writes only in the linked folder. Its name and machine are set automatically.','Solo se escribe en la carpeta vinculada. El nombre y la máquina se asignan automáticamente.'],
+  unlinkedScope:['It can talk and plan; a file write requires permission until a folder is linked.','Se puede conversar y planificar; escribir un archivo requiere permiso hasta vincular una carpeta.'],
+  lyraPending:['Allow HIVEM1ND in Lyra before using the local model.','Autorizar HIVEM1ND en Lyra antes de utilizar el modelo local.'],
+  lyraMissing:['Lyra is not running on this machine.','Lyra no se está ejecutando en esta máquina.'],
+  scopeUnavailable:['This connection cannot enforce the selected write scope.','Esta conexión no puede aplicar el ámbito de escritura seleccionado.'],
+});
+export function startText(language,key,values={}){
+  const pair=START_COPY[key];if(!pair)throw new Error('Unknown start copy key: '+key);
+  return pair[language==='es'?1:0].replace(/\{([a-zA-Z]+)\}/g,(_match,name)=>String(values[name]??'{'+name+'}'));
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{START_COPY,startText}from'../gui/app/start-copy.mjs';
+test('every start label is literal bilingual and Spanish actions are impersonal',()=>{
+  for(const[key,pair]of Object.entries(START_COPY)){
+    assert.equal(pair.length,2,key);assert.ok(pair.every(s=>typeof s==='string'&&s.length>0),key);
+    assert.doesNotMatch(pair.join(' '),/\u2014/);assert.doesNotMatch(pair[1],/\b(vos|tu|tus|tenés|podés|elegí|hacé|usá)\b/i);
+    assert.equal(startText('en',key),pair[0]);assert.equal(startText('es',key),pair[1]);
+  }
+});
+test('copy values remain text data and task count placeholders are explicit',()=>{
+  assert.equal(startText('es','import',{count:26}),'Importar 26');
+  assert.equal(startText('en','plan',{title:'<script>fixture</script>'}),'Plan: <script>fixture</script>');
+  assert.equal(startText('en','commitsHint',{branch:'cart-empty'}),'Each task is committed on cart-empty');
+  assert.throws(()=>startText('en','invented'),/Unknown start copy/);
+});
+~~~
+
+- Proof: node --test test/gui-start-copy.test.mjs test/spanish-register.test.mjs; 2 new tests and existing register cases pass, 0 failed, 0 canceled.
+- Depends on: T073. Commit message: `Define bilingual copy for clusters plans and session work`.
+
+#### T089. Fit the entire cluster graph and fly to one cluster
+
+- Screens: start 1.3, start 1.4; all start Map states. Decisions: 25. Kind: MECHANICAL.
+- Files: new gui/app/cluster-geometry.mjs, complete module; new test/gui-cluster-geometry.test.mjs, complete tests.
+- Change: create these camera functions. Bounds come from current cluster frames and actual agent circles in T091; root:master is excluded by the caller. Unlike the previous 0.25 minimum, fitting has no lower zoom floor that can hide a large graph. No layout persistence format is replaced.
+
+~~~js
+export function clusterCamera(bounds,viewport,padding=48){
+  if(!bounds.length)return{x:0,y:0,zoom:1};
+  if(viewport.width<=padding*2||viewport.height<=padding*2)throw new RangeError('Map viewport is too small');
+  for(const b of bounds)if(![b.x,b.y,b.width,b.height].every(Number.isFinite)||b.width<0||b.height<0)throw new TypeError('Invalid graph bounds');
+  const minX=Math.min(...bounds.map(b=>b.x)),minY=Math.min(...bounds.map(b=>b.y));
+  const width=Math.max(1,Math.max(...bounds.map(b=>b.x+b.width))-minX);
+  const height=Math.max(1,Math.max(...bounds.map(b=>b.y+b.height))-minY);
+  const zoom=Math.min(2.5,(viewport.width-padding*2)/width,(viewport.height-padding*2)/height);
+  return{x:(viewport.width-width*zoom)/2-minX*zoom,y:(viewport.height-height*zoom)/2-minY*zoom,zoom};
+}
+export function interpolateCamera(from,to,fraction){
+  const t=Math.max(0,Math.min(1,fraction)),ease=1-Math.pow(1-t,3);
+  return{x:from.x+(to.x-from.x)*ease,y:from.y+(to.y-from.y)*ease,zoom:from.zoom+(to.zoom-from.zoom)*ease};
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{clusterCamera,interpolateCamera}from'../gui/app/cluster-geometry.mjs';
+test('all clusters remain inside the fit even beyond the old minimum zoom',()=>{
+  const boxes=[{x:-10000,y:-6000,width:300,height:200},{x:12000,y:7000,width:300,height:200}],viewport={width:736,height:818};
+  const camera=clusterCamera(boxes,viewport);assert.ok(camera.zoom<0.25);
+  for(const b of boxes){assert.ok(b.x*camera.zoom+camera.x>=47.99);assert.ok(b.y*camera.zoom+camera.y>=47.99);
+    assert.ok((b.x+b.width)*camera.zoom+camera.x<=viewport.width-47.99);assert.ok((b.y+b.height)*camera.zoom+camera.y<=viewport.height-47.99);}
+});
+test('cluster flight and reduced-motion final position use one deterministic target',()=>{
+  const from={x:0,y:0,zoom:1},to=clusterCamera([{x:20,y:48,width:720,height:690}],{width:736,height:818});
+  assert.deepEqual(interpolateCamera(from,to,0),from);assert.deepEqual(interpolateCamera(from,to,1),to);
+  assert.deepEqual(interpolateCamera(from,to,2),to);assert.deepEqual(clusterCamera([],{width:736,height:818}),from);
+});
+~~~
+
+- Proof: node --test test/gui-cluster-geometry.test.mjs test/gui-map.test.mjs; 2 new tests and existing Map tests pass, 0 failed, 0 canceled.
+- Depends on: T073. Commit message: `Fit every cluster and calculate deterministic camera flights`.
+
+#### T090. Separate authored chat from work and count unread recipients
+
+- Screens: start 4.1, start 4.2, start 2.6 to start 2.9. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new engine/service/conversation-data.mjs, complete pure projection helpers; new test/service-conversation-data.test.mjs, complete tests.
+- Change: create. Inputs are owner-classified records; T093 binds old preload markers and native evidence to these channels. A model cannot supply its own free control/message classification. Messages have channel message, bootstrap or work; only message is authored conversation.
+
+~~~js
+export function authoredMessages(records){
+  const seen=new Set();return records.filter(record=>{
+    if(record.channel!=='message'||seen.has(record.id))return false;
+    seen.add(record.id);return true;
+  });
+}
+export function unreadByAgent(records,receipts){
+  const read=new Set(receipts.map(r=>r.messageId+'\0'+r.readerId)),counts=new Map();
+  for(const record of authoredMessages(records))for(const recipient of new Set(record.recipientIds??[])){
+    if(recipient===record.authorId||read.has(record.id+'\0'+recipient))continue;
+    counts.set(recipient,(counts.get(recipient)??0)+1);
+  }
+  return Object.fromEntries([...counts].sort(([a],[b])=>a.localeCompare(b)));
+}
+export function workElapsedMinutes(record,now){
+  if(record.state!=='busy')return null;
+  const start=Date.parse(record.at);if(!Number.isFinite(start)||!Number.isFinite(now))return null;
+  return Math.max(0,Math.floor((now-start)/60000));
+}
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{authoredMessages,unreadByAgent,workElapsedMinutes}from'../engine/service/conversation-data.mjs';
+const message={id:'m',channel:'message',authorId:'root:master',recipientIds:['project:shop:a','project:shop:b','project:shop:b']};
+test('bootstrap prompts and work never become chat or inbox counts',()=>{
+  const records=[message,{...message},{...message,id:'boot',channel:'bootstrap'},{...message,id:'step',channel:'work'}];
+  assert.deepEqual(authoredMessages(records),[message]);assert.deepEqual(unreadByAgent(records,[]),{'project:shop:a':1,'project:shop:b':1});
+});
+test('only each recipient acknowledgment clears its own unread message',()=>{
+  assert.deepEqual(unreadByAgent([message],[{messageId:'m',readerId:'root:master'}]),{'project:shop:a':1,'project:shop:b':1});
+  assert.deepEqual(unreadByAgent([message],[{messageId:'m',readerId:'project:shop:a'}]),{'project:shop:b':1});
+  assert.deepEqual(unreadByAgent([message],[{messageId:'m',readerId:'project:shop:a'},{messageId:'m',readerId:'project:shop:b'}]),{});
+});
+test('elapsed work uses the actual step start and never implies progress or completion',()=>{
+  const record={state:'busy',at:'2026-10-14T11:10:00.000Z'};
+  assert.equal(workElapsedMinutes(record,Date.parse('2026-10-14T11:12:00.000Z')),2);
+  assert.equal(workElapsedMinutes({...record,state:'done'},Date.now()),null);
+  assert.equal(workElapsedMinutes({...record,at:'unknown'},Date.now()),null);
+});
+~~~
+
+- Proof: node --test test/service-conversation-data.test.mjs; 3 passed, 0 failed, 0 canceled.
+- Depends on: T073. Commit message: `Project authored chat and recipient unread counts separately`.
+
+#### T091. Render first-open discovery clusters and the Runs in picker
+
+- Screens: start 1.1 to start 1.4, start 2.1 to start 2.6; replaced 2.7 to 2.14, 6.6, 6.7. Decisions: 25. Kind: JUDGMENT.
+- Files: new gui/app/clusters.mjs, discovery/cluster/new-agent/Runs in views and selection state; gui/app/main.mjs, mount/first-open/selection/inspector/settingsSurface/startSession forms; gui/app/hierarchy.mjs, buildHierarchy/flattenVisibleHierarchy/cluster expansion and activation; gui/app/map.mjs, createMap/renderMap/pointerDown/keyDown/wheelZoom/cluster hit/select/flight and no master node; gui/app/map-geometry.mjs, persisted cluster frames versus old personalGroupBounds; gui/app/inspector.mjs, cluster Git/lead/empty inspector; gui/app/settings.mjs, Projects cluster-link list/connected capability facts; gui/app/state.mjs and gui/app/stream.mjs, cluster/report refresh; gui/app/styles.css, complete start layout/control styles; engine/service/http.mjs, BROWSER_STATIC_FILES add start-api.mjs/start-copy.mjs/cluster-geometry.mjs/clusters.mjs; new test/gui-start.test.mjs and test/gui-clusters.test.mjs; test/gui-shell.test.mjs, test/gui-map.test.mjs, test/gui-fixture.mjs, test/gui-data.mjs, test/service-api.test.mjs, test/gui-browser.md.
+- Change: decide focus/selection and camera composition while applying C13. Replace visible My groups/Chain of command/Without an Overlord project grouping with the one cluster tree and its actual lead links. root:master remains core identity but has no node. Override T007's automatic Overseer creation: a new empty M1ND first offers repositories, then Create your Overseer; Later leaves it empty and existing migrated Overseers are retained. No discovery/import or model session starts without its explicit action. Store offer dismissal and focused modal flow so restart cannot import or reopen it repeatedly.
+
+  At 1440x900 use shared 52 top bar, 818 workspace and 30 footer; body padding 0x12 and gap 12, Hierarchy width 290 and inspector 366. The drawing's reference Map width is 760; its viewport occupies the remaining 736 pixels at 1440 and maps the same world coordinates through the camera, avoiding the drawing's 24-pixel overflow. On narrow desktop collapse panels through existing layout behavior, retain the same data and keyboard actions. Panel radius 20, panel fill/quiet line, bg Map, hints 12/mute at world x14/y12. All visible controls have at least 32-pixel targets. Drag empty space pans X/Y; Shift-drag selects; double click cluster in Map or Hierarchy flies for 220 ms with T089 cubic interpolation, reduced motion jumps directly. Fit and zoom out include every frame and real agent circle without the old 0.25 floor. Folder frame labels/counts stay visible; no repository/worktree is lost by truncation.
+
+  Frame values from area/mini/folderArea: normal repo 290x230 or220x170/160 as the actual saved frame; unlinked default 180x70; radius 14, ring stroke1.4, dash7 5, ring-soft fill; selected accent stroke2/accent-soft; label x+14/y-11, padding 2x8/radius 7, glyph12, title11.5/700. Folder overview frames radius 16, each repo mini66x24 with grid pitch72x30, padding 14left/20top, mini radius 10/stroke1.2/dash5 4/text9.5. Focused Web frame720x690 at 20/48, mini156x62 at 44+(column*172),76+(row*92), four columns; selected mini accent. Saved anchors use layout.groups["cluster:"+id], not layout.nodes or project circles. Fixture Overseer x380/y409/diameter60; shop lead 185/545/50 and Executors110/630/42 and 260/630/42; real placement uses persisted anchors and current agent counts. Services and Fit controls remain.
+
+  Hierarchy tabs/search are shared. Rows padding 6x8/radius 7/gap 8, title13.5/600; nested repos5x8x5x30 with branch11mono, expanded six then named more control; agent indents24/42. Cluster plus control is named New cluster. Discovery modal600/padding 24/gap 16/radius 22/panel/line2 with 18/700 heading,13.5/mute subtitle, filter padding 8x10/radius 10/card/line2; folder row 8x10/radius 10/gap 10 with 18 tick, glyph15/title13.5/700/path11.5mono/count 12; child rows5x10x5x42 and 13text. Toggling/filtering retains canonical selections; fixture Web 19, Unity 6, Tools 1 shows Import 26, never a second worktree count. Not now/Create are busy in-button and retain operation/focus after errors.
+
+  Create Overseer modal600 with two14x14/padding kind cards, gap 10/radius 16, selected card2/accent and unselected card/line; icon34/radius 10/glyph17. Runs in field gap 6/label12/600,9x11/radius 11/card/line2/text13.5, checked fresh control and Later/Create. No native session is started until a message or approved plan. New cluster modal540 with Name, Repository/Folder/Nothing segments, exact no-link consequence and Cancel/Create. Folder/repository choices use verified links, never browser-inferred paths.
+
+  Cluster inspector header uses folder avatar38/glyph18, title15/700, subtitle12.5/mute, New agent plus and More named36 controls. Git section12x16/gap 8/linebottom: sanitized remote12mono, branch badge2x7/pill/glyph11/text11, changed count 12.5/wait, last commit12/mute; Changes/Open in editor. Unlinked inspector uses noLinkBody and Link a folder. Member/lead row 10x16/gap 8/12.5; composer Message{name}/goesToLead is persistent. Changes opens the bounded real Git projection; no read or editor action commits/pushes.
+
+  New agent popover320/padding 16/gap 12/radius 16/card2/line2 anchored to New agent and clamped within 16 px viewport. Only Executor/Overlord segmented4 padding/gap 4/radius 12/card, cells7x12/radius 9/text13/600, Runs in and scope consequence, Cancel/Create. Create derives fields from cluster and leaves the session closed. Runs in picker560/radius 16/card2/line2 beside this field, three columns200/180/170 separated by1 px line with 230 px minimum height, each10x8 padding/gap 2, labels11uppercase/mute; options8x10/radius 9/gap 8/text13 selected700/accent/accent-soft, notes11/mute, check13. Footer10x14/gap 10/line-top, unchecked default choice and selected summary12/700/accent. List only connected clients; source quotas/models/efforts are actual or explicit unknown. Lyra models/modes replace effort and unsupported model-mode pairs are disabled with cause, not silently changed. Confirming a picker choice persists only on Create or explicit unit change; default is changed only if checked.
+
+  Settings Projects becomes a machine-owned cluster-link list with shared row/section geometry, actual folder/repository/no-link badges, Link a folder and guarded Remove/Undo. No old roots/environment automatic-import form is built. All labels use T088; use original five-tab Settings/phone and Add controls. Preserve editor drafts and existing cluster chats across event refreshes, rename/removal/Undo and camera changes.
+- Tests: actual-core discovery acceptance and no-import/dismissal, filter/parent selection/worktree count, Later/fresh/Overseer creation with no launch, migrated tree/history/aliases and no root person; empty/unlinked/repository/folder/nested cluster frames; all graph Fit/flight/pan/Shift-selection/keyboard/reduced motion; New agent exact derived fields/no session/default unchecked; connected-only choices, actual unknown quota, external model-effort native round trip and Lyra pair mismatch; Git safe facts/Changes/Open editor no mutation; cluster link removal/Undo preserving bytes. Test 1440x900,720x600,200%zoom, all six looks, en/es, keyboard focus/32 px targets and retained drafts. Record measured browser results only when executed.
+- Proof: node --test test/gui-start.test.mjs test/gui-clusters.test.mjs test/gui-cluster-geometry.test.mjs test/gui-map.test.mjs test/gui-shell.test.mjs test/gui-fixture.test.mjs test/service-api.test.mjs; 0 failed, 0 canceled, plus recorded start 1.1 to 1.4/start 2.1 to 2.6 browser observations in test/gui-browser.md. Fixture-only results cannot substitute for discovery/Git/native choice integration.
+- Depends on: T055, T062, T073, T078, T079, T080, T081, T087, T088, T089, T090. Commit message: `Present discovery linked clusters and persisted agent launch choices`.
+
+#### T092. Render the editable running and warning plan card in chat
+
+- Screens: start 2.7, start 2.8, start 2.9. Decisions: 24, 25. Kind: MECHANICAL.
+- Files: new gui/app/plan-view.mjs, complete renderer; gui/app/styles.css, append the full CSS below; new test/gui-plan-view.test.mjs, complete tests; reuse test/add-dom-fixture.mjs from T071 without changing it.
+- Change: create. Model fields are language,title,branch,phase (ready/running/warning),tasks:[{id,title,actor,runsInLabel,state,elapsedMinutes,endedLabel}],problem:null|{kind:"noStart"|"stalled"|"unreadProblem",agent,lead,minutes},busy,budget:null|{used,base},extensions:[{count,reason}]. Actions are onRun,onEdit,onAssignment,onStop,onStopStep,onRetryTask,onRetryStart,onResend. Model values are text data, not authorization. A runtime state cannot be guessed from a local click.
+
+~~~js
+import{element}from'./components.mjs';import{startText}from'./start-copy.mjs';
+function svg(document,path,size=14){
+  const node=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  for(const[key,value]of Object.entries({viewBox:'0 0 24 24',width:size,height:size,'aria-hidden':'true',fill:'none',stroke:'currentColor','stroke-width':'1.7','stroke-linecap':'round','stroke-linejoin':'round'}))node.setAttribute(key,value);
+  const shape=document.createElementNS('http://www.w3.org/2000/svg','path');shape.setAttribute('d',path);node.append(shape);return node;
+}
+const paths={play:'M7 4l13 8-13 8z',edit:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',stop:'M6 6h12v12H6z',retry:'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',check:'M5 12l4.5 4.5L19 7',alert:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v6M12 16.5v.5',chevron:'M6 9l6 6 6-6',graph:'M8.5 6a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0M20.5 8a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0M11.5 18a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0M8.3 7l7.4.8M7 8.4l1.4 7.2M16.6 10l-5.8 6.3',list:'M9 6h11M9 12h11M9 18h11M4 6h.1M4 12h.1M4 18h.1'};
+function action(document,text,id,glyph,primary,busy,callback){
+  return element(document,'button',{type:'button',class:'plan-action'+(primary?' is-primary':''),'data-action':id,disabled:busy?'':null,'aria-busy':busy?'true':null,onclick:callback},
+    busy?element(document,'span',{class:'spinner','aria-hidden':'true'}):svg(document,paths[glyph]),element(document,'span',{text}));
+}
+export function renderPlanCard(document,model,actions={}){
+  const t=(key,values)=>startText(model.language,key,values);
+  const root=element(document,'section',{class:'plan-card'+(model.phase==='warning'?' is-warning':''),'aria-label':t('plan',{title:model.title})});
+  root.append(element(document,'header',{class:'plan-title'},svg(document,paths.list,15),
+    element(document,'strong',{text:t('plan',{title:model.title})}),element(document,'span',{class:'plan-branch'},svg(document,paths.graph,11),element(document,'span',{text:model.branch}))));
+  for(const[ordinal,task]of model.tasks.entries()){
+    let mark;
+    if(model.phase==='ready')mark=element(document,'span',{class:'plan-number',text:ordinal+1});
+    else if(task.state==='busy')mark=element(document,'span',{class:'spinner plan-state','aria-label':t('busy'),role:'status'});
+    else if(task.state==='done')mark=element(document,'span',{class:'plan-state is-done','aria-label':t('done')},svg(document,paths.check,12));
+    else if(task.state==='stuck'||task.state==='failed')mark=element(document,'span',{class:'plan-state is-stuck','aria-label':t(task.state)},svg(document,paths.alert,17));
+    else mark=element(document,'span',{class:'plan-state is-pending','aria-label':t('pending')});
+    const assignment=element(document,model.phase==='ready'?'button':'div',{class:'plan-assignment',type:model.phase==='ready'?'button':null,
+      'data-action':model.phase==='ready'?'edit-assignment':null,'aria-label':model.phase==='ready'?t('edit')+': '+task.title:null,
+      onclick:model.phase==='ready'?()=>actions.onAssignment?.(task.id):null},
+      element(document,'span',{class:'plan-actor',text:task.actor}),element(document,'span',{text:task.runsInLabel}),
+      model.phase==='ready'?svg(document,paths.chevron,12):null);
+    const elapsed=task.elapsedMinutes!=null?t('minutes',{count:task.elapsedMinutes}):task.endedLabel??'';
+    root.append(element(document,'div',{class:'plan-task','data-task-id':task.id,'data-state':task.state},mark,
+      element(document,'div',{class:'plan-task-body'},element(document,'div',{class:'plan-task-title',text:task.title}),assignment),
+      elapsed?element(document,'span',{class:'plan-time',text:elapsed}):null));
+  }
+  if(model.problem)root.append(element(document,'p',{class:'plan-problem',role:'status',text:t(model.problem.kind,model.problem)}));
+  if(model.budget)root.append(element(document,'p',{class:'plan-budget',text:t('budget',model.budget)}));
+  for(const extra of model.extensions??[])root.append(element(document,'p',{class:'plan-budget',text:t('extra',extra)}));
+  const controls=element(document,'div',{class:'plan-actions'});
+  if(model.phase==='ready'){
+    controls.append(action(document,t('run'),'run-plan','play',true,model.busy,()=>actions.onRun?.()),
+      action(document,t('edit'),'edit-plan','edit',false,model.busy,()=>actions.onEdit?.()),
+      element(document,'span',{class:'plan-note',text:t('editableHint')}));
+  }else if(model.phase==='warning'){
+    if(model.problem?.kind==='stalled')controls.append(
+      action(document,t('stopStep'),'stop-step','stop',true,model.busy,()=>actions.onStopStep?.()),
+      action(document,t('retryTask'),'retry-task','retry',false,model.busy,()=>actions.onRetryTask?.()));
+    else controls.append(action(document,t('stop'),'stop-plan','stop',true,model.busy,()=>actions.onStop?.()),
+      action(document,t('retry'),model.problem?.kind==='noStart'?'retry-start':'resend','retry',false,model.busy,
+        ()=>model.problem?.kind==='noStart'?actions.onRetryStart?.():actions.onResend?.()));
+  }else{
+    controls.append(action(document,t('stop'),'stop-plan','stop',false,model.busy,()=>actions.onStop?.()),
+      element(document,'span',{class:'plan-note',text:t('commitsHint',{branch:model.branch})}));
+  }
+  root.append(controls);return root;
+}
+~~~
+
+Append this complete CSS. Board planBlock geometry and token roles are literal; title/assignment text wraps instead of creating horizontal scroll. T013 already defines --waiting-soft in Modern and Nocturne (current styles.css:789,806); family looks inherit their existing waiting palette. No undefined fallback color is introduced.
+
+~~~css
+.plan-card { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); }
+.plan-card.is-warning { border-color: var(--waiting); background: var(--waiting-soft); }
+.plan-title { display: flex; align-items: center; gap: 8px; color: var(--accent); }
+.plan-card.is-warning .plan-title { color: var(--waiting); }
+.plan-title strong { min-width: 0; color: var(--text); font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; }
+.plan-branch { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 7px; border-radius: var(--radius-pill); background: var(--card2); color: var(--body); font: 11px var(--mono); }
+.plan-task { display: flex; align-items: flex-start; gap: 10px; }
+.plan-task-body { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.plan-task-title { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.plan-assignment { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--mute); font: 11px var(--font); }
+button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.plan-actor { font-family: var(--mono); }
+.plan-number { min-width: 18px; color: var(--mute); font-size: 12.5px; font-weight: 700; }
+.plan-state { box-sizing: border-box; display: inline-grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; border-radius: var(--radius-circle); }
+.plan-state.is-done { color: var(--accent-ink); background: var(--accent); }
+.plan-state.is-pending { border: 2px solid var(--line2); }
+.plan-state.is-stuck { color: var(--waiting); }
+.plan-time { color: var(--mute); font-size: 11.5px; white-space: nowrap; }
+.plan-task[data-state="stuck"] .plan-time { color: var(--waiting); }
+.plan-problem { margin: 0; color: var(--body); font-size: 12.5px; line-height: 1.5; }
+.plan-budget, .plan-note { margin: 0; color: var(--mute); font-size: 11.5px; line-height: 1.5; }
+.plan-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.plan-action { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 7px 12px; border: 0; border-radius: 10px; background: var(--card2); color: var(--text); font: 600 12.5px var(--font); }
+.plan-action.is-primary { background: var(--accent); color: var(--accent-ink); }
+[data-look="high-contrast"] .plan-action { padding: 6px 11px; border: 1px solid var(--line2); border-radius: 8px; font-weight: 700; }
+[data-look="high-contrast"] .plan-action.is-primary { border-color: var(--accent); }
+~~~
+
+- Tests: create:
+
+~~~js
+import assert from'node:assert/strict';import test from'node:test';import{renderPlanCard}from'../gui/app/plan-view.mjs';import{document,nodes,copy}from'./add-dom-fixture.mjs';
+const model={language:'en',title:'cart empty state',branch:'cart-empty',phase:'ready',busy:false,problem:null,budget:null,extensions:[],
+  tasks:[{id:'project:shop:1',title:'Empty state on the cart page',actor:'executor-shop',runsInLabel:'connected client, selected model, high',state:'todo'}]};
+test('ready card exposes exact assignment Run and Edit without executing a task',()=>{
+  let ran=0;const card=renderPlanCard(document,model,{onRun(){ran++;}});
+  assert.match(copy(card),/Plan: cart empty state/);assert.match(copy(card),/cart-empty/);
+  const controls=nodes(card).filter(n=>n.getAttribute('data-action'));
+  assert.deepEqual(controls.map(n=>n.getAttribute('data-action')),['edit-assignment','run-plan','edit-plan']);
+  assert.equal(ran,0);controls[1].listeners.click();assert.equal(ran,1);
+});
+test('running and warning states retain the same tasks and expose only their actions',()=>{
+  const running=renderPlanCard(document,{...model,phase:'running',tasks:[{...model.tasks[0],state:'busy',elapsedMinutes:4}]},{});
+  assert.match(copy(running),/4 min/);assert.match(copy(running),/Each task is committed on cart-empty/);
+  const warning=renderPlanCard(document,{...model,language:'es',phase:'warning',problem:{kind:'stalled',agent:'executor-shop',lead:'overlord-shop',minutes:10},
+    tasks:[{...model.tasks[0],state:'stuck',elapsedMinutes:14}]},{});
+  assert.match(copy(warning),/no mostró avances durante 10 minutos/);
+  assert.deepEqual(nodes(warning).filter(n=>n.tagName==='BUTTON').map(n=>n.getAttribute('data-action')),['stop-step','retry-task']);
+  for(const[kind,action]of[['noStart','retry-start'],['unreadProblem','resend']]){
+    const view=renderPlanCard(document,{...model,phase:'warning',problem:{kind,agent:'executor-shop',lead:'overlord-shop',minutes:10}},{});
+    assert.deepEqual(nodes(view).filter(n=>n.tagName==='BUTTON').map(n=>n.getAttribute('data-action')),['stop-plan',action]);
+  }
+  const unsafe=renderPlanCard(document,{...model,title:'<script>fixture</script>'},{});
+  assert.equal(nodes(unsafe).some(n=>n.tagName==='SCRIPT'),false);
+});
+~~~
+
+- Proof: node --test test/gui-plan-view.test.mjs test/gui-start-copy.test.mjs; 2 new view tests and copy tests pass, 0 failed, 0 canceled. Actual browser binding and geometry are T093/T064 gates.
+- Depends on: T071, T088. Commit message: `Render editable plan cards with running and warning states`.
+
+#### T093. Integrate chat plans context and separate session Work
+
+- Screens: start 2.6 to start 2.9, start 3.1, start 3.2, start 4.1, start 4.2; 3.2 to 3.11, 7.4 to 7.6. Decisions: 24, 25. Kind: JUDGMENT.
+- Files: new gui/app/session-work.mjs, Work/Started with/context views and bounded transcript; new gui/app/plan-controller.mjs, plan draft/edit/run/retained control and warning/Waiting actions; gui/app/main.mjs, cluster/agent/Overseer inspectors, composer, More and phone tree; gui/app/chats.mjs, authored message projection and role-recipient acknowledgments; gui/app/inspector.mjs, Chat/Work tabs/context/plan attachment/extension asks; gui/app/hierarchy.mjs and gui/app/map.mjs, canonical unread badges; gui/app/state.mjs and gui/app/stream.mjs, plan/work/context/unread invalidations; gui/app/phone.mjs, restricted cluster projection; gui/app/styles.css, chat/work/context layouts; engine/service/adapters.mjs, preload/start descriptor without fabricated authored message; engine/service/chats.mjs and engine/service/projection.mjs, owner-derived channel/recipient/start descriptor/Work/transcript projection; engine/service/http.mjs, bounded Work/transcript plus static allowlist plan-view.mjs/session-work.mjs/plan-controller.mjs; new test/gui-plan-controller.test.mjs and test/gui-session-work.test.mjs; new test/gui-chats.test.mjs, test/gui-shell.test.mjs, test/gui-map.test.mjs, test/service-messaging.test.mjs, test/service-integration.test.mjs, test/service-api.test.mjs, test/gui-fixture.mjs, test/gui-data.mjs, test/gui-browser.md.
+- Change: decide the authoritative authored-message versus bootstrap/Work mapping and bind the already implemented backend to the start drawing. Existing preload currently stores a kind message; use verified preload marker/request identity to classify it as bootstrap without deleting or rewriting historical bytes. New sessions keep one startedWith descriptor outside authored chat. Genuine person/agent Relay messages and explicit final authored replies stay in Chat through session closure; native tool output, steps, transcript deltas and startup instructions do not become messages. Apply T090 to current canonical recipients/verified read receipts, deduplicate shared chat/mailbox copies and show unread badges on the same agent in Map/Hierarchy. Clicking inspector/Work or a sender's line does not acknowledge its recipient's inbox. Remove the separate Mailbox surface for agents while preserving existing message storage and offline delivery.
+
+  Agent header remains avatar38/title15/700 with working spinner10/status12.5 and More36. Add Chat/Work tabs in that order with existing tabs keyboard semantics; Chat is default, switching preserves scroll/composer draft and Work cursor. Conversation padding 16x18/gap 14. Started with is one initially folded details row 8x12/gap 8/radius 12/card, task glyph14, title12/700/body and summary12/mute, chevron13; expansion shows the actual sanitized role/M1ND/task references, never a second message or secret-bearing raw launch prompt. Work starts with workHint12/mute, then ordered step rows6x2/gap 10/start-aligned, time11.5mono/mute, check13 or spinner13, body12.5/text and detail11.5/mute. Stop the step ghost plus transcriptHint11.5; More has Full transcript. Composer persists at bottom with readsNext, and full transcript opens bounded pages only under verified session ownership. Derive initial/mutated recipientIds from the service snapshot, not current UI membership; a cluster composer targets its lead and preserves historical group deliveries.
+
+  Cluster lead chat mounts T092's plan card after the person's request and before its authored summaries. Ready has task titles, actor and actual client/model/effort/mode choices editable through the same T091 picker, Run/Edit and branch. Edit changes one revisioned draft, not running state. Run confirms the exact card/branch/task commits; a click shows in-button progress immediately, response loss retains operation and no second launch/branch. Running shows per-task done/busy/todo and elapsed time from actual step start; lead summary remains a separate authored chat message. No lead with several agents opens a Choose who plans control before draft dispatch. Warning no-start/stall/unread shows cause, retained-work consequence, actual first notified lead, cause-bound Stop/Retry: stalled uses stop_step/retry_task, no-start uses stop_run/retry_start, unread uses stop_run/resend of its original pointer; these operate on the backend attempt/episode and cannot assert restart or cleanup before acknowledgment. Waiting points to this same card and counts it once; cross-half budget asks use the existing Approve/Deny card with reason and exact extension. Timer updates affect displayed elapsed time only, never invent progress/read status.
+
+  Overseer header says freshStatus; context section12x16/gap 6/linebottom, Context and percent 12, bar334x6/radius-pill/card2 with proportional accent fill and waiting at threshold. At82 percent the fixture fill274, normal18 percent60; actual percent is backend telemetry/estimated, never fixture constants. Notice12x14/gap 8/radius 14/wait-soft/wait, alert15/title13.5/700/Close36, contextHint12.5/body, Compact primary/Clear plain. Close changes only generation dismissal. Compact/Clear keep messages/drafts/history and reconcile actual native context; failed actions show unavailable/Retry without claiming new context. Estimated percent is labeled; unknown capacity shows contextUnknown and cannot be drawn as zero/100. No implicit Git/approval/session launch follows context actions.
+
+  Phone uses the migrated cluster tree/unread counts and existing restricted chats/asks only; no Runs in, plan editing/Run, scope changes, context operations or transcript is exposed. Plan warnings may be read but launch/control/extension answers stay on desktop. Preserve the phone's ordinary existing permitted asks. Apply all six looks, keyboard/200 percentzoom/reduced motion and minimum targets using current quiet tokens. Serve/package all new modules through the exact static allowlist, with no new host or server.
+- Tests: owner-classified legacy preload versus authored data, Started with folded/expanded/no message count, Chat/Work persistence and no tool transcript in Chat; offline session closure retaining messages; explicit recipient counts both locations and no inspector/Work read inference; real plan draft/task choices/branch/revision/Run/Edit/once-only retry, authored lead summary, per-agent progress, no-start/10minute/30minute/unread warnings and same Waiting action; cross-half Approve/Deny with reason; stop/retry retaining changes and uncertain cleanup; context actual/estimated/unavailable/fresh/80threshold/Compact/Clear/Close/error generation and no erased history; bounded transcript/phone rejection before private read; en/es keyboard/scroll/busy/focus in each named state. Observe all nine named start states through actual service with injected native/clock, not fixture-only card states.
+- Proof: node --test test/gui-plan-view.test.mjs test/gui-plan-controller.test.mjs test/gui-session-work.test.mjs test/gui-chats.test.mjs test/gui-shell.test.mjs test/gui-map.test.mjs test/service-conversation-data.test.mjs test/service-messaging.test.mjs test/service-integration.test.mjs test/service-api.test.mjs test/gui-fixture.test.mjs; 0 failed, 0 canceled; actual-core browser observations for start 2.7 to 2.9/start 3.1 to 3.2/start 4.1 to 4.2 recorded in test/gui-browser.md, with no raw secret/transcript capture.
+- Depends on: T024, T059, T078, T079, T080, T081, T085, T086, T087, T088, T090, T091, T092. Commit message: `Keep plans in lead chats and session work outside messages`.
+
+#### T094. Complete Add through canonical clusters and final link controls
+
+- Screens: 2.19 to 2.22, 6.8; start 1.3, start 1.4, start 2.2 to start 2.6. Decisions: 23, 25. Kind: JUDGMENT.
+- Files: new gui/app/add-controller.mjs, openAdd/closeAdd/inspection/upload/check/accept/retry state; gui/app/main.mjs, shared bar/Add modal/Content/project selection handoff; gui/app/settings.mjs, Content provenance/update/Remove and cluster-link report; gui/app/clusters.mjs, accepted repository selection/New agent; gui/app/hierarchy.mjs and gui/app/map.mjs, addition invalidation and canonical cluster selection; gui/app/inspector.mjs, pinned repository origin and real cluster Git facts; gui/app/state.mjs, retained Add draft/reports; engine/service/additions.mjs and engine/service/clusters.mjs, canonical scope snapshots/acceptance/remove/Undo intersection; engine/service/http.mjs, BROWSER_STATIC_FILES add add-api.mjs/add-view.mjs/add-controller.mjs; new test/gui-add-controller.test.mjs; test/gui-add-view.test.mjs, test/gui-clusters.test.mjs, test/gui-shell.test.mjs, test/gui-map.test.mjs, test/service-additions.test.mjs, test/service-integration.test.mjs, test/service-api.test.mjs, test/gui-fixture.mjs, test/gui-data.mjs, test/gui-browser.md.
+- Change: carry all valid shared-controller work from retired T072, using T070/T071 and C12 as amended by C13. Shared + Add before Waiting in Map/Blueprint/Void/Settings and Content Add open the same600 px modal, preserve mode/tab/drafts/focus and are absent on phone. Source inspection uses300ms debounce/Enter immediately, protected64 KiB chunk upload with no File.path, immutable preview identity and same-operation Retry. Continue/Back/Cancel preserve selections and write no accepted state; accepted or failed previews reconcile through the original identity. Runtime requirements are caution, never an installation. All source/check geometry remains T071.
+
+  Replace visible Group labels with Cluster. Scope.groups remains the compatibility wire name but choices are canonical active clusters with effective descendant members flattened from T078 and exact reviewed revisions; no second personal group is created or granted globally. Recheck scope and accepted ownership on every actual native session through T079/T080, not only in GUI. Repository acceptance registers one canonical repository-linked cluster, potentially nested in its accepted folder cluster, and selects that existing identity in Map/Hierarchy. Retire the circle at 320/575, layout.groups project anchors, Without an Overlord folder and old New unit dialog. Its inspector uses T091 linked cluster facts and T088 New agent; selecting that action opens only Executor/Overlord plus stored Runs in, never auto-creates an Overlord/session. Duplicate acceptance/reopen cannot create another cluster. Show origin/pin as inherited Content/provenance metadata; live branch/dirty Git state remains independent from the imported pin.
+
+  Content keeps pdf alongside kit features, origin/count/Remove, knowledge pack placement, update through the same check, explicit acceptance before replacing the old pin, guarded Remove and ten-second Undo. Source/repository files stay. Origin click is Check for updates. Preserve license/NOTICE, ownership and foreign-edit rejection. Addition/report events refresh links/choices while preserving editor/draft/chat/scroll state. Finish Settings Projects link creation/removal/Undo through the same canonical cluster APIs, never hidden root/environment discovery imports. Existing imported content gets the same native scope enforcement as kit tools; manual connections with unproved enforcement remain explicitly unavailable rather than globally exposing content.
+- Tests: two Add entry points/one modal, debounce/drop chunk order and limits, no source path escape, mixed supported parts/disabled tools, immutable retry and expiry/stale choices, cluster/direct descendant dedup, no global grant, accepted Content/docs/provenance/pin/update/remove/Undo and preserved source; repository existing/new nested cluster selection, no project circle/synthetic agent/Overlord/session, new-agent picker default; actual-core reopen/sync/remove/Undo and native per-cluster content access; all three Add modules packaged, link list same identity; en/es1440x900 and 720x600, six looks, keyboard200 percentzoom/reduced motion. Record actual observed state rather than a future pass claim.
+- Proof: node --test test/gui-add-api.test.mjs test/gui-add-view.test.mjs test/gui-add-controller.test.mjs test/gui-clusters.test.mjs test/gui-shell.test.mjs test/gui-map.test.mjs test/service-additions.test.mjs test/service-integration.test.mjs test/service-api.test.mjs test/gui-fixture.test.mjs; 0 failed, 0 canceled and recorded Add/link browser outcomes. T063/T064 follow only after all kept/P15 tasks pass.
+- Depends on: T069, T070, T071, T078, T079, T080, T087, T088, T091, T093. Commit message: `Integrate Add and repository links through canonical clusters`.
 
 ### P12. Verification
 
 #### T063. Run the final automated gates and report every result
 
-- Screens: all 83. Decisions: 1 to 22. Kind: MECHANICAL.
+- Screens: 94 active states across both boards, with 14 replaced references recorded by T064. Decisions: 1 to 25. Kind: MECHANICAL.
 - Files: `test/gui-browser.md`, automated-gate evidence section only. No production file is changed in this task.
 - Change: run each command below separately at the root and append its observed exit code/counts/failure names to the evidence file. Do not substitute a fixture for the actual full suite and do not hide a platform skip. Build cache failure must be resolved through a permitted writable npm cache/environment before this task can pass; no source change is made to bypass packaging.
 
@@ -3517,15 +4582,15 @@ git diff --check
 
 - Tests: existing full suite plus all added task tests. No mirrored implementation test is added for a command-running/evidence task.
 - Proof: all five commands exit 0; npm test/core show 0 fail/0 canceled, all newly required tests executed; lint 0 issues; build prints packaged browser assets and the 3.0.0 archive; diffcheck has no output. The known Windows permission skip is named explicitly if still present. Never claim pass counts before observing them.
-- Depends on: T062. Commit message: `Record the final automated integration checks`.
+- Depends on: T047, T056, T059, T062, T071, T094. Commit message: `Record the final automated integration checks`.
 
 #### T064. Verify all final screens against the actual core and capture evidence
 
-- Screens: all 87. Decisions: 1 to 23. Kind: JUDGMENT.
-- Files: `test/gui-browser.md`, per-screen actual results and evidence; `test/gui-data.mjs`, final board sample/scenario state generation; `test/gui-fixture.mjs`, final independent protocol scenarios; `test/service-integration.test.mjs`, actual-core/GUI protocol coverage; `docs/3.0/verification/<reference>-<language>-modern.png`, 174 new captures, with reference drawn from the complete 87-entry verification list and language exactly `en` or `es`; `docs/3.0/verification/6.1-en-<look>.png`, five additional captures with look exactly `high-contrast`, `nebula`, `txmska`, `coffee-cat` or `ntk`. This closed naming rule defines every capture filename. These files are execution artifacts, not outputs of the current planning session.
-- Change: decide reproducible scenario controls for real core persistence, client ownership and adverse states. Execute the verification list at 1440 by 900 on desktop and 390 by 844 on phone, in both languages. Check common chrome and contrast in all six looks. Record the 179 captures named above, reach steps, expected and actual elements, pass/fail, look, language, viewport, and whether the source is core or fixture. Use temporary M1NDs and repositories with injected client/OS adapters. Add source inspection/acceptance/update/removal, scoped session availability, empty-project registration, cross-project moves, assets, Void saves, History Restore, Undo, owner permissions and stopped-service recovery must exercise the actual core. Return defects to the owning task and repeat affected checks before the final full gate. Manual sessions and Windows/Linux service tests remain explicit release gates requiring platform access. Live-machine deployment is outside this planning task.
-- Tests: all routes enumerated in C01 to C12, including authorization before receipt, exact schemas, status codes, revision conflicts, crash recovery, sync and states; all 87 screen reach cases; actual QR decoding; every disabled/error/loading/optimistic state; keyboard/scroll/zoom/contrast; no secret logging/storage/output.
-- Proof: `node --test test/service-integration.test.mjs`; zero failures, plus 87/87 observed screen passes and no unresolved material risk in test/gui-browser.md. Capture references are real files; mocks or unrun commands do not count as browser evidence.
+- Screens: all 91 flow references and all 17 start references, 108 reference checks; fourteen flow states are replaced, yielding 94 active states. Decisions: 1 to 25. Kind: JUDGMENT.
+- Files: test/gui-browser.md, per-reference reach/result/replacement evidence; test/gui-data.mjs and test/gui-fixture.mjs, final reproducible scenarios; test/service-integration.test.mjs, actual-core coverage. New captures: docs/3.0/verification/<flow-reference>-<language>-modern.png for the 77 flow entries not marked REPLACED; docs/3.0/verification/start-<start-reference>-<language>-modern.png for all 17 start entries; language is exactly en or es. This defines 188 captures. Five additional docs/3.0/verification/6.1-en-<look>.png use high-contrast,nebula,txmska,coffee-cat,ntk, totaling 193. No obsolete screen capture is required; its record links to its named replacement capture. These are future execution artifacts, not outputs of this planning session.
+- Change: execute all active states at desktop 1440x900/phone 390x844 in both languages. Preserve all other GUI/editor/phone checks below under the new common cluster/Chat/Work behavior. For fourteen replaced flow references, record the explicit start replacement and verify retained guarantees instead of restoring old UI. Use temporary actual M1ND/repositories, injected verified native/Lyra/Git/clock transports and platform fixtures. Discovery consent/worktree identity, migration, Runs in applied natively, write-root/Git permissions, Lyra actual wire, context retention, plan report/exit/owned cleanup, cap-respecting wake, per-recipient unread, Content/update/removal and cross-project editors must exercise actual service persistence/restart. Record real pass/fail, source, viewport/look/language, target/contrast/focus measurements and 193 capture paths. Fix defects in the owning task and rerun affected/full gates. No deployment or installer is authorized by this planning session.
+- Tests: C01 to C15 route/body/status/auth-before-receipt/Revision/crash/sync coverage; all 108 mappings and 94 active states; actual QR; adverse states, keyboard/scroll/zoom/contrast; actual native/Lyra integration and no secret output. Platform availability remains an explicit release gate; mock capability is not an observed native pass.
+- Proof: node --test test/service-integration.test.mjs; 0 failed, 0 canceled; 94/94 active states observed and 14/14 replacement mappings verified, 193 actual captures, no unresolved material risk in test/gui-browser.md.
 - Depends on: T063. Commit message: `Verify all final screens against the running integration`.
 
 ##### GUI verification list for T064
@@ -3534,7 +4599,7 @@ The following checks are mandatory execution work, not completed browser observa
 Use a temporary M1ND with the board's sample data. Paths, timestamps, counts and client versions are fixture data; real product values are dynamic. Mask generated pairing credentials in every stored capture and report.
 
 Desktop common chrome: viewport 1440 by 900; top bar 52 pixels, workspace 818 pixels, footer 30 pixels. The bar contains the mark, HIVEM1ND, Map/Blueprint/Void modes with the active mode distinguished, the + Add button with the accessible name Add to M1ND, the Waiting pill when its active count is positive, Open on the phone, Notifications and Settings. Horizontal workspace padding and panel gaps are 12 pixels. Modern panels have a 20-pixel radius and panel fill; quiet borders use line. The footer contains the service shape and text, last read, and machine timestamps.
-Common Map: Hierarchy/Chats tabs, search, My groups, Chain of command, Without an Overlord and Services; free unit circles, role icons, status shapes, names and lead lines; three drag hints; Zoom in, Zoom out, Fit and 100%; Incubator and Genesis controls; inspector. Map columns are 266, 760 and 366 pixels.
+Common Map after P15: Hierarchy/Chats tabs, search, Overseer when created, one Clusters tree with folder/repository/unlinked links and lead lines; no person node, My groups or Without an Overlord grouping. Status shapes/names/aliases, unread badges, New cluster, Services, Zoom in/out/Fit/percent remain. Empty-space drag pans X/Y, Shift-drag selects, double click flies to a cluster. At 1440 the columns are 290/736/366 with 12 gaps/padding, using the board's760-wide world coordinates. Agent inspector Chat contains authored messages and Started with; Work contains session steps. This common behavior amends the old flow examples without a second graph or inbox.
 Common editor: shared library 228 pixels, canvas 796 pixels, comments or History 368 pixels. The toolbar is centered 14 pixels below the canvas top. Every icon control has a name. Nocturne uses its quiet palette and ruled layout; family looks use Modern layout.
 
 ###### Row 1: setup and first run
@@ -3548,24 +4613,24 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **1.7 Ready:** finish startup. Step 4 of 4; HIVEM1ND is running; actual machine and same-folder instruction; summary rows M1ND/path, Legacy M1ND/original untouched when migrated, Service/status shape/Running, Agents/client list, Projects/repository and folder counts; detected-defaults/Settings note; Open the Map. No Back control.
 - **1.8 Opening:** delay the initial read. Common desktop frame; left skeletons 200 by 30 and 230 by 34, followed by widths 150/190/120/170/140/180/110; centered 28-pixel spinner, Reading the M1ND and last-known counts; right skeletons 220 by 38 and 300 by 70, followed by widths 260/200/240 with height 44; footer Connecting to the service and Reading.
 - **1.9 The M1ND cannot be read:** delay the folder read for 30 seconds. Retain frame and skeleton panels; centered 52-pixel error circle with 24-pixel alert; The M1ND cannot be read; actual selected folder, timeout and offline/held-folder explanation; Retry and Choose another folder; footer M1ND not read. No credential appears in the cause.
-- **1.10 An empty M1ND:** load only root master. Hierarchy/Chats and search; No units yet and Overseer-first explanation; 40-pixel You circle; no lead lines or groups; dashed 64-pixel Overseer placeholder centered at x372/y178 and The Overseer goes here; inspector Your M1ND is empty, coordination explanation and Create the Overseer. Waiting pill is absent. Create once and select root:overseer.
+- **1.10 Empty M1ND:** after setup, dismiss repository import and choose Later at Overseer creation. Keep the complete desktop frame and empty Clusters hint/inspector; no person or automatic Overseer node. The reachable first-open choices and empty state are checked by start 1.1/start 1.2.
 
 ###### Row 2: the Map
 
-- **2.1 Map:** open the populated fixture with nothing selected. Common Map; My groups/API work folder/count; Chain of command, loose projects and Services; empty inspector with 56-pixel Map icon, title and selection explanation, working/asks/unread/groups summaries and New unit. Each node retains its position and reporting line.
+- **2.1 The Map:** open accepted migrated data. Verify the P15 common Map, one cluster tree and free X/Y canvas, actual unit aliases/status/lead edges and inspector, with no person node or duplicate personal-group/project grouping. Preserve connected service/machine facts and gesture feedback.
 - **2.2 A unit selected:** click executor-shop. Selected circle and connected lines; inspector avatar/name/status; Machine/Runs in/Model/Reports to facts; Pin and More; history messages; build ask with Approve/Always for this unit/Deny; delivered task with Accept/Send back/Open task; composer/Send and immediate-session-notification hint. Double click its Hierarchy row to center the same unit.
 - **2.3 Rename:** select executor-blog, then use F 2 or More/Rename. Inline Blog input, caret/check, original unit name and alias explanation; Map and inspector retain the saved identity until confirmation. Enter saves and Escape cancels. Double click continues to center the unit.
 - **2.4 Renamed:** save Blog. Hierarchy, Map, inspector and chat header show alias plus original unit name; No session; LAPTOP, manual-app Runs in, Mailbox and Reports to facts; existing messages; Message Blog composer; alias notice and Undo. Undo restores the previous alias with a revision check.
 - **2.5 Connect:** drag overlord-web onto executor-site. Preview line and connection hint; 480-pixel dialog over scrim; Connect executor-site; reports-to explanation; source/target roles and names; Cancel and Connect. Personal groups and their chats retain membership.
 - **2.6 Connected:** confirm the connection while delaying persistence. New line, Saving spinner beside the node and pending Reports to fact; selected executor-site facts and conversation/mailbox hint; committed confirmation and Undo. A failure shows the cause and never claims the change committed.
-- **2.7 A selection:** drag on empty Map space around three units; use Shift to add one. Filled dashed marquee; three selected accent circles; inspector 3 selected and gesture hint; unit rows with name/alias/id/status; Save as group, Message all 3, Connect to a lead and Clear selection; personal-group explanation. The marquee adds canonical units once.
-- **2.8 New group:** press Save as group. Retain the selection below scrim; 520-pixel dialog; New group and explanation; Name; Members with removable chips and Add; Cancel and Create group. Changing members does not change reporting relationships.
-- **2.9 A group:** create the selected group. Expanded Hierarchy folder and member rows; dashed rounded zone and top-edge title; selected inspector title, Group/3 units, avatars and More; Members and Created facts; four participant reply bubbles; Message the group and Every member sees every reply; created notice and Undo. Folder, zone and chat select the same group.
-- **2.10 Delete a group:** choose its More/Delete. Scrim and 480-pixel dialog; Delete the group {title}?; explanation names folder/zone removal, chat archive and retained units/direct chats/leads; Cancel and Delete group. Successful removal has Undo; linked conversation remains readable under Archived.
-- **2.11 New unit:** press New unit and open Machine. Scrim and 560-pixel dialog; Name/Role, Project/Machine, Reports to/Group; current machine selected; offline LAPTOP disabled with offline-since reason; Cancel and Create unit. An offline choice cannot be submitted indirectly.
-- **2.12 Creating:** submit valid unit fields while delaying creation. Form and typed values remain; fields disabled during the operation; Cancel and Creating spinner. Failure restores editing, retains every typed value and names the cause.
-- **2.13 Created:** finish creation. Selected executor-mobile circle and increased project count; inspector name/No session; Machine, Runs in/Not started, Model/default and Reports to/No Overlord; No messages yet, mailbox explanation and Start session; composer; created notice and Start a session action.
-- **2.14 Start a session:** press Start session. 520-pixel dialog; connected command-line choices and availability; configuration-needed choice disabled with Settings/Agents reason; Runs as choices One task then closes selected by default and Chat kept open; Executor lifecycle explanation; Task or first message; manual-command guidance; Cancel and Start session. Client names come from the detected connected-client list.
+- **2.7 A selection:** REPLACED by start 1.3/start 2.1/start 2.6; preserve Shift selection, alias identity, bulk messaging and explicit reporting changes, but use one cluster grouping and no Save as group surface.
+- **2.8 New group:** REPLACED by start 2.1; New cluster with repository/folder/nothing replaces the personal-group form.
+- **2.9 A group:** REPLACED by start 2.6 and start 2.7; one canonical cluster frame/tree/chat replaces independent personal groups.
+- **2.10 Delete a group:** REPLACED by start 2.2; More cluster deletion retains confirmation, archive/history/unchanged agents/leads/files and ten-second Undo.
+- **2.11 New unit:** REPLACED by start 2.3; New agent asks role and Runs in, deriving name/cluster/machine/lead.
+- **2.12 Creating:** REPLACED by start 2.3 creation busy/failure variants; retain exact draft and receipt while the two-choice form is pending.
+- **2.13 Created:** REPLACED by start 2.6; created agents have actual derived identity/Runs in and no session until explicitly started.
+- **2.14 Start a session:** REPLACED by start 2.4/start 2.5; stored Runs in replaces client-only launch choice, with explicit task/chat intent retained.
 - **2.15 Starting:** delay the start result. Unit has a 60-pixel spinner and Starting a session status; progress Request sent, Starting the selected client on its machine, Session connected; Cancel start; composer and queued-delivery hint. Cancel reconciles any already-spawned process before reporting closure.
 - **2.16 It did not start:** inject a verified start failure after 30 seconds. Request sent is complete, starting has an error, Session connected is pending; safe actual cause; Retry and Choose another client; unit and conversation retained. An uncertain spawn retains the operation ID for reconciliation.
 - **2.17 Stop a session:** choose Stop for a live unit. Scrim and 480-pixel dialog; Stop the session of {unit}?; explanation names stopped work and retained unit/chat/mailbox/tasks/groups; Cancel and Stop session. Stopped appears only after verified native acknowledgment.
@@ -3574,21 +4639,26 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **2.19 Add to M1ND:** press + Add in the Map bar, or Content/Add. Retain the underlying mode, selection and unsaved drafts. Scrim and one 600-pixel dialog, padding 24/gap 18/radius 22/panel/line2; Add to M1ND; link-or-registry/drop-folder instruction; focused Link field in monospace 13 with padding 11x13/radius 12/card/accent line; Found in the actual source and pinned commit/version; separate pdf, docx and acme-files rows in the mixed fixture. Rows use padding 10x12/gap 12/radius 12; 18-pixel ticks; pdf checked with card2/accent, docx unchecked, acme-files disabled with Reads and writes cloud files, Tool server and the accessible Available after 3.0 reason. Cancel and Continue. Paste/drop inspection shows progress and ends at 30 s with safe cause/Retry; no imported content, project or client configuration is written before acceptance. Repeat from Blueprint, Void, Settings and 6.8; each opens this same window and preserves the invoker and underlying drafts. Verify dropped chunks privately with fixture sources; never show a credential or file body in a capture.
 - **2.20 Check and who uses it:** select only pdf and press Continue. The same 600-pixel window has Add pdf and its actual Skill/source/no-copy-before-confirmation explanation. The check precedes scope choices: Pinned to commit/full accepted identity represented by the short commit display and updates wait for your yes; actual MIT license; Older than 7 days, no install scripts; Its scripts run Python and only in the units below. Three 12-pixel filled accent marks and the 12-pixel thick waiting ring distinguish the runtime caution; check container padding 12x14/gap 8/radius 14/card; text 13.5 and notes 12/mute. Who can use it follows: Every unit unchecked, Checkout launch selected with Group, 3 units, adjutant selected; four deduplicated actual units. Choices use 18-pixel ticks, padding 10x12/gap 12/radius 12, selected card2/accent. Back retains choices without accepting; Add pdf is the only placement control and displays a spinner while busy. Missing license/date/runtime evidence, younger-than-seven-days source and stale scope disable acceptance and name the reason. Verify docs/repository and multiple selected parts show their own check/scope, tool selection is impossible, full registry version is retained, and a reviewed update keeps the prior pin active until confirmation.
 - **2.21 A skill in Content:** confirm the eligible pdf check for the selected group and adjutant. Open Settings/Content in the current machine context. Retain common bar with + Add, five Settings tabs, all existing Features/Knowledge packs/Preferences and the Features/Add action. The added checked pdf row sits beside kit content with padding 9x12/gap 10/radius 10/card2/accent line, pdf at 13/700, from acme/agent-skills, 4 units at 12.5/accent, and Remove. The toast reads pdf added for 4 units and Undo; count derives from current canonical scope. Remove asks with the actual name, imported-content/access removal, retained kit/source files and ten-second Undo; Cancel changes nothing and successful Undo restores the same owned bytes/scope. Verify docs appear as a knowledge pack with origin/Remove, accepted content survives reopen/sync, selected sessions receive it and unselected sessions do not, and no global client skills root changes. The origin control has the accessible name Check for updates: pdf and opens the same check; it does not replace content until accepted.
-- **2.22 A repository on the Map:** accept the eligible landing-site repository fixture. Retain the existing units, lead lines, groups and chats. Hierarchy includes landing-site under Without an Overlord with the new badge; Map has its separate project circle at fixture x320/y575, diameter 46, grid icon and zero count, with no fabricated Unit or Overlord. Select it: 366-pixel inspector with grid/title landing-site and Project from github.com/acme/landing-site; centered body padding 32/gap 12; No units yet at 16/700; actual pinned-commit/first-unit instruction at 13.5/mute/center; New unit in landing-site. Toast landing-site added has New unit. That action opens the existing unit form with this project selected and no Overlord, without submitting it. Reopen keeps the actual project registration, origin, pin and layout.groups project anchor; group/lead gestures cannot turn the project circle into a unit. Remove/unregister and Undo preserve the repository/source checkout byte inventory.
+- **2.22 A repository on the Map:** accept a checked repository through Add. Select its canonical repository-linked cluster in the same tree/Map; origin/pin provenance, live remote/branch/changes, no agents yet and New agent. No project circle or fabricated Overlord is created; New agent uses start 2.3 to start 2.5, and Remove/Undo preserves checkout/source bytes.
 
 ###### Row 3: chats and Waiting
 
 - **3.1 A chat:** select Chats, then the pinned executor conversation. Pinned/Recent lists with timestamps, unread counts and group preview; selected conversation in inspector; unit facts, history, ask/review cards and composer. Archived is reachable after group or unit deletion.
 - **3.2 Sending:** submit a message while its POST is pending. Own bubble appears immediately with You, now, body and Sending/spinner; composer clears for the next draft. A second send has an independent operation and cannot replace the first pending bubble.
-- **3.3 The agent is working:** acknowledge submission and emit actual busy activity. Own line has Delivered and time; working bubble has three dots, unit, elapsed time and Stop. Stop ends verified work and retains the conversation.
+- **3.3 The agent is working:** retain authored Delivered/Read chat while Work shows its actual elapsed native step and Stop the step. Start 4.1/start 4.2 supply the tab layout; stopping targets verified owned work and never fabricates a recipient read or deletes the draft.
 - **3.4 Asks to open a session:** request a child command line from an Executor chat. Working state and Stop remain; Asks to open a session card names the connected client and machine; Approve and Deny; active Waiting count increments. Approve permits one child spawn; Deny permits none.
 - **3.5 The reply:** record the recipient's explicit read and reply. Read/time replaces Delivered on the own line; incoming reply has author, time and body. A viewport observation or an unrelated reply alone cannot manufacture a read receipt.
 - **3.6 Not confirmed:** lose a send acknowledgment for 10 seconds. Own bubble remains; alert, Not confirmed: the service did not answer in 10 s. and Retry; composer hint states that the same message is sent once; later draft remains. Retry uses the retained key and leaves one persisted message.
-- **3.7 Mailbox:** select offline Blog running manually in a desktop app. Alias and original unit name; No session; LAPTOP, manual-app Runs in, Mailbox unread count and Reports to; Blog is not running; offline-since and delivery-on-start explanation; disabled Start session with Needs LAPTOP online; retained messages, composer and mailbox hint.
+- **3.7 Offline messages:** open an agent without a live session and one manual-app agent on offline LAPTOP. Chat retains authored messages and pending recipient count; actual manual app/machine/offline facts remain. Start uses stored Runs in on its real owner and reports offline availability without changing hierarchy or opening another client. There is no separate Mailbox surface; start 4.1 defines unread presentation.
 - **3.8 Waiting on you:** press the Waiting pill. Back to Hierarchy, title, active count and search; Asks with build request/unit/time; Reviews with task/unit/time; Ended without an answer with expired push/unit/time/Expired; selected unit remains on Map with inspector cards. Expired items do not increase the active pill count.
 - **3.9 Answer sent:** approve an ask while delaying its owner's acknowledgment. Card shows Answer sent/spinner and waiting-for-confirmation explanation; review card remains. Settled answer appears only after owner confirmation; Always permission is not granted prematurely.
 - **3.10 Send back:** choose Send back on a review. Scrim and 480-pixel dialog; Send task {number} back; open-status/unit-note explanation; What needs to change field; Cancel and Send back. Empty notes are refused and typed drafts remain after failure.
 - **3.11 Accepted:** accept a reviewable delivery. Approved build summary and Accepted task summary; unit idle and task done; Waiting pill disappears when its active count reaches zero; Task accepted notice and Undo. Undo through the existing task-status operation retains report history.
+
+- **3.12 A group's chat:** REPLACED by start 2.6/start 2.7; select the migrated cluster and reach its lead's persistent chat and Start a plan, never a second personal-group surface.
+- **3.13 Start a plan:** REPLACED by start 2.7; choose/review the real plan and assignments in the lead's chat, with new drafts approved before build and exact branch/commit consent.
+- **3.14 A plan in progress:** REPLACED by start 2.8/start 4.2; the same chat card and separate Work show genuine task/step/elapsed state and the lead's authored summary.
+- **3.15 A plan needs you:** REPLACED by start 2.9; the same warning card/Waiting handles no-start, stalled/unread work, Stop/Retry, escalation and budget extensions.
 
 ###### Row 4: Blueprint
 
@@ -3628,8 +4698,8 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **6.3 Connect an agent:** press Review changes for sample Cursor CLI. 600-pixel dialog; Connect the Cursor CLI; no-write-before-Apply/Copy explanation; checked Relay server/mcp.json and hooks/hooks.json changes; Optional permission; unchecked scoped git commit/git push/cli-config.json change; explicit-request note; kept-copy/Disconnect note; restart note; Cancel/Copy changes/Apply 2 changes. Copy/Cancel preserve every client file byte.
 - **6.4 Another machine:** open picker. 320-pixel menu/current machine/check; second machine/laptop/offline-since/latest-report-read-only explanation. Select offline machine; machine-owned Agents/Permissions/Projects/Locations change to its report and all mutation controls are disabled with the reason.
 - **6.5 Permissions:** select Permissions. Standing approvals: unit, exact command, grant time, Revoke for each; Always for this unit explanation. Agent permissions: client, scoped git commit/git push, time, Revoke; machine/owned-session/explicit-instruction explanation. Revoke only named authority and verify next request asks again.
-- **6.6 Projects:** select Projects. Project folders/title/detected counts; three sample roots; folder icon/path/optional Environment chip or No environment/More; repository chips/name/named remove control; Add folder; auto-discovery/removal explanation. Actual counts come from selected-machine report.
-- **6.7 Remove a repository:** select sample shop removal. Scrim; Remove shop from the M1ND?; its units/boards/texts stop showing; repository/files untouched/readding restores explanation; Cancel/Remove repository. Successful unregister offers ten-second Undo; full repository hash remains identical.
+- **6.6 Projects:** REPLACED by start 2.1/start 2.2; Settings Projects lists canonical cluster links and selected-owner availability, without root/environment auto-import controls.
+- **6.7 Remove a repository:** REPLACED by start 2.2 link-removal variant; explicit detach preserves cluster/chat/agents/repository bytes and offers guarded Undo.
 - **6.8 Content:** select Content. The Features heading includes Add with a plus icon; it opens the same Add to M1ND window as the shared bar, preserving the selected tab/machine and preferences. Features columns Planning:Plan/Brainstorm/Task; Quality:QA/Tribunal/Cyberattack; Continuity:Relay/Catchup/Docs with inclusion states. Knowledge packs:Security/Design/Copy/Coding. Preferences:Address style/Impersonal/Formal/Explanatory; Additional instructions; Keep existing preferences first/On; Check for updates/Daily. Existing preference content survives; configuration writes use review.
 - **6.9 Open on the phone:** press Open on the phone. 600-pixel dialog/title/same-network instruction; real black/white QR with quiet zone; Or type this code with generated six characters masked in captures; At/actual LAN origin; expiry; replacement/sign-out note; Close access/Done. Decode real QR privately; replacement/close clears old secret DOM/memory.
 - **6.10 Reconnecting:** interrupt response while composing/sending. Selected Map/chat retained; reconnect banner/spinner/retained-work explanation/Retry now; own line Waiting for the service; footer reconnecting/last read. Recovery reconciles the same operation, not a second send.
@@ -3645,6 +4715,35 @@ Common editor: shared library 228 pixels, canvas 796 pixels, comments or History
 - **7.5 A chat:** open existing executor chat. Unit header; incoming delivery message; Asks to run/build command/Approve/Deny only; delivered review/Accept/Send back; computer-required standing/push guidance; outgoing reply; composer/Send. Wider viewport still cannot add Always or other authority.
 - **7.6 Waiting:** press Waiting. Title/count; Asks/unit/time/request/Approve/Deny; Reviews/unit/time/task/Accept/Send back; bottom navigation. Push asks remain readable with computer-required guidance and no answer button; ordinary session-open asks have Approve/Deny; direct forged API writes are rejected.
 - **7.7 Access ended:** advance 12 hours or close access on computer. Authenticated data cleared; 64-pixel quiet wifi circle; Access ended; 12-hour/computer-reopen instruction; Type a new code. Credential/session/source fragments are removed and never logged.
+
+###### Start row 1: first run
+
+- **start 1.1 Repositories found:** open a new temporary M1ND with no accepted clusters or Overseer and a read-only discovery fixture: Web holds 19 canonical repositories, Unity 6, Tools 1, with two worktrees belonging to one repository. Empty Map has no person node; Hierarchy/Chats/search, Clusters/New cluster, No clusters yet hint; empty inspector Nothing here yet and its explanation. One 600 px modal with 24 padding/16 gap/22radius/panel/line2: 26 repositories found on this machine; three-folder/import-before-yes/files-unchanged explanation; Filter repositories field/search glyph; Web selected/expanded with folder path,count 19 and selected shop/blog/api-gateway/nova plus 15 more; Unity selected/collapsed,count 6; Tools selected/collapsed,count 1; worktree-inside-repository note; Not now and Import 26. Filter and collapsed counts preserve selections; unchecking one changes count once, never by worktree. Verify no registration or source write before Import; Not now dismisses without importing and reopen does not repeat the same offer.
+- **start 1.2 Create your Overseer:** accept the repository offer or dismiss it, with no existing Overseer. Underlying Map/tree show only accepted clusters, no fabricated agents. Modal 600: Create your Overseer; cross-cluster/only-runs-on-message explanation; External agent selected with CLI/account/quota explanation and Local model with Lyra/private/free/no-quota/slower explanation; Runs in current verified selection; checked Start fresh every session and reread/context warning note; Later/Create. Runs in opens the same external or Lyra picker as start 2.4/2.5. Lyra absent/pending has truthful cause, no installer or invented trusted permission. Later creates/starts nothing; Create creates one canonical Overseer with no inference until a message or approved work. Reopen does not create it twice.
+- **start 1.3 All clusters:** finish first-open choices with 26 repositories accepted. Side width 290 shows Overseer/Above every cluster, Clusters/New cluster, collapsed Web 19/Unity 6/Tools 1. Map shows every accepted repository inside its folder's dashed frame, not just a subset; hint Zoomed out: every cluster at once. Double click one to fly to it; Overseer centered; no person node. Fixture folder frames Web 8/320/318x186,Unity 444/260/300x90,Tools 444/470/300x60, mini frames 66x24 on 72x30 pitch; zoom/fit and Services. Empty inspector Your clusters, the three folders/count 26 and double-click instruction. Fit includes all frames/agents, including a fixture larger than the previous 0.25 floor; X/Y panning and zoom out retain everything. Double click Map or Hierarchy selects/flys to the same cluster; reduced motion reaches the same final camera without animation.
+- **start 1.4 Zoomed in on a cluster:** double click Web and select shop. Expanded Web tree shows child repositories/branches, selected shop,13 more after six visible rows and other folders. Hint Zoomed in on Web,19 repositories; zoom out to see every cluster again. Web 720x690 frame at 20/48; all 19 repo frames 156x62 in four columns at 44+172column,76+92row, shop selected. Inspector shop, Cluster linked to a repository, New agent/More; actual sanitized remote and main branch badge; two changed files and last commit 2h fixture; Changes/Open in editor; no-agents/New agent hint; cluster composer. Real Git read/Changes must preserve working/index bytes and conceal remote credentials. Zoom out returns to all clusters; no synthetic unit is needed for an empty repository.
+
+###### Start row 2: clusters and agents
+
+- **start 2.1 New cluster:** press New cluster. Underlying Map remains selected-state safe. Modal 540/padding 24/gap 16/radius 22: New cluster, grouping/link/write-scope explanation; Name set to ideas; Linked to; Repository/Folder/Nothing segment with Nothing selected; explicit talk/plan/no-file-write/link-later consequence; Cancel/Create. Choose each link kind and verify real owner-local mapping review, machine and path validation, no discovery import side effect. Cancel writes nothing; Create is revisioned/idempotent with immediate busy state, retained draft and failure cause. File permissions follow its selected root, not its title/cwd.
+- **start 2.2 A cluster with no link:** create ideas with Nothing. Hierarchy shows ideas/No link; empty dashed 180x70 frame and title; inspector ideas, Cluster with no link, New agent/More; no repository/folder consequence, Link a folder; No agents yet; empty conversation and Message ideas/Goes to the cluster's lead; Cluster ideas created/Undo toast. An unlinked agent can converse/plan but an attempted file write asks first and cannot silently use another repo. Link a folder uses verified mapping and updates only after approval. In More verify guarded cluster deletion names chat archive and retained agents/leads/files, ten-second Undo; in Settings Projects verify the same link list, selected-machine/offline read-only behavior and Remove link confirmation preserving cluster/chat/files plus guarded Undo. These retain the useful deletion/link guarantees of replaced 2.10/6.6/6.7.
+- **start 2.3 New agent:** select shop and press its inspector plus. Popover 320/padding 16/gap 12/radius 16/card2/line2 anchored at the plus: New agent in shop; Executor/Overlord segment with Overlord selected in this fixture; Runs in actual external model/effort; repo-scope/name-machine-derived explanation; Cancel/Create. No Name/Project/Machine/Reports to/Group form. Create derives unique canonical name, cluster/machine/folders/lead, persists Runs in and creates no session; repeated acknowledgment creates no duplicate. Delay/fail Create to verify disabled fields/in-button progress, no draft loss and actionable retry. Repeat with Executor and folder/unlinked consequences.
+- **start 2.4 Agent, model and effort:** open Runs in from New agent or Overseer creation. Keep parent popover/modal. Picker 560/radius 16/card2/line2: Agent 200 px,Model 180 px,Effort 170 px, quiet 1 px dividers; connected clients only; each real quota or Quota unavailable; chosen client models and supported effort options; selected check/accent-soft/accent label. Fixture choices can use board CLI names and verified fixture model labels; production never hard-codes their availability or quota percentages. Footer unchecked Use for new agents from now on and exact selected client/model/effort summary. Keyboard moves columns/options and Escape restores parent focus; choosing a disconnected/unsupported item is impossible. Create then launch and inspect actual native protocol proving selected model/effort, including reload/default persistence and no prompt-only fallback.
+- **start 2.5 Lyra as the agent:** with a verified local service and explicit HIVEM1ND app grants, select Lyra. Same picker Agent/Model/Mode; On this machine,no quota; only installed/actually resolvable alias-backed model choices with proved labels; Fast/Normal/Thinking and their distinct explanatory notes; selected summary and unchecked future-default choice. Fixture renders Qwen 3.5 4B/9B only with credible mapping evidence; actual API cannot prove arbitrary physical-model aliases, so an unsupported pair is disabled with cause rather than renamed/ignored. Registration is kind app, awaiting real permission when necessary. Launch sends the exact mode locally, verifies first model/provider before tools, and grants only scoped M1ND/message/task tools. No browser token, cloud fallback, model pull, new alias or upstream Lyra modification. Use for Overseer,Overlord,Executor and plan roles.
+- **start 2.6 A team in a cluster:** create a shop Overlord and two Executors. Same cluster frame contains lead 50 and Executor 42 circles, correct lead edges from Overseer; expanded Hierarchy mirrors these canonical members. Inspector shop/Git facts/New agent/More and overlord-shop leads executor-shop and executor-shop-2; authored request and authored lead answer only; cluster composer routes to that lead. No task/bootstrap/tool output is inserted as conversation. A sole Executor plans for itself; several agents with no lead show Choose who plans before planning, not automatic delegation or fabricated hierarchy.
+- **start 2.7 The plan in the chat:** ask the lead for the cart plan, or choose an existing Void plan/new planner draft. Chat shows the person's request then one plan card: Plan: cart empty state, cart-empty branch badge; numbered three fixture tasks Empty state on the cart page, The cart API answers an empty cart, Review both against the board; each actual actor and Runs in choice with edit chevron; Run/Edit and Who does each task can be changed. Edit persists one revisioned draft and opens the same assignment/picker. New draft requires person review; Run confirms exactly the revision/branch/task commits, not push. Before Run no build/session branch/commit is created. Role/coordinator/planner/builder/reviewer assignments are actual cluster or connected-client facts; only the lead can open sessions. Approve then lose acknowledgment/retry and verify one launch/branch/plan, not two.
+- **start 2.8 The plan runs:** Run the approved fixture. Same card stays in the lead's chat with completed task 1/check/11:09, task 2 spinner/4 min and pending task 3 ring; exact actor/client/model/effort under each; Stop and Each task is committed on cart-empty. An authored lead summary below says task 1 completed/committed and the actor on task 2. Work records genuine native/hook/Relay steps independently for each active agent. Verify start confirmation within 3 min, no progress invented by clocks/bytes, task report plus process exit plus owned cleanup before done/commit/next task, and exact reviewed paths on its branch with no implicit push. A parent that finishes while an owned test holds stdout still publishes exit, closes that test and settles only with the report; no 4.5-hour driver wait. Stop retains changes and leaves uncertain cleanup visible.
+- **start 2.9 The plan needs you:** use injected clocks to cause no-start 3 min, execution-stall 10 min, planning-stall 30 min and unread 10 min separately. Same card turns waiting-soft/wait warning; stalled fixture shows task 1 done, task 2 warning/14 min, task 3 pending; cause states no progress 10 min, changes kept and lead told first; Stop the step/Retry the task for the stalled step. No-start uses Stop/Retry bound to retry_start; unread uses Stop/Retry bound to resend original message, never a blind task relaunch. Waiting pill 1 opens this same warning once. Observe lead,Overseer,person escalation at durable deadlines and real delivery times, five-minute token-free scans, five-minute pointer retry once, ten-minute unread detection, explicit recipient read only,30-minute summaries and continued wake beyond ordinary expiry. Exhaust plan budget, log an agreed within-half extension/reason, then cross half and verify one person Approve/Deny ask and no credit before answer. Daily wake cap does not reset/bypass; scans/escalation continue without tokens and show resume time.
+
+###### Start row 3: the Overseer
+
+- **start 3.1 Across every cluster:** select the real Overseer and send Where are we with the launch? Header crown/overseer/idle/Starts fresh every session/More; 12 px Context label and 18% full fixture text,334x6card2 bar with 60accent fill; authored person/Overseer messages across shop/blog/api-gateway; composer Message the Overseer/Across every cluster. Actual context comes from supported telemetry or explicitly estimated separate input budgets, never a fabricated capacity. Start a new session with fresh default, then explicit keep; both preserve authored chat/history while only native context differs. Multiple registered repositories must not block launch or choose one as an implicit write root.
+- **start 3.2 Its context is filling:** advance the real/injected context generation to 82 percent. Bar fill 274/wait; same retained chat; warning panel 12x14/gap 8/radius 14, alert 15, My context is 82% full, named Close X; slower/less-precise/summary/reread explanation; Compact primary/Clear plain. Execute each separately: Compact verifies a summary and rereads M1ND in a new generation, Clear retains chat but starts empty/rereads, Close dismisses only this notice. Failed or uncertain operation retains original history/context and same receipt. Lyra is labeled estimated input-budget usage from separate character dimensions; unavailable capacity shows a literal unavailable label. The note's old Start fresh/Keep going labels are superseded by these drawn Compact/Clear/Close controls and decision 25.
+
+###### Start row 4: messages and work
+
+- **start 4.1 The chat is messages:** select executor-shop with a running session, and leave two authored messages unread by executor-shop-2. Side 290 shows Overseer/Clusters/shop/main, nested agents, selected executor-shop and accent pill 2 beside executor-shop-2; its Map node has the same 2 count. Inspector term/name/working spinner/More, Chat selected/Work; one folded Started with row containing Executor of shop,the M1ND,and task Cart empty state; authored lead task assignment, person's illustration instruction and agent reply only. Composer Message executor-shop/It reads your message at its next step. Expand Started with to real sanitized bootstrap references, close/reopen session and verify all authored messages survive. Tool output never enters chat. Merely viewing this inspector leaves the other agent's 2 unread count unchanged; only each recipient's explicit acknowledgment clears its own IDs in both locations. No separate Inbox/Mailbox destination remains.
+- **start 4.2 The work is apart:** switch the same inspector to Work. Header/tree/unread remain; Chat/Work with Work selected; What the session is doing,step by step. Nothing here is a message; time 11:04/read board+page/check,11:06/edited 3 files/check with safe paths detail,11:09/commit/check and 11:10/Running npm test/spinner/2 min fixture. Records come from verified events, not parsed prose or fake polling. Stop the step and The full transcript opens from More; composer remains with same unsent text. Stop closes only the owned step and retains changes/task. More opens bounded authorized sanitized transcript pages, not another chat or browser token. Switching tabs/restarting retains chat and authoritative Work cursor, and phone cannot read private transcript or mutate scope/context/plans.
 
 ## Verified survey corrections and additional integration findings
 
@@ -3669,6 +4768,20 @@ The following defects refine PARTIAL rows without inventing another work package
 
 ## Risks and release gates
 
+Verified replan facts at29647b5: engine/discovery.mjs:73-113 recognizes any existing .git within depth4, including worktree files, with no common-directory folding. Unit model is stored at engine/service/units.mjs:269,349 and projected at projection.mjs:631; GUI actions.mjs:49-52 omits it, enqueueStart:278-289 does not resolve stored model, while adapters.mjs:1224 already applies an explicitly supplied Codex model. Claude launchArgs:792-800 and ACP session/new:1241 lack native selection; effort is absent. T078/T079 address these precise gaps.
+
+engine/relay/hooks.mjs:137 gates Bash only; adapters.mjs:1147-1151 rejects incoming unsupported native calls with -32601. registeredProjectCwd:897-906 cannot choose a root/environment cwd with multiple repositories. No service Git state/commit/push surface is present; lifecycle.mjs:128-154 is separate lifecycle Git infrastructure. commands/relay.md:23 currently treats exit as blanket commit/push consent, rather than an automatic service-exit function; T079 removes that consent rule and requires separately instructed scopes.
+
+Groups already exist in engine/service/groups.mjs:9-19,50-95 and HTTP groups routes. Migration preserves their record/chat/Undo identity and creates no parallel grouping. Lyra API inspection used its packages/client/src/types.ts:114-146,189-198 and packages/service/src/routes.ts:109-118,158-175,210; its repository remains unchanged. These observations are about this committed branch, distinct from the historical candidate survey above.
+
+- The start board's introductory comment still mentions the person at the center; decision25 and its actual graph exclude that node. The start 3.2 note still says Start fresh/Keep going; its drawing and the explicit direction require Compact/Clear/Close. The plan follows those current controls, without modifying either board.
+- Stored unit.model is not applied by the GUI-driven launch. Explicit caller model already reaches the Codex thread/start request, so the claim that no native model is ever applied is too broad. Claude currently has only a prompt Model line and ACP omits selection; all stored choices and efforts need actual native proof.
+- Cluster cwd is not a sandbox. Current hooks gate only Bash and current native unknown requests get -32601. Every supported launch must prove real filesystem/process enforcement, including junctions/indirect writes; unsupported capability cannot be labeled connected and write-capable.
+- Lyra's kind app requires actual permission, uses background queueing and has no arbitrary model selector, context token meter, upstream resume or compact endpoint. Alias-backed mode selection and a labeled input-budget estimate are the supported boundary. Local role/tool work remains subject to Lyra's change/send permission rules; no automatic global approval can be invented to make a plan finish.
+- A non-expiring plan lease must coexist with daily wake caps and explicit revocation. Capped wake cannot silence token-free scans, Waiting or person escalation. Pointer transfer, ambiguous submissions and owner-local midnight accounting need the source and target regression intersections.
+- A task's report, process exit, descendant pipe closure and task commit are distinct events. Waiting for inherited stdout after a parent exits reproduces the original hung driver. Cleanup must target proved owned handles, and report/exit absence remains visible rather than a fabricated success.
+- The reference start layout sums to 1464 pixels at a1440 viewport. T091 keeps290 px side/366 px inspector and projects the 760 px world into the remaining736 px canvas; exact frames and camera fitting are verified without horizontal overflow.
+
 - P13 acquisition reads untrusted repositories, registry archives and folder uploads. Immutable hash/date/license/runtime evidence must be bound before acceptance; archive paths and network redirects cannot escape the named staging/transport limits. A source check does not certify the instructions as safe.
 - Existing global client skill installation cannot enforce P13 unit/group selection. Availability must use verified scoped adapter bindings or report scope_unavailable; generic kit evolve must not install or prune imported content globally.
 - Repository checkout publication is outside the ordinary M1ND journal. Its owned local recovery record and later project registration must prevent partial visibility and preserve checkout/source bytes through Remove and Undo.
@@ -3689,6 +4802,8 @@ The following defects refine PARTIAL rows without inventing another work package
 - Native connected-client behavior, actual optional startup registration, phone LAN binding and cross-machine operation must be observed on supported runtime platforms before release. Future live-machine deployment is outside this document-writing authorization.
 
 ## JUDGMENT tasks retained by the planner
+
+T001 to T044 entries below describe completed historical decisions; P15 overrides their replaced behavior without changing their task text. T045 resumes the named existing stash with unchanged implementation scope. Retired T054/T072 perform no code work; their valid work is transferred to T051/T078/T091/T094.
 
 - T004: safe checkpoint phases, join preservation, verified legacy shutdown and offline closure before adoption.
 - T005: existing runtime/host leases and ownership recognition without a logon record.
@@ -3712,12 +4827,22 @@ The following defects refine PARTIAL rows without inventing another work package
 - T051: sanitized machine reports and authenticated selected-owner request/result routing.
 - T052: exact configuration preview binding, kept-copy restoration, foreign-edit handling and reviewed reload.
 - T053: session-scoped git permissions, revocation and trusted desktop-only approval classification.
-- T054: repository visibility/exclusions/readd/Undo and shared Content preview/apply reuse.
+
 - T055: five-tab/machine-aware Settings layout, review dialogs, own-palette previews and focus restoration.
 - T056: verified same-user recovery bridge for a stopped service and safe draft/credential replacement.
 - T059: accessible code input, server-derived lock state, restricted phone cards and expiry cleanup.
 - T062: measured palette/fill corrections, target geometry and complete keyboard/live-region behavior.
-- T064: reproducible actual-core scenarios, 87 screen captures and the final observed acceptance decision.
+- T064: 108 reference mappings, 94 active states, 193 captures and actual-core final acceptance across both boards.
 - T068: immutable source/provider resolution, bounded extraction/uploads, credible date/license/runtime evidence and owner-bound preview/retry retention.
 - T069: recoverable checkout/content acceptance, session-scoped availability, ownership-preserving updates/removal and accepted bundle sync.
-- T072: shared modal lifecycle/focus, uncertain-operation reconciliation and zero-unit project Map/Hierarchy integration.
+
+- T077: compose every freshly enumerated release/2.1 Relay fix with the 3.0 owner service, canonical registration/consent aliases, source daily cap and both branches' tests.
+- T078: migrate existing group/chat/project identities into one cluster tree, map worktrees to their repository, bind owner-local links, and keep discovery consent separate from read-only Git.
+- T079: apply stored native model/effort, prove filesystem and indirect-write scope per client, route exact native permissions, and separate Git capability from explicit instruction.
+- T080: implement the existing Lyra app API with real grants, alias/mode proof, fixed private actor-bound tools, request bounds and abortable owned execution.
+- T081: choose verified per-client context telemetry/estimated dimensions and reversible fresh/Compact/Clear/dismiss reconciliation while preserving history.
+- T085: attach revisioned plans to lead chats, bind role identities and exact branch/task approval, observe real milestones and settle only after report/exit/owned cleanup.
+- T086: durable per-agent timing, outbox acknowledgments, ordered escalation, explicit reads, authenticated budget extensions and cap-respecting lead wake recovery.
+- T091: focus-safe first-open offer/Overseer/cluster/agent/picker flow, nested graph/camera rendering and machine-owned link controls from the start drawing.
+- T093: authoritative bootstrap/message/Work classification, recipient unread badges, context controls, inline plan editing and cause-bound Stop/Retry actions.
+- T094: preserve shared Add lifecycle/provenance/scope and select the canonical repository cluster, without old project circles or unproved global availability.
