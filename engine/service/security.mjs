@@ -481,7 +481,7 @@ export function safeError(error, requestId) {
   };
 }
 
-const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code', 'desktopOnly']);
+const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code', 'desktopOnly', 'triesLeft', 'lockedUntil']);
 
 function leaks(value) {
   return typeof value === 'string' && /[A-Za-z]:[\\/]|\\\\|token|secret|bearer |authorization|password|(?:^|[^A-Za-z0-9])\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/i.test(value);

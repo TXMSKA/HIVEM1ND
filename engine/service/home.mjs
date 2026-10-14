@@ -7,6 +7,8 @@ import { encodeQr } from './qr.mjs';
 
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const LIFETIME_MS = 43200000;
+const PAIRING_ATTEMPT_LIMIT = 5;
+const PAIRING_LOCK_MS = 600000;
 const POLL_MS = 15000;
 const HOME_CLOSE_MS = 1000;
 
@@ -50,8 +52,10 @@ export async function openHome(context, input = {}) {
     listeners: opened,
     tokens: new Set(),
     addresses: opened.map((listener) => ({ origin: `http://${listener.address}:${listener.port}` })),
+    pairing: new Map(),
   };
   context.grant = grant;
+  context.bucket = { peers: new Map(), grantFailures: [] };
   arm(context, grant);
   emit(context, 'opened');
   return grantView(context, true);
@@ -81,7 +85,9 @@ export async function exchange(context, input, peer) {
   const grant = context.grant;
   const bucket = context.bucket ?? { peers: new Map(), grantFailures: [] };
   context.bucket = bucket;
-  if (!grant?.enabled || context.now() >= Date.parse(grant?.expiresAt ?? 0)) {
+  const now = context.now();
+  const peerId = peer ?? 'unknown';
+  if (!grant?.enabled || now >= Date.parse(grant?.expiresAt ?? 0)) {
     if (grant?.enabled) await closeHome(context, { reason: 'expired' });
     throw new CoreError(410, 'home_expired', 'Home access is not active.');
   }
@@ -89,19 +95,35 @@ export async function exchange(context, input, peer) {
     await closeHome(context, { reason: 'closed' });
     throw new CoreError(410, 'home_expired', 'Home access is not active.');
   }
-  assertHomeWindow(bucket, peer ?? 'unknown', context.now());
   const presented = presentedSecret(input);
-  const expected = input && Object.hasOwn(input, 'code') ? grant.code : grant.key;
+  grant.pairing ??= new Map();
+  let attempts = grant.pairing.get(peerId) ?? { failures: 0, lockedUntil: null };
+  if (attempts.lockedUntil && now < Date.parse(attempts.lockedUntil)) throw pairingLocked(attempts.lockedUntil);
+  if (attempts.lockedUntil) attempts = { failures: 0, lockedUntil: null };
+  grant.pairing.set(peerId, attempts);
+  assertHomeWindow(bucket, peerId, now);
+  const isCode = Object.hasOwn(input, 'code');
+  const expected = isCode ? grant.code : grant.key;
   if (!safeEqual(expected, presented)) {
-    checkLimits(bucket, { homeFailure: true, peer: peer ?? 'unknown' }, context.now());
+    checkLimits(bucket, { homeFailure: true, peer: peerId }, now);
+    if (isCode) {
+      attempts.failures += 1;
+      if (attempts.failures >= PAIRING_ATTEMPT_LIMIT) {
+        attempts.lockedUntil = new Date(now + PAIRING_LOCK_MS).toISOString();
+        throw pairingLocked(attempts.lockedUntil);
+      }
+      throw new CoreError(401, 'invalid_home_key', 'The home code does not match.', { triesLeft: PAIRING_ATTEMPT_LIMIT - attempts.failures });
+    }
     throw new CoreError(401, 'invalid_home_key', 'The home key is not valid.');
   }
-  const issued = context.credentials.issue({
-    audience: 'phone',
-    expiresAt: grant.expiresAt,
-  });
+  attempts.failures = 0;
+  const issued = context.credentials.issue({ audience: 'phone', expiresAt: grant.expiresAt });
   grant.tokens.add(issued.token);
   return { token: issued.token, audience: 'phone', expiresAt: grant.expiresAt, capabilities: issued.capabilities };
+}
+
+function pairingLocked(lockedUntil) {
+  return new CoreError(429, 'pairing_locked', 'Pairing is locked for 10 minutes.', { triesLeft: 0, lockedUntil }, lockedUntil);
 }
 
 export function status(context) {
