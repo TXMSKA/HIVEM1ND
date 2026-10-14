@@ -586,7 +586,8 @@ export function browserReferences(text) {
   const add = (raw) => {
     if (typeof raw !== 'string') return;
     const clean = raw.split('#')[0].split('?')[0].trim();
-    if (!clean || clean.startsWith('#') || clean.startsWith('data:') || clean.startsWith('http:') || clean.startsWith('https:') || clean.startsWith('mailto:') || clean.startsWith('/')) return;
+    // A value built at runtime from a template expression (src="${...}") names no packaged file.
+    if (!clean || clean.includes('${') || clean.startsWith('#') || clean.startsWith('data:') || clean.startsWith('http:') || clean.startsWith('https:') || clean.startsWith('mailto:') || clean.startsWith('/')) return;
     const name = clean.replace(/^\.\//, '');
     if (!name || name.includes('..') || name.includes('\\') || name.includes('/')) return;
     names.push(name);

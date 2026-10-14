@@ -20,7 +20,7 @@ import { copyLegacyTree, legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
-import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, browserReferences, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -1432,4 +1432,9 @@ test('CI pins action commits and the install policy ignores scripts', async () =
   assert.match(readme, /icacls\.exe/);
   assert.equal(readme.includes('.NET'), false);
   assert.match(readme, /A real login registration was not verified/);
+});
+
+test('a browser reference built at runtime names no packaged file', () => {
+  const text = 'const html = `<script type="module" src="${dataUrl(script)}"></script>`;' + '<img src="./mark.svg"><link href="./styles.css">';
+  assert.deepEqual(browserReferences(text), ['mark.svg', 'styles.css']);
 });
