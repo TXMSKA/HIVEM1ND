@@ -91,9 +91,11 @@ test('native acknowledgment precedes every archive event, and crash after stop r
   const started = await start();
   const sessionId = started.result.sessionId;
   let archiveEvents = 0;
-  context.bus = { emit: () => {
-    archiveEvents += 1;
+  context.bus = { emit: (event) => {
     assert.equal(signaled.length, 1);
+    // The acknowledged stop announces its own session and unit state; only the archival events count here.
+    if (event?.name === 'session.changed' || (event?.name === 'unit.changed' && event.data?.unit?.removed !== true)) return;
+    archiveEvents += 1;
   } };
   context.removalFault = 'after-stop';
   await assert.rejects(removeUnit(context, UNIT, input), { code: 'injected_crash' });
