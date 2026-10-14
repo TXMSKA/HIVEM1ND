@@ -881,6 +881,7 @@ test('every contract route has a success result and an authority or boundary fai
   const localPath = path.join(fixture.paths.localDirectory, 'shop');
   await mkdir(origin, { recursive: true });
   await mkdir(localPath, { recursive: true });
+  await mkdir(path.join(localPath, '.git'));
   const paths = { ...fixture.paths, origin };
   const permissionId = randomUUID();
   await writeFile(path.join(paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{
@@ -897,8 +898,19 @@ test('every contract route has a success result and an authority or boundary fai
     paths,
     now: () => fixture.clock.now,
     projects: [{ name: 'shop', localPath }],
+    gitRunner: async (_exe, args, settings) => {
+      assert.equal(settings.shell, false); assert.equal(settings.windowsHide, true);
+      if (args.includes('rev-parse')) return { stdout: args.includes('--show-toplevel') ? `${settings.cwd}\n` : args.includes('--git-common-dir') ? `${path.join(settings.cwd, '.git')}\n` : `${'a'.repeat(40)}\n` };
+      if (args.includes('worktree')) return { stdout: `worktree ${settings.cwd}\0HEAD ${'a'.repeat(40)}\0branch refs/heads/main\0\0` };
+      if (args.includes('config')) return { stdout: '', code: 1 };
+      if (args.includes('status')) return { stdout: '' };
+      if (args.includes('symbolic-ref')) return { stdout: 'main\n' };
+      if (args.includes('log')) return { stdout: `${'a'.repeat(40)}\0Fixture\0${'2026-10-01T00:00:00.000Z'}\n` };
+      throw new Error('Unexpected Git operation');
+    },
+    editorLauncher: { reviewed: true, open: async () => ({ requestId: randomUUID() }) },
     adapters: { codex: createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }) },
-    // Later tasks supply the reviewed configuration and cluster executors.
+    // Configuration review uses its injected owner handlers.
     settingsHandlers: {
       preview: async ({ context }) => ({ previewId: randomUUID(), revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, expiresAt: new Date(fixture.clock.now + 30000).toISOString(), changes: [], restartRequired: false }),
       apply: async ({ context, id }) => ({ machine: fixture.machine, client: id, state: 'connected', revision: (await readMachineSettings(context, fixture.machine, 'agents')).revision, keptCopies: 0 }),
@@ -1752,6 +1764,34 @@ test('every contract route has a success result and an authority or boundary fai
   const remainingAdditions = await call(port, 'GET', '/api/v1/additions', { token });
   expectStatus(remainingAdditions, 200, 'read additions after removal');
   assert.deepEqual(remainingAdditions.json.data.items, []);
+  const clusterList = await call(port, 'GET', '/api/v1/clusters', { token });
+  expectStatus(clusterList, 200, 'list clusters'); hit('GET', '/clusters');
+  const repositoryCluster = clusterList.json.data.items.find(cluster => cluster.link.kind === 'repository' && cluster.link.projectId === 'shop');
+  for (const [suffix, template] of [['', '/clusters/:clusterId'], ['/git', '/clusters/:clusterId/git'], ['/changes', '/clusters/:clusterId/changes']]) {
+    const target = `/api/v1/clusters/${repositoryCluster.id}${suffix}`;
+    expectStatus(await call(port, 'GET', `${target}?machine=${fixture.machine}`, { token }), 200, template); hit('GET', template);
+    expectStatus(await call(port, 'GET', `${target}?machine=OFFLINE`, { token }), 409, 'cluster selected owner');
+  }
+  const linkDirectory = path.join(fixture.root, 'linked-folder'); await mkdir(linkDirectory);
+  const linkReport = await call(port, 'GET', '/api/v1/settings/projects', { token });
+  const linked = await call(port, 'POST', '/api/v1/cluster-links', { token, body: { machine: fixture.machine, kind: 'folder', path: linkDirectory, expectedReportRevision: linkReport.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(linked, 201, 'reviewed cluster link'); hit('POST', '/cluster-links');
+  const createdCluster = await call(port, 'POST', '/api/v1/clusters', { token, body: { title: 'Linked folder', parentId: null, link: linked.json.data.link, machine: fixture.machine, confirmed: true }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(createdCluster, 201, 'create cluster'); hit('POST', '/clusters');
+  const clusterTarget = `/api/v1/clusters/${createdCluster.json.data.id}`;
+  const patchedCluster = await call(port, 'PATCH', clusterTarget, { token, body: { title: 'Renamed folder', machine: fixture.machine, expectedRevision: createdCluster.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(patchedCluster, 200, 'patch cluster'); hit('PATCH', '/clusters/:clusterId');
+  const unlinked = await call(port, 'DELETE', `/api/v1/cluster-links/${createdCluster.json.data.id}`, { token, body: { machine: fixture.machine, confirmed: true, expectedRevision: patchedCluster.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(unlinked, 200, 'detach cluster link'); hit('DELETE', '/cluster-links/:clusterId');
+  const detached = await call(port, 'GET', `${clusterTarget}?machine=${fixture.machine}`, { token });
+  expectStatus(await call(port, 'DELETE', clusterTarget, { token, body: { machine: fixture.machine, confirmed: true, expectedRevision: detached.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 200, 'remove cluster'); hit('DELETE', '/clusters/:clusterId');
+  expectStatus(await call(port, 'POST', `/api/v1/clusters/${repositoryCluster.id}/open-editor`, { token, body: { machine: fixture.machine }, headers: { 'idempotency-key': randomUUID() } }), 202, 'reviewed editor'); hit('POST', '/clusters/:clusterId/open-editor');
+  const discovery = (await call(port, 'GET', '/api/v1/settings/projects', { token })).json.data.discoveryOffer;
+  expectStatus(await call(port, 'POST', `/api/v1/discovery/offers/${discovery.id}/answer`, { token, body: { machine: fixture.machine, repositoryIds: [], confirmed: false, expectedRevision: discovery.revision }, headers: { 'idempotency-key': randomUUID() } }), 200, 'dismiss discovery'); hit('POST', '/discovery/offers/:offerId/answer');
+  for (const route of routeTable().filter(route => route.handler === 'cluster')) {
+    const target = route.template.replace(':clusterId', repositoryCluster.id).replace(':offerId', discovery.id);
+    expectStatus(await call(port, route.method, `/api/v1${target}`, { token: phone.token, ...(route.method === 'GET' ? {} : { body: { machine: fixture.machine }, headers: { 'idempotency-key': randomUUID() } }) }), 403, 'cluster phone authority');
+  }
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');

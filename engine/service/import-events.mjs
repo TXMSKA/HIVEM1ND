@@ -64,9 +64,9 @@ export async function importedSidecarEvents(context, change) {
   if (file === 'user/gui/resources.json') return changed([], ['editors']);
   const group = /^user\/gui\/groups\/([^/]+)\.json$/.exec(file);
   if (group) {
-    if (change.operation === 'delete') return changed([], ['groups', 'chats']);
+    if (change.operation === 'delete') return changed([], ['clusters', 'groups', 'chats']);
     const value = projectGroup(await bytesAt(context.paths.mind, file), group[1]);
-    return changed([event('group.changed', { group: value }, { chatId: value.chatId })], ['groups', 'chats']);
+    return changed([event('cluster.changed', { cluster: value }, { chatId: value.chatId }), event('group.changed', { group: value }, { chatId: value.chatId })], ['groups', 'chats']);
   }
   const metadata = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
   if (metadata) {

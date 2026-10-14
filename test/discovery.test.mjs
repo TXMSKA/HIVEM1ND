@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -42,6 +43,7 @@ test('the home scan skips AppData, Library and hidden directories but still find
   await mkdir(path.join(homeDir, 'Library', 'excluded', '.git'), { recursive: true });
   await mkdir(path.join(homeDir, '.hidden', 'excluded', '.git'), { recursive: true });
   await mkdir(path.join(homeDir, 'GitHub', 'found', '.git'), { recursive: true });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: path.join(homeDir, 'GitHub', 'found'), shell: false, windowsHide: true, timeout: 30000, stdio: 'ignore' });
 
   const found = await discoverHomeProjects(homeDir);
   assert.deepEqual(found.map((project) => project.name), ['found']);
@@ -53,6 +55,7 @@ test('the home scan tolerates a directory it cannot list', async (t) => {
   const blocked = path.join(homeDir, 'blocked');
   await mkdir(blocked, { recursive: true });
   await mkdir(path.join(homeDir, 'visible', '.git'), { recursive: true });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: path.join(homeDir, 'visible'), shell: false, windowsHide: true, timeout: 30000, stdio: 'ignore' });
 
   await chmod(blocked, 0o000);
   try {

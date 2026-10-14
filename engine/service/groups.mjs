@@ -2,20 +2,26 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, isUuid, parseUnitId } from './identity.mjs';
 import { stateHeader, readUnitState } from './state.mjs';
-import { checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges } from './store.mjs';
-import { editChatMetadata, groupChatBytes, projectChatBytes } from './chats.mjs';
+import { checkRevision, commitChange, readBytes, revisionOf, withLocalChanges } from './store.mjs';
+import { editChatMetadata, projectChatBytes } from './chats.mjs';
 import { projectChat, readCollection } from './projection.mjs';
+import { createCluster, patchCluster, removeCluster, validateClusterLink } from './clusters.mjs';
 
 export function projectGroup(bytes, id) {
   try {
     const record = JSON.parse(bytes);
-    if (record.format !== 'hivem1nd-group-v1' || !isUuid(id) || record.id !== id || record.chatId !== id
+    if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || !isUuid(id) || record.id !== id || record.chatId !== id
       || typeof record.deleted !== 'boolean' || groupTitle(record.title) !== record.title
-      || !Array.isArray(record.members) || record.members.length < 1 || record.members.length > 255
+      || !Array.isArray(record.members) || record.members.length > 255
       || new Set(record.members).size !== record.members.length
       || record.members.some((member) => member === 'root:master' || parseUnitId(member).id !== member)
       || !Number.isFinite(Date.parse(record.createdAt))) throw new Error('format');
-    return { id, title: record.title, members: record.members, chatId: id, createdAt: record.createdAt, revision: revisionOf(bytes), deleted: record.deleted };
+    const parentId = record.parentId ?? null, link = record.link ?? { kind: 'none' };
+    if (record.format === 'hivem1nd-cluster-v1' && (!Object.hasOwn(record, 'parentId') || !Object.hasOwn(record, 'link'))) throw new Error('cluster');
+    if (['localPath', 'commonDir', 'writeRoots', 'nativeSessionId', 'credential', 'token'].some(key => Object.hasOwn(record, key))) throw new Error('private');
+    if (parentId !== null && !isUuid(parentId)) throw new Error('parent');
+    validateClusterLink(link);
+    return { parentId, link, id, title: record.title, members: record.members, chatId: id, createdAt: record.createdAt, revision: revisionOf(bytes), deleted: record.deleted };
   } catch { throw new CoreError(422, 'corrupt_resource', 'The group record is not valid.'); }
 }
 
@@ -49,50 +55,19 @@ export async function prepareUnitMembershipRemoval(context, unitId) {
 
 export async function createGroup(context, input) {
   desktop(context);
-  return withLocalChanges(context.store, async () => {
-    const title = groupTitle(input?.title);
-    const members = await groupMembers(context, input?.members);
-    const id = randomUUID();
-    const createdAt = new Date(context.now()).toISOString();
-    const chatBytes = groupChatBytes(context, { id, title, members, createdAt });
-    const bytes = groupBytes({ format: 'hivem1nd-group-v1', id, title, members, chatId: id, createdAt, deleted: false, chatRevision: revisionOf(chatBytes) });
-    const group = projectGroup(bytes, id);
-    const entries = [entry(context, `user/gui/groups/${id}.json`, null, bytes), entry(context, `user/relay/chats/${id}/chat.md`, null, chatBytes)];
-    await commitChange(context, { id: randomUUID(), entries, events: changed(group, projectChatBytes(chatBytes, id)), response: { status: 201, body: group } });
-    return group;
-  });
+  await groupMembers(context, input?.members, true);
+  return createCluster(context, { ...input, parentId: null, link: { kind: 'none' }, machine: context.paths.machine, confirmed: true });
 }
 
 export async function patchGroup(context, groupId, input) {
-  desktop(context);
-  if (!Object.hasOwn(input ?? {}, 'title') && !Object.hasOwn(input ?? {}, 'members')) throw new CoreError(422, 'invalid_body', 'A group patch needs a title or members.');
-  return withLocalChanges(context.store, async () => {
-    const current = await loadGroup(context, groupId);
-    checkRevision(current.bytes, input.expectedRevision);
-    const title = Object.hasOwn(input, 'title') ? groupTitle(input.title) : current.record.title;
-    const members = Object.hasOwn(input, 'members') ? await groupMembers(context, input.members) : current.record.members;
-    const chatBytes = editChatMetadata(current.chatBytes, { title, members: ['root:master', ...members].sort() });
-    return saveGroup(context, current, { ...current.record, title, members }, chatBytes);
-  });
+  try { return await patchCluster(context, groupId, { ...input, machine: context.paths.machine }); }
+  catch (error) { if (error.code === 'cluster_not_found') throw new CoreError(404, 'group_not_found', 'The group does not exist.'); throw error; }
 }
 
 export async function removeGroup(context, groupId, input) {
-  desktop(context);
-  if (input?.confirmed !== true) throw new CoreError(422, 'confirmation_required', 'Deleting a group requires confirmation.');
-  return withLocalChanges(context.store, async () => {
-    const current = await loadGroup(context, groupId);
-    checkRevision(current.bytes, input.expectedRevision);
-    const chatBytes = editChatMetadata(current.chatBytes, { listed: false, archived: true });
-    const bytes = groupBytes({ ...current.record, deleted: true, chatRevision: revisionOf(chatBytes) });
-    const group = projectGroup(bytes, groupId);
-    const id = randomUUID();
-    const entries = [entry(context, current.relative, current.bytes, bytes), entry(context, current.chatRelative, current.chatBytes, chatBytes)];
-    const undo = await prepareChangeUndo(context, { id, permission: 'chat.manage', resourceIds: [groupId], entries,
-      events: changed(projectGroup(current.bytes, groupId), current.chat) });
-    const response = { groupId, changeId: id, undoUntil: undo.undoUntil };
-    await commitChange(context, { id, entries: [...entries, undo.entry], events: changed(group, projectChatBytes(chatBytes, groupId, current.chat)), response: { status: 200, body: response } });
-    return response;
-  });
+  try {
+    return await removeCluster(context, groupId, { ...input, machine: context.paths.machine }, { groupAlias: true });
+  } catch (error) { if (error.code === 'cluster_not_found') throw new CoreError(404, 'group_not_found', 'The group does not exist.'); throw error; }
 }
 
 export async function patchGroupChat(context, groupId, input) {
@@ -136,13 +111,13 @@ async function loadGroup(context, id, includeDeleted = false) {
   return { relative, bytes, record, chatRelative, chatBytes, chat: await projectChat(context, id) };
 }
 
-function groupTitle(value) {
+export function groupTitle(value) {
   if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value) || !value.trim() || value.trim().length > 240) throw new CoreError(422, 'invalid_title', 'A group title must be one nonblank line of at most 240 characters.');
   return value.trim();
 }
 
-async function groupMembers(context, values) {
-  if (!Array.isArray(values) || values.length < 1 || values.length > 255) throw new CoreError(422, 'invalid_members', 'A group needs from 1 to 255 distinct non-master units.');
+export async function groupMembers(context, values, allowEmpty = false) {
+  if (!Array.isArray(values) || values.length < (allowEmpty ? 0 : 1) || values.length > 255) throw new CoreError(422, 'invalid_members', 'A group needs from 1 to 255 distinct non-master units.');
   const members = [];
   for (const value of values) {
     let id;
@@ -159,8 +134,8 @@ function desktop(context) {
 }
 
 function changed(group, chat) {
-  return [{ name: 'group.changed', chatId: group.chatId, data: { group } }, { name: 'chat.changed', chatId: chat.id, data: { chat } },
-    { name: 'view.changed', data: { revision: group.revision, collections: ['groups', 'chats'] } }];
+  return [{ name: 'cluster.changed', chatId: group.chatId, data: { cluster: group } }, { name: 'group.changed', chatId: group.chatId, data: { group } }, { name: 'chat.changed', chatId: chat.id, data: { chat } },
+    { name: 'view.changed', data: { revision: group.revision, collections: ['clusters', 'groups', 'chats'] } }];
 }
 
 function entry(context, relative, beforeBytes, afterBytes) {

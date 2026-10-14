@@ -11,6 +11,7 @@ import { prepareAdditionProjects, readContent, readPublishedSettings } from './s
 import { additionSourceError } from './security.mjs';
 import { commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { EVENT_NAMES } from './events.mjs';
+import { clusterMembers } from './cluster-policy.mjs';
 import { machineRecordPath } from '../records.mjs';
 
 if (!EVENT_NAMES.includes('additions.changed')) EVENT_NAMES.push('additions.changed');
@@ -183,7 +184,7 @@ async function choices(context) {
   const units = (await all('units')).filter(item => item.id !== 'root:master' && !item.removed);
   const groups = (await all('groups')).filter(item => !item.deleted);
   const snapshot = { units: units.map(item => ({ id: item.id, title: item.alias ?? item.unit ?? item.id })),
-    groups: groups.map(item => ({ id: item.id, title: item.title, members: [...item.members] })) };
+    groups: groups.map(item => ({ id: item.id, title: item.title, members: clusterMembers(groups, [item.id], units) })) };
   return { snapshot, revision: hashBytes(Buffer.from(canonicalJson({ units: units.map(item => [item.id, item.revision]), groups: groups.map(item => [item.id, item.revision]), snapshot }))) };
 }
 
@@ -446,6 +447,7 @@ function changeEntry(context, relative, beforeBytes, afterBytes, extra = {}) {
 }
 function undoReportEvents(context, entries) {
   const events = [];
+  if (entries.some(entry => /^user\/gui\/groups\//.test(path.relative(context.paths.mind, entry.recordPath).replaceAll('\\', '/')))) events.push({ name: 'view.changed', data: { revision: null, collections: ['clusters', 'groups', 'chats'] } });
   for (const entry of entries) {
     if (entry.recordPath === path.join(context.paths.mind, 'user', 'gui', 'content.json')) events.push({ name: 'settings.content.changed', data: { revision: revisionOf(entry.beforeBytes) } });
     if (entry.resource === `settings-report:${context.paths.machine}`) {

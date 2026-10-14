@@ -101,6 +101,7 @@ export async function recoverIncomingGroups(sync) {
       }
       if (progress.done === progress.ops.length && progress.emitted === true) continue;
       for (const op of progress.ops) await validateRecoveryOp(sync, op);
+      await validateClusterOperations(sync, progress.ops);
       await runGroup(sync, progress.id, progress.ops, progress.events, writeRoots(sync, sync.projects), progress.changes);
       recovered.push(progress.id);
     }
@@ -244,7 +245,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     plans.push(planChange(item, localBytes, localVersion, located, tombstones));
     if (plans[plans.length - 1].version) versions.targets[key] = plans[plans.length - 1].version;
   }
-  const libraryGroups = new Set(prepared.filter((item) => item.change.transactionId && (item.change.target.path === 'docs/flows/library.json' || item.change.target.path.startsWith('user/additions/'))).map((item) => item.change.transactionId));
+  const libraryGroups = new Set(prepared.filter((item) => item.change.transactionId && (item.change.target.path === 'docs/flows/library.json' || item.change.target.path.startsWith('user/additions/') || item.change.target.path.startsWith('user/gui/groups/'))).map((item) => item.change.transactionId));
   for (const id of libraryGroups) {
     const indexes = prepared.map((item, index) => item.change.transactionId === id ? index : -1).filter((index) => index >= 0);
     const loses = indexes.some((index) => plans[index].version?.id !== prepared[index].change.id
@@ -261,6 +262,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     }
   }
   if (plans.some((plan) => plan.corrupt)) throw new CoreError(422, 'corrupt_resource', 'An immutable record cannot be replaced.');
+  await validateClusterOperations(sync, plans.flatMap(plan => plan.ops));
   await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
   const groups = groupPlans(prepared, plans);
   bindProjects(sync.store, resolvedProjects);
@@ -413,6 +415,15 @@ async function recordedChange(sync, change) {
   if (!change.transactionId) return false;
   const record = await readJsonAbsolute(path.join(sync.paths.localDirectory, 'received', 'groups', `${change.transactionId}.json`));
   return record?.id === change.transactionId && record.changes?.some((item) => canonicalJson(item) === canonicalJson(change));
+}
+
+async function validateClusterOperations(sync, ops) {
+  const entries = ops.filter(op => ['write', 'remove'].includes(op.kind) && !op.conflict && insideRoot(sync.paths.mind, op.file))
+    .map(op => ({ target: { kind: 'mind', path: path.relative(sync.paths.mind, op.file).replaceAll('\\', '/') },
+      bytes: op.kind === 'write' ? Buffer.from(op.bytes, 'base64') : null, deleted: op.kind === 'remove' }));
+  if (!entries.some(entry => entry.target.path.startsWith('user/gui/groups/'))) return;
+  const { validateClusterBundle } = await import('../service/clusters.mjs');
+  await validateClusterBundle(sync, entries);
 }
 
 async function runGroup(sync, id, ops, events, roots, changes = []) {

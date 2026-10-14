@@ -397,7 +397,9 @@ test('scope is resolved at each verified session use, with group edits and delet
   assert.equal((await read('root:one')).length, 1); assert.equal((await read('root:three')).length, 0); assert.equal((await read('root:four')).length, 1);
   const patched = await patchGroup(context, group.id, { members: ['root:two', 'root:three'], expectedRevision: group.revision });
   assert.equal((await read('root:one')).length, 0); assert.equal((await read('root:three')).length, 1);
-  await removeGroup(context, group.id, { confirmed: true, expectedRevision: patched.revision });
+  await assert.rejects(removeGroup(context, group.id, { confirmed: true, expectedRevision: patched.revision }), { code: 'stop_unavailable' });
+  const emptied = await patchGroup(context, group.id, { members: [], expectedRevision: patched.revision });
+  await removeGroup(context, group.id, { confirmed: true, expectedRevision: emptied.revision });
   assert.equal((await read('root:three')).length, 0);
   context.adapters.codex.runtimeAvailable = async requirement => requirement !== 'Python';
   await assert.rejects(read('root:four'), error => error.code === 'runtime_unavailable' && error.details.requirement === 'Python');

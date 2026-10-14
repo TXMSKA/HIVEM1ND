@@ -337,6 +337,12 @@ async function loadMind(context) {
     catch { issues.push({ path: relative, code: 'corrupt_resource', message: 'The group could not be projected.' }); }
   }
   groups.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+  for (const unit of units) {
+    const choices = groups.filter(group => !group.deleted && group.members.includes(unit.id)).map(group => group.id).sort();
+    unit.clusterChoices = choices;
+    if (!choices.includes(unit.clusterId)) unit.clusterId = choices.length === 1 ? choices[0] : null;
+    unit.clusterAmbiguous = choices.length > 1 && unit.clusterId === null;
+  }
   const machines = await readMachines(context, now, issues);
   const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues);
   const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
@@ -401,6 +407,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     sessions: [...loaded.sessions].sort((left, right) => String(right.registeredAt ?? '').localeCompare(String(left.registeredAt ?? '')) || String(left.id).localeCompare(String(right.id))),
     chats: listedChats,
     groups: loaded.groups.filter((group) => !group.deleted),
+    clusters: loaded.groups.filter((group) => !group.deleted),
     tasks: loaded.tasks,
     waiting,
     counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
@@ -428,6 +435,7 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     sessions: loaded.sessions.length,
     chats: chats.length,
     groups: loaded.groups.filter((group) => !group.deleted).length,
+    clusters: loaded.groups.filter((group) => !group.deleted).length,
     waiting: waiting.filter((item) => item.state !== 'expired').length,
     open: tasks.filter((task) => task.status === 'open').length,
     review: tasks.filter((task) => task.status === 'review').length,
@@ -609,7 +617,7 @@ function idleLimits() {
 
 function readUnit(bytes, relative, issues) {
   const blank = {
-    id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null,
+    id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null, clusterId: null,
     machine: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
     sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
   };
@@ -634,6 +642,7 @@ function readUnit(bytes, relative, issues) {
       leadId: headers.get('lead-id') || null,
       job: headers.get('job') || null,
       model: headers.get('model') || null,
+      clusterId: isUuid(headers.get('cluster-id')) ? headers.get('cluster-id') : null,
       machine: headers.get('machine') || null,
       state,
       context: bodyText(bytes),
@@ -886,7 +895,7 @@ function collectionItems(view, name, query = {}) {
   if (name === 'projects') return view.projects;
   if (name === 'sessions') return view.sessions;
   if (name === 'chats') return view.chats;
-  if (name === 'groups') return view.groups;
+  if (name === 'groups' || name === 'clusters') return view.clusters;
   if (name === 'tasks') return view.tasks;
   if (name === 'waiting') return view.waiting;
   if (name === 'mailboxes') return mailboxSummaries(view.messages).map((box) => ({ ...box, archived: view.allUnits.some((unit) => unit.id === box.unitId && unit.removed) }))

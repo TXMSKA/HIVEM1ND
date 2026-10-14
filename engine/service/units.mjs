@@ -5,12 +5,14 @@ import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitSt
 import { answersFor, readDetail, readProjection } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
-import { prepareUnitMembershipRemoval } from './groups.mjs';
+import { prepareUnitMembershipRemoval, projectGroup } from './groups.mjs';
 import { editChatMetadata, projectChatBytes } from './chats.mjs';
 import { stopSession } from './adapters.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
+import { clusterChoices, clusterEntry, clusterEvents, rawClusters, readCluster, resolveClusterLink } from './clusters.mjs';
 
 export async function createUnit(context, input, options = {}) {
+  if (input?.clusterId) input = await deriveClusterUnit(context, input);
   const run = () => createPrepared(context, input);
   if (!options.receipt) return run();
   return withReceipt(context.store, options.receipt, async (receipt) => {
@@ -266,7 +268,7 @@ async function prepareCreate(context, input) {
     }
   }
   const position = input.position ? { x: coordinate(input.position.x), y: coordinate(input.position.y) } : { x: 0, y: 0 };
-  const state = Buffer.from(renderState({ unit, id: id.id, role, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null }));
+  const state = Buffer.from(renderState({ unit, id: id.id, role, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null }));
   const layoutFile = await readJson(context, 'user/gui/layout.json');
   const layout = layoutFile.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} };
   layout.nodes = { ...(layout.nodes ?? {}), [id.id]: position };
@@ -277,16 +279,21 @@ async function prepareCreate(context, input) {
     { name: 'view.changed', data: { revision: hashBytes(state), collections: ['units', 'leads', 'squads'] } },
   ];
   const relative = unitStatePath(id);
+  const membership = input.clusterId ? await prepareClusterMembership(context, input.clusterId, id.id) : [];
+  if (membership.length) events.push(...clusterEvents(projectGroup(membership[0].afterBytes, input.clusterId)),
+    { name: 'chat.changed', chatId: input.clusterId, data: { chat: projectChatBytes(membership[1].afterBytes, input.clusterId) } });
   return {
     id: id.id,
     events,
     stage: [
       { target: { kind: 'mind', path: relative }, bytes: state },
       { target: { kind: 'mind', path: 'user/gui/layout.json' }, bytes: layoutBytes },
+      ...membership.map(entry => ({ target: { kind: 'mind', path: entry.resource }, bytes: entry.afterBytes })),
     ],
     transaction: transactionOf(context, [
       { resource: relative, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: state },
       { resource: 'user/gui/layout.json', recordPath: absolute(context, 'user/gui/layout.json'), beforeRevision: layoutFile.revision, afterBytes: layoutBytes },
+      ...membership,
     ], events),
   };
 }
@@ -347,6 +354,7 @@ function renderState(fields) {
   if (fields.leadId) lines.push(`lead-id: ${fields.leadId}`);
   if (fields.job) lines.push(`job: ${fields.job}`);
   if (fields.model) lines.push(`model: ${fields.model}`);
+  if (fields.clusterId) lines.push(`cluster-id: ${fields.clusterId}`);
   return `${lines.join('\n')}\n\nReady.\n`;
 }
 
@@ -354,6 +362,44 @@ function unitIdFor(unit, scope) {
   if (scope.kind === 'root') return `root:${unit}`;
   if (scope.kind === 'environment') return `env:${scope.name}:${unit}`;
   return `project:${scope.name}:${unit}`;
+}
+
+export async function resolveUnitCluster(context, unitId) {
+  const choice = await clusterChoices(context, unitId);
+  if (choice.ambiguous) throw new CoreError(409, 'scope_unresolved', 'Choose a cluster explicitly before a write-capable launch.');
+  return choice.clusterId;
+}
+
+async function deriveClusterUnit(context, input) {
+  const cluster = await readCluster(context, input.clusterId, { machine: input.machine ?? context.paths.machine });
+  if (!['executor', 'overlord'].includes(input.role)) throw new CoreError(422, 'invalid_role', 'A cluster agent is an Executor or Overlord.');
+  const mapping = cluster.link.kind === 'none' ? null : await resolveClusterLink(context, cluster.link, context.paths.machine);
+  const scope = cluster.link.kind === 'repository' ? { kind: 'project', name: mapping.projectId } : { kind: 'root' };
+  const records = await readUnitStates(context), clusters = await rawClusters(context);
+  const base = `${input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
+  let unit = base, index = 2;
+  while (records.some(record => record.id === unitIdFor(unit, scope))) unit = `${base}-${index++}`;
+  let current = cluster, leadId = null;
+  const seen = new Set();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    leadId = records.find(record => current.members.includes(record.id) && header(record.bytes, 'role') === 'overlord' && header(record.bytes, 'removed') !== 'true')?.id ?? null;
+    if (leadId) break;
+    current = clusters.find(record => record.cluster.id === current.parentId)?.cluster;
+  }
+  leadId ??= records.find(record => header(record.bytes, 'role') === 'overseer' && header(record.bytes, 'removed') !== 'true')?.id ?? null;
+  return { ...input, unit, scope, machine: context.paths.machine, leadId };
+}
+
+async function prepareClusterMembership(context, clusterId, unitId) {
+  const current = (await rawClusters(context)).find(item => item.cluster.id === clusterId && !item.cluster.deleted);
+  if (!current) throw new CoreError(409, 'cluster_changed', 'The cluster changed before creation.');
+  if (current.cluster.members.length >= 255) throw new CoreError(422, 'invalid_members', 'A cluster can include at most 255 agents.');
+  const relative = `user/relay/chats/${clusterId}/chat.md`, beforeChat = await readBytes(context.store, absolute(context, relative));
+  if (revisionOf(beforeChat) !== current.record.chatRevision) throw new CoreError(409, 'chat_changed', 'The linked chat changed.');
+  const members = [...current.cluster.members, unitId].sort(), afterChat = editChatMetadata(beforeChat, { members: ['root:master', ...members].sort() });
+  const after = Buffer.from(`${canonicalJson({ ...current.record, members, chatRevision: revisionOf(afterChat) })}\n`);
+  return [clusterEntry(context, current.relative, current.bytes, after), clusterEntry(context, relative, beforeChat, afterChat)];
 }
 
 async function readBeat(context, machine) {

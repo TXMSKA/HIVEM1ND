@@ -405,6 +405,12 @@ async function commitLocked(store, prepared) {
     await validateAdditionBundle({ store, paths: { mind: store.mindPath }, now: store.now }, prepared.entries.filter(entry => !entry.private && entry.recordPath && isInside(store.mindPath, entry.recordPath)).map(entry => ({
       target: { kind: 'mind', path: path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/') }, bytes: entry.afterBytes, deleted: entry.operation === 'delete' })), prepared.sync.machine);
   }
+  const clusterEntries = prepared.entries.filter(entry => !entry.private && entry.recordPath && /^user\/gui\/groups\/[a-f0-9-]{36}\.json$/.test(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')));
+  if (clusterEntries.length) {
+    const { validateClusterBundle } = await import('./clusters.mjs');
+    await validateClusterBundle({ store, paths: { mind: store.mindPath } }, clusterEntries.map(entry => ({
+      target: { kind: 'mind', path: path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/') }, bytes: entry.afterBytes, deleted: entry.operation === 'delete' })));
+  }
   const checked = [];
   const beforeCatalog = await catalogSnapshot(store);
   const catalog = await catalogSnapshot(store, prepared.entries);
@@ -653,6 +659,7 @@ async function stageJournal(store, journal) {
     baseHash: entry.beforeRevision,
     id: uuidV8(['journal-change', journal.id, entry.resource, entry.afterRevision]),
   }));
+  if (!entries.length) return [];
   return stageTransaction(sync, entries, { transactionId: journal.id, at: journal.sync.at,
     authorizedTargets: journal.entries.filter((entry) => entry.target).map((entry) => entry.target) });
 }
@@ -757,6 +764,10 @@ export async function undoChange(context, changeId) {
     try {
       const result = await commitChange(context, { id, entries, events: record.events,
         response: { status: 200, body: { changeId: id, undoOf: changeId, resourceIds: record.resourceIds } } });
+      if (record.events.some(event => event.name === 'cluster.changed')) {
+        const { refreshClusterProjects } = await import('./settings.mjs');
+        await refreshClusterProjects(context);
+      }
       if (record.events.some(event => event.name === 'additions.changed')) {
         const { pruneAdditionDirectories } = await import('./additions.mjs');
         for (const entry of entries) if (entry.operation === 'delete' && entry.beforeBytes && /^user\/additions\/[a-f0-9-]{36}\.json$/.test(path.relative(context.paths.mind, entry.recordPath).replaceAll('\\', '/'))) await pruneAdditionDirectories(context, JSON.parse(entry.beforeBytes));

@@ -970,7 +970,8 @@ test('personal group creation, edits, archive and Undo sync as identical group-c
       const relative = change.target.path.split('/');
       assert.deepEqual(await readFile(path.join(desktop.paths.mind, ...relative)), await readFile(path.join(laptop.paths.mind, ...relative)));
       const sidecar = await importedSidecarEvents(destination, change);
-      assert.equal(sidecar.events[0].name, change.target.path.startsWith('user/gui/') ? 'group.changed' : 'chat.changed');
+      assert.ok(sidecar.events.some(event => event.name === (change.target.path.startsWith('user/gui/') ? 'group.changed' : 'chat.changed')));
+      if (change.target.path.startsWith('user/gui/')) assert.ok(sidecar.events.some(event => event.name === 'cluster.changed'));
     }
     await ackPublished(laptop, changes.map((change) => change.id));
     assert.deepEqual(await readFile(path.join(desktop.paths.mind, 'user', 'state', 'one.md')), state);

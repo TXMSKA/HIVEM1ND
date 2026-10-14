@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -141,6 +142,10 @@ async function makeFixture(context) {
 
   await mkdir(path.join(homeDir, 'direct-plain', '.git'), { recursive: true });
   await mkdir(path.join(rootB, 'gamma', '.git'), { recursive: true });
+  for (const directory of [path.join(homeDir, 'GitHub', 'repo1'), path.join(homeDir, 'GitHub', 'repo2'), path.join(homeDir, 'Unity', 'repo3'), directWeb,
+    path.join(homeDir, 'direct-plain'), path.join(rootB, 'gamma')]) {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: directory, windowsHide: true, shell: false, timeout: 30000, stdio: 'ignore' });
+  }
 
   return { root, mindPath, homeDir, rootB };
 }

@@ -8,9 +8,12 @@ import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
-import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, setUnitAlias } from './units.mjs';
+import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias } from './units.mjs';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
+import { clusterOwner, createCluster, listClusters, patchCluster, readCluster, removeCluster } from './clusters.mjs';
+import { openClusterEditor, readClusterChanges, readClusterGit } from './cluster-git.mjs';
+import { answerDiscoveryOffer, createClusterLink, removeClusterLink } from './settings.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
 import { cancelStart, consumeStart, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
@@ -65,6 +68,17 @@ const ROUTES = [
   ['POST', '/groups', 'chat.manage', 'D', 'createGroup'],
   ['PATCH', '/groups/:groupId', 'chat.manage', 'D', 'patchGroup'],
   ['DELETE', '/groups/:groupId', 'chat.manage', 'D', 'removeGroup'],
+  ['GET', '/clusters', 'read', 'D', 'cluster', 'list'],
+  ['GET', '/clusters/:clusterId', 'read', 'D', 'cluster', 'read'],
+  ['POST', '/clusters', 'chat.manage', 'D', 'cluster', 'create'],
+  ['PATCH', '/clusters/:clusterId', 'chat.manage', 'D', 'cluster', 'patch'],
+  ['DELETE', '/clusters/:clusterId', 'chat.manage', 'D', 'cluster', 'remove'],
+  ['POST', '/cluster-links', 'settings.write', 'D', 'cluster', 'link'],
+  ['DELETE', '/cluster-links/:clusterId', 'settings.write', 'D', 'cluster', 'unlink'],
+  ['POST', '/discovery/offers/:offerId/answer', 'settings.write', 'D', 'cluster', 'answer'],
+  ['GET', '/clusters/:clusterId/git', 'read', 'D', 'cluster', 'git'],
+  ['GET', '/clusters/:clusterId/changes', 'read', 'D', 'cluster', 'changes'],
+  ['POST', '/clusters/:clusterId/open-editor', 'read', 'D', 'cluster', 'editor'],
   ['POST', '/changes/:changeId/undo', 'read', 'D', 'undoChange'],
   ['GET', '/chats/:chatId', 'read', 'DPA', 'detail', 'chats'],
   ['GET', '/chats/:chatId/messages', 'read', 'DPA', 'collection', 'messages'],
@@ -844,6 +858,10 @@ function allowedQuery(route) {
     '/sessions': [...list, 'unitId', 'machine', 'state'],
     '/chats': [...list, 'unitId', 'listed', 'pinned', 'archived'],
     '/groups': list,
+    '/clusters': [...list, 'machine'],
+    '/clusters/:clusterId': ['machine'],
+    '/clusters/:clusterId/git': ['machine'],
+    '/clusters/:clusterId/changes': [...list, 'machine'],
     '/chats/:chatId/messages': [...list, 'before'],
     '/mailboxes': [...list, 'archived'],
     '/mailboxes/:unitId/messages': [...list, 'state'],
@@ -908,6 +926,7 @@ function operationFor(route, credential, body) {
 }
 
 async function objectFor(route, domain, credential, params, body) {
+  if (route.handler === 'cluster' && route.method !== 'GET') clusterOwner(domain, body?.machine, { write: true });
   if (route.handler === 'addition') {
     await assertAdditionRequest(domain, route.collection, body, params.previewId ?? params.uploadId ?? params.additionId ?? null);
     return {};
@@ -1049,7 +1068,7 @@ function allowedBody(route) {
     'POST /additions/previews/:previewId/retry': [],
     'POST /additions': ['machine', 'previewId', 'selections', 'expectedContentRevision', 'expectedProjectRevision', 'confirmed'],
     'DELETE /additions/:additionId': ['machine', 'confirmed', 'expectedRevision'],
-    'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position'],
+    'POST /units': ['unit', 'role', 'scope', 'machine', 'leadId', 'job', 'model', 'position', 'clusterId'],
     'PATCH /units/:unitId/alias': ['alias', 'expectedRevision'],
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
@@ -1059,6 +1078,13 @@ function allowedBody(route) {
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
     'POST /chats': ['members', 'title'],
     'POST /groups': ['title', 'members'],
+    'POST /clusters': ['title', 'parentId', 'link', 'machine', 'confirmed'],
+    'PATCH /clusters/:clusterId': ['title', 'parentId', 'link', 'machine', 'expectedRevision'],
+    'DELETE /clusters/:clusterId': ['machine', 'confirmed', 'expectedRevision'],
+    'POST /cluster-links': ['machine', 'kind', 'path', 'expectedReportRevision'],
+    'DELETE /cluster-links/:clusterId': ['machine', 'confirmed', 'expectedRevision'],
+    'POST /discovery/offers/:offerId/answer': ['machine', 'repositoryIds', 'confirmed', 'expectedRevision'],
+    'POST /clusters/:clusterId/open-editor': ['machine'],
     'PATCH /groups/:groupId': ['title', 'members', 'expectedRevision'],
     'DELETE /groups/:groupId': ['confirmed', 'expectedRevision'],
     'POST /changes/:changeId/undo': [],
@@ -1134,6 +1160,8 @@ function domainContext(options, credential, bus) {
     ownedPids: options.ownedPids ?? new Set(),
     aliases: Array.isArray(options.aliases) ? options.aliases : null,
     adapters: options.adapters ?? null,
+    gitRunner: options.gitRunner,
+    editorLauncher: options.editorLauncher,
     models: options.models ?? [],
     settingsOwner: options.settingsOwner ?? null,
     additionOwner: options.additionOwner ?? options.settingsOwner ?? options,
@@ -1258,6 +1286,15 @@ async function watchRoute(route, domain, params, body, credential) {
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
+  if (route.handler === 'cluster') {
+    const calls = { list: () => listClusters(domain, numbers(query)), read: () => readCluster(domain, params.clusterId, query),
+      create: () => createCluster(domain, body), patch: () => patchCluster(domain, params.clusterId, body),
+      remove: () => removeCluster(domain, params.clusterId, body), link: () => createClusterLink(domain, body),
+      unlink: () => removeClusterLink(domain, params.clusterId, body), answer: () => answerDiscoveryOffer(domain, params.offerId, body),
+      git: () => readClusterGit(domain, params.clusterId, query), changes: () => readClusterChanges(domain, params.clusterId, numbers(query)),
+      editor: () => openClusterEditor(domain, params.clusterId, body) };
+    return { status: ['create', 'link'].includes(route.collection) ? 201 : route.collection === 'editor' ? 202 : 200, body: await calls[route.collection]() };
+  }
   if (route.handler === 'addition') {
     if (route.collection === 'list') return { status: 200, body: await readAdditions(domain, query.machine ?? domain.paths.machine) };
     const operations = { upload: openAdditionUpload, inspect: inspectAddition, chunk: writeAdditionChunk, read: readAdditionPreview,
@@ -1328,6 +1365,7 @@ async function invoke(route, scope) {
     return { status: 200, body: connected.unit };
   }
   if (route.handler === 'enqueueStart') {
+    await resolveUnitCluster(domain, params.unitId);
     const queued = await enqueueStart(domain, { ...body, unitId: params.unitId, stateRevision: body.stateRevision ?? body.expectedRevision, queueOnly: true });
     if (queued.request.targetMachine === domain.paths.machine) consumeStart(domain, queued.request.id).then((outcome) => {
       domain.bus?.emit({ name: 'session.request.changed', unitId: queued.request.unitId, data: projectSessionRequest(outcome) });

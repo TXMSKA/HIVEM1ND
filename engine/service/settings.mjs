@@ -1,16 +1,18 @@
 import { generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { discoverAgents, discoverContent, loadAdapters } from '../discovery.mjs';
+import { discoverAgents, discoverContent, discoverProjects, loadAdapters } from '../discovery.mjs';
 import { OWNED_RULE_MODES, autoRuleLine, prepareContentAgentAssets } from '../install.mjs';
 import { machineRecordPath, machineSettingsPath, readMachineRecord, serializeMachineRecord } from '../records.mjs';
 import { parseRoutes } from '../relay/store.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName } from './identity.mjs';
 import { answersFor, readProjection } from './projection.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { atomicWrite, checkRevision, commitChange, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
+import { atomicWrite, bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
+import { clusterEntry, clusterEvents, clusterOwner, mappingKey, prepareRepositoryClusters, rawClusters, readClusterMappings, resolveClusterLink } from './clusters.mjs';
+import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-git.mjs';
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
@@ -90,7 +92,7 @@ function verifyRecord(record, publicKey = record?.publicKey) {
 }
 
 function reportShape(record, machine) {
-  exact(record, ['format', 'machine', 'reportedAt', 'service', 'locations', 'agents', 'permissions', 'projects', 'publicKey', 'signature']);
+  exact(record, ['format', 'machine', 'reportedAt', 'service', 'locations', 'agents', 'permissions', 'projects', 'clusterLinks', 'discoveryOffer', 'publicKey', 'signature']);
   if (record.format !== 'hivem1nd-machine-settings-v1' || record.machine !== machine || !time(record.reportedAt) || !verifyRecord(record)) fail(422, 'corrupt_resource', 'The machine Settings report failed its integrity check.');
   exact(record.locations, ['mind', 'staging']);
   if (!text(record.locations.mind) || !text(record.locations.staging)) fail(422, 'corrupt_resource', 'The machine locations are not valid.');
@@ -139,6 +141,15 @@ function reportShape(record, machine) {
     for (const [key, item] of Object.entries(value)) { if (forbidden.test(key)) fail(422, 'corrupt_resource', 'A machine report contains private material.'); visit(item); }
   };
   visit(record.permissions);
+  if (record.clusterLinks !== undefined) {
+    if (!Array.isArray(record.clusterLinks)) fail(422, 'corrupt_resource', 'The cluster links report is not valid.');
+    for (const link of record.clusterLinks) {
+      exact(link, ['clusterId', 'title', 'kind', 'projectId', 'localPath', 'available']);
+      if (!isUuid(link.clusterId) || !text(link.title, 240) || !['repository', 'folder', 'none'].includes(link.kind)
+        || link.localPath !== null || typeof link.available !== 'boolean' || link.projectId !== null && !text(link.projectId, 128)) fail(422, 'corrupt_resource', 'An owner-local path cannot enter shared cluster metadata.');
+    }
+  }
+  if (record.discoveryOffer != null) validatePublicOffer(record.discoveryOffer);
   return record;
 }
 
@@ -212,6 +223,8 @@ async function publishOwnedSettings(context, section) {
   const unitGrants = view.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant })));
   const permissions = { unitGrants, agentPermissions: await readAgentPermissions(context) };
   const projects = { folders: [...folders.values()] };
+  const links = await clusterLinks(context);
+  const offer = await discoveryOffer(context);
   const contentRevision = revisionOf(await readBytes(context.store, absolute(context, CONTENT_PATH)));
   const refreshAgents = !existing || section === 'agents' || context.contentRevision !== contentRevision;
   context.contentRevision = contentRevision;
@@ -221,6 +234,7 @@ async function publishOwnedSettings(context, section) {
     service: { machine, state: context.active === false ? 'stopped' : 'running', version: '3.0.0', startedAt: context.startedAt ?? stamp(context), startWithWindows: config.startWithWindows === true, revision: revisionOf(configSource) },
     agents: refreshAgents ? { revision: null, items: await agentItems(context, legacy) } : existing.agents,
     permissions: { ...permissions, revision: revision(permissions) }, projects: { ...projects, revision: revision(projects) },
+    clusterLinks: links.map(link => ({ ...link, localPath: null })), discoveryOffer: publicOffer(offer),
   });
   if (report.agents.revision === null) {
     report.agents.revision = revision(report.agents.items);
@@ -283,7 +297,9 @@ export async function readMachineSettings(context, machine = context.paths.machi
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
   if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [] };
   if (section === 'permissions') return { ...common, revision: report?.permissions.revision ?? null, unitGrants: report?.permissions.unitGrants ?? [], agentPermissions: report?.permissions.agentPermissions ?? [] };
-  if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [] };
+  if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [],
+    clusterLinks: machine === context.paths.machine ? await clusterLinks(ownerOf(context)) : report?.clusterLinks ?? [],
+    discoveryOffer: machine === context.paths.machine ? await discoveryOffer(ownerOf(context)) : report?.discoveryOffer ?? null };
   if (section) fail(422, 'invalid_body', 'The Settings section is not valid.');
   const settingsBytes = await readBytes(context.store, absolute(context, 'user/gui/settings.json'));
   return { settings: shared, revision: revisionOf(settingsBytes), selectedMachine: machine, readOnly, reportedAt: report?.reportedAt ?? null,
@@ -782,14 +798,189 @@ export async function prepareAdditionProjects(context, additions, { checkOnly = 
     const existing = folders.find(item => item.id === folder.id);
     if (existing) existing.repositories.push(...folder.repositories); else folders.push(folder);
   }
+  const clusterPlan = await prepareRepositoryClusters(context, additions.map(item => ({ ...item, additionId: item.id })), { remove });
+  entries.push(...clusterPlan.entries);
+  const projected = new Map((await clusterLinks(context)).map(item => [item.clusterId, { ...item, localPath: null }]));
+  for (const cluster of clusterPlan.clusters) projected.set(cluster.id, { clusterId: cluster.id, title: cluster.title, kind: cluster.link.kind,
+    projectId: cluster.link.projectId ?? null, localPath: null, available: true });
+  for (const event of clusterPlan.events) if (event.name === 'cluster.changed' && event.data.cluster.deleted) projected.delete(event.data.cluster.id);
   const projects = { folders }, projectRevision = revision(projects);
   const base = report ? (({ publicKey, signature, ...body }) => body)(report) : {
     format: 'hivem1nd-machine-settings-v1', machine, locations: { mind: context.paths.mind, staging: context.paths.staging },
     service: { machine, state: 'running', version: '3.0.0', startedAt: stamp(context), startWithWindows: false, revision: null },
     agents: { revision: revision([]), items: [] }, permissions: { revision: revision({ unitGrants: [], agentPermissions: [] }), unitGrants: [], agentPermissions: [] } };
-  const afterReport = await signed(service, { ...base, reportedAt: stamp(context), projects: { ...projects, revision: projectRevision } });
+  const afterReport = await signed(service, { ...base, reportedAt: stamp(context), projects: { ...projects, revision: projectRevision }, clusterLinks: [...projected.values()] });
   reportShape(afterReport, machine);
   const reportPath = machineSettingsPath(context.paths.mind, machine), beforeReport = await readBytes(context.store, reportPath);
   entries.push({ resource: `settings-report:${machine}`, recordPath: reportPath, beforeRevision: revisionOf(beforeReport), beforeBytes: beforeReport, afterBytes: bytes(afterReport) });
-  return { entries, revision: projectRevision, events: [{ name: 'machine.settings.changed', data: { machine, section: 'projects', reportedAt: afterReport.reportedAt, revision: projectRevision } }] };
+  return { entries, clusters: clusterPlan.clusters, revision: projectRevision, events: [...clusterPlan.events, { name: 'machine.settings.changed', data: { machine, section: 'projects', reportedAt: afterReport.reportedAt, revision: projectRevision } }] };
+}
+
+export async function clusterLinks(context) {
+  const mapping = await readClusterMappings(context);
+  const links = [];
+  for (const { cluster } of await rawClusters(context)) {
+    if (cluster.deleted) continue;
+    const local = mapping.record.links[mappingKey(cluster.link)];
+    let available = false;
+    if (local?.machine === context.paths.machine && local.localPath) {
+      try { await resolveClusterLink(context, cluster.link, context.paths.machine); available = true; }
+      catch (error) { if (!['cluster_changed', 'unsafe_path', 'machine_unavailable', 'ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error; }
+    }
+    links.push({ clusterId: cluster.id, title: cluster.title, kind: cluster.link.kind, projectId: cluster.link.projectId ?? null,
+      localPath: local?.localPath ?? null, available });
+  }
+  return links;
+}
+
+function publicOffer(offer) {
+  return offer ? { ...offer, groups: offer.groups.map(group => ({ ...group, path: null,
+    repositories: group.repositories.map(repository => ({ ...repository, worktrees: repository.worktrees.map(tree => ({ ...tree, path: null })) })) })) } : null;
+}
+function validatePublicOffer(offer) {
+  exact(offer, ['id', 'revision', 'groups', 'dismissed']);
+  if (!isUuid(offer.id) || !byteRevision(offer.revision) || typeof offer.dismissed !== 'boolean' || !Array.isArray(offer.groups)) fail(422, 'corrupt_resource', 'The discovery report is not valid.');
+  for (const group of offer.groups) {
+    exact(group, ['id', 'title', 'path', 'repositories']);
+    if (!text(group.id, 128) || !text(group.title, 240) || group.path !== null || !Array.isArray(group.repositories)) fail(422, 'corrupt_resource', 'A shared discovery folder contains a private path.');
+    for (const repository of group.repositories) {
+      exact(repository, ['id', 'name', 'projectId', 'remote', 'worktrees']);
+      if (!text(repository.id, 128) || !text(repository.name, 240) || repository.remote !== null || repository.projectId !== null || !Array.isArray(repository.worktrees)) fail(422, 'corrupt_resource', 'A discovery repository is not valid.');
+      for (const tree of repository.worktrees) {
+        exact(tree, ['id', 'path', 'branch']);
+        if (!isUuid(tree.id) || tree.path !== null || tree.branch !== null && !text(tree.branch, 512)) fail(422, 'corrupt_resource', 'A shared discovery worktree contains a private path.');
+      }
+    }
+  }
+}
+
+async function offerRecord(context) {
+  const file = path.join(context.paths.localDirectory, 'discovery-offer.json');
+  await assertNoLinks(file, { root: context.paths.localDirectory });
+  const source = await readBytes(context.store, file);
+  return { file, bytes: source, record: source ? JSON.parse(source) : null };
+}
+function offerView(record) {
+  const { repositories, format, machine, ...offer } = record;
+  return { ...offer, revision: revision(record) };
+}
+export async function discoveryOffer(context) {
+  return withLocalChanges(context.store, async () => {
+    const saved = await offerRecord(context);
+    if (saved.record) {
+      if (saved.record.format !== 'hivem1nd-discovery-offer-v1' || saved.record.machine !== context.paths.machine) fail(409, 'cluster_changed', 'The discovery owner changed.');
+      return offerView(saved.record);
+    }
+    const owner = ownerOf(context);
+    const candidates = owner.discoveryRoots ?? [owner.homeDir ?? owner.home ?? os.homedir()];
+    const roots = [];
+    for (const candidate of candidates) {
+      if (context.store.confineRoot) {
+        const relative = path.relative(context.store.confineRoot, path.resolve(candidate));
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+      }
+      const state = await lstat(candidate).catch(error => { if (['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) return null; throw error; });
+      if (state?.isDirectory() && !state.isSymbolicLink()) roots.push(candidate);
+    }
+    const found = await discoverProjects(roots, { gitRunner: owner.gitRunner,
+      skip: name => name.startsWith('.') || ['AppData', 'Library'].includes(name) });
+    const accepted = (await readClusterMappings(context)).record.links;
+    const groups = new Map(), repositories = [];
+    for (const project of found) {
+      if (Object.values(accepted).some(link => link.repositoryId === project.repositoryId || link.localPath && pathKey(link.localPath) === pathKey(project.path))
+        || (context.projects ?? []).some(item => item.localPath && project.worktrees.some(tree => pathKey(tree.path) === pathKey(item.localPath)))) continue;
+      const folder = path.dirname(project.path), id = uuidV8(['discovery-folder', pathKey(folder)]);
+      if (!groups.has(id)) groups.set(id, { id, title: path.basename(folder), path: folder, repositories: [] });
+      groups.get(id).repositories.push({ id: project.repositoryId, name: project.name, projectId: null, remote: null, worktrees: project.worktrees });
+      repositories.push(project);
+    }
+    const record = { format: 'hivem1nd-discovery-offer-v1', machine: context.paths.machine, id: randomUUID(), groups: [...groups.values()], repositories, dismissed: false };
+    await commitChange({ ...context, receipt: null }, { id: randomUUID(), entries: [{ resource: 'discovery-offer', recordPath: saved.file, beforeRevision: null, afterBytes: bytes(record), private: true }], events: [], response: { status: 200, body: null } });
+    return offerView(record);
+  });
+}
+
+export async function answerDiscoveryOffer(context, offerId, input) {
+  clusterOwner(context, input?.machine, { write: true });
+  exact(input, ['machine', 'repositoryIds', 'confirmed', 'expectedRevision']); required(input, ['machine', 'repositoryIds', 'confirmed', 'expectedRevision']);
+  if (typeof input.confirmed !== 'boolean' || !Array.isArray(input.repositoryIds) || new Set(input.repositoryIds).size !== input.repositoryIds.length) fail(422, 'invalid_body', 'Select distinct canonical repositories.');
+  return withLocalChanges(context.store, async () => {
+    const saved = await offerRecord(context), record = saved.record;
+    if (!record || record.id !== offerId) fail(404, 'discovery_not_found', 'The discovery offer does not exist.');
+    if (record.dismissed || offerView(record).revision !== input.expectedRevision) fail(409, 'revision_conflict', 'The discovery offer changed.');
+    if (input.repositoryIds.some(id => !record.repositories.some(project => project.repositoryId === id))) fail(422, 'invalid_body', 'Worktrees cannot be imported as repositories.');
+    const selected = input.confirmed ? record.repositories.filter(project => input.repositoryIds.includes(project.repositoryId)) : [];
+    const projects = [], used = new Set((context.projects ?? []).map(project => project.name.toLowerCase()));
+    for (const project of selected) {
+      const identity = await readRepositoryIdentity(project.path, ownerOf(context));
+      if (identity.id !== project.repositoryId) fail(409, 'cluster_changed', 'A discovered repository changed before acceptance.');
+      let name = project.name.replace(/[^A-Za-z0-9._-]/g, '-');
+      if (!/^[A-Za-z0-9]/.test(name)) name = `repo-${name}`;
+      name = name.slice(0, 80);
+      if (used.has(name.toLowerCase())) name = `${name.slice(0, 64)}-${identity.id.slice(0, 8)}`;
+      used.add(name.toLowerCase()); projects.push({ name, title: project.name, localPath: identity.path });
+    }
+    const prepared = await prepareRepositoryClusters(context, projects);
+    const result = { clusters: prepared.clusters, dismissed: true };
+    await commitChange(context, { id: randomUUID(), entries: [...prepared.entries, { resource: 'discovery-offer', recordPath: saved.file,
+      beforeRevision: revisionOf(saved.bytes), beforeBytes: saved.bytes, afterBytes: bytes({ ...record, dismissed: true }), private: true }],
+      events: prepared.events, response: { status: 200, body: result } });
+    await refreshClusterProjects(context);
+    return result;
+  });
+}
+
+export async function refreshClusterProjects(context) {
+  const owner = ownerOf(context), mapping = await readClusterMappings(context), records = await rawClusters(context);
+  const active = new Set(records.filter(item => !item.cluster.deleted && item.cluster.link.kind === 'repository').map(item => item.cluster.link.projectId));
+  const current = context.projects ?? owner.projects ?? [];
+  const projects = [...current.filter(project => !project.clusterMapped || active.has(project.name))];
+  for (const name of active) {
+    const link = mapping.record.links[`repository:${name}`];
+    if (!link?.localPath || link.machine !== context.paths.machine || projects.some(project => project.name === name)) continue;
+    projects.push({ name, localPath: link.localPath, eligible: true, clusterMapped: true });
+  }
+  for (const target of new Set([context.projects, owner.projects, context.sync?.projects, owner.sync?.projects].filter(Array.isArray))) target.splice(0, target.length, ...projects);
+  context.projects ??= projects; owner.projects ??= context.projects;
+  bindProjects(context.store, context.projects);
+}
+
+export async function createClusterLink(context, input) {
+  clusterOwner(context, input?.machine, { write: true });
+  exact(input, ['machine', 'kind', 'path', 'expectedReportRevision']); required(input, ['machine', 'kind', 'path', 'expectedReportRevision']);
+  if (!['repository', 'folder'].includes(input.kind) || !text(input.path) || !path.isAbsolute(input.path)) fail(422, 'invalid_link', 'Choose an absolute repository or folder.');
+  return withLocalChanges(context.store, async () => {
+    const report = await readPublishedSettings(context, input.machine);
+    if (report?.projects.revision !== input.expectedReportRevision) fail(409, 'revision_conflict', 'The cluster links report changed.');
+    await assertNoLinks(input.path);
+    if (!(await lstat(input.path).catch(() => null))?.isDirectory()) fail(422, 'invalid_link', 'The linked folder does not exist.');
+    const localPath = await realpath(input.path), mapping = await readClusterMappings(context);
+    const identity = input.kind === 'repository' ? await readRepositoryIdentity(localPath, ownerOf(context)) : null;
+    if (Object.values(mapping.record.links).some(link => identity ? link.repositoryId === identity.id : link.kind === 'folder' && link.localPath && pathKey(link.localPath) === pathKey(localPath))) fail(409, 'cluster_changed', 'The directory already has a canonical mapping.');
+    const link = identity ? { kind: 'repository', projectId: `repo-${identity.id.slice(0, 8)}` } : { kind: 'folder', folderId: randomUUID() };
+    mapping.record.links[mappingKey(link)] = { ...link, machine: input.machine, localPath, identity: await directoryIdentity(localPath), repositoryId: identity?.id ?? null, worktrees: identity?.worktrees ?? [] };
+    const after = bytes(mapping.record), result = { link, revision: revisionOf(after) };
+    await commitChange(context, { id: randomUUID(), entries: [{ resource: 'cluster-mappings', recordPath: mapping.file, beforeRevision: revisionOf(mapping.bytes), beforeBytes: mapping.bytes, afterBytes: after, private: true }], events: [], response: { status: 201, body: result } });
+    return result;
+  });
+}
+
+export async function removeClusterLink(context, clusterId, input) {
+  clusterOwner(context, input?.machine, { write: true });
+  exact(input, ['machine', 'confirmed', 'expectedRevision']); required(input, ['machine', 'confirmed', 'expectedRevision']);
+  if (input.confirmed !== true) fail(422, 'confirmation_required', 'Removing a cluster link requires confirmation.');
+  return withLocalChanges(context.store, async () => {
+    const current = (await rawClusters(context)).find(item => item.cluster.id === clusterId && !item.cluster.deleted);
+    if (!current) fail(404, 'cluster_not_found', 'The cluster does not exist.');
+    checkRevision(current.bytes, input.expectedRevision);
+    const view = await readProjection(context);
+    if (view.sessions.some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this link.');
+    const after = bytes({ ...current.record, link: { kind: 'none' } }), cluster = { ...current.cluster, link: { kind: 'none' }, revision: revisionOf(after) };
+    const entries = [clusterEntry(context, current.relative, current.bytes, after)], id = randomUUID();
+    const undo = await prepareChangeUndo(context, { id, permission: 'settings.write', resourceIds: [clusterId], entries, events: clusterEvents(current.cluster) });
+    const result = { clusterId, changeId: id, undoUntil: undo.undoUntil };
+    await commitChange(context, { id, entries: [...entries, undo.entry], events: clusterEvents(cluster), response: { status: 200, body: result } });
+    await refreshClusterProjects(context);
+    return result;
+  });
 }

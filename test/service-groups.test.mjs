@@ -43,7 +43,7 @@ test('group validation rejects invalid titles, members and empty patches without
   for (const title of [undefined, null, 1, '', '  ', 'a'.repeat(241), 'a\nb', 'a\rb', 'a\0b', 'a\u007fb', 'a\u2028b']) {
     await assert.rejects(createGroup(context, { title, members: ['root:one'] }), { code: 'invalid_title' });
   }
-  for (const members of [undefined, null, {}, [], ['root:master'], ['root:missing'], ['one'], [null], ['root:one', 'root:one'], Array(256).fill('root:one')]) {
+  for (const members of [undefined, null, {}, ['root:master'], ['root:missing'], ['one'], [null], ['root:one', 'root:one'], Array(256).fill('root:one')]) {
     await assert.rejects(createGroup(context, { title: 'Group', members }), { code: 'invalid_members' });
   }
   assert.equal((await readProjection(context)).chats.length, 0);
@@ -194,7 +194,10 @@ test('restart after the first deletion write restores a protected Undo copy befo
   const restarted = { ...context, store: fresh, sync: openSync({ store: fresh, paths: context.paths, now: context.now }) };
   const view = await readProjection(restarted);
   assert.equal(view.groups.length, 0);
-  const [name] = await readdir(path.join(fixture.paths.localDirectory, 'change-undo'));
+  const names = await readdir(path.join(fixture.paths.localDirectory, 'change-undo'));
+  const undoRecords = await Promise.all(names.map(async name => ({ name, record: JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'change-undo', name))) })));
+  const archivedRevision = revisionOf(await readFile(groupFile(context, group.id)));
+  const name = undoRecords.find(item => item.record.entries.some(entry => entry.recordPath === groupFile(context, group.id) && entry.afterRevision === archivedRevision)).name;
   await undoChange(restarted, name.slice(0, -5));
   assert.equal((await readProjection(restarted)).groups[0].revision, group.revision);
 });
@@ -230,6 +233,17 @@ test('delete archives only its group chat and Undo restores exact metadata and m
   assert.deepEqual(await readFile(path.join(context.paths.mind, ...states[0][0].split('/'))), leadBefore);
   assert.equal((await listGroups(context)).items[0].revision, group.revision);
   await assert.rejects(undoChange(context, removed.changeId), { code: 'undo_conflict' });
+});
+
+test('the compatibility removal response retains group identity on receipt replay', async t => {
+  const { context } = await world(t);
+  const group = await createGroup(context, { title: 'Receipt', members: ['root:one'] });
+  const body = { confirmed: true, expectedRevision: group.revision };
+  const request = { principal: 'desktop', key: randomUUID(), requestId: randomUUID(), method: 'DELETE', path: `/groups/${group.id}`, body };
+  const first = await withReceipt(context.store, request, receipt => removeGroup({ ...context, receipt }, group.id, body));
+  const replay = await withReceipt(context.store, request, () => { throw new Error('The receipt must replay.'); });
+  assert.equal(first.groupId, group.id);
+  assert.deepEqual(replay.body, first);
 });
 
 test('Undo expires at ten seconds or rejects either changed record without restoring anything', async (t) => {

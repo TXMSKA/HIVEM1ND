@@ -2,6 +2,7 @@ import { access, lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFrontmatter } from './records.mjs';
+import { readRepositoryIdentity } from './service/cluster-git.mjs';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SKIP_DIRECTORIES = new Set(['.git', '.hg', '.svn', 'node_modules', 'user']);
@@ -70,10 +71,12 @@ export function resolveAdapterPaths(adapter, { homeDir, env = process.env } = {}
   return { skillsRoot, skillsBase, rulesPath, rulesBase };
 }
 
-export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () => false } = {}) {
+export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () => false, gitRunner } = {}) {
   if (!Array.isArray(projectRoots)) throw new Error('projectRoots must be an array');
+  maxDepth = Math.min(4, maxDepth);
   const projects = [];
   const seen = new Set();
+  const repositories = new Set();
   for (const rootValue of projectRoots) {
     const root = path.resolve(String(rootValue));
     if (!await isDirectory(root)) throw new Error(`Project folder does not exist: ${root}`);
@@ -89,10 +92,22 @@ export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () =
     if (!state || state.isSymbolicLink() || !state.isDirectory()) return;
 
     if (await pathExists(path.join(directory, '.git'))) {
+      let identity;
+      try { identity = await readRepositoryIdentity(directory, { gitRunner }); }
+      catch (error) {
+        // A marker without Git metadata is not a repository; unsupported Git on a real one remains an error.
+        if (error.code === 'git_unavailable' && await isDirectory(path.join(directory, '.git')) && !await pathExists(path.join(directory, '.git', 'HEAD'))) return;
+        throw error;
+      }
+      if (repositories.has(identity.id)) return;
+      repositories.add(identity.id);
       projects.push({
-        name: path.basename(directory),
-        path: directory,
-        environment: await guessEnvironment(directory),
+        name: path.basename(identity.path),
+        path: identity.path,
+        environment: await guessEnvironment(identity.path),
+        repositoryId: identity.id,
+        commonDir: identity.commonDir,
+        worktrees: identity.worktrees,
       });
       return;
     }
@@ -106,9 +121,10 @@ export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () =
   }
 }
 
-export async function discoverHomeProjects(homeDir, { maxDepth = 4 } = {}) {
+export async function discoverHomeProjects(homeDir, { maxDepth = 4, gitRunner } = {}) {
   return discoverProjects([homeDir], {
     maxDepth,
+    gitRunner,
     skip: (name) => name.startsWith('.') || HOME_SKIP_DIRECTORIES.has(name),
   });
 }

@@ -270,6 +270,8 @@ export async function listStaged(sync) {
 export async function resolveIncoming(sync, packBytes, provider) {
   const result = await resolveDependencies(packBytes, provider);
   if (result.status !== 'pending') {
+    const { validateClusterBundle } = await import('../service/clusters.mjs');
+    await validateClusterBundle(sync, result.decoded.changes.map(change => ({ target: change.target, bytes: result.objects.get(change.hash), deleted: change.operation === 'delete' })));
     const { validateSettingsSyncRecord } = await import('../service/settings.mjs');
     const incoming = new Map(result.decoded.changes.filter(change => change.operation === 'put').map(change => [change.target.path, result.objects.get(change.hash)]));
     for (const change of result.decoded.changes) {
@@ -404,6 +406,8 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
     const { validateAdditionBundle } = await import('../service/additions.mjs');
     await validateAdditionBundle(sync, entries, sync.machine);
   }
+  const { validateClusterBundle } = await import('../service/clusters.mjs');
+  await validateClusterBundle(sync, entries);
   const prepared = [];
   for (const entry of entries) {
     const normalized = await prepareTarget(sync, entry.target, options.authorizedTargets);
