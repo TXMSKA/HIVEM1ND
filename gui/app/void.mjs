@@ -271,3 +271,20 @@ export function continuousSave({ save, revision, onState = () => {}, delayMs = 4
     get dirty() { return savedGeneration < generation; },
   };
 }
+
+export function findTextMatches(source, query, { caseSensitive = false, wholeWord = false, regularExpression = false } = {}) {
+  if (!query) return [];
+  const pattern = regularExpression ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const expression = new RegExp(pattern, caseSensitive ? 'gu' : 'giu');
+  const word = (value) => /[\p{L}\p{M}\p{N}_]/u.test(value ?? '');
+  const matches = [];
+  for (const match of source.matchAll(expression)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (!match[0].length) continue;
+    if (wholeWord && (word([...source.slice(Math.max(0, start - 2), start)].at(-1)) || word([...source.slice(end, end + 2)].at(0)))) continue;
+    matches.push({ start, end, text: match[0], captures: match.slice(1) });
+    if (matches.length > 10000) throw new RangeError('Too many matches.');
+  }
+  return matches;
+}
