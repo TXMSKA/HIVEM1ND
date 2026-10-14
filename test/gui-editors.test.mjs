@@ -26,6 +26,11 @@ import {
   createResource,
   handleActivity,
   loadCatalog,
+  libraryState,
+  groupCatalog,
+  renderLibrary,
+  duplicateEditor,
+  moveEditor,
   loadComments,
   markDirty,
   noteRemote,
@@ -42,6 +47,7 @@ import {
 } from "../gui/app/editors.mjs";
 import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
+import { text } from "../gui/app/i18n.mjs";
 
 test("editor comments, attachments and Watch stay on their own revisions", async (t) => {
   const fixture = await createGuiFixture();
@@ -631,11 +637,17 @@ function fakeDocument() {
   const create = (tagName) => ({
     tagName,
     children: [],
-    append(child) { this.children.push(child); },
+    attributes: new Map(), listeners: new Map(),
+    setAttribute(name, value) { this.attributes.set(name, String(value)); },
+    getAttribute(name) { return this.attributes.get(name) ?? null; },
+    addEventListener(name, callback) { this.listeners.set(name, callback); },
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
   });
   return {
     createDocumentFragment() { return create("#fragment"); },
     createElement(name) { return create(name.toUpperCase()); },
+    createElementNS(_namespace, name) { return create(name.toUpperCase()); },
     createTextNode(text) { return { tagName: "#text", textContent: text, children: [], append() {} }; },
   };
 }
@@ -810,3 +822,120 @@ async function phoneApi(fixture) {
   assert.equal(response.status, 200);
   return apiFrom(`${home.origin}/#session=${json.data.token}`);
 }
+
+test("both editor kinds use the shared library with empty folders, recursive counts and matching ancestors", () => {
+  const document = fakeDocument();
+  for (const kind of ["blueprint", "void"]) {
+    const editors = createEditors(), state = libraryState(editors, kind);
+    editors.catalog = [{ id: "deep", kind, title: "Cart", project: "shop", folderId: "child", openThreads: 2 }];
+    state.folders = [{ id: "parent", project: "shop", title: "Parent", parentId: null, count: 1 }, { id: "child", project: "shop", title: "Child", parentId: "parent", count: 1 }, { id: "empty", project: "shop", title: "Empty", parentId: null, count: 0 }];
+    state.collapsed = new Set(["project:shop", "shop:parent", "shop:child"]);
+    const render = () => renderLibrary(document, { kind, data: editors, project: "deep", t: (key, vars) => text("en", key, vars), actions: {} });
+    assert.equal(nodesOf(render()).some((node) => node.getAttribute?.("data-library-item") === "deep"), false);
+    state.query = "screen text";
+    const matching = nodesOf(render());
+    assert.equal(matching.find((node) => node.getAttribute?.("data-library")).getAttribute("data-library"), kind);
+    assert.equal(matching.some((node) => node.getAttribute?.("data-library-item") === "deep"), true);
+    assert.deepEqual(matching.filter((node) => node.getAttribute?.("data-library-folder")).map((node) => node.getAttribute("data-library-folder")), ["parent", "child"]);
+    state.query = ""; state.collapsed.clear();
+    const empty = nodesOf(render()).find((node) => node.getAttribute?.("data-library-folder") === "empty");
+    assert.equal(nodesOf(empty).find((node) => node.className === "library-count").textContent, "0");
+    assert.equal(groupCatalog(editors.catalog, state.folders)[0].folders.length, 3);
+    assert.equal(state.collapsed.size, 0);
+  }
+});
+
+test("catalog search loads every result page and keeps AND filters and kind-specific state", async () => {
+  const calls = [];
+  const api = createApi({ location: { origin: "http://127.0.0.1:9", hash: "#session=fixture" }, history: { replaceState() {} }, fetch: async (input) => {
+    const url = new URL(input); calls.push(url);
+    if (url.pathname.endsWith("/library/folders")) return jsonResponse({ items: [{ id: "folded", project: "shop", parentId: null, title: "Folded", count: 51 }], total: 1 });
+    if (url.pathname.endsWith("/projects")) return jsonResponse({ items: [{ id: "shop" }], total: 1 });
+    const next = url.searchParams.has("cursor");
+    return jsonResponse({ items: next ? [{ id: "last", kind: "blueprint", project: "shop", title: "Last", folderId: "folded" }] : Array.from({ length: 50 }, (_, index) => ({ id: `item-${index}`, kind: "blueprint", project: "shop", title: "Match", folderId: "folded" })), total: 51, nextCursor: next ? null : "page-two" });
+  } });
+  const editors = createEditors(), state = libraryState(editors, "blueprint");
+  state.filters = { project: "shop", openComments: true, attachedAgents: true, changedThisWeek: true };
+  state.collapsed.add("shop:folded");
+  await loadCatalog(api, editors, "blueprint", "deep comment");
+  assert.equal(editors.catalog.length, 51);
+  assert.equal(editors.catalog.at(-1).id, "last");
+  const requests = calls.filter((url) => url.pathname.endsWith("/blueprint/boards"));
+  assert.equal(requests.length, 2);
+  for (const url of requests) for (const [key, value] of Object.entries({ q: "deep comment", project: "shop", openComments: "true", attachedAgents: "true", changedThisWeek: "true" })) assert.equal(url.searchParams.get(key), value);
+  assert.deepEqual(libraryState(editors, "void").filters, {});
+  assert.equal(libraryState(editors, "void").query, "");
+  delete state.filters.openComments;
+  await loadCatalog(api, editors, "blueprint");
+  assert.equal(calls.at(-1).searchParams.has("openComments"), false);
+  assert.equal(state.query, "deep comment");
+});
+
+test("full content and comment search includes folded folders and UTC week filters", async (t) => {
+  const fixture = await createGuiFixture({ now: "2026-10-13T10:00:00.000Z" });
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  await loadCatalog(api, editors, "blueprint");
+  const board = await openEditor(api, editors, editors.catalog.find((item) => item.title === "Cart"));
+  const folder = await request(api, "POST", "/library/folders", { operation: createOperation({ method: "POST", path: "/library/folders", body: { project: "shop", kind: "blueprint", title: "Folded", parentId: null, expectedRevision: board.authoritative.libraryRevision } }) });
+  const moved = await moveEditor(api, board.authoritative, { project: "shop", path: board.authoritative.path, folderId: folder.data.folder.id }, folder.data.revision);
+  const state = libraryState(editors, "blueprint"); state.collapsed.add(`shop:${folder.data.folder.id}`);
+  const node = moved.data.editor.document.screens[0].root.kids[0];
+  const found = await loadCatalog(api, editors, "blueprint", node.value);
+  assert.ok(found.some((item) => item.id === board.resourceId));
+  board.authoritative = moved.data.editor;
+  await createComment(api, editors, canvasAnchor(), "A unique comment inside a folded folder");
+  state.filters = { openComments: true, attachedAgents: true, changedThisWeek: true };
+  const comments = await loadCatalog(api, editors, "blueprint", "unique comment inside");
+  assert.deepEqual(comments.map((item) => item.id), [board.resourceId]);
+  state.filters.project = "blog";
+  assert.deepEqual(await loadCatalog(api, editors, "blueprint", "unique comment inside"), []);
+  assert.equal(state.collapsed.has(`shop:${folder.data.folder.id}`), true);
+});
+
+test("duplication copies source screens, sketches and unknown fields without comments or attachments", async (t) => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  const source = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
+  await openEditor(api, editors, source.data);
+  await createComment(api, editors, canvasAnchor(), "This must stay with the source");
+  const copy = await duplicateEditor(api, source.data, { project: "shop", folderId: null, title: "Actual copy", path: "docs/flows/boards/actual-copy.json" });
+  assert.deepEqual(copy.data.document.screens, source.data.document.screens);
+  assert.deepEqual(copy.data.document.pages, source.data.document.pages);
+  assert.equal(copy.data.document.sentinel, "document-sentinel");
+  assert.notEqual(copy.data.document.id, source.data.document.id);
+  assert.deepEqual(copy.data.threads, []); assert.deepEqual(copy.data.attached, []);
+  assert.equal((await request(api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: source.data.id } })).data.threads.length, 1);
+});
+
+test("Changed this week starts at Monday 00:00 UTC, independently of viewer time", async (t) => {
+  const fixture = await createGuiFixture({ now: "2026-10-11T23:59:59.000Z" }); t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl), editors = createEditors();
+  await createResource(api, "blueprint", { project: "shop", document: { ...fullBoard(), id: "sunday", title: "Boundary board Sunday" } });
+  await fixture.control.advance(1000);
+  const monday = await createResource(api, "blueprint", { project: "shop", document: { ...fullBoard(), id: "monday", title: "Boundary board Monday" } });
+  libraryState(editors, "blueprint").filters.changedThisWeek = true;
+  assert.deepEqual((await loadCatalog(api, editors, "blueprint", "Boundary board")).map((item) => item.id), [monday.data.id]);
+});
+
+test("an offline project is reported once without hiding another project's library", async () => {
+  const issue = { project: "offline", code: "project_unavailable" };
+  const api = createApi({ location: { origin: "http://127.0.0.1:9", hash: "#session=fixture" }, history: { replaceState() {} }, fetch: async (input) => {
+    const route = new URL(input).pathname;
+    return jsonResponse(route.endsWith("/projects") ? { items: [{ id: "shop" }, { id: "offline" }], total: 2 } : route.endsWith("/library/folders") ? { items: [], total: 0, issues: [issue] } : { items: [{ id: "accessible", kind: "blueprint", title: "Accessible", project: "shop", folderId: null }], total: 1, issues: [issue] });
+  } });
+  const editors = createEditors(); await loadCatalog(api, editors, "blueprint");
+  assert.deepEqual(editors.catalogIssues, [issue]);
+  const view = renderLibrary(fakeDocument(), { kind: "blueprint", data: editors, actions: {}, t: (key, vars) => text("en", key, vars) });
+  assert.equal(nodesOf(view).filter((node) => node.getAttribute?.("data-library-issue")).length, 1);
+  assert.ok(nodesOf(view).some((node) => node.getAttribute?.("data-library-item") === "accessible"));
+});
+
+test("switching editor kind never shows the previous kind while its catalog is loading", () => {
+  const editors = createEditors();
+  editors.catalog = [{ id: "board", kind: "blueprint", title: "Board", project: "shop" }];
+  editors.catalogLoading = true;
+  const view = renderLibrary(fakeDocument(), { kind: "void", data: editors, actions: {}, t: (key, vars) => text("en", key, vars) });
+  assert.equal(nodesOf(view).some((node) => node.getAttribute?.("data-id") === "board"), false);
+  assert.ok(nodesOf(view).some((node) => node.getAttribute?.("data-catalog-progress")));
+});

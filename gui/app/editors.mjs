@@ -2,6 +2,7 @@ import { createOperation, perform, request } from "./api.mjs";
 import { loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
+import { element, icon } from "./components.mjs";
 
 export function createEditors() {
   return {
@@ -21,15 +22,29 @@ export function createEditors() {
     viewerDirty: null,
     viewerPatch: null,
     error: null,
+    libraries: new Map(),
   };
 }
 
-export function groupCatalog(items) {
+export function libraryState(editors, kind) {
+  if (!editors.libraries.has(kind)) editors.libraries.set(kind, {
+    query: "", filters: {}, collapsed: new Set(), matchingCollapsed: new Set(), folders: [], projects: [], menu: null, rename: null, scrollTop: 0,
+  });
+  return editors.libraries.get(kind);
+}
+
+export function groupCatalog(items, folders = [], projects = []) {
   const groups = [];
+  for (const project of projects) groups.push({ project: project.id ?? project.name, items: [], folders: [] });
+  for (const folder of folders) {
+    let group = groups.find((entry) => entry.project === folder.project);
+    if (!group) { group = { project: folder.project, items: [], folders: [] }; groups.push(group); }
+    group.folders.push(folder);
+  }
   for (const item of items) {
     let group = groups.find((entry) => entry.project === item.project);
     if (!group) {
-      group = { project: item.project, items: [] };
+      group = { project: item.project, items: [], folders: [] };
       groups.push(group);
     }
     group.items.push(item);
@@ -37,19 +52,168 @@ export function groupCatalog(items) {
   return groups;
 }
 
-export async function loadCatalog(api, editors, kind, query = "") {
+export async function loadCatalog(api, editors, kind, query = libraryState(editors, kind).query) {
+  const state = libraryState(editors, kind);
+  state.query = query;
   const ticket = editors.catalogTicket + 1;
   editors.catalogTicket = ticket;
   const route = kind === "void" ? "/void/texts" : "/blueprint/boards";
-  const page = await collectPages(api, route, { query: query ? { q: query } : {}, limit: 50 });
+  const filters = { ...state.filters, ...(query ? { q: query } : {}) };
+  const filterKey = JSON.stringify(filters);
+  if (state.filterKey !== filterKey) { state.matchingCollapsed.clear(); state.filterKey = filterKey; }
+  const [page, folders, projects] = await Promise.all([
+    collectPages(api, route, { query: filters, limit: 50 }),
+    collectPages(api, "/library/folders", { query: { kind }, limit: 50 }),
+    collectPages(api, "/projects", { limit: 50 }),
+  ]);
   if (editors.catalogTicket !== ticket) return editors.catalog;
   editors.catalog = page.items;
   editors.catalogTotal = page.total;
-  editors.catalogIssues = page.issues;
+  editors.catalogIssues = [...page.issues, ...folders.issues].filter((issue, index, issues) => issues.findIndex((entry) => entry.project === issue.project && entry.code === issue.code) === index);
   editors.catalogNext = page.nextCursor;
   editors.catalogKind = kind;
   editors.loadedKind = kind;
+  state.folders = folders.items;
+  state.projects = projects.items;
   return page.items;
+}
+
+export function renderLibrary(document, { kind, project = null, data, actions, t }) {
+  const state = libraryState(data, kind);
+  const items = data.catalog.filter((item) => item.kind === kind);
+  const filtered = Boolean(state.query || Object.keys(state.filters).length);
+  const panel = element(document, "aside", { class: "panel editor-catalog shared-library", "data-editor-column": "catalog", "data-library": kind, "data-project": project });
+  const button = (action, label, handler, attributes = {}, glyph = null) => element(document, "button", {
+    type: "button", class: "library-control", "data-action": action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`), "aria-label": label, title: label, onclick: handler, ...attributes,
+  }, glyph ? libraryIcon(document, glyph) : label);
+  const header = element(document, "header", { class: "library-header" }, element(document, "h2", { text: t(kind === "blueprint" ? "boards" : "texts") }));
+  header.append(button("library-filters", t("filters"), (event) => actions.menu("filters", null, event.currentTarget ?? event.target.closest("button")), { "aria-expanded": String(state.menu?.type === "filters") }, "filters"));
+  if (actions.create) header.append(
+    button("new-folder", t("newFolder"), actions.folder, {}, "folder-plus"),
+    button("open-create", t(kind === "blueprint" ? "newBoard" : "newText"), () => actions.create(), { "data-kind": kind }, "plus"),
+  );
+  panel.append(header);
+  const search = element(document, "input", { type: "search", placeholder: t(kind === "blueprint" ? "searchBoards" : "searchTexts"), "aria-label": t(kind === "blueprint" ? "searchBoards" : "searchTexts"), "data-library-search": kind, "data-keep": `library|${kind}|search` });
+  search.value = state.query;
+  search.addEventListener("input", () => actions.query(search.value));
+  const searchBox = element(document, "div", { class: `library-search${state.query ? " has-query" : ""}` }, libraryIcon(document, "search"), search);
+  if (state.query) searchBox.append(button("clear-library-search", t("clearSearch"), () => actions.query(""), {}, "close"));
+  panel.append(searchBox);
+  const chips = element(document, "div", { class: "library-chips" });
+  for (const [key, value] of Object.entries(state.filters)) {
+    const label = key === "project" ? t("projectFilter", { project: value }) : t(key);
+    chips.append(button(`remove-${key}`, t("removeFilter", { filter: label }), () => actions.filter(key, null), { class: "library-chip", "data-filter-chip": key }, null));
+    chips.children[chips.children.length - 1].replaceChildren(element(document, "span", { text: label }), libraryIcon(document, "close"));
+  }
+  panel.append(chips);
+  const list = element(document, "div", { class: "library-list", "data-editor-total": String(data.catalogTotal ?? data.catalog.length) });
+  list.scrollTop = state.scrollTop;
+  list.addEventListener("scroll", () => { state.scrollTop = list.scrollTop; });
+  const rename = (entry, type) => {
+    const editing = state.rename;
+    const input = element(document, "input", { "data-library-rename": entry.id, "data-keep": `library|${kind}|rename|${entry.id}`, "aria-label": t("rename"), maxlength: "240", disabled: editing.busy ? "" : null });
+    input.value = editing.title;
+    input.addEventListener("input", () => { editing.title = input.value; editing.operation = null; });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault?.(); actions.saveRename(); }
+      if (event.key === "Escape") { event.preventDefault?.(); actions.cancelRename(); }
+    });
+    return element(document, "div", { class: `library-rename library-rename-${type}` }, input,
+      button("save-library-name", t(editing.busy ? "working" : "save"), actions.saveRename, { disabled: editing.busy ? "" : null }, "check"),
+      editing.error ? element(document, "p", { role: "alert", text: editing.error }) : null);
+  };
+  const itemRow = (item, depth) => {
+    if (state.rename?.id === item.id && state.rename.type === "item") return rename(item, "item");
+    const row = element(document, "div", { class: "library-item", "data-library-item": item.id });
+    row.style?.setProperty?.("--folder-depth", String(depth));
+    row.append(button("select-editor", item.title, () => actions.select(item), { class: "library-item-select", "data-id": item.id, "data-keep": `library|${kind}|item|${item.id}`, "aria-pressed": String(data.current?.resourceId === item.id) }, kind === "blueprint" ? "board" : "text"));
+    row.children[0].append(element(document, "span", { class: "library-item-title", text: item.title }));
+    if (item.openThreads) row.append(element(document, "span", { class: "library-count", text: item.openThreads }));
+    if (actions.manage) row.append(button(`more-item-${item.id}`, t("finalMore"), (event) => actions.menu("item", item, event.currentTarget ?? event.target.closest("button")), { "data-library-more": item.id, "aria-haspopup": "menu", "aria-expanded": String(state.menu?.entry?.id === item.id) }, "more"));
+    return row;
+  };
+  for (const group of groupCatalog(items, state.folders, state.projects).filter((entry) => !state.filters.project || entry.project === state.filters.project || state.rename?.project === entry.project)) {
+    if (filtered && !group.items.length && state.rename?.project !== group.project) continue;
+    const rootKey = `project:${group.project}`;
+    const open = !(filtered ? state.matchingCollapsed : state.collapsed).has(rootKey);
+    const heading = button(`folder-${rootKey}`, group.project, () => actions.toggle(rootKey), { class: "library-folder", "aria-expanded": String(open), "data-library-project": group.project, "data-keep": `library|${kind}|project|${encodeURIComponent(group.project)}` }, "folder");
+    heading.append(element(document, "span", { "aria-hidden": "true", text: open ? "⌄" : "›" }), element(document, "span", { text: group.project }), element(document, "span", { class: "library-count", text: group.items.length }));
+    list.append(heading);
+    if (!open) continue;
+    const branch = (parentId, depth) => {
+      for (const folder of group.folders.filter((entry) => entry.parentId === parentId)) {
+        const descendants = new Set([folder.id]);
+        for (let index = 0; index < group.folders.length; index += 1) for (const entry of group.folders) if (descendants.has(entry.parentId)) descendants.add(entry.id);
+        const count = group.items.filter((entry) => descendants.has(entry.folderId)).length;
+        if (filtered && !count && !descendants.has(state.rename?.id)) continue;
+        const key = `${group.project}:${folder.id}`;
+        const expanded = !(filtered ? state.matchingCollapsed : state.collapsed).has(key);
+        const row = element(document, "div", { class: "library-folder-row", "data-library-folder": folder.id });
+        row.style?.setProperty?.("--folder-depth", String(depth));
+        if (state.rename?.id === folder.id && state.rename.type === "folder") row.append(rename(folder, "folder"));
+        else {
+          const control = button(`folder-${folder.id}`, folder.title, () => actions.toggle(key), { class: "library-folder", "aria-expanded": String(expanded) }, "folder");
+          control.append(element(document, "span", { "aria-hidden": "true", text: expanded ? "⌄" : "›" }), element(document, "span", { text: folder.title }), element(document, "span", { class: "library-count", text: filtered ? count : folder.count }));
+          row.append(control);
+          if (actions.manage) row.append(button(`more-folder-${folder.id}`, t("finalMore"), (event) => actions.menu("folder", folder, event.currentTarget ?? event.target.closest("button")), { "data-library-more": folder.id, "aria-haspopup": "menu" }, "more"));
+        }
+        list.append(row);
+        if (expanded) branch(folder.id, depth + 1);
+      }
+      for (const item of group.items.filter((entry) => (entry.folderId ?? null) === parentId)) list.append(itemRow(item, depth));
+    };
+    branch(null, 0);
+  }
+  if (!items.length && !data.catalogLoading) list.append(element(document, "p", { "data-empty": filtered ? "search" : kind, text: t(filtered ? "emptySearch" : kind === "blueprint" ? actions.create ? "emptyBoards" : "emptyBoardsRead" : actions.create ? "emptyTexts" : "emptyTextsRead") }));
+  panel.append(list);
+  for (const issue of data.catalogIssues ?? []) panel.append(element(document, "p", { class: "library-issue", "data-library-issue": issue.project, role: "status", text: t("libraryUnavailable", { project: issue.project }) }));
+  if (data.catalogLoading) panel.append(element(document, "p", { role: "status", "data-catalog-progress": "true", text: t("loadingList") }));
+  panel.append(button("refresh-catalog", t("refreshList"), actions.refresh, { class: "btn library-refresh" }));
+  if (state.menu) {
+    const menu = element(document, "div", { class: `library-menu${state.menu.type === "filters" ? " library-filter-menu" : ""}`, role: "menu", "data-library-menu": state.menu.type });
+    if (menu.style) { menu.style.left = `${state.menu.x}px`; menu.style.top = `${state.menu.y}px`; }
+    const add = (key, label, callback, selected = null, glyph = key) => {
+      const row = button(`library-${key}`, label, callback, { role: selected === null ? "menuitem" : "menuitemcheckbox", "aria-checked": selected === null ? null : String(selected), class: `library-control library-menu-row${key === "delete" ? " is-danger" : ""}` }, glyph);
+      row.append(element(document, "span", { text: label }));
+      if (key === "move") row.append(element(document, "span", { class: "library-count", "aria-hidden": "true", text: "›" }));
+      menu.append(row);
+    };
+    if (state.menu.type === "filters") {
+      for (const key of ["openComments", "attachedAgents", "changedThisWeek"]) add(key, t(key), () => actions.filter(key, state.filters[key] ? null : true), Boolean(state.filters[key]), state.filters[key] ? "check" : key);
+      menu.append(element(document, "div", { role: "separator" }));
+      const select = element(document, "select", { "aria-label": t("registerProject"), "data-project-filter": "true", onchange: (event) => actions.filter("project", event.target.value || null) }, element(document, "option", { value: "", text: t("projectAll") }));
+      for (const entry of state.projects) select.append(element(document, "option", { value: entry.id ?? entry.name, text: entry.name ?? entry.id }));
+      select.value = state.filters.project ?? "";
+      menu.append(select);
+    } else {
+      add("rename", t("rename"), () => actions.manage("rename", state.menu.entry, state.menu.type));
+      if (state.menu.type === "item") {
+        add("duplicate", t("duplicate"), () => actions.manage("duplicate", state.menu.entry, "item"));
+        add("move", t("moveToFolder"), () => actions.manage("move", state.menu.entry, "item"));
+      }
+      menu.append(element(document, "div", { role: "separator" }));
+      add("delete", t("delete"), () => actions.manage("delete", state.menu.entry, state.menu.type));
+    }
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault?.(); actions.closeMenu(); }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      const controls = [...menu.querySelectorAll("button, select")];
+      const index = controls.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
+      event.preventDefault?.(); controls[next]?.focus?.();
+    });
+    panel.append(menu);
+  }
+  return panel;
+}
+
+function libraryIcon(document, name) {
+  if (["close", "board", "text", "attachedAgents", "openComments"].includes(name)) return icon(document, { board: "blueprint", text: "document", attachedAgents: "person", openComments: "chats", close: "close" }[name]);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("class", "icon"); svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const paths = { filters: "M4 6h16M7 12h10M10 18h4", "folder-plus": "M3 7V5h7l2 3h9v12H3zM12 11v6M9 14h6", folder: "M3 7V5h7l2 3h9v12H3z", plus: "M12 5v14M5 12h14", search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6", more: "M5 12h.1M12 12h.1M19 12h.1", check: "M5 12l4 4L19 6", rename: "M4 16 16 4l4 4L8 20H4z", duplicate: "M8 8h12v12H8zM16 8V4H4v12h4", move: "M3 7V5h7l2 3h9v12H3zM9 14h8M14 11l3 3-3 3", delete: "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7", changedThisWeek: "M5 5v5h5M5 10a8 8 0 1 1 0 5M12 8v5h4" };
+  path.setAttribute("d", paths[name]); svg.append(path); return svg;
 }
 
 export async function openEditor(api, editors, summary) {

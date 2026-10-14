@@ -46,7 +46,12 @@ import {
   createComment,
   createEditors,
   createResource,
-  groupCatalog,
+  libraryState,
+  renderLibrary,
+  libraryChange,
+  duplicateEditor,
+  moveEditor,
+  deleteEditor,
   handleActivity,
   loadCatalog,
   loadComments,
@@ -559,6 +564,7 @@ export function dispose(app) {
   app.disposed = true;
   clearTimeout(app.readyTimer);
   clearTimeout(app.mapToastTimer);
+  clearTimeout(app.libraryToastTimer);
   for (const record of app.activity?.values() ?? []) record.cancel?.();
   app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
   app.api.live && (app.api.live.stopped = true);
@@ -672,6 +678,16 @@ async function onStream(app, event) {
   }
   if (editors && event?.name === "editor.attachments.changed") noteAttachmentEvent(editors, data);
   if (editors && event?.name === "editor.asset.created") await noteAssetEvent(app, data);
+  if (editors && ["library.changed", "editor.removed", "editor.changed"].includes(event?.name)) {
+    if (event.name === "editor.removed" && editors.current?.resourceId === data.resourceId) {
+      editors.current = null;
+      app.store.selected.resourceId = null;
+    }
+    const kind = app.mode === "blueprint" ? "blueprint" : "void";
+    if (["blueprint", "document"].includes(app.mode)) {
+      try { await loadCatalog(app.api, editors, kind); } catch (error) { editors.error = error; }
+    } else editors.loadedKind = null;
+  }
   if (event?.name === "notification.changed") noteDelivery(app, editors, data);
   if (event?.name === "sync.conflict") noteSyncConflict(app, data);
   if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
@@ -1458,7 +1474,7 @@ function queueCatalog(app, kind) {
   editors.catalogLoading = true;
   settle(app, `catalog:${kind}`, text(app.language, "loadingList"), async () => {
     try {
-      await loadCatalog(app.api, editors, kind, editors.query ?? "");
+      await loadCatalog(app.api, editors, kind);
     } catch (error) {
       editors.loadedKind = kind;
       throw error;
@@ -1885,9 +1901,8 @@ function renderEditorSurfaces(app, t) {
   const watchStatus = watch?.state === "waiting"
     ? progressMark(document, watchText, { "data-watch": "waiting" })
     : element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText });
-  const catalog = element(document, "aside", { class: `panel editor-catalog${app.catalogOpen ? " is-open" : ""}`, "data-editor-column": "catalog" },
-    element(document, "h2", { text: t(kind === "blueprint" ? "boards" : "texts") }),
-  );
+  const catalog = renderLibrary(document, { kind, project: current?.authoritative?.project, data: editors, t, actions: libraryActions(app, kind) });
+  if (app.catalogOpen) catalog.className += " is-open";
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
     element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
   );
@@ -1913,6 +1928,7 @@ function renderEditorSurfaces(app, t) {
     watchStatus,
   );
   resource.append(tools);
+  if (app.libraryToast) resource.append(renderLibraryToast(app, t));
   if (current?.conflict) {
     resource.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
     resource.append(element(document, "button", {
@@ -1956,45 +1972,6 @@ function renderEditorSurfaces(app, t) {
     }
   }
   if (editors.error?.code === "corrupt_resource") resource.append(element(document, "p", { text: t("corruptResource") }));
-  const catalogRows = [];
-  for (const group of groupCatalog(editors.catalog)) {
-    for (const item of group.items) {
-      catalogRows.push({
-        id: item.id,
-        kind: "editor",
-        text: `${group.project} ${item.title}`,
-        pos: catalogRows.length + 1,
-        setsize: editors.catalogTotal ?? editors.catalog.length,
-        item,
-      });
-    }
-  }
-  const list = element(document, "div", { class: "editor-list list", "data-editor-total": String(editors.catalogTotal ?? editors.catalog.length) });
-  const catalogWindow = editors.catalogWindow ?? { scrollTop: 0, rowHeight: 36, height: 0, focusId: current?.resourceId ?? null };
-  editors.catalogWindow = catalogWindow;
-  renderWindow(document, list, catalogWindow, catalogRows, {
-    selectedId: current?.resourceId,
-    onActivate: (row) => selectEditor(app, row.item),
-  });
-  if (editors.catalogLoading) catalog.append(progressMark(document, t("loadingList"), { "data-catalog-progress": "true" }));
-  else if (editors.loadedKind === kind && (editors.catalog?.length ?? 0) === 0) {
-    const editable = canEditResources(app);
-    const emptyKey = kind === "blueprint"
-      ? (editable ? "emptyBoards" : "emptyBoardsRead")
-      : (editable ? "emptyTexts" : "emptyTextsRead");
-    catalog.append(element(document, "p", { "data-empty": kind, text: t(emptyKey) }));
-    catalog.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "refresh-catalog",
-      text: t("refreshList"),
-      onclick: () => {
-        editors.loadedKind = null;
-        queueCatalog(app, kind);
-      },
-    }));
-  }
-  catalog.append(list);
   const forms = resourceForms(app, document, t);
   if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
@@ -2306,19 +2283,12 @@ function resourceForms(app, document, t) {
       text: t("registerResource"),
       onclick: () => openResourceForm(app, kind, "register"),
     }),
-    element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "open-create",
-      "data-kind": kind,
-      text: t("createResource"),
-      onclick: () => openResourceForm(app, kind, "create"),
-    }),
   );
   return box;
 }
 
 function openResourceForm(app, kind, mode) {
+  if (mode === "create") return openLibraryCreate(app, kind);
   const document = app.root.ownerDocument;
   if (document.querySelector?.(`[data-form="${mode}"]`)) return;
   const t = (key) => text(app.language, key);
@@ -2327,18 +2297,10 @@ function openResourceForm(app, kind, mode) {
   const heading = element(document, "h2", { text: t(mode === "register" ? "registerForm" : "createForm") });
   labelDialog(dialog, heading);
   form.append(heading);
-  if (mode === "register") {
-    form.append(
-      editorField(document, app, t, "project", "registerProject", "register-project"),
-      editorField(document, app, t, "path", "registerPath", "register-path"),
-    );
-  } else {
-    form.append(
-      editorField(document, app, t, "id", "resourceId", "create-id"),
-      editorField(document, app, t, "title", "resourceTitle", "create-title"),
-      editorField(document, app, t, "createPath", "registerPath", "create-path"),
-    );
-  }
+  form.append(
+    editorField(document, app, t, "project", "registerProject", "register-project"),
+    editorField(document, app, t, "path", "registerPath", "register-path"),
+  );
   form.append(element(document, "button", {
     type: "button",
     class: "btn primary",
@@ -2348,7 +2310,6 @@ function openResourceForm(app, kind, mode) {
     onclick: () => {
       dialog.close();
       if (mode === "register") submitRegister(app, kind);
-      else submitCreate(app, kind);
     },
   }), element(document, "button", {
     type: "button",
@@ -2462,28 +2423,6 @@ function submitRegister(app, kind) {
   });
 }
 
-function submitCreate(app, kind) {
-  const draft = editorDraft(app);
-  const id = draft.id.trim();
-  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(id)) {
-    noteEditor(app, { code: "invalid_document" });
-    return;
-  }
-  const title = draft.title.trim() || id;
-  const path = draft.createPath.trim() || (kind === "blueprint" ? `docs/flows/boards/${id}.json` : `docs/${id}.json`);
-  const document = kind === "blueprint" ? starterBoard(id, title) : starterText(id, title);
-  const savedId = draft.id;
-  const savedTitle = draft.title;
-  const savedCreatePath = draft.createPath;
-  editorAct(app, `create:${kind}`, text(app.language, "working"), async (record) => {
-    const result = await createResource(app.api, kind, { project: draft.project.trim(), path, document }, record.operation);
-    releaseFormDraft(app, "resources", "id", savedId);
-    releaseFormDraft(app, "resources", "title", savedTitle);
-    releaseFormDraft(app, "resources", "createPath", savedCreatePath);
-    await openCreated(app, result.data, kind);
-  });
-}
-
 function submitJsonCopy(app, current) {
   const legacy = current?.authoritative?.legacy;
   const id = jsonCopyId(legacy?.path ?? "");
@@ -2521,12 +2460,10 @@ function starterBoard(id, title) {
     title,
     note: "",
     pages: [
-      { id: "main", title: "Main", objects: [], order: ["empty", "next"], start: "empty" },
-      { id: "more", title: "More", objects: [], order: [] },
+      { id: "main", title: "Main", objects: [], order: ["empty"], start: "empty" },
     ],
     screens: [
       screenBox("empty", "Empty", 0),
-      screenBox("next", "Next", 420),
     ],
     links: [],
     components: [],
@@ -3095,6 +3032,391 @@ function waitForActivity(app, record, work, previous) {
   });
 }
 
+function libraryActions(app, kind) {
+  const editors = editorsOf(app);
+  const state = libraryState(editors, kind);
+  const refresh = () => editorAct(app, `library:${kind}:${JSON.stringify([state.query, state.filters])}`, text(app.language, "loadingList"), async () => loadCatalog(app.api, editors, kind));
+  return {
+    select: (item) => selectEditor(app, item), refresh,
+    query: (value) => { state.query = value; refresh(); },
+    filter: (key, value) => {
+      if (value == null) delete state.filters[key]; else state.filters[key] = value;
+      refresh();
+    },
+    toggle: (key) => {
+      const collapsed = state.query || Object.keys(state.filters).length ? state.matchingCollapsed : state.collapsed;
+      if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+      renderShell(app);
+    },
+    menu: (type, entry, control) => {
+      const box = control.getBoundingClientRect();
+      const view = app.root.ownerDocument.defaultView;
+      state.menu = state.menu?.type === type && state.menu.entry?.id === entry?.id ? null : {
+        type, entry, opener: control.getAttribute("data-action"), x: Math.max(8, Math.min(box.left, (view?.innerWidth ?? 1440) - 238)),
+        y: Math.max(8, Math.min(box.bottom ?? box.top + 32, (view?.innerHeight ?? 900) - 240)),
+      };
+      renderShell(app);
+      app.root.querySelector("[data-library-menu]")?.querySelector("button")?.focus?.();
+    },
+    closeMenu: () => { const opener = state.menu?.opener; state.menu = null; renderShell(app); restoreInvoker(app, opener); },
+    create: canEditResources(app) ? () => openResourceForm(app, kind, "create") : null,
+    folder: () => newLibraryFolder(app, kind),
+    manage: canEditResources(app) ? (action, entry, type) => {
+      state.menu = null;
+      if (action === "rename") beginLibraryRename(app, kind, entry, type);
+      else if (action === "delete") deleteLibraryEntry(app, kind, entry, type);
+      else if (action === "duplicate") openLibraryCreate(app, kind, entry);
+      else openLibraryMove(app, kind, entry);
+    } : null,
+    saveRename: () => saveLibraryRename(app, kind),
+    cancelRename: () => { const entry = state.rename; if (entry?.busy) return; state.rename = null; renderShell(app); focusLibraryEntry(app, entry); },
+  };
+}
+
+function focusLibraryEntry(app, entry) {
+  const selector = entry?.type === "folder" ? `[data-action="folder-${entry.id}"]` : `[data-id="${entry?.id}"]`;
+  (app.root.querySelector(selector) ?? app.root.querySelector("[data-library-search]"))?.focus?.();
+}
+
+function beginLibraryRename(app, kind, entry, type) {
+  const state = libraryState(editorsOf(app), kind);
+  state.rename = { id: entry.id, type, project: entry.project, title: entry.title, entry, operation: null, busy: false, error: null };
+  if (type === "item") {
+    const editing = state.rename;
+    editing.read = request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })
+      .then((result) => { editing.record = result.data; }).catch((error) => { editing.readError = error; });
+  } else {
+    state.collapsed.delete(`project:${entry.project}`);
+    state.matchingCollapsed.delete(`project:${entry.project}`);
+    let parentId = entry.parentId;
+    const parents = new Set();
+    while (parentId && !parents.has(parentId)) {
+      parents.add(parentId);
+      state.collapsed.delete(`${entry.project}:${parentId}`);
+      state.matchingCollapsed.delete(`${entry.project}:${parentId}`);
+      parentId = state.folders.find((folder) => folder.id === parentId && folder.project === entry.project)?.parentId;
+    }
+  }
+  renderShell(app);
+  const input = app.root.querySelector(`[data-library-rename="${entry.id}"]`);
+  input?.focus?.(); input?.setSelectionRange?.(0, entry.title.length);
+}
+
+async function saveLibraryRename(app, kind) {
+  const editors = editorsOf(app), state = libraryState(editors, kind), editing = state.rename;
+  if (!editing || editing.busy) return;
+  const title = editing.title.trim();
+  if (!title || title.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) {
+    editing.error = text(app.language, "groupNameRequired"); renderShell(app); return;
+  }
+  editing.busy = true; editing.error = null;
+  renderShell(app);
+  try {
+    let result;
+    if (editing.type === "folder") {
+      const operation = editing.operation ?? createOperation({ method: "PATCH", path: "/library/folders/:folderId", params: { folderId: editing.id }, body: { project: editing.project, title, expectedRevision: editing.entry.revision } });
+      editing.operation = operation;
+      result = await request(app.api, "PATCH", operation.path, { operation });
+    } else {
+      await editing.read;
+      if (editing.readError) throw editing.readError;
+      result = await libraryChange(app.api, editing.record, title, editing.record.folderId, editing.record.libraryRevision, editing.operation);
+      applyLibraryRecord(app, result.data, editing.id);
+    }
+    state.rename = null;
+    await loadCatalog(app.api, editors, kind);
+    if (!app.disposed) { renderShell(app); focusLibraryEntry(app, editing); }
+  } catch (error) {
+    editing.operation = error.operation ?? editing.operation;
+    editing.error = actionText(app.language, error.code);
+    editing.busy = false;
+    if (!app.disposed) { renderShell(app); app.root.querySelector(`[data-library-rename="${editing.id}"]`)?.focus?.(); }
+  }
+}
+
+function applyLibraryRecord(app, record, previousId = record.id) {
+  const editors = editorsOf(app);
+  const draft = editors.drafts.get(previousId) ?? (editors.current?.resourceId === previousId ? editors.current : null);
+  if (!draft) return;
+  if (previousId !== record.id) {
+    editors.drafts.delete(previousId);
+    if (app.store.open.editors.delete(previousId)) app.store.open.editors.set(record.id, record.kind);
+    if (app.store.open.comments.delete(previousId)) app.store.open.comments.add(record.id);
+    if (editors.focus?.resourceId === previousId) editors.focus.resourceId = record.id;
+    if (draft.textDrafts?.size) draft.textDrafts = new Map([...draft.textDrafts].map(([key, value]) => {
+      const [resourceId, k, language] = key.split("\0");
+      return [resourceId === previousId ? textDraftKey(record.id, k, language) : key, value];
+    }));
+    const nodes = draftMap(app, "nodes");
+    if (nodes.has(previousId)) { nodes.set(record.id, nodes.get(previousId)); nodes.delete(previousId); }
+  }
+  draft.resourceId = record.id;
+  draft.authoritative = record;
+  draft.revision = record.revision;
+  draft.commentsRevision = record.commentsRevision;
+  draft.attachmentRevision = record.attachmentRevision;
+  editors.drafts.set(record.id, draft);
+  if (app.store.selected.resourceId === previousId) app.store.selected.resourceId = record.id;
+}
+
+function libraryProjects(app, kind) {
+  return libraryState(editorsOf(app), kind).projects.filter((entry) => entry.eligible !== false);
+}
+
+function libraryProjectField(app, form, kind, value = "") {
+  const document = form.ownerDocument;
+  const select = element(document, "select", { name: "project", "data-field": "create-project", required: "" }, element(document, "option", { value: "", text: text(app.language, "chooseProject") }));
+  for (const project of libraryProjects(app, kind)) select.append(element(document, "option", { value: project.id ?? project.name, text: project.name ?? project.id }));
+  select.value = value;
+  form.append(labeledField(document, text(app.language, "registerProject"), text(app.language, kind === "blueprint" ? "boardRepositoryHint" : "textRepositoryHint"), select));
+  return select;
+}
+
+function libraryFolderField(app, form, kind, project, folderId = null) {
+  const document = form.ownerDocument;
+  const select = element(document, "select", { name: "folderId", "data-field": "create-folder" });
+  const paint = () => {
+    select.replaceChildren(element(document, "option", { value: "", text: text(app.language, "projectRoot") }));
+    const folders = libraryState(editorsOf(app), kind).folders.filter((folder) => folder.project === project.value);
+    const title = (folder) => { const parent = folders.find((entry) => entry.id === folder.parentId); return parent ? `${title(parent)} / ${folder.title}` : folder.title; };
+    for (const folder of folders) select.append(element(document, "option", { value: folder.id, text: title(folder) }));
+    select.value = folders.some((folder) => folder.id === folderId) ? folderId : "";
+    folderId = null;
+  };
+  project.addEventListener("change", paint); paint();
+  form.append(element(document, "label", { class: "field" }, element(document, "span", { class: "field-label", text: text(app.language, "folder") }), select));
+  return select;
+}
+
+function openLibraryCreate(app, kind, source = null) {
+  const document = app.root.ownerDocument;
+  if (document.querySelector('[data-form="library-create"]')) return;
+  const state = libraryState(editorsOf(app), kind);
+  state.menu = null;
+  renderShell(app);
+  let operation = null;
+  openChoiceForm(app, "library-create", text(app.language, kind === "blueprint" ? "newBoard" : "newText"), (form, confirm) => {
+    confirm.setAttribute("data-action", "create-resource");
+    confirm.textContent = text(app.language, kind === "blueprint" ? "finalCreateBoard" : "createText");
+    const heading = form.querySelector("h2"); heading.remove();
+    form.append(element(document, "div", { class: "library-dialog-heading" }, heading, element(document, "p", { text: text(app.language, kind === "blueprint" ? "finalNewBoardHint" : "newTextHint") })));
+    const pair = element(document, "div", { class: "library-field-pair" });
+    const name = editorField(document, app, (key) => text(app.language, key), "title", "name", "create-title");
+    name.querySelector(".field-hint")?.remove();
+    name.querySelector("input").removeAttribute("aria-describedby");
+    name.querySelector("input").value = source ? text(app.language, "duplicateTitle", { title: source.title }) : editorDraft(app).title;
+    pair.append(name);
+    const project = libraryProjectField(app, pair, kind, source?.project ?? "");
+    form.append(pair);
+    libraryFolderField(app, form, kind, project, source?.folderId);
+    let method = source ? "duplicate" : "empty";
+    let chosen = source?.id ?? "";
+    const sources = element(document, "select", { name: "source", "aria-label": text(app.language, "sourceBoard"), "data-library-source": "true" });
+    const notice = element(document, "p", { class: "field-hint", "data-import-unavailable": "true", text: text(app.language, "importUnavailable") });
+    const paint = () => {
+      sources.replaceChildren(element(document, "option", { value: "", text: text(app.language, "chooseBoard") }));
+      for (const item of state.sources ?? editorsOf(app).catalog) if ((method === "import") === item.readOnly) sources.append(element(document, "option", { value: item.id, text: `${item.project} / ${item.title}` }));
+      sources.value = chosen;
+      sources.hidden = method === "empty";
+      notice.hidden = method !== "import";
+      confirm.disabled = method === "import";
+    };
+    if (kind === "blueprint" || source) {
+      const options = element(document, "div", { class: "library-create-options" });
+      for (const [value, key, hint] of [["empty", "emptyBoard", "finalEmptyHint"], ["duplicate", kind === "blueprint" ? "duplicateBoard" : "duplicateText", "finalDuplicateHint"], ["import", "importBoard", "finalImportHint"]].filter(([value]) => kind === "blueprint" || value === "duplicate")) {
+        const input = element(document, "input", { type: "radio", name: "creation", value }); input.checked = method === value;
+        input.addEventListener("change", () => { method = value; chosen = ""; paint(); });
+        options.append(element(document, "label", { class: "library-create-option" }, input, element(document, "span", {}, element(document, "strong", { text: text(app.language, key) }), element(document, "small", { text: text(app.language, hint) }))));
+      }
+      sources.addEventListener("change", () => { chosen = sources.value; });
+      form.append(options, sources, notice); paint();
+      collectPages(app.api, kind === "blueprint" ? "/blueprint/boards" : "/void/texts", { limit: 50 }).then((page) => { state.sources = page.items; if (document.querySelector('[data-form="library-create"]')) paint(); }).catch(() => {});
+    }
+    form.libraryCreation = () => ({ method, source: sources.value || chosen });
+    form.problems = () => {
+      const problems = [];
+      const title = form.querySelector('[data-field="create-title"]').value.trim();
+      if (!title || title.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) problems.push({ name: "title", message: text(app.language, "groupNameRequired") });
+      if (!project.value) problems.push({ name: "project", message: text(app.language, "projectRequired") });
+      if (method === "duplicate" && !form.libraryCreation().source) problems.push({ name: "source", message: text(app.language, "chooseBoard") });
+      return problems;
+    };
+    name.querySelector("input").setAttribute("name", "title");
+  }, async (form) => {
+    const title = form.querySelector('[name="title"]').value.trim();
+    const project = fieldValue(form, "project"), folderId = fieldValue(form, "folderId") || null;
+    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || operationId();
+    const path = kind === "blueprint" ? `docs/flows/boards/${id}.json` : `docs/${id}.json`;
+    const choice = form.libraryCreation();
+    try {
+      let result;
+      if (choice.method === "duplicate") {
+        const selected = (state.sources ?? editorsOf(app).catalog).find((entry) => entry.id === choice.source);
+        result = await duplicateEditor(app.api, selected, { project, folderId, title, path }, operation);
+      } else {
+        result = await createResource(app.api, kind, { project, folderId, path, document: kind === "blueprint" ? starterBoard(id, title) : starterText(id, title) }, operation);
+      }
+      releaseFormDraft(app, "resources", "title", editorDraft(app).title);
+      editorDraft(app).title = "";
+      await openCreated(app, result.data, kind);
+      return true;
+    } catch (error) { operation = error.operation ?? operation; throw error; }
+  }, "open-create");
+}
+
+async function libraryRevision(app, kind, project) {
+  const state = libraryState(editorsOf(app), kind);
+  const folder = state.folders.find((entry) => entry.project === project);
+  if (folder) return folder.revision;
+  const page = await collectPages(app.api, kind === "blueprint" ? "/blueprint/boards" : "/void/texts", { query: { project }, limit: 50 });
+  if (page.items.length) return (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: page.items[0].id } })).data.libraryRevision;
+  const otherKind = kind === "blueprint" ? "void" : "blueprint";
+  const folders = await collectPages(app.api, "/library/folders", { query: { kind: otherKind, project }, limit: 50 });
+  if (folders.items.length) return folders.items[0].revision;
+  const other = await collectPages(app.api, otherKind === "blueprint" ? "/blueprint/boards" : "/void/texts", { query: { project }, limit: 50 });
+  return other.items.length ? (await request(app.api, "GET", otherKind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: other.items[0].id } })).data.libraryRevision : null;
+}
+
+function newLibraryFolder(app, kind) {
+  const current = editorsOf(app).current?.authoritative;
+  let operation = null;
+  openChoiceForm(app, "library-folder", text(app.language, "newFolder"), (form, confirm) => {
+    const project = libraryProjectField(app, form, kind, current?.project ?? libraryState(editorsOf(app), kind).filters.project ?? "");
+    libraryFolderField(app, form, kind, project, current?.folderId);
+    confirm.textContent = text(app.language, "newFolder");
+    form.problems = () => project.value ? [] : [{ name: "project", message: text(app.language, "projectRequired") }];
+  }, async (form) => {
+    try {
+      const project = fieldValue(form, "project");
+      const retained = operation ?? createOperation({ method: "POST", path: "/library/folders", body: { project, kind, title: text(app.language, "newFolder"), parentId: fieldValue(form, "folderId") || null, expectedRevision: await libraryRevision(app, kind, project) } });
+      operation = retained;
+      const result = await request(app.api, "POST", retained.path, { operation: retained });
+      await loadCatalog(app.api, editorsOf(app), kind);
+      const state = libraryState(editorsOf(app), kind);
+      if (!state.folders.some((folder) => folder.id === result.data.folder.id)) state.folders.push(result.data.folder);
+      beginLibraryRename(app, kind, result.data.folder, "folder");
+      return true;
+    } catch (error) { operation = error.operation ?? operation; throw error; }
+  }, "new-folder");
+  app.root.ownerDocument.querySelector('[data-form="library-folder"]')?.addEventListener("close", () => {
+    const editing = libraryState(editorsOf(app), kind).rename;
+    if (editing) app.root.querySelector(`[data-library-rename="${editing.id}"]`)?.focus?.();
+  });
+}
+
+function deleteLibraryEntry(app, kind, entry, type) {
+  editorAct(app, `library-delete-form:${entry.id}`, text(app.language, "working"), async () => {
+    const record = type === "item" ? (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })).data : entry;
+    const previous = editorsOf(app).current;
+    let operation = null;
+    const dialog = showDialog(app.root.ownerDocument, {
+      title: text(app.language, "finalDeleteTitle", { title: record.title }),
+      body: `${text(app.language, type === "folder" ? kind === "blueprint" ? "deleteBoardFolderScope" : "deleteTextFolderScope" : kind === "blueprint" ? "finalDeleteBoardScope" : "deleteTextScope", { count: record.count })} ${text(app.language, "undoTenSeconds")}`,
+      confirm: text(app.language, type === "folder" ? "deleteFolder" : kind === "blueprint" ? "deleteBoard" : "deleteText"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+      onConfirm: async () => {
+        try {
+          let result;
+          if (type === "folder") {
+            operation ??= createOperation({ method: "DELETE", path: "/library/folders/:folderId", params: { folderId: record.id }, body: { project: record.project, confirmed: true, expectedRevision: record.revision } });
+            result = await request(app.api, "DELETE", operation.path, { operation });
+          } else result = await deleteEditor(app.api, record, record.libraryRevision, operation);
+          const removed = result.data.removedResourceIds ?? [record.id];
+          const editors = editorsOf(app);
+          for (const id of removed) { app.store.open.editors.delete(id); app.store.open.comments.delete(id); }
+          if (removed.includes(editors.current?.resourceId)) { editors.current = null; app.store.selected.resourceId = null; }
+          await loadCatalog(app.api, editors, kind);
+          showLibraryUndo(app, kind, result, text(app.language, "libraryDeleted", { title: record.title }), async (retained) => {
+            await undoChange(app.api, result.data.changeId, retained);
+            await loadCatalog(app.api, editors, kind);
+            if (previous && removed.includes(previous.resourceId)) {
+              editors.current = previous; app.store.selected.resourceId = previous.resourceId;
+              app.store.open.editors.set(previous.resourceId, previous.kind); app.store.open.comments.add(previous.resourceId);
+            }
+          });
+          renderShell(app);
+        } catch (error) { operation = error.operation ?? operation; throw Object.assign(new Error(actionText(app.language, error.code)), { code: error.code }); }
+      },
+    });
+    dialog.className += " library-dialog";
+    dialog.querySelector("button.primary").className += " library-danger";
+    dialog.setAttribute("data-library-delete", type);
+    dialog.addEventListener("close", () => focusLibraryEntry(app, { ...entry, type }));
+  });
+}
+
+function openLibraryMove(app, kind, entry) {
+  editorAct(app, `library-move-form:${entry.id}`, text(app.language, "working"), async () => {
+    const record = (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })).data;
+    let operation = null;
+    const commit = async (destination) => {
+      try {
+        const result = await moveEditor(app.api, record, destination, record.libraryRevision, operation);
+        applyLibraryRecord(app, result.data.editor, record.id);
+        await loadCatalog(app.api, editorsOf(app), kind);
+        showLibraryUndo(app, kind, result, text(app.language, "libraryMoved", { title: record.title }), async (retained) => {
+          await undoChange(app.api, result.data.changeId, retained);
+          const restored = (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: record.id } })).data;
+          applyLibraryRecord(app, restored, result.data.editor.id);
+          await loadCatalog(app.api, editorsOf(app), kind);
+        });
+        renderShell(app);
+      } catch (error) { operation = error.operation ?? operation; throw Object.assign(new Error(actionText(app.language, error.code)), { code: error.code }); }
+    };
+    openChoiceForm(app, "library-move", text(app.language, "moveToFolder"), (form, confirm) => {
+      const project = libraryProjectField(app, form, kind, record.project);
+      libraryFolderField(app, form, kind, project, record.folderId);
+      confirm.textContent = text(app.language, "moveToFolder");
+      form.problems = () => project.value ? [] : [{ name: "project", message: text(app.language, "projectRequired") }];
+    }, async (form) => {
+      const project = fieldValue(form, "project"), folderId = fieldValue(form, "folderId") || null;
+      const destination = { project, folderId, path: record.path, confirmedRepositoryChange: project !== record.project };
+      if (project === record.project) { await commit(destination); return true; }
+      const folder = libraryState(editorsOf(app), kind).folders.find((entry) => entry.id === folderId)?.title ?? project;
+      form.closest("dialog").close();
+      const dialog = showDialog(app.root.ownerDocument, {
+        title: text(app.language, "finalMoveTitle", { title: record.title, folder }),
+        body: text(app.language, kind === "blueprint" ? "finalMoveScope" : "moveTextScope", { folder, source: record.project, destination: project }),
+        confirm: text(app.language, "finalMoveAction", { folder }), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+        onConfirm: () => commit(destination),
+      });
+      dialog.className += " library-dialog"; dialog.setAttribute("data-library-repository-confirm", "true");
+      dialog.addEventListener("close", () => focusLibraryEntry(app, { id: editorsOf(app).current?.resourceId ?? record.id }));
+      return false;
+    });
+  });
+}
+
+function showLibraryUndo(app, kind, result, label, undo) {
+  clearTimeout(app.libraryToastTimer);
+  const until = app.api.now() + Math.min(10000, Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
+  const toast = { kind, label, until, undo, operation: null, busy: false, error: null };
+  app.libraryToast = toast;
+  const tick = () => {
+    if (app.disposed || app.libraryToast !== toast) return;
+    if (app.api.now() >= until) app.libraryToast = null;
+    else app.libraryToastTimer = setTimeout(tick, Math.min(1000, until - app.api.now()));
+    renderShell(app);
+  };
+  app.libraryToastTimer = setTimeout(tick, Math.min(1000, Math.max(0, until - app.api.now())));
+}
+
+function renderLibraryToast(app, t) {
+  const toast = app.libraryToast, document = app.root.ownerDocument;
+  const node = element(document, "div", { class: "library-toast", role: "status", "data-library-toast": "true" }, element(document, "span", { text: toast.label }));
+  if (app.api.now() < toast.until) node.append(element(document, "span", { "data-library-countdown": "true", text: t("undoRemaining", { seconds: Math.ceil((toast.until - app.api.now()) / 1000) }) }), element(document, "button", {
+    type: "button", class: "btn", "data-action": "library-undo", text: t("undo"), disabled: toast.busy ? "" : null,
+    onclick: async () => {
+      if (toast.busy || app.api.now() >= toast.until) return;
+      toast.busy = true; renderShell(app);
+      try { await toast.undo(toast.operation); if (app.libraryToast === toast) app.libraryToast = null; }
+      catch (error) { toast.operation = error.operation ?? toast.operation; toast.error = error.code === "undo_conflict" ? text(app.language, "libraryUndoConflict") : actionText(app.language, error.code); toast.busy = false; }
+      if (!app.disposed) renderShell(app);
+    },
+  }));
+  if (toast.error) node.append(element(document, "p", { role: "alert", text: toast.error }));
+  return node;
+}
+
 function activityMessage(app, record) {
   const action = record?.action || record?.label || text(app.language, "actionFailed");
   const code = record?.error?.code;
@@ -3453,6 +3775,12 @@ const SESSION_COPY = {
 };
 
 const ACTION_COPY = {
+  resource_exists: "libraryDestinationExists",
+  project_unavailable: "libraryProjectUnavailable",
+  invalid_folder: "libraryInvalidFolder",
+  folder_not_found: "libraryInvalidFolder",
+  read_only_resource: "libraryReadOnly",
+  undo_expired: "libraryUndoExpired",
   invalid_lead: "invalidLead",
   machine_unavailable: "machineDown",
   note_required: "noteRequired",
@@ -4414,7 +4742,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const inputs = [...form.querySelectorAll("input, select, textarea")];
   const enabled = inputs.filter((control) => !control.disabled);
   const setFieldsBusy = (busy) => {
-    if (!["unit", "group", "selection-lead"].includes(kind)) return;
+    if (!["unit", "group", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) return;
     for (const control of enabled) {
       const immutable = kind === "unit" && form.created && control.getAttribute("name") !== "groupId";
       control.disabled = busy || Boolean(immutable);
@@ -4475,7 +4803,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
     dialog.remove();
     restoreInvoker(app, opener);
   });
-  if (["group", "unit", "selection-lead"].includes(kind)) {
+  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) {
     dialog.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault?.(); dialog.close(); return; }
       if (event.key !== "Tab") return;
@@ -4489,7 +4817,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   }
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") dialog.showModal();
-  if (["group", "unit", "selection-lead"].includes(kind)) enabled[0]?.focus?.();
+  if (["group", "unit", "selection-lead", "library-create", "library-folder", "library-move"].includes(kind)) enabled[0]?.focus?.();
 }
 
 function appendInput(document, form, name, label, value, options = {}) {
