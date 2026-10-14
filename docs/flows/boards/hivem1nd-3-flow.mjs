@@ -563,6 +563,11 @@ const groupPanel = () =>
       ["Members", t("executor-shop, overlord-web, Blog", 12.5, { color: "text" })],
       ["Created", t("Today 22:40", 13, { color: "text" })],
     ]),
+    row(
+      { gap: 10, pad: [12, 16], edge: { side: "bottom", color: "line" } },
+      button(L, "Start a plan", "pri", "play", "start-plan"),
+      t("The group works through it, task by task", 12, { color: "mute" }),
+    ),
     conversation(
       L,
       message(L, { who: "You", when: "22:40", body: "Checkout launch tonight: shop finishes the empty state, Blog announces it, web reviews.", me: true }),
@@ -992,6 +997,8 @@ const runStart = () =>
       }),
     ],
   });
+
+const runEntry = () => mapScreen({ sideOpts: GROUP_SIDE, field: GROUP_FIELD, inspector: groupPanel() });
 
 const runProgress = () => mapScreen({ sideOpts: GROUP_SIDE, field: GROUP_FIELD, inspector: runPanel(runCard({}), RUN_CHAT()) });
 
@@ -2033,7 +2040,8 @@ const DESK = {
     ["approval-sent", "Answer sent", approvalSent, "Approve answers at once; the card shows the answer is on its way until the unit confirms it."],
     ["send-back", "Send back", sendBack, "Sending a task back needs a note: the unit reads it."],
     ["accepted", "Accepted", accepted, "Accepting closes the review; the notice offers Undo."],
-    ["start-run", "Start a plan", runStart, "A group can work through a plan. The person chooses who coordinates, plans, builds and reviews: units of the group or agents connected on the machine. The coordinator opens every session; no agent opens another."],
+    ["group-chat", "A group's chat", runEntry, "A plan starts from a group: select it on the Map or in Hierarchy, and its chat opens in the inspector with Start a plan under the group's facts."],
+    ["start-run", "Start a plan", runStart, "Start a plan asks for the plan, a text in Void or a new one the planner writes and the person approves before anything is built, and for who coordinates, plans, builds and reviews: units of the group or agents connected on the machine. The coordinator opens every session; no agent opens another."],
     ["run-progress", "A plan in progress", runProgress, "The plan shows on top of the group chat: the task, the step under way and how long it has run. Each agent confirms that it started and reports every step; the coordinator sums up in the chat."],
     ["run-problem", "A plan needs you", runProblem, "When an agent does not start within 3 minutes, shows no progress for 10, or leaves a message unread for 10, the card says so with Stop and Retry, and it waits in Waiting. The coordinator is told first, then the Overseer, then the person. Extra messages past half the plan are asked here too."],
   ],
