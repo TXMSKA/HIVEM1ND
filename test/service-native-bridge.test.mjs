@@ -67,7 +67,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     await configureProjects(fixture, projects);
     service = await runConfiguredService({ ...common, mindPath: fixture.paths.mind, platform: fixture.platform, homeDir: fixture.home, cosmicPath: fixture.paths.cosmic });
   } else service = await startService({ ...common, paths: fixture.paths, projects });
-  t.after(async () => { await stopService(service); await dispose(fixture); });
+  // A configured service retains itself while a viewer or a launch is open; teardown closes what the test opened.
+  t.after(async () => { await stopService(service, { force: configured }); await dispose(fixture); });
   if (fresh) return { fixture, service, projects, editor, ownedPids, adapters, get launch() { return launch; } };
   const registration = await registerNative(context, { client, nativeSessionId: NATIVE, unitId: UNIT });
   const controller = await createRelayWakeController({ mindPath: fixture.paths.mind, hostname: fixture.machine, clock: { now: () => fixture.clock.now, sleep: () => Promise.resolve() }, sink: async () => ({ status: 'not_submitted' }) });
