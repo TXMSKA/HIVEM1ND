@@ -216,7 +216,7 @@ export async function patchSettings(context, input) {
   const hasLanguage = Object.prototype.hasOwnProperty.call(input ?? {}, 'language');
   const hasSendToAgent = Object.hasOwn(input ?? {}, 'sendToAgent');
   if (!hasLook && !hasLanguage && !hasSendToAgent) throw new CoreError(422, 'invalid_body', 'Settings need a look or a language.');
-  if (hasLook && input.look !== 'modern' && input.look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
+  if (hasLook && !['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(input.look)) throw new CoreError(422, 'invalid_body', 'The look is not supported.');
   if (hasLanguage && input.language !== 'en' && input.language !== 'es') throw new CoreError(422, 'invalid_body', 'The language is not supported.');
   if (hasSendToAgent && typeof input.sendToAgent !== 'boolean') throw new CoreError(422, 'invalid_body', 'Send to agent must be a boolean.');
   const current = await readJson(context, 'user/gui/settings.json');

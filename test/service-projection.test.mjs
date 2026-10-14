@@ -887,3 +887,16 @@ test('Send to agent persists separately from theme and language', async (t) => {
   assert.equal(saved.language, 'es');
   await assert.rejects(patchSettings(context, { sendToAgent: 'false', expectedRevision: revisionOf(await readFile(file)) }), { code: 'invalid_body' });
 });
+
+test('all six looks persist while existing high-contrast remains compatible', async (t) => {
+  const fixture = await mind(t);
+  const context = serviceContext(fixture);
+  let revision = null;
+  for (const look of ['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk']) {
+    await patchSettings(context, { look, expectedRevision: revision });
+    const file = path.join(fixture.paths.mind, 'user', 'gui', 'settings.json');
+    const bytes = await readFile(file);
+    assert.equal(JSON.parse(bytes).look, look);
+    revision = revisionOf(bytes);
+  }
+});

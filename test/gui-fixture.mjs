@@ -1856,7 +1856,7 @@ function validateSettings(body) {
   requireKeys(body, ["expectedRevision"]);
   if (!("look" in body) && !("language" in body) && !("sendToAgent" in body)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   if ("sendToAgent" in body && typeof body.sendToAgent !== "boolean") throw new HttpError(422, "invalid_body", "Send to agent must be a boolean.");
-  if ("look" in body && !["modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  if ("look" in body && !["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(body.look)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   if ("language" in body && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The request body is not valid.");
   revisionField(body.expectedRevision);
 }
@@ -3312,7 +3312,7 @@ function validateViewer(body) {
   requireObject(body, ["look", "language", "dirty"]);
   const present = ["look", "language", "dirty"].filter((key) => body[key] !== undefined);
   if (!present.length) throw new HttpError(422, "invalid_body", "The viewer change is empty.");
-  if (body.look !== undefined && body.look !== null && !["modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
+  if (body.look !== undefined && body.look !== null && !["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
   if (body.language !== undefined && body.language !== null && !["en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The language is not valid.");
   if (body.dirty !== undefined && typeof body.dirty !== "boolean") throw new HttpError(422, "invalid_body", "The dirty flag is not valid.");
 }
@@ -4600,7 +4600,7 @@ async function handleAuth(fx, request, response, audience, path, requestId) {
     const hostOrigin = body.embedded ? canonicalOrigin(body.hostOrigin) : null;
     if (body.embedded && !hostOrigin) throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
     if (!body.embedded && body.hostOrigin !== null) throw new HttpError(422, "invalid_host_origin", "The host origin is not valid.");
-    if (![null, "modern", "high-contrast"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
+    if (![null, "modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(body.look)) throw new HttpError(422, "invalid_body", "The look is not valid.");
     if (![null, "en", "es"].includes(body.language)) throw new HttpError(422, "invalid_body", "The language is not valid.");
     const viewer = createViewer(fx, { embedded: body.embedded, hostOrigin, look: body.look, language: body.language, audience: "desktop" });
     sendJson(response, 201, success(fx, {

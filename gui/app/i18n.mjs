@@ -95,7 +95,7 @@ const COPY = {
   accept: ["Accept", "Aceptar"],
   sendBack: ["Send back", "Devolver"],
   watch: ["Watch", "Seguir"],
-  highContrast: ["High contrast", "Alto contraste"],
+  highContrast: ["Nocturne", "Nocturne"],
   cancel: ["Cancel", "Cancelar"],
   close: ["Close", "Cerrar"],
   retry: ["Retry", "Reintentar"],
@@ -481,7 +481,7 @@ const COPY = {
   suggestionNotApplied: ["It was not applied. Edit the passage yourself, ask again on the current text, or discard it.", "No se aplicó. Editar el pasaje, solicitar de nuevo sobre el texto actual o descartar la sugerencia."],
   suggestionUnsaved: ["Save the document draft before answering the suggestion.", "Guardar el borrador del documento antes de responder a la sugerencia."],
   discard: ["Discard", "Descartar"],
-  modern: ["Modern", "Moderno"],
+  modern: ["Modern", "Modern"],
   english: ["English", "Inglés"],
   spanish: ["Spanish", "Español"],
   versionLabel: ["Version {version}", "Versión {version}"],
@@ -662,6 +662,10 @@ const COPY = {
   historyRestored: ['Restored a version', 'Restaurada una versión'],
   historyChanged: ['Changed', 'Modificado'],
   restoreKeepsCurrent: ['Restoring keeps the current version in the list, so it can be restored back.', 'Restaurar conserva la versión actual en la lista para poder recuperarla después.'],
+  nebula:['Nebula','Nebula'],
+  waves:['Waves','Waves'],
+  toxic:['Toxic','Toxic'],
+  kinetic:['Kinetic','Kinetic'],
 };
 
 const DICTIONARIES = {

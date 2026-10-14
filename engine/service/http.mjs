@@ -1314,7 +1314,7 @@ async function invoke(route, scope) {
     if (!body || Object.keys(body).length === 0) throw new CoreError(422, 'invalid_body', 'The viewer patch needs a field.');
     const next = { ...current };
     if (Object.hasOwn(body, 'look')) {
-      if (body.look !== null && body.look !== 'modern' && body.look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
+      if (body.look !== null && !['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(body.look)) throw new CoreError(422, 'invalid_body', 'The look is not supported.');
       next.look = body.look;
     }
     if (Object.hasOwn(body, 'language')) {
@@ -1452,7 +1452,7 @@ function localPresentation(body) {
   if (hostOrigin !== null && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');
   if (embedded === true && !validHostOrigin(hostOrigin)) throw new CoreError(422, 'invalid_host_origin', 'The embedded host origin is not valid.');
   const look = value.look ?? null;
-  if (look !== null && look !== 'modern' && look !== 'high-contrast') throw new CoreError(422, 'invalid_body', 'The look is not supported.');
+  if (look !== null && !['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(look)) throw new CoreError(422, 'invalid_body', 'The look is not supported.');
   const language = value.language ?? null;
   if (language !== null && language !== 'en' && language !== 'es') throw new CoreError(422, 'invalid_body', 'The language is not supported.');
   return { embedded, hostOrigin, look, language };

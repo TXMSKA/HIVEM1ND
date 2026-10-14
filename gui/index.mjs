@@ -99,7 +99,7 @@ export async function startGui(input = {}) {
   const hostOrigin = input.hostOrigin ?? null;
   if (embedded && !originOf(hostOrigin)) fail(422, 'invalid_body', 'An embedded host needs one http or https origin.');
   if (hostOrigin != null && !originOf(hostOrigin)) fail(422, 'invalid_body', 'The host origin must be one http or https origin.');
-  if (input.look != null && !['modern', 'high-contrast'].includes(input.look)) fail(422, 'invalid_body', 'The look is not supported.');
+  if (input.look != null && !['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(input.look)) fail(422, 'invalid_body', 'The look is not supported.');
   if (input.language != null && !['en', 'es'].includes(input.language)) fail(422, 'invalid_body', 'The language is not supported.');
   const confineRoot = input.confineRoot ?? (input.env?.LOCALAPPDATA ? path.dirname(input.env.LOCALAPPDATA) : input.env?.XDG_DATA_HOME ? path.dirname(input.env.XDG_DATA_HOME) : null);
   const service = await connectService({ ...input, mindPath, confineRoot });
@@ -133,7 +133,7 @@ export async function startGui(input = {}) {
       language: input.language ?? null,
       stopped: false,
       async setTheme(look) {
-        if (!['modern', 'high-contrast'].includes(look)) fail(422, 'invalid_body', 'The look is not supported.');
+        if (!['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(look)) fail(422, 'invalid_body', 'The look is not supported.');
         await patchViewer(service.origin.port, token, { look });
         handle.look = look;
       },

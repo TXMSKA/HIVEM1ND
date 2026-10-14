@@ -295,7 +295,7 @@ async function patchOwnViewer(app, body, retained = null) {
   const result = await request(app.api, "PATCH", "/viewer", { operation });
   app.store.viewer = { ...app.store.viewer, ...result.data };
   const choice = presentation(app.store.viewer, app.store.settings?.settings);
-  app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
   if (!app.disposed) renderShell(app);
   return result;
@@ -832,7 +832,7 @@ async function loadPresentation(app, options = {}) {
   }
   if (ticket !== app.presentationTicket) return;
   const choice = presentation(app.store.viewer, app.store.settings?.settings);
-  app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
   app.layout = shellLayout(app.store.capabilities, app.store.audience);
   const home = homeState(app);
@@ -3715,7 +3715,7 @@ function applySettingsResult(app, result) {
   applySettingsRead(home, app.store.settings);
   editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
   const choice = presentation(app.store.viewer, result.data.settings);
-  app.look = choice.look === "high-contrast" ? "high-contrast" : "modern";
+  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
 }
 

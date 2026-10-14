@@ -50,7 +50,7 @@ test("English and Spanish use the same copy keys", () => {
   assert.equal(text("en", "comments"), "Comments");
   assert.equal(text("es", "comments"), "Comentarios");
   assert.equal(text("es", "focus"), "Concentración");
-  assert.equal(text("es", "highContrast"), "Alto contraste");
+  assert.equal(text("es", "highContrast"), "Nocturne");
   assert.equal(text("es", "settings"), "Configuración");
   assert.equal(text("en", "showMore", { count: 4 }), "Show 4 more");
   assert.equal(text("es", "queued").includes("respuesta registrada"), true);
