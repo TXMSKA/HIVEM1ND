@@ -129,6 +129,7 @@ async function moveWake({ mindPath, from, nativeSessionId, unit, env, hostname, 
     ...(policy?.unlimited ? { unlimited: true, manualConsent: true } : {}),
     ...(!policy?.unlimited && Number.isInteger(policy?.durationHours) ? { windowHours: policy.durationHours } : {}),
     ...(policy?.extended ? { extended: true } : {}),
+    ...(Number.isInteger(policy?.dailyBudget) ? { maxDailyHandoffs: policy.dailyBudget } : {}),
   });
   await controller.disable(old);
   if (startWorker && env.CLAUDE_CODE_SESSION_ID === nativeSessionId && claudeWakeCapability({ env, platform }).available) {
@@ -157,7 +158,7 @@ export async function resumeClaudeWake({ mindPath, nativeSessionId, env = proces
   const consented = !['disabled', 'expired'].includes(status.worker.state);
   if (restart && consented && (status.enabled || status.pausedReason === 'error-budget-exhausted')) {
     await controller.enable({
-      ...binding, maxHandoffs: status.wakeBudget,
+      ...binding, maxHandoffs: status.wakeBudget, ...(Number.isInteger(status.dailyBudget) ? { maxDailyHandoffs: status.dailyBudget } : {}),
       ...(status.unlimited ? { unlimited: true, manualConsent: true } : { windowHours: status.durationHours, ...(status.extended ? { extended: true } : {}) }),
     });
   } else if (!status.enabled || status.worker.state === 'running') return null;

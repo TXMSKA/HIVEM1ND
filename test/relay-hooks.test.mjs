@@ -191,7 +191,8 @@ test('a Claude hook opens a fixed number of policies and registrations however m
   for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'UserPromptSubmit']) {
     let invoked;
     const reads = await countReads(async () => { invoked = await invokeClaudeLifecycle(event, mindPath, nativeSessionId); });
-    assert.ok(reads.policies <= 3, `${event} opened ${reads.policies} policies`);
+    // The lifecycle reads the policy and may rewrite it; an event with a notice reads it once more for the day's wake cap.
+    assert.ok(reads.policies <= 4, `${event} opened ${reads.policies} policies`);
     assert.ok(reads.registrations <= 2, `${event} opened ${reads.registrations} registrations`);
     const notice = ['UserPromptSubmit', 'PostToolUse'].includes(event);
     assert.equal(reads.inbox > 0, notice, `${event} ${notice ? 'must' : 'must not'} read the inbox`);
@@ -250,4 +251,26 @@ test('the first hook turn after a wake window ended says so once, and a turn ins
   assert.match(first.output, /relay wake attach/);
   const second = await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-ended');
   assert.equal(second.output, '', 'the notice is given once and a quiet inbox says nothing');
+});
+
+test('a hook turn of a session whose consent reached the day\'s wake cap is told once, though the consent is still enabled', async (context) => {
+  const mindPath = await fixture(context);
+  const machine = os.hostname();
+  const relay = await createRelay({ mindPath, hostname: machine, sessionId: 'registering', client: 'claude' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'native-capped', client: 'claude' });
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: machine, sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'native-capped', client: 'claude', machine };
+  await controller.enable({ ...binding, maxDailyHandoffs: 3 });
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const policy = JSON.parse(await fsPromises.readFile(path.join(policies, file), 'utf8'));
+  const today = new Date();
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  await writeFile(path.join(policies, file), JSON.stringify({ ...policy, day: { date, count: 3 } }));
+  const first = await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-capped');
+  assert.match(first.output, /reached its limit of 3 wakes for /);
+  assert.equal((await controller.status(binding)).enabled, true);
+  const second = await invokeClaudeLifecycle('UserPromptSubmit', mindPath, 'native-capped');
+  assert.equal(second.output, '', 'the notice is given once');
 });

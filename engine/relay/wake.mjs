@@ -13,6 +13,10 @@ const DEFAULT_WINDOW_HOURS = 4;
 const ALLOWED_STANDARD_HOURS = new Set([4, 5, 6, 7, 8]);
 const ALLOWED_EXTENDED_HOURS = new Set([12, 24]);
 const DEFAULT_WAKE_HANDOFFS = 20;
+// A hard cap per calendar day of the machine that activity does not reset, so two seats that answer each other cannot
+// spend their quota all night.
+const DEFAULT_DAILY_HANDOFFS = 200;
+const MAX_DAILY_HANDOFFS = 1000;
 const MAX_DELIVERIES = 1024;
 const MAX_INBOX_MESSAGES = 500;
 const ACTIVITY_MAX_AGE_MS = 15 * 60 * 1000;
@@ -30,6 +34,36 @@ function wakeError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
   error.code = code;
   return error;
+}
+
+// The calendar day of the machine, which the daily cap counts in.
+function localDate(ms) {
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function nextLocalMidnight(ms) {
+  const date = new Date(ms);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+}
+
+function dailyCap(policy) {
+  return Number.isInteger(policy?.maxDailyHandoffs) ? policy.maxDailyHandoffs : DEFAULT_DAILY_HANDOFFS;
+}
+
+function dayCount(policy, now) {
+  return policy?.day?.date === localDate(now) && Number.isInteger(policy.day.count) ? policy.day.count : 0;
+}
+
+function dayCapped(policy, now) {
+  return dayCount(policy, now) >= dailyCap(policy);
+}
+
+// The day's count after `added` more wakes; a new day starts again from zero.
+function countedDay(policy, now, added) {
+  const date = localDate(now);
+  const same = policy?.day?.date === date;
+  return { date, count: dayCount(policy, now) + added, ...(same && policy.day.noticeAt ? { noticeAt: policy.day.noticeAt } : {}) };
 }
 
 function plainObject(value) { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
@@ -120,7 +154,7 @@ function makeDefaultClock() {
 }
 
 function policyWindow(options, now) {
-  const allowed = ['unit', 'nativeSessionId', 'client', 'machine', 'windowHours', 'extended', 'unlimited', 'manualConsent', 'maxHandoffs'];
+  const allowed = ['unit', 'nativeSessionId', 'client', 'machine', 'windowHours', 'extended', 'unlimited', 'manualConsent', 'maxHandoffs', 'maxDailyHandoffs'];
   const unknown = Object.keys(options).find((key) => !allowed.includes(key));
   if (unknown) throw wakeError('WAKE_INVALID_POLICY', `enable does not accept ${unknown}.`);
   const unlimited = options.unlimited === true;
@@ -136,7 +170,11 @@ function policyWindow(options, now) {
   }
   const maxHandoffs = options.maxHandoffs ?? DEFAULT_WAKE_HANDOFFS;
   if (!Number.isInteger(maxHandoffs) || maxHandoffs < 1 || maxHandoffs > 100) throw wakeError('WAKE_INVALID_POLICY', 'maxHandoffs must be an integer from 1 to 100.');
-  return { startedAt: iso(now), deadlineAt: unlimited ? null : iso(now + hours * 60 * 60 * 1000), durationHours: unlimited ? null : hours, extended, unlimited, maxHandoffs };
+  const maxDailyHandoffs = options.maxDailyHandoffs ?? DEFAULT_DAILY_HANDOFFS;
+  if (!Number.isInteger(maxDailyHandoffs) || maxDailyHandoffs < 1 || maxDailyHandoffs > MAX_DAILY_HANDOFFS) {
+    throw wakeError('WAKE_INVALID_POLICY', `maxDailyHandoffs must be an integer from 1 to ${MAX_DAILY_HANDOFFS}.`);
+  }
+  return { startedAt: iso(now), deadlineAt: unlimited ? null : iso(now + hours * 60 * 60 * 1000), durationHours: unlimited ? null : hours, extended, unlimited, maxHandoffs, maxDailyHandoffs };
 }
 
 const SAFE_ERROR_CODES = new Set([
@@ -186,7 +224,11 @@ function validStoredPolicy(policy, binding, key) {
     || policy.worker !== undefined && (!plainObject(policy.worker) || !['running', 'stopped'].includes(policy.worker.state) || !Number.isFinite(Date.parse(policy.worker.heartbeatAt)))
     || !plainObject(policy.activity) || ![null, 'busy', 'idle'].includes(policy.activity.value)
     || policy.activity.observedAt !== null && !Number.isFinite(Date.parse(policy.activity.observedAt))
-    || policy.lastError !== null && (!plainObject(policy.lastError) || !SAFE_ERROR_CODES.has(policy.lastError.code) || !Number.isFinite(Date.parse(policy.lastError.at)))) return false;
+    || policy.lastError !== null && (!plainObject(policy.lastError) || !SAFE_ERROR_CODES.has(policy.lastError.code) || !Number.isFinite(Date.parse(policy.lastError.at)))
+    // A policy written before the daily cap has neither field and counts with the default.
+    || policy.maxDailyHandoffs !== undefined && (!Number.isInteger(policy.maxDailyHandoffs) || policy.maxDailyHandoffs < 1 || policy.maxDailyHandoffs > MAX_DAILY_HANDOFFS)
+    || policy.day !== undefined && (!plainObject(policy.day) || !/^\d{4}-\d{2}-\d{2}$/.test(String(policy.day.date))
+      || !Number.isInteger(policy.day.count) || policy.day.count < 0)) return false;
   if (policy.enabled) {
     if (!Number.isFinite(Date.parse(policy.startedAt))) return false;
     if (policy.unlimited) {
@@ -312,6 +354,10 @@ export async function createRelayWakeController(options = {}) {
       ambiguousCount: entries.filter((entry) => entry.state === 'ambiguous' || entry.state === 'attempting').length,
       wakeCount: policy?.wakeCount ?? 0,
       wakeBudget: policy?.maxHandoffs ?? DEFAULT_WAKE_HANDOFFS,
+      dailyCount: dayCount(policy, now),
+      dailyBudget: dailyCap(policy),
+      // The daily cap holds wakes back until the next local midnight without pausing the consent.
+      dailyResumesAt: policy && dayCapped(policy, now) ? iso(nextLocalMidnight(now)) : null,
       pausedReason: policy?.pausedReason ?? (windowExpired ? 'expired' : null),
       lastError: policy?.lastError ?? null,
     };
@@ -354,9 +400,23 @@ export async function createRelayWakeController(options = {}) {
       activity: { value: null, observedAt: null }, wakeCount: 0,
       retryAt: null, cooldownUntil: null, lastError: null, consecutiveErrors: 0,
     };
+    // The day's count of the unit's consents on this machine carries over, so neither a new attach nor a consent that moves to
+    // another session of the unit starts the daily cap again.
+    const today = localDate(nowMs(clock));
+    let day = null;
+    let others = [];
+    try { others = await persistence.list('policies'); } catch { /* the consent's own earlier count still carries */ }
+    for (const { value } of others) {
+      const other = value?.binding;
+      if (value?.kind === 'relay-wake-policy' && plainObject(other) && other.machine === binding.machine && other.client === binding.client
+        && String(other.unit).toLowerCase() === binding.unit.toLowerCase() && dayCount(value, nowMs(clock)) > (day?.count ?? 0)) day = { date: today, count: dayCount(value, nowMs(clock)) };
+    }
     // A new consent renews the window and budgets, not the right to point at a message again; only a pointer that never reached the host may be retried.
-    await mutatePolicy(binding, key, async (previous) => ({ ...policy, deliveries: Object.fromEntries(
-      Object.entries(previous?.deliveries ?? {}).filter(([, entry]) => entry.state === 'submitted' || entry.state === 'ambiguous')) }));
+    await mutatePolicy(binding, key, async (previous) => {
+      const carried = dayCount(previous, nowMs(clock)) > (day?.count ?? 0) ? { date: today, count: dayCount(previous, nowMs(clock)) } : day;
+      return { ...policy, ...(carried ? { day: carried } : {}), deliveries: Object.fromEntries(
+        Object.entries(previous?.deliveries ?? {}).filter(([, entry]) => entry.state === 'submitted' || entry.state === 'ambiguous')) };
+    });
     const worker = workers.get(key);
     if (worker && worker.generation !== policy.generation) await worker.stop('policy-replaced');
     return inspect(binding);
@@ -389,7 +449,7 @@ export async function createRelayWakeController(options = {}) {
     const [latest] = earlier.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
     if (!freshPolicy(await readPolicy(binding, bindingHash(binding)), now)) {
       await enable({
-        ...binding, maxHandoffs: latest.maxHandoffs,
+        ...binding, maxHandoffs: latest.maxHandoffs, maxDailyHandoffs: dailyCap(latest),
         ...(latest.unlimited ? { unlimited: true, manualConsent: true } : { windowHours: latest.durationHours, ...(latest.extended ? { extended: true } : {}) }),
       });
     }
@@ -426,6 +486,7 @@ export async function createRelayWakeController(options = {}) {
     const flags = [];
     if (!policy.unlimited && policy.durationHours !== DEFAULT_WINDOW_HOURS) flags.push(`--hours ${policy.durationHours}`, ...(policy.extended ? ['--extended'] : []));
     if (policy.maxHandoffs !== DEFAULT_WAKE_HANDOFFS) flags.push(`--max-handoffs ${policy.maxHandoffs}`);
+    if (dailyCap(policy) !== DEFAULT_DAILY_HANDOFFS) flags.push(`--max-daily-handoffs ${dailyCap(policy)}`);
     return `node "${CLI_PATH}" relay wake attach --mind-path "${options.mindPath}" --client ${binding.client} --unit ${binding.unit} `
       + `--native-session-id ${binding.nativeSessionId}${flags.map((flag) => ` ${flag}`).join('')}`;
   }
@@ -455,11 +516,19 @@ export async function createRelayWakeController(options = {}) {
       };
     }
     if (stored.unlimited === true || Date.parse(stored.deadlineAt) > now) {
-      const due = (policy, at) => freshPolicy(policy, at) && (renewalDue(policy, at) || policy.wakeCount > 0);
+      // The daily cap is not lifted by activity; the chat is told once that it holds wakes back until the next day.
+      const untold = (policy, at) => dayCapped(policy, at) && !policy.day.noticeAt;
+      const due = (policy, at) => freshPolicy(policy, at) && (renewalDue(policy, at) || policy.wakeCount > 0 || untold(policy, at));
       if (!due(stored, now)) return quiet;
-      const renewed = await mutatePolicy(binding, key, async (policy) => due(policy, nowMs(clock)) && policy.generation === stored.generation
-        ? { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), wakeCount: 0 } : policy);
-      return { renewed: renewed.startedAt === iso(now), notice: null };
+      const next = await mutatePolicy(binding, key, async (policy) => due(policy, nowMs(clock)) && policy.generation === stored.generation
+        ? { ...policy, ...(renewalDue(policy, now) ? renewedWindow(policy, now) : {}), wakeCount: 0,
+          ...(untold(policy, now) ? { day: { ...policy.day, noticeAt: iso(now) } } : {}) } : policy);
+      if (next.day?.noticeAt !== iso(now)) return { renewed: next.startedAt === iso(now), notice: null };
+      return {
+        renewed: next.startedAt === iso(now),
+        notice: `Relay wake for ${binding.unit} reached its limit of ${dailyCap(next)} wakes for ${next.day.date}, so new messages do not wake this chat until ${iso(nextLocalMidnight(now))}, `
+          + 'midnight on this machine, when it resumes by itself. Activity of the chat and a new attach do not lift the limit before then.',
+      };
     }
     if (stored.endNoticeAt) return quiet;
     const told = await mutatePolicy(binding, key, async (policy) => policy?.enabled === true && policy.unlimited !== true && !policy.endNoticeAt
@@ -496,7 +565,7 @@ export async function createRelayWakeController(options = {}) {
       return persistence.withLock(`policy-${key}`, async () => {
         const policy = await readPolicy(binding, key);
         const now = nowMs(clock);
-        if (!freshPolicy(policy, now) || policy.wakeCount >= policy.maxHandoffs) return null;
+        if (!freshPolicy(policy, now) || policy.wakeCount >= policy.maxHandoffs || dayCapped(policy, now)) return null;
         const registration = await persistence.resolveBinding(binding);
         // The consent names the unit and the native session id; a chat that registers again gets a new record id.
         if (!registration) return null;
@@ -507,7 +576,7 @@ export async function createRelayWakeController(options = {}) {
         for (const message of messages) deliveries[message.id] = { state: 'submitted', attempts: 1,
           lastAttemptAt: iso(now), submittedAt: iso(now), threadId: message.threadId ?? null, priority: message.priority };
         if (Object.keys(deliveries).length > MAX_DELIVERIES) return null;
-        await persistence.write('policies', key, { ...policy, deliveries, wakeCount: policy.wakeCount + 1,
+        await persistence.write('policies', key, { ...policy, deliveries, wakeCount: policy.wakeCount + 1, day: countedDay(policy, now, 1),
           cursorStop: { generationId: generationId ?? null, loopCount }, activity: { value: 'idle', observedAt: iso(now) } });
         return wakePointer(binding.unit, messages);
       });
@@ -642,6 +711,9 @@ export async function createRelayWakeController(options = {}) {
       const urgent = candidates.filter((message) => message.priority === 'urgent');
       const selected = activity.value === 'busy' ? urgent : candidates;
       if (!selected.length) return;
+      // The daily cap holds every wake back, urgent ones included, until the next local midnight; the worker keeps polling
+      // and wakes for what is still unread once the day has changed.
+      if (dayCapped(policy, now)) return;
       const hasUrgent = urgent.length > 0;
       if (policy.cooldownUntil && Date.parse(policy.cooldownUntil) > now && !hasUrgent) return;
       if ((policy.wakeCount ?? 0) >= (policy.maxHandoffs ?? DEFAULT_WAKE_HANDOFFS)) {
@@ -710,16 +782,14 @@ export async function createRelayWakeController(options = {}) {
       }
       const settledAt = nowMs(clock);
       const settled = { ...(await readPolicy(binding, key)).deliveries };
-      let wakeCount = (await readPolicy(binding, key)).wakeCount ?? 0;
       const settledPolicy = await readPolicy(binding, key);
       if (settledPolicy?.generation !== policy.generation || !freshPolicy(settledPolicy, nowMs(clock))) return;
       const safeReason = stableSinkReason(validOutcome.status, validOutcome.reason);
+      const woke = validOutcome.status === 'submitted' || validOutcome.status === 'ambiguous';
       if (validOutcome.status === 'submitted') {
         for (const id of ids) settled[id] = { ...settled[id], state: 'submitted', submittedAt: iso(settledAt) };
-        wakeCount += 1;
       } else if (validOutcome.status === 'ambiguous') {
         for (const id of ids) settled[id] = { ...settled[id], state: 'ambiguous', ambiguousAt: iso(settledAt), reason: safeReason };
-        wakeCount += 1;
       } else {
         for (const id of ids) {
           const entry = settled[id];
@@ -727,8 +797,10 @@ export async function createRelayWakeController(options = {}) {
           else settled[id] = { ...entry, state: 'not_submitted', retryAt: iso(settledAt + Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** Math.max(0, (entry?.attempts ?? 1) - 1))), reason: safeReason };
         }
       }
-      await mutatePolicy(binding, key, async (current) => current?.generation !== policy.generation || !freshPolicy(current, nowMs(clock)) ? current : ({ ...current, deliveries: settled, wakeCount,
-        cooldownUntil: validOutcome.status === 'submitted' || validOutcome.status === 'ambiguous' ? iso(settledAt + retry.cooldownMs) : current.cooldownUntil,
+      // Both counts grow on the stored policy, so activity of the session that answered meanwhile is not written over.
+      await mutatePolicy(binding, key, async (current) => current?.generation !== policy.generation || !freshPolicy(current, nowMs(clock)) ? current : ({ ...current, deliveries: settled,
+        wakeCount: (current.wakeCount ?? 0) + (woke ? 1 : 0), ...(woke ? { day: countedDay(current, settledAt, 1) } : {}),
+        cooldownUntil: woke ? iso(settledAt + retry.cooldownMs) : current.cooldownUntil,
         lastError: validOutcome.status === 'submitted' ? null : { code: stableReasonCode(safeReason), at: iso(settledAt) },
         consecutiveErrors: validOutcome.status === 'submitted' ? 0 : (current.consecutiveErrors ?? 0) + 1,
       }));
@@ -779,7 +851,7 @@ export async function createRelayWakeController(options = {}) {
             deliveries[id] = { ...entry, state: 'ambiguous', ambiguousAt: iso(nowMs(clock)), reason: 'worker-restarted-during-submit' };
             recovered = true;
           }
-          return { ...current, deliveries, wakeCount: current.wakeCount + (recovered ? 1 : 0) };
+          return { ...current, deliveries, wakeCount: current.wakeCount + (recovered ? 1 : 0), ...(recovered ? { day: countedDay(current, nowMs(clock), 1) } : {}) };
         });
         policy = await readPolicy(binding, key);
       }

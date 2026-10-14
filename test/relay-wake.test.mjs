@@ -949,3 +949,76 @@ test('activity of the session answers its wakes, and the first call after the bu
   await wake.enable({ ...binding, maxHandoffs: 2 });
   assert.deepEqual(await wake.touch(binding), { renewed: false, notice: null });
 });
+
+test('a hard cap of wakes per local day holds wakes back until midnight, whatever the activity or a new attach, and says so once', async (context) => {
+  const { mind, sender, binding } = await fixture(context);
+  const notices = [];
+  // An hour before midnight on this machine, so the day changes within the window.
+  let now = new Date(2026, 9, 14, 23, 0, 0).getTime();
+  const sleep = (ms, signal) => new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const timer = setTimeout(done, ms);
+    function done() { signal?.removeEventListener('abort', done); clearTimeout(timer); resolve(); }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+  const wake = await controller(mind, async (notice) => { notices.push(notice); return { status: 'submitted' }; }, { clock: { now: () => now, sleep } });
+  context.after(() => wake.stopAll());
+  assert.equal((await wake.enable(binding)).dailyBudget, 200, 'the default cap');
+  await wake.enable({ ...binding, maxDailyHandoffs: 2 });
+  let handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  const answers = [];
+  for (const subject of ['Build one', 'Build two']) {
+    await sender.send({ to: binding.unit, subject, body: 'stopped' });
+    const before = notices.length;
+    await until(() => notices.length === before + 1);
+    await until(async () => (await wake.status(binding)).dailyCount === before + 1 || (await wake.status(binding)).dailyCount);
+    // The chat answers each wake, which sets the handoff budget back, not the day's count.
+    answers.push(await wake.touch(binding));
+    now += 1001;
+  }
+  const held = await sender.send({ to: binding.unit, subject: 'Build three', body: 'stopped' });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(notices.length, 2, 'the third wake of the day is held back');
+  let status = await wake.status(binding);
+  assert.deepEqual([status.dailyCount, status.dailyBudget, status.wakeCount, status.enabled], [2, 2, 0, true]);
+  const midnight = new Date(2026, 9, 15, 0, 0, 0).toISOString();
+  assert.equal(status.dailyResumesAt, midnight);
+  assert.equal(answers[0].notice, null);
+  assert.equal(answers[1].notice, `Relay wake for executor-alpha reached its limit of 2 wakes for 2026-10-14, so new messages do not wake this chat until ${midnight}, `
+    + 'midnight on this machine, when it resumes by itself. Activity of the chat and a new attach do not lift the limit before then.');
+  assert.equal((await wake.touch(binding)).notice, null, 'the notice is given once');
+
+  await handle.stop();
+  await wake.enable({ ...binding, maxDailyHandoffs: 2 });
+  status = await wake.status(binding);
+  assert.equal(status.dailyCount, 2, 'a new attach keeps the day\'s count');
+  handle = wake.start(binding);
+  assert.equal((await handle.ready).ownsLease, true);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(notices.length, 2);
+
+  now = new Date(2026, 9, 15, 0, 0, 1).getTime();
+  await until(() => notices.length === 3);
+  assert.deepEqual(notices[2].messageIds, [held.id], 'the held message wakes once the day has changed');
+  await until(async () => (await wake.status(binding)).dailyCount === 1 || (await wake.status(binding)).dailyCount);
+  status = await wake.status(binding);
+  assert.deepEqual([status.dailyCount, status.dailyResumesAt], [1, null]);
+  await handle.stop();
+});
+
+test('a consent that moves to a newer session of its unit keeps the day\'s count and its cap', async (context) => {
+  const { mind, binding } = await fixture(context);
+  const wake = await controller(mind, async () => ({ status: 'submitted' }));
+  await wake.enable({ ...binding, maxDailyHandoffs: 40 });
+  const policyFile = path.join(mind, 'user', 'relay', 'wake', 'policies', `${keyOf(binding)}.json`);
+  const policy = JSON.parse(await readFile(policyFile, 'utf8'));
+  const today = new Date();
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  await writeFile(policyFile, JSON.stringify({ ...policy, day: { date, count: 17 } }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const successor = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'executor-chat-2', client: 'claude' });
+  await successor.register({ unit: 'executor-alpha', nativeSessionId: 'executor-native-2' });
+  const moved = await wake.takeOver({ ...binding, nativeSessionId: 'executor-native-2' });
+  assert.deepEqual([moved.enabled, moved.dailyCount, moved.dailyBudget], [true, 17, 40]);
+});

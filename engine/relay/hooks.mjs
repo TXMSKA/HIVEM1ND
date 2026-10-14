@@ -200,9 +200,8 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
         startClaudeWakeWorker({ binding: carried.binding, mindPath, env, stderr, platform, wakeWorkerSpawner });
       }
     }
-    let observed = null;
     if (client === 'claude') {
-      observed = await runClaudeWakeLifecycle({
+      await runClaudeWakeLifecycle({
         event: hookEvent,
         mindPath,
         nativeSessionId: nativeSessionId ?? context.nativeSessionId,
@@ -219,9 +218,9 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
     const notice = carried
       ? `Relay moved this conversation's registration as ${carried.unit} from native session ${carried.previous} to this one${carried.binding ? ', with its wake' : ''}.`
       : '';
-    // A turn is activity of the session: it keeps the wake window open, and hears once that the window ended. A Claude
-    // event whose enabled consent the lifecycle just marked has had its window started again there.
-    const wakeNotice = reminder?.registered && reminder.unit && !observed
+    // A turn is activity of the session: it keeps the wake window open, and hears once that the window ended, the budget ran
+    // out or the day's cap was reached. The consent the Claude lifecycle just marked is read once more for the day's cap.
+    const wakeNotice = reminder?.registered && reminder.unit
       ? await touchWake({ mindPath, client, nativeSessionId: nativeSessionId ?? context.nativeSessionId, unit: reminder.unit, wakeControllerFactory })
         .catch((error) => { stderr.write(`Relay wake renewal unavailable: ${error.message}\n`); return null; })
       : null;
