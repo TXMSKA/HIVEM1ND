@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { helpText, parseArgs } from '../cli/index.mjs';
+import { installAgentAssets } from '../engine/install.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 import { readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { uninstall } from '../engine/uninstall.mjs';
@@ -25,7 +26,7 @@ test('help and argument parsing document the uninstall command', () => {
 test('uninstall removes managed skills, the auto rule line and the machine record, restoring the home', async (context) => {
   const fixture = await makeFixture(context);
   const before = await snapshotTree(fixture.homeDir);
-  await installFixture(fixture);
+  await installFixture(fixture, 'TESTBOX', { reviewedClients: true });
 
   const rulesAfterInstall = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
   assert.match(rulesAfterInstall, /HIVEM1ND: the mind is at/);
@@ -56,7 +57,7 @@ test('uninstall removes managed skills, the auto rule line and the machine recor
 
 test('a user-modified skill file is kept and its folder is not removed', async (context) => {
   const fixture = await makeFixture(context);
-  await installFixture(fixture);
+  await installFixture(fixture, 'TESTBOX', { reviewedClients: true });
   const skillPath = path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md');
   await writeFile(skillPath, 'the user changed this skill\n');
 
@@ -71,7 +72,7 @@ test('a user-modified skill file is kept and its folder is not removed', async (
 
 test('a junction skill folder is left untouched', async (t) => {
   const fixture = await makeFixture(t);
-  await installFixture(fixture);
+  await installFixture(fixture, 'TESTBOX', { reviewedClients: true });
   const qaPath = path.join(fixture.homeDir, '.agents', 'skills', 'qa');
   const outside = path.join(fixture.root, 'outside-qa');
   await mkdir(outside, { recursive: true });
@@ -97,7 +98,7 @@ test('a junction skill folder is left untouched', async (t) => {
 
 test('a dry run reports the plan without removing anything', async (context) => {
   const fixture = await makeFixture(context);
-  await installFixture(fixture);
+  await installFixture(fixture, 'TESTBOX', { reviewedClients: true });
   const rulesBefore = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
 
   const result = await uninstall({ mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, dryRun: true });
@@ -192,7 +193,7 @@ async function makeFixture(context) {
   return { root, mindPath, homeDir };
 }
 
-async function installFixture(fixture, hostname = 'TESTBOX') {
+async function installFixture(fixture, hostname = 'TESTBOX', { reviewedClients = false } = {}) {
   const session = await createSetupSession({
     kitPath: KIT_PATH,
     mindPath: fixture.mindPath,
@@ -213,7 +214,10 @@ async function installFixture(fixture, hostname = 'TESTBOX') {
   session.answers.updateCheck = 'off';
   await session.persistDraft();
   await session.answer({ confirm: true });
-  return session.install();
+  const result = await session.install();
+  // Setup writes no client configuration; the reviewed client apply installs the skills and rule lines.
+  if (reviewedClients) await installAgentAssets({ kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname, env: { PATH: '' } });
+  return result;
 }
 
 async function snapshotTree(root) {

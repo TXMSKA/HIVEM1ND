@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadAdapters } from '../engine/discovery.mjs';
+import { installAgentAssets } from '../engine/install.mjs';
 import { readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession, SetupValidationError } from '../engine/setup.mjs';
 
@@ -64,6 +65,8 @@ test('a supported adapter that scanning did not detect can be added manually', a
   assert.deepEqual(machine.agents, [{ name: 'codex', mode: 'auto' }, { name: 'cursor', mode: 'auto' }]);
 });
 
+// Setup writes no client configuration (docs/3.0/integration.md, T004); the reviewed client apply
+// installs the skills and rule lines that the machine record selects.
 test('auto attach writes the rule line for every adapter that has one; on demand never does', async (context) => {
   const adapters = await loadAdapters({ kitPath: KIT_PATH });
   for (const adapter of adapters) {
@@ -77,6 +80,8 @@ test('auto attach writes the rule line for every adapter that has one; on demand
       await finishSetup(session);
 
       const skillPath = path.join(fixture.homeDir, ...skillsHomePath(adapter), 'executor', 'SKILL.md');
+      await assert.rejects(() => access(skillPath), { code: 'ENOENT' }, `${adapter.id} ${mode} before review`);
+      await installAgentAssets({ kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' } });
       await access(skillPath);
 
       if (!adapter.rules) continue;
