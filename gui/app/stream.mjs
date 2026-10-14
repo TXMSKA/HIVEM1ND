@@ -218,6 +218,8 @@ export function synchronize(api, store, options = {}) {
     } catch (error) {
       if (live.stopped || api.closed || error?.name === "AbortError") return;
       if (error.status === 401 || error.status === 410) {
+        if (options.reauthenticate && await options.reauthenticate(error)) return;
+        if (live.stopped || api.closed) return;
         clearCredentials(api);
         if (store) store.signedOut = error.status;
         noteStream(live, store, options, { state: "error", error: error.code ?? "signed_out" });
@@ -263,7 +265,19 @@ export function close(live) {
   if (!live || live.stopped) return;
   live.stopped = true;
   live.controller?.abort();
-  if (typeof live.timer === "number") clearTimeout(live.timer);
+  if (live.timer != null) clearTimeout(live.timer);
+}
+
+export function resetCredentials(api, store, session) {
+  if (!session?.token || !session.viewerId || session.origin !== api.location.origin) throw new ApiError(0, 'invalid_response', 'The recovered viewer is not local.');
+  close(api.live);
+  api.token = session.token;
+  api.homeKey = null;
+  store.signedOut = null;
+  store.cursor = null;
+  store.liveCursor = null;
+  store.buffer.length = 0;
+  store.capabilities = session.capabilities ?? store.capabilities;
 }
 
 async function responseError(response, api) {

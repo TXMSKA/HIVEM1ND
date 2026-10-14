@@ -34,20 +34,20 @@ export function guardPortFor(userKey) {
   return 49152 + (digest.readUInt16BE(0) % 16384);
 }
 
-export async function startService(options) {
+export async function startService(options, retained = null) {
   assertReady(options);
   const userKey = await resolveUserKey(options);
   const port = options.guardPort ?? guardPortFor(userKey);
-  const guard = createServer((socket) => socket.destroy());
+  const guard = retained?.guard ?? createServer((socket) => socket.destroy());
   try {
-    await listen(guard, port);
+    if (!retained) await listen(guard, port);
   } catch (error) {
     guard.close();
     if (error?.code === 'EADDRINUSE') return attachOrStart({ ...options, userKey }, port);
     throw error;
   }
   const nonce = randomUUID();
-  const handle = {
+  const handle = Object.assign(retained ?? {}, {
     options,
     userKey,
     port,
@@ -61,7 +61,9 @@ export async function startService(options) {
     stopping: false,
     credentials: options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) }),
     bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
-  };
+    receiptPrincipals: options.receiptPrincipals ?? new Map(),
+    recoveryHosts: options.recoveryHosts ?? new Map(),
+  });
   const credentials = handle.credentials;
   handle.credentials = {
     ...credentials,
@@ -89,6 +91,13 @@ export async function startService(options) {
       now: options.now ?? (() => Date.now()),
     });
     handle.runtime = await openServiceSync({ ...options, paths, bus }, paths);
+    handle.runtime.settingsOwner.settingsHandlers = {
+      ...handle.runtime.settingsOwner.settingsHandlers,
+      restart: async () => {
+        if (handle.runtime.processingRemoteSettings) handle.runtime.restartAfterSettings = () => restartService(handle);
+        return { state: 'restarting', machine: paths.machine };
+      },
+    };
     handle.listener = options.listener ? await options.listener() : null;
     handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
     handle.credentials.revokeAudience('agent');
@@ -141,6 +150,9 @@ export async function startService(options) {
       pulse: handle.runtime.pulse,
       adapters: handle.adapters.adapters,
       settingsOwner: handle.runtime.settingsOwner,
+      receiptPrincipals: handle.receiptPrincipals,
+      recoveryHosts: handle.recoveryHosts,
+      restartService: () => restartService(handle),
     });
     handle.bridge.origin = `http://127.0.0.1:${handle.http.port}`;
     handle.bridge.onNativeHook = binding => handleNativeHook({
@@ -197,7 +209,7 @@ export async function runConfiguredService(options = {}) {
     store,
     paths,
     projects,
-    port: located.config.port,
+    port: options.port ?? located.config.port,
     userKey: options.userKey,
     guardPort: options.guardPort,
     retainHosts: true,
@@ -265,6 +277,8 @@ export async function attachOrStart(options, port = options.guardPort) {
   if (active.machine !== options.paths.machine || path.resolve(active.localDirectory) !== path.resolve(options.paths.localDirectory)) {
     throw new CoreError(503, 'service_unavailable', 'The running service does not match this user.');
   }
+  await assertNoLinks(bootstrapPath(options));
+  await verifyBootstrapFiles(options.paths.localDirectory, bootstrapPath(options), options);
   const lock = parseLock(await readFile(lockPath(options)).catch(() => null));
   const userKey = options.userKey ?? await resolveUserKey(options);
   const digest = createHash('sha256').update(canonicalJson(identityOf(options, userKey, port, active.pid))).digest('hex');
@@ -272,6 +286,28 @@ export async function attachOrStart(options, port = options.guardPort) {
     throw new CoreError(503, 'service_unavailable', 'The running service could not be verified.');
   }
   return { attached: true, port, bootstrap, active, mutated: false };
+}
+
+export function restartService(handle) {
+  if (!handle || handle.attached) throw new CoreError(503, 'service_unavailable', 'Restart using the local HIVEM1ND launcher.');
+  if (handle.restarting) return handle.restarting;
+  handle.restarting = (async () => {
+    const lock = parseLock(await readFile(lockPath(handle.options)).catch(() => null));
+    if (!handle.guard?.listening || lock?.nonce !== handle.nonce || lock.digest !== handle.lock.digest) {
+      throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
+    }
+    const options = { ...handle.options, port: handle.http.port, credentials: undefined, bus: undefined,
+      receiptPrincipals: handle.receiptPrincipals, recoveryHosts: handle.recoveryHosts };
+    handle.stopping = true;
+    handle.bootstrapState.valid = false;
+    for (const audience of ['desktop', 'phone', 'agent']) handle.credentials.revokeAudience(audience);
+    await unlink(bootstrapPath(options)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await closeOwned(handle);
+    for (const file of [activePath(options), shutdownPath(options)]) await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    // Keep the user guard and lock throughout replacement so contenders can only attach.
+    return startService(options, handle);
+  })().finally(() => { handle.restarting = null; });
+  return handle.restarting;
 }
 
 export async function acquireServiceLock(handle) {
@@ -543,6 +579,7 @@ function serviceInUse(handle) {
 
 export async function stopService(handle, { force = false } = {}) {
   if (!handle || handle.attached) return { stopped: false };
+  if (handle.restarting) await handle.restarting;
   if (!force && handle.options.retainHosts && serviceInUse(handle)) return { stopped: false, inUse: true };
   handle.stopping = true;
   if (handle.bootstrapState) handle.bootstrapState.valid = false;
@@ -855,7 +892,15 @@ async function receiveOrigin(runtime) {
     }
   }
   await retryPending(runtime, provider, bindings);
-  await processSettingsRequests(runtime.settingsOwner);
+  runtime.processingRemoteSettings = true;
+  try { await processSettingsRequests(runtime.settingsOwner); }
+  finally { runtime.processingRemoteSettings = false; }
+  if (runtime.restartAfterSettings) {
+    const restart = runtime.restartAfterSettings;
+    runtime.restartAfterSettings = null;
+    const settled = runtime.reconciling;
+    setImmediate(() => Promise.resolve(settled).then(restart).catch(error => { runtime.lastError = error; }));
+  }
 }
 
 async function retryPending(runtime, provider, bindings) {
@@ -1327,6 +1372,7 @@ async function readConfiguredMind(options) {
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const file = path.join(root, entry.name, 'config.json');
+    await assertNoLinks(file);
     let parsed;
     try {
       parsed = JSON.parse(await readFile(file, 'utf8'));
@@ -1345,6 +1391,7 @@ async function readConfiguredMind(options) {
   if (path.resolve(config.mindPath) !== mindPath || config.machine !== chosen.machine) {
     throw new CoreError(422, 'invalid_body', 'The configured M1ND does not match.');
   }
+  await verifyBootstrapFiles(path.dirname(chosen.file), chosen.file, options);
   return { cosmic, mindPath, config, configFile: chosen.file };
 }
 

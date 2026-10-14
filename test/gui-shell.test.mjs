@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, request, retryOperation } from "../gui/app/api.mjs";
-import { answerApproval, changeTaskStatus, createGroup, setUnitAlias, startSession } from "../gui/app/actions.mjs";
+import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias, startSession } from "../gui/app/actions.mjs";
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
@@ -17,6 +17,8 @@ import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQue
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
 import { setAttachments, startWatch, libraryState, createResource } from "../gui/app/editors.mjs";
 import { composeCore } from "../engine/service/service.mjs";
+import { stopService } from "../engine/service/service.mjs";
+import { close as closeStream } from '../gui/app/stream.mjs';
 import { renderSession, renderUnit } from "../gui/app/inspector.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
@@ -29,6 +31,109 @@ import { assertVisibleCopy } from "./spanish-register.test.mjs";
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
+
+test('the browser launcher restores a stopped singleton without losing a draft or duplicating an uncertain send', async t => {
+  const fixture = await makeCoreFixture();
+  let host;
+  let desktop;
+  t.after(async () => { if (desktop) dispose(desktop.app); await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind,
+    machine: fixture.machine, origin: { kind: 'folder', path: join(fixture.root, 'origin') }, stagingPath: fixture.paths.staging, port: 0 }));
+  host = await startGui({ mindPath: fixture.paths.mind, env: fixture.env, home: fixture.home, platform: fixture.platform,
+    machine: fixture.machine, aclRunner: fixture.store.aclRunner, confineRoot: fixture.root });
+  const api = apiFrom(host.url);
+  await createUnit(api, { unit: 'overseer', role: 'overseer', scope: 'root', machine: fixture.machine });
+  const chat = (await request(api, 'POST', '/chats', { operation: createOperation({ method: 'POST', path: '/chats', body: { members: ['root:overseer'] } }) })).data;
+  const sends = [];
+  desktop = await bootWithFetch(host.url, 1440, async (input, init) => {
+    const response = await fetch(input, init);
+    if (init.method === 'POST' && new URL(input).pathname.endsWith('/messages')) {
+      sends.push(init.headers['Idempotency-Key']);
+      if (sends.length === 1) { await response.arrayBuffer(); throw new Error('The reply was lost after commit.'); }
+    }
+    return response;
+  });
+  await waitFor(() => desktop.app.recovery && desktop.app.chatList?.catalog?.length, 'The browser bridge did not load.');
+  navigate(desktop.app, 'chats');
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The chat did not open.');
+  closeStream(desktop.app.api.live);
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Send exactly once', 0, 17);
+  click(desktop.root.querySelector('[data-action="send"]'));
+  await waitFor(() => desktop.app.api.uncertain.has(sends[0]), 'The uncertain operation was not retained.');
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Keep this next draft', 3, 8);
+  const oldToken = desktop.app.api.token;
+  const drafts = desktop.app.store.drafts;
+  drafts.set('open-resource', { text: 'Retained resource work' });
+  desktop.app.store.selected.resourceId = 'open-resource';
+  await stopService(host.service, { force: true });
+  desktop.app.store.stream = { state: 'reconnecting' }; renderShell(desktop.app);
+  click(desktop.root.querySelector('[data-action="retry-service"]'));
+  await waitFor(() => desktop.root.querySelector('[data-service-banner="stopped"]'), 'The owned guard did not confirm the stopped service.');
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep this next draft');
+  click(desktop.root.querySelector('[data-action="recover-service"]'));
+  await waitFor(() => desktop.app.api.token !== oldToken && desktop.app.thread.pendingSends.size === 0, 'Recovery did not reconcile the original operation.');
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0], sends[1]);
+  assert.equal(desktop.app.thread.messages.filter(message => message.operationId === sends[0]).length, 1);
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep this next draft');
+  assert.equal(desktop.app.store.selected.chatId, chat.id);
+  assert.equal(desktop.app.store.selected.resourceId, 'open-resource');
+  assert.equal(desktop.app.store.drafts === drafts, true);
+  const copy = [...desktop.document.querySelectorAll('p, span, button')].map(node => node.textContent).join(' ');
+  assert.equal(copy.includes(desktop.app.api.token), false);
+  assert.equal(copy.includes(host.service.bootstrap.secret), false);
+  assert.equal(desktop.app.embed ?? null, null);
+  const recoveredToken = desktop.app.api.token;
+  navigate(desktop.app, 'settings');
+  await waitFor(() => desktop.root.querySelector('[data-action="settings-restart"]')?.disabled === false, 'The local service controls did not load.');
+  click(desktop.root.querySelector('[data-action="settings-restart"]'));
+  await waitFor(() => desktop.app.api.token !== recoveredToken && !desktop.app.recoveryPending, 'Running restart did not renew the desktop credential.');
+  assert.equal(host.service.guard.listening, true);
+  assert.equal(desktop.app.store.selected.resourceId, 'open-resource');
+  assert.equal(desktop.app.store.drafts === drafts, true);
+});
+
+test('reconnection never infers a stopped service from a slow response and Details names the existing launcher', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.layout === 'desktop', 'The desktop did not open.');
+  desktop.app.selectedFolder = 'C:\\fixtures\\.m1nd';
+  desktop.app.store.stream = { state: 'reconnecting', error: 'timeout' };
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-service-banner="stopped"]'), null);
+  assert.match(desktop.root.querySelector('[data-service-copy]').textContent, /What you do is kept/);
+  assert.equal(desktop.root.querySelector('[data-action="retry-service"]').textContent, 'Retry now');
+  desktop.app.store.stream = { state: 'error', error: 'reconnect_exhausted' };
+  renderShell(desktop.app);
+  click(desktop.root.querySelector('[data-action="service-details"]'));
+  const details = [...desktop.document.querySelector('[data-service-details]').querySelectorAll('p')].map(node => node.textContent).join(' ');
+  assert.match(details, /hivem1nd service install --mind-path/);
+  assert.equal(details.includes(desktop.app.api.token), false);
+  desktop.document.querySelector('[data-service-details]').close();
+  desktop.app.language = 'es'; desktop.app.serviceStopped = true; renderShell(desktop.app);
+  assert.match(desktop.root.querySelector('[data-service-copy]').textContent, /El servicio Relay se detuvo/);
+  assert.equal(desktop.root.querySelector('[data-action="recover-service"]').textContent, 'Reiniciar el servicio');
+});
+
+test('phone reconnection requires pairing after restart and never invokes desktop recovery', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  let expired = false;
+  let recoveries = 0;
+  const phone = await bootWithFetch(fixture.phoneUrl, 390, (input, init) => expired && new URL(input).pathname.endsWith('/events')
+    ? Promise.resolve(new Response(JSON.stringify({ error: { code: 'invalid_session' } }), { status: 401, headers: { 'content-type': 'application/json' } }))
+    : fetch(input, init), { recovery: { async recoverService() { recoveries++; }, async serviceStatus() { return { state: 'stopped' }; } } });
+  t.after(() => dispose(phone.app));
+  await waitFor(() => phone.app.layout === 'phone', 'The phone did not pair.');
+  closeStream(phone.app.api.live);
+  expired = true;
+  phone.app.store.stream = { state: 'error' }; renderShell(phone.app);
+  click(phone.root.querySelector('[data-action="retry-stream"]'));
+  await waitFor(() => phone.app.api.token === null, 'The old phone credential remained active.');
+  assert.equal(recoveries, 0);
+  assert.equal(phone.app.api.homeKey, null);
+  assert.equal(phone.root.querySelector('[data-action="recover-service"]'), null);
+});
 
 test("English and Spanish use the same copy keys", () => {
   assert.deepEqual(Object.keys(DICTIONARIES.en).sort(), Object.keys(DICTIONARIES.es).sort());

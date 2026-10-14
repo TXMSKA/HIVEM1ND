@@ -80,12 +80,21 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
   let window;
   let closing = false;
   let viewerTarget;
+  let viewerHost;
+
+  const viewerFrame = event => {
+    if (!viewerTarget || !window || window.isDestroyed() || event.sender !== window.webContents
+        || !event.senderFrame || event.senderFrame !== window.webContents.mainFrame) throw new Error('The verified local Map is required.');
+    const target = new URL(event.senderFrame.url);
+    if (target.origin !== viewerTarget.origin || target.pathname !== viewerTarget.pathname || target.username || target.password) throw new Error('The verified local Map is required.');
+  };
 
   const closeWizard = async () => {
     if (closing || !wizard) return;
     closing = true;
     try {
       await wizard.close();
+      await viewerHost?.stop();
     } finally {
       wizard = undefined;
     }
@@ -107,8 +116,9 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
         });
         const target = new URL(started.viewerUrl);
         if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.username || target.password
-          || target.pathname !== '/gui/viewer') throw new Error('The local Map URL could not be verified.');
+          || !/^\/gui\/(?:viewer|[0-9a-f-]{36})\/?$/.test(target.pathname)) throw new Error('The local Map URL could not be verified.');
         viewerTarget = { origin: target.origin, pathname: target.pathname };
+        viewerHost = started.recovery;
         return started;
       };
       wizard = await (dependencies.createWizardServer ?? createWizardServer)({
@@ -156,6 +166,16 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     const owner = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(owner, { properties: ["openDirectory"] });
     return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
+  });
+  ipcMain.handle('hivem1nd:service-status', async event => {
+    viewerFrame(event);
+    if (!viewerHost) throw new Error('Reopen HIVEM1ND using its local launcher.');
+    return viewerHost.serviceStatus();
+  });
+  ipcMain.handle('hivem1nd:recover-service', async event => {
+    viewerFrame(event);
+    if (!viewerHost) throw new Error('Reopen HIVEM1ND using its local launcher.');
+    return viewerHost.recover();
   });
 
   await app.whenReady();

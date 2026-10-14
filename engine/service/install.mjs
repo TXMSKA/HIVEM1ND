@@ -227,6 +227,11 @@ export function registrationRunner(run) {
 }
 
 export async function startConfiguredViewer(config, options = {}) {
+  if (!options.start && !options.login) {
+    const { startGui } = await import('../../gui/index.mjs');
+    const host = await startGui({ ...options, mindPath: config.mindPath, machine: config.machine });
+    return { viewerUrl: host.url, handle: host.service, recovery: host };
+  }
   const handle = options.start
     ? await options.start(config)
     : await (await import('./service.mjs')).runConfiguredService({ mindPath: config.mindPath, ...options });

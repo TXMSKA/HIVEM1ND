@@ -396,6 +396,7 @@ export async function createHttpServer(options) {
   };
   const principals = new Map();
   const compiled = routeTable().map(compile);
+  if (options.recoveryHosts) compiled.push(compile({ method: 'GET', template: '/viewer/recovery', operation: 'read', audience: 'D', handler: 'readRecovery', collection: null }));
   const sockets = new Set();
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
   homeState.serve = (req, res) => acceptRequest(req, res);
@@ -481,7 +482,7 @@ export async function createHttpServer(options) {
       return;
     }
     if (requested.path.startsWith('/app/') || requested.path === '/' || requested.path === '/mark.svg' || requested.path.startsWith('/gui/')) {
-      await serveEdge(req, res, requested.path, { assetDir: options.assetDir, viewers });
+      await serveEdge(req, res, requested.path, { assetDir: options.assetDir, viewers, options });
       return;
     }
     if (!requested.path.startsWith('/api/v1/') && requested.path !== '/api/v1') throw new CoreError(404, 'not_found', 'The route does not exist.');
@@ -596,6 +597,13 @@ export async function createHttpServer(options) {
       res.writeHead(outcome.status ?? 200, headers);
       res.end(outcome.raw);
       return;
+    }
+    if (route.collection === 'restart' && outcome.status === 202 && !outcome.replayed && body.machine === options.paths.machine && options.restartService) {
+      res.once('finish', () => {
+        options.restartService().catch(error => {
+          security.diagnose({ code: error.code ?? 'service_unavailable', message: 'The owned service could not restart.' });
+        });
+      });
     }
     respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
   }
@@ -729,7 +737,7 @@ function principalBucket(principals, req, pathname, credential, now) {
   return bucket;
 }
 
-async function serveEdge(req, res, pathname, { assetDir, viewers }) {
+async function serveEdge(req, res, pathname, { assetDir, viewers, options }) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const error = new CoreError(405, 'method_not_allowed', 'The method is not allowed.');
     error.allow = 'GET';
@@ -748,7 +756,7 @@ async function serveEdge(req, res, pathname, { assetDir, viewers }) {
   const embedded = viewer?.embedded === true && validHostOrigin(viewer.hostOrigin);
   const headers = {
     'content-type': contentType(name),
-    'content-security-policy': csp(embedded ? viewer.hostOrigin : "'none'"),
+    'content-security-policy': csp(embedded ? viewer.hostOrigin : "'none'", options?.recoveryHosts?.get(viewerId)?.origin),
   };
   if (!embedded) headers['x-frame-options'] = 'DENY';
   respond(res, 200, bytes, headers);
@@ -1351,6 +1359,10 @@ async function invoke(route, scope) {
     return { status: 200, body: await readDetail(domain, 'settings') };
   }
   if (route.handler === 'readViewer') return { status: 200, body: viewerRecord(viewers.get(credential.viewerId), credential.viewerId) };
+  if (route.handler === 'readRecovery') {
+    const bridge = options.recoveryHosts?.get(credential.viewerId);
+    return { status: 200, body: bridge ? { origin: bridge.origin, token: bridge.token } : { available: false } };
+  }
   if (route.handler === 'patchViewer') {
     const current = viewers.get(credential.viewerId) ?? {};
     if (!body || Object.keys(body).length === 0) throw new CoreError(422, 'invalid_body', 'The viewer patch needs a field.');
@@ -1408,7 +1420,7 @@ async function mutate(options, credential, req, relative, body, requestId, event
   const key = headerOne(req, 'idempotency-key');
   if (!isUuid(key)) throw new CoreError(400, 'idempotency_required', 'Idempotency-Key must be a UUID.');
   return withReceipt(options.store, {
-    principal: credential.token,
+    principal: options.receiptPrincipals?.get(credential.token) ?? credential.token,
     key,
     method: req.method,
     path: relative,
@@ -1622,8 +1634,8 @@ function contentType(name) {
   return 'text/html; charset=utf-8';
 }
 
-function csp(ancestors) {
-  return `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
+function csp(ancestors, recoveryOrigin) {
+  return `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; style-src 'self'; connect-src 'self'${recoveryOrigin ? ` ${recoveryOrigin}` : ''}; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
 }
 
 function decodeStatic(name) {

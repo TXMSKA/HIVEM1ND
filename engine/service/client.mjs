@@ -5,7 +5,7 @@ import os from 'node:os';
 import { localCosmic, mindKeyFor } from './paths.mjs';
 import path from 'node:path';
 import { CoreError, parseUnitId } from './identity.mjs';
-import { readOwnedServiceBridge, runConfiguredService, stopService } from './service.mjs';
+import { readOwnedServiceBridge, restartService, runConfiguredService, stopService } from './service.mjs';
 import { dispatchLocal, dispatchNative } from './bridge.mjs';
 
 const sessions = new Map();
@@ -24,6 +24,11 @@ export async function connectService(options = {}) {
     throw new CoreError(422, 'mind_not_configured', 'The mind is not configured.');
   }
   const key = process.platform === 'win32' ? mindPath.toLowerCase() : mindPath;
+  for (const [name, previous] of sessions) {
+    if (!previous.handle?.stopping || previous.handle.restarting) continue;
+    for (const close of previous.closes) close();
+    sessions.delete(name);
+  }
   if ([...sessions.keys()].some((item) => item !== key)) {
     throw new CoreError(409, 'service_mind_conflict', 'Another mind owns the service lock.');
   }
@@ -35,7 +40,7 @@ export async function connectService(options = {}) {
       resolveHandle = resolve;
       rejectHandle = reject;
     });
-    session = { mindPath, pending, handle: null, refs: 0, closes: new Set(), viewers: new Set() };
+    session = { mindPath, pending, handle: null, refs: 0, closes: new Set(), viewers: new Set(), recovery: null };
     sessions.set(key, session);
     runConfiguredService({
       mindPath,
@@ -50,6 +55,7 @@ export async function connectService(options = {}) {
       userKey: options.userKey,
       guardPort: options.guardPort,
       assetDir: options.assetDir,
+      port: options.port,
     }).then((handle) => {
       session.handle = handle;
       resolveHandle(handle);
@@ -86,9 +92,30 @@ export async function connectService(options = {}) {
     token: viewer.token,
     viewerId: viewer.viewerId,
     secret,
-    service: handle,
+    get service() { return session.handle; },
     mindPath,
     closed: false,
+    async readiness() {
+      const owned = await readOwnedServiceBridge({ ...options, mindPath });
+      if (owned.descriptor && session.handle?.http && !session.handle.http.server.listening) return { state: 'stopped' };
+      return { state: owned.absent ? 'stopped' : owned.descriptor ? 'running' : 'unknown' };
+    },
+    async recover() {
+      session.recovery ??= (async () => {
+        if (session.handle?.restarting) await session.handle.restarting;
+        const owned = await readOwnedServiceBridge({ ...options, mindPath });
+        if (owned.unrelated) throw new CoreError(409, 'service_mind_conflict', 'Another M1ND owns the service lock.');
+        if (owned.descriptor && session.handle?.http && !session.handle.http.server.listening) await restartService(session.handle);
+        if (owned.absent || session.handle?.stopping || session.handle?.bootstrapState?.valid === false) {
+          session.handle = await runConfiguredService({ ...options, mindPath, port: Number(origin.port), hostname: options.machine ?? options.hostname });
+          session.pending = Promise.resolve(session.handle);
+        }
+        const current = session.handle.bootstrapState?.record ?? session.handle.bootstrap;
+        if (!current?.origin || new URL(current.origin).origin !== origin.origin) throw new CoreError(503, 'service_unavailable', 'Reopen HIVEM1ND using the local launcher.');
+        return { origin: new URL(current.origin), secret: session.handle.bootstrapState?.secret ?? current.secret, handle: session.handle };
+      })().finally(() => { session.recovery = null; });
+      return session.recovery;
+    },
     track(close) {
       session.closes.add(close);
       return () => session.closes.delete(close);
@@ -101,7 +128,7 @@ export async function connectService(options = {}) {
         for (const close of session.closes) close();
         session.closes.clear();
         sessions.delete(key);
-        await stopService(handle);
+        await stopService(session.handle);
       }
     },
   };

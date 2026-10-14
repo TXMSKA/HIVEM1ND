@@ -5,12 +5,54 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { helpText, parseArgs, runCli, runTerminalSetup } from "../cli/index.mjs";
-import { createWindowOptions, parseElectronOptions, secureWebPreferences } from "../gui/electron.mjs";
+import { createWindowOptions, parseElectronOptions, secureWebPreferences, startElectronApp } from "../gui/electron.mjs";
+import { EventEmitter } from 'node:events';
 import { createSetupSession } from "../engine/setup.mjs";
 import { defaultMind } from "../engine/service/paths.mjs";
 import { stubAclRunner } from "../engine/service/security.mjs";
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test('Electron recovery accepts only the verified main viewer frame and preload exposes no arbitrary launcher', async () => {
+  const handlers = new Map();
+  const windows = [];
+  let recovered = 0;
+  class Window extends EventEmitter {
+    constructor() {
+      super(); windows.push(this); this.visible = false;
+      this.webContents = new EventEmitter(); this.webContents.mainFrame = { url: '' };
+      this.webContents.setWindowOpenHandler = () => {};
+    }
+    static fromWebContents(sender) { return windows.find(window => window.webContents === sender); }
+    isDestroyed() { return false; }
+    isVisible() { return this.visible; }
+    show() { this.visible = true; }
+    focus() {}
+    async loadURL(url) { this.webContents.mainFrame.url = url; }
+  }
+  const app = Object.assign(new EventEmitter(), { getPath: () => os.tmpdir(), getAppPath: () => KIT_PATH,
+    requestSingleInstanceLock: () => true, whenReady: async () => {}, quit() {} });
+  const viewerUrl = 'http://127.0.0.1:43123/gui/viewer';
+  await startElectronApp({ app, BrowserWindow: Window, dialog: {}, ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
+    session: { defaultSession: { setPermissionCheckHandler() {}, setPermissionRequestHandler() {} } } }, [], {
+    async startConfiguredViewer() { return { viewerUrl, recovery: { async serviceStatus() { return { state: 'stopped' }; },
+      async recover() { recovered++; return { origin: 'http://127.0.0.1:43123', viewerId: 'renewed' }; }, async stop() {} } }; },
+    async createWizardServer({ sessionOptions }) { await sessionOptions.serviceStart({}); return { url: 'http://127.0.0.1:12345/', origin: 'http://127.0.0.1:12345', async close() {} }; },
+  });
+  const window = windows[0];
+  const invoke = handlers.get('hivem1nd:recover-service');
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  await assert.rejects(invoke(event), /verified local Map/);
+  window.webContents.mainFrame.url = viewerUrl;
+  await assert.rejects(invoke({ ...event, senderFrame: { url: viewerUrl } }), /verified local Map/);
+  await assert.rejects(invoke({ ...event, sender: {} }), /verified local Map/);
+  assert.equal((await handlers.get('hivem1nd:service-status')(event)).state, 'stopped');
+  assert.equal((await invoke(event)).viewerId, 'renewed');
+  assert.equal(recovered, 1);
+  const preload = await readFile(new URL('../gui/preload.cjs', import.meta.url), 'utf8');
+  assert.match(preload, /recoverService: \(\) => ipcRenderer.invoke\('hivem1nd:recover-service'\)/);
+  assert.doesNotMatch(preload, /postMessage|localStorage|sessionStorage|console\.|exec|spawn/);
+});
 
 function sink() {
   let value = "";

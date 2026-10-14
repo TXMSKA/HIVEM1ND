@@ -84,10 +84,96 @@ import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapsho
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
-import { close as closeStream, synchronize } from "./stream.mjs";
+import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
+const RECOVERY_COPY = {
+  reconnecting: ['Reconnecting to the service. What you do is kept and sent when it answers.', 'Reconectando con el servicio. Las acciones se conservan y se envían cuando responde.'],
+  retry: ['Retry now', 'Reintentar ahora'],
+  stopped: ['The Relay service stopped on {machine}.', 'El servicio Relay se detuvo en {machine}.'],
+  details: ['Details', 'Detalles'],
+  restart: ['Restart service', 'Reiniciar el servicio'],
+  instructions: ['Reopen HIVEM1ND on this machine, or run: {command}', 'Volver a abrir HIVEM1ND en esta máquina o ejecutar: {command}'],
+  unavailable: ['The service connection could not be restored. Your work is kept.', 'No se pudo restablecer la conexión con el servicio. El trabajo se conserva.'],
+};
+
+function recoveryText(app, key, variables = {}) {
+  return RECOVERY_COPY[key][app.language === 'es' ? 1 : 0].replace(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? ''));
+}
+
+async function loadRecoveryBridge(app) {
+  if (app.recovery || app.store.audience === 'phone') return;
+  try {
+    const result = await request(app.api, 'GET', '/viewer/recovery');
+    if (!result.data.origin || !result.data.token) return;
+    const origin = new URL(result.data.origin);
+    if (origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' || !origin.port || origin.href !== `${origin.origin}/`) return;
+    const token = result.data.token;
+    const call = async (path, method = 'GET') => {
+      const response = await app.api.fetch(`${origin.origin}${path}`, { method, cache: 'no-store', redirect: 'error',
+        signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+          ...(typeof document === 'undefined' ? { Origin: app.api.location.origin } : {}) }, ...(method === 'POST' ? { body: '{}' } : {}) });
+      const body = await response.json();
+      if (!response.ok) throw new ApiError(response.status, body.error?.code ?? 'service_unavailable', recoveryText(app, 'unavailable'));
+      return body;
+    };
+    app.recovery = { serviceStatus: () => call('/status'), recoverService: () => call('/recover', 'POST') };
+  } catch { /* Hosts without a recovery bridge keep the existing launcher instructions. */ }
+}
+
+function startServiceStream(app) {
+  return synchronize(app.api, app.store, {
+    cursor: () => app.store.cursor,
+    onEvent: event => onStream(app, event),
+    reauthenticate: () => app.layout !== 'phone' && app.recovery ? recoverSession(app) : false,
+    onState: state => {
+      if (state.state === 'reconnecting' || state.error === 'reconnect_exhausted') verifyServiceStatus(app);
+      if (!app.disposed && !app.bootFailed && app.layout !== 'unknown') renderShell(app);
+    },
+  });
+}
+
+async function verifyServiceStatus(app) {
+  if (!app.recovery || app.checkingService || app.recoveryPending || app.disposed) return;
+  app.checkingService = true;
+  try {
+    const result = await app.recovery.serviceStatus();
+    if (app.disposed) return;
+    app.serviceStopped = result.state === 'stopped';
+    if (app.serviceStopped) closeStream(app.api.live);
+  } catch (error) { app.recoveryError = error; }
+  finally { app.checkingService = false; if (!app.disposed) renderShell(app); }
+}
+
+async function recoverSession(app) {
+  if (!app.recovery || app.layout === 'phone' || app.disposed) return false;
+  if (app.recoveryPending) return app.recoveryPending;
+  app.recoveryPending = (async () => {
+    captureInputs(app);
+    try {
+      const session = await app.recovery.recoverService();
+      if (app.disposed) return false;
+      resetCredentials(app.api, app.store, session);
+      app.serviceStopped = false;
+      app.recoveryError = null;
+      app.bootFailed = false;
+      app.bootReading = false;
+      disposeEmbed(app.embed); app.embed = null;
+      clearGrant(homeState(app));
+      await loadSnapshot(app.store, app.api);
+      await loadPresentation(app, { keepShell: true });
+      startOwnEmbed(app);
+      startServiceStream(app);
+      return true;
+    } catch (error) {
+      app.recoveryError = error;
+      if (!app.disposed) renderShell(app);
+      return false;
+    }
+  })().finally(() => { app.recoveryPending = null; if (!app.disposed) renderShell(app); });
+  return app.recoveryPending;
+}
 
 const OPENING_COPY = {
   reading: ["Reading the M1ND", "Leyendo el M1ND"],
@@ -166,6 +252,7 @@ export async function mount(root, env = globalThis) {
     bootReading: Boolean(api.token),
     selectedFolder: env.mindPath ?? new URLSearchParams(api.location.search ?? "").get("mind") ?? "",
     chooseFolder: env.chooseFolder ?? null,
+    recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null),
   };
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
@@ -228,13 +315,8 @@ async function runBoot(app) {
       if (!app.disposed && app.bootFailed) renderShell(app);
     }).catch(() => {});
   }
-  synchronize(app.api, app.store, {
-    cursor: () => app.store.cursor,
-    onEvent: (event) => onStream(app, event),
-    onState: () => {
-      if (!app.disposed && !app.bootFailed && app.layout !== "unknown") renderShell(app);
-    },
-  });
+  loadRecoveryBridge(app);
+  startServiceStream(app);
   try {
     await loadSnapshot(app.store, { ...app.api, deadlineMs: 30000 });
     if (app.disposed || app.bootFailed) return app;
@@ -362,7 +444,7 @@ export function renderShell(app) {
 
 function paintShell(app) {
   captureInputs(app);
-  if (!app.api.token) {
+  if (!app.api.token && (app.layout === 'phone' || !app.recovery)) {
     renderSignedOut(app);
     return;
   }
@@ -392,6 +474,7 @@ function paintShell(app) {
   app.root.replaceChildren(shell);
   syncLiveRegions(app);
   paintActivity(app, shell);
+  paintServiceBanner(app, shell);
   restoreInputFocus(app);
   app.editors?.current?.restoreSelection?.();
   finishList(app);
@@ -3623,7 +3706,7 @@ function settingsSurface(app, document, t) {
     },
     onRetry: () => loadSettingsSections(app),
     onStartup: (startWithWindows) => settingsMutation(app, "PATCH", "/settings/service", { machine: state.machine, startWithWindows, expectedRevision: info.service?.revision ?? null }),
-    onRestart: () => settingsMutation(app, "POST", "/settings/service/restart", { machine: state.machine }),
+    onRestart: () => restartSelectedService(app, state.machine),
     onScan: () => settingsMutation(app, "POST", "/settings/agents/scan", { machine: state.machine }),
     onFind: (agent) => findSettingsAgent(app, agent),
     onReview: (agent, mode, target) => reviewSettingsAgent(app, agent, mode, target),
@@ -3732,6 +3815,53 @@ function settingsMutation(app, method, path, body, onSuccess = null) {
       throw error;
     }
   });
+}
+
+function restartSelectedService(app, machine) {
+  return settle(app, 'service-recovery', recoveryText(app, 'restart'), async record => {
+    if (!app.recovery && machine === (app.store.settings?.service?.machine ?? app.store.view?.mind?.machine)) { showServiceDetails(app); return; }
+    if (machine === (app.store.settings?.service?.machine ?? app.store.view?.mind?.machine) && app.serviceStopped) {
+      if (!app.recovery) { showServiceDetails(app); return; }
+    } else {
+      await commitSettingsMutation(app, record, 'POST', '/settings/service/restart', { machine });
+    }
+    if (app.recovery && machine === (app.store.settings?.service?.machine ?? app.store.view?.mind?.machine)) {
+      if (!await recoverSession(app)) throw app.recoveryError ?? new ApiError(0, 'service_unavailable', recoveryText(app, 'unavailable'));
+    }
+  });
+}
+
+function showServiceDetails(app) {
+  const document = app.root.ownerDocument;
+  const path = String(app.selectedFolder ?? '').replace(/[\r\n"\u0000]/g, '');
+  const command = `hivem1nd service install${path ? ` --mind-path "${path}"` : ''}`;
+  const dialog = showDialog(document, { title: recoveryText(app, 'details'), body: recoveryText(app, 'unavailable'), cancel: text(app.language, 'close') });
+  dialog.setAttribute('data-service-details', 'true');
+  dialog.append(element(document, 'p', { text: recoveryText(app, 'instructions', { command }) }));
+  if (app.recoveryError) dialog.append(element(document, 'p', { text: String(app.recoveryError.code ?? 'service_unavailable').replace(/[^a-z0-9_]/gi, '') }));
+}
+
+function paintServiceBanner(app, shell) {
+  if (app.layout === 'phone' || app.bootReading) return;
+  const stream = app.store.stream;
+  if (!app.serviceStopped && !app.recoveryError && !['connecting', 'reconnecting', 'error'].includes(stream?.state)) return;
+  const document = app.root.ownerDocument;
+  const stopped = app.serviceStopped === true;
+  const error = stopped || stream?.state === 'error' || app.recoveryError;
+  const banner = element(document, 'div', { role: error ? 'alert' : 'status', 'data-service-banner': stopped ? 'stopped' : error ? 'unavailable' : 'reconnecting' });
+  // These scoped board dimensions avoid altering other task surfaces.
+  Object.assign(banner.style, { position: 'absolute', top: '40px', left: 'calc(50% - 260px)', zIndex: '20', padding: '10px 12px 10px 14px',
+    display: 'flex', alignItems: 'center', gap: '10px', borderRadius: '14px', background: error ? 'var(--error-soft)' : 'var(--waiting-soft)', fontSize: '13px', maxWidth: 'calc(100% - 28px)' });
+  if (!error) banner.append(element(document, 'span', { class: 'spinner', 'aria-hidden': 'true', style: 'width:15px;height:15px' }));
+  banner.append(element(document, 'span', { 'data-service-copy': 'true', text: recoveryText(app, stopped ? 'stopped' : error ? 'unavailable' : 'reconnecting', {
+    machine: app.store.settings?.service?.machine ?? app.store.view?.mind?.machine ?? '',
+  }) }));
+  const button = (action, key, handler) => element(document, 'button', { type: 'button', class: 'btn', 'data-action': action,
+    style: 'min-height:32px;min-width:32px', text: recoveryText(app, key), disabled: app.recoveryPending ? '' : null, onclick: handler });
+  if (error) banner.append(button('service-details', 'details', () => showServiceDetails(app)));
+  if (stopped) banner.append(button('recover-service', 'restart', () => app.recovery ? recoverSession(app) : showServiceDetails(app)));
+  else banner.append(button('retry-service', 'retry', () => app.recovery && !app.api.token ? recoverSession(app) : startServiceStream(app)));
+  shell.append(banner);
 }
 
 function contentSettingsDraft(state) {
@@ -4611,7 +4741,7 @@ function renderFooter(app, t) {
   const syncKey = syncCopy(syncState);
   const time = formatClock(app.language, app.readAt);
   const footer = element(document, "footer", { class: "foot" },
-    element(document, "span", { "data-service-machine": machine, text: t("serviceRunning", { machine }) }),
+    element(document, "span", { "data-service-machine": machine, text: app.serviceStopped ? recoveryText(app, 'stopped', { machine }) : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? t('reconnecting') : t("serviceRunning", { machine }) }),
     element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
     element(document, "span", { text: t("lastRead", { time }) }),
   );
@@ -4628,11 +4758,7 @@ function renderFooter(app, t) {
       "data-action": "retry-stream",
       "data-stream": "error",
       text: t("retry"),
-      onclick: () => synchronize(app.api, app.store, {
-        cursor: () => app.store.cursor,
-        onEvent: (event) => onStream(app, event),
-        onState: () => { if (!app.disposed && app.layout !== "unknown") renderShell(app); },
-      }),
+      onclick: () => app.recovery && !app.api.token ? recoverSession(app) : startServiceStream(app),
     }));
   }
   return footer;
@@ -4694,6 +4820,12 @@ async function submitCode(app, code) {
 }
 
 function renderFailure(app, error) {
+  if (app.layout === 'desktop' && app.store.snapshotReady && app.recovery) {
+    app.recoveryError = error;
+    verifyServiceStatus(app);
+    renderShell(app);
+    return;
+  }
   if (app.layout !== "phone" && app.api.token) {
     app.bootFailed = true;
     app.bootError = error;

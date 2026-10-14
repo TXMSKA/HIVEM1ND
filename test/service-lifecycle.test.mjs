@@ -16,7 +16,7 @@ import { stubAclRunner } from '../engine/service/security.mjs';
 import { createRelay } from '../engine/relay/store.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
-import { adoptWake, composeCore, guardPortFor, startService, stopConfiguredService, stopService } from '../engine/service/service.mjs';
+import { adoptWake, composeCore, guardPortFor, restartService, startService, stopConfiguredService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -47,6 +47,100 @@ async function optionsFor(t, port) {
   };
   return { fixture, options, listeners: () => listeners };
 }
+
+test('running restart holds the user guard through replacement and revokes every old audience', async t => {
+  const { fixture, options, listeners } = await optionsFor(t, await freePort());
+  const owner = await startService(options);
+  t.after(() => stopService(owner, { force: true }));
+  const guard = owner.guard;
+  const nonce = owner.nonce;
+  const secret = owner.bootstrap.secret;
+  const oldCredentials = owner.credentials;
+  const tokens = ['desktop', 'phone', 'agent'].map(audience => oldCredentials.issue({ audience, unitId: 'root:master', viewerId: randomUUID() }).token);
+  let release;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const close = owner.adopted.controller.close.bind(owner.adopted.controller);
+  owner.adopted.controller.close = async () => { entered(); await gate; await close(); };
+  const first = restartService(owner);
+  const second = restartService(owner);
+  assert.equal(first === second, true);
+  t.after(() => release());
+  await started;
+  const contender = startService(options);
+  assert.equal(guard.listening, true);
+  for (const token of tokens) assert.throws(() => oldCredentials.verify(token), { code: 'invalid_session' });
+  assert.equal(JSON.parse(await readFile(fixture.paths.lockFile, 'utf8')).nonce, nonce);
+  release();
+  await first;
+  const attached = await contender;
+  assert.equal(attached.attached, true);
+  assert.equal(owner.guard === guard, true);
+  assert.equal(owner.nonce === nonce, false);
+  assert.equal(owner.bootstrap.secret === secret, false);
+  assert.equal(listeners(), 2);
+  assert.equal((await jsonCall(owner.http.port, 'GET', '/api/v1/viewer', { token: tokens[0] })).status, 401);
+});
+
+test('a stopped browser or embedded host recovers one owned service with isolated viewers and retained receipts', async t => {
+  const fixture = await makeCoreFixture();
+  const { startGui, closeGuiHost } = await import('../gui/index.mjs');
+  const hosts = [];
+  t.after(async () => { for (const host of hosts) await host.stop(); await closeGuiHost(); await dispose(fixture); });
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind,
+    machine: fixture.machine, origin: { kind: 'folder', path: path.join(fixture.root, 'origin') }, stagingPath: fixture.paths.staging, port: 0 }));
+  const input = { mindPath: fixture.paths.mind, platform: fixture.platform, env: fixture.env, cosmicPath: fixture.paths.cosmic,
+    machine: fixture.machine, aclRunner: stubAclRunner(), guardPort: await freePort(), userKey: fixture.root, confineRoot: fixture.root };
+  const first = await startGui({ ...input, look: 'nebula', language: 'es' }); hosts.push(first);
+  const second = await startGui({ ...input, embedded: true, hostOrigin: 'http://host.example', look: 'ntk' }); hosts.push(second);
+  const originalToken = first.token;
+  const otherToken = second.token;
+  const bridge = (await jsonCall(new URL(first.origin).port, 'GET', '/api/v1/viewer/recovery', { token: first.token })).json.data;
+  const headers = { Origin: first.origin, Authorization: `Bearer ${bridge.token}`, 'Content-Type': 'application/json' };
+  const shell = await shellHeaders(first.url);
+  assert.equal(shell.csp.includes(`connect-src 'self' ${bridge.origin}`), true);
+  assert.equal((await fetch(`${bridge.origin}/recover`, { method: 'POST', headers: { ...headers, Origin: 'http://foreign.example' }, body: '{}' })).status, 403);
+  const operationKey = randomUUID();
+  const body = { sendToAgent: false, expectedRevision: null };
+  const created = await jsonCall(new URL(first.origin).port, 'PATCH', '/api/v1/settings', { token: first.token, body, key: operationKey });
+  assert.equal(created.status, 200);
+  await stopService(first.service, { force: true });
+  assert.equal((await fetch(`${bridge.origin}/status`, { headers })).status, 200);
+  assert.equal((await (await fetch(`${bridge.origin}/status`, { headers })).json()).state, 'stopped');
+  const [left, right] = await Promise.all([fetch(`${bridge.origin}/recover`, { method: 'POST', headers, body: '{}' }), first.recover()]);
+  assert.equal(left.status, 200);
+  const recovered = await left.json();
+  assert.equal(recovered.token === right.token, true);
+  assert.equal(first.token === originalToken, false);
+  assert.equal(first.service.guard.listening, true);
+  assert.equal(first.origin, second.origin);
+  const replay = await jsonCall(new URL(first.origin).port, 'PATCH', '/api/v1/settings', { token: first.token, body, key: operationKey });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.json.meta.replayed, true);
+  assert.equal(replay.json.data.revision, created.json.data.revision);
+  assert.equal((await call(first.origin, otherToken)).status, 401);
+  await second.recover();
+  assert.equal(first.service === second.service, true);
+  assert.equal(first.viewerId === second.viewerId, false);
+  assert.equal(first.token === second.token, false);
+  assert.equal((await call(first.origin, first.token)).json.data.look, 'nebula');
+  assert.equal((await call(second.origin, second.token)).json.data.look, 'ntk');
+  const restart = await jsonCall(new URL(first.origin).port, 'POST', '/api/v1/settings/service/restart', {
+    token: first.token, body: { machine: fixture.machine }, key: randomUUID(),
+  });
+  assert.equal(restart.status, 202);
+  await first.recover();
+  assert.equal((await call(first.origin, first.token)).status, 200);
+  const retainedGuard = first.service.guard;
+  await first.service.http.close();
+  assert.equal((await first.serviceStatus()).state, 'stopped');
+  await first.recover();
+  assert.equal(first.service.guard === retainedGuard, true);
+  assert.equal((await call(first.origin, first.token)).status, 200);
+  await jsonCall(new URL(first.origin).port, 'POST', '/api/v1/auth/logout', { token: first.token, body: {} });
+  await assert.rejects(first.recover(), { code: 'invalid_session' });
+});
 
 test('one active host prevents owned runtime shutdown', async t => {
   const { fixture, options } = await optionsFor(t, await freePort());
@@ -898,7 +992,7 @@ async function writeWakePolicy(fixture, policy) {
   await writeFile(path.join(directory, `${policy.key}.json`), JSON.stringify(policy));
 }
 
-function jsonCall(port, method, target, { token = null, body = undefined } = {}) {
+function jsonCall(port, method, target, { token = null, body = undefined, key = null } = {}) {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
     const req = httpRequest({
@@ -911,6 +1005,7 @@ function jsonCall(port, method, target, { token = null, body = undefined } = {})
         origin: `http://127.0.0.1:${port}`,
         ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(key ? { 'idempotency-key': key } : {}),
       },
     }, (res) => {
       const chunks = [];
