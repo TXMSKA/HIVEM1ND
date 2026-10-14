@@ -888,7 +888,7 @@ test("the check command prints nothing for a clean state and one line per findin
   assert.equal(await run("TEST"), "");
   await write(path.join(mindPath, "user", "inbox", "genesis", "20300102-1000-executor-app.md"), "message\n");
   assert.equal(await run("TEST"), "Executive roles: 1 unread message.\n");
-  assert.match(await run("OTHER"), /^This machine \(OTHER\) has no machine record in the mind\./);
+  assert.match(await run("OTHER"), /^This machine \(OTHER\) has no machine record in the M1ND\./);
   await fs.rm(path.join(mindPath, "user", "inbox"), { recursive: true });
   assert.deepEqual(await snapshot(root), before);
 });

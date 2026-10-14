@@ -179,7 +179,7 @@ test("the check carries the measurements, prints one line and writes nothing", a
   await projectFiles(mindPath, "web", { "product.md": product("web", "2030-01-01") });
 
   const before = await snapshot(root);
-  assert.equal(await run(), "Mind: 2 items to clean (user/projects/web/brief.md, 17 KB); /cleaner offers the cleanup.\n");
+  assert.equal(await run(), "M1ND: 2 items to clean (user/projects/web/brief.md, 17 KB); /cleaner offers the cleanup.\n");
   const json = JSON.parse(await run("--json"));
   assert.equal(json.mind.count, 2);
   assert.equal(json.mind.items[0].path, "user/projects/web/brief.md");
@@ -204,7 +204,7 @@ test("the human line names the count and the largest item, and stays silent belo
   const mind = (count, largest) => ({ action: "status", machine: "TEST", machineRecord: true, missing: [], update: null, project: null, repository: null, executive: { unread: 0, open: 0 }, warnings: [], mind: { count, largest } });
   await runCli(["check", "--mind-path", "."], { stdout, stderr: stdout, lifecycle: { async check() { return mind(1, { path: "user/projects/app/brief.md", bytes: 16_000 }); } } });
   await runCli(["check", "--mind-path", "."], { stdout, stderr: stdout, lifecycle: { async check() { return mind(0, null); } } });
-  assert.deepEqual(lines, ["Mind: 1 item to clean (user/projects/app/brief.md, 16 KB); /cleaner offers the cleanup.\n"]);
+  assert.deepEqual(lines, ["M1ND: 1 item to clean (user/projects/app/brief.md, 16 KB); /cleaner offers the cleanup.\n"]);
   assert.equal(formatBytes(5_362_389_374), "5.0 GB");
   assert.equal(formatBytes(800), "800 B");
 });
@@ -316,7 +316,7 @@ test("the check prints one line per product document finding, carries the produc
 
   await write(path.join(mindPath, "user", "projects", "big", "product.md"), "z".repeat(PRODUCT_MAX_BYTES + 2000));
   const lines = (await run()).split("\n");
-  assert.equal(lines[0], "Mind: 1 item to clean (user/projects/big/product.md, 22 KB); /cleaner offers the cleanup.");
+  assert.equal(lines[0], "M1ND: 1 item to clean (user/projects/big/product.md, 22 KB); /cleaner offers the cleanup.");
   assert.equal(lines.length, 4);
   const json = JSON.parse(await run("--json"));
   assert.equal(json.mind.thresholds.productBytes, 20480);
