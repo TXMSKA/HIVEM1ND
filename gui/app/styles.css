@@ -298,15 +298,9 @@ button, input { font: inherit; color: inherit; }
 }
 
 .status-line { display: inline-flex; align-items: center; gap: 6px; }
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--idle);
-  flex: none;
-}
-.status-dot[data-status="working"] { background: var(--working); }
-.status-dot[data-status="waiting"] { background: var(--waiting); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); flex: none; }
+.status-dot[data-status="working"] { background: var(--working); box-shadow: none; }
+.status-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 2px var(--waiting); }
 
 .icon-button { width: 36px; height: 36px; justify-content: center; padding: 0; background: var(--panel); }
 
@@ -550,20 +544,10 @@ button, input { font: inherit; color: inherit; }
   white-space: nowrap;
   pointer-events: none;
 }
-.map-status {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  width: 11px;
-  height: 11px;
-  border-radius: var(--radius-circle);
-  border: 2px solid var(--bg);
-  background: var(--idle);
-  box-sizing: content-box;
-}
-.map-status[data-status="working"] { background: var(--working); }
-.map-status[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 2.5px var(--waiting); }
-.map-status[data-status="idle"] { background: var(--idle); }
+.map-status { position: absolute; right: 1px; bottom: 1px; width: 11px; height: 11px; border-radius: var(--radius-circle); border: 2px solid var(--bg); background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); box-sizing: content-box; }
+.map-status[data-status="working"] { background: var(--working); box-shadow: none; }
+.map-status[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 2px var(--waiting); }
+.map-status[data-status="idle"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); }
 .map-status[data-status="out"],
 .map-status[data-status="quota"] { background: var(--mute); }
 .map-node.is-person { background: var(--text); color: var(--bg); border: 0; }
