@@ -3,8 +3,6 @@ import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "n
 import http from "node:http";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { prepareLegacyExport } from "../features/blueprint/server.mjs";
-import { validateSketch } from "../features/blueprint/review/sketch-format.mjs";
 import { boundaryInsideTag, plainText, validUtf16Boundary } from "../gui/app/markup.mjs";
 import {
   FIXTURE_HOME_CODE,
@@ -18,7 +16,8 @@ import {
   stableJson,
 } from "./gui-data.mjs";
 
-// Isolated GUI contract fixture. The read-only module boundary is shared; no server or CLI is started.
+// Isolated GUI contract fixture. It does not import the service, CLI, or feature servers; it shares
+// only the browser app's pure markup module, and reads the shared board kit as bytes for exports.
 // The home listener is a loopback transport simulation, not a production subnet check.
 // Stdin commands: advance <ms>, emit <name> <json>, disconnect, quit.
 
@@ -3391,13 +3390,123 @@ function validateImport(body) {
   assertEditorPath(body.project, body.path); groupTitle(body.title); revisionField(body.expectedRevision);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   if (!uuid.test(body.legacyResourceId) || body.folderId !== null && !uuid.test(body.folderId)) throw new HttpError(422, "invalid_body", "The resource and folder ids must be UUIDs.");
-  try { validateSketch(body.document); } catch { throw new HttpError(422, "invalid_document", "The exported document is invalid."); }
+  try { assertSketchShape(body.document); } catch { throw new HttpError(422, "invalid_document", "The exported document is invalid."); }
 }
 
+// An independent structural check of a sketch document, strict enough to reject a malformed client body.
+function assertSketchShape(document) {
+  const invalid = () => { throw new HttpError(422, "invalid_document", "The document is not valid."); };
+  const object = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const title = (value) => typeof value === "string" && value.length > 0 && value.length <= 240;
+  const id = (value) => typeof value === "string" && value.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+  if (!object(document)) invalid();
+  for (const key of ["formatVersion", "id", "title", "note", "pages", "screens", "links", "components", "fonts", "threads"]) if (!(key in document)) invalid();
+  if (document.formatVersion !== 1 || typeof document.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(document.id) || !title(document.title) || typeof document.note !== "string") invalid();
+  if (!["components", "fonts", "threads", "screens", "links"].every((key) => Array.isArray(document[key]))) invalid();
+  if (!Array.isArray(document.pages) || document.pages.length < 1 || document.pages.length > 100) invalid();
+  const seen = new Set();
+  const take = (value) => { if (!id(value) || seen.has(value)) invalid(); seen.add(value); };
+  for (const page of document.pages) {
+    if (!object(page) || !title(page.title) || !Array.isArray(page.objects) || !Array.isArray(page.order)) invalid();
+    take(page.id);
+  }
+  const pages = new Set(document.pages.map((page) => page.id));
+  for (const screen of document.screens) {
+    if (!object(screen) || !title(screen.title) || !pages.has(screen.pageId) || !object(screen.root) || screen.root.t !== "box") invalid();
+    if (![screen.x, screen.y, screen.w, screen.h].every(Number.isFinite) || screen.root.w !== screen.w || screen.root.h !== screen.h) invalid();
+    take(screen.id);
+  }
+  for (const link of document.links) {
+    if (!object(link) || !id(link.from) || !id(link.to) || link.from === link.to || !["cut", "fade", "slide"].includes(link.transition)) invalid();
+    take(link.id);
+  }
+}
+
+const BOARD_KIT = fileURLToPath(new URL("../features/blueprint/kit/", import.meta.url));
+const BOARD_SCHEMA = fileURLToPath(new URL("../features/blueprint/review/sketch-format.mjs", import.meta.url));
+const SHARED_BOARD_KIT = new Set(["kit.mjs", "board.mjs", "icons.mjs", "ui.mjs", "skins.mjs"]);
+const LEGACY_MODULE_LIMIT = 16_000_000;
+const LEGACY_IMPORTS = /(?:^|\n)[ \t]*(?:import\s*(?:[^;]*?\bfrom\s*)?|export\s*(?:\*|\{[^}]*\})\s*from\s*)(["'])([^"'\r\n]+)\1/g;
+
+function legacyUnavailable() {
+  throw new HttpError(422, "import_unavailable", "This registered board cannot be exported.");
+}
+
+// The registered module, its approved kit and the schema are read as bytes and never evaluated here;
+// the browser evaluates the returned manifest in its sandbox, as it does against the core.
 async function fixtureLegacyExport(fx, editor) {
-  try {
-    return await prepareLegacyExport({ name: editor.project, localPath: join(fx.tree.root, "repositories", editor.project) }, { ...editor, legacyId: editor.legacy?.id });
-  } catch (error) { throw new HttpError(error.status ?? 422, error.code ?? "import_unavailable", "This registered board cannot be exported."); }
+  const legacyId = editor?.legacy?.id;
+  if (!editor?.readOnly || editor.kind !== "blueprint" || !/^docs\/flows\/boards\/[a-z0-9-]+\.mjs$/.test(editor.path ?? "")) legacyUnavailable();
+  const root = join(fx.tree.root, "repositories", editor.project);
+  const flows = join(root, "docs", "flows");
+  const read = async (file, optional = false) => {
+    for (const target of [root, file]) {
+      const linked = await lstat(target).then((stats) => stats.isSymbolicLink(), () => false);
+      if (linked) throw new HttpError(422, "unsafe_path", "The path is not safe.");
+    }
+    const stats = await lstat(file).catch((error) => (optional && error.code === "ENOENT" ? null : legacyUnavailable()));
+    if (!stats) return null;
+    if (!stats.isFile() || stats.size > LEGACY_MODULE_LIMIT) legacyUnavailable();
+    return readFile(file);
+  };
+  const indexBytes = await read(join(flows, "boards", "index.json"));
+  let index;
+  try { index = JSON.parse(indexBytes); } catch { legacyUnavailable(); }
+  if (!(Array.isArray(index) ? index : index?.boards ?? []).some((item) => item?.id === legacyId)) legacyUnavailable();
+  const moduleBytes = await read(join(root, editor.path));
+  const sketchBytes = await read(join(flows, "sketches", `${legacyId}.json`), true);
+  let sketch = null;
+  if (sketchBytes) {
+    try { sketch = JSON.parse(sketchBytes); assertSketchShape(sketch); } catch { legacyUnavailable(); }
+    if (sketch.id !== legacyId) legacyUnavailable();
+  }
+  const modules = {};
+  const reading = new Set();
+  let total = 0;
+  const shared = async (file) => ({ key: `shared/${file}`, bytes: await read(join(BOARD_KIT, file)) });
+  const ownKit = async (file) => {
+    const bytes = await read(join(flows, "kit", file), true);
+    if (bytes) return { key: `project/kit/${file}`, bytes };
+    if (!SHARED_BOARD_KIT.has(file)) legacyUnavailable();
+    return shared(file);
+  };
+  const resolveImport = async (specifier, key) => {
+    if (specifier.startsWith("blueprint/") && SHARED_BOARD_KIT.has(specifier.slice(10))) return shared(specifier.slice(10));
+    if (!specifier.startsWith(".") || specifier.includes("\\") || /[%?#]/.test(specifier)) legacyUnavailable();
+    const target = new URL(specifier, `https://blueprint.local/${key}`).pathname.slice(1);
+    if (target.startsWith("project/kit/") && /^[a-zA-Z0-9-]+\.mjs$/.test(target.slice(12))) return ownKit(target.slice(12));
+    if (target.startsWith("shared/") && SHARED_BOARD_KIT.has(target.slice(7))) return shared(target.slice(7));
+    return legacyUnavailable();
+  };
+  const visit = async ({ key, bytes }) => {
+    if (reading.has(key)) legacyUnavailable();
+    if (modules[key]) return key;
+    if (Object.keys(modules).length >= 64 || (total += bytes.length) > LEGACY_MODULE_LIMIT) legacyUnavailable();
+    const source = bytes.toString("utf8");
+    if (/\bimport\s*\(/.test(source)) legacyUnavailable();
+    reading.add(key);
+    const references = [];
+    for (const match of source.matchAll(LEGACY_IMPORTS)) {
+      const dependency = await resolveImport(match[2], key);
+      references.push({ start: match.index + match[0].length - match[2].length - 2, end: match.index + match[0].length, key: await visit(dependency) });
+    }
+    reading.delete(key);
+    modules[key] = { source, imports: references };
+    return key;
+  };
+  const module = await visit({ key: `project/boards/${editor.path.split("/").at(-1)}`, bytes: moduleBytes });
+  const kit = await visit(await ownKit("kit.mjs"));
+  const skins = await visit(await ownKit("skins.mjs"));
+  const exporter = await visit(await shared("board.mjs"));
+  const schema = await visit({ key: "schema", bytes: await read(BOARD_SCHEMA) });
+  const extras = {};
+  for (const [name, file] of [["icons", "extra-icons.mjs"], ["nodes", "extra-nodes.mjs"]]) {
+    const bytes = await read(join(flows, "kit", file), true);
+    if (bytes) extras[name] = await visit({ key: `project/kit/${file}`, bytes });
+  }
+  return { module, kit, skins, exporter, schema, ...extras, modules, sketch, expectedRevision: sha256(moduleBytes), path: editor.path.replace(/\.mjs$/, ".json"),
+    sourceRevisions: { module: sha256(moduleBytes), index: sha256(indexBytes), sketch: sketchBytes ? sha256(sketchBytes) : null,
+      kit: Object.fromEntries(Object.entries(modules).filter(([key]) => key !== module).map(([key, value]) => [key, sha256(value.source)])) } };
 }
 
 async function prepareImport(fx, body) {
@@ -4328,7 +4437,7 @@ async function prepareHistoryAnswer(fx, params, body, principal) {
     writes.push(...fixtureSnapshot(fx, editor, draft, comments, "conflict", ++sequence, principal, { source: { kind: "draft", id: LOCAL_MACHINE, unitId: principal.unitId } }));
     document = body.decision === "keep-mine" ? structuredClone(body.document) : structuredClone(editor.document);
   }
-  if (editor.kind === "blueprint") { validateSketch(document); assertCompatible(editor.document, document); }
+  if (editor.kind === "blueprint") { assertSketchShape(document); assertCompatible(editor.document, document); }
   else { validateTextPut({ document, expectedRevision: editor.revision }); assertTextCompatible(editor.document, document); }
   if (editor.kind === "void") document.rev = (editor.document.rev ?? 0) + 1;
   if (!records.some((item) => item.revision === editor.revision && item.commentsRevision === editor.commentsRevision)) {

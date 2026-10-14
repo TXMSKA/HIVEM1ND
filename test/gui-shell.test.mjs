@@ -3933,7 +3933,6 @@ test("the GUI import graph stays inside its ownership table", async () => {
     }
     const specifiers = [...source.matchAll(/from "([^"]+)"/g)].map((match) => match[1]);
     for (const specifier of specifiers) {
-      if (rel === "test/gui-fixture.mjs" && ["../features/blueprint/server.mjs", "../features/blueprint/review/sketch-format.mjs"].includes(specifier)) continue;
       assert.equal(specifier.startsWith(".") || specifier.startsWith("node:"), true, specifier);
       assert.equal(/engine|cli|features|https?:|node_modules/.test(specifier), false, specifier);
       if (specifier.startsWith("node:")) {

@@ -492,7 +492,8 @@ test("fixture bounds check origin before files and publish complete resource eve
 });
 
 test("the fixture import graph stays inside Node built-ins and its own helper", async () => {
-  const allowed = new Set(["node:http", "node:crypto", "node:fs/promises", "node:path", "node:os", "node:url", "./gui-data.mjs"]);
+  // A pure browser app module may be shared on purpose (docs/3.0/plan-gui.md); the core, CLI and feature servers may not.
+  const allowed = new Set(["node:http", "node:crypto", "node:fs/promises", "node:path", "node:os", "node:url", "./gui-data.mjs", "../gui/app/markup.mjs"]);
   const seen = new Set();
   async function walk(file) {
     if (seen.has(file)) return;
