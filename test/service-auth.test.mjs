@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -9,12 +9,66 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exchange, openHome } from '../engine/service/home.mjs';
 import { composeCore, startService, stopService } from '../engine/service/service.mjs';
-import { CoreError } from '../engine/service/identity.mjs';
+import { CoreError, canonicalJson, hashText } from '../engine/service/identity.mjs';
+import { requestApproval } from '../engine/service/approvals.mjs';
+import { createHttpServer } from '../engine/service/http.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, createSecuritySink, protectLocalFile, safeError, SECURITY_ALERT_THRESHOLD, SECURITY_FAILURE_LIMIT, SECURITY_FAILURE_WINDOW_MS, stubAclRunner } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const PHONE_FORBIDDEN = ['unit.create', 'chat.manage', 'layout.write', 'settings.write', 'home.manage', 'grant.revoke', 'session.start', 'session.stop', 'task.undo', 'editor.write', 'comment.write', 'asset.write', 'proposal.answer', 'watch', 'viewer.write'];
 const LOOPBACK = { kind: 'loopback', address: '127.0.0.1', port: 8765 };
+
+test('phone standing and push answers fail before receipt creation or replay, with no grant or notice changes', async t => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const unitId = 'project:shop:executor-shop', sessionId = randomUUID();
+  const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await mkdir(path.dirname(stateFile), { recursive: true });
+  await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+  const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: ['project:shop'], schedule() {}, principal: { audience: 'agent', unitId, sessionId } };
+  const credentials = createCredentialStore({ now: context.now });
+  const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  const http = await createHttpServer({ ...context, credentials });
+  t.after(() => http.close());
+  for (const [action, pattern, decision] of [
+    ['process.run', { command: 'npm run build', cwd: 'project:shop' }, 'approve-always'],
+    ['git.push', { repository: 'project:shop', args: ['origin', 'main'] }, 'approve'],
+    ['process.run', { command: 'git -C "C:\\work" push origin main', cwd: 'project:shop' }, 'deny'],
+  ]) {
+    const ask = await requestApproval(context, { action, pattern, display: 'Build', alwaysAllowed: true });
+    const route = `/approvals/${ask.approval.id}/answer`, body = { decision, expectedRevision: ask.approval.revision };
+    const approvalDirectory = path.join(fixture.paths.mind, 'user', 'relay', 'approvals', ask.approval.id);
+    const notices = path.join(fixture.paths.mind, 'user', 'relay', 'chats');
+    const before = await legacyTreeInventory(approvalDirectory), beforeNotices = await legacyTreeInventory(notices), beforeState = await readFile(stateFile);
+    const denied = await requestJson(http.port, 'POST', `/api/v1${route}`, { token: phone, body });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.json.error.code, 'phone_read_only');
+    assert.deepEqual(denied.json.error.details, { desktopOnly: true });
+    const key = randomUUID(), receiptRoot = path.join(fixture.paths.localDirectory, 'receipts', hashText(phone));
+    await mkdir(receiptRoot, { recursive: true });
+    const file = path.join(receiptRoot, `${key}.json`);
+    const receipt = { principalHash: hashText(phone), key, method: 'POST', path: route, bodyHash: hashText(canonicalJson(body)), requestId: randomUUID(), status: 200, response: { approval: { state: 'approved' } }, createdAt: new Date(fixture.clock.now).toISOString(), expiresAt: new Date(fixture.clock.now + 60000).toISOString() };
+    await writeFile(file, JSON.stringify(receipt));
+    const replay = await requestJson(http.port, 'POST', `/api/v1${route}`, { token: phone, body, headers: { 'idempotency-key': key } });
+    assert.equal(replay.status, 403);
+    assert.equal(replay.json.error.code, 'phone_read_only');
+    assert.deepEqual(await legacyTreeInventory(approvalDirectory), before);
+    assert.deepEqual(await legacyTreeInventory(notices), beforeNotices);
+    assert.deepEqual(await readFile(stateFile), beforeState);
+    assert.equal(JSON.stringify(JSON.parse(await readFile(file))) === JSON.stringify(receipt), true);
+  }
+  for (const [action, pattern] of [
+    ['process.run', { command: 'npm run build', cwd: 'project:shop' }],
+    ['git.commit', { repository: 'project:shop', args: ['-m', 'Reviewed task'] }],
+  ]) {
+    const ask = await requestApproval(context, { action, pattern, display: 'git push', alwaysAllowed: false });
+    const answered = await requestJson(http.port, 'POST', `/api/v1/approvals/${ask.approval.id}/answer`, { token: phone, body: { decision: 'approve', expectedRevision: ask.approval.revision }, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal(answered.status, 200);
+    assert.equal(answered.json.data.approval.desktopOnly, false);
+    assert.equal(answered.json.data.approval.grantId, null);
+  }
+});
 
 describe('service auth', { concurrency: false }, () => {
 test('audiences, peers and limits fail closed without leaking secrets', async (t) => {

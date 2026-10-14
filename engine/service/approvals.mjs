@@ -2,7 +2,8 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CLIENTS, CoreError, canonicalJson, hashBytes, parseTaskId, parseUnitId, replaceHeader, uuidV8, validateName } from './identity.mjs';
-import { assertChatSession, enqueueStart } from './adapters.mjs';
+import { assertChatSession, classifyApprovalAction, enqueueStart } from './adapters.mjs';
+import { authorize } from './security.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
@@ -11,7 +12,7 @@ import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks }
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
-const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open']);
+const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open', 'git.commit', 'git.push']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 const DECISIONS = new Set(['approve', 'approve-always', 'deny']);
 
@@ -21,6 +22,7 @@ export function normalizeAction(action, pattern, options = {}) {
     throw new CoreError(422, 'invalid_body', 'The action pattern must be an object.');
   }
   if (action === 'process.run') return normalizeProcess(pattern, options.projects ?? []);
+  if (action === 'git.commit' || action === 'git.push') return normalizeGit(action, pattern, options.projects ?? []);
   if (action === 'file.write') return normalizeFile(pattern);
   if (action === 'session.open') return normalizeSession(pattern);
   return normalizeNetwork(pattern);
@@ -48,7 +50,7 @@ export async function requestApproval(context, input) {
   if (normalized.action === 'session.open') await validateChild(context, normalized.pattern, sessionId);
   const chat = await chatFor(context, input?.chatId, parsed.id);
   const tombstones = await readTombstones(context);
-  const existing = normalized.action !== 'session.open' && grantsOf(state.bytes).find((grant) => !tombstones.ids.has(grant.id) && grant.action === normalized.action && normalized.exact && canonicalJson(grant.pattern) === canonicalJson(normalized.pattern));
+  const existing = normalized.alwaysAllowed && grantsOf(state.bytes).find((grant) => !tombstones.ids.has(grant.id) && grant.action === normalized.action && normalized.exact && canonicalJson(grant.pattern) === canonicalJson(normalized.pattern));
   const id = randomUUID();
   const requestedAt = stamp(context);
   const request = {
@@ -60,7 +62,8 @@ export async function requestApproval(context, input) {
     action: normalized.action,
     pattern: normalized.pattern,
     display: input.display,
-    alwaysAllowed: Boolean(normalized.alwaysAllowed && !existing),
+    alwaysAllowed: Boolean(normalized.alwaysAllowed && input.alwaysAllowed !== false && !existing),
+    desktopOnly: normalized.desktopOnly,
     operationId: typeof input?.operationId === 'string' ? input.operationId : null,
     requestedAt,
     expiresAt: new Date(context.now() + LIFETIME_MS).toISOString(),
@@ -102,7 +105,7 @@ export async function requestApproval(context, input) {
       throw new CoreError(502, 'delivery_failed', 'The approval notice was not delivered.');
     }
   }
-  const live = existing ? await resumeNative(context, request) : false;
+  const live = existing ? await resumeNative(context, request, existing.id) : false;
   return {
     status: existing ? 200 : 202,
     approval,
@@ -118,6 +121,7 @@ export async function answerApproval(context, approvalId, input) {
   if (typeof input?.expectedRevision !== 'string') throw new CoreError(422, 'invalid_body', 'The approval revision is required.');
   return withLocks(context.store, [`approval:${approvalId}`], async () => {
     const loaded = await loadApproval(context, approvalId);
+    authorize(context.principal, 'approval.answer', { decision: input.decision, desktopOnly: classifyApprovalAction(loaded.request.action, loaded.request.pattern).desktopOnly });
     if (loaded.result) {
       await recordLateAnswer(context, loaded, input.decision);
       const expired = loaded.result.state === 'expired';
@@ -130,7 +134,7 @@ export async function answerApproval(context, approvalId, input) {
     }
     const revision = approvalRevision({ request: loaded.requestBytes, answers: loaded.answerBytes });
     if (input.expectedRevision !== revision) throw new CoreError(409, 'revision_conflict', 'The approval dialog is stale.');
-    if (input.decision === 'approve-always' && (loaded.request.action === 'session.open' || loaded.request.alwaysAllowed !== true)) {
+    if (input.decision === 'approve-always' && !validAnswer(loaded.request, answer)) {
       throw new CoreError(422, 'always_unavailable', 'This action cannot be granted forever.');
     }
     if (!isOwner(context, loaded.binding)) {
@@ -181,7 +185,9 @@ export async function listGrants(context, unitId, query = {}) {
   const parsed = parseUnitId(unitId);
   const state = await readState(context, parsed);
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
-  const items = grantsOf(state.bytes).map((grant) => ({ ...grant, unitId: parsed.id }));
+  const unit = await readDetail(context, 'units', parsed.id);
+  const tombstones = await readTombstones(context);
+  const items = unit.approvalGrants.filter(grant => !tombstones.ids.has(grant.id)).map(grant => ({ ...grant, unitId: parsed.id }));
   return paginate(items, query);
 }
 
@@ -202,7 +208,7 @@ export async function consumeAnswers(context, approvalId = null) {
       if (!isOwner(context, loaded.binding)) return { approvalId: id, skipped: true, allow: false };
       if (loaded.result) return { approvalId: id, replayed: true, allow: false, resumed: false, state: loaded.result.state };
       if (Date.parse(loaded.request.expiresAt) <= context.now()) return settle(context, loaded, null, 'expired');
-      const winner = [...loaded.answers].sort(byArrival).find((item) => item.decision === 'approve' || item.decision === 'deny' || item.decision === 'approve-always' && loaded.request.action !== 'session.open' && loaded.request.alwaysAllowed === true);
+      const winner = [...loaded.answers].sort(byArrival).find((item) => validAnswer(loaded.request, item));
       if (!winner) return { approvalId: id, state: 'pending', allow: false };
       return settle(context, loaded, winner, winner.decision === 'deny' ? 'denied' : 'approved');
     }));
@@ -320,7 +326,7 @@ async function settle(context, loaded, answer, state, pending = null) {
       child = { state: 'failed', error: { code: error.code ?? 'client_unavailable', message: 'The approved CLI could not be opened.' } };
     }
   }
-  const resumed = state === 'approved' && request.action !== 'session.open' && await resumeNative(context, request);
+  const resumed = state === 'approved' && request.action !== 'session.open' && await resumeNative(context, request, grantId);
   return { status: 200, approval, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, child, replayed: false };
 }
 
@@ -332,6 +338,7 @@ async function recordLateAnswer(context, loaded, decision) {
     decision,
     answeredBy: context.principal?.unitId ?? 'root:master',
     machine: context.paths.machine,
+    audience: context.principal?.audience ?? 'desktop',
     at: stamp(context),
   };
   const outcome = loaded.result.state === 'expired' ? 'expired' : 'rejected';
@@ -474,9 +481,14 @@ async function sessionLive(context, sessionId, request) {
   return true;
 }
 
-async function resumeNative(context, request) {
+async function resumeNative(context, request, grantId = null) {
   const live = await sessionLive(context, request.sessionId, request);
   if (!live) return false;
+  if (grantId) {
+    const tombstones = await readTombstones(context);
+    const state = await readState(context, parseUnitId(request.unitId));
+    if (tombstones.ids.has(grantId) || !state || !grantsOf(state.bytes).some(grant => grant.id === grantId && grant.action === request.action && canonicalJson(grant.pattern) === canonicalJson(request.pattern))) return false;
+  }
   if (typeof context.native?.resolve === 'function') {
     await context.native.resolve({ sessionId: request.sessionId, operationId: request.operationId ?? null, decision: 'approve' });
   }
@@ -587,8 +599,18 @@ function answerRecord(context, approvalId, decision) {
     decision,
     answeredBy: context.principal?.unitId ?? 'root:master',
     machine: context.paths.machine,
+    audience: context.principal?.audience ?? 'desktop',
     at: stamp(context),
   };
+}
+
+function validAnswer(request, answer) {
+  if (answer.answeredBy !== 'root:master' || !DECISIONS.has(answer.decision)) return false;
+  const classification = classifyApprovalAction(request.action, request.pattern);
+  if (answer.audience === 'phone' && (classification.desktopOnly || answer.decision === 'approve-always')) return false;
+  if (answer.decision !== 'approve-always') return true;
+  return !['session.open', 'git.commit', 'git.push'].includes(request.action)
+    && classification.gitAction === null && request.alwaysAllowed === true;
 }
 
 function withAnswer(loaded, answer) {
@@ -597,7 +619,14 @@ function withAnswer(loaded, answer) {
 
 function normalizeProcess(pattern, projects) {
   const command = typeof pattern.command === 'string' ? pattern.command : '';
-  const cwd = typeof pattern.cwd === 'string' ? pattern.cwd.replaceAll('\\', '/').replace(/\/+$/, '') : '';
+  const classification = classifyApprovalAction('process.run', pattern);
+  const { cwd, known } = approvalLocation(pattern.cwd, projects);
+  const exact = command.length > 0 && !/[?*[\]]/.test(command) && !command.includes('..') && known;
+  return { action: 'process.run', pattern: { command, cwd }, exact, alwaysAllowed: exact && classification.gitAction === null, ...classification };
+}
+
+function approvalLocation(value, projects) {
+  const cwd = typeof value === 'string' ? value.replaceAll('\\', '/').replace(/\/+$/, '') : '';
   const known = new Set();
   for (const project of projects) {
     if (typeof project === 'string') {
@@ -611,8 +640,17 @@ function normalizeProcess(pattern, projects) {
     }
     if (typeof project?.localPath === 'string') known.add(project.localPath.replaceAll('\\', '/').replace(/\/+$/, ''));
   }
-  const exact = command.length > 0 && !/[?*[\]]/.test(command) && !command.includes('..') && known.has(cwd);
-  return { action: 'process.run', pattern: { command, cwd }, exact, alwaysAllowed: exact };
+  return { cwd, known: known.has(cwd) };
+}
+
+function normalizeGit(action, pattern, projects) {
+  if (Object.keys(pattern).length !== 2 || !Object.hasOwn(pattern, 'repository') || !Object.hasOwn(pattern, 'args')
+    || !Array.isArray(pattern.args) || pattern.args.length > 256 || pattern.args.some(arg => typeof arg !== 'string' || arg.length > 4096 || /[\u0000-\u001f]/.test(arg))) {
+    throw new CoreError(422, 'invalid_body', 'The Git approval must name a repository and literal arguments.');
+  }
+  const { cwd: repository, known } = approvalLocation(pattern.repository, projects);
+  if (!known) throw new CoreError(422, 'unsupported_capability', 'The Git repository is not registered.');
+  return { action, pattern: { repository, args: [...pattern.args] }, exact: true, alwaysAllowed: false, ...classifyApprovalAction(action, pattern) };
 }
 
 function normalizeSession(pattern) {
@@ -625,7 +663,7 @@ function normalizeSession(pattern) {
   parseUnitId(pattern.unitId);
   if (pattern.taskId !== null) parseTaskId(pattern.taskId);
   if (pattern.runMode === 'task' && pattern.taskId === null) throw new CoreError(422, 'task_required', 'A child task session requires its assigned task.');
-  return { action: 'session.open', pattern: { ...pattern }, exact: true, alwaysAllowed: false };
+  return { action: 'session.open', pattern: { ...pattern }, exact: true, alwaysAllowed: false, desktopOnly: false };
 }
 
 async function validateChild(context, pattern, sessionId) {
@@ -642,7 +680,7 @@ function normalizeFile(pattern) {
   const resource = typeof pattern.resource === 'string' ? pattern.resource : '';
   const filePath = normalizeRelative(pattern.path);
   const exact = resource.length > 0 && resource.length <= 240 && filePath !== null;
-  return { action: 'file.write', pattern: { resource, path: filePath ?? String(pattern.path ?? '') }, exact, alwaysAllowed: exact };
+  return { action: 'file.write', pattern: { resource, path: filePath ?? String(pattern.path ?? '') }, exact, alwaysAllowed: exact, desktopOnly: false };
 }
 
 function normalizeNetwork(pattern) {
@@ -657,7 +695,7 @@ function normalizeNetwork(pattern) {
   }
   const urlPath = typeof pattern.path === 'string' && pattern.path.startsWith('/') && !pattern.path.includes('..') && !/[?*]/.test(pattern.path) ? pattern.path : '';
   const exact = METHODS.has(method) && origin.length > 0 && urlPath.length > 0;
-  return { action: 'network.request', pattern: { method, origin, path: urlPath || String(pattern.path ?? '') }, exact, alwaysAllowed: exact };
+  return { action: 'network.request', pattern: { method, origin, path: urlPath || String(pattern.path ?? '') }, exact, alwaysAllowed: exact, desktopOnly: false };
 }
 
 function normalizeRelative(value) {
@@ -688,6 +726,7 @@ function projectApproval(source, state = null) {
     pattern: request.pattern,
     display: request.display,
     alwaysAllowed: request.alwaysAllowed,
+    desktopOnly: classifyApprovalAction(request.action, request.pattern).desktopOnly,
     requestedAt: request.requestedAt,
     expiresAt: request.expiresAt,
     state: resolvedState,

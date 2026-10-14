@@ -408,6 +408,92 @@ test('optional Git records only the reviewed machine and started-session scope w
   assert.equal((await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions.length, 0);
 });
 
+test('Revoke removes only its reviewed permission, survives retry and cannot be undone by Disconnect or Apply replay', async t => {
+  const world = await reviewWorld(t);
+  const defaultPreview = await review(world, { allowGit: false });
+  await applyReview(world, defaultPreview);
+  assert.deepEqual((await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions, []);
+  const preview = await review(world);
+  await applyReview(world, preview, ['git']);
+  const permissionFile = path.join(world.fixture.paths.localDirectory, 'client-permissions.json');
+  const cursor = (await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions[0];
+  const other = { ...cursor, id: randomUUID(), client: 'codex' };
+  await writeFile(permissionFile, JSON.stringify({ permissions: [cursor, other] }));
+  const beforeHome = await legacyTreeInventory(world.fixture.home);
+  let report = await readMachineSettings(world.domain, world.fixture.machine, 'permissions');
+  await assert.rejects(mutateMachineSettings(world.domain, 'revoke', { machine: world.fixture.machine, expectedRevision: 'a'.repeat(64) }, cursor.id), { code: 'revision_conflict' });
+  const revoked = await mutateMachineSettings(world.domain, 'revoke', { machine: world.fixture.machine, expectedRevision: report.revision }, cursor.id);
+  assert.equal(revoked.body.state, 'revoked');
+  report = await readMachineSettings(world.domain, world.fixture.machine, 'permissions');
+  assert.deepEqual(report.agentPermissions.map(item => item.id), [other.id]);
+  assert.equal(report.revision, revoked.body.revision);
+  assert.deepEqual(await legacyTreeInventory(world.fixture.home), beforeHome);
+  await applyReview(world, preview, ['git']);
+  assert.deepEqual((await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions.map(item => item.id), [other.id]);
+  const fresh = await review(world);
+  assert.equal(fresh.changes.find(item => item.id === 'git').selected, false);
+  await mutateMachineSettings(world.domain, 'disconnect', { machine: world.fixture.machine, confirmed: true, expectedRevision: (await readMachineSettings(world.domain, world.fixture.machine, 'agents')).revision }, 'cursor');
+  assert.deepEqual((await readMachineSettings(world.domain, world.fixture.machine, 'permissions')).agentPermissions.map(item => item.id), [other.id]);
+  assert.deepEqual(await readFile(world.paths.mcp), world.originals.mcp);
+  assert.deepEqual(await readFile(world.paths.hooks), world.originals.hooks);
+});
+
+test('permission HTTP revocation is desktop-only and replays without changing unrelated configuration', async t => {
+  const world = await reviewWorld(t);
+  await applyReview(world, await review(world), ['git']);
+  const credentials = createCredentialStore({ now: world.owner.now });
+  const desktop = credentials.issue({ audience: 'desktop', unitId: 'root:master' }).token;
+  const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  const agent = credentials.issue({ audience: 'agent', unitId: 'project:shop:executor-shop' }).token;
+  const http = await createHttpServer({ ...world.owner, settingsOwner: world.owner, credentials });
+  t.after(() => http.close());
+  const origin = `http://127.0.0.1:${http.port}`;
+  const report = await readMachineSettings(world.domain, world.fixture.machine, 'permissions'), permission = report.agentPermissions[0];
+  const input = { machine: world.fixture.machine, expectedRevision: report.revision }, key = randomUUID();
+  const call = async (token, body = input) => {
+    const response = await fetch(`${origin}/api/v1/settings/permissions/${permission.id}`, { method: 'DELETE', signal: AbortSignal.timeout(5000),
+      headers: { origin, authorization: `Bearer ${token}`, 'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(body) });
+    return { status: response.status, json: await response.json() };
+  };
+  for (const token of [phone, agent]) assert.equal((await call(token)).status, 403);
+  assert.equal((await call(desktop, { ...input, action: '*' })).status, 400);
+  const revoked = await call(desktop);
+  assert.equal(revoked.status, 200);
+  const beforeRetry = await legacyTreeInventory(world.fixture.root);
+  assert.deepEqual((await call(desktop)).json.data, revoked.json.data);
+  assert.deepEqual(await legacyTreeInventory(world.fixture.root), beforeRetry);
+  assert.equal(JSON.stringify(revoked.json).includes(world.secret), false);
+});
+
+test('remote permission revocation executes only on the selected authenticated owner and offline requests write nothing', async t => {
+  const { fixture, owner, domain } = await setup(t);
+  fixture.paths.origin = path.join(fixture.root, 'origin');
+  await mkdir(fixture.paths.origin);
+  const store = createStore({ root: fixture.root, mindPath: fixture.paths.mind, localDirectory: path.join(fixture.root, 'laptop'), confineRoot: fixture.root, now: owner.now });
+  store.aclRunner = fixture.store.aclRunner;
+  const laptop = createSettingsOwner({ ...owner, store, paths: { ...owner.paths, machine: 'LAPTOP', localDirectory: store.localDirectory, staging: path.join(store.localDirectory, 'staging') } });
+  await mkdir(store.localDirectory, { recursive: true });
+  const permission = { id: randomUUID(), machine: 'LAPTOP', client: 'cursor', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' };
+  await writeFile(path.join(store.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [permission] }));
+  await publishMachineSettings(owner);
+  const report = await publishMachineSettings(laptop);
+  const input = { machine: 'LAPTOP', expectedRevision: report.permissions.revision };
+  const beforeOffline = await legacyTreeInventory(fixture.root);
+  await assert.rejects(mutateMachineSettings(domain, 'revoke', input, permission.id), { code: 'machine_unavailable' });
+  assert.deepEqual(await legacyTreeInventory(fixture.root), beforeOffline);
+  await writeBeat(laptop, 'running');
+  const localBefore = await legacyTreeInventory(fixture.home);
+  const request = mutateMachineSettings({ ...domain, operationId: 'remote-revoke' }, 'revoke', input, permission.id);
+  for (let index = 0; index < 25; index += 1) { await processSettingsRequests(laptop); await new Promise(resolve => setTimeout(resolve, 10)); }
+  const result = await request;
+  assert.equal(result.body.state, 'revoked');
+  assert.deepEqual(await legacyTreeInventory(fixture.home), localBefore);
+  await assert.rejects(readFile(path.join(fixture.paths.localDirectory, 'client-permissions.json')), { code: 'ENOENT' });
+  assert.deepEqual(JSON.parse(await readFile(path.join(store.localDirectory, 'client-permissions.json'))).permissions, []);
+  await processSettingsRequests(laptop);
+  assert.deepEqual((await readMachineSettings(domain, 'LAPTOP', 'permissions')).agentPermissions, []);
+});
+
 test('Auto and On demand review only their owned instruction while retaining foreign rule credentials through Disconnect', async t => {
   const world = await reviewWorld(t);
   const rulesPath = path.join(world.fixture.home, '.codex', 'AGENTS.md');
@@ -467,4 +553,30 @@ test('the isolated GUI fixture reviews without disk writes and applies, replays 
   const disconnected = await call('DELETE', '/settings/agents/cursor', { machine: 'DESKTOP', confirmed: true, expectedRevision: applied.json.data.revision });
   assert.equal(disconnected.status, 200);
   await assert.rejects(readFile(preview.changes.find(item => item.id === 'mcp').path), { code: 'ENOENT' });
+});
+
+test('the GUI fixture lists a scoped permission, revokes it once and Disconnect preserves revocation', async t => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const call = async (method, route, body, key = randomUUID()) => {
+    const response = await fetch(`${fixture.origin}/api/v1${route}`, { method, signal: AbortSignal.timeout(5000), headers: { ...fixture.headers,
+      'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(body) });
+    return { status: response.status, json: await response.json() };
+  };
+  const preview = (await call('POST', '/settings/agents/cursor/preview', { machine: 'DESKTOP', mode: 'on-demand', target: 'cli', allowGit: false })).json.data;
+  assert.equal(preview.changes.find(item => item.id === 'git').selected, false);
+  const applied = await call('POST', '/settings/agents/cursor/apply', { machine: 'DESKTOP', previewId: preview.previewId, changeIds: ['git'], expectedRevision: preview.revision });
+  assert.equal(applied.status, 200);
+  const report = (await call('GET', '/settings/permissions?machine=DESKTOP')).json.data;
+  assert.equal(report.agentPermissions.length, 1);
+  const permission = report.agentPermissions[0], input = { machine: 'DESKTOP', expectedRevision: report.revision }, key = randomUUID();
+  assert.equal(permission.scope, 'hivem1nd-started-sessions');
+  assert.equal(permission.grantedBy, 'root:master');
+  const revoked = await call('DELETE', `/settings/permissions/${permission.id}`, input, key);
+  assert.equal(revoked.status, 200);
+  assert.deepEqual((await call('DELETE', `/settings/permissions/${permission.id}`, input, key)).json.data, revoked.json.data);
+  assert.deepEqual((await call('GET', '/settings/permissions')).json.data.agentPermissions, []);
+  const disconnected = await call('DELETE', '/settings/agents/cursor', { machine: 'DESKTOP', confirmed: true, expectedRevision: applied.json.data.revision });
+  assert.equal(disconnected.status, 200);
+  assert.deepEqual((await call('GET', '/settings/permissions')).json.data.agentPermissions, []);
 });

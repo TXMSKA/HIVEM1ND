@@ -6,6 +6,7 @@ import { stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
 import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
+import { classifyApprovalAction } from './adapters.mjs';
 
 const VIEW_LIMIT = 16000000;
 const OBSERVATION_MS = 15 * 60 * 1000;
@@ -1083,7 +1084,11 @@ function parseGrants(value) {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(({ id, action, pattern, grantedAt, grantedBy }) => {
+      const fields = { 'process.run': ['command', 'cwd'], 'file.write': ['resource', 'path'], 'network.request': ['method', 'origin', 'path'] }[action];
+      if (!fields || !pattern || typeof pattern !== 'object' || fields.some(key => typeof pattern[key] !== 'string')) return null;
+      return { id, action, pattern: Object.fromEntries(fields.map(key => [key, pattern[key]])), grantedAt, grantedBy };
+    }).filter(Boolean) : [];
   } catch {
     return [];
   }
@@ -1277,6 +1282,7 @@ async function readPendingApprovals(mind, issues, now) {
       const answers = await filesUnder(mind, relative.replace(/request\.json$/, 'answers'));
       const state = expired ? 'expired' : answers.some((file) => file.endsWith('.json')) ? 'answering' : 'pending';
       items.push({ id: 'approval:' + request.id, kind: 'approval', state,
+        desktopOnly: classifyApprovalAction(request.action, request.pattern).desktopOnly,
         unitId: request.unitId ?? null, title: request.display ?? request.action ?? '',
         since: request.requestedAt ?? '', chatId: request.chatId ?? null, approvalId: request.id ?? null,
         taskId: null, messageId: null, blocking: !expired });

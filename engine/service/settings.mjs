@@ -115,9 +115,7 @@ function reportShape(record, machine) {
     if (!text(item.unitId, 512) || !isUuid(item.grant.id) || !text(item.grant.action, 128) || !plain(item.grant.pattern) || !time(item.grant.grantedAt) || item.grant.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'A standing approval report is not valid.');
   }
   for (const permission of record.permissions.agentPermissions) {
-    exact(permission, ['id', 'machine', 'client', 'actions', 'scope', 'grantedAt', 'grantedBy']);
-    if (!isUuid(permission.id) || permission.machine !== machine || !text(permission.client, 128) || canonicalJson(permission.actions) !== canonicalJson(['git.commit', 'git.push'])
-      || permission.scope !== 'hivem1nd-started-sessions' || !time(permission.grantedAt) || permission.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'An agent permission report is not valid.');
+    validateAgentPermission(permission, machine);
   }
   for (const folder of record.projects.folders) {
     exact(folder, ['id', 'path', 'environment', 'repositories']);
@@ -157,6 +155,33 @@ async function machineOnline(context, machine) {
 
 function ownerOf(context) { return context.settingsOwner ?? context; }
 
+function validateAgentPermission(permission, machine) {
+  exact(permission, ['id', 'machine', 'client', 'actions', 'scope', 'grantedAt', 'grantedBy']);
+  if (!isUuid(permission.id) || permission.machine !== machine || !text(permission.client, 128) || canonicalJson(permission.actions) !== canonicalJson(['git.commit', 'git.push'])
+    || permission.scope !== 'hivem1nd-started-sessions' || !time(permission.grantedAt) || permission.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'An agent permission report is not valid.');
+}
+
+export async function readAgentPermissions(context) {
+  const source = await readConfigBytes(path.join(context.paths.localDirectory, 'client-permissions.json'));
+  if (!source) return [];
+  let record;
+  try { record = JSON.parse(source); } catch { fail(422, 'corrupt_resource', 'The local permission ledger is not valid.'); }
+  exact(record, ['permissions']);
+  if (!Array.isArray(record.permissions) || record.permissions.length > 64 || new Set(record.permissions.map(item => item?.id)).size !== record.permissions.length) fail(422, 'corrupt_resource', 'The local permission ledger is not valid.');
+  for (const permission of record.permissions) validateAgentPermission(permission, context.paths.machine);
+  return record.permissions;
+}
+
+async function revokeAgentPermission(context, id) {
+  const file = path.join(context.paths.localDirectory, 'client-permissions.json');
+  const original = await readConfigBytes(file);
+  const permissions = await readAgentPermissions(context);
+  if (!permissions.some(item => item.id === id)) fail(404, 'permission_not_found', 'The agent permission does not exist.');
+  await configurationWrite(context, [{ path: file, root: context.paths.localDirectory, before: original, after: bytes({ permissions: permissions.filter(item => item.id !== id) }), internal: true }]);
+  const report = await publishMachineSettings(context, 'permissions');
+  return { status: 200, body: { permissionId: id, state: 'revoked', revision: report.permissions.revision } };
+}
+
 export async function publishMachineSettings(context, section = null) {
   context = ownerOf(context);
   return withLocks(context.store, [`settings-report-build:${context.paths.machine}`], () => publishOwnedSettings(context, section));
@@ -177,8 +202,7 @@ async function publishOwnedSettings(context, section) {
   }
   const view = await readProjection(context);
   const unitGrants = view.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant })));
-  const permissionBytes = await readConfigBytes(path.join(context.paths.localDirectory, 'client-permissions.json'));
-  const permissions = { unitGrants, agentPermissions: permissionBytes ? JSON.parse(permissionBytes).permissions : [] };
+  const permissions = { unitGrants, agentPermissions: await readAgentPermissions(context) };
   const projects = { folders: [...folders.values()] };
   const contentRevision = revisionOf(await readBytes(context.store, absolute(context, CONTENT_PATH)));
   const refreshAgents = !existing || section === 'agents' || context.contentRevision !== contentRevision;
@@ -326,6 +350,7 @@ async function executeOwned(context, operation, input, id = null) {
     const report = await publishMachineSettings(context);
     if (report[section].revision !== input.expectedRevision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
   }
+  if (operation === 'revoke') return revokeAgentPermission(context, id);
   const handler = context.settingsHandlers?.[operation];
   if (operation === 'service' && !handler) {
     await configureOwnedService({ ...context, platform: context.paths.platform, mindPath: context.paths.mind, cosmicPath: context.paths.cosmic,
@@ -405,7 +430,7 @@ export async function previewClientConfiguration(context, client, input) {
   }
   const permissionPath = path.join(context.paths.localDirectory, 'client-permissions.json');
   const permissionBytes = await readConfigBytes(permissionPath);
-  const permissions = permissionBytes ? JSON.parse(permissionBytes).permissions : [];
+  const permissions = await readAgentPermissions(context);
   if (!permissions.some(item => item.client === client && item.machine === input.machine)) {
     const permission = { id: randomUUID(), machine: input.machine, client, actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: stamp(context), grantedBy: 'root:master' };
     changes.push({ id: 'git', path: permissionPath, root: context.paths.localDirectory, kind: 'permission', before: permissionBytes,
@@ -481,7 +506,19 @@ async function restoredClientEntries(context, client, connection) {
     const current = changes.has(entry.path) ? changes.get(entry.path).after : await readConfigBytes(entry.path);
     const decode = value => value === null ? null : Buffer.from(value, 'base64');
     let after;
-    try { after = restoreClientConfig({ client, kind: entry.kind, before: decode(entry.before), after: decode(entry.after), current }); }
+    try {
+      if (entry.kind === 'permission') {
+        const beforePermissions = entry.before === null ? [] : JSON.parse(decode(entry.before)).permissions;
+        const added = JSON.parse(decode(entry.after)).permissions.filter(item => !beforePermissions.some(previous => previous.id === item.id));
+        const record = current ? JSON.parse(current) : { permissions: [] };
+        for (const item of added) {
+          const present = record.permissions.find(permission => permission.id === item.id);
+          if (present && canonicalJson(present) !== canonicalJson(item)) fail(409, 'configuration_changed', 'An owned permission changed.');
+        }
+        record.permissions = record.permissions.filter(item => !added.some(permission => permission.id === item.id));
+        after = entry.before === null && record.permissions.length === 0 ? null : bytes(record);
+      } else after = restoreClientConfig({ client, kind: entry.kind, before: decode(entry.before), after: decode(entry.after), current });
+    }
     catch { fail(409, 'configuration_changed', 'An owned configuration entry changed; Disconnect preserved the files.'); }
     const before = changes.has(entry.path) ? changes.get(entry.path).before : current;
     changes.set(entry.path, { path: entry.path, root: entry.root, before, after });

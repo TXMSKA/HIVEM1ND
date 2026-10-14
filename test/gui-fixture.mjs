@@ -4,6 +4,7 @@ import http from "node:http";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { boundaryInsideTag, plainText, validUtf16Boundary } from "../gui/app/markup.mjs";
+import { classifyApprovalAction } from "../engine/service/adapters.mjs";
 import {
   FIXTURE_HOME_CODE,
   FIXTURE_HOME_KEY,
@@ -16,8 +17,8 @@ import {
   stableJson,
 } from "./gui-data.mjs";
 
-// Isolated GUI contract fixture. It does not import the service, CLI, or feature servers; it shares
-// only the browser app's pure markup module, and reads the shared board kit as bytes for exports.
+// Isolated GUI contract fixture. It starts no service, CLI, or feature servers; it shares
+// pure markup and approval classification, and reads the shared board kit as bytes for exports.
 // The home listener is a loopback transport simulation, not a production subnet check.
 // Stdin commands: advance <ms>, emit <name> <json>, disconnect, quit.
 
@@ -795,6 +796,7 @@ async function loadApprovals(fx, issues) {
       else if (Date.parse(request.expiresAt) <= fx.nowMs) state = "expired";
       approvals.push({
         ...request,
+        desktopOnly: classifyApprovalAction(request.action, request.pattern).desktopOnly,
         state,
         revision,
         answer: answers.at(-1)?.value ?? null,
@@ -1357,6 +1359,10 @@ function publishNewEventRecords(fx, intent, principal) {
 async function mutate(fx, request, route, body, principal, requestId) {
   authorize(principal, route);
   route.validate(body);
+  if (principal.audience === "phone" && route.pattern === "/approvals/:approvalId/answer") {
+    const approval = (await projection(fx)).approvals.find(item => item.id === route.approvalId);
+    if (body.decision === "approve-always" || approval?.desktopOnly) throw new HttpError(403, "phone_read_only", "Standing approvals and pushes are answered on the computer.");
+  }
   const key = String(request.headers["idempotency-key"] ?? "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(key)) {
     throw new HttpError(400, "invalid_body", "The idempotency key must be a lowercase UUID.");
@@ -1811,6 +1817,7 @@ function routeTable() {
     { pattern: "/settings/agents/:client/apply", POST: { capability: "settings.write", validate: clientReviewValidator("apply") } },
     { pattern: "/settings/agents/:client", DELETE: { capability: "settings.write", validate: clientReviewValidator("disconnect") } },
     { pattern: "/settings/permissions", GET: { query: ["machine"] } },
+    { pattern: "/settings/permissions/:permissionId", DELETE: { capability: "settings.write", validate: permissionRevokeValidator } },
     { pattern: "/settings/projects", GET: { query: ["machine"] } },
     { pattern: "/settings/content", GET: { query: [] } },
     { pattern: "/settings/home-network", POST: { capability: "home.manage", validate: validateHome, runtime: true } },
@@ -1880,6 +1887,31 @@ function clientReviewValidator(operation) {
   };
 }
 
+function permissionRevokeValidator(body) {
+  requireObject(body, ["machine", "expectedRevision"]);
+  requireKeys(body, ["machine", "expectedRevision"]);
+  if (typeof body.machine !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+  revisionField(body.expectedRevision);
+  if (body.expectedRevision === null) throw new HttpError(422, "invalid_body", "An existing revision is required.");
+}
+
+async function fixturePermissions(fx, snap) {
+  const source = await readJsonFile(join(fx.local, "client-permissions.json")).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+  const report = { unitGrants: snap.units.filter(unit => unit.machine === LOCAL_MACHINE).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant }))), agentPermissions: source?.value.permissions ?? [] };
+  return { ...report, revision: sha256(Buffer.from(stableJson(report))) };
+}
+
+async function preparePermissionRevoke(fx, id, body) {
+  if (body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "The selected machine is unavailable.");
+  const snap = await projection(fx), report = await fixturePermissions(fx, snap);
+  if (body.expectedRevision !== report.revision) throw new HttpError(409, "revision_conflict", "The permissions changed.");
+  if (!report.agentPermissions.some(item => item.id === id)) throw new HttpError(404, "permission_not_found", "The agent permission does not exist.");
+  const file = join(fx.local, "client-permissions.json"), before = await readFile(file);
+  const after = Buffer.from(stableJson({ permissions: report.agentPermissions.filter(item => item.id !== id) }));
+  const revision = sha256(Buffer.from(stableJson({ unitGrants: report.unitGrants, agentPermissions: report.agentPermissions.filter(item => item.id !== id) })));
+  return { status: 200, data: { permissionId: id, state: "revoked", revision }, writes: [{ path: file, beforeRevision: sha256(before), afterRevision: sha256(after), afterBytesBase64: after.toString("base64") }], events: [{ name: "machine.settings.changed", global: true, data: { machine: LOCAL_MACHINE, section: "permissions", revision, reportedAt: clock(fx).toISOString() } }] };
+}
+
 async function fixtureClientState(fx) {
   return readJsonFile(join(fx.local, "reviewed-clients.json")).catch(error => { if (error.code === "ENOENT") return { value: { clients: {} }, hash: null }; throw error; });
 }
@@ -1905,7 +1937,7 @@ async function prepareClientReview(fx, operation, client, body) {
     const changes = await Promise.all([
       change("mcp", join(base, "mcp.json"), stableJson({ mcpServers: { "hivem1nd-relay": { command: "fixture-relay" } } }), "Add the Relay server, so sessions read and send messages"),
       change("hooks", join(base, "hooks.json"), stableJson({ hooks: { stop: [{ command: "fixture-relay-hook" }] } }), "Add the Relay hooks, so a session wakes when a message arrives"),
-      change("git", join(fx.local, "client-permissions.json"), stableJson({ machine: LOCAL_MACHINE, client, actions: ["git.commit", "git.push"], scope: "hivem1nd-started-sessions" }), "Allow git commit and git push only in HIVEM1ND-started sessions", true),
+      change("git", join(fx.local, "client-permissions.json"), stableJson({ id: uuid(), machine: LOCAL_MACHINE, client, actions: ["git.commit", "git.push"], scope: "hivem1nd-started-sessions", grantedAt: clock(fx).toISOString(), grantedBy: "root:master" }), "Allow git commit and git push only in HIVEM1ND-started sessions", true),
     ]);
     const previewId = uuid(), expiresAt = new Date(fx.nowMs + 600000).toISOString();
     return { status: 200, data: { previewId, revision: state.hash, expiresAt, restartRequired: true, changes: changes.map(({ before, after, ...item }) => item) }, writes: [], events: [],
@@ -1940,8 +1972,19 @@ async function prepareClientReview(fx, operation, client, body) {
     const restored = new Map();
     for (const entry of [...connection.entries].reverse()) {
       const current = restored.has(entry.path) ? restored.get(entry.path).after : await readFile(entry.path).catch(error => { if (error.code === "ENOENT") return null; throw error; });
-      if (current === null || sha256(current) !== sha256(Buffer.from(entry.after, "base64"))) throw new HttpError(409, "configuration_changed", "The owned configuration changed; the files were preserved.");
-      restored.set(entry.path, { before: restored.get(entry.path)?.before ?? current, after: entry.before === null ? null : Buffer.from(entry.before, "base64") });
+      let after = entry.before === null ? null : Buffer.from(entry.before, "base64");
+      if (entry.path === join(fx.local, "client-permissions.json")) {
+        const previous = after === null ? [] : JSON.parse(after).permissions;
+        const added = JSON.parse(Buffer.from(entry.after, "base64")).permissions.filter(item => !previous.some(permission => permission.id === item.id));
+        const record = current === null ? { permissions: [] } : JSON.parse(current);
+        for (const item of added) {
+          const present = record.permissions.find(permission => permission.id === item.id);
+          if (present && stableJson(present) !== stableJson(item)) throw new HttpError(409, "configuration_changed", "The owned permission changed.");
+        }
+        record.permissions = record.permissions.filter(item => !added.some(permission => permission.id === item.id));
+        after = entry.before === null && record.permissions.length === 0 ? null : Buffer.from(stableJson(record));
+      } else if (current === null || sha256(current) !== sha256(Buffer.from(entry.after, "base64"))) throw new HttpError(409, "configuration_changed", "The owned configuration changed; the files were preserved.");
+      restored.set(entry.path, { before: restored.get(entry.path)?.before ?? current, after });
     }
     for (const [file, item] of restored) {
       if (item.after === null) removes.push({ path: file, beforeRevision: sha256(item.before) });
@@ -2143,7 +2186,7 @@ async function readData(fx, snap, spec, params, query) {
         return saved ? { ...item, mode: saved.mode, cli: { state: saved.connected ? "connected" : "changes-needed", changes: saved.connected ? 0 : 1 }, app: { ...item.app, state: saved.appConnected ? "connected" : item.app.state } } : item;
       }) };
     }
-    if (pattern === "/settings/permissions") return { ...common, ...(reported?.permissions ?? { revision: null, unitGrants: snap.units.filter(unit => unit.machine === machine).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant }))), agentPermissions: [] }) };
+    if (pattern === "/settings/permissions") return { ...common, ...(machine === LOCAL_MACHINE ? await fixturePermissions(fx, snap) : reported?.permissions ?? { revision: null, unitGrants: [], agentPermissions: [] }) };
     if (pattern === "/settings/projects") return { ...common, ...(reported?.projects ?? { revision: null, folders: [] }) };
     const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
     return { settings: snap.settings.settings, revision: snap.settings.revision, selectedMachine: machine, readOnly, reportedAt: common.reportedAt,
@@ -2520,6 +2563,7 @@ async function handleApi(fx, request, response, audience) {
     ...spec,
     requestPath: concrete,
     mailboxUnit: matched.params.unitId,
+    approvalId: matched.params.approvalId,
     validate: spec.validate,
     checkPreconditions: async (input) => checkMutation(fx, spec.pattern, matched.params, input),
     prepare: async (input, actor, operationId) => prepareMutation(fx, spec.pattern, matched.params, input, actor, operationId),
@@ -4737,6 +4781,7 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
 }
 
 async function prepareMutation(fx, pattern, params, body, principal, operationId) {
+  if (pattern === "/settings/permissions/:permissionId") return preparePermissionRevoke(fx, params.permissionId, body);
   if (pattern === "/settings/agents/:client/preview") return prepareClientReview(fx, "preview", params.client, body);
   if (pattern === "/settings/agents/:client/apply") return prepareClientReview(fx, "apply", params.client, body);
   if (pattern === "/settings/agents/:client") return prepareClientReview(fx, "disconnect", params.client, body);

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answerApproval, approvalRevision, consumeAnswers, consumeRevocations, normalizeAction, readApproval, recoverApprovals, requestApproval, revokeGrant } from '../engine/service/approvals.mjs';
+import { answerApproval, approvalRevision, consumeAnswers, consumeRevocations, listGrants, normalizeAction, readApproval, recoverApprovals, requestApproval, revokeGrant } from '../engine/service/approvals.mjs';
 import { openSync } from '../engine/sync/store.mjs';
 import { canonicalJson } from '../engine/service/identity.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
@@ -11,6 +11,7 @@ import { createNativeAdapter, enqueueStart } from '../engine/service/adapters.mj
 import { dispatch } from '../engine/service/mcp.mjs';
 import { validateToolArguments } from '../engine/relay/mcp.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
+import { readProjection } from '../engine/service/projection.mjs';
 
 const UNIT = 'project:shop:executor-shop';
 
@@ -429,4 +430,109 @@ test('the bound MCP forwards one session approval and rejects arbitrary launch f
   assert.equal(world.creates(), 0);
   const invalid = await call({ ...args, cwd: 'foreign' });
   assert.equal(invalid.error.code, -32602);
+});
+
+test('Git classification uses literal operations, refuses ambiguity and ignores display or false overrides', async t => {
+  const { fixture, context } = await service(t);
+  for (const command of ['git push origin main', 'git.exe --no-pager push', '"C:\\Program Files\\Git\\bin\\git.exe" -C "C:\\work" push origin']) {
+    const normalized = normalizeAction('process.run', { command, cwd: 'project:shop' }, { projects: context.projects });
+    assert.equal(normalized.desktopOnly, true);
+    assert.equal(normalized.alwaysAllowed, false);
+    const created = await requestApproval(context, { action: 'process.run', pattern: { command, cwd: 'project:shop' }, display: 'Ordinary build', desktopOnly: false });
+    assert.equal(created.approval.desktopOnly, true);
+    const file = path.join(fixture.paths.mind, 'user', 'relay', 'approvals', created.approval.id, 'request.json');
+    const record = JSON.parse(await readFile(file));
+    record.desktopOnly = false;
+    await writeFile(file, JSON.stringify(record));
+    assert.equal((await readApproval(context, created.approval.id)).desktopOnly, true);
+    assert.equal((await readProjection(context)).waiting.find(item => item.approvalId === created.approval.id).desktopOnly, true);
+  }
+  for (const command of ['npm run build', "printf 'git push'", 'git commit -m "git push"', 'git status']) {
+    assert.equal(normalizeAction('process.run', { command, cwd: 'project:shop' }, { projects: context.projects }).desktopOnly, false);
+  }
+  for (const command of ['git status; git push', 'git -c alias.publish=push publish', 'git publish', 'cmd /c git push', 'bash -c "git push"', 'env git push', 'call git push', 'command git push', 'git $(printf push)', 'git pu"sh"', 'git push\nnpm test', 'git push > log', "echo '& git push'", 'git.cmd push']) {
+    assert.throws(() => normalizeAction('process.run', { command, cwd: 'project:shop' }, { projects: context.projects }), { code: 'unsupported_capability' });
+  }
+  const spoof = await requestApproval(context, { action: 'process.run', pattern: pattern(), display: 'git push', desktopOnly: true, alwaysAllowed: false });
+  assert.equal(spoof.approval.desktopOnly, false);
+  assert.equal(spoof.approval.alwaysAllowed, false);
+  const direct = normalizeAction('git.push', { repository: 'project:shop', args: ['origin', 'main'] }, { projects: context.projects });
+  assert.equal(direct.desktopOnly, true);
+  assert.equal(direct.alwaysAllowed, false);
+  assert.throws(() => normalizeAction('git.push', { repository: '*', args: [] }, { projects: context.projects }), { code: 'unsupported_capability' });
+});
+
+test('phone cannot grant standing authority or answer pushes, while build and one-time commit answers work', async t => {
+  const { fixture, context, master, sessionId } = await service(t);
+  context.native = master.native = liveNative(sessionId);
+  const phone = { ...master, principal: { ...master.principal, audience: 'phone' } };
+  for (const input of [
+    { action: 'git.push', pattern: { repository: 'project:shop', args: ['origin', 'main'] } },
+    { action: 'process.run', pattern: { command: 'git push origin main', cwd: 'project:shop' } },
+  ]) {
+    const created = await requestApproval(context, { ...input, display: 'Build', alwaysAllowed: true });
+    for (const decision of ['approve', 'deny', 'approve-always']) {
+      await assert.rejects(answerApproval(phone, created.approval.id, { decision, expectedRevision: created.approval.revision }), { code: 'phone_read_only' });
+    }
+    assert.equal((await readApproval(context, created.approval.id)).state, 'pending');
+    await assert.rejects(readFile(path.join(fixture.paths.mind, 'user', 'relay', 'approvals', created.approval.id, 'result.json')), { code: 'ENOENT' });
+    const desktop = await answerApproval(master, created.approval.id, { decision: 'approve', expectedRevision: created.approval.revision });
+    assert.equal(desktop.allow, true);
+  }
+  const build = await requestApproval(context, { action: 'process.run', pattern: pattern(), display: 'Build', alwaysAllowed: true });
+  await assert.rejects(answerApproval(phone, build.approval.id, { decision: 'approve-always', expectedRevision: build.approval.revision }), { code: 'phone_read_only' });
+  for (const decision of ['approve', 'deny']) for (const input of [
+    { action: 'process.run', pattern: pattern() },
+    { action: 'git.commit', pattern: { repository: 'project:shop', args: ['-m', 'Reviewed task'] } },
+    { action: 'process.run', pattern: { command: 'git commit -m "Reviewed task"', cwd: 'project:shop' } },
+  ]) {
+    const created = await requestApproval(context, { ...input, display: 'git push', alwaysAllowed: false });
+    assert.equal(created.approval.desktopOnly, false);
+    const resolved = await answerApproval(phone, created.approval.id, { decision, expectedRevision: created.approval.revision });
+    assert.equal(resolved.state, decision === 'approve' ? 'approved' : 'denied');
+    assert.equal(resolved.grantId, null);
+  }
+  assert.deepEqual(await grants(fixture), []);
+});
+
+test('phone session.open remains a one-time approval and synced phone standing answers never create grants', async t => {
+  const world = await childWorld(t);
+  const phone = { ...world.master, principal: { ...world.master.principal, audience: 'phone' } };
+  const child = await requestApproval(world.context, { action: 'session.open', pattern: world.pattern, display: 'Open another CLI' });
+  const resolved = await answerApproval(phone, child.approval.id, { decision: 'approve', expectedRevision: child.approval.revision });
+  assert.equal(resolved.child.result.state, 'started');
+  assert.equal(world.creates(), 1);
+  const build = await requestApproval(world.context, { action: 'process.run', pattern: pattern(), display: 'Build', alwaysAllowed: true });
+  const id = randomUUID(), directory = path.join(world.fixture.paths.mind, 'user', 'relay', 'approvals', build.approval.id, 'answers');
+  await mkdir(directory);
+  await writeFile(path.join(directory, `${id}.json`), JSON.stringify({ id, approvalId: build.approval.id, decision: 'approve-always', answeredBy: 'root:master', audience: 'phone', machine: 'PHONE', at: new Date(world.fixture.clock.now).toISOString() }));
+  const [outcome] = await consumeAnswers(world.context, build.approval.id);
+  assert.equal(outcome.state, 'pending');
+  assert.deepEqual(await grants(world.fixture), []);
+});
+
+test('a revoked unit grant cannot resume the next request or leak private fields in its projection', async t => {
+  const { fixture, context, master, sessionId } = await service(t);
+  const grant = { id: randomUUID(), action: 'process.run', pattern: { ...pattern(), token: 'synthetic-private-field' }, grantedAt: '2026-10-10T11:00:00.000Z', grantedBy: 'root:master', endpoint: 'synthetic-private-endpoint' };
+  const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await writeFile(stateFile, stateText('DESKTOP', [grant]));
+  const projected = await listGrants(master, UNIT);
+  assert.equal(JSON.stringify(projected).includes('synthetic-private-field'), false);
+  assert.equal(JSON.stringify(projected).includes('synthetic-private-endpoint'), false);
+  delete grant.pattern.token;
+  delete grant.endpoint;
+  await writeFile(stateFile, stateText('DESKTOP', [grant]));
+  let resolves = 0;
+  context.native = { connected: async id => {
+    assert.equal(id, sessionId);
+    await revokeGrant(master, UNIT, grant.id, { expectedRevision: revisionOf(await readFile(stateFile)) });
+    return true;
+  }, resolve: async () => { resolves += 1; } };
+  const result = await requestApproval(context, { action: 'process.run', pattern: pattern(), display: 'Build' });
+  assert.equal(result.allow, false);
+  assert.equal(resolves, 0);
+  const next = await requestApproval(context, { action: 'process.run', pattern: pattern(), display: 'Build again' });
+  assert.equal(next.prompted, true);
+  assert.equal(next.allow, false);
+  assert.deepEqual((await listGrants(master, UNIT)).items, []);
 });

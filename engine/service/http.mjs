@@ -882,6 +882,11 @@ function operationFor(route, credential, body) {
 
 async function objectFor(route, domain, credential, params, body) {
   if (credential?.audience === 'agent') return agentScope(route, domain, credential, params, body);
+  if (route.handler === 'answerApproval' && credential?.audience === 'phone') {
+    if (body?.decision === 'approve-always') return { decision: body.decision };
+    const approval = await readApproval(domain, params.approvalId);
+    return { decision: body?.decision, desktopOnly: approval.desktopOnly };
+  }
   if (route.handler === 'changeStatus' && credential?.audience === 'phone') {
     const task = await loadTask(domain, params.taskId);
     const reviewable = reviewAuthority(task).reviewable;

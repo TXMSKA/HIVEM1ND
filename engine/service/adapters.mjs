@@ -10,11 +10,55 @@ import { readUnitState } from './state.mjs';
 import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocks } from './store.mjs';
+import { readAgentPermissions } from './settings.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
 const TERMINAL = new Set(['started', 'failed', 'expired', 'canceled']);
 const STARTABLE = new Set(CLIENTS);
+
+// Only a single, literal invocation is classified. Shells, aliases and expansion
+// need the client's native prompt because their effective operation is unknown.
+export function classifyApprovalAction(action, pattern) {
+  if (action === 'git.commit' || action === 'git.push') return { gitAction: action, desktopOnly: action === 'git.push' };
+  if (action !== 'process.run') return { gitAction: null, desktopOnly: false };
+  const command = pattern?.command;
+  const unsupported = () => { throw new CoreError(422, 'unsupported_capability', 'The command cannot be classified as one literal operation.'); };
+  if (typeof command !== 'string' || !command.trim() || command.length > 100000 || /[\u0000-\u0008\u000a-\u001f\u007f\u2028\u2029]/.test(command)) unsupported();
+  const tokens = command.match(/"[^"\r\n]*"|'[^'\r\n]*'|[^\s"']+/g) ?? [];
+  if (tokens.join(' ').replace(/\s+/g, ' ') !== command.trim().replace(/\s+/g, ' ')) unsupported();
+  const argv = tokens.map(token => {
+    const quoted = token[0] === '"' || token[0] === "'";
+    if (/[;&|<>`$^()%{}]/.test(token) || (!quoted && token.includes('#'))) unsupported();
+    const value = quoted ? token.slice(1, -1) : token;
+    if (value.includes('\\') && !/^[A-Za-z]:\\/.test(value)) unsupported();
+    return value;
+  });
+  const executable = argv.shift()?.replaceAll('\\', '/').split('/').at(-1).toLowerCase();
+  if (/^(?:sh|bash|zsh|fish|cmd|powershell|pwsh|env|call|start|command|exec|sudo|nohup|nice|time|xargs|eval)(?:\.exe)?$/.test(executable) || executable?.includes('=')) unsupported();
+  if (/^git\.(?:cmd|bat)$/.test(executable)) unsupported();
+  if (!['git', 'git.exe'].includes(executable)) return { gitAction: null, desktopOnly: false };
+  while (argv[0]?.startsWith('-')) {
+    if (['-C', '--git-dir', '--work-tree'].includes(argv[0]) && argv[1] && !argv[1].startsWith('-')) argv.splice(0, 2);
+    else if (/^--(?:git-dir|work-tree)=.+$/.test(argv[0]) || ['--no-pager', '--no-optional-locks'].includes(argv[0])) argv.shift();
+    else unsupported();
+  }
+  const operation = argv.shift();
+  if (!['push', 'commit', 'status', 'diff', 'log', 'show', 'fetch', 'pull', 'checkout', 'switch', 'branch', 'add', 'restore', 'reset', 'merge', 'rebase', 'rev-parse', 'ls-files', 'ls-remote', 'clone', 'init', 'tag'].includes(operation)) unsupported();
+  const gitAction = ['push', 'commit'].includes(operation) ? `git.${operation}` : null;
+  return { gitAction, desktopOnly: gitAction === 'git.push' };
+}
+
+export async function sessionGitPermissions(context, sessionId, { unitId, client, repository } = {}) {
+  const registration = await registrationFor(context, sessionId);
+  const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.phase === 'registered');
+  if (!registration || registration.machine !== context.paths.machine || registration.launchKind !== 'cli'
+    || !journal?.pid || !context.ownedPids?.has(journal.pid) || journal.unitId !== registration.unitId || journal.client !== registration.client
+    || unitId !== registration.unitId || client !== registration.client || repository !== journal.repository) return [];
+  const permissions = await readAgentPermissions(context);
+  return permissions.filter(item => journal.permissionIds?.includes(item.id) && item.client === client)
+    .map(item => ({ ...item, sessionId, unitId, repository }));
+}
 
 export async function probeClients(options = {}) {
   const env = options.env ?? process.env;
@@ -152,6 +196,7 @@ export function createNativeAdapter(client, options = {}) {
     async registered(request, registration, context) {
       const session = sessions.get(registration.nativeSessionId);
       if (session && context) {
+        session.gitPermissions = request.gitPermissions;
         session.onCompleted = async () => {
           if (!session.taskTerminal || request.runMode !== 'task') return;
           await stopSession(context, registration.sessionId, { confirmed: true });
@@ -159,6 +204,10 @@ export function createNativeAdapter(client, options = {}) {
         session.child?.once?.('exit', () => stopSession(context, registration.sessionId, { confirmed: true }).catch(() => {}));
       }
       return options.onNativeRegistered?.({ request, registration });
+    },
+    async gitPermissions({ nativeSessionId, unitId }) {
+      const session = sessions.get(nativeSessionId);
+      return session?.unitId === unitId && typeof session.gitPermissions === 'function' ? session.gitPermissions() : [];
     },
     async completeTask(input) {
       const session = sessions.get(input.nativeSessionId);
@@ -568,14 +617,16 @@ async function launch(context, request) {
   if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && !['failed', 'stopped'].includes(item.phase) && item.createAttempted === true)) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
+  const adapter = adapterFor(context, request.client);
+  const permissions = (await readAgentPermissions(context)).filter(item => item.client === request.client && parseUnitId(request.unitId).project !== null);
+  const permissionBinding = { repository: cwd, permissionIds: permissions.map(item => item.id) };
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
   if (context.launchFault === 'prepared') throw new CoreError(500, 'injected_crash', 'Injected crash before native creation.');
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
-  const adapter = adapterFor(context, request.client);
   let created;
   try {
-    created = await adapter.create({ ...request, cwd });
+    created = await adapter.create({ ...request, cwd, agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository: cwd })) });
   } catch (error) {
     if (error?.ownedPid) {
       context.ownedPids ??= new Set();
@@ -595,9 +646,9 @@ async function launch(context, request) {
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
-  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
+  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
   try {
-    await adapter.registered?.(request, registration, context);
+    await adapter.registered?.({ ...request, gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository: cwd }) }, registration, context);
   } catch (error) {
     await stopSession(context, registration.sessionId, { confirmed: true });
     await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });

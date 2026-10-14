@@ -6,12 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cancelStart, clientRecords, completeSessionTask, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, readStartRequest, recoverStarts, registerNative, stopSession } from '../engine/service/adapters.mjs';
+import { cancelStart, clientRecords, completeSessionTask, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, readStartRequest, recoverStarts, registerNative, sessionGitPermissions, stopSession } from '../engine/service/adapters.mjs';
 import { readDetail } from '../engine/service/projection.mjs';
 import { composeCore, openNativeAdapters } from '../engine/service/service.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
+import { requestApproval } from '../engine/service/approvals.mjs';
 
 const UNIT = 'project:shop:executor-shop';
 const CODEX = [
@@ -55,6 +56,63 @@ async function start(context, file, extra = {}) {
   const revision = hashBytes(await readFile(file));
   return enqueueStart(context, { unitId: UNIT, client: 'codex', model: 'strong', stateRevision: revision, prompt: 'Say ok.', ...extra });
 }
+
+test('reviewed Git capability reaches only newly owned sessions and is rechecked after revocation', async t => {
+  const transcript = [...CODEX];
+  const { fixture, context, file } = await world(t, transcript);
+  const permissionFile = path.join(fixture.paths.localDirectory, 'client-permissions.json');
+  const launches = [], adapter = context.adapters.codex, original = adapter.create.bind(adapter);
+  adapter.create = async request => {
+    launches.push(request);
+    transcript[2] = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { thread: { id: `permission-thread-${launches.length}` } } });
+    return original(request);
+  };
+  const earlier = await start(context, file, { runMode: 'chat' });
+  assert.deepEqual(launches[0].agentPermissions, []);
+  const permission = { id: randomUUID(), machine: fixture.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' };
+  await writeFile(permissionFile, JSON.stringify({ permissions: [permission] }));
+  const binding = { unitId: UNIT, client: 'codex', repository: fixture.root };
+  assert.deepEqual(await sessionGitPermissions(context, earlier.result.sessionId, binding), []);
+  await stopSession(context, earlier.result.sessionId, { confirmed: true });
+  const started = await start(context, file, { runMode: 'chat' });
+  assert.equal(launches[1].agentPermissions[0].id, permission.id);
+  assert.equal(launches[1].agentPermissions[0].unitId, UNIT);
+  assert.equal(launches[1].agentPermissions[0].repository, fixture.root);
+  assert.equal(launches[1].agentPermissions[0].requestId, started.request.id);
+  const permitted = await sessionGitPermissions(context, started.result.sessionId, binding);
+  assert.equal(permitted[0].sessionId, started.result.sessionId);
+  const registration = await readDetail(context, 'sessions', started.result.sessionId);
+  assert.equal((await adapter.gitPermissions({ nativeSessionId: registration.nativeSessionId, unitId: UNIT }))[0].id, permission.id);
+  for (const changed of [{ unitId: 'root:overseer' }, { client: 'cursor' }, { repository: path.join(fixture.root, 'foreign') }]) {
+    assert.deepEqual(await sessionGitPermissions(context, started.result.sessionId, { ...binding, ...changed }), []);
+  }
+  assert.deepEqual(await sessionGitPermissions({ ...context, paths: { ...context.paths, machine: 'LAPTOP' } }, started.result.sessionId, binding), []);
+  const manual = await registerNative(context, { client: 'codex', unitId: UNIT, nativeSessionId: 'manual-foreign' });
+  assert.deepEqual(await sessionGitPermissions(context, manual.sessionId, binding), []);
+  const agent = { ...context, principal: { audience: 'agent', unitId: UNIT, sessionId: started.result.sessionId } };
+  const ask = await requestApproval(agent, { action: 'git.push', pattern: { repository: 'project:shop', args: ['origin', 'main'] }, display: 'Push the reviewed task' });
+  assert.equal(ask.prompted, true);
+  assert.equal(ask.allow, false);
+  assert.equal(ask.approval.alwaysAllowed, false);
+  await writeFile(permissionFile, JSON.stringify({ permissions: [] }));
+  assert.deepEqual(await sessionGitPermissions(context, started.result.sessionId, binding), []);
+  assert.deepEqual(await adapter.gitPermissions({ nativeSessionId: registration.nativeSessionId, unitId: UNIT }), []);
+  await writeFile(permissionFile, JSON.stringify({ permissions: [{ ...permission, id: randomUUID() }] }));
+  assert.deepEqual(await sessionGitPermissions(context, started.result.sessionId, binding), []);
+  await stopSession(context, started.result.sessionId, { confirmed: true });
+  await writeFile(permissionFile, JSON.stringify({ permissions: [] }));
+  await start(context, file, { runMode: 'chat' });
+  assert.deepEqual(launches.at(-1).agentPermissions, []);
+  await writeFile(permissionFile, JSON.stringify({ permissions: [permission] }));
+  for (const [unitId, role] of [['root:overseer', 'overseer'], ['env:web:overlord-web', 'overlord']]) {
+    const unit = unitId.split(':').at(-1), otherFile = path.join(fixture.paths.mind, 'user', 'state', `${unit}.md`);
+    await writeFile(otherFile, `unit: ${unit}\nunit-id: ${unitId}\nrole: ${role}\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+    const started = await enqueueStart(context, { unitId, client: 'codex', runMode: 'chat', stateRevision: hashBytes(await readFile(otherFile)) });
+    assert.equal(started.result.state, 'started');
+    assert.deepEqual(launches.at(-1).agentPermissions, []);
+    assert.deepEqual(await sessionGitPermissions(context, started.result.sessionId, { ...binding, unitId }), []);
+  }
+});
 
 test('unavailable clients, bad models, stale state and a quiet machine do not start', async (t) => {
   const { fixture, context, file, calls } = await world(t);

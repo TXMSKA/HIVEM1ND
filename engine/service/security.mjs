@@ -391,6 +391,9 @@ export function authorize(credential, operation, object = {}) {
   if (object.listener === 'lan' && credential.audience !== 'phone') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
   if (credential.audience === 'phone') {
     if (!PHONE.has(operation)) throw new CoreError(403, 'phone_read_only', 'Phone cannot change that.');
+    if (operation === 'approval.answer' && (object.decision === 'approve-always' || object.desktopOnly === true)) {
+      throw new CoreError(403, 'phone_read_only', 'Standing approvals and pushes are answered on the computer.', { desktopOnly: true });
+    }
     if ((operation === 'chat.post' || operation === 'master.read') && object.existing === false) throw new CoreError(404, 'not_found', 'The destination does not exist.');
     if ((operation === 'task.accept' || operation === 'task.send-back') && object.reviewable !== true) throw new CoreError(403, 'forbidden', 'The task is not reviewable.');
     return { allowed: true };
@@ -478,7 +481,7 @@ export function safeError(error, requestId) {
   };
 }
 
-const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code']);
+const PUBLIC_DETAIL_KEYS = new Set(['remaining', 'limits', 'state', 'retryAt', 'machine', 'phase', 'used', 'max', 'windowSeconds', 'messages', 'messageBytes', 'syncBytes', 'reason', 'code', 'desktopOnly']);
 
 function leaks(value) {
   return typeof value === 'string' && /[A-Za-z]:[\\/]|\\\\|token|secret|bearer |authorization|password|(?:^|[^A-Za-z0-9])\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/i.test(value);
