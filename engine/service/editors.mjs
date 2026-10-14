@@ -1597,6 +1597,12 @@ function recipientsFor(context, attached, authorId) {
   return list;
 }
 
+export function commentRecipients(context, input, attached, authorId) {
+  if (input.sendToAgent !== undefined && typeof input.sendToAgent !== 'boolean') fail(422, 'invalid_body', 'Send to agent must be a boolean.');
+  const recipients = recipientsFor(context, attached, authorId);
+  return input.sendToAgent === false ? recipients.filter((unitId) => unitId === 'root:master') : recipients;
+}
+
 async function noticePlan(context, messageId, resourceId, recipients) {
   if (!context.paths?.mind || recipients.length === 0) return { entries: [], events: [] };
   const file = path.join(context.paths.mind, 'user', 'relay', 'fanout', `${messageId}.json`);
@@ -1681,7 +1687,7 @@ export async function createComment(context, id, input) {
   const { author, authorId } = actor(context);
   const thread = {
     id: randomUUID(), anchor, to: null, status: 'open', layer: found.entry.kind === 'blueprint' ? 'design' : undefined,
-    messages: [{ id: randomUUID(), author, authorId, at: clock(context), text }],
+    messages: [{ id: randomUUID(), author, authorId, at: clock(context), text, sendToAgent: input.sendToAgent !== false }],
   };
   if (thread.layer === undefined) delete thread.layer;
   assignIds(comments.value, found.entry.id);
@@ -1689,8 +1695,8 @@ export async function createComment(context, id, input) {
   const bytes = jsonBytes(comments.value);
   const revision = hashBytes(bytes);
   const messageId = thread.messages[0].id;
-  const notices = await noticePlan(context, messageId, id, recipientsFor(context, (await readAttachments(context, found.entry.id)).attached, authorId));
-  await admitComment(context, messageId);
+  const notices = await noticePlan(context, messageId, id, commentRecipients(context, input, (await readAttachments(context, found.entry.id)).attached, authorId));
+  if (notices.entries.length) await admitComment(context, messageId);
   await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
     { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread: projectComments({ threads: [thread] }, id).threads[0], commentsRevision: revision, operation: 'create' } },
     ...notices.events,
@@ -1708,14 +1714,14 @@ export async function replyComment(context, id, threadId, input) {
   const thread = comments.value.threads.find((item) => item.id === threadId);
   if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
   const { author, authorId } = actor(context);
-  const message = { id: randomUUID(), author, authorId, at: clock(context), text };
+  const message = { id: randomUUID(), author, authorId, at: clock(context), text, sendToAgent: input.sendToAgent !== false };
   assignIds(comments.value, found.entry.id);
   thread.messages.push(message);
   thread.status = 'open';
   const bytes = jsonBytes(comments.value);
   const revision = hashBytes(bytes);
-  const notices = await noticePlan(context, message.id, id, recipientsFor(context, (await readAttachments(context, found.entry.id)).attached, authorId));
-  await admitComment(context, message.id);
+  const notices = await noticePlan(context, message.id, id, commentRecipients(context, input, (await readAttachments(context, found.entry.id)).attached, authorId));
+  if (notices.entries.length) await admitComment(context, message.id);
   await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
     { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: 'reply' } },
     ...notices.events,

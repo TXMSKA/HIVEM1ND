@@ -8,7 +8,7 @@ import { crc32 } from 'node:zlib';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch, rectangleNode } from '../features/blueprint/review/sketch-format.mjs';
-import { addNode, answerProposal, createAsset, createBoard, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
+import { addNode, answerProposal, createAsset, createBoard, commentRecipients, createComment, createText, discoverResources, editorSearchText, list, notifyAttached, observeExternal, preserveUnknown, readAsset, readAttachments, readComments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replyComment, updateNode, validateBoard, validateText, writeAttachments } from '../engine/service/editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from '../engine/service/editors.mjs';
 import { listHistory, restoreHistory, resolveConflict, setCommentStatus } from '../engine/service/editors.mjs';
 import { legacyModuleUrls } from '../gui/app/main.mjs';
@@ -1446,4 +1446,39 @@ test('editor search includes screen labels nested text pages and comments', () =
   }, threads: [{ messages: [{ text: 'Add checkout errors' }] }] });
   for (const query of ['cart page', 'empty cart', 'continue button', 'return to shop', 'relay manual', 'manual de relay', 'checkout errors']) assert.ok(value.includes(query));
   assert.equal(editorSearchText({ document: { screens: [{ root: { kids: [] } }], pages: [] } }), '');
+});
+
+test('Send to agent keeps local notes and only the person receives a suppressed agent reply', () => {
+  const desktop = { principal: { audience: 'desktop', unitId: 'root:master' } };
+  const attached = ['root:executor-shop', 'root:executor-shop', 'root:master'];
+  assert.deepEqual(commentRecipients(desktop, {}, attached, 'root:master'), ['root:executor-shop']);
+  assert.deepEqual(commentRecipients(desktop, { sendToAgent: false }, attached, 'root:master'), []);
+  const agent = { principal: { audience: 'agent', unitId: 'root:executor-shop' } };
+  assert.deepEqual(commentRecipients(agent, { sendToAgent: false }, attached, 'root:executor-shop'), ['root:master']);
+  assert.throws(() => commentRecipients(desktop, { sendToAgent: 'false' }, attached, 'root:master'), { status: 422, code: 'invalid_body' });
+});
+
+test('a person note and its reply persist without message admission or fanout', async (t) => {
+  const { fixture, context } = await shop(t);
+  context.principal = { audience: 'desktop', unitId: 'root:master' };
+  const board = await createBoard(context, { project: 'shop', document: sketch() });
+  context.ledger = null;
+  const note = await createComment(context, board.id, {
+    text: 'Keep this as a note.', sendToAgent: false,
+    expectedRevision: board.revision,
+    expectedCommentsRevision: (await readComments(context, board.id)).commentsRevision,
+    anchor: { screen: board.document.screens[0].id, label: 'Bag' },
+  });
+  assert.equal(note.thread.messages[0].sendToAgent, false);
+  const replied = await replyComment(context, board.id, note.thread.id, {
+    text: 'The note remains local.', sendToAgent: false,
+    expectedCommentsRevision: note.commentsRevision,
+  });
+  assert.equal(replied.thread.messages.at(-1).sendToAgent, false);
+  const stored = await readComments(context, board.id);
+  assert.equal(stored.threads[0].messages.length, 2);
+  for (const message of stored.threads[0].messages) {
+    const fanout = path.join(fixture.paths.mind, 'user', 'relay', 'fanout', message.id + '.json');
+    await assert.rejects(readFile(fanout), { code: 'ENOENT' });
+  }
 });
