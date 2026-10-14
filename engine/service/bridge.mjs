@@ -7,8 +7,31 @@ import { fileURLToPath } from 'node:url';
 import { CoreError, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { createCredentialStore } from './security.mjs';
 import { bindManualAdditionContent } from '../relay/local-wake.mjs';
+import { verifiedSessionScope } from './file-access.mjs';
+import { callLocalTool, localToolNames } from './mcp.mjs';
+import { readUnitState } from './state.mjs';
 
 const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake', 'policy', 'shutdown']);
+
+// Local callbacks receive a captured service actor, never model-supplied authority.
+export async function bindLocalTools(context, registration) {
+  if (registration.client !== 'lyra' || registration.machine !== context.paths.machine) throw new CoreError(403, 'forbidden', 'The local actor belongs to another owner.');
+  const actor = Object.freeze({ audience: 'agent', client: 'lyra', unitId: registration.unitId, sessionId: registration.sessionId });
+  const bound = { ...context, principal: actor, credential: actor };
+  const verify = async () => {
+    const scope = await verifiedSessionScope(bound);
+    if (bound.localAppLive && !await bound.localAppLive()) throw new CoreError(403, 'lyra_revoked', 'The local application permission is unavailable.');
+    return scope;
+  };
+  await verify();
+  const state = await readUnitState(bound, parseUnitId(actor.unitId));
+  const role = state.bytes.toString('utf8').match(/^role:\s*(\S+)/m)?.[1];
+  const plan = context.localPlanBinding;
+  bound.localPlanBinding = plan?.unitId === actor.unitId && plan?.sessionId === actor.sessionId ? plan : null;
+  const names = localToolNames(bound);
+  return { role, names, resources: [`unit:${actor.unitId}`, 'inbox', 'tasks', 'content', 'rules', 'role'], verify,
+    call: (event, signal) => callLocalTool(bound, registration, event, signal) };
+}
 
 export async function openBridge(options = {}) {
   const secret = options.secret ?? randomBytes(32).toString('base64url');

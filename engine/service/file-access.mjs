@@ -12,7 +12,7 @@ import { protectLocalFile, verifyLocalPermissions } from './security.mjs';
 import { additionsForUnit } from './additions.mjs';
 import { gitRead } from './cluster-git.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
-import { classifyApprovalAction } from './adapters.mjs';
+import { classifyApprovalAction, ownsSessionExecution } from './adapters.mjs';
 
 function fail(code, message) { throw new CoreError(409, code, message); }
 function freeze(value) { for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child); return Object.freeze(value); }
@@ -94,8 +94,9 @@ export async function prepareLaunchScope(context, request) {
   return { scope: freeze(scope), cwd: mapping?.localPath ?? directory, directory };
 }
 
-export async function bindLaunchScope(context, scope, registration, pid) {
-  const bound = { ...scope, sessionId: registration.sessionId, client: registration.client, nativeSessionId: registration.nativeSessionId, pid };
+export async function bindLaunchScope(context, scope, registration, pid, executionId) {
+  const bound = { ...scope, sessionId: registration.sessionId, client: registration.client, nativeSessionId: registration.nativeSessionId, pid,
+    ...(executionId ? { executionId } : {}) };
   return saveScope(context, bound);
 }
 
@@ -117,8 +118,8 @@ export async function verifiedSessionScope(context) {
   await verifyLocalPermissions(file, { store: context.store });
   const scope = await readFile(file, 'utf8').then(JSON.parse).catch(() => null);
   if (!scope || scope.sessionId !== actor.sessionId || scope.unitId !== actor.unitId || scope.machine !== context.paths.machine
-    || !context.ownedPids?.has(scope.pid) || actor.client && actor.client !== scope.client
-    || await context.adapters?.[scope.client]?.confirm?.({ unitId: scope.unitId, client: scope.client, nativeSessionId: scope.nativeSessionId, pid: scope.pid, machine: scope.machine, sessionId: scope.sessionId }) !== true) {
+    || !ownsSessionExecution(context, scope) || actor.client && actor.client !== scope.client
+    || await context.adapters?.[scope.client]?.confirm?.({ unitId: scope.unitId, client: scope.client, nativeSessionId: scope.nativeSessionId, pid: scope.pid, executionId: scope.executionId, machine: scope.machine, sessionId: scope.sessionId }) !== true) {
     fail('scope_unavailable', 'The native scope binding is no longer owned.');
   }
   const state = await import('./state.mjs').then(module => module.readUnitState(context, parseUnitId(scope.unitId)));

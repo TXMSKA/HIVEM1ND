@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, lstatSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, stat } from 'node:fs/promises';
+import { chmod, mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CoreError, isUuid } from './identity.mjs';
+import { assertNoLinks } from './paths.mjs';
 
 export const DESKTOP = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailbox.read', 'approval.answer', 'grant.revoke', 'task.status', 'task.undo', 'unit.create', 'unit.connect', 'session.start', 'session.stop', 'layout.write', 'settings.write', 'home.manage', 'editor.read', 'editor.write', 'comment.write', 'proposal.answer', 'asset.write', 'watch', 'viewer.write']);
 const PHONE = new Set(['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back']);
@@ -477,6 +478,48 @@ export function safeError(error, requestId) {
       requestId,
       details: safeDetails(known ? error.details : null),
       retryAt: error?.retryAt ?? null,
+    },
+  };
+}
+
+// App credentials belong to the local owner, outside all published M1ND records.
+export function createAppTokenStore(context) {
+  const directory = path.join(context.paths.localDirectory, 'app-secrets');
+  const file = path.join(directory, 'lyra.token');
+  return {
+    async get() {
+      await assertNoLinks(file);
+      let handle;
+      try {
+        handle = await open(file, 'r');
+        await verifyLocalPermissions(directory, context);
+        await verifyLocalPermissions(file, context);
+        const state = await handle.stat();
+        if (!state.isFile() || state.nlink !== 1 || state.size !== 43) throw new Error();
+        const token = await handle.readFile('utf8');
+        if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error();
+        await assertNoLinks(file);
+        const current = lstatSync(file);
+        if (current.dev !== state.dev || current.ino !== state.ino) throw new Error();
+        return token;
+      } catch (error) {
+        if (error.code === 'ENOENT') return undefined;
+        throw new CoreError(503, 'lyra_unavailable', 'The local application credential is unavailable.');
+      } finally { await handle?.close(); }
+    },
+    async set(token) {
+      if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CoreError(503, 'lyra_unavailable', 'The local application credential is invalid.');
+      await assertNoLinks(file);
+      await mkdir(directory, { recursive: true });
+      await protectLocalFile(directory, context);
+      const temporary = path.join(directory, `${isUuid(context.requestId) ? context.requestId : randomBytes(16).toString('hex')}.tmp`);
+      try {
+        const handle = await open(temporary, 'wx', 0o600);
+        try { await handle.writeFile(token); await handle.sync(); } finally { await handle.close(); }
+        await protectLocalFile(temporary, context);
+        await rename(temporary, file);
+        await protectLocalFile(file, context);
+      } finally { await rm(temporary, { force: true }); }
     },
   };
 }

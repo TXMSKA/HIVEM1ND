@@ -12,7 +12,7 @@ import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
-import { clientRecords, createNativeAdapter, probeClients } from './adapters.mjs';
+import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
 import { createRelay, parseRoutes } from '../relay/store.mjs';
 import { machineRecordPath, parseMachineRecord } from '../records.mjs';
 import { createRelayWakeController } from '../relay/wake.mjs';
@@ -108,7 +108,7 @@ export async function startService(options, retained = null) {
     handle.listener = options.listener ? await options.listener() : null;
     handle.relay = await createRelay({ mindPath: paths.mind, hostname: paths.machine });
     handle.credentials.revokeAudience('agent');
-    const bridgeRuntime = { adapters: options.adapters ?? null, ownedPids: options.ownedPids ?? new Set() };
+    const bridgeRuntime = { adapters: options.adapters ?? null, ownedPids: options.ownedPids ?? new Set(), ownedExecutions: options.ownedExecutions ?? new Set() };
     handle.bridge = await openBridge({
       credentials: handle.credentials,
       now: options.now,
@@ -132,6 +132,7 @@ export async function startService(options, retained = null) {
       },
     });
     handle.adapters = openNativeAdapters(options.env ?? process.env, {
+      lyra: options.lyra, store: options.store,
       createNativeLaunch: request => {
         if (handle.stopping) throw new CoreError(503, 'service_unavailable', 'The service is stopping.');
         return createNativeLaunch(handle.bridge, request);
@@ -145,6 +146,9 @@ export async function startService(options, retained = null) {
     bridgeRuntime.ownedPids = options.ownedPids ?? bridgeRuntime.ownedPids;
     options.adapters = bridgeRuntime.adapters;
     options.ownedPids = bridgeRuntime.ownedPids;
+    options.ownedExecutions = bridgeRuntime.ownedExecutions;
+    options.store.ownedExecutions = bridgeRuntime.ownedExecutions;
+    handle.runtime.settingsOwner.adapters = { ...handle.runtime.settingsOwner.adapters, lyra: bridgeRuntime.adapters.lyra };
     handle.bridge.adapters = handle.adapters.adapters;
     handle.http = await createHttpServer({
       ...options,
@@ -563,8 +567,8 @@ async function nativeSessionLive(options, runtime, binding) {
     } catch {
       continue;
     }
-    if (journal?.sessionId !== sessionId || !Number.isInteger(journal.pid) || journal.pid <= 0) continue;
-    if (owned?.has(journal.pid)) return true;
+    if (journal?.sessionId !== sessionId) continue;
+    if (ownsSessionExecution({ ownedPids: owned, ownedExecutions: runtime?.ownedExecutions ?? options.ownedExecutions }, journal)) return true;
   }
   return false;
 }
@@ -620,7 +624,7 @@ export async function composeCore(options) {
 
 function serviceInUse(handle) {
   // Viewer logout and native launch closure release the existing host/session leases.
-  return (handle.http?.viewers?.size ?? 0) > 0 || (handle.bridge?.launches?.size ?? 0) > 0;
+  return (handle.http?.viewers?.size ?? 0) > 0 || (handle.bridge?.launches?.size ?? 0) > 0 || (handle.options.store?.ownedExecutions?.size ?? 0) > 0;
 }
 
 export async function stopService(handle, { force = false } = {}) {
@@ -825,7 +829,7 @@ async function publishServiceBeat(runtime, state) {
     if (runtime.clientOptions) runtime.clientRecords = runtime.clientOptions;
     else {
       try {
-        runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, platform: process.platform }));
+        runtime.clientRecords = clientRecords(await probeClients({ env: runtime.env ?? process.env, store: runtime.settingsOwner.store, platform: process.platform }));
       } catch {
         runtime.clientRecords = clientRecords({});
       }
@@ -1503,6 +1507,8 @@ export function openNativeAdapters(env = process.env, hooks = {}) {
     claude: createNativeAdapter('claude', shared),
     codex: createNativeAdapter('codex', shared),
     cursor: createNativeAdapter('cursor', shared),
+    lyra: createNativeAdapter('lyra', { env: hooks.store?.confineRoot ? { ...env, LYRA_HOME: path.join(hooks.store.confineRoot, 'lyra') } : env,
+      store: hooks.store, ...hooks.lyra }),
   };
   return {
     adapters,

@@ -1,21 +1,211 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { admitMessage } from '../sync/limits.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
-import { CoreError, canonicalJson, isUuid } from './identity.mjs';
+import { CoreError, ROLES, canonicalJson, hashBytes, isUuid, parseTaskId, uuidV8 } from './identity.mjs';
 import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
-import { requestApproval } from './approvals.mjs';
-import { completeSessionTask } from './adapters.mjs';
+import { readApproval, requestApproval } from './approvals.mjs';
+import { completeSessionTask, ownsSessionExecution } from './adapters.mjs';
 import { assertGitCapability, readScopedFile, requestScopedGit, runScopedGit, verifiedSessionScope, writeScopedFile } from './file-access.mjs';
 import { carryHostConversation } from '../relay/carry-over.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
+import { lyraToolDefinitions, validateLyraInput } from './lyra.mjs';
+import { paginate, readCollection, readDetail, readProjection } from './projection.mjs';
+import { postMailbox, readMailbox } from './chats.mjs';
+import { loadTask } from './tasks.mjs';
+import { additionsForUnit, readScopedAdditions } from './additions.mjs';
+import { assertNoLinks } from './paths.mjs';
 
 const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
+
+export function localToolNames(context) {
+  return lyraToolDefinitions().filter(tool => !tool.name.startsWith('plan_')
+    || context.localPlanBinding && (tool.name !== 'plan_dispatch' || context.localPlanBinding.lead === true)).map(tool => tool.name);
+}
+
+function localText(value) {
+  return String(value).replace(/(?:-----BEGIN [^-]*PRIVATE KEY-----)[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----)/g, '[redacted]')
+    .replace(/(["']?(?:[A-Za-z_][\w.-]*(?:token|password|secret|api[_-]?key)|token|password|secret|api[_-]?key)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}\r\n]+)/gi, '$1[redacted]')
+    .replace(/\b(?:Bearer|Bootstrap)\s+[A-Za-z0-9_-]+/gi, '[redacted]')
+    .replace(/\b[A-Za-z0-9_-]{43}\b/g, '[redacted]');
+}
+
+function localOutput(value) {
+  if (typeof value === 'string') return localText(value).slice(0, 8000);
+  const result = JSON.parse(JSON.stringify(value));
+  const sanitize = record => {
+    if (!record || typeof record !== 'object') return;
+    for (const [key, child] of Object.entries(record)) {
+      if (typeof child === 'string') record[key] = /token|password|secret|api[_-]?key/i.test(key) ? '[redacted]' : localText(child);
+      else sanitize(child);
+    }
+  };
+  sanitize(result);
+  let output = JSON.stringify(result);
+  for (const key of ['text', 'excerpt', 'body']) {
+    if (output.length <= 8000 || typeof result[key] !== 'string') continue;
+    let low = 0, high = result[key].length, text = result[key];
+    while (low < high) {
+      const end = Math.ceil((low + high) / 2);
+      result[key] = text.slice(0, end);
+      if (JSON.stringify(result).length <= 8000) low = end; else high = end - 1;
+    }
+    result[key] = text.slice(0, low);
+    if (key === 'text' && Number.isInteger(result.start)) result.end = result.start + result.text.length;
+    output = JSON.stringify(result);
+  }
+  return output.length <= 8000 ? output : JSON.stringify({ error: 'result_too_large' });
+}
+
+// Both schema validation and ownership run again here, even if the upstream service validated input.
+export async function callLocalTool(context, registration, event, signal) {
+  await verifiedSessionScope(context);
+  if (registration.client !== 'lyra' || registration.machine !== context.paths.machine
+    || registration.unitId !== context.principal.unitId || registration.sessionId !== context.principal.sessionId) throw new CoreError(403, 'forbidden', 'The local callback cannot change its actor.');
+  if (context.localAppLive && !await context.localAppLive()) throw new CoreError(403, 'lyra_revoked', 'The local application permission is unavailable.');
+  if (!isUuid(event?.id) || !localToolNames(context).includes(event.name) || !['allowed', 'ask'].includes(event.permission)) throw new CoreError(403, 'forbidden', 'This tool is unavailable to the local actor.');
+  const args = validateLyraInput(event.name, event.input);
+  const tool = lyraToolDefinitions().find(item => item.name === event.name);
+  if (event.name.startsWith('plan_')) {
+    const binding = context.localPlanBinding;
+    if (!binding || args.runId !== binding.runId || args.attemptId && args.attemptId !== binding.attemptId
+      || binding.unitId !== registration.unitId || binding.sessionId !== registration.sessionId) throw new CoreError(403, 'forbidden', 'The plan belongs to another actor.');
+    if (typeof binding.tools?.[event.name] !== 'function') return { error: 'unavailable' };
+  }
+  const value = await transactLegacy(context, `lyra/${event.name}`, { ...args, requestId: event.id }, registration, 'local', async () => {
+    try {
+      signal?.throwIfAborted();
+      if (tool.effect !== 'read' || event.permission === 'ask') {
+        if (!await approveLocalTool(context, tool, args, event.id, signal)) return { error: 'denied', ...(event.permission === 'ask' ? { decision: 'once' } : {}) };
+      }
+      await verifiedSessionScope(context); signal?.throwIfAborted();
+      if (context.localAppLive && !await context.localAppLive()) return { error: 'unavailable' };
+      let result;
+      for (;;) {
+        try { result = await executeLocalTool(context, registration, event.name, args, event.id, signal); break; }
+        catch (error) {
+          if (error.code !== 'outside_scope' || !isUuid(error.details?.approvalId) || args.approvalId) throw error;
+          if (!await waitLocalApproval(context, error.details.approvalId, signal)) return { error: 'denied', ...(event.permission === 'ask' ? { decision: 'once' } : {}) };
+          args.approvalId = error.details.approvalId;
+          signal?.throwIfAborted(); await verifiedSessionScope(context);
+        }
+      }
+      return { output: localOutput(result),
+        ...(event.permission === 'ask' ? { decision: 'once' } : {}) };
+    } catch { return { error: 'failed' }; }
+  });
+  return value;
+}
+
+async function approveLocalTool(context, tool, args, id, signal) {
+  // The exact proposed data remains readable in the approval pattern. It cannot select a file callback.
+  const preview = canonicalJson(args).replaceAll('\\', '%5C').replaceAll('/', '%2F').replaceAll('?', '%3F').replaceAll('*', '%2A');
+  const requested = await requestApproval(context, { action: 'file.write', alwaysAllowed: false, operationId: id,
+    display: `${tool.title.en} / ${tool.title.es}`,
+    pattern: { resource: `lyra:${id}:${hashBytes(Buffer.from(canonicalJson(args)))}`, path: `${tool.name}/${localText(preview)}` } });
+  return waitLocalApproval(context, requested.approval.id, signal);
+}
+
+async function waitLocalApproval(context, id, signal) {
+  const deadline = Date.now() + Math.min(context.nativeApprovalTimeoutMs ?? 120000, 120000);
+  for (;;) {
+    signal?.throwIfAborted(); await verifiedSessionScope(context);
+    if (context.localAppLive && !await context.localAppLive()) return false;
+    const approval = await readApproval(context, id);
+    if (approval.unitId !== context.principal.unitId || approval.sessionId !== context.principal.sessionId
+      || Date.parse(approval.expiresAt) <= context.now() || Date.now() >= deadline) return false;
+    if (!['pending', 'answering'].includes(approval.state)) return approval.state === 'approved';
+    await new Promise(resolve => {
+      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); };
+      const timer = setTimeout(finish, 25); signal?.addEventListener('abort', finish, { once: true });
+    });
+  }
+}
+
+async function executeLocalTool(context, registration, name, args, id, signal) {
+  if (name === 'file_read') {
+    const file = await readScopedFile(context, { ...args, requestId: id });
+    return { revision: file.revision, start: args.start, end: Math.min(args.end, file.text.length), text: file.text.slice(args.start, args.end) };
+  }
+  if (name === 'file_write') return writeScopedFile(context, { ...args, requestId: id });
+  if (name === 'message_read') return readMailbox(context, registration.unitId, args);
+  if (name === 'message_send') {
+    for (const unitId of args.recipientIds) await readDetail(context, 'units', unitId);
+    const messages = [];
+    for (const unitId of args.recipientIds) {
+      signal?.throwIfAborted(); await verifiedSessionScope(context);
+      const key = uuidV8(['lyra-send', registration.sessionId, id, unitId]);
+      const sent = await withReceipt(context.store, { principal: registration.sessionId, key, method: 'POST', path: `/lyra/mailboxes/${unitId}`,
+        body: { text: args.text }, requestId: key }, receipt => postMailbox({ ...context, receipt }, unitId, { body: args.text, subject: 'Message' }));
+      messages.push({ recipientId: unitId, messageId: sent.replayed ? sent.body.id : sent.message.id });
+    }
+    return { messages };
+  }
+  if (name.startsWith('plan_')) return context.localPlanBinding.tools[name](args, { actor: context.principal, signal });
+  return readLocalResource(context, registration, args);
+}
+
+async function readLocalResource(context, registration, args) {
+  const scope = await verifiedSessionScope(context);
+  if (args.resourceId === `unit:${registration.unitId}`) {
+    const unit = await readDetail(context, 'units', registration.unitId);
+    return { id: unit.id, role: unit.role, leadId: unit.leadId, clusterId: unit.clusterId, status: unit.status, runsIn: unit.runsIn };
+  }
+  if (args.resourceId === 'inbox') {
+    const page = await readCollection(context, 'messages', { mailboxId: registration.unitId, limit: Math.min(args.limit ?? 4, 4), cursor: args.cursor ?? null });
+    return { items: page.items.filter(message => message.toId === registration.unitId).map(message => ({ id: message.id, fromId: message.fromId, subject: message.subject, body: message.body.slice(0, 1200) })), nextCursor: page.nextCursor };
+  }
+  if (args.resourceId === 'tasks' || args.resourceId === 'content') {
+    const items = args.resourceId === 'tasks' ? (await readProjection(context)).tasks.filter(task => task.toId === registration.unitId)
+      .map(task => ({ id: task.id, title: task.title, resourceId: `task:${task.id}` }))
+      : (await additionsForUnit(context, registration.unitId)).filter(item => scope.contentScope.additionIds.includes(item.record.id))
+        .map(item => ({ id: item.record.id, title: item.record.title, resourceId: `content:${item.record.id}` }));
+    return paginate(items, { limit: Math.min(args.limit ?? 10, 10), cursor: args.cursor ?? null, filters: { resourceId: args.resourceId }, snapshot: canonicalJson(items) });
+  }
+  if (args.resourceId === 'rules' || args.resourceId === 'role') {
+    const unit = await readDetail(context, 'units', registration.unitId);
+    if (!ROLES.includes(unit.role)) throw new CoreError(403, 'forbidden', 'The role is unavailable.');
+    const file = args.resourceId === 'rules' ? path.join(context.paths.mind, 'rules.md') : path.join(context.paths.mind, 'roles', `${unit.role}.md`);
+    await assertNoLinks(file, { root: context.paths.mind });
+    const handle = await open(file, 'r');
+    try {
+      const state = await handle.stat();
+      if (!state.isFile() || state.nlink !== 1 || state.size > 1048576) throw new CoreError(413, 'body_too_large', 'The role text exceeds its bound.');
+      const text = await handle.readFile('utf8');
+      await verifiedSessionScope(context);
+      return { resourceId: args.resourceId, excerpt: text.slice(0, 7000) };
+    } finally { await handle.close(); }
+  }
+  if (args.resourceId.startsWith('task:')) {
+    const task = await loadTask(context, parseTaskId(args.resourceId.slice(5)).id);
+    if (task.toId !== registration.unitId) throw new CoreError(403, 'forbidden', 'The task belongs to another actor.');
+    return { id: task.id, title: task.title, status: task.status, body: task.body };
+  }
+  if (args.resourceId.startsWith('editor:')) {
+    const resourceId = args.resourceId.slice(7);
+    if (!isUuid(resourceId)) throw new CoreError(422, 'invalid_body', 'The resource identifier is invalid.');
+    await requireAttachment(context, resourceId);
+    const editor = await readEditor(context, resourceId);
+    return { resourceId, kind: editor.kind, title: editor.title, revision: editor.revision, excerpt: JSON.stringify(editor.document).slice(0, 7000) };
+  }
+  if (args.resourceId.startsWith('content:')) {
+    const parts = args.resourceId.slice(8).split('/'), additionId = parts.shift();
+    if (!isUuid(additionId) || !scope.contentScope.additionIds.includes(additionId)) throw new CoreError(403, 'forbidden', 'The content is outside this actor scope.');
+    const additions = await readScopedAdditions(context, registration);
+    const addition = additions.find(item => item.addition.id === additionId);
+    if (!parts.length) return addition?.files.map(file => ({ path: file.path, resourceId: `content:${additionId}/${file.path}` }));
+    const file = addition?.files.find(file => file.path === parts.join('/'));
+    if (!file) throw new CoreError(404, 'not_found', 'The content is unavailable.');
+    if (/^(?:\.env(?:\..*)?|.*\.(?:key|pem|p12|pfx)|credentials(?:\..*)?)$/i.test(path.basename(file.path))) return { keys: [] };
+    return Buffer.from(file.bytesBase64, 'base64').toString('utf8').slice(0, 7000);
+  }
+  throw new CoreError(403, 'forbidden', 'The resource is outside this actor scope.');
+}
 
 function tool(name, description, properties, required) {
   return { name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } };
@@ -366,8 +556,8 @@ async function proveBinding(context, registration) {
     } catch {
       continue;
     }
-    if (journal?.sessionId !== registration.sessionId || !Number.isInteger(journal.pid) || journal.pid <= 0) continue;
-    if (context.ownedPids?.has(journal.pid)) return true;
+    if (journal?.sessionId !== registration.sessionId) continue;
+    if (ownsSessionExecution(context, journal)) return true;
   }
   return false;
 }

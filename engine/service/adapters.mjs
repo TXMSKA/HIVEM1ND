@@ -16,11 +16,17 @@ import { launchChoice } from './runs-in.mjs';
 import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOperation, writeScopedFile } from './file-access.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { protectLocalFile } from './security.mjs';
+import { discoverLyra, openLyraAdapter } from './lyra.mjs';
 
 const LIFETIME_MS = 120000;
 const PROMPT_MAX = 100000;
 const TERMINAL = new Set(['started', 'failed', 'expired', 'canceled']);
 const STARTABLE = new Set(CLIENTS);
+
+export function ownsSessionExecution(context, record) {
+  return record?.client === 'lyra' ? typeof record.executionId === 'string' && (context.ownedExecutions ?? context.store?.ownedExecutions)?.has(record.executionId) === true
+    : Number.isInteger(record?.pid) && context.ownedPids?.has(record.pid) === true;
+}
 
 // Only a single, literal invocation is classified. Shells, aliases and expansion
 // need the client's native prompt because their effective operation is unknown.
@@ -58,7 +64,7 @@ export async function sessionGitPermissions(context, sessionId, { unitId, client
   const registration = await registrationFor(context, sessionId);
   const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.phase === 'registered');
   if (!registration || registration.machine !== context.paths.machine || registration.launchKind !== 'cli'
-    || !journal?.pid || !context.ownedPids?.has(journal.pid) || journal.unitId !== registration.unitId || journal.client !== registration.client
+    || !ownsSessionExecution(context, journal) || journal.unitId !== registration.unitId || journal.client !== registration.client
     || unitId !== registration.unitId || client !== registration.client || repository !== journal.repository) return [];
   const permissions = await readAgentPermissions(context);
   return permissions.filter(item => journal.permissionIds?.includes(item.id) && item.client === client)
@@ -70,6 +76,14 @@ export async function probeClients(options = {}) {
   const platform = options.platform ?? process.platform;
   const reports = {};
   for (const client of CLIENTS) {
+    if (client === 'lyra') {
+      const isolated = options.store?.confineRoot ? { env: { ...env, LYRA_HOME: path.join(options.store.confineRoot, 'lyra') } } : {};
+      const found = await discoverLyra({ ...options, ...isolated });
+      reports.lyra = { client, installed: Boolean(found), command: null, version: found?.serviceVersion ?? null,
+        nativeSupport: false, reason: found ? 'lyra_permission_unverified' : 'lyra_offline',
+        capabilities: { create: false, resume: false, stop: true, exactApproval: true, modelSelection: true } };
+      continue;
+    }
     const located = client === 'lyra' ? null : await locateClient(client, env, platform);
     const unwrapped = located && client !== 'cursor' ? await unwrapLaunch(located.command, client) : null;
     const command = client === 'cursor' ? located?.command ?? null : unwrapped?.command ?? null;
@@ -95,11 +109,12 @@ export async function probeClients(options = {}) {
 export function clientRecords(reports) {
   return CLIENTS.map((id) => {
     const installed = reports?.[id]?.installed === true;
-    return { id, enabled: installed, installed, supported: ['claude', 'codex', 'cursor'].includes(id), reason: reports?.[id]?.reason ?? null };
+    return { id, enabled: installed, installed, supported: CLIENTS.includes(id), reason: reports?.[id]?.reason ?? null };
   });
 }
 
 export function createNativeAdapter(client, options = {}) {
+  if (client === 'lyra') return openLyraAdapter(options);
   if (!STARTABLE.has(client)) throw new CoreError(503, 'client_unavailable', 'That client cannot start a session.');
   const models = Array.isArray(options.models) ? options.models : [];
   const fixture = options.fixture === true;
@@ -448,7 +463,7 @@ export async function recoverStarts(context) {
       results.push(await consumeStart(context, journal.requestId));
       continue;
     }
-    if (journal.phase === 'registered') {
+    if (journal.phase === 'registered' && (journal.client !== 'lyra' || ownsSessionExecution(context, journal))) {
       results.push({ requestId: journal.requestId, state: 'started', sessionId: journal.sessionId, recovered: true });
       continue;
     }
@@ -523,7 +538,7 @@ export async function stopSession(context, sessionId, input = {}) {
 // Active CLI work needs an adapter-supported reload or an explicit close first.
 export async function reloadReviewedClient(context, { client, target, previewId, checkOnly = false }) {
   const journals = (await listJournals(context)).filter(item => item.client === client && !['failed', 'stopped'].includes(item.phase)
-    && item.pid && context.ownedPids?.has(item.pid));
+    && ownsSessionExecution(context, item));
   const adapter = context.adapters?.[client];
   if (journals.length && typeof adapter?.reload !== 'function') throw new CoreError(409, 'client_reload_required', 'Close the running HIVEM1ND sessions, then apply the reviewed changes.');
   if (checkOnly || !journals.length) return;
@@ -547,12 +562,12 @@ async function stopOwnedSession(context, sessionId, input) {
     throw new CoreError(409, 'remote_session', 'The session belongs to another machine.');
   }
   const journal = (await listJournals(context)).find((item) => item.sessionId === sessionId);
-  if (!journal?.pid || !context.ownedPids?.has(journal.pid)) {
+  if (!ownsSessionExecution(context, journal)) {
     throw new CoreError(409, 'stop_unavailable', 'The session is not an owned native process.');
   }
   const adapter = adapterFor(context, journal.client);
   if (adapter.capabilities?.stop !== true || typeof adapter.stop !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot stop this session.');
-  const stopped = await adapter.stop({ owned: true, pid: journal.pid, sessionId });
+  const stopped = await adapter.stop({ owned: true, pid: journal.pid, executionId: journal.executionId, sessionId });
   if (stopped.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native process did not acknowledge the stop.');
   const status = {
     format: 'hivem1nd-session-status-v1',
@@ -568,6 +583,7 @@ async function stopOwnedSession(context, sessionId, input) {
     ...(input.onAcknowledged ? await input.onAcknowledged(status) : []),
   ], events: [] });
   context.ownedPids.delete(journal.pid);
+  if (journal.executionId) (context.ownedExecutions ?? context.store.ownedExecutions)?.delete(journal.executionId);
   await writeJournal(context, { ...journal, phase: 'stopped', at: stamp(context) });
   context.credentials?.revokeSession?.(sessionId);
   if (context.watch && journal.unitId) {
@@ -596,7 +612,7 @@ export async function completeSessionTask(context, sessionId, input) {
   if (await adapter.confirm?.(registration) !== true) throw new CoreError(409, 'stop_unavailable', 'The native completion cannot be verified.');
   if (typeof adapter.completeTask !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot observe task completion.');
   const journal = (await listJournals(context)).find((item) => item.sessionId === sessionId);
-  if (!journal || !context.ownedPids?.has(journal.pid)) throw new CoreError(409, 'stop_unavailable', 'The native task is not owned by this service.');
+  if (!ownsSessionExecution(context, journal)) throw new CoreError(409, 'stop_unavailable', 'The native task is not owned by this service.');
   await writeJournal(context, { ...journal, taskCompletion: { taskId: registration.taskId, outcome: input.outcome, at: stamp(context) } });
   const result = await adapter.completeTask(registration);
   if (result?.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native completion was not acknowledged.');
@@ -629,13 +645,14 @@ export async function cancelStart(context, requestId) {
 
 async function cancelOwnedStart(context, request) {
   const journal = (await listJournals(context)).find((item) => item.requestId === request.id);
-  if (journal?.pid && journal.phase !== 'stopped') {
+  if ((journal?.pid || journal?.executionId) && journal.phase !== 'stopped') {
     if (journal.sessionId) await stopSession(context, journal.sessionId, { confirmed: true });
     else {
-      if (!context.ownedPids?.has(journal.pid)) throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
-      const stopped = await adapterFor(context, journal.client).stop({ owned: true, pid: journal.pid });
+      if (!ownsSessionExecution(context, journal)) throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
+      const stopped = await adapterFor(context, journal.client).stop({ owned: true, pid: journal.pid, executionId: journal.executionId });
       if (stopped?.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The uncertain launch cannot be stopped safely.');
       context.ownedPids.delete(journal.pid);
+      if (journal.executionId) (context.ownedExecutions ?? context.store.ownedExecutions)?.delete(journal.executionId);
       await writeJournal(context, { ...journal, phase: 'stopped', at: stamp(context) });
     }
   } else if (journal?.createAttempted && !['failed', 'stopped'].includes(journal.phase)) {
@@ -726,6 +743,7 @@ async function launch(context, request) {
       nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
+      store: context.store,
       agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository })) });
   } catch (error) {
     if (error?.ownedPid) {
@@ -742,19 +760,26 @@ async function launch(context, request) {
   }
   const pid = created.pid;
   context.ownedPids ??= new Set();
-  context.ownedPids.add(pid);
-  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
+  if (created.executionId) { context.ownedExecutions ??= context.store.ownedExecutions ??= new Set(); context.ownedExecutions.add(created.executionId); }
+  else context.ownedPids.add(pid);
+  const ownership = created.executionId ? { executionId: created.executionId } : {};
+  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, ...ownership, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
   const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
-  if (scope) await bindLaunchScope(context, scope.scope, registration, pid);
-  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
+  if (scope) await bindLaunchScope(context, scope.scope, registration, pid, created.executionId);
+  await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId, createAttempted: true, ...permissionBinding, at: stamp(context) });
   try {
     if (adapter.capabilities?.scopedContent) {
       const proof = { unitId: request.unitId, client: request.client, nativeSessionId: created.nativeSessionId, machine: context.paths.machine, sessionId: registration.sessionId };
       const bound = await adapter.bindContent(proof, () => contentReader(proof));
       if (bound?.bound !== true) throw new CoreError(503, 'scope_unavailable', 'The client did not confirm its scoped content binding.');
     }
-    await adapter.registered?.({ ...request, gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository }) }, registration, context);
+    await adapter.registered?.({ ...request,
+      onLocalStarted: () => localResult(context, request, 'started', registration.sessionId, null),
+      onLocalFailed: error => localResult(context, request, 'failed', registration.sessionId, { code: error.code ?? 'lyra_turn_failed', message: 'The local turn could not be confirmed.' }),
+      onLocalAborted: () => stopSession(context, registration.sessionId, { confirmed: true }),
+      gitPermissions: () => sessionGitPermissions(context, registration.sessionId, { unitId: request.unitId, client: request.client, repository }) }, registration,
+    { ...context, localTaskEnded: binding => stopSession(context, binding.sessionId, { confirmed: true }) });
   } catch (error) {
     await stopSession(context, registration.sessionId, { confirmed: true });
     await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'failed', pid, sessionId: registration.sessionId, createAttempted: true, at: stamp(context) });
@@ -762,6 +787,7 @@ async function launch(context, request) {
   }
   if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) return { status: 200, request, result: await cancelOwnedStart(context, request) };
   await preload(context, request);
+  if (request.client === 'lyra') return { status: 202, request, state: 'starting', result: await latestResult(context, request.id), replayed: false };
   return finish(context, request, 'started', registration.sessionId, null);
 }
 
@@ -1170,6 +1196,13 @@ async function submitCursor(session, text) {
   if (!prompted?.result || typeof prompted.result !== 'object') return { submitted: false, ambiguous: true };
   if (typeof prompted.result.stopReason === 'string') await session.onCompleted?.();
   return { submitted: true };
+}
+
+async function localResult(context, request, state, sessionId, error) {
+  const result = await writeResult(context, request, state, sessionId, error);
+  if (context.bus) publishDomainEvents(context, [{ name: 'session.request.changed', unitId: request.unitId,
+    data: projectSessionRequest({ request, result }) }]);
+  return result;
 }
 
 async function submitClaude(session, text) {

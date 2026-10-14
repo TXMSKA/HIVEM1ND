@@ -149,7 +149,8 @@ function reportShape(record, machine) {
   }
   if (!Array.isArray(record.agents.items) || record.agents.items.length > 64) fail(422, 'corrupt_resource', 'The agent list is not valid.');
   for (const item of record.agents.items) {
-    exact(item, ['id', 'name', 'version', 'found', 'mode', 'cli', 'app']);
+    exact(item, ['id', 'name', 'version', 'found', 'mode', 'cli', 'app', 'availability']);
+    if (item.availability !== undefined && (item.id !== 'lyra' || !['granted', 'models-unavailable', 'lyra_pending', 'lyra_revoked', 'lyra_scopes_required', 'lyra_offline'].includes(item.availability))) fail(422, 'corrupt_resource', 'The local client availability is invalid.');
     exact(item.cli, ['state', 'changes']); exact(item.app, ['name', 'state']);
     if (!text(item.id, 128) || !text(item.name, 128) || item.version !== null && !text(item.version, 128) || typeof item.found !== 'boolean' || !['auto', 'on-demand'].includes(item.mode)
       || !['connected', 'changes-needed', 'missing'].includes(item.cli.state) || !Number.isInteger(item.cli.changes) || item.cli.changes < 0
@@ -313,12 +314,12 @@ async function publishOwnedSettings(context, section) {
 async function agentItems(context, legacy) {
   const adapters = await loadAdapters({ kitPath: context.kitPath });
   const detected = await discoverAgents({ homeDir: context.homeDir, env: context.env, adapters });
-  const probes = context.probeAgents ? await context.probeAgents() : await probeClients({ env: context.env, platform: context.paths.platform, spawnVersion: true, timeoutMs: 1500 });
+  const probes = context.probeAgents ? await context.probeAgents() : await probeClients({ env: context.env, store: context.store, platform: context.paths.platform, spawnVersion: true, timeoutMs: 1500 });
   const content = await readContent(context);
   const foundSource = await readBytes(context.store, path.join(context.paths.localDirectory, 'settings-found-agents.json'));
   const foundPaths = foundSource ? JSON.parse(foundSource) : {};
   const connections = await clientOwnership(context);
-  return Promise.all(adapters.map(async adapter => {
+  const items = await Promise.all(adapters.map(async adapter => {
     const id = CLIENT_IDS[adapter.id] ?? adapter.id;
     const foundState = foundPaths[adapter.id] ? await lstat(foundPaths[adapter.id]).catch(() => null) : null;
     const found = detected.some(item => item.id === adapter.id) || probes[id]?.installed === true || foundState?.isFile() === true;
@@ -346,6 +347,12 @@ async function agentItems(context, legacy) {
       cli: { state: !found ? 'missing' : changes ? 'changes-needed' : 'connected', changes },
       app: { name: app?.name ?? null, state: app?.connected === true ? 'connected' : app?.available === true ? 'available' : 'missing' } };
   }));
+  const local = await (context.adapters?.lyra ?? context.settingsOwner?.adapters?.lyra)?.describe?.({ localDirectory: context.paths.localDirectory, store: context.store });
+  const availability = local?.availability ?? (local?.connected ? 'granted' : 'lyra_offline');
+  if (local) items.push({ id: 'lyra', name: 'Lyra', version: probes.lyra?.version ?? null, found: availability !== 'lyra_offline',
+    mode: 'on-demand', availability, cli: { state: local.connected ? 'connected' : 'missing', changes: 0 },
+    app: { name: 'Lyra', state: local.connected ? 'connected' : availability === 'lyra_offline' ? 'missing' : 'available' } });
+  return items;
 }
 
 export async function readMachineSettings(context, machine = context.paths.machine, section = null) {
