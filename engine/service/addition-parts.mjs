@@ -2,6 +2,16 @@ import path from 'node:path';
 import { parseFrontmatter } from '../records.mjs';
 import { CoreError, uuidV8, validateName } from './identity.mjs';
 
+const POWERSHELL_RUNTIME = 'PowerShell';
+export const interpreterRuntimes = {
+  node: 'Node.js', npm: 'Node.js', npx: 'Node.js', python: 'Python', python3: 'Python',
+  bash: 'Bash', sh: 'Bash', pwsh: POWERSHELL_RUNTIME, powershell: POWERSHELL_RUNTIME,
+};
+export const skillRuntimes = {
+  none: null, python: interpreterRuntimes.python, node: interpreterRuntimes.node,
+  'node.js': interpreterRuntimes.node, bash: interpreterRuntimes.bash, powershell: interpreterRuntimes.powershell,
+};
+
 export function additionPath(value) {
   if (typeof value !== 'string' || !value || value.length > 1024 || /[\\\x00-\x1f\x7f:]/.test(value)) {
     throw new CoreError(422, 'invalid_path', 'The source path is not a regular relative path.');
@@ -62,7 +72,7 @@ export function recognizeAdditionParts(entries, { repository = false, name = 're
       if (/\.py$/i.test(file.path)) names.add('Python');
       if (/\.(?:js|mjs|cjs)$/i.test(file.path)) names.add('Node.js');
       if (/\.sh$/i.test(file.path)) names.add('Bash');
-      if (/\.ps1$/i.test(file.path)) names.add('PowerShell');
+      if (/\.ps1$/i.test(file.path)) names.add(POWERSHELL_RUNTIME);
       if (/\.(?:exe|dll|so|dylib)$/i.test(file.path)) names.add('Native executable');
     }
     return [...names].sort();

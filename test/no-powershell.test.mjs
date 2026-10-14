@@ -8,6 +8,8 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const FOLDERS = ['engine', 'cli', 'scripts', 'gui', 'features'];
 const STARTS = [/(['"`])(?:powershell|pwsh)(?:\.exe)?\1/i, /-EncodedCommand \$\{/];
+// Runtime recognition data only; this module never launches processes.
+const EXEMPT = new Set([path.join(ROOT, 'engine', 'service', 'addition-parts.mjs')]);
 
 async function sources(folder) {
   const found = [];
@@ -20,9 +22,15 @@ async function sources(folder) {
 }
 
 test('no source file starts PowerShell or builds an encoded command', async () => {
+  for (const file of EXEMPT) {
+    const text = await readFile(file, 'utf8');
+    assert.doesNotMatch(text, /child_process/i, file);
+    assert.doesNotMatch(text, /-EncodedCommand/i, file);
+  }
   const offenders = [];
   for (const folder of FOLDERS) {
     for (const file of await sources(path.join(ROOT, folder))) {
+      if (EXEMPT.has(file)) continue;
       const text = await readFile(file, 'utf8');
       if (STARTS.some((pattern) => pattern.test(text))) offenders.push(path.relative(ROOT, file));
     }

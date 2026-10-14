@@ -7,7 +7,7 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { atomicWriteFile, parseFrontmatter } from '../records.mjs';
-import { additionPath, recognizeAdditionParts } from './addition-parts.mjs';
+import { additionPath, interpreterRuntimes, recognizeAdditionParts, skillRuntimes } from './addition-parts.mjs';
 import { checkAddition } from './addition-check.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid } from './identity.mjs';
 import { assertLocalStaging, assertNoLinks } from './paths.mjs';
@@ -350,7 +350,7 @@ function evidenceFor(candidate, files, acquisition) {
       if (typeof script !== 'string') { runtimeVerified = false; continue; }
       const commands = script.split(/&&|\|\||[;|]/).map(command => command.trim().split(/\s+/)[0]);
       for (const command of commands) {
-        const runtime = { node: 'Node.js', npm: 'Node.js', npx: 'Node.js', python: 'Python', python3: 'Python', bash: 'Bash', sh: 'Bash', pwsh: 'PowerShell', powershell: 'PowerShell' }[command];
+        const runtime = Object.hasOwn(interpreterRuntimes, command) ? interpreterRuntimes[command] : null;
         if (runtime) requirements.add(runtime); else runtimeVerified = false;
       }
     }
@@ -361,9 +361,9 @@ function evidenceFor(candidate, files, acquisition) {
     const runtime = parseFrontmatter(skill.text).attributes.runtime;
     if (runtime !== undefined) {
       const names = String(runtime).replace(/^["']|["']$/g, '').split(',').map(name => name.trim().toLowerCase());
-      if (names.every(name => ['none', 'python', 'node', 'node.js', 'bash', 'powershell'].includes(name))) {
+      if (names.every(name => Object.hasOwn(skillRuntimes, name))) {
         runtimeVerified = true;
-        for (const name of names.filter(name => name !== 'none')) requirements.add({ python: 'Python', node: 'Node.js', 'node.js': 'Node.js', bash: 'Bash', powershell: 'PowerShell' }[name]);
+        for (const name of names.filter(name => name !== 'none')) requirements.add(skillRuntimes[name]);
       } else runtimeVerified = false;
     }
   }
