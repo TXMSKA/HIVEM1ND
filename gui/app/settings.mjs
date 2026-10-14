@@ -287,3 +287,35 @@ function homeFields(home) {
     remainingSeconds: home.remainingSeconds ?? 0,
   };
 }
+
+export const LOOK_OPTIONS = Object.freeze([
+  { id: 'modern', label: 'Modern' }, { id: 'high-contrast', label: 'Nocturne' },
+  { id: 'nebula', label: 'Nebula' }, { id: 'txmska', label: 'Waves' },
+  { id: 'coffee-cat', label: 'Toxic' }, { id: 'ntk', label: 'Kinetic' },
+]);
+export function renderLookPreview(document, look, selected, onChoose) {
+  const button = element(document, 'button', { type: 'button', class: 'look-choice',
+    'aria-label': look.label, 'aria-pressed': String(selected), onclick: () => onChoose(look.id) });
+  const preview = element(document, 'span', { class: 'look-preview', 'data-look': look.id, 'aria-hidden': 'true' });
+  preview.append(element(document, 'span', { class: 'look-preview-bar' },
+    element(document, 'span', { class: 'look-preview-mark' }),
+    element(document, 'span', { class: 'look-preview-modes' })));
+  const panels = element(document, 'span', { class: 'look-preview-panels' });
+  const side = element(document, 'span', { class: 'look-preview-side' });
+  for (const width of [24, 20, 22]) side.append(element(document, 'span', {
+    class: 'look-preview-line' + (width === 22 ? ' look-preview-accent' : ''), style: 'width: ' + width + 'px' }));
+  const map = element(document, 'span', { class: 'look-preview-map' },
+    element(document, 'span', { class: 'look-preview-node look-preview-node-one' }),
+    element(document, 'span', { class: 'look-preview-node look-preview-node-two' }));
+  const inspector = element(document, 'span', { class: 'look-preview-inspector' });
+  for (const [width, height, ink] of [[32, 10, 'card'], [26, 10, 'me'], [30, 7, 'accent']]) {
+    inspector.append(element(document, 'span', { class: 'look-preview-bubble look-preview-' + ink,
+      style: 'width: ' + width + 'px; height: ' + height + 'px' }));
+  }
+  panels.append(side, map, inspector);
+  preview.append(panels);
+  const label = element(document, 'span', { class: 'look-preview-name' },
+    element(document, 'span', { class: 'look-preview-radio', 'aria-hidden': 'true' }), look.label);
+  button.append(preview, label);
+  return button;
+}
