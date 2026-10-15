@@ -35,7 +35,8 @@ async function boot(t) {
 test('HTTP MCP accepts only the pinned protocol and lists the editor tools', async (t) => {
   const { port, token, desktop } = await boot(t);
   // Editor, session and actor-bound filesystem/Git tools share the pinned protocol.
-  assert.equal(toolSchemas().length, 15);
+  assert.equal(toolSchemas().length, 23);
+  assert.equal(toolSchemas().filter(tool => tool.name.startsWith('plan_')).length, 8);
   assert.equal(toolSchemas().filter((tool) => /^(blueprint|void)_/.test(tool.name)).length, 8);
   assert.deepEqual(Object.keys(toolSchemas().find((tool) => tool.name === 'session_open').inputSchema.properties), ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']);
   assert.deepEqual(Object.keys(toolSchemas().find((tool) => tool.name === 'session_complete').inputSchema.properties), ['outcome', 'taskId', 'requestId']);

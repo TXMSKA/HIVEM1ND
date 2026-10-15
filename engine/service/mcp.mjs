@@ -19,12 +19,13 @@ import { postMailbox, readMailbox } from './chats.mjs';
 import { loadTask } from './tasks.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { assertNoLinks } from './paths.mjs';
+import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool } from './runs.mjs';
 
 const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
 
 export function localToolNames(context) {
-  return lyraToolDefinitions().filter(tool => !tool.name.startsWith('plan_')
+  return lyraToolDefinitions().filter(tool => context.localPlanBinding?.unitId !== null || tool.name.startsWith('plan_') || ['m1nd_read', 'file_read', 'file_write'].includes(tool.name)).filter(tool => !tool.name.startsWith('plan_')
     || context.localPlanBinding && (tool.name !== 'plan_dispatch' || context.localPlanBinding.lead === true)).map(tool => tool.name);
 }
 
@@ -64,7 +65,8 @@ function localOutput(value) {
 
 // Both schema validation and ownership run again here, even if the upstream service validated input.
 export async function callLocalTool(context, registration, event, signal) {
-  await verifiedSessionScope(context);
+  const verify = () => context.localPlanBinding?.role ? assertPlanActor(context, context.localPlanBinding.runId) : verifiedSessionScope(context);
+  await verify();
   if (registration.client !== 'lyra' || registration.machine !== context.paths.machine
     || registration.unitId !== context.principal.unitId || registration.sessionId !== context.principal.sessionId) throw new CoreError(403, 'forbidden', 'The local callback cannot change its actor.');
   if (context.localAppLive && !await context.localAppLive()) throw new CoreError(403, 'lyra_revoked', 'The local application permission is unavailable.');
@@ -80,10 +82,10 @@ export async function callLocalTool(context, registration, event, signal) {
   const value = await transactLegacy(context, `lyra/${event.name}`, { ...args, requestId: event.id }, registration, 'local', async () => {
     try {
       signal?.throwIfAborted();
-      if (tool.effect !== 'read' || event.permission === 'ask') {
+      if (!context.localPlanBinding && (tool.effect !== 'read' || event.permission === 'ask')) {
         if (!await approveLocalTool(context, tool, args, event.id, signal)) return { error: 'denied', ...(event.permission === 'ask' ? { decision: 'once' } : {}) };
       }
-      await verifiedSessionScope(context); signal?.throwIfAborted();
+      await verify(); signal?.throwIfAborted();
       if (context.localAppLive && !await context.localAppLive()) return { error: 'unavailable' };
       let result;
       for (;;) {
@@ -92,7 +94,7 @@ export async function callLocalTool(context, registration, event, signal) {
           if (error.code !== 'outside_scope' || !isUuid(error.details?.approvalId) || args.approvalId) throw error;
           if (!await waitLocalApproval(context, error.details.approvalId, signal)) return { error: 'denied', ...(event.permission === 'ask' ? { decision: 'once' } : {}) };
           args.approvalId = error.details.approvalId;
-          signal?.throwIfAborted(); await verifiedSessionScope(context);
+          signal?.throwIfAborted(); await verify();
         }
       }
       return { output: localOutput(result),
@@ -114,10 +116,12 @@ async function approveLocalTool(context, tool, args, id, signal) {
 async function waitLocalApproval(context, id, signal) {
   const deadline = Date.now() + Math.min(context.nativeApprovalTimeoutMs ?? 120000, 120000);
   for (;;) {
-    signal?.throwIfAborted(); await verifiedSessionScope(context);
+    signal?.throwIfAborted();
+    const plan = context.localPlanBinding?.role ? await assertPlanActor(context, context.localPlanBinding.runId) : null;
+    if (!plan) await verifiedSessionScope(context);
     if (context.localAppLive && !await context.localAppLive()) return false;
     const approval = await readApproval(context, id);
-    if (approval.unitId !== context.principal.unitId || approval.sessionId !== context.principal.sessionId
+    if (approval.unitId !== (plan?.actorId ?? context.principal.unitId) || approval.sessionId !== context.principal.sessionId
       || Date.parse(approval.expiresAt) <= context.now() || Date.now() >= deadline) return false;
     if (!['pending', 'answering'].includes(approval.state)) return approval.state === 'approved';
     await new Promise(resolve => {
@@ -128,11 +132,19 @@ async function waitLocalApproval(context, id, signal) {
 }
 
 async function executeLocalTool(context, registration, name, args, id, signal) {
+  if (context.localPlanBinding?.role && name === 'm1nd_read') {
+    const binding = await assertPlanActor(context, context.localPlanBinding.runId);
+    const { readPlanRecord, publicPlan } = await import('./plans.mjs');
+    const { readRunRecord } = await import('./runs.mjs');
+    const run = (await readRunRecord(context, binding.runId)).record;
+    if (args.resourceId !== 'plan') throw new CoreError(403, 'forbidden', 'The resource is outside this plan actor.');
+    return publicPlan((await readPlanRecord(context, run.planId)).record);
+  }
   if (name === 'file_read') {
-    const file = await readScopedFile(context, { ...args, requestId: id });
+    const file = context.localPlanBinding?.role ? await planFileTool(context, 'file_read', { ...args, requestId: id }) : await readScopedFile(context, { ...args, requestId: id });
     return { revision: file.revision, start: args.start, end: Math.min(args.end, file.text.length), text: file.text.slice(args.start, args.end) };
   }
-  if (name === 'file_write') return writeScopedFile(context, { ...args, requestId: id });
+  if (name === 'file_write') return context.localPlanBinding?.role ? planFileTool(context, 'file_write', { ...args, requestId: id }) : writeScopedFile(context, { ...args, requestId: id });
   if (name === 'message_read') return readMailbox(context, registration.unitId, args);
   if (name === 'message_send') {
     for (const unitId of args.recipientIds) await readDetail(context, 'units', unitId);
@@ -219,6 +231,7 @@ const text = { type: 'string', maxLength: 10000 };
 
 export function toolSchemas() {
   return [
+    ...planToolSchemas(),
     tool('native_permission', 'Resolve one exact native file or process permission for this owned actor.', { toolName: label, input: { type: 'object' }, cwd: { type: 'string', maxLength: 4096 }, requestId }, ['toolName', 'input', 'cwd', 'requestId']),
     tool('file_read', 'Read one bounded file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, approvalId: requestId }, ['path']),
     tool('file_write', 'Write one reviewed file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, text: { type: 'string', maxLength: 1000000 }, expectedRevision: revision, approvalId: requestId, requestId }, ['path', 'text', 'requestId']),
@@ -291,6 +304,7 @@ function valueMatches(rule, value) {
 
 export async function callTool(context, name, args) {
   const value = await runTool(context, name, args);
+  if (name.startsWith('plan_') || await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId)) return value;
   if (!context.wake?.touch) return value;
   const registration = await canonicalRegistration(context);
   if (!await proveBinding(context, registration)) return value;
@@ -300,6 +314,10 @@ export async function callTool(context, name, args) {
 }
 
 async function runTool(context, name, args) {
+  if (name.startsWith('plan_')) return callPlanTool(context, name, args);
+  const planBinding = await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId);
+  if (planBinding && ['file_read', 'file_write'].includes(name)) return planFileTool(context, name, { ...args, expectedRevision: args.expectedRevision ?? null });
+  if (planBinding?.unitId === null) throw new CoreError(403, 'forbidden', 'A direct plan actor may use only its bound plan tools.');
   if (name === 'native_permission') {
     const registration = await canonicalRegistration(context);
     await verifiedSessionScope(context);

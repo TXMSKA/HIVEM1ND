@@ -10,6 +10,7 @@ import { bindManualAdditionContent } from '../relay/local-wake.mjs';
 import { verifiedSessionScope } from './file-access.mjs';
 import { callLocalTool, localToolNames } from './mcp.mjs';
 import { readUnitState } from './state.mjs';
+import { assertPlanActor, ingestPlanSignal, waitForPlanActor } from './runs.mjs';
 
 const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake', 'policy', 'shutdown']);
 
@@ -18,16 +19,16 @@ export async function bindLocalTools(context, registration) {
   if (registration.client !== 'lyra' || registration.machine !== context.paths.machine) throw new CoreError(403, 'forbidden', 'The local actor belongs to another owner.');
   const actor = Object.freeze({ audience: 'agent', client: 'lyra', unitId: registration.unitId, sessionId: registration.sessionId });
   const bound = { ...context, principal: actor, credential: actor };
+  const plan = context.localPlanBinding;
+  bound.localPlanBinding = plan?.unitId === actor.unitId && plan?.sessionId === actor.sessionId ? plan : null;
   const verify = async () => {
-    const scope = await verifiedSessionScope(bound);
+    const scope = bound.localPlanBinding?.role ? await assertPlanActor(bound, plan.runId) : await verifiedSessionScope(bound);
     if (bound.localAppLive && !await bound.localAppLive()) throw new CoreError(403, 'lyra_revoked', 'The local application permission is unavailable.');
     return scope;
   };
   await verify();
-  const state = await readUnitState(bound, parseUnitId(actor.unitId));
-  const role = state.bytes.toString('utf8').match(/^role:\s*(\S+)/m)?.[1];
-  const plan = context.localPlanBinding;
-  bound.localPlanBinding = plan?.unitId === actor.unitId && plan?.sessionId === actor.sessionId ? plan : null;
+  const state = actor.unitId ? await readUnitState(bound, parseUnitId(actor.unitId)) : null;
+  const role = plan?.role ?? state?.bytes.toString('utf8').match(/^role:\s*(\S+)/m)?.[1];
   const names = localToolNames(bound);
   return { role, names, resources: [`unit:${actor.unitId}`, 'inbox', 'tasks', 'content', 'rules', 'role'], verify,
     call: (event, signal) => callLocalTool(bound, registration, event, signal) };
@@ -99,13 +100,13 @@ export async function dispatchLocal(bridge, operation, binding) {
 }
 
 export function createNativeLaunch(bridge, request) {
-  const unitId = parseUnitId(request.unitId).id;
+  const unitId = request.planActor?.unitId === null ? null : parseUnitId(request.unitId).id;
   if (!['codex', 'cursor', 'claude'].includes(request.client) || !bridge.paths?.machine) {
     throw new CoreError(422, 'invalid_binding', 'The native launch binding is incomplete.');
   }
   const secret = randomBytes(32).toString('base64url');
   const launch = { unitId, client: request.client, machine: bridge.paths.machine, nativeSessionId: null, token: null,
-    contentReader: request.contentReader ?? null };
+    contentReader: request.contentReader ?? null, planActor: request.planActor ?? null };
   bridge.launches.set(secret, launch);
   return {
     env: { HIVEM1ND_SERVICE_BRIDGE: bridge.endpoint, HIVEM1ND_SERVICE_GRANT: secret },
@@ -254,7 +255,25 @@ async function nativeOperation(bridge, secret, operation, input) {
   const proof = { unitId: launch.unitId, nativeSessionId: launch.nativeSessionId, client: launch.client, machine: launch.machine };
   const adapter = bridge.adapters?.[proof.client];
   if (await adapter?.confirm?.(proof) !== true) throw new CoreError(403, 'native_login_unverified', 'The native process is no longer attached.');
-  if (input.hostSessionId !== undefined) {
+  if (launch.planActor) {
+    if (operation !== 'attach' && operation !== 'hook') throw new CoreError(403, 'forbidden', 'The plan actor has no ordinary session authority.');
+    const actor = launch.planActor;
+    const context = { ...bridge.additionContext, paths: bridge.paths, adapters: bridge.adapters,
+      principal: { audience: 'agent', unitId: actor.unitId, sessionId: actor.sessionId } };
+    await waitForPlanActor(context, actor.sessionId);
+    const bound = await assertPlanActor(context, actor.runId, actor.attemptId);
+    if (operation === 'hook') {
+      if (['SessionStart', 'sessionStart'].includes(input.event)) await ingestPlanSignal(context, { ...bound, id: 'hook-init', kind: 'start', source: 'hook' });
+      if (['PostToolUse', 'postToolUse'].includes(input.event) && input.evidence
+        && Object.keys(input.evidence).sort().join(',') === 'id,kind,step' && input.evidence.kind === 'step_end') {
+        await ingestPlanSignal(context, { ...bound, ...input.evidence, source: 'hook' });
+      }
+      return { verified: true };
+    }
+    if (!launch.token) launch.token = bridge.credentials.issue({ audience: 'agent', unitId: actor.unitId, sessionId: actor.sessionId, capabilities: ['own'], attached: true }).token;
+    return { origin: bridge.origin, token: launch.token, ...proof, sessionId: actor.sessionId, runId: actor.runId, attemptId: actor.attemptId };
+  }
+  if (input.hostSessionId !== undefined && !launch.planActor) {
     if (operation !== 'attach' && operation !== 'hook' || proof.client !== 'claude'
       || launch.hostSessionId && launch.hostSessionId !== input.hostSessionId) throw new CoreError(403, 'forbidden', 'The host conversation cannot be changed.');
     if (typeof bridge.carryConversation !== 'function') throw new CoreError(503, 'service_unavailable', 'Host continuity is unavailable.');

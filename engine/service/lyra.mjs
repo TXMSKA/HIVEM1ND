@@ -356,9 +356,15 @@ export function openLyraAdapter(options = {}) {
       resolveLyraChoice(request.runsIn, await connection.call('GET', '/v1/models'));
       await registerLyraTools(connection);
       const nativeSessionId = randomUUID(), executionId = randomUUID();
-      sessions.set(nativeSessionId, { request, connection, executionId, nativeSessionId, unitId: request.unitId, stopped: false, turn: null,
-        messages: request.retainedContext?.messages ?? [], replacements: new Map() });
-      return { nativeSessionId, executionId, pid: null, owned: true };
+      const session = { request, connection, executionId, nativeSessionId, unitId: request.unitId, stopped: false, turn: null,
+        messages: request.retainedContext?.messages ?? [], replacements: new Map(), exitListeners: new Set(), exited: false };
+      sessions.set(nativeSessionId, session);
+      const processHandle = { identity: executionId, verify: async () => sessions.get(nativeSessionId) === session,
+        onExit: listener => { session.exitListeners.add(listener); if (session.exited) queueMicrotask(listener); return () => session.exitListeners.delete(listener); },
+        cleanup: async () => ({ closed: session.exited && !session.turn, identity: executionId }),
+        stop: async () => { await closeLyraTurn(session.turn); session.exited = true; for (const listener of session.exitListeners) listener(); return { acknowledged: true }; },
+        stopStep: async () => { if (!session.turn) return { acknowledged: false }; await closeLyraTurn(session.turn); return { acknowledged: true }; } };
+      return { nativeSessionId, executionId, pid: null, owned: true, processHandle };
     },
     async confirm(proof) {
       const session = sessions.get(proof?.nativeSessionId);
@@ -399,6 +405,13 @@ export function openLyraAdapter(options = {}) {
       if (!session.turn) await session.context.localTaskEnded?.(session.registration);
       return { acknowledged: true };
     },
+    async completePlanTask(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session?.request.planActor || session.request.planActor.attemptId !== input.attemptId) fail('scope_unavailable', 409);
+      session.taskTerminal = true;
+      if (!session.turn) { session.exited = true; for (const listener of session.exitListeners) listener(); }
+      return { acknowledged: true };
+    },
     async observe(input) {
       const session = sessions.get(input?.nativeSessionId);
       return { activity: session ? session.turn ? 'busy' : 'idle' : null, quota: null };
@@ -415,6 +428,11 @@ export function openLyraAdapter(options = {}) {
       const session = sessions.get(input.nativeSessionId);
       if (!session) fail('context_unavailable', 409);
       return { client: 'lyra', messages: session.messages, bootstrap: session.bootstrap ?? session.request.bootstrap ?? '' };
+    },
+    async resumePlanReview(input) {
+      const session = sessions.get(input.nativeSessionId), checkpoint = input.conversation?.checkpoint;
+      return Boolean(input.role === 'reviewer' && session?.request.planActor?.role === 'reviewer' && checkpoint?.client === 'lyra'
+        && canonicalJson(checkpoint) === canonicalJson(session.request.retainedContext) && Array.isArray(checkpoint.messages));
     },
     async summarizeContext(input) {
       const session = sessions.get(input.nativeSessionId);
@@ -498,7 +516,7 @@ export function openLyraAdapter(options = {}) {
       if (saved && (saved.unitId !== session.unitId || saved.sessionId !== session.registration.sessionId)) fail('scope_unavailable', 409);
       let messages = [...(saved?.messages ?? session.messages), { role: 'user', content: text }];
       while (messages.length > 30 || messages.reduce((sum, message) => sum + message.content.length, 0) > 16000 && messages.length > 1) messages.shift();
-      const context = saved?.bootstrap ?? session.bootstrap ?? await contextBootstrap(session.context, session.unitId);
+      const context = saved?.bootstrap ?? session.bootstrap ?? session.request.bootstrap ?? await contextBootstrap(session.context, session.unitId);
       let output = '';
       const checkpoint = async () => {
         await atomicWrite(session.context.store, file, Buffer.from(canonicalJson({ unitId: session.unitId, sessionId: session.registration.sessionId, messages, bootstrap: context })));
@@ -513,9 +531,10 @@ export function openLyraAdapter(options = {}) {
           session.meter = meter;
           import('./context.mjs').then(({ readContext }) => readContext({ ...session.context, principal: { audience: 'desktop' } }, session.registration.sessionId)).catch(() => {});
         },
-        onStarted: event => { turn.started = true; return lifecycle.onLocalStarted?.(event); },
+        onStarted: async event => { turn.started = true; await session.request.planObserver?.({ id: 'native-init', kind: 'start' }); return lifecycle.onLocalStarted?.(event); },
         onToolCall: (event, signal) => session.tools.call(event, signal),
         onEvent: async event => {
+          await session.request.planTranscript?.(event);
           if (event.type === 'text') output = (output + event.text).slice(0, 8000);
           await options.onEvent?.({ nativeSessionId: session.nativeSessionId, event });
         },
@@ -525,6 +544,7 @@ export function openLyraAdapter(options = {}) {
       await checkpoint(); session.messages = messages;
     }).catch(async error => { turn.failed = true; accept(false); await lifecycle.onLocalFailed?.(error); }).finally(async () => {
       controller.abort(); if (session.turn === turn) session.turn = null;
+      if (session.request.planActor && session.request.runMode === 'task') { session.exited = true; for (const listener of session.exitListeners) listener(); }
       if (turn.failed && !turn.started && !session.stopped) await lifecycle.onLocalAborted?.();
       if (session.taskTerminal && !session.stopped) await session.context.localTaskEnded?.(session.registration);
     });

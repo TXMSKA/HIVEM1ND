@@ -36,6 +36,28 @@ export function approvalRevision({ request, answers = [], result = null }) {
 }
 
 export async function requestApproval(context, input) {
+  const { planBindingForSession, assertPlanActor, readRunRecord } = await import('./runs.mjs');
+  const planActor = await planBindingForSession(context, context.principal?.sessionId);
+  if (planActor) {
+    await assertPlanActor(context, planActor.runId, planActor.attemptId);
+    if (input.action !== 'file.write') throw new CoreError(403, 'plan_lead_required', 'This plan actor cannot obtain ordinary process or child-session authority.');
+    const normalized = normalizeAction(input.action, input.pattern, { projects: context.projects ?? [] });
+    if (!normalized.exact || !isUuid(input.pattern.resource) || !['read', 'write'].includes(input.pattern.operation)) throw new CoreError(422, 'invalid_body', 'The plan file approval must name one exact operation.');
+    const { readPlanRecord } = await import('./plans.mjs');
+    const run = (await readRunRecord(context, planActor.runId)).record;
+    const plan = (await readPlanRecord(context, run.planId)).record;
+    const id = randomUUID(), requestedAt = stamp(context);
+    const request = { format: 'hivem1nd-approval-v1', id, unitId: planActor.actorId, sessionId: planActor.sessionId, chatId: plan.chatId,
+      action: normalized.action, pattern: normalized.pattern, display: input.display, alwaysAllowed: false, desktopOnly: false,
+      operationId: input.operationId ?? null, requestedAt, expiresAt: new Date(context.now() + LIFETIME_MS).toISOString() };
+    const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: planActor.actorId, sessionId: planActor.sessionId,
+      machine: context.paths.machine, runId: planActor.runId, attemptId: planActor.attemptId };
+    await commitFiles(context, [entry(context, `user/relay/approvals/${id}/request.json`, null, jsonBytes(request)),
+      entry(context, `user/relay/approvals/${id}/binding.json`, null, jsonBytes(binding)),
+      entry(context, noticePath(plan.chatId, id), null, noticeBytes(context, { unit: planActor.actorId, id: planActor.actorId }, id, input.display))],
+    [ownedEvent(context, { request, binding }, 'approval.requested', projectApproval({ request, binding }))]);
+    arm(context, request); return { status: 202, approval: projectApproval({ request, binding }), prompted: true, allow: false, resumed: false };
+  }
   const unitId = context.principal?.unitId;
   const sessionId = context.principal?.sessionId;
   if (!unitId || !sessionId) throw new CoreError(422, 'invalid_binding', 'The approval binding is incomplete.');
@@ -670,6 +692,7 @@ function normalizeSession(pattern) {
 }
 
 async function validateChild(context, pattern, sessionId) {
+  await import('./runs.mjs').then(module => module.assertPlanLaunchAuthority({ ...context, principal: { ...context.principal, sessionId } }));
   await assertChatSession(context, sessionId);
   if (pattern.machine !== context.paths.machine) throw new CoreError(409, 'machine_unavailable', 'The child CLI must be on the requesting machine.');
   const target = await readState(context, parseUnitId(pattern.unitId));

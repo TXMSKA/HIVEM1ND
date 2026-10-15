@@ -400,6 +400,12 @@ export async function commitTransaction(store, prepared) {
 }
 
 async function commitLocked(store, prepared) {
+  const runEntries = prepared.entries.filter(entry => !entry.private && entry.recordPath && /^user\/gui\/(plans|runs)\//.test(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')));
+  if (runEntries.length) {
+    const { validatePlanRunBundle } = await import('./runs.mjs');
+    await validatePlanRunBundle({ store, paths: { mind: store.mindPath } }, runEntries.map(entry => ({ target: { kind: 'mind', path: path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/') },
+      bytes: entry.afterBytes, deleted: entry.operation === 'delete' })), prepared.sync?.machine ?? JSON.parse(runEntries[0].afterBytes).machine);
+  }
   if (prepared.sync && prepared.entries.some(entry => entry.recordPath && /^user\/(?:additions|features|knowledge)\//.test(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')))) {
     const { validateAdditionBundle } = await import('./additions.mjs');
     await validateAdditionBundle({ store, paths: { mind: store.mindPath }, now: store.now }, prepared.entries.filter(entry => !entry.private && entry.recordPath && isInside(store.mindPath, entry.recordPath)).map(entry => ({
@@ -407,6 +413,14 @@ async function commitLocked(store, prepared) {
   }
   const clusterEntries = prepared.entries.filter(entry => !entry.private && entry.recordPath && /^user\/gui\/groups\/[a-f0-9-]{36}\.json$/.test(path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/')));
   if (clusterEntries.length) {
+    const { runIds, readRunRecord } = await import('./runs.mjs');
+    for (const entry of clusterEntries.filter(entry => entry.operation !== 'delete' && JSON.parse(entry.afterBytes).deleted === true)) {
+      const clusterId = JSON.parse(entry.afterBytes).id;
+      for (const id of await runIds({ store, paths: { mind: store.mindPath } })) {
+        const run = (await readRunRecord({ store, paths: { mind: store.mindPath } }, id)).record;
+        if (run.clusterId === clusterId && ['open', 'stopping'].includes(run.state)) throw new CoreError(409, 'cleanup_unavailable', 'Stop the cluster plan and verify its owned cleanup before removal.');
+      }
+    }
     const { validateClusterBundle } = await import('./clusters.mjs');
     await validateClusterBundle({ store, paths: { mind: store.mindPath } }, clusterEntries.map(entry => ({
       target: { kind: 'mind', path: path.relative(store.mindPath, entry.recordPath).replaceAll('\\', '/') }, bytes: entry.afterBytes, deleted: entry.operation === 'delete' })));

@@ -5,6 +5,7 @@ import { CoreError, isUuid } from './identity.mjs';
 import { DESKTOP } from './security.mjs';
 
 export const EVENT_NAMES = [
+  'plan.changed', 'run.changed', 'run.log', 'run.alert', 'run.closed', 'session.work',
   'stream.ready', 'stream.reset', 'service.changed', 'unit.changed', 'view.changed',
   'session.changed', 'session.request.changed', 'session.context', 'chat.changed', 'cluster.changed', 'group.changed', 'message.created', 'message.read',
   'notification.changed', 'approval.requested', 'approval.answered', 'approval.grant.changed',

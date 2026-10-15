@@ -672,7 +672,7 @@ export function editChatMetadata(bytes, changes) {
 }
 
 export function projectChatBytes(bytes, id, previous = {}) {
-  return { lastMessage: previous.lastMessage ?? null, unread: previous.unread ?? 0, ...parseChat(bytes, id) };
+  return { lastMessage: previous.lastMessage ?? null, unread: previous.unread ?? 0, ...parseChat(bytes, id), plans: previous.plans ?? [], runs: previous.runs ?? [] };
 }
 
 function headerMap(bytes) {
@@ -721,4 +721,14 @@ export async function contextHistory(context, unitId) {
     }
   }
   return history;
+}
+
+export async function authoredPlanEntry(context, plan, { id, authorId, recipients, text }) {
+  const relative = `user/relay/chats/${plan.chatId}/${id}.md`, recordPath = absolute(context, relative);
+  if (await readBytes(context.store, recordPath)) return null;
+  const body = text.replace(/\b(?:Bearer|Bootstrap)\s+[^\s]+/gi, '[redacted]')
+    .replace(/((?:token|password|secret|api[_-]?key)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,}\n]+)/gi, '$1[redacted]');
+  const bytes = Buffer.from(`id: ${id}\nfrom: ${authorId}\nfrom-id: ${authorId}\nto-id: chat:${plan.chatId}\nmachine: ${plan.machine}\ntimestamp: ${stamp(context)}\nsubject: ${plan.title}\nthread-id: ${plan.chatId}\nkind: message\nplan-id: ${plan.id}\nrecipient-ids: ${canonicalJson(recipients)}\n\n${body}`);
+  if (bytes.length > RECORD_MAX) throw new CoreError(413, 'message_too_large', 'The authored plan message exceeds its bound.');
+  return { resource: relative, recordPath, beforeRevision: null, afterBytes: bytes };
 }

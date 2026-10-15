@@ -88,7 +88,12 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
   try {
     if (env.HIVEM1ND_SERVICE_GRANT || env.HIVEM1ND_SERVICE_BRIDGE) {
       if (serviceConnector === connectNativeService) {
-        observed = await nativeHook({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client, event: hookEvent });
+        const toolId = input.tool_use_id ?? input.tool_call_id ?? input.toolCallId;
+        const toolName = input.tool_name ?? input.toolName;
+        const step = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName) ? 'edit' : ['Bash', 'Shell'].includes(toolName) ? 'work' : null;
+        const evidence = step && typeof toolId === 'string' && toolId.length <= 100 && ['PostToolUse', 'postToolUse'].includes(hookEvent)
+          ? { id: `${toolId}:end`, kind: 'step_end', step } : null;
+        observed = await nativeHook({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client, event: hookEvent, evidence });
         if (!REMINDER_EVENTS[client]?.has(hookEvent) && hookEvent !== 'PreToolUse') return null;
       }
       try { service = await serviceConnector({ env, nativeSessionId: nativeSessionId ?? context.nativeSessionId, client }); }

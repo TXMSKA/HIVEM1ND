@@ -31,6 +31,8 @@ import { bytesAt, importedSidecarEvents } from './import-events.mjs';
 import { watchLocalChanges } from './local-watch.mjs';
 import { migrateClusters } from './clusters.mjs';
 import { createSettingsOwner, processSettingsRequests, publishMachineSettings } from './settings.mjs';
+import { drainRunLaunches, recoverRuns } from './runs.mjs';
+import { closeRunProcesses } from './run-processes.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -173,6 +175,8 @@ export async function startService(options, retained = null) {
       restartService: () => restartService(handle),
     });
     handle.bridge.origin = `http://127.0.0.1:${handle.http.port}`;
+    await recoverRuns({ ...options, paths, bus, now: options.now ?? (() => Date.now()), adapters: handle.adapters.adapters,
+      settingsOwner: handle.runtime.settingsOwner, sync: handle.runtime.sync, pulse: handle.runtime.pulse });
     handle.bridge.onNativeHook = binding => handleNativeHook({
       controller: handle.adopted?.controller?.wake,
       credentials: handle.credentials,
@@ -615,6 +619,10 @@ export async function composeCore(options) {
     additionOwner: runtime.settingsOwner,
   });
   bindRuntime({ http, runtime });
+  const runContext = { ...options, paths, bus, now: options.now ?? (() => Date.now()), settingsOwner: runtime.settingsOwner };
+  await recoverRuns(runContext);
+  const closeHttp = http.close.bind(http);
+  http.close = async () => { await drainRunLaunches(runContext); await closeRunProcesses(runContext); return closeHttp(); };
   try {
     await publishBootstrap({ ...options, paths }, http.port, bootstrap);
     await armServiceBeat(runtime);
@@ -1534,6 +1542,10 @@ async function armServiceBeat(runtime) {
 }
 
 async function closeOwned(handle, { beat = true } = {}) {
+  if (handle.options?.store) {
+    const runContext = { ...handle.options, paths: servicePathsFor(handle.options), now: handle.options.now ?? (() => Date.now()) };
+    await drainRunLaunches(runContext); await closeRunProcesses(runContext);
+  }
   await handle.adopted?.controller?.close?.();
   if (handle.adapters?.close) await handle.adapters.close().catch(() => {});
   if (handle.http?.close) await handle.http.close().catch(() => {});

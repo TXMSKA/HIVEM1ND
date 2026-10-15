@@ -19,6 +19,8 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
 import { clearContext, compactContext, dismissContext, readContext } from './context.mjs';
 import { createEventBus } from './events.mjs';
+import { createPlan, editPlan, listPlans, readPlan, startPlan } from './plans.mjs';
+import { controlRun, readRun, readRunLog, readSessionWork, readSessionTranscript } from './runs.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
 import { addNode, answerProposal, createAsset, createBoard, createComment, createText, list as listBoards, listComments, listProposals, readAsset, readAttachments, readEditor, registerResource, removeNode, replaceBoard, replaceRange, replaceText, replaceTextMatches, undoTextReplace, replyComment, requireAttachment, setCommentStatus, updateNode, writeAttachments } from './editors.mjs';
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from './editors.mjs';
@@ -45,6 +47,16 @@ export const BROWSER_STATIC_FILES = Object.freeze([
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
 const ROUTES = [
+  ['GET', '/plans', 'read', 'D', 'plan', 'list'],
+  ['GET', '/plans/:planId', 'read', 'D', 'plan', 'read'],
+  ['POST', '/plans', 'chat.post', 'D', 'plan', 'create'],
+  ['PATCH', '/plans/:planId', 'chat.post', 'D', 'plan', 'edit'],
+  ['POST', '/plans/:planId/run', 'session.start', 'D', 'plan', 'start'],
+  ['GET', '/runs/:runId', 'read', 'D', 'run', 'read'],
+  ['GET', '/runs/:runId/log', 'read', 'D', 'run', 'log'],
+  ['POST', '/runs/:runId/control', 'session.stop', 'D', 'run', 'control'],
+  ['GET', '/sessions/:sessionId/work', 'read', 'D', 'planWork'],
+  ['GET', '/sessions/:sessionId/transcript', 'read', 'D', 'planWork'],
   ['GET', '/view', 'read', 'DPA', 'view'],
   ['GET', '/units', 'read', 'DPA', 'collection', 'units'],
   ['GET', '/leads', 'read', 'DPA', 'collection', 'leads'],
@@ -854,6 +866,10 @@ function rejectUnknownQuery(route, query) {
 function allowedQuery(route) {
   const list = ['q', 'limit', 'cursor'];
   const table = {
+    '/plans': [...list, 'clusterId'],
+    '/runs/:runId/log': list,
+    '/sessions/:sessionId/work': list,
+    '/sessions/:sessionId/transcript': list,
     '/additions': route.method === 'GET' ? ['machine'] : [],
     '/view': ['project'],
     '/units': [...list, 'project', 'machine', 'leadId', 'status', 'archived'],
@@ -1081,6 +1097,10 @@ function boundRecord(value, label, limit) {
 
 function allowedBody(route) {
   const table = {
+    'POST /plans': ['clusterId', 'chatId', 'machine', 'title', 'branch', 'mode', 'tasks', 'roles', 'expectedChatRevision'],
+    'PATCH /plans/:planId': ['title', 'branch', 'mode', 'tasks', 'roles', 'expectedRevision'],
+    'POST /plans/:planId/run': ['confirmed', 'expectedRevision'],
+    'POST /runs/:runId/control': ['action', 'expectedRevision', 'attemptId', 'role', 'assignment', 'messageId', 'recipientId'],
     'POST /additions/uploads': ['machine', 'name'],
     'PUT /additions/uploads/:uploadId/chunks': ['path', 'index', 'total', 'base64'],
     'DELETE /additions/uploads/:uploadId': [],
@@ -1311,6 +1331,14 @@ async function watchRoute(route, domain, params, body, credential) {
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
+  if (route.handler === 'plan') {
+    const calls = { list: () => listPlans(domain, numbers(query)), read: () => readPlan(domain, params.planId), create: () => createPlan(domain, body),
+      edit: () => editPlan(domain, params.planId, body), start: () => startPlan(domain, params.planId, body) };
+    return { status: route.collection === 'create' ? 201 : route.collection === 'start' ? 202 : 200, body: await calls[route.collection]() };
+  }
+  if (route.handler === 'run') return { status: route.collection === 'control' ? 202 : 200, body: await (route.collection === 'read'
+    ? readRun(domain, params.runId) : route.collection === 'log' ? readRunLog(domain, params.runId, numbers(query)) : controlRun(domain, params.runId, body)) };
+  if (route.handler === 'planWork') return { status: 200, body: await (route.template.endsWith('/transcript') ? readSessionTranscript(domain, params.sessionId, numbers(query)) : readSessionWork(domain, params.sessionId, numbers(query))) };
   if (route.handler === 'cluster') {
     const calls = { list: () => listClusters(domain, numbers(query)), read: () => readCluster(domain, params.clusterId, query),
       create: () => createCluster(domain, body), patch: () => patchCluster(domain, params.clusterId, body),

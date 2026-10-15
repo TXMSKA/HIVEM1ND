@@ -17,6 +17,7 @@ import { readContent, readMachineSettings } from '../engine/service/settings.mjs
 import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
+import { drainRunLaunches } from '../engine/service/runs.mjs';
 
 describe('service api', { concurrency: false }, () => {
 async function boot(t, { assetDir = null, missingAssets = false } = {}) {
@@ -1814,6 +1815,8 @@ test('every contract route has a success result and an authority or boundary fai
   const remainingAdditions = await call(port, 'GET', '/api/v1/additions', { token });
   expectStatus(remainingAdditions, 200, 'read additions after removal');
   assert.deepEqual(remainingAdditions.json.data.items, []);
+  fixture.clock.now += 60000;
+  await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
   const clusterList = await call(port, 'GET', '/api/v1/clusters', { token });
   expectStatus(clusterList, 200, 'list clusters'); hit('GET', '/clusters');
   const repositoryCluster = clusterList.json.data.items.find(cluster => cluster.link.kind === 'repository' && cluster.link.projectId === 'shop');
@@ -1847,6 +1850,41 @@ test('every contract route has a success result and an authority or boundary fai
     const target = route.template.replace(':clusterId', repositoryCluster.id).replace(':offerId', discovery.id);
     expectStatus(await call(port, route.method, `/api/v1${target}`, { token: phone.token, ...(route.method === 'GET' ? {} : { body: { machine: fixture.machine }, headers: { 'idempotency-key': randomUUID() } }) }), 403, 'cluster phone authority');
   }
+  fixture.clock.now += 60000;
+  await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
+  const clusterResult = await call(port, 'POST', '/api/v1/clusters', { token, body: { title: 'Plan scope', machine: fixture.machine, parentId: null, link: { kind: 'none' }, confirmed: true }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(clusterResult, 201, 'plan cluster'); const planCluster = clusterResult.json.data;
+  const unitResult = await call(port, 'POST', `/api/v1/clusters/${planCluster.id}/agents`, { token, body: { role: 'executor', machine: fixture.machine, runsIn, useAsDefault: false, expectedRevision: planCluster.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(unitResult, 201, 'plan unit'); const planUnit = unitResult.json.data;
+  await mkdir(path.join(paths.mind, 'user', 'tasks'), { recursive: true });
+  await writeFile(path.join(paths.mind, 'user', 'tasks', '085.md'), `id: root:085\nstatus: open\nfrom-id: root:master\nto-id: ${planUnit.id}\nfiles: ["result.txt"]\n\n## Request\nDraft for review.\n`);
+  const assignment = { kind: 'unit', unitId: planUnit.id, runsIn };
+  const planInput = { clusterId: planCluster.id, chatId: planCluster.chatId, machine: fixture.machine, title: 'Approved draft', branch: 'approved-draft', mode: 'planning',
+    tasks: [{ id: 'root:085', title: 'Draft task', assignment }], roles: { coordinator: assignment, planner: assignment, builder: assignment, reviewer: assignment },
+    expectedChatRevision: (await call(port, 'GET', `/api/v1/chats/${planCluster.chatId}`, { token })).json.data.revision };
+  const planCreated = await call(port, 'POST', '/api/v1/plans', { token, body: planInput, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(planCreated, 201, 'create actual plan'); hit('POST', '/plans');
+  const planId = planCreated.json.data.id;
+  expectStatus(await call(port, 'GET', '/api/v1/plans', { token }), 200, 'list actual plans'); hit('GET', '/plans');
+  expectStatus(await call(port, 'GET', `/api/v1/plans/${planId}`, { token }), 200, 'read actual plan'); hit('GET', '/plans/:planId');
+  const planEdited = await call(port, 'PATCH', `/api/v1/plans/${planId}`, { token, body: { title: 'Reviewed draft', expectedRevision: planCreated.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(planEdited, 200, 'edit actual plan'); hit('PATCH', '/plans/:planId');
+  const runStarted = await call(port, 'POST', `/api/v1/plans/${planId}/run`, { token, body: { confirmed: true, expectedRevision: planEdited.json.data.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(runStarted, 202, 'freeze plan approval'); hit('POST', '/plans/:planId/run');
+  await drainRunLaunches({ store: fixture.store });
+  const runId = runStarted.json.data.runId;
+  const running = await call(port, 'GET', `/api/v1/runs/${runId}`, { token });
+  expectStatus(running, 200, 'read run'); hit('GET', '/runs/:runId');
+  expectStatus(await call(port, 'GET', `/api/v1/runs/${runId}/log`, { token }), 200, 'read bounded log'); hit('GET', '/runs/:runId/log');
+  const planSessionId = running.json.data.attempts[0].sessionId;
+  for (const suffix of ['work', 'transcript']) {
+    expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/${suffix}`, { token }), 200, suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
+  }
+  for (const route of routeTable().filter(route => ['plan', 'run', 'planWork'].includes(route.handler))) {
+    const target = route.template.replace(':planId', planId).replace(':runId', runId).replace(':sessionId', planSessionId);
+    expectStatus(await call(port, route.method, `/api/v1${target}`, { token: phone.token, ...(route.method === 'GET' ? {} : { body: {}, headers: { 'idempotency-key': randomUUID() } }) }), 403, 'plan phone authority');
+  }
+  expectStatus(await call(port, 'POST', `/api/v1/runs/${runId}/control`, { token, body: { action: 'stop_run', expectedRevision: running.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 202, 'stop owned run'); hit('POST', '/runs/:runId/control');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');

@@ -254,7 +254,7 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
   let origin;
   try { origin = new URL(attached.origin); } catch { throw new CoreError(503, 'service_unavailable', 'The native service origin is invalid.'); }
   if (origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' || origin.pathname !== '/' || origin.search || origin.hash || !origin.port
-      || typeof attached.token !== 'string' || !attached.sessionId || !attached.unitId) {
+      || typeof attached.token !== 'string' || !attached.sessionId || !attached.unitId && !attached.runId) {
     throw new CoreError(503, 'service_unavailable', 'The native service binding is invalid.');
   }
   const connection = { ...attached, origin, closed: false };
@@ -279,13 +279,13 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
       }
       return response.json.result;
     },
-    hook(event) { return dispatchNative(endpoint, grant, 'hook', { ...binding, event }); },
+    hook(event, evidence = null) { return dispatchNative(endpoint, grant, 'hook', { ...binding, event, ...(evidence ? { evidence } : {}) }); },
     close() { connection.closed = true; },
   };
 }
 
-export function nativeHook({ env = process.env, nativeSessionId, client, event }) {
-  return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event });
+export function nativeHook({ env = process.env, nativeSessionId, client, event, evidence = null }) {
+  return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) });
 }
 
 export async function request(client, spec) {

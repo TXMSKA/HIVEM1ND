@@ -1,4 +1,5 @@
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -162,9 +163,16 @@ export function createNativeAdapter(client, options = {}) {
       if (request.runsIn && !fixture && client !== 'codex' && typeof options.enforceScope !== 'function') throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
       if (fixture) {
         const created = acceptFixture(client, options.transcript ?? [], request);
-        sessions.set(created.nativeSessionId, { ...created, unitId: request.unitId, closedTurns: [] });
-        return created;
+        for (const line of options.transcript ?? []) await request.planTranscript?.(JSON.parse(line));
+        const exit = new EventEmitter(), identity = randomUUID(); let ended = false;
+        const processHandle = options.planProcessHandle ?? { identity, verify: async () => true,
+          onExit: listener => { exit.on('exit', listener); return () => exit.off('exit', listener); },
+          cleanup: async () => ({ closed: ended, identity }), stop: async () => { ended = true; exit.emit('exit'); return { acknowledged: true }; } };
+        sessions.set(created.nativeSessionId, { ...created, unitId: request.unitId, closedTurns: [], planProcessHandle: processHandle, observer: request.planObserver, permissionRequest: request });
+        request.planObserver?.({ id: 'native-init', kind: 'start' });
+        return { ...created, processHandle };
       }
+      if (request.planObserver && typeof options.enforceScope !== 'function') throw new CoreError(409, 'cleanup_unavailable', 'Plan execution requires a verified job or process-group handle.');
       const nativeLaunch = options.createNativeLaunch?.({ ...request, client }) ?? null;
       request = { ...request, nativeMcp: nativeLaunch?.mcp ?? null };
       if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
@@ -185,9 +193,10 @@ export function createNativeAdapter(client, options = {}) {
         };
         if (request.runsIn && typeof options.enforceScope === 'function') {
           const enforced = await options.enforceScope({ command: resolved.command, args: resolved.args, options: spawnOptions, scope: request.launchScope,
-            policy: { gitBrokerOnly: true, indirectWrites: 'confined', outsideWrites: 'exact-once' } });
+            policy: { gitBrokerOnly: true, indirectWrites: 'confined', outsideWrites: 'exact-once', ...(request.planAuthority ? { plan: request.planAuthority } : {}) } });
           if (enforced?.verified !== true || typeof enforced.spawn !== 'function') throw new CoreError(409, 'scope_unavailable', 'The OS sandbox could not be verified.');
           request.nativeBoundary = { ...enforced, signal: permissionAbort.signal };
+          if (request.planObserver && !enforced.processHandle) throw new CoreError(409, 'cleanup_unavailable', 'The native job ownership is unavailable.');
           child = enforced.spawn();
         } else child = (options.spawn ?? spawn)(resolved.command, resolved.args, spawnOptions);
       } catch (error) {
@@ -216,19 +225,28 @@ export function createNativeAdapter(client, options = {}) {
         record.timeoutMs = options.timeoutMs ?? 30000;
         record.launchChoice = request.runsIn ?? null;
         record.permissionRequest = request;
+        record.planProcessHandle = request.nativeBoundary?.processHandle;
         record.contextBootstrap = request.bootstrap ?? '';
         record.contextMessages = request.retainedContext?.messages ?? [];
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
         sessions.set(opened.nativeSessionId, record);
         if (client === 'claude') pumpClaude(record);
         nativeLaunch?.ready(opened.nativeSessionId);
-        return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true };
+        request.planObserver?.({ id: 'native-init', kind: 'start' });
+        return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true, processHandle: request.nativeBoundary?.processHandle };
       } catch (error) {
         clearTimeout(deadline);
         nativeLaunch?.close();
         opened?.incoming?.close();
-        const exited = await finishChild(child, true);
-        if (exited === null) {
+        let exited;
+        if (request.planObserver) {
+          const handle = request.nativeBoundary?.processHandle;
+          if (await handle?.verify?.() === true && (await handle.stop())?.acknowledged === true) {
+            const cleanup = await handle.cleanup();
+            if (cleanup?.closed === true && cleanup.identity === handle.identity) exited = 0;
+          }
+        } else exited = await finishChild(child, true);
+        if (exited == null) {
           const ambiguous = new CoreError(409, 'launch_ambiguous', 'The launch could not be proved or stopped.');
           ambiguous.ownedPid = child.pid;
           throw ambiguous;
@@ -264,12 +282,16 @@ export function createNativeAdapter(client, options = {}) {
         await persistNativeContext(session);
         session.gitPermissions = request.gitPermissions;
         session.onCompleted = async () => {
+          if (request.planObserver) {
+            if (session.taskTerminal) await session.planProcessHandle?.stop?.();
+            return;
+          }
           if (!session.taskTerminal || request.runMode !== 'task') return;
           await stopSession(context, registration.sessionId, { confirmed: true });
         };
-        session.child?.once?.('exit', () => stopSession(context, registration.sessionId, { confirmed: true }).catch(() => {}));
+        if (!request.planObserver) session.child?.once?.('exit', () => stopSession(context, registration.sessionId, { confirmed: true }).catch(() => {}));
       }
-      return options.onNativeRegistered?.({ request, registration });
+      return request.planActor ? { bound: true } : options.onNativeRegistered?.({ request, registration });
     },
     async gitPermissions({ nativeSessionId, unitId }) {
       const session = sessions.get(nativeSessionId);
@@ -280,6 +302,14 @@ export function createNativeAdapter(client, options = {}) {
       if (!session || session.unitId !== input.unitId) throw new CoreError(409, 'stop_unavailable', 'The native task binding is unavailable.');
       session.taskTerminal = true;
       session.terminalTurnId = session.turnId;
+      return { acknowledged: true };
+    },
+    async completePlanTask(input) {
+      const session = sessions.get(input.nativeSessionId);
+      if (!session || !session.permissionRequest?.planObserver && !session.observer) throw new CoreError(403, 'forbidden', 'The plan task is not bound.');
+      session.taskTerminal = true; session.terminalTurnId = session.turnId;
+      if (fixture) await session.planProcessHandle.stop();
+      else if (!session.turnId && client !== 'claude') await session.permissionRequest.nativeBoundary.processHandle.stop();
       return { acknowledged: true };
     },
     async taskEnded(input) {
@@ -328,6 +358,14 @@ export function createNativeAdapter(client, options = {}) {
         history = result.result.thread;
       }
       return { client, threadId, history, messages: session.contextMessages ?? [] };
+    },
+    async resumePlanReview(input) {
+      const session = sessions.get(input.nativeSessionId), checkpoint = input.conversation?.checkpoint;
+      if (input.role !== 'reviewer' || session?.permissionRequest?.planActor?.role !== 'reviewer' || checkpoint?.client !== client
+        || canonicalJson(checkpoint) !== canonicalJson(session.permissionRequest.retainedContext)
+        || !Array.isArray(checkpoint.messages) || Buffer.byteLength(canonicalJson(checkpoint)) > PROMPT_MAX) return false;
+      // The verified checkpoint was applied to the new native request, with new actor credentials and review-only authority.
+      session.contextMessages = structuredClone(checkpoint.messages); return true;
     },
     async summarizeContext(input) {
       const session = sessions.get(input.nativeSessionId);
@@ -440,6 +478,7 @@ export function parseClaudeLine(line) {
 }
 
 export async function enqueueStart(context, input) {
+  await import('./runs.mjs').then(module => module.assertPlanLaunchAuthority(context, input.unitId));
   const unit = parseUnitId(input.unitId);
   const state = (await readUnitState(context, unit))?.bytes;
   if (!state || /^removed:\s*true\s*$/m.test(state.toString('utf8').split(/\r?\n\r?\n/, 1)[0])) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
@@ -607,6 +646,8 @@ export function projectSessionRequest(value) {
 }
 
 export async function stopSession(context, sessionId, input = {}) {
+  const plan = await import('./runs.mjs').then(module => module.planBindingForSession(context, sessionId));
+  if (plan) return import('./runs.mjs').then(module => module.stopPlanSession(context, plan, input));
   return withLocks(context.store, [`stop:${sessionId}`], () => stopOwnedSession(context, sessionId, input));
 }
 
@@ -679,6 +720,8 @@ async function stopOwnedSession(context, sessionId, input) {
 }
 
 export async function completeSessionTask(context, sessionId, input) {
+  const plan = await import('./runs.mjs').then(module => module.planBindingForSession(context, sessionId));
+  if (plan) throw new CoreError(422, 'invalid_binding', 'Report this plan task explicitly through plan_report.');
   const registration = await registrationFor(context, sessionId);
   if (!registration || sessionId !== context.principal?.sessionId || registration.unitId !== context.principal?.unitId || registration.runMode !== 'task'
     || registration.launchKind !== 'cli' || !['delivered', 'failed'].includes(input?.outcome)) {
@@ -787,6 +830,7 @@ async function previousContext(context, request) {
 }
 
 async function launch(context, request) {
+  await import('./runs.mjs').then(module => module.assertPlanLaunchAuthority(context, request.unitId));
   if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) {
     return { status: 200, request, result: await cancelOwnedStart(context, request), replayed: true };
   }
@@ -1340,6 +1384,8 @@ async function pumpClaude(session) {
       break;
     }
     if (message.session_id && message.session_id !== session.nativeSessionId) continue;
+    await session.permissionRequest?.planTranscript?.(message);
+    observePlanProtocol(session.permissionRequest, message);
     if (message.type === 'control_cancel_request') { permissions.get(message.request_id)?.abort.abort(); continue; }
     if (message.type === 'control_request' && typeof message.request_id === 'string') {
       const fingerprint = canonicalJson(message), previous = permissions.get(message.request_id);
@@ -1364,6 +1410,76 @@ async function pumpClaude(session) {
   }
 }
 
+// Only structured protocol identities become milestones; model prose and command text never do.
+function observePlanProtocol(request, message) {
+  if (!request?.planObserver) return;
+  let item, state, id, step;
+  if (['item/started', 'item/completed'].includes(message.method) && message.params?.threadId === (request.contextNativeSessionId ?? request.nativeSessionId)) {
+    item = message.params.item; state = message.method === 'item/started' ? 'start' : 'end'; id = item?.id;
+    step = item?.type === 'fileChange' ? 'edit' : item?.type === 'commandExecution' ? 'work' : null;
+  } else if (message.method === 'session/update' && message.params?.sessionId === request.nativeSessionId) {
+    item = message.params.update; id = item?.toolCallId;
+    state = item?.sessionUpdate === 'tool_call' ? 'start' : item?.sessionUpdate === 'tool_call_update' && ['completed', 'failed'].includes(item.status) ? 'end' : null;
+    step = item?.kind === 'edit' ? 'edit' : item?.kind === 'execute' ? 'work' : null;
+  } else if (message.type === 'assistant' && message.session_id === request.nativeSessionId) {
+    for (const block of message.message?.content ?? []) if (block.type === 'tool_use' && typeof block.id === 'string') {
+      const step = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(block.name) ? 'edit' : block.name === 'Bash' ? 'work' : null;
+      if (step) Promise.resolve(request.planObserver({ id: `${block.id}:start`, kind: 'step_start', step, wireHash: hashBytes(Buffer.from(canonicalJson(block))) })).catch(() => {});
+    }
+    return;
+  }
+  if (step && state && typeof id === 'string' && id.length <= 100) Promise.resolve(request.planObserver({ id: `${id}:${state}`, kind: `step_${state}`, step, wireHash: hashBytes(Buffer.from(canonicalJson(message))) })).catch(() => {});
+}
+
+export async function launchPlanSession(context, host) {
+  const { resolveClusterLink, readCluster } = await import('./clusters.mjs');
+  const { directoryIdentity, readRepositoryIdentity } = await import('./cluster-git.mjs');
+  const desktop = { ...context, principal: { audience: 'desktop', unitId: 'root:master' } };
+  const cluster = await readCluster(desktop, host.approval.plan.clusterId, { machine: host.machine });
+  if (cluster.revision !== host.approval.clusterRevision) throw new CoreError(409, 'plan_changed', 'The approved cluster changed before launch.');
+  const mapping = cluster.link.kind === 'none' ? null : await resolveClusterLink(desktop, cluster.link, host.machine);
+  const directory = path.join(context.paths.localDirectory, 'runs', host.runId, 'sessions', host.sessionId);
+  await mkdir(directory, { recursive: true }); await protectLocalFile(directory, { store: context.store });
+  const repository = cluster.link.kind === 'repository' ? await readRepositoryIdentity(mapping.localPath, context.settingsOwner ?? context) : null;
+  const scope = { id: randomUUID(), revision: host.approval.plan.revision, sessionId: host.sessionId, attemptId: host.attemptId, unitId: host.unitId,
+    clusterId: cluster.id, clusterRevision: cluster.revision, machine: host.machine, readScope: host.unitId ? [host.unitId] : [],
+    contentScope: { additionIds: [], scopeRevision: null }, writeRoots: mapping ? [{ realPath: mapping.localPath,
+      identity: await directoryIdentity(mapping.localPath), gitCommonDir: repository?.commonDir ?? null }] : [], git: { commit: false, push: false, intentId: null } };
+  const choice = host.assignment.runsIn, adapter = context.adapters?.[choice.client];
+  if (!adapter) throw new CoreError(503, 'client_unavailable', 'The selected plan client is unavailable.');
+  const task = host.taskId ? await loadTask(context, host.taskId) : null;
+  const prompt = `Plan ${host.runId}, attempt ${host.attemptId}, role ${host.role}, task ${host.taskId ?? 'coordination'}. Only the coordinator dispatches roles through plan_dispatch. Confirm start, report bounded steps and explicitly report the task through plan_report. Git is performed by the owner from the approved task paths. Review authority grants no build, Git or session dispatch.${task ? `\nApproved task:\n${task.body}` : ''}`;
+  if (Buffer.byteLength(prompt) > PROMPT_MAX || choice.client === 'lyra' && prompt.length > 8000) throw new CoreError(413, 'message_too_large', 'The approved task exceeds the native input bound.');
+  const actor = { ...context, principal: { audience: 'agent', unitId: host.unitId, sessionId: host.sessionId } };
+  const fileTool = async (name, input) => (await import('./runs.mjs')).planFileTool(actor, name, input);
+  const request = { id: host.attemptId, planActor: { runId: host.runId, attemptId: host.attemptId, sessionId: host.sessionId, unitId: host.unitId, role: host.role, taskId: host.taskId },
+    unitId: host.unitId, client: choice.client, machine: host.machine, model: choice.model, effort: choice.effort, runsIn: choice,
+    runMode: host.role === 'coordinator' ? 'chat' : 'task', taskId: host.taskId, cwd: mapping?.localPath ?? directory, probeDirectory: directory,
+    launchScope: scope, store: context.store, prompt, bootstrap: canonicalJson({ role: host.role, actorId: host.actorId, assignment: host.assignment,
+      plan: host.approval.plan, unit: host.unitId ? JSON.parse(await contextBootstrap(context, host.unitId)) : null, resources: ['plan'] }),
+    retainedContext: host.reviewConversation?.checkpoint ?? null, planObserver: host.observer, planTranscript: host.transcript,
+    planAuthority: { role: host.role, writablePaths: host.role === 'builder' ? host.approval.taskWitnesses.find(task => task.id === host.taskId)?.paths ?? [] : [] },
+    nativePermission: (operation, boundary) => import('./runs.mjs').then(module => module.requestPlanNativeOperation(actor, operation, boundary)),
+    scopedRead: input => fileTool('file_read', input), scopedWrite: input => fileTool('file_write', input) };
+  if (Buffer.byteLength(request.bootstrap) > PROMPT_MAX || choice.client === 'lyra' && request.bootstrap.length > 12000) throw new CoreError(409, 'context_unavailable', 'The approved plan exceeds this client input budget.');
+  const created = await adapter.create(request);
+  if (!created.processHandle) throw new CoreError(409, 'cleanup_unavailable', 'The selected client did not provide verified execution ownership.');
+  if (host.reviewConversation && await adapter.resumePlanReview?.({ ...created, conversation: host.reviewConversation, role: 'reviewer' }) !== true) {
+    await created.processHandle.stop(); throw new CoreError(409, 'context_unavailable', 'The planner conversation cannot be reopened with review authority.');
+  }
+  const registration = { ...request.planActor, nativeSessionId: created.nativeSessionId, client: choice.client, machine: host.machine, runMode: request.runMode, launchKind: 'plan' };
+  const scopeFile = path.join(context.paths.localDirectory, 'runs', host.runId, 'scopes', `${host.attemptId}.json`);
+  await commitTransaction(context.store, { id: randomUUID(), entries: [{ resource: scopeFile, recordPath: scopeFile, beforeRevision: null,
+    afterBytes: Buffer.from(canonicalJson({ scope, role: host.role, taskId: host.taskId, actorId: host.actorId })), private: true }], events: [] });
+  return { ...created, registered: async binding => {
+    const { callPlanTool } = await import('./runs.mjs');
+    const tools = Object.fromEntries(['plan_confirm_start', 'plan_step', 'plan_report', 'plan_dispatch', 'plan_send', 'plan_read', 'plan_extend', 'plan_agree'].map(name => [name,
+      input => callPlanTool({ ...context, principal: { audience: 'agent', unitId: host.unitId, sessionId: host.sessionId } }, name, input)]));
+    await adapter.registered?.(request, registration, { ...context, localPlanBinding: { ...binding, lead: host.role === 'coordinator', tools } });
+    if (choice.client !== 'lyra') Promise.resolve(adapter.send({ ...registration, text: prompt })).catch(() => {});
+  } };
+}
+
 function startupInstruction(request) {
   const lines = [`Unit: ${request.unitId ?? ''}`];
   if (request.bootstrap) lines.push(request.bootstrap);
@@ -1371,7 +1487,8 @@ function startupInstruction(request) {
   if (typeof request.job === 'string' && request.job) lines.push(`Job: ${request.job}`);
   if (typeof request.leadId === 'string' && request.leadId) lines.push(`Lead: ${request.leadId}`);
   lines.push('Read the unit role, job and lead from the registered files and stay ready.');
-  if (request.runMode === 'task') lines.push(`Assigned task: ${request.taskId ?? 'the task prompt in the mailbox'}. After terminal delivery or failure, call session_complete with outcome delivered or failed. The CLI closes after native completion is acknowledged.`);
+  if (request.planActor) lines.push(`Plan role: ${request.planActor.role}. ${request.prompt} Use only the bound plan tools for dispatch and task reports; native turn completion is not task completion.`);
+  else if (request.runMode === 'task') lines.push(`Assigned task: ${request.taskId ?? 'the task prompt in the mailbox'}. After terminal delivery or failure, call session_complete with outcome delivered or failed. The CLI closes after native completion is acknowledged.`);
   else if (request.runMode === 'chat') lines.push('Remain open as a chat until the person stops this session. Use session_open to request another CLI with approval.');
   return lines.join('\n');
 }
@@ -1459,12 +1576,14 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
         failAll(unavailable());
         break;
       }
+      await request.planTranscript?.(message);
       if (message?.error != null && loginFailed(JSON.stringify(message.error))) {
         remember(message);
         failAll(unavailable());
         break;
       }
       if (message?.method && message.id == null) {
+        observePlanProtocol(request, message);
         noteContext(session, message);
         if (message.method === 'serverRequest/resolved') nativeRequests.get(message.params?.requestId)?.abort.abort();
         if (message.method === 'item/started' && message.params?.item?.id) {

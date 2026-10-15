@@ -354,7 +354,34 @@ async function loadMind(context) {
     if (!product?.value?.removed) projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
   }
   projects.sort((left, right) => left.id.localeCompare(right.id));
-  return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, issues: collectIssues(issues) };
+  const { planIds, readPlanRecord, publicPlan } = await import('./plans.mjs');
+  const { runIds, readRunRecord, publicRun } = await import('./runs.mjs');
+  const plans = [], runs = [];
+  if (context.store && context.principal?.audience !== 'agent' && context.principal?.audience !== 'phone') {
+    for (const id of await planIds(context)) plans.push(publicPlan((await readPlanRecord(context, id)).record));
+    for (const id of await runIds(context)) runs.push(publicRun((await readRunRecord(context, id)).record));
+  }
+  for (const chat of chats) { chat.plans = plans.filter(plan => plan.chatId === chat.id); chat.runs = runs.filter(run => chat.plans.some(plan => plan.id === run.planId) && ['open', 'stopping'].includes(run.state)); }
+  for (const run of runs.filter(run => ['open', 'stopping'].includes(run.state))) {
+    const plan = plans.find(plan => plan.id === run.planId);
+    if (!plan) continue;
+    for (const attempt of run.attempts.filter(attempt => attempt.sessionId)) {
+      const assignment = attempt.taskId ? plan.tasks.find(task => task.id === attempt.taskId)?.assignment : plan.roles[attempt.role];
+      if (!assignment) continue;
+      const evidenceBytes = run.machine === context.paths.machine ? await readBytes(context.store, path.join(context.paths.localDirectory, 'runs', run.id, 'evidence', `${attempt.id}.json`)) : null;
+      const evidence = evidenceBytes ? JSON.parse(evidenceBytes) : null;
+      const stopped = attempt.resolved || evidence?.processExited && evidence.cleanupVerified;
+      sessions.push({ id: attempt.sessionId, unitId: assignment.kind === 'unit' ? assignment.unitId : null, client: assignment.runsIn.client, machine: run.machine,
+        runMode: attempt.role === 'coordinator' ? 'chat' : 'task', taskId: attempt.taskId, launchKind: 'plan', runsIn: assignment.runsIn,
+        state: stopped ? 'stopped' : 'running', activity: !stopped && attempt.role !== 'coordinator' ? 'busy' : 'idle', registeredAt: attempt.sentAt,
+        activityObservedAt: attempt.confirmedAt, quota: null, quotaObservedAt: null, role: attempt.role, clusterId: run.clusterId, runId: run.id });
+    }
+  }
+  for (const unit of units) {
+    const live = sessions.filter(session => session.unitId === unit.id && session.state !== 'stopped' && session.launchKind === 'plan');
+    if (live.length) { unit.state = 'in'; unit.sessionIds = [...new Set([...unit.sessionIds, ...live.map(session => session.id)])]; }
+  }
+  return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, plans, runs, issues: collectIssues(issues) };
 }
 
 function assemble(loaded, query, aliases = [], machine = null, editors = []) {
@@ -408,6 +435,8 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     chats: listedChats,
     groups: loaded.groups.filter((group) => !group.deleted),
     clusters: loaded.groups.filter((group) => !group.deleted),
+    plans: loaded.plans,
+    runs: loaded.runs.filter(run => ['open', 'stopping'].includes(run.state)),
     tasks: loaded.tasks,
     waiting,
     counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
@@ -703,9 +732,11 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
     const fileId = path.basename(relative, '.md');
     const id = headers.get('id') || fileId;
     if (!id) throw new Error('missing id');
+    const planMessage = isUuid(headers.get('plan-id'));
     return {
       id,
       fromId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
+      ...(planMessage ? { channel: 'message', authorId: headers.get('from-id'), recipientIds: JSON.parse(headers.get('recipient-ids') || '[]') } : {}),
       toId: messageToId(headers, relative, units, aliases),
       machine: headers.get('machine') || null,
       timestamp: headers.get('timestamp') || null,
@@ -891,6 +922,8 @@ function buildSquads(units) {
 }
 
 function collectionItems(view, name, query = {}) {
+  if (name === 'plans') return view.plans;
+  if (name === 'runs') return view.runs;
   if (name === 'units') return query.archived != null ? view.allUnits.filter((unit) => unit.removed === queryFlag(query.archived)) : view.units;
   if (name === 'leads') return view.units.filter((unit) => view.leads.includes(unit.id));
   if (name === 'squads') return view.squads;

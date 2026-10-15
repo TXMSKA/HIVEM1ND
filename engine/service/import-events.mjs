@@ -18,6 +18,13 @@ export async function importedSidecarEvents(context, change) {
   if (change.target?.kind === 'project') return projectSidecar(context, change, file);
   const event = (name, data, extra = {}) => ({ name, data, ...extra });
   const changed = (events, collections) => ({ events, collections });
+  const plan = /^user\/gui\/plans\/([^/]+)\/plan\.json$/.exec(file);
+  const run = /^user\/gui\/runs\/([^/]+)\/(run\.json|log\/\d{12}\.json)$/.exec(file);
+  if (plan || run) {
+    const record = await jsonAt(context.paths.mind, file);
+    const name = plan ? 'plan.changed' : run[2] === 'run.json' ? 'run.changed' : 'run.log';
+    return changed([event(name, plan ? { planId: plan[1], revision: record.revision } : { runId: run[1], ...(name === 'run.log' ? { sequence: record.sequence } : { revision: record.revision }) })], ['plans', 'runs', 'chats']);
+  }
   const addition = /^user\/additions\/([a-f0-9-]{36})\.json$/.exec(file);
   if (addition) {
     const record = change.operation === 'delete' ? null : await jsonAt(context.paths.mind, file);

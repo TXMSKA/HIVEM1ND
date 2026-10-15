@@ -29,6 +29,7 @@ export function compareVersions(left, right) {
 
 export function validateOwner({ packMachine, target, record = null, headers = null, bindings = {} } = {}) {
   const format = record?.format ?? null;
+  if (/^user\/gui\/(plans|runs)\//.test(target?.path ?? '') && record?.machine !== packMachine) ownerError();
   if (format === 'hivem1nd-session-result-v1') {
     const owner = bindings.requests?.[record.requestId]?.targetMachine ?? null;
     if (!owner) return pendingOwner(`request:${record.requestId ?? ''}`);
@@ -643,6 +644,7 @@ function registriesInPack(prepared) {
 }
 
 function isImmutable(item) {
+  if (/^user\/gui\/runs\/[^/]+\/log\/\d{12}\.json$/.test(item.change.target.path)) return true;
   if (item.change.target.kind === 'project' && /^docs\/flows\/history\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(item.change.target.path)) return true;
   if (RESULT_FORMATS.has(item.record?.format)) return true;
   if (item.record?.format === 'hivem1nd-session-request-v1' || item.record?.format === 'hivem1nd-approval-v1' || item.record?.format === 'hivem1nd-approval-answer-v1' || item.record?.format === 'hivem1nd-read-v1') return true;

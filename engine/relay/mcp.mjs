@@ -177,13 +177,16 @@ export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, clie
         const args = validateToolArguments(params.name, params.arguments ?? {});
         const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
         operationId = requestId;
-        const forwarded = MUTATING_TOOLS.has(params.name) ? { ...args, requestId } : args;
+        const forwarded = MUTATING_TOOLS.has(params.name) || params.name.startsWith('plan_') ? { ...args, requestId } : args;
         if (editors.has(params.name)) {
           if (typeof forwardEditor === 'function') response = await forwardEditor(params.name, forwarded);
           else {
             service ??= await serviceConnector({ env, nativeSessionId, client });
             response = await service.callTool(params.name, forwarded);
           }
+        } else if (params.name.startsWith('plan_')) {
+          service ??= await serviceConnector({ env, nativeSessionId, client });
+          response = await service.callTool(params.name, forwarded);
         } else if (operations) {
           response = result(await callMethod(operations, params.name, args, { sessionId, client }));
         } else {

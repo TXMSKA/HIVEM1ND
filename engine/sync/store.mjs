@@ -270,6 +270,8 @@ export async function listStaged(sync) {
 export async function resolveIncoming(sync, packBytes, provider) {
   const result = await resolveDependencies(packBytes, provider);
   if (result.status !== 'pending') {
+    const { validatePlanRunBundle } = await import('../service/runs.mjs');
+    await validatePlanRunBundle(sync, result.decoded.changes.map(change => ({ target: change.target, bytes: result.objects.get(change.hash), deleted: change.operation === 'delete' })), result.decoded.header.machine);
     const { validateClusterBundle } = await import('../service/clusters.mjs');
     await validateClusterBundle(sync, result.decoded.changes.map(change => ({ target: change.target, bytes: result.objects.get(change.hash), deleted: change.operation === 'delete' })));
     const { validateSettingsSyncRecord } = await import('../service/settings.mjs');
@@ -402,6 +404,8 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
     throw new CoreError(422, 'invalid_body', 'The transaction id must be a UUID.');
   }
   const atDefault = options.at ? requireTime(options.at) : timestamp(sync.now());
+  const { validatePlanRunBundle } = await import('../service/runs.mjs');
+  await validatePlanRunBundle(sync, entries, sync.machine);
   if (entries.some(entry => entry.target.kind === 'mind' && /^user\/(?:additions|features|knowledge)\//.test(entry.target.path))) {
     const { validateAdditionBundle } = await import('../service/additions.mjs');
     await validateAdditionBundle(sync, entries, sync.machine);
