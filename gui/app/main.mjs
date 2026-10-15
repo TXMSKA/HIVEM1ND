@@ -3595,17 +3595,15 @@ function loadStartReports(app) {
 
 async function readStartReports(app, machine, ticket) {
   try {
-    const [projects, agents, clusters, additions, permissions] = await Promise.all([
+    const [projects, agents, clusters, additions] = await Promise.all([
       request(app.api, 'GET', '/settings/projects', { query: { machine } }),
       request(app.api, 'GET', '/settings/agents', { query: { machine } }),
       collectPages(app.api, '/clusters', { limit: 200 }),
       app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
-      // The agent inspector says whether an agent asks first or works automatically; without this report it shows nothing.
-      request(app.api, 'GET', '/settings/permissions', { query: { machine } }).catch(() => null),
     ]);
     if (app.disposed) return;
     if (ticket !== app.startReportTicket) return app.startReportPending;
-    app.startProjects = projects.data; app.startAgents = agents.data; app.startPermissions = permissions?.data ?? null;
+    app.startProjects = projects.data; app.startAgents = agents.data; app.startPermissionsStale = true;
     app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
     app.startError = null;
@@ -3616,6 +3614,16 @@ async function readStartReports(app, machine, ticket) {
     if (ticket !== app.startReportTicket) return app.startReportPending;
     app.startError = error;
   }
+}
+
+// The agent inspector says whether a Claude Code or Cursor agent asks first or works automatically. That needs the permissions report,
+// which is read only when such an agent is shown, so the cluster reports above never wait for it.
+function refreshPermissions(app) {
+  if (app.permissionsLoading || app.layout === 'phone' || app.disposed) return;
+  app.permissionsLoading = true; app.startPermissionsStale = false;
+  request(app.api, 'GET', '/settings/permissions', { query: { machine: startMachine(app) } })
+    .then(result => { app.startPermissions = result.data; app.permissionsFailedAt = 0; }, () => { app.permissionsFailedAt = Date.now(); })
+    .finally(() => { app.permissionsLoading = false; if (!app.disposed) renderShell(app); });
 }
 
 function rememberOverseerOffer(app) {
@@ -3715,6 +3723,10 @@ function automaticGrant(report, unit) {
 
 // Work automatically is one grant for one agent and its client. It is made, or taken back, through Settings, Permissions.
 async function setAutomaticWork(app, unit, wanted, retained = null) {
+  try { return await changeAutomaticWork(app, unit, wanted, retained); } finally { app.startPermissionsStale = true; }
+}
+
+async function changeAutomaticWork(app, unit, wanted, retained) {
   if (retained) return retained.method === 'DELETE' ? startApi.revokeAutomaticWork(app.api, null, null, retained) : startApi.grantAutomaticWork(app.api, null, retained);
   const machine = startMachine(app);
   const report = (await request(app.api, 'GET', '/settings/permissions', { query: { machine } })).data, present = automaticGrant(report, unit);
@@ -3722,6 +3734,7 @@ async function setAutomaticWork(app, unit, wanted, retained = null) {
   if (!wanted && present) return startApi.revokeAutomaticWork(app.api, present.id, { machine, expectedRevision: report.revision });
   return null;
 }
+
 
 async function openUnitRunsIn(app, unit) {
   const [report, permissions] = await Promise.all([request(app.api, 'GET', '/settings/agents', { query: { machine: unit.machine } }),
@@ -5821,6 +5834,7 @@ function actionControls(app, t, selected) {
   if (caps.includes('unit.create') && !(app.unitList?.catalog ?? []).some(unit => unit.id === 'root:overseer')) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
   if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
+  if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);
   if (selected && app.startPermissions && ['claude', 'cursor'].includes(selected.runsIn?.client)) {
     const automatic = Boolean(automaticGrant(app.startPermissions, selected));
     row.append(element(document, 'p', { class: 'native-mode', 'data-native-mode': automatic ? 'automatic' : 'supervised', text: startText(app.language, automatic ? 'automaticNotConfined' : 'asksFirst') }));
