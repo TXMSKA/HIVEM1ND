@@ -13,7 +13,7 @@ import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocalChanges, withLocks } from './store.mjs';
 import { readAgentPermissions } from './settings.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
-import { launchChoice } from './runs-in.mjs';
+import { launchBoundary, launchChoice } from './runs-in.mjs';
 import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOperation, writeScopedFile } from './file-access.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { protectLocalFile } from './security.mjs';
@@ -139,12 +139,12 @@ export function createNativeAdapter(client, options = {}) {
     models,
     async describe(context = {}) {
       if (typeof options.describe === 'function') return options.describe();
-      if (fixture) return { id: client, title: client, connected: true, scopeEnforced: true,
+      if (fixture) return { id: client, title: client, connected: true, scopeEnforced: true, boundary: 'confined',
         models: models.map(id => ({ id, title: id, efforts: options.efforts ?? ['high'], modes: [] })),
         quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
       if (client === 'codex' && live) return probeCodexChoices(options);
       if (live && ['claude', 'cursor'].includes(client)) return probeNativeChoices(client, options, context);
-      return { id: client, title: client, connected: false, models: [], scopeEnforced: false,
+      return { id: client, title: client, connected: false, models: [], scopeEnforced: false, boundary: null,
         quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
     },
     async probe() {
@@ -164,12 +164,15 @@ export function createNativeAdapter(client, options = {}) {
       if (request.runsIn && (request.runsIn.client !== client || request.model !== request.runsIn.model || request.effort !== request.runsIn.effort)) {
         throw new CoreError(422, 'unsupported_launch_choice', 'The immutable launch choice does not match the native request.');
       }
+      let boundaryKind = null;
       if (request.runsIn) {
         const capability = await this.describe({ localDirectory: request.probeDirectory });
         launchChoice({ runsIn: request.runsIn }, [capability]);
-        if (capability.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
+        boundaryKind = launchBoundary(capability);
+        if (!boundaryKind) throw new CoreError(409, 'scope_unavailable', 'This client has no verified boundary.');
       }
-      if (request.runsIn && !fixture && client !== 'codex' && typeof options.enforceScope !== 'function') throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
+      // A client reported confined other than Codex is confined by an injected sandbox; without it the launch fails closed.
+      if (boundaryKind === 'confined' && !fixture && client !== 'codex' && typeof options.enforceScope !== 'function') throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
       if (fixture) {
         const created = acceptFixture(client, options.transcript ?? [], request);
         for (const line of options.transcript ?? []) {
@@ -510,7 +513,7 @@ export async function enqueueStart(context, input) {
   if (stored) {
     const reports = await import('./settings.mjs').then(module => module.connectedClients(context));
     choice = launchChoice({ runsIn: stored }, reports);
-    if (reports.find(report => report.id === choice.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected client cannot enforce file and process scope.');
+    if (!launchBoundary(reports.find(report => report.id === choice.client))) throw new CoreError(409, 'scope_unavailable', 'The selected client has no verified native boundary.');
   } else throw new CoreError(409, 'scope_unresolved', 'Choose Runs in before launching this agent.');
   if (input.client !== undefined && input.client !== choice.client || input.model !== undefined && input.model !== choice.model
     || input.effort !== undefined && input.effort !== choice.effort) throw new CoreError(422, 'unsupported_launch_choice', 'Use the stored Runs in choice.');
@@ -940,7 +943,7 @@ async function launch(context, request) {
   if (request.runsIn) {
     const report = await adapter.describe?.({ localDirectory: scope.directory, store: context.store });
     request = { ...request, runsIn: launchChoice({ runsIn: request.runsIn }, report ? [report] : []) };
-    if (report.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The native boundary changed before launch.');
+    if (!launchBoundary(report)) throw new CoreError(409, 'scope_unavailable', 'The native boundary changed before launch.');
   }
   try {
     const additions = await additionsForUnit(context, request.unitId);
@@ -1877,7 +1880,7 @@ export async function nativePermissionReply(message, request = {}) {
 
 async function probeCodexChoices(options) {
   let child, incoming, deadline;
-  const unavailableReport = { id: 'codex', title: 'Codex', connected: false, models: [], scopeEnforced: false,
+  const unavailableReport = { id: 'codex', title: 'Codex', connected: false, models: [], scopeEnforced: false, boundary: null,
     quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
   try {
     const launch = options.command ? { command: options.command, args: options.args ?? launchArgs('codex') }
@@ -1907,7 +1910,7 @@ async function probeCodexChoices(options) {
           .filter(window => Number.isFinite(window?.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100);
         windows.sort((left, right) => right.usedPercent - left.usedPercent);
         const limiting = windows[0];
-        return { ...unavailableReport, connected: models.length > 0, scopeEnforced: true, models,
+        return { ...unavailableReport, connected: models.length > 0, scopeEnforced: models.length > 0, boundary: models.length > 0 ? 'confined' : null, models,
           quota: limiting ? { remainingPercent: 100 - limiting.usedPercent, period: Number.isFinite(limiting.windowDurationMins) ? `${limiting.windowDurationMins}m` : null, known: true } : unavailableReport.quota };
       }
       if (cursors.has(cursor)) return unavailableReport;
@@ -1919,7 +1922,7 @@ async function probeCodexChoices(options) {
 }
 
 async function probeNativeChoices(client, options, context) {
-  const unavailableReport = { id: client, title: client === 'claude' ? 'Claude Code' : 'Cursor', connected: false, models: [], scopeEnforced: false,
+  const unavailableReport = { id: client, title: client === 'claude' ? 'Claude Code' : 'Cursor', connected: false, models: [], scopeEnforced: false, boundary: null,
     quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
   const root = context.localDirectory;
   if (typeof root !== 'string' || !path.isAbsolute(root)) return unavailableReport;
@@ -1986,7 +1989,10 @@ async function probeNativeChoices(client, options, context) {
         if (efforts.length && efforts.every(value => typeof value === 'string' && value)) models.push({ id: model.value, title: model.name ?? model.value, efforts, modes: [] });
       }
     }
-    return { ...unavailableReport, connected: models.length > 0, models, quota, scopeEnforced: typeof options.enforceScope === 'function' };
+    // Claude Code and Cursor cannot be confined on Windows: connected, they are supervised unless a sandbox hook is injected.
+    const confined = typeof options.enforceScope === 'function';
+    return { ...unavailableReport, connected: models.length > 0, models, quota, scopeEnforced: models.length > 0 && confined,
+      boundary: models.length > 0 ? confined ? 'confined' : 'supervised' : null };
   } catch { return unavailableReport; }
   finally {
     clearTimeout(deadline); incoming?.close(); if (child) await finishChild(child);

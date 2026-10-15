@@ -346,10 +346,10 @@ export function openLyraAdapter(options = {}) {
         const connection = await reconnect(context.paths ? context : { ...context, paths: { localDirectory: context.localDirectory } });
         const models = catalogModels(await connection.call('GET', '/v1/models'));
         return { id: 'lyra', title: 'Lyra', connected: models.length > 0, availability: models.length ? 'granted' : 'models-unavailable', models,
-          quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: true, context: { known: true, compact: true } };
+          quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: models.length > 0, boundary: models.length > 0 ? 'confined' : null, context: { known: true, compact: true } };
       } catch (error) {
         return { id: 'lyra', title: 'Lyra', connected: false, availability: ['lyra_pending', 'lyra_revoked', 'lyra_scopes_required'].includes(error.code) ? error.code : 'lyra_offline',
-          models: [], quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: true, context: { known: false, compact: false } };
+          models: [], quota: { known: false, remainingPercent: null, period: null }, scopeEnforced: false, boundary: null, context: { known: false, compact: false } };
       }
     },
     async create(request) {

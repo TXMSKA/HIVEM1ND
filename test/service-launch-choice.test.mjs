@@ -194,6 +194,7 @@ test('Claude control initialization and ACP configuration supply only observed m
     const reports = await connectedClients({ paths: fixture.paths, store: fixture.store, adapters: { [client]: adapter } });
     assert.deepEqual(reports[0].models, [{ id: 'observed-model', title: 'Observed', efforts: ['low', 'high'], modes: [] }]);
     assert.equal(reports[0].scopeEnforced, false);
+    assert.equal(reports[0].boundary, 'supervised');
     assert.equal(reports[0].quota.remainingPercent, client === 'claude' ? 60 : null);
     assert.equal(native.writes.some(message => message.type === 'user' || message.method === 'session/prompt'), false);
     assert.equal(native.killed, true);

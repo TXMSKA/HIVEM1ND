@@ -14,3 +14,19 @@ export function launchChoice(unit, clients) {
   if(!unit.runsIn)throw new CoreError(409,'scope_unresolved','Choose Runs in before launching this agent.');
   return validateRunsIn(unit.runsIn,clients);
 }
+// How a connected client is held to its boundary: 'confined' (it confines itself, or HIVEM1ND does)
+// or 'supervised' (Claude Code and Cursor, which cannot be confined on Windows; every native change asks first).
+// A report that names no boundary keeps the older meaning of scopeEnforced. Anything else, or a client that is
+// not connected, has no boundary and fails closed.
+export function launchBoundary(report) {
+  if (!report || report.connected !== true) return null;
+  const kind = report.boundary === undefined ? (report.scopeEnforced === true ? 'confined' : null) : report.boundary;
+  if (kind === 'confined') return report.scopeEnforced === true ? kind : null;
+  if (kind === 'supervised') return report.scopeEnforced !== true && ['claude', 'cursor'].includes(report.id) ? kind : null;
+  return null;
+}
+export function requireLaunchBoundary(report, message = 'The selected runtime has no verified native boundary.') {
+  const kind = launchBoundary(report);
+  if (!kind) throw new CoreError(409, 'scope_unavailable', message);
+  return kind;
+}

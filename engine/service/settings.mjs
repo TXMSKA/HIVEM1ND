@@ -16,7 +16,7 @@ import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-gi
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
-import { validateRunsIn } from './runs-in.mjs';
+import { launchBoundary, validateRunsIn } from './runs-in.mjs';
 import { stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
 import { applyClientConfigChanges, buildClientConfig, clientConfigPaths, readConfigBytes, restoreClientConfig } from '../relay/config.mjs';
@@ -49,9 +49,10 @@ export async function connectedClients(context) {
     if (!models.length) continue;
     const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
       && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
+    const boundary = launchBoundary({ ...report, id, connected: true });
     reports.push({ id, title: text(report.title, 128) ? report.title : id, connected: true, models,
       quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
-      scopeEnforced: report.scopeEnforced === true, context: { known: report.context?.known === true, compact: report.context?.compact === true } });
+      scopeEnforced: boundary === 'confined', boundary, context: { known: report.context?.known === true, compact: report.context?.compact === true } });
   }
   return reports;
 }
@@ -60,7 +61,7 @@ export async function prepareDefaultRunsIn(context, choice) {
   if (context.principal?.audience !== 'desktop' || context.principal.capabilities && !context.principal.capabilities.includes('settings.write')) fail(403, 'forbidden', 'Changing the default requires Settings authority.');
   const clients = await connectedClients(context);
   validateRunsIn(choice, clients);
-  if (clients.find(client => client.id === choice.client)?.scopeEnforced !== true) fail(409, 'scope_unavailable', 'The default needs a verified native scope boundary.');
+  if (!launchBoundary(clients.find(client => client.id === choice.client))) fail(409, 'scope_unavailable', 'The default needs a verified native boundary.');
   const file = path.join(context.paths.localDirectory, 'default-runs-in.json');
   await assertNoLinks(file);
   const before = await readBytes(context.store, file);
@@ -196,10 +197,11 @@ function reportShape(record, machine) {
   if (record.discoveryOffer != null) validatePublicOffer(record.discoveryOffer);
   if (record.connectedClients !== undefined && (!Array.isArray(record.connectedClients) || record.connectedClients.length > 4)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');
   for (const client of record.connectedClients ?? []) {
-    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'context']);
+    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'boundary', 'context']);
     exact(client.quota, ['remainingPercent', 'period', 'known']); exact(client.context, ['known', 'compact']);
     if (!['claude', 'codex', 'cursor', 'lyra'].includes(client.id) || !text(client.title, 128) || client.connected !== true
-      || typeof client.scopeEnforced !== 'boolean' || typeof client.context.known !== 'boolean' || typeof client.context.compact !== 'boolean'
+      || typeof client.scopeEnforced !== 'boolean' || client.boundary !== undefined && ![null, 'confined', 'supervised'].includes(client.boundary)
+      || typeof client.context.known !== 'boolean' || typeof client.context.compact !== 'boolean'
       || !Array.isArray(client.models) || client.models.length > 256 || typeof client.quota.known !== 'boolean'
       || client.quota.remainingPercent !== null && (!Number.isFinite(client.quota.remainingPercent) || client.quota.remainingPercent < 0 || client.quota.remainingPercent > 100)
       || client.quota.period !== null && !text(client.quota.period, 128)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');

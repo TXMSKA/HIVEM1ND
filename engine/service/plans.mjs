@@ -6,7 +6,7 @@ import { readCluster, rawClusters, clusterOwner } from './clusters.mjs';
 import { readDetail, paginate } from './projection.mjs';
 import { readUnitState } from './state.mjs';
 import { connectedClients } from './settings.mjs';
-import { launchChoice, validateRunsIn } from './runs-in.mjs';
+import { launchBoundary, launchChoice, validateRunsIn } from './runs-in.mjs';
 import { loadTask, taskAllocator } from './tasks.mjs';
 import { commitChange, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 
@@ -72,7 +72,7 @@ export async function validatePlanAssignment(context, value, units, clients, rol
     if (value.client !== value.runsIn?.client || value.reuseRole !== null && (role !== 'reviewer' || value.reuseRole !== 'planner')) planError();
   } else planError();
   const runsIn = validateRunsIn(value.runsIn, clients);
-  if (clients.find(client => client.id === runsIn.client)?.scopeEnforced !== true) planError('scope_unavailable', 409);
+  if (!launchBoundary(clients.find(client => client.id === runsIn.client))) planError('scope_unavailable', 409);
   return { ...value, runsIn: { ...runsIn } };
 }
 

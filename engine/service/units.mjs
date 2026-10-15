@@ -10,7 +10,7 @@ import { editChatMetadata, projectChatBytes } from './chats.mjs';
 import { stopSession } from './adapters.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { clusterChoices, clusterEntry, clusterEvents, rawClusters, readCluster, resolveClusterLink } from './clusters.mjs';
-import { validateRunsIn } from './runs-in.mjs';
+import { launchBoundary, validateRunsIn } from './runs-in.mjs';
 import { connectedClients, prepareDefaultRunsIn } from './settings.mjs';
 
 export async function createUnit(context, input, options = {}) {
@@ -251,7 +251,7 @@ export async function patchSettings(context, input) {
 async function prepareCreate(context, input) {
   const capabilities = input.runsIn ? await connectedClients(context) : [];
   const runsIn = input.runsIn ? validateRunsIn(input.runsIn, capabilities) : null;
-  if (runsIn && capabilities.find(client => client.id === runsIn.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native scope boundary.');
+  if (runsIn && !launchBoundary(capabilities.find(client => client.id === runsIn.client))) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native boundary.');
   const unit = validateName(input?.unit, { label: 'unit', max: 80 });
   const role = validateRole(input?.role);
   const scope = canonicalScope(input?.scope);
@@ -411,7 +411,7 @@ export async function setUnitRunsIn(context, unitId, input) {
   if (!current || header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   if (input.machine !== context.paths.machine || header(current.bytes, 'machine') !== input.machine) throw new CoreError(409, 'machine_unavailable', 'Change Runs in on its owning machine.');
   const capabilities = await connectedClients(context), choice = validateRunsIn(input.runsIn, capabilities);
-  if (capabilities.find(client => client.id === choice.client)?.scopeEnforced !== true) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native scope boundary.');
+  if (!launchBoundary(capabilities.find(client => client.id === choice.client))) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native boundary.');
   const next = replaceHeader(current.bytes, 'runs-in', canonicalJson(choice));
   const entries = [{ resource: current.relative, recordPath: current.absolute, beforeRevision: input.expectedRevision, afterBytes: next }];
   if (input.useAsDefault === true) entries.push(await prepareDefaultRunsIn(context, choice));
