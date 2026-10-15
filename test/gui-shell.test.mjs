@@ -6274,7 +6274,7 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   assert.equal(pdf.unitCount, 1); assert.equal(pdf.included, true);
   typeInput(root.querySelector('[data-preference-instructions]'), 'Retain these preferences', 3, 8);
   pin = 'b'.repeat(40);
-  click(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('.add-origin'));
+  await clickAndWait(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('.add-origin'));
   await waitFor(() => app.addController.model.preview?.state === 'ready', 'Origin did not check for updates.');
   assert.equal(app.addController.model.preview.pin.value, pin);
   assert.equal(app.settingsState.content.features.find(item => item.title === 'pdf').pin.value, 'a'.repeat(40));
@@ -6287,7 +6287,7 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   click(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('[data-action="remove-addition"]'));
   await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
   await waitFor(() => !document.querySelector('.dialog') && !app.settingsState.content.features.some(item => item.title === 'pdf'), 'The confirmed Remove did not remove Content.');
-  click(root.querySelector('[data-action="map-undo"]'));
+  await clickAndWait(root.querySelector('[data-action="map-undo"]'));
   await waitFor(() => app.settingsState.content.features.some(item => item.title === 'pdf'), 'Content Undo did not restore it.');
   assert.equal(app.store.drafts.get('document-draft'), draft);
   click(root.querySelector('[data-action="settings-tab-projects"]'));
@@ -6296,7 +6296,7 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
   await waitFor(() => !document.querySelector('.dialog') && app.store.indexes.groups.get(clusterId)?.link.kind === 'none', 'The canonical link did not detach.');
   assert.equal(app.store.indexes.groups.get(clusterId).members.length, 1); assert.equal(launches.length, 0);
-  click(root.querySelector('[data-action="map-undo"]'));
+  await clickAndWait(root.querySelector('[data-action="map-undo"]'));
   await waitFor(() => app.store.indexes.groups.get(clusterId)?.link.kind === 'repository', 'Link Undo did not restore its identity.');
 });
 
