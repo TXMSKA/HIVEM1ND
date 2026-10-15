@@ -213,7 +213,7 @@ async function runInstall() {
   const install = api('install', { method: 'POST', body: { confirm: true, conflicts } }).finally(() => { pending = false; });
   const poll = (async () => { while (pending) { await new Promise(resolve => setTimeout(resolve, 1000)); if (pending) render(await api('step')); } })();
   try { await install; }
-  finally { await poll; render(await api('step')); setBusy(false); }
+  finally { await poll; setBusy(false); render(await api('step')); }
 }
 elements['step-form'].addEventListener('submit', async event => {
   event.preventDefault(); if (busy || !elements['step-form'].reportValidity()) return;
