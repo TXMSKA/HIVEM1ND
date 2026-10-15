@@ -144,20 +144,33 @@ export async function dispatchNative(endpoint, secret, operation, binding = {}) 
     const socket = createConnection(endpoint);
     let data = '';
     let answered = false;
-    const timer = setTimeout(() => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.')), 3000);
+    const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
+    let timer = setTimeout(silent, 3000);
     socket.setEncoding('utf8');
     socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
     socket.on('data', (chunk) => {
       data += chunk;
       if (Buffer.byteLength(data, 'utf8') > 100000) socket.destroy(new CoreError(422, 'invalid_body', 'The bridge response is too large.'));
-      if (!data.includes('\n')) return;
-      try {
-        const message = JSON.parse(data.slice(0, data.indexOf('\n')));
-        if (message.id !== id || message.error) throw new CoreError(403, message.error ?? 'invalid_binding', 'The native bridge rejected the binding.');
-        answered = true;
-        resolve(message.result);
-      } catch (error) { reject(error); }
-      finally { socket.destroy(); }
+      while (data.includes('\n')) {
+        const end = data.indexOf('\n');
+        const line = data.slice(0, end);
+        data = data.slice(end + 1);
+        try {
+          const message = JSON.parse(line);
+          if (message.id !== id || message.error) throw new CoreError(403, message.error ?? 'invalid_binding', 'The native bridge rejected the binding.');
+          if (operation === 'attach' && binding.hostSessionId !== undefined && message.pending === true && Object.keys(message).length === 2) {
+            // A verified owner may be waiting for durable registration and wake locks under load.
+            // The wait stays bounded: a pending owner has 30 s more to answer.
+            clearTimeout(timer);
+            timer = setTimeout(silent, 30000);
+            continue;
+          }
+          answered = true;
+          resolve(message.result);
+        } catch (error) { reject(error); }
+        socket.destroy();
+        return;
+      }
     });
     socket.once('error', reject);
     socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.')); });
@@ -308,7 +321,7 @@ export async function maintainPlanActorWake(context, run, binding) {
   } catch { return { pausedReason: 'wake_unavailable' }; }
 }
 
-async function nativeOperation(bridge, secret, operation, input) {
+async function nativeOperation(bridge, secret, operation, input, pending) {
   const launch = bridge.launches.get(secret);
   if (!launch?.nativeSessionId || !['attach', 'hook', 'policy', 'content'].includes(operation)) {
     throw new CoreError(403, 'native_login_unverified', 'The native launch has not been verified.');
@@ -343,6 +356,7 @@ async function nativeOperation(bridge, secret, operation, input) {
     if (operation !== 'attach' && operation !== 'hook' || proof.client !== 'claude'
       || launch.hostSessionId && launch.hostSessionId !== input.hostSessionId) throw new CoreError(403, 'forbidden', 'The host conversation cannot be changed.');
     if (typeof bridge.carryConversation !== 'function') throw new CoreError(503, 'service_unavailable', 'Host continuity is unavailable.');
+    if (operation === 'attach') pending();
     const carried = await bridge.carryConversation({ ...proof, unit: parseUnitId(proof.unitId).unit,
       sessionId: uuidV8(['session', proof.machine, proof.client, proof.nativeSessionId, proof.unitId]) }, input.hostSessionId);
     if (!carried) throw new CoreError(403, 'forbidden', 'The host conversation could not be verified.');
@@ -531,7 +545,8 @@ function accept(socket, bridge) {
       socket.end(`${JSON.stringify({ id: message.id ?? null, error: 'unauthorized' })}\n`);
       return;
     }
-    (native ? nativeOperation(bridge, message.secret, message.operation, message.binding ?? {}) : perform(bridge, message.operation, message.binding ?? {})).then((result) => {
+    (native ? nativeOperation(bridge, message.secret, message.operation, message.binding ?? {},
+      () => socket.write(`${JSON.stringify({ id: message.id, pending: true })}\n`)) : perform(bridge, message.operation, message.binding ?? {})).then((result) => {
       socket.end(`${JSON.stringify({ id: message.id, result })}\n`, () => {
         if (!native && message.operation === 'shutdown' && result?.accepted === true) {
           Promise.resolve(bridge.ownerShutdown?.(message.binding ?? {}, { afterReply: true })).catch(() => {});

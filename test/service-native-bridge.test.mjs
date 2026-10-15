@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
+import net, { createServer as createNetServer } from 'node:net';
 import { mkdir, readFile, readdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -336,6 +337,8 @@ test('a Relay tool call keeps its verified window open and a hook reports the en
 test('verified owner host continuity survives an MCP reconnect and rejects another host without making a separate worker', async t => {
   const w = await world(t, 'claude');
   w.launch.ready(NATIVE);
+  for (const hostSessionId of ['', null]) await assert.rejects(() => dispatchNative(w.launch.env.HIVEM1ND_SERVICE_BRIDGE,
+    w.launch.env.HIVEM1ND_SERVICE_GRANT, 'attach', { client: 'claude', hostSessionId }), { code: 'forbidden' });
   const env = { ...w.launch.env, CLAUDE_CODE_SESSION_ID: NATIVE, CLAUDE_CODE_HOST_SESSION_ID: 'owned-conversation' };
   const first = await connectNativeService({ env, client: 'claude' });
   first.close();
@@ -351,6 +354,89 @@ test('verified owner host continuity survives an MCP reconnect and rejects anoth
   await assert.rejects(connectNativeService({ env: { ...env, CLAUDE_CODE_HOST_SESSION_ID: 'different-host' }, client: 'claude' }), { code: 'forbidden' });
   const records = await readdir(path.join(w.fixture.paths.mind, 'user', 'relay', 'sessions'));
   assert.ok(records.length >= 2, 'continuity registrations use the owner journal');
+});
+
+test('a verified host attach waits for owner continuity work beyond the bridge deadline', { timeout: 15000 }, async t => {
+  const w = await world(t, 'claude');
+  w.launch.ready(NATIVE);
+  const accepted = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const carry = w.service.bridge.carryConversation;
+  w.service.bridge.carryConversation = async (...args) => { await release.promise; return carry(...args); };
+  const createConnection = net.createConnection;
+  const observer = t.mock.method(net, 'createConnection', (...args) => {
+    const socket = createConnection(...args);
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk.toString();
+      for (let end; (end = buffer.indexOf('\n')) >= 0;) {
+        const message = JSON.parse(buffer.slice(0, end));
+        buffer = buffer.slice(end + 1);
+        if (message.pending === true) accepted.resolve();
+      }
+    });
+    return socket;
+  });
+  syncBuiltinESMExports();
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    t.mock.timers.reset();
+    observer.mock.restore();
+    syncBuiltinESMExports();
+    release.resolve();
+  };
+  t.after(cleanup);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const env = { ...w.launch.env, CLAUDE_CODE_SESSION_ID: NATIVE, CLAUDE_CODE_HOST_SESSION_ID: 'owned-conversation' };
+  let settled = false;
+  const waiting = connectNativeService({ env, client: 'claude' });
+  waiting.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await Promise.race([accepted.promise, waiting.then(() => { throw new Error('The attach completed before the owner finished.'); })]);
+    t.mock.timers.tick(3001);
+    await new Promise(setImmediate);
+    assert.equal(settled, false, 'The owner has acknowledged the attach but has not finished its continuity work.');
+  } finally { cleanup(); }
+  const connected = await waiting;
+  t.after(() => connected.close());
+  assert.equal((await connected.callTool('status', { detail: true, limit: 1 })).isError, false);
+});
+
+test('native host attach bounds an unacknowledged owner and requires a complete final reply', async t => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  for (const mode of ['silent', 'interrupted', 'coalesced', 'wrong-id']) await t.test(mode, async t => {
+    const received = Promise.withResolvers();
+    const sockets = new Set();
+    const server = createNetServer(socket => {
+      sockets.add(socket);
+      socket.on('error', () => {});
+      let buffer = '';
+      socket.on('data', chunk => {
+        buffer += chunk.toString();
+        if (!buffer.includes('\n')) return;
+        const { id } = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
+        received.resolve();
+        if (mode === 'silent') return;
+        const pending = JSON.stringify({ id: mode === 'wrong-id' ? randomUUID() : id, pending: true });
+        socket.end(`${pending}\n${mode === 'coalesced' ? `${JSON.stringify({ id, result: { attached: true } })}\n` : ''}`);
+      });
+    });
+    const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\hivem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
+    await new Promise(resolve => server.listen(endpoint, resolve));
+    t.after(() => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(resolve); }));
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = dispatchNative(endpoint, 'a'.repeat(43), 'attach', { hostSessionId: 'owned-conversation' });
+    const finished = mode === 'coalesced' ? assert.doesNotReject(async () => assert.deepEqual(await pending, { attached: true }))
+      : assert.rejects(pending, { code: mode === 'wrong-id' ? 'invalid_binding' : 'service_unavailable' });
+    try {
+      await received.promise;
+      if (mode === 'silent') t.mock.timers.tick(3001);
+      await finished;
+    } finally { t.mock.timers.reset(); }
+  });
 });
 
 test('shared attach and enable carry the exact daily cap and reject unreviewed consent fields', async t => {
