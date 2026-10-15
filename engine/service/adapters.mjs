@@ -732,6 +732,7 @@ async function stopOwnedSession(context, sessionId, input) {
   context.ownedPids.delete(journal.pid);
   if (journal.executionId) (context.ownedExecutions ?? context.store.ownedExecutions)?.delete(journal.executionId);
   await writeJournal(context, { ...journal, phase: 'stopped', at: stamp(context) });
+  context.store.checkoutCache?.delete(sessionId);
   context.credentials?.revokeSession?.(sessionId);
   if (context.watch && journal.unitId) {
     const { clearUnit } = await import('./watch.mjs');
@@ -838,6 +839,18 @@ export async function contextSession(context, sessionId) {
   const adapter = adapterFor(context, registration.client);
   if (!ownsSessionExecution(context, journal) || await adapter.confirm(registration) !== true) throw new CoreError(409, 'context_unavailable', 'The native context is not owned and live.');
   return { registration, adapter };
+}
+
+// Read-only facts for the checkout read: the registration and whether this service still owns the live native process.
+export async function sessionOwnership(context, sessionId) {
+  const registration = await registrationFor(context, sessionId);
+  if (!registration) return null;
+  let live = false;
+  if (registration.machine === context.paths.machine) {
+    const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.phase === 'registered');
+    live = ownsSessionExecution(context, journal) && await Promise.resolve(context.adapters?.[registration.client]?.confirm?.(registration)).catch(() => false) === true;
+  }
+  return { registration, live };
 }
 
 export function sanitizeSessionTranscript(value) {
@@ -1519,7 +1532,7 @@ export async function launchPlanSession(context, host) {
   await mkdir(directory, { recursive: true }); await protectLocalFile(directory, { store: context.store });
   const repository = cluster.link.kind === 'repository' ? await readRepositoryIdentity(mapping.localPath, context.settingsOwner ?? context) : null;
   const scope = { id: randomUUID(), revision: host.approval.plan.revision, sessionId: host.sessionId, attemptId: host.attemptId, unitId: host.unitId,
-    clusterId: cluster.id, clusterRevision: cluster.revision, machine: host.machine, readScope: host.unitId ? [host.unitId] : [],
+    clusterId: cluster.id, clusterRevision: cluster.revision, machine: host.machine, repositoryId: repository?.id ?? null, readScope: host.unitId ? [host.unitId] : [],
     contentScope: { additionIds: [], scopeRevision: null }, writeRoots: mapping ? [{ realPath: mapping.localPath,
       identity: await directoryIdentity(mapping.localPath), gitCommonDir: repository?.commonDir ?? null }] : [], git: { commit: false, push: false, intentId: null } };
   const choice = host.assignment.runsIn, adapter = context.adapters?.[choice.client];

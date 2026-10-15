@@ -19,6 +19,7 @@ import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs
 import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readSessionActivity, readStartRequest, sanitizeSessionTranscript, stopSession } from './adapters.mjs';
 import { clearContext, compactContext, dismissContext, readContext } from './context.mjs';
 import { createEventBus } from './events.mjs';
+import { readSessionCheckout } from './session-checkout.mjs';
 import { createPlan, editPlan, listPlans, readPlan, startPlan } from './plans.mjs';
 import { controlRun, readRun, readRunLog, readSessionWork, readSessionTranscript } from './runs.mjs';
 import { closeHome, exchange, openHome, status as homeStatus } from './home.mjs';
@@ -81,6 +82,7 @@ const ROUTES = [
   ['POST', '/session-requests/:requestId/cancel', 'session.start', 'D', 'cancelStart'],
   ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
   ['GET', '/sessions/:sessionId/context', 'read', 'D', 'readContext'],
+  ['GET', '/sessions/:sessionId/checkout', 'read', 'D', 'sessionCheckout'],
   ['POST', '/sessions/:sessionId/context', 'session.start', 'D', 'renewContext'],
   ['GET', '/layout', 'read', 'DP', 'layout'],
   ['PATCH', '/layout', 'layout.write', 'D', 'patchLayout'],
@@ -1469,6 +1471,7 @@ async function invoke(route, scope) {
     return { status: 202, body: { sessionId: stopped.sessionId, state: 'stopping' } };
   }
   if (route.handler === 'readContext') return { status: 200, body: await readContext(domain, params.sessionId) };
+  if (route.handler === 'sessionCheckout') return { status: 200, body: await readSessionCheckout(domain, params.sessionId) };
   if (route.handler === 'renewContext') {
     const renew = { compact: compactContext, clear: clearContext, dismiss: dismissContext }[body.action];
     return { status: 202, body: await renew(domain, params.sessionId, body) };

@@ -144,6 +144,18 @@ export async function verifiedSessionScope(context) {
   return scope;
 }
 
+// The owner-local launch snapshot of one session on this machine, or null when it is absent, unbound or not owner-protected.
+export async function readBoundScope(context, sessionId) {
+  try {
+    const file = scopePath(context, sessionId);
+    await assertNoLinks(file);
+    await verifyLocalPermissions(file, { store: context.store });
+    const scope = JSON.parse(await readFile(file, 'utf8'));
+    if (scope?.sessionId !== sessionId || scope.machine !== context.paths.machine || typeof scope.nativeSessionId !== 'string' || !Array.isArray(scope.writeRoots)) return null;
+    return { scope, directory: path.dirname(file) };
+  } catch { return null; }
+}
+
 export async function verifiedFilePath(candidate) {
   if (typeof candidate !== 'string' || !path.isAbsolute(candidate) || /[\u0000-\u001f\u007f]/.test(candidate)
     || process.platform === 'win32' && (candidate.startsWith('\\\\') || candidate.slice(2).includes(':') || candidate.split(/[\\/]/).some(part => /[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)))) {

@@ -257,6 +257,22 @@ export async function assertPlanActor(context, runId, attemptId = null, { report
   return active.binding;
 }
 export async function planBindingForSession(context, sessionId) { return actorTable(context).get(sessionId)?.binding ?? null; }
+// The launch snapshot of one plan session. The run record is shared, so another machine's session is named without its private files.
+export async function readPlanSessionScope(context, sessionId) {
+  for (const id of await runIds(context)) {
+    let run;
+    try { run = (await readRunRecord(context, id)).record; } catch { continue; }
+    const attempt = run.attempts.find(item => item.sessionId === sessionId);
+    if (!attempt) continue;
+    if (run.machine !== context.paths.machine) return { machine: run.machine, live: false, scope: null, directory: null };
+    let scope = null;
+    try { scope = JSON.parse(await readBytes(context.store, runPrivateFile(context, run.id, `scopes/${attempt.id}.json`))).scope; } catch { scope = null; }
+    return { machine: run.machine, live: ['open', 'stopping'].includes(run.state) && !attempt.resolved,
+      scope: scope?.sessionId === sessionId && scope.machine === context.paths.machine && Array.isArray(scope.writeRoots) ? scope : null,
+      directory: runPrivateFile(context, run.id, path.join('sessions', sessionId)) };
+  }
+  return null;
+}
 export async function assertOrdinaryRunSend(context) {
   if (await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId)) runError('plan_message_required', 403);
 }

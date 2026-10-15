@@ -1123,6 +1123,16 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(sessionContext, 200, 'session context');
   assert.equal(sessionContext.json.data.sessionId, sessionId);
   hit('GET', '/sessions/:sessionId/context');
+  const checkoutTarget = `/api/v1/sessions/${sessionId}/checkout`;
+  const sessionCheckout = await call(port, 'GET', checkoutTarget, { token });
+  expectStatus(sessionCheckout, 200, 'session checkout');
+  assert.deepEqual([sessionCheckout.json.data.sessionId, sessionCheckout.json.data.kind, sessionCheckout.json.data.branch, sessionCheckout.json.data.live],
+    [sessionId, 'private', null, true]);
+  assert.equal(sessionCheckout.json.data.path, path.join(paths.localDirectory, 'sessions', sessionId));
+  hit('GET', '/sessions/:sessionId/checkout');
+  for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, 'GET', checkoutTarget, { token: denied }), 403, 'session checkout authority');
+  expectStatus(await call(port, 'GET', `${checkoutTarget}?branch=main`, { token }), 400, 'session checkout takes no query');
+  expectStatus(await call(port, 'GET', `/api/v1/sessions/${randomUUID()}/checkout`, { token }), 404, 'session checkout of an unknown session');
   const contextBody = { action: 'clear', expectedRevision: sessionContext.json.data.revision };
   const contextWrites = fixture.store.writes.length;
   for (const denied of [phoneCredential.token, settingsAgent.token]) {
@@ -1156,6 +1166,10 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(stopped.json.data.sessionId, sessionId);
   assert.equal(stopped.json.data.state, 'stopping');
   hit('POST', '/sessions/:sessionId/stop');
+  const stoppedCheckout = await call(port, 'GET', checkoutTarget, { token });
+  expectStatus(stoppedCheckout, 200, 'stopped session checkout');
+  assert.deepEqual([stoppedCheckout.json.data.live, stoppedCheckout.json.data.path, stoppedCheckout.json.data.observedAt],
+    [false, sessionCheckout.json.data.path, sessionCheckout.json.data.observedAt]);
   const canceledStart = await call(port, 'POST', `/api/v1/session-requests/${requestId}/cancel`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
   assert.ok([200, 202].includes(canceledStart.status));
   hit('POST', '/session-requests/:requestId/cancel');
@@ -1907,11 +1921,16 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(running, 200, 'read run'); hit('GET', '/runs/:runId');
   expectStatus(await call(port, 'GET', `/api/v1/runs/${runId}/log`, { token }), 200, 'read bounded log'); hit('GET', '/runs/:runId/log');
   const planSessionId = running.json.data.attempts[0].sessionId;
+  const planCheckout = await call(port, 'GET', `/api/v1/sessions/${planSessionId}/checkout`, { token });
+  expectStatus(planCheckout, 200, 'plan session checkout'); hit('GET', '/sessions/:sessionId/checkout');
+  assert.deepEqual([planCheckout.json.data.kind, planCheckout.json.data.live, planCheckout.json.data.path],
+    ['private', true, path.join(paths.localDirectory, 'runs', runId, 'sessions', planSessionId)]);
+  expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/checkout`, { token: phone.token }), 403, 'private plan checkout'); hit('GET', '/sessions/:sessionId/checkout');
   for (const suffix of ['work', 'transcript']) {
     expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/${suffix}`, { token }), 200, suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
     expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/${suffix}`, { token: phone.token }), 403, 'private plan ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
   }
-  for (const route of routeTable().filter(route => ['plan', 'run', 'planWork'].includes(route.handler))) {
+  for (const route of routeTable().filter(route => ['plan', 'run', 'planWork', 'sessionCheckout'].includes(route.handler))) {
     const target = route.template.replace(':planId', planId).replace(':runId', runId).replace(':sessionId', planSessionId);
     expectStatus(await call(port, route.method, `/api/v1${target}`, { token: phone.token, ...(route.method === 'GET' ? {} : { body: {}, headers: { 'idempotency-key': randomUUID() } }) }), 403, 'plan phone authority');
   }
