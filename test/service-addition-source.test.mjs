@@ -4,7 +4,7 @@ import { access, lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
-import { acquireAdditionSource, receiveAdditionChunk } from '../engine/service/addition-source.mjs';
+import { acquireAdditionSource, receiveAdditionChunk, validateAdditionSource } from '../engine/service/addition-source.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -209,6 +209,18 @@ test('credential URLs query strings and filesystem paths are refused before tran
     await assert.rejects(acquireAdditionSource(context, { ...input, source: { kind: 'link', url } }), { code: 'invalid_source' });
   }
   assert.equal(calls.length, 0);
+});
+test('a refused link names the forms Add accepts and the accepted forms still resolve', async t => {
+  const { context, input } = await setup(t);
+  const refused = /GitHub or GitLab repository link with an owner and a name, an npm package link, or a dropped folder/;
+  for (const url of ['https://example.com/acme/example', 'https://github.com/acme', 'https://github.com/acme/example/issues/1', 'https://www.npmjs.com/acme/example',
+    'https://gitlab.com/acme/example/blob/main/file', 'https://registry.npmjs.org/', 'http://github.com/acme/example']) {
+    assert.throws(() => validateAdditionSource({ kind: 'link', url }), error => error.code === 'invalid_source' && error.status === 422 && refused.test(error.message), url);
+  }
+  for (const url of ['https://github.com/acme/example', 'https://gitlab.com/acme/example', 'https://www.npmjs.com/package/example', 'https://www.npmjs.com/package/@acme/example']) {
+    assert.doesNotThrow(() => validateAdditionSource({ kind: 'link', url }), url);
+  }
+  await assert.rejects(acquireAdditionSource(context, { ...input, source: { kind: 'link', url: 'https://example.com/acme/example' } }), error => error.code === 'invalid_source' && refused.test(error.message));
 });
 test('registry digest mismatch and truncated archives leave no staged source', async t => {
   const { context, input } = await setup(t, { registry: true });

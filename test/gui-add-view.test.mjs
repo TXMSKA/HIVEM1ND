@@ -61,3 +61,15 @@ test('failed inspection retains an enabled Retry and unknown evidence is shown w
   assert.match(copy(repository), /A repository becomes a cluster/);
   assert.equal(nodes(repository).find(node => node.getAttribute('data-action') === 'add-confirm').getAttribute('disabled'), null);
 });
+test('the hint names the three accepted forms and a refused source repeats them in both languages', () => {
+  const english = 'A GitHub or GitLab repository link, an npm package link, or a dropped folder';
+  assert.equal(addText('en', 'linkHint'), english);
+  assert.equal(addText('es', 'linkHint'), 'Un enlace a un repositorio de GitHub o GitLab, un enlace a un paquete de npm o una carpeta soltada');
+  assert.ok(copy(renderAdd(document, model, {})).includes(english));
+  assert.ok(copy(renderAdd(document, { ...model, language: 'es' }, {})).includes(addText('es', 'linkHint')));
+  for (const [language, forms] of [['en', ['GitHub or GitLab repository link', 'npm package link', 'dropped folder']], ['es', ['repositorio de GitHub o GitLab', 'paquete de npm', 'carpeta soltada']]]) {
+    const refused = renderAdd(document, { ...model, language, preview: null, selected: [], errorCode: 'invalid_source' }, {});
+    const alert = nodes(refused).find(node => node.getAttribute('role') === 'alert');
+    for (const form of forms) assert.ok(copy(alert).includes(form), `${language}: ${form}`);
+  }
+});

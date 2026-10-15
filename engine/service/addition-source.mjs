@@ -18,6 +18,8 @@ const TREE_MAX = 64 * 1024 * 1024;
 const ARCHIVE_MAX = TREE_MAX + 2 * 1024 * 1024;
 function fail(status, code, message) { throw new CoreError(status, code, message); }
 function invalid() { fail(422, 'invalid_source', 'The source evidence is not valid.'); }
+export const ACCEPTED_SOURCES = 'a GitHub or GitLab repository link with an owner and a name, an npm package link, or a dropped folder';
+function invalidLink() { fail(422, 'invalid_source', `The source link is not accepted. Accepted sources are ${ACCEPTED_SOURCES}.`); }
 function exact(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
   if (Object.keys(value).some(key => !keys.includes(key))) fail(400, 'unknown_field', 'The source contains an unknown field.');
@@ -46,10 +48,10 @@ export function additionSourceIdentity(source) {
 
 function publicUrl(value) {
   let url;
-  try { url = new URL(value); } catch { invalid(); }
+  try { url = new URL(value); } catch { invalidLink(); }
   if (typeof value !== 'string' || value.length > 2048 || url.protocol !== 'https:' || url.username || url.password
-    || url.search || url.hash || url.port && url.port !== '443' || /[\x00-\x20\\]/.test(value)) invalid();
-  if (isIP(url.hostname.replace(/^\[|\]$/g, '')) && !publicAddress(url.hostname.replace(/^\[|\]$/g, ''))) invalid();
+    || url.search || url.hash || url.port && url.port !== '443' || /[\x00-\x20\\]/.test(value)) invalidLink();
+  if (isIP(url.hostname.replace(/^\[|\]$/g, '')) && !publicAddress(url.hostname.replace(/^\[|\]$/g, ''))) invalidLink();
   return url;
 }
 
@@ -67,27 +69,27 @@ function publicAddress(address) {
 function provider(source) {
   const url = publicUrl(source.url);
   const parts = url.pathname.split('/').filter(Boolean).map(value => {
-    let part; try { part = decodeURIComponent(value); } catch { invalid(); }
-    if (!/^[A-Za-z0-9@._~-]+$/.test(part) || part === '.' || part === '..') invalid();
+    let part; try { part = decodeURIComponent(value); } catch { invalidLink(); }
+    if (!/^[A-Za-z0-9@._~-]+$/.test(part) || part === '.' || part === '..') invalidLink();
     return part;
   });
   if (['github.com', 'gitlab.com'].includes(url.hostname) && source.kind !== 'registry') {
-    if (parts.length < 2 || parts.length > 4 || parts.length > 2 && !['tree', 'commit'].includes(parts[2]) || parts.length === 3) invalid();
+    if (parts.length < 2 || parts.length > 4 || parts.length > 2 && !['tree', 'commit'].includes(parts[2]) || parts.length === 3) invalidLink();
     const project = parts.slice(0, 2).join('/').replace(/\.git$/, '');
     return { kind: 'git', host: url.hostname, project, ref: parts[3] ?? 'HEAD', name: project.split('/').at(-1), display: project,
       url: `https://${url.hostname}/${project}` };
   }
   if (['www.npmjs.com', 'npmjs.com', 'registry.npmjs.org'].includes(url.hostname) && source.kind !== 'git') {
-    if (url.hostname !== 'registry.npmjs.org' && parts.shift() !== 'package') invalid();
+    if (url.hostname !== 'registry.npmjs.org' && parts.shift() !== 'package') invalidLink();
     const scoped = parts[0]?.startsWith('@');
     const packageName = parts.splice(0, scoped ? 2 : 1).join('/');
-    if (!/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(packageName)) invalid();
+    if (!/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(packageName)) invalidLink();
     if (parts[0] === 'v') parts.shift();
-    if (parts.length > 1) invalid();
+    if (parts.length > 1) invalidLink();
     return { kind: 'registry', packageName, ref: parts[0] ?? 'latest', name: packageName.split('/').at(-1), display: packageName,
       url: `https://www.npmjs.com/package/${packageName}` };
   }
-  invalid();
+  invalidLink();
 }
 
 async function fetchBytes(context, value, signal, redirects = 0) {

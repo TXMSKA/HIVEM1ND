@@ -2,7 +2,7 @@ import { element, labelDialog, progressMark } from './components.mjs';
 export const ADD_COPY = Object.freeze({
   title: ['Add to M1ND', 'Agregar al M1ND'],
   add: ['Add', 'Agregar'],
-  linkHint: ['Paste a link to a repository or a registry, or drop a folder.', 'Pegar un enlace a un repositorio o registro, o soltar una carpeta.'],
+  linkHint: ['A GitHub or GitLab repository link, an npm package link, or a dropped folder', 'Un enlace a un repositorio de GitHub o GitLab, un enlace a un paquete de npm o una carpeta soltada'],
   link: ['Link', 'Enlace'],
   found: ['Found in {source}, {kind} {pin}', 'Detectado en {source}, {kind} {pin}'],
   commit: ['commit', 'commit'], version: ['version', 'versión'], snapshot: ['snapshot', 'copia'],
@@ -47,7 +47,7 @@ export const ADD_COPY = Object.freeze({
   failureHint: ['The selection is kept. Retry checks the saved operation before sending it again.', 'Se conserva la selección. Reintentar comprueba la operación guardada antes de volver a enviarla.'],
   error_source_unavailable: ['The source could not be read. Check the link and retry.', 'No se pudo leer el origen. Comprobar el enlace y reintentar.'],
   error_source_timeout: ['The source did not answer in 30 s.', 'El origen no respondió en 30 s.'],
-  error_invalid_source: ['The source link or manifest is invalid.', 'El enlace o manifiesto de origen no es válido.'],
+  error_invalid_source: ['The source is not valid. Accepted sources are a GitHub or GitLab repository link with an owner and a name, an npm package link, or a dropped folder.', 'El origen no es válido. Se aceptan un enlace a un repositorio de GitHub o GitLab con propietario y nombre, un enlace a un paquete de npm o una carpeta soltada.'],
   error_invalid_path: ['The source contains an unsafe file path or link.', 'El origen contiene una ruta de archivo o enlace no seguro.'],
   error_addition_too_large: ['The source exceeds the file or size limit.', 'El origen supera el límite de archivos o tamaño.'],
   error_check_failed: ['The source did not pass its pin, license, age or script check.', 'El origen no superó la comprobación de versión, licencia, antigüedad o scripts.'],
