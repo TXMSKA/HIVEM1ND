@@ -4,13 +4,15 @@ import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CoreError, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
+import { CoreError, hashBytes, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
+import { commitChange, readBytes, revisionOf, withLocalChanges } from './store.mjs';
 import { createCredentialStore } from './security.mjs';
 import { bindManualAdditionContent } from '../relay/local-wake.mjs';
 import { verifiedSessionScope } from './file-access.mjs';
 import { callLocalTool, localToolNames } from './mcp.mjs';
 import { readUnitState } from './state.mjs';
 import { assertPlanActor, ingestPlanSignal, waitForPlanActor } from './runs.mjs';
+import { createRelay } from '../relay/store.mjs';
 
 const OPERATIONS = new Set(['register', 'send', 'read', 'history', 'reminder', 'activity', 'wake', 'policy', 'shutdown']);
 
@@ -240,6 +242,67 @@ export async function initializeNativeEntry({ controller, bridge, request, regis
   const worker = controller.start(exact);
   await worker.ready;
   return { attached: true };
+}
+
+export async function renewPlanWakeLease(context, run, binding) {
+  const controller = context.runWake ?? context.store.runWake;
+  if (!controller) return null;
+  if (!['open', 'stopping'].includes(run.state)) { await controller.releaseRunLease(run.id); return null; }
+  if (!binding || binding.role !== 'coordinator' || binding.machine !== context.paths.machine || !binding.unitId) return { pausedReason: 'wake_unavailable' };
+  // Native identity, role and canonical unit are captured by the owner, never inferred from a shared service PID.
+  if (await context.adapters?.[binding.client]?.confirm?.(binding) !== true) return { pausedReason: 'wake_unavailable' };
+  const exact = { unit: parseUnitId(binding.unitId).unit, unitId: binding.unitId, client: binding.client, machine: binding.machine, nativeSessionId: binding.nativeSessionId };
+  try {
+    const relay = await createRelay({ mindPath: context.paths.mind, hostname: binding.machine, sessionId: binding.sessionId, client: binding.client });
+    if (!await relay.wakePersistence.resolveBinding(exact)) await relay.register({ unit: exact.unit, unitId: exact.unitId, client: exact.client,
+      nativeSessionId: exact.nativeSessionId, hostSessionId: binding.sessionId });
+    const status = await controller.renewRunLease(exact, { runId: run.id, role: binding.role, hostSessionId: binding.sessionId });
+    if (!status.enabled) return { ...status, pausedReason: status.pausedReason ?? 'revoked' };
+    return status;
+  } catch { return { pausedReason: 'wake_unavailable' }; }
+}
+
+export async function maintainPlanActorWake(context, run, binding) {
+  const controller = context.runWake ?? context.store.runWake;
+  if (!controller?.maintainActor || !binding) return null;
+  const verify = async () => {
+    const { readRunRecord } = await import('./runs.mjs');
+    const latest = (await readRunRecord(context, run.id)).record;
+    return ['open', 'stopping'].includes(latest.state) && latest.attempts.some(a => a.id === binding.attemptId && !a.resolved && a.sessionId === binding.sessionId)
+      && await context.adapters?.[binding.client]?.confirm?.(binding) === true;
+  };
+  const directory = path.join(context.paths.localDirectory, 'runs', run.id, 'inbox', hashBytes(Buffer.from(`${binding.actorId}:${binding.role}`)));
+  const native = { unit: binding.unitId ? parseUnitId(binding.unitId).unit : null, unitId: binding.unitId, nativeSessionId: binding.nativeSessionId, client: binding.client, machine: binding.machine };
+  try {
+    return await controller.maintainActor(native, { ...binding, hostSessionId: binding.sessionId }, { verify,
+      inbox: async () => {
+        const rows = [];
+        for (const name of await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; })) {
+          if (!isUuid(path.basename(name, '.json'))) continue;
+          const bytes = await readBytes(context.store, path.join(directory, name));
+          if (bytes) {
+            const row = JSON.parse(bytes);
+            if (['submitted', 'ambiguous'].includes(row.state)) continue;
+            if (row.messageId) {
+              const message = await readBytes(context.store, path.join(context.paths.localDirectory, 'runs', run.id, 'messages', `${row.messageId}.json`));
+              if (!message || JSON.parse(message).recipients.find(r => r.actorId === binding.actorId && r.role === binding.role)?.readAt) continue;
+            }
+            const { readRunRecord } = await import('./runs.mjs');
+            const latest = (await readRunRecord(context, run.id)).record;
+            if (['no_start', 'stalled', 'unread'].includes(row.kind) && !latest.alerts.some(a => !a.resolved && row.actionId?.startsWith(`${a.id}:`))) continue;
+            if (row.kind === 'summary' && Number(row.actionId?.split(':').at(-1)) < Math.floor((context.now() - Date.parse(latest.startedAt)) / 1800000)) continue;
+            rows.push(row);
+          }
+        }
+        return rows;
+      },
+      acknowledge: (pointer, state) => withLocalChanges(context.store, async () => {
+        const file = path.join(directory, `${pointer.deliveryId}.json`), before = await readBytes(context.store, file);
+        if (!before) return;
+        await commitChange({ ...context, receipt: null }, { id: randomUUID(), entries: [{ resource: file, recordPath: file, beforeRevision: revisionOf(before),
+          afterBytes: Buffer.from(JSON.stringify({ ...JSON.parse(before), state, deliveredAt: state === 'submitted' ? new Date(context.now()).toISOString() : null })), private: true }], events: [], response: { status: 200, body: null } });
+      }) });
+  } catch { return { pausedReason: 'wake_unavailable' }; }
 }
 
 async function nativeOperation(bridge, secret, operation, input) {

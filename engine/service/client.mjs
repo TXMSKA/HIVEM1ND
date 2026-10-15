@@ -191,6 +191,7 @@ function nativeOperations(options, env) {
   const tools = { register: 'register', send: 'send_message', inbox: 'list_inbox', read: 'read_inbox', history: 'history', threads: 'threads', status: 'status', overview: 'status', events: 'events', reminder: 'reminder', delivery: 'delivery_status' };
   return Object.fromEntries(Object.entries(tools).map(([operation, name]) => [operation, async (args = {}) => {
     connected ??= await connectNativeService({ env, client: options.client, nativeSessionId: options.nativeSessionId });
+    if (operation === 'send' && connected.runId) throw new CoreError(403, 'plan_message_required', 'Use the bound plan_send tool for authored plan messages.');
     const forwarded = ['register', 'send', 'read'].includes(operation) ? { ...args, requestId: args.requestId ?? randomUUID() } : args;
     const received = await connected.callTool(name, forwarded);
     const body = JSON.parse(received.content?.find((item) => item.type === 'text')?.text ?? '{}');

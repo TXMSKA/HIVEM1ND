@@ -19,7 +19,7 @@ import { postMailbox, readMailbox } from './chats.mjs';
 import { loadTask } from './tasks.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool } from './runs.mjs';
+import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool, assertOrdinaryRunSend, readPlanInbox } from './runs.mjs';
 
 const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
@@ -132,11 +132,13 @@ async function waitLocalApproval(context, id, signal) {
 }
 
 async function executeLocalTool(context, registration, name, args, id, signal) {
+  if (name === 'message_send') await assertOrdinaryRunSend(context);
   if (context.localPlanBinding?.role && name === 'm1nd_read') {
     const binding = await assertPlanActor(context, context.localPlanBinding.runId);
     const { readPlanRecord, publicPlan } = await import('./plans.mjs');
     const { readRunRecord } = await import('./runs.mjs');
     const run = (await readRunRecord(context, binding.runId)).record;
+    if (args.resourceId === 'inbox') return readPlanInbox(context, args);
     if (args.resourceId !== 'plan') throw new CoreError(403, 'forbidden', 'The resource is outside this plan actor.');
     return publicPlan((await readPlanRecord(context, run.planId)).record);
   }
@@ -145,6 +147,7 @@ async function executeLocalTool(context, registration, name, args, id, signal) {
     return { revision: file.revision, start: args.start, end: Math.min(args.end, file.text.length), text: file.text.slice(args.start, args.end) };
   }
   if (name === 'file_write') return context.localPlanBinding?.role ? planFileTool(context, 'file_write', { ...args, requestId: id }) : writeScopedFile(context, { ...args, requestId: id });
+  if (name === 'message_read' && context.localPlanBinding) return callPlanTool(context, 'plan_read', { runId: context.localPlanBinding.runId, messageIds: args.messageIds, requestId: id });
   if (name === 'message_read') return readMailbox(context, registration.unitId, args);
   if (name === 'message_send') {
     for (const unitId of args.recipientIds) await readDetail(context, 'units', unitId);
@@ -303,6 +306,7 @@ function valueMatches(rule, value) {
 }
 
 export async function callTool(context, name, args) {
+  if (name === 'send_message') await assertOrdinaryRunSend(context);
   const value = await runTool(context, name, args);
   if (name.startsWith('plan_') || await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId)) return value;
   if (!context.wake?.touch) return value;
@@ -316,6 +320,14 @@ export async function callTool(context, name, args) {
 async function runTool(context, name, args) {
   if (name.startsWith('plan_')) return callPlanTool(context, name, args);
   const planBinding = await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId);
+  if (planBinding && ['list_inbox', 'read_inbox', 'history'].includes(name)) {
+    if (args.unit !== undefined && args.unit !== planBinding.unitId || args.nativeSessionId !== undefined && args.nativeSessionId !== planBinding.nativeSessionId
+      || args.client !== undefined && args.client !== planBinding.client) throw new CoreError(403, 'forbidden', 'The plan inbox belongs to another actor.');
+    const page = await readPlanInbox(context, { limit: Math.min(args.limit ?? 50, 100), unread: name !== 'history' });
+    const messages = args.ids ? page.items.filter(m => args.ids.includes(m.id)) : page.items;
+    if (name === 'read_inbox') await callPlanTool(context, 'plan_read', { runId: planBinding.runId, messageIds: args.ids ?? messages.map(m => m.id), requestId: args.requestId ?? randomUUID() });
+    return { messages, unread: page.total, nextCursor: page.nextCursor };
+  }
   if (planBinding && ['file_read', 'file_write'].includes(name)) return planFileTool(context, name, { ...args, expectedRevision: args.expectedRevision ?? null });
   if (planBinding?.unitId === null) throw new CoreError(403, 'forbidden', 'A direct plan actor may use only its bound plan tools.');
   if (name === 'native_permission') {

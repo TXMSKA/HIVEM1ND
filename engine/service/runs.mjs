@@ -15,6 +15,10 @@ import { launchPlanSession } from './adapters.mjs';
 import { readUnitState } from './state.mjs';
 import { loadTask } from './tasks.mjs';
 import { authoredPlanEntry } from './chats.mjs';
+import { queueRunAction, deliverRunActions } from './run-supervision.mjs';
+import { requestPlanExtensionApproval, readApproval } from './approvals.mjs';
+import { renewPlanWakeLease, maintainPlanActorWake } from './bridge.mjs';
+import { queueRunPointer } from '../relay/store.mjs';
 
 const nativeWitnesses = new WeakSet();
 const actors = new WeakMap();
@@ -253,6 +257,92 @@ export async function assertPlanActor(context, runId, attemptId = null, { report
   return active.binding;
 }
 export async function planBindingForSession(context, sessionId) { return actorTable(context).get(sessionId)?.binding ?? null; }
+export async function assertOrdinaryRunSend(context) {
+  if (await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId)) runError('plan_message_required', 403);
+}
+export async function readPlanInbox(context, query = {}) {
+  const binding = await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId);
+  await assertPlanActor(context, binding?.runId);
+  const run = (await readRunRecord(context, binding.runId)).record, plan = (await readPlanRecord(context, run.planId)).record;
+  const rows = [];
+  for (const tracked of run.messages) {
+    const saved = (await readPrivate(context, run.id, `messages/${tracked.id}.json`)).record;
+    const recipient = saved?.recipients.find(r => r.actorId === binding.actorId && r.role === binding.role);
+    if (!recipient || query.unread !== false && recipient.readAt) continue;
+    const bytes = await readBytes(context.store, path.join(context.paths.mind, 'user', 'relay', 'chats', plan.chatId, `${tracked.id}.md`));
+    if (bytes) rows.push({ id: tracked.id, fromId: saved.authorId, body: bytes.toString('utf8').split(/\r?\n\r?\n/).slice(1).join('\n\n'), read: Boolean(recipient.readAt), timestamp: tracked.sentAt });
+  }
+  return paginate(rows, { limit: query.limit ?? 50, cursor: query.cursor ?? null, filters: { actor: binding.actorId, role: binding.role }, snapshot: run.revision });
+}
+export async function maintainRunLease(context, run) {
+  const attempt = run.attempts.find(a => a.role === 'coordinator' && !a.resolved);
+  const intent = attempt ? (await readPrivate(context, run.id, `intents/${attempt.id}.json`)).record : null;
+  let status = intent?.binding?.unitId || !['open', 'stopping'].includes(run.state) ? await renewPlanWakeLease(context, run, intent?.binding ?? null) : null;
+  if (!['open', 'stopping'].includes(run.state)) return status;
+  for (const actor of run.attempts.filter(a => !a.resolved && a.sessionId)) {
+    const saved = (await readPrivate(context, run.id, `intents/${actor.id}.json`)).record;
+    const actual = await maintainPlanActorWake(context, run, saved?.binding);
+    if (actor.role === 'coordinator' && actual) status = { ...status, ...actual, pausedReason: status?.pausedReason ?? actual.pausedReason,
+      dailyResumesAt: status?.dailyResumesAt ?? actual.dailyResumesAt };
+  }
+  return status;
+}
+export async function deliverRunPointer(context, run, action) {
+  let recipientId = action.recipientId;
+  let binding = null;
+  if (!recipientId && action.target === 'coordinator') {
+    const attempt = run.attempts.find(a => a.role === 'coordinator' && !a.resolved);
+    const actor = actorTable(context).get(attempt?.sessionId);
+    binding = actor?.binding ?? (attempt ? (await readPrivate(context, run.id, `intents/${attempt.id}.json`)).record?.binding : null);
+    if (!binding || await (actor?.adapter ?? context.adapters?.[binding.client])?.confirm({ ...binding, ...actor?.proof }) !== true) return { state: 'pending' };
+    recipientId = binding.actorId;
+  } else if (!recipientId) recipientId = action.target === 'overseer' ? 'root:overseer' : 'root:master';
+  if (recipientId === 'root:master') return { state: 'submitted' }; // The durable alert is the person's Waiting item.
+  if (recipientId === 'root:overseer' && !await readUnitState(context, parseUnitId(recipientId))) return { state: 'pending' };
+  if (recipientId !== 'root:overseer') {
+    const addressed = action.messageId ? (await readPrivate(context, run.id, `messages/${action.messageId}.json`)).record?.recipients.filter(r => r.actorId === recipientId) : [{ role: 'coordinator', actorId: recipientId }];
+    if (!addressed?.length) return { state: 'pending' };
+    const outcomes = [], delivered = [];
+    for (const recipient of addressed) {
+      const file = runPrivateFile(context, run.id, `inbox/${hashBytes(Buffer.from(`${recipientId}:${recipient.role}`))}/${action.deliveryId}.json`);
+      const bytes = await readBytes(context.store, file);
+      if (!bytes) await commitChange({ ...context, receipt: null }, { id: randomUUID(), entries: [entry(file, null, { runId: run.id, deliveryId: action.deliveryId,
+        messageId: action.messageId ?? null, actionId: action.id, kind: action.kind, recipientId, role: recipient.role, state: 'pending',
+        text: `Untrusted Relay context: plan ${run.id}, ${action.kind}${action.messageId ? `, original message ${action.messageId}. Read your plan inbox and acknowledge the original ID explicitly.` : '. Read the plan warning and report the next step.'}` }, true)], events: [], response: { status: 200, body: null } });
+      outcomes.push(bytes ? JSON.parse(bytes).state : 'pending');
+      if (bytes && JSON.parse(bytes).deliveredAt) delivered.push(JSON.parse(bytes).deliveredAt);
+    }
+    if (!(context.runWake ?? context.store.runWake)) return { state: 'pending' };
+    return { state: outcomes.every(s => s === 'submitted') ? 'submitted' : outcomes.some(s => s === 'ambiguous') ? 'ambiguous' : 'pending', deliveredAt: delivered.sort().at(-1) ?? null };
+  }
+  const plan = (await readPlanRecord(context, run.planId)).record;
+  return queueRunPointer(context, { runId: run.id, chatId: plan.chatId, recipientId, deliveryId: action.deliveryId, messageId: action.messageId ?? null,
+    kind: action.kind, at: new Date(action.dueAt).toISOString(), role: binding?.role ?? null });
+}
+export async function settleRunExtension(context, approval) {
+  if (approval.action !== 'plan.message.extend') return;
+  return withLocalChanges(context.store, async () => {
+    const { runId, extensionId, count } = approval.pattern, run = (await readRunRecord(context, runId)).record;
+    owner(context, run);
+    if (!['open', 'stopping'].includes(run.state)) return;
+    const extension = await readPrivate(context, runId, `extensions/${extensionId}.json`);
+    if (!extension.record || extension.record.approvalId !== approval.id || extension.record.count !== count || extension.record.state !== 'pending') return;
+    const verified = await readApproval(context, approval.id);
+    if (verified.state !== 'approved' && !['denied', 'expired'].includes(verified.state)) return;
+    const budget = await readPrivate(context, run.id, 'budget.json'); let ledger = budget.record;
+    if (verified.state === 'approved') ledger = applyRunBudget(ledger, { id: `person:${approval.id}`, kind: 'extend', extensionId, count,
+      reason: extension.record.reason, requester: extension.record.requester, authority: 'person', approvalId: approval.id });
+    ledger.events = [];
+    run.budget = projectRunBudget(ledger);
+    for (const alert of run.alerts.filter(a => a.extensionId === extensionId)) alert.resolved = true;
+    await appendRun({ ...context, receipt: null }, run, { eventId: `extension:${approval.id}`, kind: 'budget_decision', values: { count, reason: extension.record.reason, decision: verified.state } },
+      [entry(runPrivateFile(context, runId, `extensions/${extensionId}.json`), extension.bytes, { ...extension.record, state: verified.state }, true),
+        entry(runPrivateFile(context, runId, 'budget.json'), budget.bytes, ledger, true)]);
+  });
+}
+export async function reconcileRunExtensions(context, run) {
+  for (const alert of run.alerts.filter(a => a.kind === 'extension' && !a.resolved && a.approvalId)) await settleRunExtension(context, await readApproval(context, alert.approvalId));
+}
 export async function stopPlanSession(context, binding, input) {
   requirePlanDesktop(context, 'session.stop');
   if (input.confirmed !== true || input.onAcknowledged) runError('stop_unavailable');
@@ -430,6 +520,7 @@ export async function ingestPlanSignal(context, value, witness = null) {
     const state = evidence.record ?? { report: null, processExited: false, cleanupVerified: false };
     if (normalized.kind === 'start') {
       if (attempt.confirmedAt === null) attempt.confirmedAt = normalized.at;
+      for (const alert of run.alerts.filter(a => a.attemptId === attempt.id && a.kind === 'no_start')) alert.resolved = true;
       if (!run.watches.some(watch => watch.attemptId === attempt.id)) run.watches.push({ episodeId: randomUUID(), attemptId: attempt.id, role: attempt.role,
         phase: attempt.role === 'planner' ? 'planning' : run.mode, taskId: attempt.taskId, lastStepAt: normalized.at, resolved: false, notifications: [] });
     } else if (normalized.kind.startsWith('step_')) {
@@ -437,6 +528,7 @@ export async function ingestPlanSignal(context, value, witness = null) {
       const watch = run.watches.find(watch => watch.attemptId === attempt.id && !watch.resolved);
       if (!watch) runError('invalid_run_event', 422);
       watch.lastStepAt = normalized.at; watch.episodeId = randomUUID(); watch.notifications = [];
+      for (const alert of run.alerts.filter(a => a.attemptId === attempt.id && a.kind === 'stalled')) alert.resolved = true;
     } else if (normalized.kind === 'report') {
       if (state.report && state.report !== normalized.outcome) runError('invalid_run_event', 422);
       state.report = normalized.outcome; state.summary = value.summary ?? null;
@@ -513,6 +605,7 @@ export async function appendRun(context, record, event, extra = [], response = n
       : ['bound', 'dispatch', 'stop_requested', 'launch_ambiguous'].includes(event.kind) ? 'wait' : 'done'), values: event.values ?? {}, source: event.source ?? 'service' };
   const logFile = path.join(path.dirname(runFile(context, run.id)), 'log', `${String(run.sequence).padStart(12, '0')}.json`);
   const events = [{ name: 'run.changed', data: { runId: run.id, revision: run.revision } }, { name: 'run.log', data: { runId: run.id, sequence: run.sequence } }];
+  if (event.kind === 'queued' && run.alerts.some(a => !a.resolved)) events.push({ name: 'run.alert', data: { runId: run.id, alertId: run.alerts.find(a => !a.resolved).id } });
   if (!['open', 'stopping'].includes(run.state)) events.push({ name: 'run.closed', data: { runId: run.id, state: run.state } });
   await commitChange(context, { id: randomUUID(), entries: [entry(runFile(context, run.id), current, run), entry(logFile, null, log), ...extra],
     events, response: response ?? { status: 200, body: null } });
@@ -522,6 +615,8 @@ export async function appendRun(context, record, event, extra = [], response = n
 export async function dispatchPlanRole(context, input) {
   const binding = await assertPlanActor(context, input.runId);
   if (binding.role !== 'coordinator') runError('plan_lead_required', 403);
+  const lease = await maintainRunLease(context, (await readRunRecord(context, input.runId)).record);
+  if (lease?.pausedReason) runError('wake_unavailable');
   if (!PLAN_ROLES.includes(input.role) || input.role === 'coordinator' || input.taskId !== null && typeof input.taskId !== 'string') runError('invalid_run_event', 422);
   const body = await withLocalChanges(context.store, async () => {
     const { record: run } = await readRunRecord(context, input.runId); revision(run, input.expectedRevision);
@@ -582,7 +677,18 @@ async function controlRunOperation(context, id, input) {
     });
     queueStop(context, id); return { runId: id, requestId };
   }
-  if (input.action === 'resend') runError('delivery_unavailable');
+  if (input.action === 'resend') {
+    await withLocalChanges(context.store, async () => {
+      const fresh = (await readRunRecord(context, id)).record; revision(fresh, input.expectedRevision);
+      const recipient = fresh.messages.find(m => m.id === input.messageId)?.recipients.find(r => r.actorId === input.recipientId && r.readAt === null);
+      if (!recipient) runError('invalid_run_event', 422);
+      // Manual and automatic resend share one retry identity and the original deadline.
+      await queueRunAction(context, fresh, { id: `retry:${input.messageId}:${input.recipientId}`, kind: 'unread_retry', messageId: input.messageId,
+        recipientId: input.recipientId, dueAt: context.now() });
+      await appendRun(context, fresh, { eventId: requestId, kind: 'resend', values: { messageId: input.messageId } }, [], { status: 202, body: { runId: id, requestId } });
+    });
+    await deliverRunActions(context); return { runId: id, requestId };
+  }
   const old = input.action === 'replace_role' ? run.attempts.find(attempt => attempt.role === input.role && !attempt.resolved)
     : run.attempts.find(attempt => attempt.id === input.attemptId);
   if (!old || old.resolved || run.state !== 'open') runError('invalid_run_event', 422);
@@ -735,7 +841,7 @@ export async function validatePlanRunBundle(context, entries, machine) {
       if (record.id !== match[2] || planRevision(record).revision !== record.revision || !['hivem1nd-plan-v1', 'hivem1nd-run-v1'].includes(record.format)) runError('invalid_pack', 422);
       if (record.format === 'hivem1nd-plan-v1') {
         if (!Array.isArray(record.tasks) || record.tasks.length < 1 || record.tasks.length > 10000 || !isUuid(record.chatId) || !isUuid(record.clusterId)) runError('invalid_pack', 422);
-      } else if (!Array.isArray(record.attempts) || record.attempts.length > 4 || record.watches.length > 4 || record.messages.length > 200 || record.alerts.length > 100) runError('invalid_pack', 422);
+      } else if (!Array.isArray(record.attempts) || record.attempts.length > 4 || record.watches.length > 4) runError('invalid_pack', 422);
     }
   }
 }
@@ -743,7 +849,7 @@ async function budgetTool(context, name, input) {
   const binding = await assertPlanActor(context, input.runId);
   return withLocalChanges(context.store, async () => {
     const { record: run } = await readRunRecord(context, input.runId), budget = await readPrivate(context, run.id, 'budget.json');
-    let ledger = budget.record, result, entries = [];
+    let ledger = budget.record, result, entries = [], budgetDecision = null;
     if (name === 'plan_send') {
       if (!Array.isArray(input.recipientRoles) || !input.recipientRoles.length || input.recipientRoles.length > 4 || new Set(input.recipientRoles).size !== input.recipientRoles.length
         || input.recipientRoles.some(role => !PLAN_ROLES.includes(role)) || typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 1000000) planError();
@@ -754,49 +860,75 @@ async function budgetTool(context, name, input) {
         return { messageId };
       }
       ledger = applyRunBudget(ledger, { id: input.requestId, kind: 'spend', messageId }); ledger.events = [];
-      if (run.messages.length >= 200) runError('budget_exhausted');
       const approval = (await readPrivate(context, run.id, 'approval.json')).record;
       const addressed = [];
       for (const role of input.recipientRoles) {
         const attempt = run.attempts.find(attempt => attempt.role === role && !attempt.resolved);
         const intent = attempt ? (await readPrivate(context, run.id, `intents/${attempt.id}.json`)).record : null;
         const assignment = intent?.assignment ?? (role === 'builder' ? approval.plan.tasks[run.taskIndex]?.assignment : null) ?? approval.plan.roles[role];
-        addressed.push({ role, actorId: assignment.kind === 'unit' ? assignment.unitId : `plan:${run.planId}:${role}` });
+        addressed.push({ role, actorId: assignment.kind === 'unit' ? assignment.unitId : `plan:${run.planId}:${role}`, readAt: null });
       }
       const recipients = addressed.map(recipient => recipient.actorId);
-      entries.push(entry(runPrivateFile(context, run.id, `messages/${messageId}.json`), null, { authorId: binding.actorId, textHash: hashBytes(Buffer.from(input.text)), recipients: addressed }, true));
+      entries.push(entry(runPrivateFile(context, run.id, `messages/${messageId}.json`), null, { authorId: binding.actorId, authorRole: binding.role,
+        textHash: hashBytes(Buffer.from(input.text)), recipients: addressed }, true));
       const prepared = await authoredPlanEntry(context, approval.plan, { id: messageId, authorId: binding.actorId, recipients, text: input.text });
       if (prepared) entries.push(prepared);
       run.messages.push({ id: messageId, sentAt: stamp(context), recipients: [...new Set(recipients)].map(actorId => ({ actorId, readAt: null, retriedAt: null, notifications: [] })) });
+      for (const actorId of new Set(recipients)) {
+        const action = { id: `message:${messageId}:${actorId}`, kind: 'message', runId: run.id, messageId, recipientId: actorId, dueAt: context.now(),
+          deliveryId: uuidV8(['run-delivery', run.id, `message:${messageId}:${actorId}`]), state: 'pending', queuedAt: stamp(context), deliveredAt: null };
+        entries.push(entry(runPrivateFile(context, run.id, `outbox/${hashBytes(Buffer.from(action.id))}.json`), null, action, true));
+      }
       result = { messageId };
     } else if (name === 'plan_read') {
       if (!Array.isArray(input.messageIds) || input.messageIds.length > 200 || new Set(input.messageIds).size !== input.messageIds.length || input.messageIds.some(id => !isUuid(id))) planError();
       for (const id of input.messageIds) {
-        const message = (await readPrivate(context, run.id, `messages/${id}.json`)).record;
+        const loaded = await readPrivate(context, run.id, `messages/${id}.json`), message = loaded.record;
         if (!message?.recipients.some(recipient => recipient.role === binding.role && recipient.actorId === binding.actorId)) runError('forbidden', 403);
         const recipient = run.messages.find(message => message.id === id)?.recipients.find(recipient => recipient.actorId === binding.actorId);
-        if (!recipient) runError('forbidden', 403); recipient.readAt ??= stamp(context);
+        if (!recipient) runError('forbidden', 403);
+        message.recipients.find(r => r.role === binding.role && r.actorId === binding.actorId).readAt ??= stamp(context);
+        if (message.recipients.filter(r => r.actorId === binding.actorId).every(r => r.readAt)) recipient.readAt ??= stamp(context);
+        entries.push(entry(runPrivateFile(context, run.id, `messages/${id}.json`), loaded.bytes, message, true));
+        for (const alert of run.alerts.filter(a => a.messageId === id && a.recipientId === binding.actorId)) alert.resolved = recipient.readAt !== null;
       }
+      const plan = (await readPlanRecord(context, run.planId)).record;
+      const receiptFile = path.join(context.paths.mind, 'user', 'relay', 'chats', plan.chatId, 'read', Buffer.from(binding.actorId).toString('base64url'), run.machine, `${input.requestId}.json`);
+      const acknowledged = input.messageIds.filter(id => run.messages.find(m => m.id === id)?.recipients.find(r => r.actorId === binding.actorId)?.readAt);
+      entries.push(entry(receiptFile, null, { format: 'hivem1nd-chat-read-v1', chatId: plan.chatId, unitId: binding.actorId, machine: run.machine, messageIds: acknowledged, at: stamp(context) }));
       result = { messageIds: input.messageIds };
     } else if (name === 'plan_extend') {
       revision(run, input.expectedRevision);
       if (!Number.isSafeInteger(input.count) || input.count < 1 || input.count > 10000 || typeof input.reason !== 'string' || !input.reason.trim() || input.reason.length > 1000 || /[\x00-\x1f\x7f]/.test(input.reason)) runError('invalid_extension', 422);
       const extensionId = uuidV8(['plan-extension', run.id, input.requestId]);
-      entries.push(entry(runPrivateFile(context, run.id, `extensions/${extensionId}.json`), null, { extensionId, requester: binding.role, count: input.count, reason: input.reason, state: 'pending', approvalId: null }, true));
-      result = { extensionId, state: 'pending', approvalId: null };
+      const crosses = projectRunBudget(ledger).roleExtra + input.count > Math.floor(ledger.base / 2);
+      const approvalId = crosses ? await requestPlanExtensionApproval(context, run, binding, { extensionId, count: input.count, reason: input.reason }) : null;
+      entries.push(entry(runPrivateFile(context, run.id, `extensions/${extensionId}.json`), null, { extensionId, requester: binding.role,
+        requesterSession: binding.sessionId, count: input.count, reason: input.reason, state: 'pending', approvalId }, true));
+      if (approvalId) run.alerts.push({ id: `extension:${extensionId}`, kind: 'extension', extensionId, approvalId, at: stamp(context), resolved: false, told: [], next: [], attemptId: null, messageId: null, recipientId: null });
+      result = { extensionId, state: 'pending', approvalId };
     } else {
       revision(run, input.expectedRevision);
       const extension = await readPrivate(context, run.id, `extensions/${input.extensionId}.json`);
       if (!extension.record || extension.record.requester === binding.role || extension.record.state !== 'pending') runError('invalid_extension', 422);
-      ledger = applyRunBudget(ledger, { id: input.requestId, kind: 'extend', extensionId: input.extensionId, count: extension.record.count, reason: extension.record.reason,
-        requester: extension.record.requester, approver: binding.role, authority: 'roles' }); ledger.events = [];
-      entries.push(entry(runPrivateFile(context, run.id, `extensions/${input.extensionId}.json`), extension.bytes, { ...extension.record, state: 'approved' }, true));
-      result = { extensionId: input.extensionId, state: 'approved', budget: projectRunBudget(ledger) };
+      if (extension.record.requesterSession === binding.sessionId) runError('invalid_extension', 422);
+      budgetDecision = { count: extension.record.count, reason: extension.record.reason, requester: extension.record.requester, approver: binding.role };
+      if (extension.record.approvalId || projectRunBudget(ledger).roleExtra + extension.record.count > Math.floor(ledger.base / 2)) {
+        const approvalId = extension.record.approvalId ?? await requestPlanExtensionApproval(context, run, binding, extension.record);
+        entries.push(entry(runPrivateFile(context, run.id, `extensions/${input.extensionId}.json`), extension.bytes, { ...extension.record, approvalId }, true));
+        if (!run.alerts.some(a => a.extensionId === input.extensionId)) run.alerts.push({ id: `extension:${input.extensionId}`, kind: 'extension', extensionId: input.extensionId, approvalId, at: stamp(context), resolved: false, told: [], next: [], attemptId: null, messageId: null, recipientId: null });
+        result = { extensionId: input.extensionId, state: 'pending', budget: projectRunBudget(ledger) };
+      } else {
+        ledger = applyRunBudget(ledger, { id: input.requestId, kind: 'extend', extensionId: input.extensionId, count: extension.record.count, reason: extension.record.reason,
+          requester: extension.record.requester, approver: binding.role, authority: 'roles' }); ledger.events = [];
+        entries.push(entry(runPrivateFile(context, run.id, `extensions/${input.extensionId}.json`), extension.bytes, { ...extension.record, state: 'approved', approver: binding.role }, true));
+        result = { extensionId: input.extensionId, state: 'approved', budget: projectRunBudget(ledger) };
+      }
     }
     run.budget = projectRunBudget(ledger);
     entries.push(entry(runPrivateFile(context, run.id, 'budget.json'), budget.bytes, ledger, true));
     await appendRun(context, run, { eventId: input.requestId, kind: name.slice(5), role: binding.role, taskId: binding.taskId,
-      values: name === 'plan_extend' ? { count: input.count, reason: input.reason } : {}, source: 'relay' }, entries,
+      values: budgetDecision ?? (name === 'plan_extend' ? { count: input.count, reason: input.reason } : {}), source: 'relay' }, entries,
       { status: name === 'plan_send' ? 201 : name === 'plan_extend' ? 202 : 200, body: result });
     return result;
   });

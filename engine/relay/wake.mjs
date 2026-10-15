@@ -274,7 +274,7 @@ function stableReasonCode(reason) {
 }
 
 function freshPolicy(policy, now) {
-  return Boolean(policy?.enabled === true && (policy.unlimited === true || Number.isFinite(Date.parse(policy.deadlineAt)) && Date.parse(policy.deadlineAt) > now)
+  return Boolean(policy?.enabled === true && (policy.runLeaseUntil > now || policy.unlimited === true || Number.isFinite(Date.parse(policy.deadlineAt)) && Date.parse(policy.deadlineAt) > now)
     && !policy.pausedReason);
 }
 
@@ -378,6 +378,10 @@ export async function createRelayWakeController(options = {}) {
   }
 
   function makeBinding(value, options) { return normalizeBinding(value, hostname, options); }
+  function withSourceBudget(binding, operation) {
+    const key = createHash('sha256').update(JSON.stringify([binding.unitId ?? binding.unit, binding.client, binding.machine])).digest('hex');
+    return persistence.withLock(`actor-submit-${key}`, operation);
+  }
   async function registered(binding) {
     const current = await persistence.resolveBinding(binding);
     if (!current) throw wakeError('WAKE_REGISTRATION_MISSING', 'No current Relay registration matches this exact wake binding.');
@@ -415,12 +419,26 @@ export async function createRelayWakeController(options = {}) {
     const canonical = await readAlias(binding, key);
     const oldKey = legacyHash(binding);
     const legacy = oldKey === key ? null : await readAlias(binding, oldKey, true);
-    return { canonical, legacy, merged: mergeAliases(canonical, legacy, binding, key) };
+    let merged = mergeAliases(canonical, legacy, binding, key);
+    const leases = binding.machine === hostname ? await persistence.read('run-leases', key) : null;
+    const until = Math.max(0, ...Object.values(leases?.runs ?? {}).map(run => run.expiresAt));
+    if (!merged && until > nowMs(clock)) merged = await persistence.read('run-policies', key);
+    if (merged && until > nowMs(clock)) merged = { ...merged, runLeaseUntil: until };
+    if (merged && binding.unitId) {
+      const sources = (await persistence.list('run-policies')).map(item => item.value).filter(policy => policy.kind === 'relay-run-wake'
+        && policy.binding.unitId === binding.unitId && policy.binding.client === binding.client && policy.binding.machine === binding.machine);
+      const used = sources.sort((a,b) => dayCount(b, nowMs(clock)) - dayCount(a, nowMs(clock)))[0];
+      if (used && dayCount(used, nowMs(clock)) > dayCount(merged, nowMs(clock))) merged = { ...merged, day: used.day };
+    }
+    return { canonical, legacy, merged };
   }
   async function readPolicy(binding, key) { return (await readAliases(binding, key)).merged; }
   async function writeAliases(binding, key, next, legacy) {
-    await persistence.write('policies', key, next);
-    if (legacy) await persistence.write('policies', legacyHash(binding), { ...next, key: legacyHash(binding) });
+    const { runLeaseUntil, ...stored } = next;
+    const ordinary = await persistence.read('policies', key);
+    if (!ordinary && await persistence.read('run-policies', key)) { await persistence.write('run-policies', key, stored); return; }
+    await persistence.write('policies', key, stored);
+    if (legacy) await persistence.write('policies', legacyHash(binding), { ...stored, key: legacyHash(binding) });
   }
   async function adopt(bindingValue) {
     const binding = await canonicalBinding(makeBinding(bindingValue));
@@ -475,7 +493,7 @@ export async function createRelayWakeController(options = {}) {
     const deliveries = policy?.deliveries ?? {};
     const entries = Object.values(deliveries);
     const workerRunning = local && Boolean(worker && worker.expiresAt > now && await isProcessAlive(worker.pid));
-    const windowExpired = policy && !policy.unlimited && Date.parse(policy.deadlineAt) <= now;
+    const windowExpired = policy && !(policy.runLeaseUntil > now) && !policy.unlimited && Date.parse(policy.deadlineAt) <= now;
     const workerState = local
       ? workerRunning ? 'running' : !policy || policy.enabled !== true ? 'disabled' : windowExpired ? 'expired' : worker ? 'stale' : 'idle'
       : !policy || policy.enabled !== true ? 'disabled' : windowExpired ? 'expired'
@@ -483,6 +501,7 @@ export async function createRelayWakeController(options = {}) {
     return {
       binding,
       enabled: freshPolicy(policy, now),
+      runLeaseUntil: policy?.runLeaseUntil ?? null,
       startedAt: policy?.startedAt ?? null,
       deadlineAt: policy?.deadlineAt ?? null,
       durationHours: policy?.durationHours ?? null,
@@ -594,6 +613,7 @@ export async function createRelayWakeController(options = {}) {
         if (other.unitId !== binding.unitId) continue;
         if (!await persistence.resolveBinding(other)) continue;
         const policy = await readPolicy(other, bindingHash(other));
+        if (policy?.runLeaseUntil > now) continue;
         if (freshPolicy(policy, now) && policy.wakeCount < policy.maxHandoffs) earlier.set(bindingHash(other), { policy, binding: other });
       }
       if (!earlier.size) return null;
@@ -733,7 +753,7 @@ export async function createRelayWakeController(options = {}) {
     if (generationId !== undefined && (typeof generationId !== 'string' || !generationId.length
         || generationId.length > 180 || /[\u0000-\u001f\u007f]/.test(generationId))) return null;
     const key = bindingHash(binding);
-    return withAliasLocks(binding, 'worker', async () => {
+    return withSourceBudget(binding, () => withAliasLocks(binding, 'worker', async () => {
       const worker = await readWorker(key);
       if (worker && worker.expiresAt > nowMs(clock) && await isProcessAlive(worker.pid)) return null;
       const oldWorker = key === legacyHash(binding) ? null : await readWorker(legacyHash(binding));
@@ -757,7 +777,7 @@ export async function createRelayWakeController(options = {}) {
           cursorStop: { generationId: generationId ?? null, loopCount }, activity: { value: 'idle', observedAt: iso(now) } }, aliases.legacy);
         return wakePointer(binding.unit, messages);
       });
-    });
+    }));
   }
 
   async function findEnabledBinding(args = {}) {
@@ -906,6 +926,7 @@ export async function createRelayWakeController(options = {}) {
     // A chat of the unit that registered under another native session after this one replaced it: the consent moves to the
     // newest registration, whose own worker wakes it, and this worker ends instead of waking a session that is gone.
     async function superseded(registration) {
+      if ((await readPolicy(binding, key))?.runLeaseUntil > nowMs(clock)) return false;
       const newest = await persistence.latestUnitRegistration({ unit: binding.unit, unitId: binding.unitId, client: binding.client, machine: binding.machine });
       if (!newest || newest.nativeSessionId === binding.nativeSessionId || newest.registeredAt <= registration.registeredAt) return false;
       try {
@@ -923,6 +944,13 @@ export async function createRelayWakeController(options = {}) {
       return 'continue';
     }
     async function deliverBatch(policy, registration, candidates) {
+      return withSourceBudget(binding, async () => {
+        const latest = await readPolicy(binding, key);
+        if (!freshPolicy(latest, nowMs(clock)) || latest.generation !== policy.generation) return;
+        return deliverBatchOwned(latest, registration, candidates);
+      });
+    }
+    async function deliverBatchOwned(policy, registration, candidates) {
       const now = nowMs(clock);
       const activity = activityFor(policy, registration, now);
       const urgent = candidates.filter((message) => message.priority === 'urgent');
@@ -976,7 +1004,7 @@ export async function createRelayWakeController(options = {}) {
         currentPolicy = await readPolicy(binding, key);
         if (!freshPolicy(currentPolicy, nowMs(clock)) || currentPolicy.generation !== policy.generation) { await releaseUnsubmittedClaim(); return; }
         if (!await persistence.resolveBinding(binding) || controller.signal.aborted) { await releaseUnsubmittedClaim(); return; }
-        const remainingMs = currentPolicy.unlimited ? retry.sinkTimeoutMs : Math.max(0, Date.parse(currentPolicy.deadlineAt) - nowMs(clock));
+        const remainingMs = currentPolicy.unlimited || currentPolicy.runLeaseUntil > nowMs(clock) ? retry.sinkTimeoutMs : Math.max(0, Date.parse(currentPolicy.deadlineAt) - nowMs(clock));
         if (remainingMs <= 0) { await releaseUnsubmittedClaim(); return; }
         controller.signal.addEventListener('abort', cancelSink, { once: true });
         sinkStarted = true;
@@ -1156,7 +1184,139 @@ export async function createRelayWakeController(options = {}) {
     return handle;
   }
 
-  return Object.freeze({ adopt, enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver, touch, resume });
+  async function renewRunLease(bindingValue, { runId, role, hostSessionId }) {
+    if (role !== 'coordinator' || typeof runId !== 'string' || !/^[a-f0-9-]{36}$/i.test(runId) || typeof hostSessionId !== 'string' || !hostSessionId) throw wakeError('WAKE_INVALID_BINDING', 'A run lease requires its verified coordinator conversation.');
+    let binding = await canonicalBinding(makeBinding(bindingValue));
+    const registration = await registered(binding);
+    const newest = await persistence.latestUnitRegistration({ unit: binding.unit, unitId: binding.unitId, client: binding.client, machine: binding.machine });
+    if (newest && newest.nativeSessionId !== binding.nativeSessionId && newest.hostSessionId === hostSessionId) {
+      const previousKey = bindingHash(binding), nextBinding = { ...binding, nativeSessionId: newest.nativeSessionId }, nextKey = bindingHash(nextBinding);
+      const leases = await persistence.read('run-leases', previousKey);
+      if (leases && Object.values(leases.runs).every(run => run.hostSessionId === hostSessionId)) {
+        const source = await readPolicy(binding, previousKey), destination = await readPolicy(nextBinding, nextKey);
+        if (source && (!destination || destination.enabled)) {
+          const moved = { ...source, binding: nextBinding, key: nextKey };
+          delete moved.runLeaseUntil;
+          // Carry unanswered wakes, daily counters and all pointer identities with the approved conversation.
+          const combined = destination ? mergeAliases(destination, moved, nextBinding, nextKey) : moved;
+          if (await persistence.read('policies', nextKey)) await writeAliases(nextBinding, nextKey, combined, null);
+          else await persistence.write('run-policies', nextKey, combined);
+          await persistence.write('run-leases', nextKey, leases);
+          await persistence.remove('run-leases', previousKey); await stop(binding);
+          binding = nextBinding;
+        }
+      }
+    }
+    const key = bindingHash(binding), now = nowMs(clock);
+    await persistence.withLock(`run-${key}`, async () => {
+      const leases = await persistence.read('run-leases', key) ?? { binding, runs: {} };
+      const previous = leases.runs[runId];
+      if (previous && previous.hostSessionId !== hostSessionId) throw wakeError('WAKE_INVALID_BINDING', 'Another role cannot adopt this run lease.');
+      if (registration.hostSessionId && registration.hostSessionId !== hostSessionId) throw wakeError('WAKE_INVALID_BINDING', 'The registered conversation does not own this run.');
+      if (!await readPolicy(binding, key) && !await persistence.read('run-policies', key)) {
+        const sources = [...await persistence.list('policies'), ...await persistence.list('run-policies')].map(item => item.value)
+          .filter(policy => policy.binding?.unitId === binding.unitId && policy.binding.client === binding.client && policy.binding.machine === binding.machine);
+        const source = sources.sort((a,b) => dayCount(b, now) - dayCount(a, now))[0];
+        await persistence.write('run-policies', key, { kind: 'relay-wake-policy', version: 1, binding, key, generation: randomUUID(), enabled: true,
+          ...policyWindow({}, now), manualConsent: false, wakeCount: 0, deliveries: {}, disabledAt: null, disabledReason: null, pausedReason: null,
+          ...(source?.day ? { day: source.day } : {}), maxDailyHandoffs: Math.min(DEFAULT_DAILY_HANDOFFS, ...sources.map(dailyCap)),
+          activity: { value: 'idle', observedAt: iso(now) }, lastError: null, consecutiveErrors: 0, retryAt: null, cooldownUntil: null });
+      }
+      leases.runs[runId] = { role, hostSessionId, expiresAt: now + 900000 };
+      await persistence.write('run-leases', key, leases);
+    });
+    return inspect(binding);
+  }
+  async function releaseRunLease(runId) {
+    for (const { key, value } of await persistence.list('run-leases')) {
+      if (!value.runs?.[runId]) continue;
+      await persistence.withLock(`run-${key}`, async () => {
+        const latest = await persistence.read('run-leases', key);
+        if (!latest?.runs?.[runId]) return;
+        delete latest.runs[runId];
+        if (Object.keys(latest.runs).length) await persistence.write('run-leases', key, latest);
+        else { await persistence.remove('run-leases', key); if (!freshPolicy(await readPolicy(value.binding, key), nowMs(clock))) await stop(value.binding); }
+      });
+    }
+    for (const { key, value } of await persistence.list('run-policies')) if (value.kind === 'relay-run-wake' && value.runs?.[runId]) {
+      delete value.runs[runId]; await persistence.write('run-policies', key, value);
+      if (!Object.keys(value.runs).length) await workers.get(key)?.stop('run-closed');
+    }
+  }
+  async function maintainActor(binding, actor, io) {
+    if (binding.machine !== hostname || !['coordinator', 'planner', 'builder', 'reviewer'].includes(actor.role)
+      || typeof actor.actorId !== 'string' || actor.sessionId !== actor.hostSessionId || await io.verify() !== true) throw wakeError('WAKE_INVALID_BINDING', 'The run actor is not owned by this conversation.');
+    const key = createHash('sha256').update(JSON.stringify([actor.actorId, actor.role, binding.nativeSessionId, binding.client, hostname])).digest('hex');
+    await withSourceBudget({ ...binding, unit: binding.unit ?? actor.actorId }, async () => {
+      const record = await persistence.read('run-policies', key) ?? { kind: 'relay-run-wake', key, binding, actorId: actor.actorId, role: actor.role,
+        runs: {}, deliveries: {}, wakeCount: 0, maxHandoffs: DEFAULT_WAKE_HANDOFFS, maxDailyHandoffs: DEFAULT_DAILY_HANDOFFS };
+      record.runs[actor.runId] = { hostSessionId: actor.hostSessionId, expiresAt: nowMs(clock) + 900000 };
+      await persistence.write('run-policies', key, record);
+    });
+    const sourceMatches = policy => policy.binding?.machine === hostname && policy.binding.client === binding.client
+      && (binding.unitId ? policy.binding.unitId === binding.unitId : policy.actorId === actor.actorId && policy.role === actor.role);
+    async function sources() { return [...await persistence.list('policies'), ...await persistence.list('run-policies')].filter(item => sourceMatches(item.value)); }
+    async function state() {
+      const all = await sources(), now = nowMs(clock), own = await persistence.read('run-policies', key);
+      const cappedAt = Math.min(DEFAULT_DAILY_HANDOFFS, ...all.map(item => dailyCap(item.value)));
+      const count = Math.max(0, ...all.map(item => dayCount(item.value, now)));
+      const revoked = all.some(item => item.value.kind === 'relay-wake-policy' && item.value.enabled === false && ['manual', 'revoked'].includes(item.value.disabledReason));
+      const exhausted = all.some(item => item.value.wakeCount >= item.value.maxHandoffs || item.value.pausedReason);
+      return { own, all, now, count, cappedAt, pausedReason: revoked ? 'revoked' : exhausted ? 'handoff-budget-exhausted' : null,
+        dailyResumesAt: count >= cappedAt ? iso(nextLocalMidnight(now)) : null };
+    }
+    if (!workers.has(key)) {
+      const abort = new AbortController(); let done;
+      const handle = { stop: async () => { abort.abort(); await done; } };
+      workers.set(key, { stop: handle.stop, handle, runActor: true });
+      done = (async () => {
+        while (!abort.signal.aborted) {
+          await clock.sleep(pollIntervalMs, abort.signal);
+          if (abort.signal.aborted) break;
+          const current = await state();
+          if (!Object.values(current.own.runs).some(run => run.expiresAt > current.now) || await io.verify() !== true) break;
+          if (current.pausedReason || current.dailyResumesAt) continue;
+          for (const pointer of await io.inbox()) {
+            if (abort.signal.aborted) break;
+            const lock = createHash('sha256').update(JSON.stringify([binding.unitId ?? actor.actorId, binding.client, hostname])).digest('hex');
+            await persistence.withLock(`actor-submit-${lock}`, async () => {
+              const latest = await state(), previous = latest.own.deliveries[pointer.deliveryId];
+              if (latest.pausedReason || latest.dailyResumesAt) return;
+              if (previous && ['submitted', 'ambiguous', 'attempting'].includes(previous.state)) { await io.acknowledge(pointer, previous.state === 'submitted' ? 'submitted' : 'ambiguous'); return; }
+              if (previous?.attempts >= retry.maxAttempts || Object.keys(latest.own.deliveries).length >= MAX_DELIVERIES && !previous) return;
+              latest.own.deliveries[pointer.deliveryId] = { state: 'attempting', attempts: (previous?.attempts ?? 0) + 1 };
+              latest.own.wakeCount++; latest.own.day = { date: localDate(latest.now), count: latest.count + 1 };
+              await persistence.write('run-policies', key, latest.own);
+              for (const source of latest.all.filter(item => item.value.kind === 'relay-wake-policy')) {
+                const exact = source.value.binding;
+                await mutatePolicy(exact, bindingHash(exact), policy => policy ? { ...policy, day: latest.own.day, wakeCount: Math.min(policy.maxHandoffs, policy.wakeCount + 1) } : policy);
+              }
+              let outcome;
+              try { outcome = await waitBounded(Promise.resolve(options.sink({ binding: { ...binding, runId: actor.runId, role: actor.role, sessionId: actor.sessionId },
+                messageIds: pointer.messageId ? [pointer.messageId] : [], text: pointer.text, activity: 'idle', urgent: false, signal: abort.signal })), retry.sinkTimeoutMs, abort.signal, abort); }
+              catch { outcome = { status: 'ambiguous' }; }
+              const submitted = outcome?.status === 'submitted', ambiguous = !submitted && outcome?.status !== 'not_submitted';
+              const fresh = await persistence.read('run-policies', key);
+              fresh.deliveries[pointer.deliveryId] = { ...fresh.deliveries[pointer.deliveryId], state: submitted ? 'submitted' : ambiguous ? 'ambiguous' : 'not_submitted' };
+              if (!submitted && !ambiguous) {
+                fresh.wakeCount = Math.max(0, fresh.wakeCount - 1); fresh.day = { ...fresh.day, count: Math.max(0, fresh.day.count - 1) };
+                await persistence.write('run-policies', key, fresh);
+                for (const source of latest.all.filter(item => item.value.kind === 'relay-wake-policy')) {
+                  const exact = source.value.binding;
+                  await mutatePolicy(exact, bindingHash(exact), policy => policy ? { ...policy, day: fresh.day, wakeCount: Math.max(0, policy.wakeCount - 1) } : policy);
+                }
+              }
+              await persistence.write('run-policies', key, fresh);
+              if (submitted || ambiguous) await io.acknowledge(pointer, submitted ? 'submitted' : 'ambiguous');
+            });
+          }
+        }
+      })().catch(() => {}).finally(() => { if (workers.get(key)?.handle === handle) workers.delete(key); });
+    }
+    const current = await state(); return { pausedReason: current.pausedReason, dailyResumesAt: current.dailyResumesAt };
+  }
+  const stopRunActors = () => Promise.all([...workers.values()].filter(worker => worker.runActor).map(worker => worker.stop()));
+  return Object.freeze({ adopt, enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver, touch, resume, renewRunLease, releaseRunLease, maintainActor, stopRunActors });
 }
 
 async function isProcessAlive(pid) {

@@ -33,6 +33,7 @@ import { migrateClusters } from './clusters.mjs';
 import { createSettingsOwner, processSettingsRequests, publishMachineSettings } from './settings.mjs';
 import { drainRunLaunches, recoverRuns } from './runs.mjs';
 import { closeRunProcesses } from './run-processes.mjs';
+import { openRunSupervisor, closeRunSupervisor } from './run-supervision.mjs';
 
 export function guardPortFor(userKey) {
   const digest = createHash('sha256').update(String(userKey)).digest();
@@ -195,6 +196,9 @@ export async function startService(options, retained = null) {
     });
     bindRuntime(handle);
     handle.adopted = await adoptWake(options, { nonce });
+    options.store.runWake = handle.adopted?.controller?.wake;
+    handle.runSupervisor = await openRunSupervisor({ ...options, paths, bus, now: options.now ?? (() => Date.now()), adapters: handle.adapters.adapters,
+      settingsOwner: handle.runtime.settingsOwner, sync: handle.runtime.sync, pulse: handle.runtime.pulse });
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     handle.shutdown = {
       format: 'hivem1nd-shutdown-v1', endpoint: handle.bridge.endpoint, secret: handle.bridge.secret,
@@ -541,7 +545,7 @@ function bridgeDelivery(delivery, binding) {
 }
 
 async function nativeSessionLive(options, runtime, binding) {
-  if (!binding?.nativeSessionId || !binding?.client || !binding?.unit) return false;
+  if (!binding?.nativeSessionId || !binding?.client || !binding?.unit && !binding?.runId) return false;
   const machine = binding.machine || options.paths?.machine;
   if (!machine || binding.machine && binding.machine !== options.paths?.machine) return false;
   const adapter = (runtime?.adapters ?? options.adapters)?.[binding.client];
@@ -553,6 +557,17 @@ async function nativeSessionLive(options, runtime, binding) {
     machine,
   });
   if (confirmed !== true) return false;
+  const { runIds, readRunRecord } = await import('./runs.mjs');
+  for (const id of await runIds(options)) {
+    const run = (await readRunRecord(options, id)).record;
+    if (!['open', 'stopping'].includes(run.state) || run.machine !== machine) continue;
+    for (const attempt of run.attempts.filter(a => (!binding.runId ? a.role === 'coordinator' : run.id === binding.runId && a.role === binding.role) && !a.resolved)) {
+      const file = path.join(options.paths.localDirectory, 'runs', id, 'intents', `${attempt.id}.json`);
+      const saved = await readOptionalJson(file), actor = saved?.binding;
+      if (actor?.nativeSessionId === binding.nativeSessionId && actor.client === binding.client && actor.unitId === binding.unitId
+        && actor.sessionId === attempt.sessionId) return true;
+    }
+  }
   const sessionId = binding.sessionId
     ?? (binding.unitId ? uuidV8(['session', machine, binding.client, binding.nativeSessionId, binding.unitId]) : null);
   if (!sessionId) return false;
@@ -621,8 +636,9 @@ export async function composeCore(options) {
   bindRuntime({ http, runtime });
   const runContext = { ...options, paths, bus, now: options.now ?? (() => Date.now()), settingsOwner: runtime.settingsOwner };
   await recoverRuns(runContext);
+  const runSupervisor = await openRunSupervisor(runContext);
   const closeHttp = http.close.bind(http);
-  http.close = async () => { await drainRunLaunches(runContext); await closeRunProcesses(runContext); return closeHttp(); };
+  http.close = async () => { await closeRunSupervisor(runContext); await drainRunLaunches(runContext); await closeRunProcesses(runContext); return closeHttp(); };
   try {
     await publishBootstrap({ ...options, paths }, http.port, bootstrap);
     await armServiceBeat(runtime);
@@ -630,12 +646,12 @@ export async function composeCore(options) {
     await http.close();
     throw error;
   }
-  return { bus, credentials, http, bootstrap, runtime };
+  return { bus, credentials, http, bootstrap, runtime, runSupervisor };
 }
 
 function serviceInUse(handle) {
   // Viewer logout and native launch closure release the existing host/session leases.
-  return (handle.http?.viewers?.size ?? 0) > 0 || (handle.bridge?.launches?.size ?? 0) > 0 || (handle.options.store?.ownedExecutions?.size ?? 0) > 0;
+  return (handle.runSupervisor?.openCount ?? 0) > 0 || (handle.http?.viewers?.size ?? 0) > 0 || (handle.bridge?.launches?.size ?? 0) > 0 || (handle.options.store?.ownedExecutions?.size ?? 0) > 0;
 }
 
 export async function stopService(handle, { force = false } = {}) {
@@ -1544,6 +1560,7 @@ async function armServiceBeat(runtime) {
 async function closeOwned(handle, { beat = true } = {}) {
   if (handle.options?.store) {
     const runContext = { ...handle.options, paths: servicePathsFor(handle.options), now: handle.options.now ?? (() => Date.now()) };
+    await closeRunSupervisor(runContext);
     await drainRunLaunches(runContext); await closeRunProcesses(runContext);
   }
   await handle.adopted?.controller?.close?.();

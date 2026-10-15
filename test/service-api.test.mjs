@@ -17,7 +17,7 @@ import { readContent, readMachineSettings } from '../engine/service/settings.mjs
 import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
-import { drainRunLaunches } from '../engine/service/runs.mjs';
+import { drainRunLaunches, callPlanTool } from '../engine/service/runs.mjs';
 
 describe('service api', { concurrency: false }, () => {
 async function boot(t, { assetDir = null, missingAssets = false } = {}) {
@@ -1884,7 +1884,25 @@ test('every contract route has a success result and an authority or boundary fai
     const target = route.template.replace(':planId', planId).replace(':runId', runId).replace(':sessionId', planSessionId);
     expectStatus(await call(port, route.method, `/api/v1${target}`, { token: phone.token, ...(route.method === 'GET' ? {} : { body: {}, headers: { 'idempotency-key': randomUUID() } }) }), 403, 'plan phone authority');
   }
-  expectStatus(await call(port, 'POST', `/api/v1/runs/${runId}/control`, { token, body: { action: 'stop_run', expectedRevision: running.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 202, 'stop owned run'); hit('POST', '/runs/:runId/control');
+  const planActor = { store: fixture.store, paths, now: () => fixture.clock.now, bus: core.bus,
+    principal: { audience: 'agent', unitId: planUnit.id, sessionId: planSessionId } };
+  const extension = await callPlanTool(planActor, 'plan_extend', { runId, count: 2, reason: 'Clarify the accepted draft.', expectedRevision: running.json.data.revision, requestId: randomUUID() });
+  const extensionAsk = await call(port, 'GET', `/api/v1/approvals/${extension.approvalId}`, { token });
+  expectStatus(extensionAsk, 200, 'bound extension approval');
+  const extensionTarget = `/api/v1/approvals/${extension.approvalId}/answer`, extensionBody = { decision: 'approve', expectedRevision: extensionAsk.json.data.revision };
+  const beforePhone = fixture.store.writes.length;
+  expectStatus(await call(port, 'POST', extensionTarget, { token: phone.token, body: extensionBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'phone cannot extend a plan');
+  assert.equal(fixture.store.writes.length, beforePhone); hit('POST', '/approvals/:approvalId/answer');
+  expectStatus(await call(port, 'POST', extensionTarget, { token, body: extensionBody, headers: { 'idempotency-key': randomUUID() } }), 200, 'person extends one bound plan'); hit('POST', '/approvals/:approvalId/answer');
+  const sentPlanMessage = await callPlanTool(planActor, 'plan_send', { runId, recipientRoles: ['planner'], text: 'Read the preserved draft.', requestId: randomUUID() });
+  const currentRun = await call(port, 'GET', `/api/v1/runs/${runId}`, { token });
+  expectStatus(await call(port, 'POST', `/api/v1/runs/${runId}/control`, { token, body: { action: 'resend', messageId: sentPlanMessage.messageId, recipientId: 'root:foreign', expectedRevision: currentRun.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 422, 'resend recipient boundary');
+  expectStatus(await call(port, 'POST', `/api/v1/runs/${runId}/control`, { token, body: { action: 'resend', messageId: sentPlanMessage.messageId, recipientId: planUnit.id, expectedRevision: currentRun.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 202, 'resend original run pointer'); hit('POST', '/runs/:runId/control');
+  const boundToken = core.credentials.issue({ audience: 'agent', unitId: planUnit.id, sessionId: planSessionId, capabilities: ['own'], attached: true }).token;
+  expectStatus(await call(port, 'POST', `/api/v1/chats/${planCluster.chatId}/messages`, { token: boundToken, body: { body: 'Bypass' }, headers: { 'idempotency-key': randomUUID() } }), 403, 'run-bound chat budget boundary'); hit('POST', '/chats/:chatId/messages');
+  expectStatus(await call(port, 'POST', `/api/v1/mailboxes/${planUnit.id}/messages`, { token: boundToken, body: { body: 'Bypass' }, headers: { 'idempotency-key': randomUUID() } }), 403, 'run-bound mailbox budget boundary'); hit('POST', '/mailboxes/:unitId/messages');
+  const finalRun = await call(port, 'GET', `/api/v1/runs/${runId}`, { token });
+  expectStatus(await call(port, 'POST', `/api/v1/runs/${runId}/control`, { token, body: { action: 'stop_run', expectedRevision: finalRun.json.data.revision }, headers: { 'idempotency-key': randomUUID() } }), 202, 'stop owned run'); hit('POST', '/runs/:runId/control');
   const loggedOut = await call(port, 'POST', '/api/v1/auth/logout', { token });
   expectStatus(loggedOut, 204, 'logout');
   hit('POST', '/auth/logout');

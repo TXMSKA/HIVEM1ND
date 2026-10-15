@@ -49,6 +49,55 @@ async function until(predicate) {
   assert.fail('The expected isolated wake operation did not finish.');
 }
 
+test('run leases outlive ordinary consent without changing it, preserve daily caps and release only their own plan', async t => {
+  const w = await world(t), calls = [], wake = await w.controller(async notice => { calls.push(notice); return { status: 'submitted' }; });
+  const ordinary = await wake.enable({ ...w.binding, maxDailyHandoffs: 1 });
+  const one = randomUUID(), two = randomUUID(), lease = runId => ({ runId, role: 'coordinator', hostSessionId: 'lead-conversation' });
+  await wake.renewRunLease(w.binding, lease(one)); await wake.renewRunLease(w.binding, lease(two));
+  const original = JSON.parse(await readFile(w.file()));
+  w.clock.now = Date.parse(ordinary.deadlineAt) + 1;
+  const renewed = await wake.renewRunLease(w.binding, lease(one));
+  assert.equal(renewed.enabled, true); assert.equal(renewed.deadlineAt, ordinary.deadlineAt);
+  assert.equal(JSON.parse(await readFile(w.file())).startedAt, original.startedAt);
+  await wake.renewRunLease(w.binding, lease(two)); await wake.releaseRunLease(one);
+  assert.equal((await wake.status(w.binding)).enabled, true);
+  const worker = wake.start(w.binding); assert.equal((await worker.ready).ownsLease, true);
+  await wake.observeActivity(w.binding, { activity: 'idle' });
+  await w.sender.send({ to: w.binding.unit, subject: 'One wake', body: 'Accepted work.' });
+  await until(async () => (await wake.status(w.binding)).dailyCount === 1);
+  await w.sender.send({ to: w.binding.unit, subject: 'Capped wake', body: 'Wait for the same daily cap.' });
+  await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(calls.length, 1);
+  const capped = await wake.renewRunLease(w.binding, lease(two)); assert.ok(capped.dailyResumesAt);
+  await worker.stop(); w.clock.now = Date.parse(capped.dailyResumesAt);
+  await wake.renewRunLease(w.binding, lease(two)); const resumed = wake.start(w.binding); await resumed.ready;
+  await until(() => calls.length === 2); await until(async () => (await wake.status(w.binding)).dailyCount === 1);
+  await resumed.stop(); await wake.disable(w.binding); await wake.renewRunLease(w.binding, lease(two));
+  assert.equal((await wake.status(w.binding)).enabled, false, 'explicit revoke cannot be renewed by a run');
+  await wake.releaseRunLease(two); assert.equal((await wake.status(w.binding)).runLeaseUntil, null);
+});
+
+test('newest coordinator conversation inherits lease counters and pointers while another role cannot steal them', async t => {
+  const w = await world(t), wake = await w.controller(), runId = randomUUID(), hostSessionId = 'lead-conversation';
+  await wake.enable(w.binding);
+  const policy = JSON.parse(await readFile(w.file())); policy.wakeCount = 3;
+  policy.day = { date: '2026-10-10', count: 8 };
+  policy.deliveries.kept = { state: 'submitted', attempts: 1, lastAttemptAt: policy.startedAt, submittedAt: policy.startedAt };
+  await writeFile(w.file(), JSON.stringify(policy));
+  await wake.renewRunLease(w.binding, { runId, role: 'coordinator', hostSessionId });
+  await assert.rejects(wake.renewRunLease(w.binding, { runId, role: 'builder', hostSessionId }), { code: 'WAKE_INVALID_BINDING' });
+  const other = await createRelay({ mindPath: w.mind, hostname: w.machine, sessionId: 'builder-service', client: 'claude' });
+  await other.register({ unit: 'worker', nativeSessionId: 'builder-native', hostSessionId: 'builder-conversation' });
+  const builder = { ...w.binding, nativeSessionId: 'builder-native' };
+  assert.equal(await wake.takeOver(builder), null);
+  assert.equal((await wake.status(w.binding)).wakeCount, 3);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const next = await createRelay({ mindPath: w.mind, hostname: w.machine, sessionId: 'next-lead', client: 'claude' });
+  await next.register({ unit: 'worker', nativeSessionId: 'new-lead-native', hostSessionId });
+  const moved = await wake.renewRunLease(w.binding, { runId, role: 'coordinator', hostSessionId });
+  assert.equal(moved.binding.nativeSessionId, 'new-lead-native'); assert.equal(moved.wakeCount, 3); assert.equal(moved.submittedCount, 1);
+  assert.equal((await wake.status(w.binding)).runLeaseUntil, null);
+});
+
 test('new wake consent uses the canonical unit key and lookup preserves that identity', async t => {
   const w = await world(t);
   const wake = await w.controller();

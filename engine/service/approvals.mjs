@@ -12,7 +12,7 @@ import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks }
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
-const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open', 'git.commit', 'git.push']);
+const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open', 'git.commit', 'git.push', 'plan.message.extend']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 const DECISIONS = new Set(['approve', 'approve-always', 'deny']);
 
@@ -22,6 +22,11 @@ export function normalizeAction(action, pattern, options = {}) {
     throw new CoreError(422, 'invalid_body', 'The action pattern must be an object.');
   }
   if (action === 'process.run') return normalizeProcess(pattern, options.projects ?? []);
+  if (action === 'plan.message.extend') {
+    if (Object.keys(pattern).sort().join(',') !== 'count,extensionId,runId' || !isUuid(pattern.runId) || !isUuid(pattern.extensionId)
+      || !Number.isSafeInteger(pattern.count) || pattern.count < 1 || pattern.count > 10000) throw new CoreError(422, 'invalid_extension', 'The extension must identify one exact run agreement.');
+    return { action, pattern: { ...pattern }, exact: true, alwaysAllowed: false, desktopOnly: true };
+  }
   if (action === 'git.commit' || action === 'git.push') return normalizeGit(action, pattern, options.projects ?? []);
   if (action === 'file.write') return normalizeFile(pattern);
   if (action === 'session.open') return normalizeSession(pattern);
@@ -36,6 +41,7 @@ export function approvalRevision({ request, answers = [], result = null }) {
 }
 
 export async function requestApproval(context, input) {
+  if (input.action === 'plan.message.extend') throw new CoreError(403, 'forbidden', 'Plan extensions require an authenticated budget negotiation.');
   const { planBindingForSession, assertPlanActor, readRunRecord } = await import('./runs.mjs');
   const planActor = await planBindingForSession(context, context.principal?.sessionId);
   if (planActor) {
@@ -146,6 +152,7 @@ export async function answerApproval(context, approvalId, input) {
   if (typeof input?.expectedRevision !== 'string') throw new CoreError(422, 'invalid_body', 'The approval revision is required.');
   return withLocks(context.store, [`approval:${approvalId}`], async () => {
     const loaded = await loadApproval(context, approvalId);
+    if (loaded.request.action === 'plan.message.extend' && context.principal?.audience === 'phone') throw new CoreError(403, 'phone_read_only', 'Plan message extensions are answered on the computer.');
     authorize(context.principal, 'approval.answer', { decision: input.decision, desktopOnly: classifyApprovalAction(loaded.request.action, loaded.request.pattern).desktopOnly });
     if (loaded.result) {
       await recordLateAnswer(context, loaded, input.decision);
@@ -194,6 +201,22 @@ export async function readApproval(context, approvalId) {
   return projectApproval(loaded);
 }
 
+export async function requestPlanExtensionApproval(context, run, actor, extension) {
+  const id = uuidV8(['plan-extension-approval', run.id, extension.extensionId]);
+  const existing = await readJson(context, `user/relay/approvals/${id}/request.json`);
+  if (existing) return id;
+  const { readPlanRecord } = await import('./plans.mjs');
+  const plan = (await readPlanRecord(context, run.planId)).record;
+  const pattern = normalizeAction('plan.message.extend', { runId: run.id, extensionId: extension.extensionId, count: extension.count }).pattern;
+  const request = { format: 'hivem1nd-approval-v1', id, unitId: actor.actorId, sessionId: actor.sessionId, chatId: plan.chatId,
+    action: 'plan.message.extend', pattern, display: 'Allow additional plan messages', alwaysAllowed: false, desktopOnly: true,
+    operationId: extension.extensionId, requestedAt: stamp(context), expiresAt: new Date(context.now() + LIFETIME_MS).toISOString() };
+  const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: actor.actorId, sessionId: actor.sessionId, machine: run.machine, runId: run.id };
+  await commitFiles({ ...context, receipt: null }, [entry(context, `user/relay/approvals/${id}/request.json`, null, jsonBytes(request)),
+    entry(context, `user/relay/approvals/${id}/binding.json`, null, jsonBytes(binding))], [ownedEvent(context, { request, binding }, 'approval.requested', projectApproval({ request, binding }))]);
+  return id;
+}
+
 export async function readAnswerResult(context, approvalId, answerId) {
   const parsed = await readJson(context, `user/relay/approvals/${approvalId}/answer-results/${answerId}.json`);
   if (!parsed) throw new CoreError(404, 'answer_not_found', 'The answer does not exist.');
@@ -231,7 +254,10 @@ export async function consumeAnswers(context, approvalId = null) {
     outcomes.push(await withLocks(context.store, [`approval:${id}`], async () => {
       const loaded = await loadApproval(context, id);
       if (!isOwner(context, loaded.binding)) return { approvalId: id, skipped: true, allow: false };
-      if (loaded.result) return { approvalId: id, replayed: true, allow: false, resumed: false, state: loaded.result.state };
+      if (loaded.result) {
+        if (loaded.request.action === 'plan.message.extend') await import('./runs.mjs').then(module => module.settleRunExtension(context, projectApproval(loaded)));
+        return { approvalId: id, replayed: true, allow: false, resumed: false, state: loaded.result.state };
+      }
       if (Date.parse(loaded.request.expiresAt) <= context.now()) return settle(context, loaded, null, 'expired');
       const winner = [...loaded.answers].sort(byArrival).find((item) => validAnswer(loaded.request, item));
       if (!winner) return { approvalId: id, state: 'pending', allow: false };
@@ -341,6 +367,7 @@ async function settle(context, loaded, answer, state, pending = null) {
     events.push({ name: 'unit.changed', data: { unit: { id: request.unitId } } });
   }
   await commitFiles(context, entries, events);
+  if (request.action === 'plan.message.extend') await import('./runs.mjs').then(module => module.settleRunExtension(context, approval));
   let child = null;
   if (state === 'approved' && request.action === 'session.open') {
     const owner = { ...context, principal: { ...context.principal, unitId: request.unitId, sessionId: request.sessionId } };
@@ -351,7 +378,7 @@ async function settle(context, loaded, answer, state, pending = null) {
       child = { state: 'failed', error: { code: error.code ?? 'client_unavailable', message: 'The approved CLI could not be opened.' } };
     }
   }
-  const resumed = state === 'approved' && request.action !== 'session.open' && await resumeNative(context, request, grantId);
+  const resumed = state === 'approved' && !['session.open', 'plan.message.extend'].includes(request.action) && await resumeNative(context, request, grantId);
   return { status: 200, approval, answerId: answer?.id ?? null, state, grantId, allow: resumed, resumed, child, replayed: false };
 }
 
@@ -632,9 +659,9 @@ function answerRecord(context, approvalId, decision) {
 function validAnswer(request, answer) {
   if (answer.answeredBy !== 'root:master' || !DECISIONS.has(answer.decision)) return false;
   const classification = classifyApprovalAction(request.action, request.pattern);
-  if (answer.audience === 'phone' && (classification.desktopOnly || answer.decision === 'approve-always')) return false;
+  if (answer.audience === 'phone' && (request.action === 'plan.message.extend' || classification.desktopOnly || answer.decision === 'approve-always')) return false;
   if (answer.decision !== 'approve-always') return true;
-  return !['session.open', 'git.commit', 'git.push'].includes(request.action)
+  return !['session.open', 'git.commit', 'git.push', 'plan.message.extend'].includes(request.action)
     && classification.gitAction === null && request.alwaysAllowed === true;
 }
 
@@ -760,7 +787,7 @@ function projectApproval(source, state = null) {
     pattern: request.pattern,
     display: request.display,
     alwaysAllowed: request.alwaysAllowed,
-    desktopOnly: classifyApprovalAction(request.action, request.pattern).desktopOnly,
+    desktopOnly: request.action === 'plan.message.extend' || classifyApprovalAction(request.action, request.pattern).desktopOnly,
     requestedAt: request.requestedAt,
     expiresAt: request.expiresAt,
     state: resolvedState,

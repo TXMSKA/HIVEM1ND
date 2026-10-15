@@ -968,6 +968,7 @@ async function objectFor(route, domain, credential, params, body) {
   if (route.handler === 'answerApproval' && credential?.audience === 'phone') {
     if (body?.decision === 'approve-always') return { decision: body.decision };
     const approval = await readApproval(domain, params.approvalId);
+    if (approval.action === 'plan.message.extend') throw new CoreError(403, 'phone_read_only', 'Plan message extensions are answered on the computer.');
     return { decision: body?.decision, desktopOnly: approval.desktopOnly };
   }
   if (route.handler === 'changeStatus' && credential?.audience === 'phone') {
@@ -985,6 +986,7 @@ async function objectFor(route, domain, credential, params, body) {
 }
 
 async function agentScope(route, domain, credential, params, body) {
+  if (['postChat', 'postMailbox'].includes(route.handler)) await import('./runs.mjs').then(module => module.assertOrdinaryRunSend({ ...domain, principal: credential }));
   const unitId = credential.unitId;
   if (route.handler === 'view' || route.template === '/mailboxes' || (route.handler === 'collection' && !params.unitId && !params.chatId && !params.taskId && AGENT_COLLECTIONS.has(route.collection))) {
     throw new CoreError(403, 'forbidden', 'The agent cannot read that.');

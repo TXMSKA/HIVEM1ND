@@ -315,7 +315,7 @@ async function loadMind(context) {
   for (const message of messages) {
     const chatId = chatIdFromPath(message.path);
     const members = chatId ? chats.find((chat) => chat.id === chatId)?.members ?? [] : [message.toId];
-    const recipients = members.filter((id) => id && id !== message.fromId);
+    const recipients = message.recipientIds ?? members.filter((id) => id && id !== message.fromId);
     const relative = `user/relay/fanout/${message.id}.json`;
     let notices = [];
     try {
@@ -380,6 +380,8 @@ async function loadMind(context) {
   for (const unit of units) {
     const live = sessions.filter(session => session.unitId === unit.id && session.state !== 'stopped' && session.launchKind === 'plan');
     if (live.length) { unit.state = 'in'; unit.sessionIds = [...new Set([...unit.sessionIds, ...live.map(session => session.id)])]; }
+    unit.unread = messages.filter(message => message.toId === unit.id && !message.read && !message.archived).length
+      + runs.reduce((count, run) => count + run.messages.filter(message => message.recipients.some(r => r.actorId === unit.id && r.readAt === null)).length, 0);
   }
   return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, plans, runs, issues: collectIssues(issues) };
 }
@@ -394,7 +396,14 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
       id: `message:${message.id}`, kind: 'message', state: 'pending', unitId: message.toId, title: message.subject || message.body, since: message.timestamp ?? message.date ?? '', chatId: null, approvalId: null, taskId: null, messageId: message.id, blocking: false,
     })),
     ...personQuestions(loaded.units.filter((unit) => !unit.removed), aliases),
-    ...(loaded.approvals ?? []).filter((approval) => !removed.has(approval.unitId)),
+    ...(loaded.approvals ?? []).filter((approval) => !removed.has(approval.unitId) && !loaded.runs.some(run => ['open', 'stopping'].includes(run.state) && run.alerts.some(a => !a.resolved && a.approvalId === approval.approvalId))),
+    ...loaded.runs.filter(run => ['open', 'stopping'].includes(run.state) && run.alerts.some(a => !a.resolved)).map(run => {
+      const plan = loaded.plans.find(p => p.id === run.planId), alert = run.alerts.find(a => !a.resolved && a.kind === 'extension') ?? run.alerts.find(a => !a.resolved);
+      return { id: `run:${run.id}`, kind: 'plan', state: 'pending', runId: run.id, planId: run.planId, unitId: plan?.roles.coordinator.unitId ?? null,
+        title: plan?.title ?? '', since: alert.at, chatId: plan?.chatId ?? null, approvalId: alert.approvalId ?? null,
+        taskId: null, messageId: alert.messageId, blocking: true, actions: ['stop_run', alert.kind === 'no_start' ? 'retry_start' : alert.kind === 'unread' ? 'resend' : 'retry_task'],
+        alertId: alert.id, attemptId: alert.attemptId, recipientId: alert.recipientId, expectedRevision: run.revision };
+    }),
   ]);
   const waitingUnits = new Set(waiting.filter((item) => item.state !== 'expired').map((item) => item.unitId).filter(Boolean));
   const allUnits = loaded.units.map((unit) => {
@@ -733,6 +742,7 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
     const id = headers.get('id') || fileId;
     if (!id) throw new Error('missing id');
     const planMessage = isUuid(headers.get('plan-id'));
+    if (headers.get('kind') === 'run-pointer') return null;
     return {
       id,
       fromId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
@@ -1331,7 +1341,7 @@ async function readPendingApprovals(mind, issues, now) {
       const answers = await filesUnder(mind, relative.replace(/request\.json$/, 'answers'));
       const state = expired ? 'expired' : answers.some((file) => file.endsWith('.json')) ? 'answering' : 'pending';
       items.push({ id: 'approval:' + request.id, kind: 'approval', state,
-        desktopOnly: classifyApprovalAction(request.action, request.pattern).desktopOnly,
+        desktopOnly: request.action === 'plan.message.extend' || classifyApprovalAction(request.action, request.pattern).desktopOnly,
         unitId: request.unitId ?? null, title: request.display ?? request.action ?? '',
         since: request.requestedAt ?? '', chatId: request.chatId ?? null, approvalId: request.id ?? null,
         taskId: null, messageId: null, blocking: !expired });

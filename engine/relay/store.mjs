@@ -4,7 +4,7 @@ import { mkdir, open, lstat, readdir, readFile, rename, realpath, unlink, link a
 import os from 'node:os';
 import path from 'node:path';
 import { assertWithin } from '../records.mjs';
-import { uuidV8 } from '../service/identity.mjs';
+import { uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -794,9 +794,9 @@ export async function createRelay(options = {}) {
 
   const wakeRoot = path.join(relayPath, 'wake');
   const localRoot = relayLocalStatePath(canonicalMind);
-  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index', 'holders']);
+  const wakeBuckets = new Set(['policies', 'workers', 'locks', 'index', 'holders', 'run-leases', 'run-policies']);
   // A policy describes a binding and is read from other machines; a lease, a lock and a holder hold a process id that means something only on the machine that wrote it, and the index records what this machine has read.
-  const localBuckets = new Set(['workers', 'locks', 'index', 'holders']);
+  const localBuckets = new Set(['workers', 'locks', 'index', 'holders', 'run-leases', 'run-policies']);
   function wakeStorage(bucket) {
     return localBuckets.has(bucket)
       ? { root: localRoot, directory: path.join(localRoot, 'wake', bucket) }
@@ -1791,6 +1791,26 @@ export async function createRelay(options = {}) {
 export async function createRelayWakePersistence(options = {}) {
   const relay = await createRelay(options);
   return relay.wakePersistence;
+}
+
+// A pointer preserves the original authored message in its chat. Reading a pointer is not its read receipt.
+export async function queueRunPointer(context, notice) {
+  const root = context.paths.mind, recipient = parseUnitId(notice.recipientId);
+  const directory = path.join(root, inboxDirectory(recipient));
+  const date = new Date(notice.at);
+  const timestamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`;
+  const file = path.join(directory, `${timestamp}-${context.paths.machine}-${notice.deliveryId}.md`);
+  const bytes = Buffer.from(`id: ${notice.deliveryId}\nfrom: master\nfrom-id: root:master\nto: ${recipient.unit}\nto-id: ${recipient.id}\nmachine: ${context.paths.machine}\ntimestamp: ${notice.at}\nsubject: Plan ${notice.kind}\nkind: run-pointer\nrun-id: ${notice.runId}\nresource-id: ${notice.messageId ?? notice.runId}\nthread-id: ${notice.deliveryId}\n\nPlan ${notice.runId}: ${notice.kind}. Read the original ${notice.messageId ?? 'plan warning'} in chat ${notice.chatId}.\n`);
+  await ensureDirectory(root, directory);
+  const previous = await readRegularFileSafe(root, file);
+  if (previous) {
+    if (!previous.equals(bytes)) throw relayError('DELIVERY_CONFLICT', 'The run pointer identity changed.');
+    return { state: 'submitted' };
+  }
+  // Its immutable identity survives a crash between publication and outbox acknowledgment.
+  try { await publishExclusive(root, file, bytes); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; if (!(await readRegularFileSafe(root, file))?.equals(bytes)) throw error; }
+  return { state: 'submitted' };
 }
 
 async function directoryNames(root, directory) {

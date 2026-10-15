@@ -73,6 +73,7 @@ export async function patchChat(context, chatId, input) {
 }
 
 export async function postChat(context, chatId, input) {
+  await import('./runs.mjs').then(module => module.assertOrdinaryRunSend(context));
   const chat = await loadChat(context, chatId);
   const fromId = author(context);
   if (!chat.members.includes(fromId) && context.principal?.audience !== 'desktop') {
@@ -111,6 +112,7 @@ export async function postChat(context, chatId, input) {
 }
 
 export async function postMailbox(context, unitId, input) {
+  await import('./runs.mjs').then(module => module.assertOrdinaryRunSend(context));
   const recipient = parseUnitId(unitId);
   if (!(await unitExists(context, unitId))) throw new CoreError(422, 'unknown_unit', 'The recipient does not exist.');
   if (input?.replyTo) {
@@ -150,6 +152,12 @@ export async function readChat(context, chatId, input) {
     throw new CoreError(403, 'not_chat_member', 'The reader is not a member of this chat.');
   }
   const ids = requireIds(input?.messageIds);
+  const { planBindingForSession, callPlanTool } = await import('./runs.mjs');
+  const binding = await planBindingForSession(context, context.principal?.sessionId);
+  if (binding) {
+    await callPlanTool(context, 'plan_read', { runId: binding.runId, messageIds: ids, requestId: context.receipt?.requestId ?? randomUUID() });
+    return { chatId, readIds: ids, unread: await unreadChat(context, chatId, reader) };
+  }
   const records = await chatRecords(context, chatId);
   for (const id of ids) {
     if (!records.some((item) => item.id === id)) {
@@ -230,7 +238,8 @@ export async function queueNotice(context, notice) {
   const parsed = current ? JSON.parse(current.toString('utf8')) : { format: 'hivem1nd-fanout-v1', messageId: notice.messageId, notices: [] };
   const existing = parsed.notices.find((item) => item.key === key);
   if (existing) return existing;
-  parsed.notices.push({ key, unitId: notice.unitId, state: notice.state ?? 'pending', resourceId: notice.resourceId ?? notice.messageId });
+  parsed.notices.push({ key, unitId: notice.unitId, state: notice.state ?? 'pending', resourceId: notice.resourceId ?? notice.messageId,
+    ...(notice.submittedAt ? { submittedAt: notice.submittedAt } : {}) });
   await commitOne(context, relative, current ? revisionOf(current) : null, Buffer.from(`${canonicalJson(parsed)}\n`), [
     { name: 'notification.changed', data: { noticeKey: key, unitId: notice.unitId, resourceId: notice.resourceId ?? notice.messageId, state: notice.state ?? 'pending', error: null } },
   ]);
