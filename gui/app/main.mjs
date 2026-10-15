@@ -382,6 +382,8 @@ async function runBoot(app) {
 
 function resumeBoot(app) {
   if (app.disposed || app.bootRetrying || !app.api?.token || app.api.closed) return;
+  app.bootFailed = false;
+  app.bootError = null;
   renderStatus(app, "loading");
   return runBoot(app);
 }

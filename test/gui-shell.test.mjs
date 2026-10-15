@@ -3544,6 +3544,36 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(history.urls.length, 1);
 });
 
+test("startup Retry shows the opening frame while the read is in progress", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  let views = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    const target = String(input);
+    if (new URL(target).pathname === "/api/v1/view") {
+      views += 1;
+      if (views === 1) {
+        return new Response(JSON.stringify({
+          error: { code: "unavailable", message: "The service is unavailable.", requestId: "req-boot", details: {}, retryAt: null },
+        }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      await gate;
+    }
+    return fetch(input, init);
+  });
+  t.after(() => dispose(booted.app));
+  await waitFor(() => booted.root.querySelector("[data-boot='failed']"), "The failed startup did not stay recoverable.");
+  click(booted.root.querySelector("[data-action='retry-boot']"));
+  assert.equal(booted.root.querySelector("[data-boot]")?.getAttribute("data-boot"), "reading");
+  assert.equal(booted.root.querySelector("h2")?.textContent, "Reading the M1ND");
+  assert.ok(booted.root.querySelector(".spinner"));
+  release();
+  await waitFor(() => booted.root.querySelector("[data-boot='ready']"), "Retry did not open the desktop shell.");
+});
+
 test("phone pairing uses a stored or browser language before a viewer exists", async () => {
   const { document, root } = createTestDocument(390);
   const app = await mount(root, {
