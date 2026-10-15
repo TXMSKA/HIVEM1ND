@@ -3611,6 +3611,36 @@ test("the opening frame uses a stored or browser language before the read, then 
   assert.equal(stored.get("hivem1nd:language"), "en");
 });
 
+test("the opening frame shows a stored view and renders again when the read arrives", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const live = (await request(apiFrom(fixture.desktopUrl), "GET", "/view")).data;
+  const liveBoards = (live.editors ?? []).filter((editor) => editor.kind === "blueprint").length;
+  const liveText = `${live.counts.units} units, ${live.groups?.length ?? 0} groups, ${live.counts.chats} chats, ${liveBoards} boards`;
+  const storage = new Map([["hivem1nd:opening-view", JSON.stringify({ counts: { units: 424242, chats: 2 }, groupCount: 1, boardCount: 3 })]]);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  const { root } = createTestDocument(1440);
+  const url = new URL(fixture.desktopUrl);
+  const store = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
+  const pending = mount(root, {
+    location: url, history: { replaceState() {} }, storage: store,
+    fetch: async (input, init) => {
+      const path = new URL(input).pathname;
+      if (path === "/api/v1/settings" || path === "/api/v1/viewer") await gate;
+      return fetch(input, init);
+    },
+  });
+  assert.equal(root.querySelector(".opening-counts").textContent, "424242 units, 1 groups, 2 chats, 3 boards");
+  assert.equal(root.querySelector("[data-boot]").getAttribute("data-boot"), "reading");
+  await waitFor(() => root.querySelector("[data-boot]")?.getAttribute("data-boot") === "reading" && root.querySelector(".opening-counts")?.textContent === liveText, "The opening frame did not show the view that arrived.");
+  release();
+  const app = await pending;
+  t.after(() => dispose(app));
+  assert.deepEqual(JSON.parse(storage.get("hivem1nd:opening-view")), { counts: { units: live.counts.units, chats: live.counts.chats }, groupCount: live.groups?.length ?? 0, boardCount: liveBoards });
+});
+
 test("a delayed initial read keeps the desktop frame and skeleton panels visible", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());

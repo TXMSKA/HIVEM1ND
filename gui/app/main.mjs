@@ -300,6 +300,7 @@ export async function mount(root, env = globalThis) {
   root.addEventListener?.("pointerup", revealFocusTools);
   root.addEventListener?.("focusin", revealFocusTools);
   app.language = knownLanguage(app.startStorage, browserLanguages(env, document));
+  restoreOpeningView(app);
   renderStatus(app, "loading");
   if (!api.token && api.homeKey) {
     try {
@@ -357,6 +358,8 @@ async function runBoot(app) {
   startServiceStream(app);
   try {
     await loadSnapshot(app.store, { ...app.api, deadlineMs: 30000 });
+    rememberOpeningView(app);
+    if (!app.disposed && !app.bootFailed && app.bootReading && app.layout !== "phone") renderShell(app);
     if (app.disposed || app.bootFailed) return app;
     if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, app.readyBudgetMs);
     await loadPresentation(app);
@@ -1262,6 +1265,35 @@ function skeletonPanel(document, name, sizes) {
   return panel;
 }
 
+function finiteCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 1_000_000 ? Math.trunc(number) : null;
+}
+
+function openingViewRecord(view) {
+  const units = finiteCount(view?.counts?.units);
+  const chats = finiteCount(view?.counts?.chats);
+  if (units == null || chats == null) return null;
+  const groups = finiteCount(Number.isInteger(view.groupCount) ? view.groupCount : view.groups?.length ?? 0);
+  const boards = finiteCount(Number.isInteger(view.boardCount) ? view.boardCount : (view.editors ?? []).filter((editor) => editor.kind === "blueprint").length);
+  if (groups == null || boards == null) return null;
+  return { counts: { units, chats }, groupCount: groups, boardCount: boards };
+}
+
+function rememberOpeningView(app) {
+  const record = openingViewRecord(app.store.view);
+  if (!record) return;
+  try { app.startStorage?.setItem("hivem1nd:opening-view", JSON.stringify(record)); } catch { /* Storage can be unavailable in a private viewer. */ }
+}
+
+function restoreOpeningView(app) {
+  if (app.store.view?.counts) return;
+  let parsed = null;
+  try { parsed = JSON.parse(app.startStorage?.getItem?.("hivem1nd:opening-view") ?? "null"); } catch { parsed = null; }
+  const record = openingViewRecord(parsed);
+  if (record) app.store.view = record;
+}
+
 function openingWorkspace(app, t) {
   const document = app.root.ownerDocument;
   const failed = app.bootFailed;
@@ -1280,8 +1312,8 @@ function openingWorkspace(app, t) {
   } else {
     content.append(element(document, "span", { class: "spinner", "aria-hidden": "true" }));
     content.append(element(document, "h2", { text: openingText(app, "reading") }));
-    const counts = app.store.view?.counts;
-    if (counts) content.append(element(document, "p", { class: "opening-counts", text: openingText(app, "counts", { units: counts.units ?? 0, groups: app.store.view.groups?.length ?? 0, chats: counts.chats ?? 0, boards: app.store.view.editors?.filter((editor) => editor.kind === "blueprint").length ?? 0 }) }));
+    const record = openingViewRecord(app.store.view);
+    if (record) content.append(element(document, "p", { class: "opening-counts", text: openingText(app, "counts", { units: record.counts.units, groups: record.groupCount, chats: record.counts.chats, boards: record.boardCount }) }));
   }
   return element(document, "div", { class: "workspace workspace-opening" },
     skeletonPanel(document, "side", [[200, 30], [230, 34], ...[150, 190, 120, 170, 140, 180, 110].map((width) => [width])]),
