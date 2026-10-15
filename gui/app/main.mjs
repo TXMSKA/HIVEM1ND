@@ -225,6 +225,27 @@ export function presentation(viewer, settings) {
   };
 }
 
+// The opening and pairing frames render before /settings and /viewer answer. A language this viewer
+// already kept is used; otherwise the browser's first language, Spanish when that is es-*.
+export function knownLanguage(storage, languages) {
+  let stored = null;
+  try { stored = storage?.getItem?.("hivem1nd:language") ?? null; } catch { stored = null; }
+  if (stored === "es" || stored === "en") return stored;
+  const first = String(Array.isArray(languages) ? languages[0] ?? "" : "").toLowerCase();
+  return first.startsWith("es") ? "es" : "en";
+}
+
+function browserLanguages(env, document) {
+  const languages = env?.navigator?.languages ?? document?.defaultView?.navigator?.languages;
+  return Array.isArray(languages) ? languages : [];
+}
+
+function applyChoice(app, choice) {
+  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
+  app.language = choice.language === "es" ? "es" : "en";
+  try { app.startStorage?.setItem("hivem1nd:language", app.language); } catch { /* Storage can be unavailable in a private viewer. */ }
+}
+
 export function shellLayout(capabilities, audience) {
   if (audience === "phone") return "phone";
   if (!capabilities?.length) return "unknown";
@@ -278,6 +299,7 @@ export async function mount(root, env = globalThis) {
   root.addEventListener?.("pointermove", revealFocusTools);
   root.addEventListener?.("pointerup", revealFocusTools);
   root.addEventListener?.("focusin", revealFocusTools);
+  if (api.token) app.language = knownLanguage(app.startStorage, browserLanguages(env, document));
   renderStatus(app, "loading");
   if (!api.token && api.homeKey) {
     try {
@@ -393,9 +415,7 @@ async function patchOwnViewer(app, body, retained = null) {
   const operation = retained ?? createOperation({ method: "PATCH", path: "/viewer", body });
   const result = await request(app.api, "PATCH", "/viewer", { operation });
   app.store.viewer = { ...app.store.viewer, ...result.data };
-  const choice = presentation(app.store.viewer, app.store.settings?.settings);
-  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
-  app.language = choice.language === "es" ? "es" : "en";
+  applyChoice(app, presentation(app.store.viewer, app.store.settings?.settings));
   if (!app.disposed) renderShell(app);
   return result;
 }
@@ -995,9 +1015,7 @@ async function loadPresentation(app, options = {}) {
     app.sync = viewer.meta.sync;
   }
   if (ticket !== app.presentationTicket) return;
-  const choice = presentation(app.store.viewer, app.store.settings?.settings);
-  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
-  app.language = choice.language === "es" ? "es" : "en";
+  applyChoice(app, presentation(app.store.viewer, app.store.settings?.settings));
   app.layout = shellLayout(app.store.capabilities, app.store.audience);
   app.store.audience ??= app.layout;
   const home = homeState(app);
@@ -4835,9 +4853,7 @@ function applySettingsResult(app, result) {
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
   editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
-  const choice = presentation(app.store.viewer, result.data.settings);
-  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
-  app.language = choice.language === "es" ? "es" : "en";
+  applyChoice(app, presentation(app.store.viewer, result.data.settings));
 }
 
 function applyMutationResult(app, operation, result) {

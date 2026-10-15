@@ -21,7 +21,7 @@ import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
 import { checkoutFacts, renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
-import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
+import { dispose, knownLanguage, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
@@ -535,6 +535,16 @@ async function endFixtureHome(desktop) {
   clickAction(desktop.root, "close-home");
   await waitFor(() => !desktop.app.homeState.home.enabled, "The fixture home access did not close.");
 }
+
+test("known language prefers the stored viewer language, then a Spanish browser", () => {
+  const storage = { getItem: (key) => key === "hivem1nd:language" ? "es" : null };
+  assert.equal(knownLanguage(storage, ["en-US"]), "es");
+  assert.equal(knownLanguage({ getItem: () => null }, ["es-AR", "en"]), "es");
+  assert.equal(knownLanguage({ getItem: () => "fr" }, ["es-MX"]), "es");
+  assert.equal(knownLanguage({ getItem: () => null }, ["en-US", "es"]), "en");
+  assert.equal(knownLanguage(null, null), "en");
+  assert.equal(knownLanguage({ getItem: () => { throw new Error("private"); } }, ["es"]), "es");
+});
 
 test("presentation prefers a viewer override and otherwise uses settings", () => {
   assert.deepEqual(presentation({ look: "high-contrast", language: "es" }, { look: "modern", language: "en" }), {
@@ -3532,6 +3542,48 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(authorizations.length >= 2, true);
   assert.equal(authorizations.every((value) => value === `Bearer ${token}`), true);
   assert.equal(history.urls.length, 1);
+});
+
+test("the opening frame uses a stored or browser language before the read, then the viewer settings", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  const storage = new Map();
+  const { document, root } = createTestDocument(1440);
+  const url = new URL(fixture.desktopUrl);
+  const pending = mount(root, {
+    location: url, history: { replaceState() {} },
+    storage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    navigator: { languages: ["es-AR", "es"] },
+    fetch: async (input, init) => {
+      if (new URL(input).pathname === "/api/v1/view") await gate;
+      return fetch(input, init);
+    },
+  });
+  assert.equal(root.querySelector("h2").textContent, "Leyendo el M1ND");
+  assert.equal(document.documentElement.lang, "es");
+  const stored = new Map([["hivem1nd:language", "es"]]);
+  const storedRoot = createTestDocument(1440).root;
+  const storedBoot = mount(storedRoot, {
+    location: url, history: { replaceState() {} },
+    storage: { getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) },
+    navigator: { languages: ["en-US"] },
+    fetch: async (input, init) => {
+      if (new URL(input).pathname === "/api/v1/view") await gate;
+      return fetch(input, init);
+    },
+  });
+  assert.equal(storedRoot.querySelector("h2").textContent, "Leyendo el M1ND");
+  release();
+  const app = await pending;
+  const storedApp = await storedBoot;
+  t.after(() => { dispose(app); dispose(storedApp); });
+  assert.equal(app.language, "en");
+  assert.equal(document.documentElement.lang, "en");
+  assert.equal(storage.get("hivem1nd:language"), "en");
+  assert.equal(stored.get("hivem1nd:language"), "en");
 });
 
 test("a delayed initial read keeps the desktop frame and skeleton panels visible", async (t) => {
