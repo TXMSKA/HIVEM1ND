@@ -16,7 +16,7 @@ import { readUnitState } from './state.mjs';
 import { loadTask } from './tasks.mjs';
 import { authoredPlanEntry } from './chats.mjs';
 import { queueRunAction, deliverRunActions } from './run-supervision.mjs';
-import { requestPlanExtensionApproval, readApproval } from './approvals.mjs';
+import { FILE_DISPLAY_MAX, requestPlanExtensionApproval, readApproval } from './approvals.mjs';
 import { renewPlanWakeLease, maintainPlanActorWake } from './bridge.mjs';
 import { queueRunPointer } from '../relay/store.mjs';
 
@@ -456,7 +456,11 @@ export async function requestPlanNativeOperation(context, input, boundary) {
   }
   const { requestApproval, readApproval } = await import('./approvals.mjs');
   const pattern = { resource: owned.scope.id, path: verified[0].path, operation: 'write', snapshot: hashBytes(Buffer.from(canonicalJson({ operation, verified }))) };
-  const pending = await requestApproval(context, { action: 'file.write', pattern, display: operation.kind === 'process' ? 'Run this exact command in the plan sandbox' : 'Apply these exact plan file changes', alwaysAllowed: false, operationId: String(operation.id) });
+  // The person approves what they can read: the exact command, or every exact path. What cannot be shown whole is refused.
+  const display = operation.kind === 'process' ? `Run this exact command in ${verified[0].path}: ${operation.command}`
+    : `Change these exact files: ${verified.map(item => item.path).join(' | ')}`;
+  if (display.length > FILE_DISPLAY_MAX) return false;
+  const pending = await requestApproval(context, { action: 'file.write', pattern, display, alwaysAllowed: false, operationId: String(operation.id) });
   const deadline = Date.now() + Math.min(120000, context.nativeApprovalTimeoutMs ?? 120000);
   for (;;) {
     if (boundary.signal?.aborted || Date.now() >= deadline) return false;

@@ -14,6 +14,8 @@ import { gitRead } from './cluster-git.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
 import { classifyApprovalAction, ownsSessionExecution } from './adapters.mjs';
 
+import { FILE_DISPLAY_MAX as NATIVE_DISPLAY_MAX } from './approvals.mjs';
+
 function fail(code, message) { throw new CoreError(409, code, message); }
 function freeze(value) { for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child); return Object.freeze(value); }
 
@@ -38,9 +40,19 @@ export async function requestNativeOperation(context, operation, boundary) {
     verified.push({ path: target.path, identity: target.identity, ancestor: target.ancestor,
       modified: String(target.state.mtimeNs), changed: String(target.state.ctimeNs), exists: target.exists });
   }
+  // Automatic work is the person's standing grant for this agent: the same denials above still hold, but no question is asked.
+  if (boundary.mode === 'automatic') {
+    const result = await boundary.authorize({ scopeId: scope.id, sessionId: scope.sessionId, operation,
+      paths: verified.map(item => item.path), approvalId: null, automatic: true, once: true });
+    return result?.authorized === true;
+  }
   const pattern = { resource: scope.id, path: verified[0].path, operation: 'write',
     snapshot: hashBytes(Buffer.from(canonicalJson({ operation, verified }))) };
-  const pending = await requestApproval(context, { action: 'file.write', pattern, display: operation.kind === 'process' ? 'Run this exact command in the session sandbox' : 'Apply these exact native file changes', alwaysAllowed: false, operationId: String(operation.id) });
+  // The person approves what they can read: the exact command, or every exact path. What cannot be shown whole is refused.
+  const display = operation.kind === 'process' ? `Run this exact command in ${verified[0].path}: ${operation.command}`
+    : `Change these exact files: ${verified.map(item => item.path).join(' | ')}`;
+  if (display.length > NATIVE_DISPLAY_MAX) return false;
+  const pending = await requestApproval(context, { action: 'file.write', pattern, display, alwaysAllowed: false, operationId: String(operation.id) });
   const deadline = Date.now() + Math.min(120000, context.nativeApprovalTimeoutMs ?? 120000);
   for (;;) {
     if (boundary.signal?.aborted || Date.now() >= deadline) return false;

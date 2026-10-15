@@ -7,7 +7,7 @@ import { discoverAgents, discoverContent, discoverProjects, loadAdapters } from 
 import { OWNED_RULE_MODES, autoRuleLine, prepareContentAgentAssets } from '../install.mjs';
 import { machineRecordPath, machineSettingsPath, readMachineRecord, serializeMachineRecord } from '../records.mjs';
 import { parseRoutes } from '../relay/store.mjs';
-import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName } from './identity.mjs';
+import { CoreError, canonicalJson, hashBytes, isUuid, parseUnitId, uuidV8, validateMachineName } from './identity.mjs';
 import { answersFor, readProjection } from './projection.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
@@ -17,7 +17,7 @@ import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
 import { launchBoundary, validateRunsIn } from './runs-in.mjs';
-import { stateRunsIn } from './state.mjs';
+import { readUnitState, stateHeader, stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
 import { applyClientConfigChanges, buildClientConfig, clientConfigPaths, readConfigBytes, restoreClientConfig } from '../relay/config.mjs';
 
@@ -234,9 +234,14 @@ async function machineOnline(context, machine) {
 
 function ownerOf(context) { return context.settingsOwner ?? context; }
 
+// Two kinds of agent permission exist: Git for every session of a client, and automatic native work for one agent of Claude Code or Cursor.
+const AUTOMATIC_CLIENTS = ['claude', 'cursor'];
 function validateAgentPermission(permission, machine) {
-  exact(permission, ['id', 'machine', 'client', 'actions', 'scope', 'grantedAt', 'grantedBy']);
-  if (!isUuid(permission.id) || permission.machine !== machine || !text(permission.client, 128) || canonicalJson(permission.actions) !== canonicalJson(['git.commit', 'git.push'])
+  exact(permission, ['id', 'machine', 'client', 'actions', 'scope', 'grantedAt', 'grantedBy', 'unitId']);
+  const automatic = canonicalJson(permission.actions) === canonicalJson(['native.automatic']);
+  const unit = automatic && (() => { try { return parseUnitId(permission.unitId).id === permission.unitId; } catch { return false; } })();
+  if (!isUuid(permission.id) || permission.machine !== machine || !text(permission.client, 128)
+    || !(automatic ? unit && AUTOMATIC_CLIENTS.includes(permission.client) : canonicalJson(permission.actions) === canonicalJson(['git.commit', 'git.push']) && !Object.hasOwn(permission, 'unitId'))
     || permission.scope !== 'hivem1nd-started-sessions' || !time(permission.grantedAt) || permission.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'An agent permission report is not valid.');
 }
 
@@ -249,6 +254,26 @@ export async function readAgentPermissions(context) {
   if (!Array.isArray(record.permissions) || record.permissions.length > 64 || new Set(record.permissions.map(item => item?.id)).size !== record.permissions.length) fail(422, 'corrupt_resource', 'The local permission ledger is not valid.');
   for (const permission of record.permissions) validateAgentPermission(permission, context.paths.machine);
   return record.permissions;
+}
+
+// Automatic native work is one grant for one agent and its client. It is created here and nowhere else, and it never
+// confines the agent: it only removes the question before each change.
+async function grantAutomaticWork(context, input) {
+  const unit = parseUnitId(input.unitId), state = await readUnitState(context, unit);
+  if (!state || stateHeader(state.bytes, 'removed') === 'true') fail(404, 'unit_not_found', 'The agent does not exist.');
+  if (stateHeader(state.bytes, 'machine') !== context.paths.machine) fail(409, 'machine_unavailable', 'Grant automatic work on the agent\'s own machine.');
+  if (stateRunsIn(state.bytes)?.client !== input.client) fail(409, 'scope_unresolved', 'The agent does not run in that client.');
+  const file = path.join(context.paths.localDirectory, 'client-permissions.json');
+  const original = await readConfigBytes(file);
+  const permissions = await readAgentPermissions(context);
+  const present = permissions.find(item => item.client === input.client && item.unitId === unit.id && item.actions.includes('native.automatic'));
+  if (present) return { status: 200, body: { permission: present, revision: (await publishMachineSettings(context, 'permissions')).permissions.revision } };
+  if (permissions.length >= 64) fail(409, 'permission_limit', 'Too many agent permissions exist; revoke one first.');
+  const permission = { id: randomUUID(), machine: context.paths.machine, client: input.client, actions: ['native.automatic'], scope: 'hivem1nd-started-sessions',
+    unitId: unit.id, grantedAt: stamp(context), grantedBy: 'root:master' };
+  await configurationWrite(context, [{ path: file, root: context.paths.localDirectory, before: original, after: bytes({ permissions: [...permissions, permission] }), internal: true }]);
+  const report = await publishMachineSettings(context, 'permissions');
+  return { status: 201, body: { permission, revision: report.permissions.revision } };
 }
 
 async function revokeAgentPermission(context, id) {
@@ -385,12 +410,16 @@ export async function findAgent(context, input) {
 }
 
 export function validateSettingsBody(operation, input) {
-  const fields = { scan: ['machine'], find: ['machine', 'client', 'path'], preview: ['machine', 'mode', 'target', 'allowGit'], apply: ['machine', 'previewId', 'changeIds', 'expectedRevision'], disconnect: ['machine', 'confirmed', 'expectedRevision'], revoke: ['machine', 'expectedRevision'], folder: ['machine', 'path', 'environment', 'expectedRevision'], removeProject: ['machine', 'confirmed', 'expectedRevision'], service: ['machine', 'startWithWindows', 'expectedRevision'], restart: ['machine'] }[operation];
+  const fields = { scan: ['machine'], find: ['machine', 'client', 'path'], preview: ['machine', 'mode', 'target', 'allowGit'], apply: ['machine', 'previewId', 'changeIds', 'expectedRevision'], disconnect: ['machine', 'confirmed', 'expectedRevision'], revoke: ['machine', 'expectedRevision'], grant: ['machine', 'unitId', 'client', 'action', 'expectedRevision'], folder: ['machine', 'path', 'environment', 'expectedRevision'], removeProject: ['machine', 'confirmed', 'expectedRevision'], service: ['machine', 'startWithWindows', 'expectedRevision'], restart: ['machine'] }[operation];
   if (!fields) fail(422, 'invalid_body', 'The Settings operation is not valid.');
   exact(input, fields); required(input, fields.filter(key => key !== 'allowGit'));
   validateMachineName(input.machine);
   if (Object.hasOwn(input, 'expectedRevision') && !byteRevision(input.expectedRevision)) fail(422, 'invalid_body', 'A byte revision is required.');
-  if (['disconnect', 'revoke', 'removeProject'].includes(operation) && input.expectedRevision === null) fail(422, 'invalid_body', 'An existing byte revision is required.');
+  if (['disconnect', 'revoke', 'grant', 'removeProject'].includes(operation) && input.expectedRevision === null) fail(422, 'invalid_body', 'An existing byte revision is required.');
+  if (operation === 'grant') {
+    if (input.action !== 'native.automatic' || !AUTOMATIC_CLIENTS.includes(input.client)) fail(422, 'invalid_body', 'Only automatic work for Claude Code or Cursor can be granted.');
+    if (parseUnitId(input.unitId).id !== input.unitId) fail(422, 'invalid_unit', 'The unit id is not canonical.');
+  }
   if (Object.hasOwn(input, 'confirmed') && input.confirmed !== true) fail(422, 'invalid_body', 'Confirmation is required.');
   if (Object.hasOwn(input, 'path') && (!text(input.path) || !path.isAbsolute(input.path))) fail(422, 'invalid_path', 'An absolute installed path is required.');
   if (operation === 'find' && !text(input.client, 128)) fail(422, 'invalid_body', 'A known client is required.');
@@ -438,12 +467,13 @@ async function executeOwned(context, operation, input, id = null) {
     if (!source?.equals(bytes(updated))) await commitChange({ ...context, receipt: null }, { id: randomUUID(), entries: [{ resource: `settings-report:${context.paths.machine}`, recordPath: file, beforeRevision: revisionOf(source), afterBytes: bytes(updated) }], events: [{ name: 'machine.settings.changed', data: { machine: context.paths.machine, section: 'agents', reportedAt: updated.reportedAt, revision: updated.agents.revision } }], body: null });
     return { status: 200, body: { machine: context.paths.machine, readOnly: false, reportedAt: updated.reportedAt, ...updated.agents } };
   }
-  const section = ['preview', 'apply', 'disconnect'].includes(operation) ? 'agents' : operation === 'revoke' ? 'permissions' : ['folder', 'removeProject'].includes(operation) ? 'projects' : 'service';
+  const section = ['preview', 'apply', 'disconnect'].includes(operation) ? 'agents' : ['revoke', 'grant'].includes(operation) ? 'permissions' : ['folder', 'removeProject'].includes(operation) ? 'projects' : 'service';
   if (Object.hasOwn(input, 'expectedRevision')) {
     const report = await publishMachineSettings(context);
     if (report[section].revision !== input.expectedRevision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
   }
   if (operation === 'revoke') return revokeAgentPermission(context, id);
+  if (operation === 'grant') return grantAutomaticWork(context, input);
   const handler = context.settingsHandlers?.[operation];
   if (operation === 'service' && !handler) {
     await configureOwnedService({ ...context, platform: context.paths.platform, mindPath: context.paths.mind, cosmicPath: context.paths.cosmic,

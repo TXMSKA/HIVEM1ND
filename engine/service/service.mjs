@@ -13,6 +13,7 @@ import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, wa
 import { createPulse } from '../sync/pulse.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
+import { ownChildProcess } from './process-handle.mjs';
 import { recoverContexts } from './context.mjs';
 import { createRelay, parseRoutes } from '../relay/store.mjs';
 import { machineRecordPath, parseMachineRecord } from '../records.mjs';
@@ -1538,7 +1539,9 @@ async function startWakeController(options, nonce) {
 }
 
 export function openNativeAdapters(env = process.env, hooks = {}) {
-  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs, createNativeLaunch: hooks.createNativeLaunch, onNativeRegistered: hooks.onNativeRegistered };
+  // Production supplies the owned process handle itself: plans and supervised launches stop without it.
+  const shared = { live: true, env, spawn: hooks.spawn, platform: hooks.platform, timeoutMs: hooks.timeoutMs, createNativeLaunch: hooks.createNativeLaunch, onNativeRegistered: hooks.onNativeRegistered,
+    ownProcess: hooks.ownProcess ?? ownChildProcess };
   const adapters = {
     claude: createNativeAdapter('claude', shared),
     codex: createNativeAdapter('codex', shared),

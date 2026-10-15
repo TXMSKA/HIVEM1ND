@@ -12,6 +12,8 @@ import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks }
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
 const LIFETIME_MS = 120000;
+// A file or native-operation approval shows the exact command or every exact path, so it may be longer than other displays.
+export const FILE_DISPLAY_MAX = 2000;
 const ACTIONS = new Set(['process.run', 'file.write', 'network.request', 'session.open', 'git.commit', 'git.push', 'plan.message.extend']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 const DECISIONS = new Set(['approve', 'approve-always', 'deny']);
@@ -49,6 +51,7 @@ export async function requestApproval(context, input) {
     if (input.action !== 'file.write') throw new CoreError(403, 'plan_lead_required', 'This plan actor cannot obtain ordinary process or child-session authority.');
     const normalized = normalizeAction(input.action, input.pattern, { projects: context.projects ?? [] });
     if (!normalized.exact || !isUuid(input.pattern.resource) || !['read', 'write'].includes(input.pattern.operation)) throw new CoreError(422, 'invalid_body', 'The plan file approval must name one exact operation.');
+    if (typeof input.display !== 'string' || input.display.length < 1 || input.display.length > FILE_DISPLAY_MAX) throw new CoreError(422, 'invalid_body', 'The approval display is not valid.');
     const { readPlanRecord } = await import('./plans.mjs');
     const run = (await readRunRecord(context, planActor.runId)).record;
     const plan = (await readPlanRecord(context, run.planId)).record;
@@ -69,7 +72,7 @@ export async function requestApproval(context, input) {
   if (!unitId || !sessionId) throw new CoreError(422, 'invalid_binding', 'The approval binding is incomplete.');
   const parsed = parseUnitId(unitId);
   const normalized = normalizeAction(input?.action, input?.pattern, { projects: context.projects ?? [] });
-  if (typeof input?.display !== 'string' || input.display.length < 1 || input.display.length > 240) {
+  if (typeof input?.display !== 'string' || input.display.length < 1 || input.display.length > (normalized.action === 'file.write' ? FILE_DISPLAY_MAX : 240)) {
     throw new CoreError(422, 'invalid_body', 'The approval display is not valid.');
   }
   if (input?.alwaysAllowed !== undefined && typeof input.alwaysAllowed !== 'boolean') throw new CoreError(422, 'invalid_body', 'alwaysAllowed must be boolean.');

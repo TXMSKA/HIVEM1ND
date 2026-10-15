@@ -38,7 +38,8 @@ export async function ownRunProcess(context, binding, handle, onEvidence) {
   };
   owned.clean = async () => {
     if (record.cleaned) return true;
-    if (handle.identity !== owned.identity || await handle.verify() !== true) unavailable();
+    // A live handle must still verify; once the exit is recorded verify is false by definition and cleanup alone proves closure.
+    if (handle.identity !== owned.identity || !record.exited && await handle.verify() !== true) unavailable();
     // A parent may have exited while descendants keep its stdout open; closure observes the job independently.
     const result = await handle.cleanup();
     if (result?.closed !== true || result.identity !== owned.identity) unavailable();

@@ -16,11 +16,13 @@ import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { launchBoundary, launchChoice } from './runs-in.mjs';
 import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOperation, writeScopedFile } from './file-access.mjs';
 import { assertNoLinks } from './paths.mjs';
+import { ownedSpawnOptions } from './process-handle.mjs';
 import { protectLocalFile } from './security.mjs';
 import { discoverLyra, openLyraAdapter } from './lyra.mjs';
 import { contextBootstrap } from './chats.mjs';
 
 const LIFETIME_MS = 120000;
+const INTERRUPT_MS = 10000;
 const PROMPT_MAX = 100000;
 const TERMINAL = new Set(['started', 'failed', 'expired', 'canceled']);
 const STARTABLE = new Set(CLIENTS);
@@ -125,6 +127,21 @@ export function createNativeAdapter(client, options = {}) {
   const sessions = new Map();
   const activityWrites = new Set();
   let closed = false;
+  // Stops only the running turn; the session, its chat and its task stay. A turn that is not running answers idle.
+  async function interruptTurn(input = {}) {
+    const refused = { acknowledged: false, code: 'stop_unavailable' };
+    const session = sessions.get(input?.nativeSessionId);
+    if (!session) return refused;
+    if (input.unitId && session.unitId && input.unitId !== session.unitId) return refused;
+    if (fixture) return { acknowledged: true, idle: true };
+    if (!session.child || session.child.exitCode != null || session.child.killed === true) return refused;
+    const limit = options.interruptTimeoutMs ?? INTERRUPT_MS;
+    try {
+      const result = client === 'codex' ? await interruptCodex(session, limit) : client === 'cursor' ? await interruptCursor(session, limit)
+        : await interruptClaude(session, limit);
+      return result.acknowledged === true ? result : refused;
+    } catch { return refused; }
+  }
   return {
     client,
     nativeSupport: false,
@@ -189,7 +206,14 @@ export function createNativeAdapter(client, options = {}) {
         request.planObserver?.({ id: 'native-init', kind: 'start' });
         return { ...created, processHandle };
       }
-      if (request.planObserver && typeof options.enforceScope !== 'function') throw new CoreError(409, 'cleanup_unavailable', 'Plan execution requires a verified job or process-group handle.');
+      // A confined client other than Codex runs inside an injected sandbox. Claude Code and Cursor are supervised instead:
+      // spawned as they are, every native change asks the person first unless that agent was granted automatic work.
+      const sandboxed = boundaryKind === 'confined' && typeof options.enforceScope === 'function';
+      const supervised = boundaryKind === 'supervised';
+      const platform = options.platform ?? process.platform;
+      // Plans and supervised launches need a handle that proves the whole process tree ended: a sandbox's own, or the owned one.
+      const ownsTree = (supervised || Boolean(request.planObserver)) && !sandboxed;
+      if (ownsTree && typeof options.ownProcess !== 'function') throw new CoreError(409, 'cleanup_unavailable', 'Plan and supervised execution require a verified process-tree handle.');
       const nativeLaunch = options.createNativeLaunch?.({ ...request, client }) ?? null;
       request = { ...request, nativeMcp: nativeLaunch?.mcp ?? null };
       if (client === 'claude' && !request.nativeSessionId) request.nativeSessionId = randomUUID();
@@ -198,7 +222,7 @@ export function createNativeAdapter(client, options = {}) {
       try {
         const resolved = options.command
           ? { command: options.command, args: options.args ?? launchArgs(client, request) }
-          : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
+          : await resolveLaunch(client, options.env ?? process.env, platform, request);
         if (closed) throw unavailable();
         if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
         assertNoBypass(resolved.args);
@@ -208,8 +232,9 @@ export function createNativeAdapter(client, options = {}) {
           cwd: request.cwd || undefined,
           env: nativeLaunch ? { ...(options.env ?? process.env), ...nativeLaunch.env } : options.env ?? process.env,
           stdio: ['pipe', 'pipe', 'pipe'],
+          ...(ownsTree ? ownedSpawnOptions(platform) : {}),
         };
-        if (request.runsIn && typeof options.enforceScope === 'function') {
+        if (sandboxed) {
           const enforced = await options.enforceScope({ command: resolved.command, args: resolved.args, options: spawnOptions, scope: request.launchScope,
             policy: { gitBrokerOnly: true, indirectWrites: 'confined', outsideWrites: 'exact-once', ...(request.planAuthority ? { plan: request.planAuthority } : {}) } });
           if (closed) throw unavailable();
@@ -221,6 +246,22 @@ export function createNativeAdapter(client, options = {}) {
       } catch (error) {
         nativeLaunch?.close();
         throw error;
+      }
+      // The handle is read from the live child before anything else can happen to it.
+      let processHandle = request.nativeBoundary?.processHandle ?? null;
+      const turnOwner = { nativeSessionId: null };
+      if (ownsTree) {
+        try {
+          processHandle = await options.ownProcess(child, { platform, stopStep: () => interruptTurn({ nativeSessionId: turnOwner.nativeSessionId }) });
+          if (closed) throw unavailable();
+        } catch (error) {
+          try { child.kill?.(); } catch { /* The child is already gone. */ }
+          nativeLaunch?.close();
+          throw error instanceof CoreError ? error : new CoreError(409, 'cleanup_unavailable', 'The native process ownership could not be verified.');
+        }
+      }
+      if (supervised) {
+        request.nativeBoundary = supervisedBoundary({ mode: request.nativeMode === 'automatic' ? 'automatic' : 'supervised', processHandle, signal: permissionAbort.signal });
       }
       child.once?.('exit', () => { permissionAbort.abort(); nativeLaunch?.close(); });
       if (child?.pid) children.set(child.pid, child);
@@ -245,25 +286,30 @@ export function createNativeAdapter(client, options = {}) {
         record.timeoutMs = options.timeoutMs ?? 30000;
         record.launchChoice = request.runsIn ?? null;
         record.permissionRequest = request;
-        record.planProcessHandle = request.nativeBoundary?.processHandle;
+        record.planProcessHandle = processHandle ?? undefined;
         record.contextBootstrap = request.bootstrap ?? '';
         record.contextMessages = request.retainedContext?.messages ?? [];
         if (!Array.isArray(record.closedTurns)) record.closedTurns = [];
+        turnOwner.nativeSessionId = opened.nativeSessionId;
+        // The startup message of a Claude Code launch opens its first turn; its result closes it.
+        if (client === 'claude') record.claudeTurnOpen = true;
         sessions.set(opened.nativeSessionId, record);
         if (client === 'claude') pumpClaude(record);
         nativeLaunch?.ready(opened.nativeSessionId);
         request.planObserver?.({ id: 'native-init', kind: 'start' });
-        return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true, processHandle: request.nativeBoundary?.processHandle };
+        return { nativeSessionId: opened.nativeSessionId, pid: child.pid, owned: true, processHandle: processHandle ?? undefined };
       } catch (error) {
         clearTimeout(deadline);
         nativeLaunch?.close();
         opened?.incoming?.close();
         let exited;
-        if (request.planObserver) {
-          const handle = request.nativeBoundary?.processHandle;
-          if (await handle?.verify?.() === true && (await handle.stop())?.acknowledged === true) {
-            const cleanup = await handle.cleanup();
-            if (cleanup?.closed === true && cleanup.identity === handle.identity) exited = 0;
+        if (processHandle) {
+          // A child that already ended on its own still has to prove that no descendant remains.
+          const live = await processHandle.verify?.() === true;
+          const ended = live ? (await processHandle.stop())?.acknowledged === true : child.exitCode != null || child.signalCode != null;
+          if (ended) {
+            const cleanup = await processHandle.cleanup();
+            if (cleanup?.closed === true && cleanup.identity === processHandle.identity) exited = 0;
           }
         } else exited = await finishChild(child, true);
         if (exited == null) {
@@ -329,7 +375,7 @@ export function createNativeAdapter(client, options = {}) {
       if (!session || !session.permissionRequest?.planObserver && !session.observer) throw new CoreError(403, 'forbidden', 'The plan task is not bound.');
       session.taskTerminal = true; session.terminalTurnId = session.turnId;
       if (fixture) await session.planProcessHandle.stop();
-      else if (!session.turnId && client !== 'claude') await session.permissionRequest.nativeBoundary.processHandle.stop();
+      else if (!session.turnId && client !== 'claude') await session.planProcessHandle.stop();
       return { acknowledged: true };
     },
     async taskEnded(input) {
@@ -450,7 +496,14 @@ export function createNativeAdapter(client, options = {}) {
         releaseSession(sessions, session.pid);
         return { acknowledged: true, exitCode: 0 };
       }
-      const exitCode = await finishChild(child, true);
+      // An owned tree is ended whole and proved closed; otherwise only the child itself is ended.
+      const handle = [...sessions.values()].find(item => item.pid === session.pid)?.planProcessHandle;
+      let exitCode;
+      if (handle) {
+        const stopped = (await handle.stop())?.acknowledged === true;
+        const cleanup = stopped ? await handle.cleanup() : null;
+        exitCode = stopped && cleanup?.closed === true && cleanup.identity === handle.identity ? child.exitCode ?? 0 : null;
+      } else exitCode = await finishChild(child, true);
       if (exitCode !== null) {
         releaseSession(sessions, session.pid);
         children.delete(session.pid);
@@ -458,13 +511,16 @@ export function createNativeAdapter(client, options = {}) {
       options.signaled?.push(session.pid);
       return { acknowledged: exitCode !== null, exitCode };
     },
+    async interruptTurn(input) { return interruptTurn(input); },
     async close() {
       closed = true;
+      const trees = fixture ? [] : [...sessions.values()].map(item => item.planProcessHandle).filter(handle => typeof handle?.stop === 'function');
       for (const item of sessions.values()) {
         item.nativeLaunch?.close();
         item.incoming?.close();
       }
       sessions.clear();
+      await Promise.allSettled(trees.map(handle => handle.stop()));
       await Promise.all([...children.values()].map((child) => finishChild(child)));
       children.clear();
       await Promise.allSettled([...activityWrites]);
@@ -675,6 +731,25 @@ export async function stopSession(context, sessionId, input = {}) {
   const plan = await import('./runs.mjs').then(module => module.planBindingForSession(context, sessionId));
   if (plan) return import('./runs.mjs').then(module => module.stopPlanSession(context, plan, input));
   return withLocks(context.store, [`stop:${sessionId}`], () => stopOwnedSession(context, sessionId, input));
+}
+
+// Stops what the agent is doing now. The session, its chat and its task stay; only the running turn ends.
+export async function stopSessionStep(context, sessionId) {
+  if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Only the desktop may stop a step.');
+  const plan = await import('./runs.mjs').then(module => module.planBindingForSession(context, sessionId));
+  if (plan) throw new CoreError(422, 'invalid_binding', 'Stop a plan step through its plan control.');
+  return withLocks(context.store, [`stop-step:${sessionId}`], async () => {
+    const registration = await registrationFor(context, sessionId);
+    if (!registration) throw new CoreError(404, 'session_not_found', 'The session does not exist.');
+    if (registration.machine !== context.paths.machine) throw new CoreError(409, 'remote_session', 'The session belongs to another machine.');
+    const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.phase === 'registered');
+    if (!ownsSessionExecution(context, journal)) throw new CoreError(409, 'stop_unavailable', 'The session is not an owned native process.');
+    const adapter = adapterFor(context, journal.client);
+    if (typeof adapter.interruptTurn !== 'function') throw new CoreError(409, 'stop_unavailable', 'The native client cannot stop a step.');
+    const result = await adapter.interruptTurn({ nativeSessionId: journal.nativeSessionId, unitId: journal.unitId });
+    if (result?.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native client did not confirm that the step stopped.');
+    return { sessionId, acknowledged: true, idle: result.idle === true };
+  });
 }
 
 // Applying a reviewed configuration never grants ownership of an app process.
@@ -959,7 +1034,10 @@ async function launch(context, request) {
   const contentReader = proof => readScopedAdditions(context, { unitId: request.unitId, client: request.client,
     nativeSessionId: proof.nativeSessionId, sessionId: uuidV8(['session', context.paths.machine, request.client, proof.nativeSessionId, request.unitId]) });
   const repository = scope.scope.writeRoots.find(root => root.gitCommonDir)?.realPath ?? null;
-  const permissions = (await readAgentPermissions(context)).filter(item => item.client === request.client && repository !== null);
+  const stored = await readAgentPermissions(context);
+  const permissions = stored.filter(item => item.client === request.client && repository !== null && !item.actions.includes('native.automatic'));
+  // Automatic work is a grant for this agent and client; without it, or once it is revoked, the next launch is supervised.
+  const nativeMode = stored.some(item => item.client === request.client && item.unitId === request.unitId && item.actions.includes('native.automatic')) ? 'automatic' : 'supervised';
   const permissionBinding = { repository, permissionIds: permissions.map(item => item.id) };
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: false, at: stamp(context) });
   if (context.launchFault === 'prepared') throw new CoreError(500, 'injected_crash', 'Injected crash before native creation.');
@@ -978,7 +1056,7 @@ async function launch(context, request) {
       return { ...context, principal: { audience: 'agent', unitId: request.unitId,
         sessionId: uuidV8(['session', context.paths.machine, request.client, created.nativeSessionId, request.unitId]) } };
     };
-    created = await adapter.create({ ...request, bootstrap: await contextBootstrap(context, request.unitId), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+    created = await adapter.create({ ...request, nativeMode, bootstrap: await contextBootstrap(context, request.unitId), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
       nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
@@ -1430,12 +1508,67 @@ async function submitCodex(session, text) {
   return { submitted: true };
 }
 
+// Rejects when the promise does not settle in time; the timer never outlives the race.
+function within(promise, limit) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new CoreError(409, 'stop_unavailable', 'The native client did not answer in time.')), limit); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function interruptCodex(session, limit) {
+  const turnId = typeof session.turnId === 'string' && session.turnId ? session.turnId : null;
+  if (!turnId) return { acknowledged: true, idle: true };
+  const answered = await within(session.rpc.call('turn/interrupt', { threadId: session.contextThreadId ?? session.nativeSessionId, turnId }), limit);
+  return answered?.error == null && answered?.result !== undefined ? { acknowledged: true } : { acknowledged: false };
+}
+
+async function interruptClaude(session, limit) {
+  if (session.claudeTurnOpen !== true) return { acknowledged: true, idle: true };
+  const id = randomUUID();
+  session.controls ??= new Map();
+  const answered = new Promise((resolve) => { session.controls.set(id, resolve); });
+  try {
+    sendLine(session.child, { type: 'control_request', request_id: id, request: { subtype: 'interrupt' } });
+    const response = await within(answered, limit);
+    return response?.response?.subtype === 'success' ? { acknowledged: true } : { acknowledged: false };
+  } finally { session.controls.delete(id); }
+}
+
+async function interruptCursor(session, limit) {
+  const prompt = session.activePrompt;
+  if (!prompt) return { acknowledged: true, idle: true };
+  session.rpc.notify('session/cancel', { sessionId: session.contextThreadId ?? session.nativeSessionId });
+  const answered = await within(prompt, limit);
+  // A prompt that ended on its own before the cancel reached it has nothing left to stop.
+  return answered?.result?.stopReason === 'cancelled' ? { acknowledged: true } : answered?.result ? { acknowledged: true, idle: true } : { acknowledged: false };
+}
+
+// One boundary object per launch. Claude Code and Cursor are never confined on Windows, so authority comes from the person
+// (supervised: each exact operation needs its own approval) or from the grant they made (automatic).
+export function supervisedBoundary({ mode, processHandle, signal }) {
+  const used = new Set();
+  return Object.freeze({ verified: true, confined: false, mode, processHandle, signal,
+    async authorize(input) {
+      if (input?.once !== true) return { authorized: false };
+      if (mode === 'automatic') return input.automatic === true ? { authorized: true } : { authorized: false };
+      // One approval permits one operation, never a second.
+      if (typeof input.approvalId !== 'string' || used.has(input.approvalId)) return { authorized: false };
+      used.add(input.approvalId);
+      return { authorized: true };
+    } });
+}
+
 async function submitCursor(session, text) {
   rememberContextInput(session, text);
-  const prompted = await session.rpc.call('session/prompt', {
+  // The turn runs as long as the agent works; only this call's wait is bounded. Stopping the step needs the real prompt.
+  const prompting = session.rpc.call('session/prompt', {
     sessionId: session.contextThreadId ?? session.nativeSessionId,
     prompt: [{ type: 'text', text: session.contextBootstrap ? `${session.contextBootstrap}\n${text}` : text }],
-  });
+  }, { timeoutMs: null });
+  session.activePrompt = prompting;
+  const settle = () => { if (session.activePrompt === prompting) session.activePrompt = null; };
+  prompting.then(settle, settle);
+  const prompted = await within(prompting, session.timeoutMs ?? 30000).catch(error => { if (error?.code === 'stop_unavailable') throw unavailable(); throw error; });
   if (!prompted?.result || typeof prompted.result !== 'object') return { submitted: false, ambiguous: true };
   if (typeof prompted.result.stopReason === 'string') await session.onCompleted?.();
   return { submitted: true };
@@ -1457,8 +1590,10 @@ async function submitClaude(session, text) {
     timer = setTimeout(() => session.submission?.({ submitted: false, ambiguous: true }), session.timeoutMs);
   });
   try {
+    session.claudeTurnOpen = true;
     sendLine(session.child, { type: 'user', message: { role: 'user', content: text } });
   } catch {
+    session.claudeTurnOpen = false;
     session.submission?.({ submitted: false });
     return { submitted: false };
   }
@@ -1474,6 +1609,10 @@ async function pumpClaude(session) {
       if (error?.timeout === true) continue;
       session.submission?.({ submitted: false, ambiguous: true });
       break;
+    }
+    if (message.type === 'control_response' && typeof message.response?.request_id === 'string' && session.controls?.has(message.response.request_id)) {
+      session.controls.get(message.response.request_id)(message);
+      continue;
     }
     if (message.session_id && message.session_id !== session.nativeSessionId) continue;
     await (session.permissionRequest?.planTranscript ?? session.permissionRequest?.workTranscript)?.(message);
@@ -1498,7 +1637,10 @@ async function pumpClaude(session) {
       session.submission?.({ submitted: !message.is_error, ...(message.is_error ? { ambiguous: true } : {}) });
       session.submission = null;
     }
-    if (message.type === 'result' && message.session_id === session.nativeSessionId) await session.onCompleted?.().catch(() => {});
+    if (message.type === 'result' && message.session_id === session.nativeSessionId) {
+      session.claudeTurnOpen = false;
+      await session.onCompleted?.().catch(() => {});
+    }
   }
 }
 
@@ -1711,10 +1853,11 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
     pump().catch(() => {});
   };
   return {
-    call(method, params) {
+    call(method, params, callOptions = {}) {
       const id = nextId;
       nextId += 1;
       let timer;
+      const limit = Object.hasOwn(callOptions, 'timeoutMs') ? callOptions.timeoutMs : timeoutMs;
       const promise = new Promise((resolve, reject) => {
         const waiter = {
           done: false,
@@ -1733,7 +1876,7 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
             reject(error);
           },
         };
-        timer = setTimeout(() => waiter.reject(unavailable()), timeoutMs);
+        if (limit !== null) timer = setTimeout(() => waiter.reject(unavailable()), limit);
         pending.set(id, waiter);
       });
       const message = { jsonrpc: '2.0', id, method };
@@ -1820,14 +1963,23 @@ async function cursorHandshake(rpc, request) {
   return session.result.sessionId;
 }
 
+function ownServerTool(request, toolName) {
+  const name = request.nativeMcp?.name;
+  if (typeof name !== 'string' || !name || typeof toolName !== 'string') return false;
+  const prefix = `mcp__${name.replace(/[^A-Za-z0-9_-]/g, '_')}__`;
+  return toolName.startsWith(prefix) && toolName.length > prefix.length;
+}
+
 export async function nativePermissionReply(message, request = {}) {
   const reply = result => ({ jsonrpc: '2.0', id: message.id, result });
   const params = message.params ?? {};
-  const permission = async operation => {
+  const bound = () => {
     if (typeof request.nativePermission !== 'function' || request.nativeBoundary?.verified !== true) return false;
     const nativeId = params.threadId ?? params.sessionId ?? message.session_id ?? request.nativeSessionId;
-    if (!request.nativeSessionId || nativeId !== (request.contextNativeSessionId ?? request.nativeSessionId)
-      || request.contextOnlyThreads?.has(nativeId)) return false;
+    return Boolean(request.nativeSessionId) && nativeId === (request.contextNativeSessionId ?? request.nativeSessionId) && !request.contextOnlyThreads?.has(nativeId);
+  };
+  const permission = async operation => {
+    if (!bound()) return false;
     try { return await request.nativePermission({ ...operation, id: message.id ?? message.request_id, protocol: request.runsIn?.client,
       nativeSessionId: request.nativeSessionId, payload: operation.payload ?? params }, request.nativeBoundary) === true; } catch { return false; }
   };
@@ -1835,8 +1987,11 @@ export async function nativePermissionReply(message, request = {}) {
     const call = message.request ?? {};
     const input = call.input ?? {};
     const paths = typeof input.file_path === 'string' ? [input.file_path] : typeof input.notebook_path === 'string' ? [input.notebook_path] : [];
-    const allow = call.subtype === 'can_use_tool' && await permission({ kind: call.tool_name === 'Bash' ? 'process' : 'write',
-      command: input.command, cwd: request.cwd, paths, payload: call });
+    // Only a command or a file change can be approved. The launch's own HIVEM1ND tools enforce their own scope and need no approval;
+    // every other tool, a Read outside the working folder included, stays denied (the agent reads through its scoped file tool).
+    const approvable = call.tool_name === 'Bash' || ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(call.tool_name);
+    const allow = call.subtype === 'can_use_tool' && (ownServerTool(request, call.tool_name) && bound()
+      || approvable && await permission({ kind: call.tool_name === 'Bash' ? 'process' : 'write', command: input.command, cwd: request.cwd, paths, payload: call }));
     return { type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
       response: allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'This exact operation was not authorized.' } } };
   }
