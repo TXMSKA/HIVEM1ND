@@ -5,10 +5,19 @@ export function connectedChoices(clients = []) {
   return clients.filter(client => client.connected === true);
 }
 
+// A client can be chosen when it is confined, or supervised (Claude Code and Cursor, which ask before every native change).
+export function launchable(client) {
+  return client?.scopeEnforced === true || client?.boundary === 'supervised';
+}
+
+export function supervisedClient(client) {
+  return client?.boundary === 'supervised' && client.scopeEnforced !== true;
+}
+
 export function validRunsIn(choice, clients) {
   const client = connectedChoices(clients).find(item => item.id === choice?.client);
   const model = client?.models.find(item => item.id === choice?.model);
-  return Boolean(client?.scopeEnforced && model && (client.id === 'lyra'
+  return Boolean(launchable(client) && model && (client.id === 'lyra'
     ? choice.effort === null && model.modes.includes(choice.mode)
     : choice.mode === null && model.efforts.includes(choice.effort)));
 }
@@ -125,8 +134,8 @@ export function renderRunsInPicker(document, model, actions) {
   columns.append(column(t('agent'), clients.map(client => {
     const quota = client.id === 'lyra' ? t('localQuota') : client.quota?.known && Number.isFinite(client.quota.remainingPercent)
       ? t('quota', { label: client.quota.period ?? client.title, percent: client.quota.remainingPercent }) : t('quotaUnknown');
-    return option(`runs-client-${client.id}`, client.title, client.scopeEnforced ? quota : t('scopeUnavailable'), current?.id === client.id,
-      () => actions.onChoice(initialRunsIn([client])), !client.scopeEnforced || !initialRunsIn([client]));
+    return option(`runs-client-${client.id}`, client.title, launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
+      () => actions.onChoice(initialRunsIn([client])), !launchable(client) || !initialRunsIn([client]));
   })));
   columns.append(column(t('model'), (current?.models ?? []).map(item => {
     const choice = { ...model.choice, model: item.id };
@@ -143,7 +152,13 @@ export function renderRunsInPicker(document, model, actions) {
       !supported ? t('unavailable') : local ? t(`${value}Hint`) : '', (local ? model.choice?.mode : model.choice?.effort) === value,
       () => actions.onChoice({ ...model.choice, [local ? 'mode' : 'effort']: value }), !supported);
   })));
-  root.append(columns, element(document, 'footer', { class: 'runs-in-footer' },
+  // Claude Code and Cursor cannot be confined on Windows: say so, and offer the per-agent choice to work without asking.
+  const warning = supervisedClient(current) ? element(document, 'section', { class: 'runs-in-warning', role: 'note', 'data-native-warning': current.id },
+    icon(document, 'alert'), element(document, 'p', { text: t('supervisedWarning') }),
+    typeof model.automatic === 'boolean' ? tick(document, t('workAutomatically'), model.automatic === true, value => actions.onAutomatic?.(value), { 'data-work-automatically': 'true' }) : null) : null;
+  root.append(columns);
+  if (warning) root.append(warning);
+  root.append(element(document, 'footer', { class: 'runs-in-footer' },
     tick(document, t('defaultChoice'), model.useAsDefault === true, actions.onDefault, { 'data-use-default': 'true' }),
     button(document, runsInLabel(model.choice, clients) || t('unavailable'), 'close-runs-picker', actions.onClose)));
   return root;

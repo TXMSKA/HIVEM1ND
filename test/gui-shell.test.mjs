@@ -4198,6 +4198,115 @@ test('an explicit unit Runs in change survives picker redraws and persists only 
   assert.equal(desktop.launches.length, 0);
 });
 
+// A real core with a supervised Claude Code beside Codex, and a log of every request the shell makes.
+async function supervisedDesktop(t) {
+  const calls = [];
+  const claude = createNativeAdapter('claude', { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'],
+    describe: async () => ({ id: 'claude', title: 'Claude Code', connected: true, scopeEnforced: false, boundary: 'supervised',
+      models: [{ id: 'observed', title: 'Observed', efforts: ['high', 'xhigh'], modes: [] }], quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } }) });
+  const codex = createNativeAdapter('codex', { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'], transcript: ['{"id":1,"result":{"thread":{"id":"owned"}}}'] });
+  const desktop = await startCoreDesktop(t, { prepare: async () => ({ adapters: { codex, claude } }),
+    afterFetch: async (input, init, result) => { calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null }); return result; } });
+  t.after(() => claude.close());
+  return { ...desktop, calls };
+}
+const nodeText = node => [node.textContent, ...(node.children ?? []).map(nodeText)].filter(Boolean).join(' ');
+const permissionWrites = calls => calls.filter(call => call.method === 'POST' && call.path.endsWith('/settings/permissions'));
+async function chooseClaude(desktop, { automatic }) {
+  const dialog = desktop.document.querySelector("[data-start-dialog='overseer']");
+  click(dialog.querySelector("[data-action='open-runs-picker']"));
+  const picker = desktop.document.querySelector("[data-start-dialog='picker']");
+  assert.equal(picker.querySelector('[data-native-warning]'), null, 'Codex is chosen first and shows no warning');
+  click(picker.querySelector('[data-action="runs-client-claude"]'));
+  const banner = picker.querySelector('[data-native-warning]');
+  assert.ok(banner, 'the warning appears when Claude Code is chosen');
+  assert.equal(banner.getAttribute('data-native-warning'), 'claude');
+  assert.ok(nodeText(banner).includes('HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.'));
+  const box = picker.querySelector('[data-work-automatically]');
+  assert.equal(box.checked, false, 'unchecked by default');
+  assert.ok(nodeText(banner).includes("Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions."));
+  if (automatic) changeControl(box, true);
+  assert.equal(desktop.document.querySelectorAll('.dialog').length, 0, 'no confirmation dialog opens');
+  click(picker.querySelector('[data-action="close-runs-picker"]'));
+  return dialog;
+}
+
+test('Claude Code in the picker shows the warning; Work automatically creates its grant only once the agent exists and the inspector says so', async t => {
+  const desktop = await supervisedDesktop(t);
+  const dialog = await chooseClaude(desktop, { automatic: true });
+  assert.equal(permissionWrites(desktop.calls).length, 0, 'choosing the box changes nothing until the agent is saved');
+  click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The agent was not created.');
+  await waitFor(() => permissionWrites(desktop.calls).length === 1, 'The automatic grant was not created.');
+  const writes = desktop.calls.filter(call => call.method !== 'GET');
+  assert.ok(writes.findIndex(call => call.path.endsWith('/overseer')) < writes.findIndex(call => call.path.endsWith('/settings/permissions')), 'the grant follows the agent');
+  const body = permissionWrites(desktop.calls)[0].body;
+  assert.deepEqual({ ...body, expectedRevision: undefined }, { machine: body.machine, unitId: 'root:overseer', client: 'claude', action: 'native.automatic', expectedRevision: undefined });
+  const listed = (await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions;
+  assert.deepEqual(listed.map(item => [item.unitId, item.client, item.actions]), [['root:overseer', 'claude', ['native.automatic']]]);
+  await waitFor(() => desktop.root.querySelector('[data-native-mode="automatic"]'), 'The inspector did not say that the agent works automatically.');
+  const mode = desktop.root.querySelector('[data-native-mode]');
+  assert.equal(mode.getAttribute('data-native-mode'), 'automatic'); assert.equal(mode.textContent, 'Automatic, not confined');
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-native-mode]').textContent, 'Automático, sin confinamiento');
+  desktop.app.language = 'en'; renderShell(desktop.app);
+  // Settings, Permissions lists the grant with Revoke, and revoking makes the next launch ask first.
+  navigate(desktop.app, 'settings'); await desktop.app.settingsState.pending; await waitFor(() => desktop.app.settingsState?.loaded && !desktop.app.settingsState.loading, 'Settings did not load.');
+  click(desktop.root.querySelector('[data-action="settings-tab-permissions"]'));
+  await waitFor(() => desktop.root.querySelector(`[data-permission="${listed[0].id}"]`), 'The grant is not listed in Permissions.');
+  const row = desktop.root.querySelector(`[data-permission="${listed[0].id}"]`);
+  assert.ok(nodeText(row).includes('root:overseer')); assert.ok(nodeText(row).includes('Works automatically in Claude Code, not confined'));
+  assert.ok(nodeText(desktop.root).includes('A session that is already running keeps working automatically until it ends.'));
+  click(row.querySelector('[data-action^="settings-revoke-"]'));
+  await waitFor(() => desktop.calls.some(call => call.method === 'DELETE' && call.path.endsWith(`/settings/permissions/${listed[0].id}`)), 'Revoke was not requested.');
+  await waitFor(() => desktop.app.settingsState.permissions?.agentPermissions.length === 0, 'The grant was not revoked.');
+  assert.deepEqual((await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions, []);
+});
+
+test('leaving Work automatically unchecked creates no grant, the inspector says Asks first, and a confined client shows nothing', async t => {
+  const desktop = await supervisedDesktop(t);
+  const dialog = await chooseClaude(desktop, { automatic: false });
+  click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The agent was not created.');
+  await waitFor(() => desktop.root.querySelector('[data-native-mode]'), 'The inspector did not say how the agent works.');
+  assert.equal(permissionWrites(desktop.calls).length, 0);
+  assert.equal(desktop.root.querySelector('[data-native-mode]').getAttribute('data-native-mode'), 'supervised');
+  assert.equal(desktop.root.querySelector('[data-native-mode]').textContent, 'Asks first');
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-native-mode]').textContent, 'Consulta antes');
+  assert.deepEqual((await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions, []);
+  // The same agent moved to Codex shows no native line at all.
+  click(desktop.root.querySelector('[data-action="change-runs-in"]'));
+  await waitFor(() => desktop.document.querySelector('[data-start-dialog="picker"]'), 'The unit picker did not open.');
+  const picker = desktop.document.querySelector('[data-start-dialog="picker"]');
+  assert.equal(picker.querySelector('[data-work-automatically]').checked, false);
+  click(picker.querySelector('[data-action="runs-client-codex"]'));
+  assert.equal(picker.querySelector('[data-native-warning]'), null);
+  click(picker.querySelector('[data-action="save-runs-in"]'));
+  await waitFor(() => desktop.app.unitList.catalog.find(unit => unit.id === 'root:overseer')?.runsIn.client === 'codex', 'Codex was not stored.');
+  await waitFor(() => !desktop.root.querySelector('[data-native-mode]'), 'A confined agent still shows a native line.');
+  assert.equal(permissionWrites(desktop.calls).length, 0);
+});
+
+test('the change Runs in picker shows an existing grant checked and unchecking it revokes the grant on Save', async t => {
+  const desktop = await supervisedDesktop(t);
+  const dialog = await chooseClaude(desktop, { automatic: true });
+  click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => permissionWrites(desktop.calls).length === 1 && desktop.root.querySelector('[data-native-mode="automatic"]'), 'The grant was not created.');
+  click(desktop.root.querySelector('[data-action="change-runs-in"]'));
+  await waitFor(() => desktop.document.querySelector('[data-start-dialog="picker"]'), 'The unit picker did not open.');
+  const picker = desktop.document.querySelector('[data-start-dialog="picker"]');
+  const box = picker.querySelector('[data-work-automatically]');
+  assert.equal(box.checked, true, 'the existing grant is shown');
+  changeControl(box, false);
+  click(picker.querySelector('[data-action="runs-effort-xhigh"]'));
+  click(picker.querySelector('[data-action="save-runs-in"]'));
+  await waitFor(() => desktop.calls.some(call => call.method === 'DELETE' && call.path.includes('/settings/permissions/')), 'The grant was not revoked.');
+  await waitFor(() => desktop.root.querySelector('[data-native-mode="supervised"]'), 'The inspector still says Automatic.');
+  assert.deepEqual((await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions, []);
+  assert.equal(permissionWrites(desktop.calls).length, 1, 'no second grant');
+});
+
 test("a reopened board gives each added shape a distinct persisted identity", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
@@ -6509,4 +6618,106 @@ test('the folder rows are read again on a session change, not on every work even
   await waitFor(() => facts().Branch?.text === 'later', 'The session change did not refresh the branch.');
   assert.equal(reads(), 2);
   assert.ok(desktop.app.checkoutTimer, 'A live session is read again on a timer.');
+});
+
+test('Stop the step on an ordinary session uses its own route, shows progress and its outcome, and the session stays', async t => {
+  const fixture = await makeCoreFixture(); t.after(() => disposeCoreFixture(fixture));
+  const now = () => fixture.clock.now, unitId = 'root:overseer', meter = { used: 180, capacity: 1000, unit: 'tokens' };
+  const context = { ...fixture, now, principal: { audience: 'desktop', unitId: 'root:master' }, ownedPids: new Set([5151]), adapters: {} };
+  await mkdir(join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(join(fixture.paths.mind, 'user', 'state', 'overseer.md'), 'unit: overseer\nunit-id: root:overseer\nrole: overseer\nstate: in\nmachine: DESKTOP\nfresh: true\n\nReady.\n');
+  await writeFile(join(fixture.paths.mind, 'rules.md'), 'Current M1ND rules.');
+  const interrupts = []; let release, answer = { acknowledged: true }; const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  context.adapters.codex = { client: 'codex', capabilities: { create: true, stop: true }, confirm: async () => true,
+    readContext: async () => meter, contextBusy: async () => false, checkpointContext: async () => ({ messages: [{ role: 'user', content: 'Decision' }] }),
+    summarizeContext: async () => 'Keep the decision.', prepareContext: async () => ({ acknowledged: true }), commitContext: async () => true,
+    interruptTurn: async input => { interrupts.push(input); await gate; return answer; } };
+  const session = await registerNative(context, { client: 'codex', unitId, nativeSessionId: 'fixture-step', launchKind: 'cli', runMode: 'chat' });
+  const journal = join(fixture.paths.localDirectory, 'session-starts', 'owned.json'); await mkdir(dirname(journal), { recursive: true });
+  await writeFile(journal, JSON.stringify({ requestId: crypto.randomUUID(), sessionId: session.sessionId, unitId, client: 'codex', pid: 5151, phase: 'registered', createAttempted: true, nativeSessionId: 'fixture-step' }));
+  context.ledger = openLedger({ store: fixture.store, paths: fixture.paths, now, machine: fixture.machine });
+  const { chat } = await createChat(context, { members: [unitId] }); await postChat(context, chat.id, { body: 'Keep authored history.' });
+  await createContext(context, session, context.adapters.codex);
+  context.settingsOwner = createSettingsOwner({ ...context, probeAgents: async () => ({}) });
+  const credentials = createCredentialStore({ now }), server = await createHttpServer({ ...context, credentials }); context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const calls = [];
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, async (input, init) => {
+    calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null }); return fetch(input, init);
+  }, { clock: now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length, 'The actual Overseer did not load.');
+  desktop.app.startDialog?.dialog.close();
+  desktop.app.activeHandlers.onActivate({ kind: 'unit', id: unitId, unit: desktop.app.unitList.catalog.find(unit => unit.id === unitId) }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The session tabs did not open.');
+  click(desktop.root.querySelector('[data-action="session-work"]'));
+  await waitFor(() => desktop.root.querySelector('[data-session-work]'), 'Work did not open.');
+  const stop = () => desktop.root.querySelector('[data-action="stop-step"]');
+  assert.equal(stop().getAttribute('aria-busy'), null);
+  click(stop());
+  await waitFor(() => stop().getAttribute('aria-busy') === 'true', 'The button did not show progress.');
+  await waitFor(() => interrupts.length === 1, 'The native step was not asked to stop.');
+  assert.notEqual(stop().getAttribute('disabled'), null, 'the button cannot be pressed twice');
+  click(stop());
+  release();
+  await waitFor(() => desktop.root.querySelector('[data-stop-outcome="stopped"]'), 'The Work tab did not show the outcome.');
+  assert.equal(desktop.root.querySelector('[data-stop-outcome]').textContent, 'The step was stopped. The session stays open.');
+  assert.equal(stop().getAttribute('aria-busy'), null);
+  const stopped = calls.filter(call => call.method === 'POST' && call.path === `/api/v1/sessions/${session.sessionId}/stop-step`);
+  assert.equal(stopped.length, 1); assert.deepEqual(stopped[0].body, {});
+  assert.deepEqual(interrupts[0].nativeSessionId, 'fixture-step');
+  assert.equal(calls.some(call => call.path.includes('/runs/')), false, 'an ordinary session never uses the plan control');
+  assert.equal(calls.some(call => call.method === 'POST' && call.path.endsWith('/stop')), false, 'the session itself is not stopped');
+  assert.notEqual((await request(desktop.app.api, 'GET', '/sessions')).data.items.find(item => item.id === session.sessionId).state, 'stopped');
+  answer = { acknowledged: true, idle: true };
+  click(stop());
+  await waitFor(() => desktop.root.querySelector('[data-stop-outcome="idle"]'), 'The idle outcome was not shown.');
+  assert.equal(desktop.root.querySelector('[data-stop-outcome]').textContent, 'Nothing was running, so there was no step to stop.');
+  answer = { acknowledged: false };
+  click(stop());
+  await waitFor(() => desktop.root.querySelector('[data-stop-outcome="failed"]'), 'The failed outcome was not shown.');
+  assert.equal(desktop.root.querySelector('[data-stop-outcome]').textContent, 'The agent did not confirm that the step stopped. It may still be working.');
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-stop-outcome]').textContent, 'El agente no confirmó que el paso se detuviera. Puede seguir trabajando.');
+});
+
+test('Stop the step on a plan attempt keeps the plan control and never calls the session route', async t => {
+  const state = await makePlanFixture(t);
+  let stepStops = 0;
+  const parent = new (await import('node:events')).EventEmitter(), identity = crypto.randomUUID();
+  state.nativeOptions.planProcessHandle = { identity, verify: async () => true, onExit: listener => { parent.on('exit', listener); return () => parent.off('exit', listener); },
+    cleanup: async () => ({ closed: true, identity }), stop: async () => { parent.emit('exit'); return { acknowledged: true }; }, stopStep: async () => { stepStops += 1; return { acknowledged: true }; } };
+  state.context.ledger = openLedger({ store: state.store, paths: state.context.paths, now: state.context.now, machine: state.machine });
+  await postChat(state.context, state.cluster.chatId, { body: 'Build the requested cart.' });
+  state.input.expectedChatRevision = (await import('../engine/service/projection.mjs').then(module => module.readDetail(state.context, 'chats', state.cluster.chatId))).revision;
+  const plan = await createPlan(state.context, state.input);
+  const credentials = createCredentialStore({ now: state.context.now });
+  state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
+  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const calls = [];
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, async (input, init) => {
+    calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null }); return fetch(input, init);
+  }, { clock: state.context.now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers, 'The actual core tree did not load.');
+  desktop.app.startDialog?.dialog.close();
+  desktop.app.activeHandlers.onActivate({ kind: 'cluster', groupId: state.cluster.id }, 'single');
+  await waitFor(() => desktop.root.querySelector('.plan-card'), 'The plan did not attach to the lead chat.');
+  const started = await startPlan(state.context, plan.id, { confirmed: true, expectedRevision: plan.revision }); await drainRunLaunches(state.context);
+  await refreshPlan(desktop.app.planController, plan.id, started.runId);
+  const run = await readRun(state.context, started.runId);
+  await loadSnapshot(desktop.app.store, desktop.app.api);
+  const unit = desktop.app.store.indexes.units.get(state.units[0].id);
+  desktop.app.activeHandlers.onActivate({ kind: 'unit', id: unit.id, unit }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The actual session tabs did not open.');
+  click(desktop.root.querySelector('[data-action="session-work"]'));
+  await waitFor(() => desktop.root.querySelector('[data-session-work]'), 'Work did not open.');
+  click(desktop.root.querySelector('[data-action="stop-step"]'));
+  await waitFor(() => desktop.root.querySelector('[data-stop-outcome="stopped"]'), 'The plan step stop did not report.');
+  const control = calls.filter(call => call.method === 'POST' && call.path === `/api/v1/runs/${run.id}/control`);
+  assert.equal(control.length, 1); assert.equal(control[0].body.action, 'stop_step'); assert.equal(control[0].body.attemptId, run.attempts[0].id);
+  assert.equal(stepStops, 1, 'the plan handle was asked to stop the step');
+  assert.equal(calls.some(call => call.path.endsWith('/stop-step')), false, 'a plan attempt never uses the session route');
 });

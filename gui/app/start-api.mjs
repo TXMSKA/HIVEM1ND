@@ -50,6 +50,16 @@ export function controlPlan(api,runId,input,retained=null){
   for(const key of['attemptId','role','assignment','messageId','recipientId'])if(Object.hasOwn(input,key))body[key]=input[key];
   return write(api,'/runs/:runId/control',body,{runId},retained);
 }
+export function grantAutomaticWork(api,input,retained=null){
+  const body=retained?undefined:{machine:input.machine,unitId:input.unitId,client:input.client,action:'native.automatic',expectedRevision:input.expectedRevision};
+  return write(api,'/settings/permissions',body,undefined,retained);
+}
+export async function revokeAutomaticWork(api,permissionId,input,retained=null){
+  const operation=retained??createOperation({method:'DELETE',path:'/settings/permissions/:permissionId',params:{permissionId},body:{machine:input.machine,expectedRevision:input.expectedRevision}});
+  try{return{...await request(api,operation.method,operation.path,{operation}),operation};}
+  catch(error){if(error&&typeof error==='object'&&error.operation==null)error.operation=operation;throw error;}
+}
+export const stopSessionStep=(api,sessionId,retained=null)=>write(api,'/sessions/:sessionId/stop-step',{},{sessionId},retained);
 export const openClusterEditor=(api,clusterId,machine,retained=null)=>write(api,'/clusters/:clusterId/open-editor',{machine},{clusterId},retained);
 export function createClusterLink(api,input,retained=null){
   const{machine,kind,path,expectedReportRevision}=input;

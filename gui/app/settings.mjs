@@ -399,8 +399,13 @@ function renderPermissions(document, model, t, actions) {
   for (const item of model.permissions?.unitGrants ?? []) standing.append(row(item.grant.id, item.unitId,
     item.grant.pattern?.command ?? `${item.grant.action}: ${JSON.stringify(item.grant.pattern)}`, item.grant.grantedAt,
     () => actions.onRevokeGrant?.(item), !model.canRevoke || model.pendingGrants?.has(item.grant.id)));
-  for (const item of model.permissions?.agentPermissions ?? []) agents.append(row(item.id, item.client,
-    item.actions.join(", "), item.grantedAt, () => actions.onRevokePermission?.(item), !model.canWrite));
+  const titles = { claude: 'Claude Code', cursor: 'Cursor' };
+  for (const item of model.permissions?.agentPermissions ?? []) {
+    const automatic = item.actions.includes('native.automatic');
+    agents.append(row(item.id, automatic ? item.unitId : item.client, automatic ? startText(model.language, 'automaticPermission', { client: titles[item.client] ?? item.client }) : item.actions.join(", "),
+      item.grantedAt, () => actions.onRevokePermission?.(item), !model.canWrite));
+  }
+  if ((model.permissions?.agentPermissions ?? []).some(item => item.actions.includes('native.automatic'))) agents.append(element(document, 'p', { class: 'settings-hint', text: startText(model.language, 'automaticRevokeHint') }));
   standing.append(element(document, "p", { class: "settings-hint", text: t("finalStandingExplanation") }));
   agents.append(element(document, "p", { class: "settings-hint", text: t("finalAgentPermissionExplanation") }));
   return element(document, "div", { class: "settings-column" }, standing, agents);

@@ -2006,6 +2006,7 @@ function routeTable() {
     { pattern: "/session-requests/:requestId", GET: { query: [] } },
     { pattern: "/session-requests/:requestId/cancel", POST: { capability: 'session.start', validate: (body) => requireObject(body, []), runtime: true } },
     { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
+    { pattern: "/sessions/:sessionId/stop-step", POST: { capability: "session.stop", validate: validateEmpty, runtime: true } },
     { pattern: '/sessions/:sessionId/work', GET: { query: ['limit', 'cursor'] } },
     { pattern: '/sessions/:sessionId/transcript', GET: { query: ['limit', 'cursor'] } },
     { pattern: '/sessions/:sessionId/checkout', GET: { query: [] } },
@@ -2047,7 +2048,7 @@ function routeTable() {
     { pattern: "/settings/agents/:client/preview", POST: { capability: "settings.write", validate: clientReviewValidator("preview"), runtime: true } },
     { pattern: "/settings/agents/:client/apply", POST: { capability: "settings.write", validate: clientReviewValidator("apply") } },
     { pattern: "/settings/agents/:client", DELETE: { capability: "settings.write", validate: clientReviewValidator("disconnect") } },
-    { pattern: "/settings/permissions", GET: { query: ["machine"] } },
+    { pattern: "/settings/permissions", GET: { query: ["machine"] }, POST: { capability: "settings.write", validate: permissionGrantValidator } },
     { pattern: "/settings/permissions/:permissionId", DELETE: { capability: "settings.write", validate: permissionRevokeValidator } },
     { pattern: "/settings/projects", GET: { query: ["machine"] } },
     { pattern: "/settings/content", GET: { query: [] }, PATCH: { capability: "settings.write", validate: validateContentSettings } },
@@ -2151,6 +2152,15 @@ function clientReviewValidator(operation) {
   };
 }
 
+function permissionGrantValidator(body) {
+  requireObject(body, ["machine", "unitId", "client", "action", "expectedRevision"]);
+  requireKeys(body, ["machine", "unitId", "client", "action", "expectedRevision"]);
+  if (typeof body.machine !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.machine)) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+  if (body.action !== "native.automatic" || !["claude", "cursor"].includes(body.client) || typeof body.unitId !== "string") throw new HttpError(422, "invalid_body", "Only automatic work for Claude Code or Cursor can be granted.");
+  revisionField(body.expectedRevision);
+  if (body.expectedRevision === null) throw new HttpError(422, "invalid_body", "An existing revision is required.");
+}
+
 function permissionRevokeValidator(body) {
   requireObject(body, ["machine", "expectedRevision"]);
   requireKeys(body, ["machine", "expectedRevision"]);
@@ -2238,6 +2248,22 @@ async function fixturePermissions(fx, snap) {
   const source = await readJsonFile(join(fx.local, "client-permissions.json")).catch(error => { if (error.code === "ENOENT") return null; throw error; });
   const report = { unitGrants: snap.units.filter(unit => unit.machine === LOCAL_MACHINE).flatMap(unit => (unit.approvalGrants ?? []).map(grant => ({ unitId: unit.id, grant }))), agentPermissions: source?.value.permissions ?? [] };
   return { ...report, revision: sha256(Buffer.from(stableJson(report))) };
+}
+
+async function preparePermissionGrant(fx, body) {
+  if (body.machine !== LOCAL_MACHINE) throw new HttpError(409, "machine_unavailable", "The selected machine is unavailable.");
+  const snap = await projection(fx), report = await fixturePermissions(fx, snap);
+  if (body.expectedRevision !== report.revision) throw new HttpError(409, "revision_conflict", "The permissions changed.");
+  const unit = snap.units.find(item => item.id === body.unitId);
+  if (!unit) throw new HttpError(404, "unit_not_found", "The agent does not exist.");
+  if (unit.runsIn?.client !== body.client) throw new HttpError(409, "scope_unresolved", "The agent does not run in that client.");
+  const present = report.agentPermissions.find(item => item.unitId === body.unitId && item.client === body.client && item.actions.includes("native.automatic"));
+  if (present) return { status: 200, data: { permission: present, revision: report.revision }, writes: [], events: [] };
+  const permission = { id: uuid(), machine: LOCAL_MACHINE, client: body.client, actions: ["native.automatic"], scope: "hivem1nd-started-sessions", unitId: body.unitId, grantedAt: clock(fx).toISOString(), grantedBy: "root:master" };
+  const file = join(fx.local, "client-permissions.json"), before = await readOptional(file);
+  const after = Buffer.from(stableJson({ permissions: [...report.agentPermissions, permission] }));
+  const revision = sha256(Buffer.from(stableJson({ unitGrants: report.unitGrants, agentPermissions: [...report.agentPermissions, permission] })));
+  return { status: 201, data: { permission, revision }, writes: [fixtureWrite(file, before, after)], events: [{ name: "machine.settings.changed", global: true, data: { machine: LOCAL_MACHINE, section: "permissions", revision, reportedAt: clock(fx).toISOString() } }] };
 }
 
 async function preparePermissionRevoke(fx, id, body) {
@@ -2561,7 +2587,7 @@ async function readData(fx, snap, spec, params, query) {
     const agents = reported?.agents ?? { revision: null, items: (selected?.clients ?? []).map(client => ({ id: client.id, name: client.id, version: null, found: client.installed === true, mode: "on-demand", cli: { state: client.enabled ? "connected" : "missing", changes: 0 }, app: { name: null, state: "missing" } })) };
     if (pattern === "/settings/agents") {
       const reviewed = machine === LOCAL_MACHINE ? await fixtureClientState(fx) : null;
-      return { ...common, ...agents, connectedClients: (selected?.clients ?? []).filter(client => client.installed && client.enabled).map(client => ({ id: client.id, title: client.id, connected: true, scopeEnforced: true, models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }], quota: { known: false, remainingPercent: null, period: null } })), revision: reviewed?.hash ?? agents.revision, items: agents.items.map(item => {
+      return { ...common, ...agents, connectedClients: (selected?.clients ?? []).filter(client => client.installed && client.enabled).map(client => ({ id: client.id, title: client.id, connected: true, scopeEnforced: !['claude', 'cursor'].includes(client.id), boundary: ['claude', 'cursor'].includes(client.id) ? 'supervised' : 'confined', models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }], quota: { known: false, remainingPercent: null, period: null } })), revision: reviewed?.hash ?? agents.revision, items: agents.items.map(item => {
         const saved = reviewed?.value.clients[item.id];
         return saved ? { ...item, mode: saved.mode, cli: { state: saved.connected ? "connected" : "changes-needed", changes: saved.connected ? 0 : 1 }, app: { ...item.app, state: saved.appConnected ? "connected" : item.app.state } } : item;
       }) };
@@ -4804,7 +4830,7 @@ async function checkMutation(fx, pattern, params, body) {
     if (pattern === "/units/:unitId/lead") rejectLead(snap, params.unitId, body);
     if (pattern === "/units/:unitId/session") await rejectSession(fx, snap, params.unitId, body);
   }
-  if (pattern === "/sessions/:sessionId/stop") await rejectStop(fx, params.sessionId);
+  if (pattern === "/sessions/:sessionId/stop" || pattern === "/sessions/:sessionId/stop-step") await rejectStop(fx, params.sessionId);
   if (pattern === "/layout") {
     const current = await loadLayout(fx);
     if ((body.expectedRevision ?? null) !== current.revision) {
@@ -5179,6 +5205,7 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/settings/agents/find") return prepareMachineSettings(fx, "find", body);
   if (pattern === "/settings/service") return prepareMachineSettings(fx, "service", body);
   if (pattern === "/settings/service/restart") return prepareMachineSettings(fx, "restart", body);
+  if (pattern === "/settings/permissions") return preparePermissionGrant(fx, body);
   if (pattern === "/settings/permissions/:permissionId") return preparePermissionRevoke(fx, params.permissionId, body);
   if (pattern === "/settings/agents/:client/preview") return prepareClientReview(fx, "preview", params.client, body);
   if (pattern === "/settings/agents/:client/apply") return prepareClientReview(fx, "apply", params.client, body);
@@ -5215,6 +5242,7 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
     return { status: 200, data: { requestId: params.requestId, state: 'canceled' }, writes: [], events: [{ name: 'session.request.changed', global: true, unitId: current.unitId, data: sessionRequestData(record) }], apply() { fx.sessionRequests.set(params.requestId, record); } };
   }
   if (pattern === "/sessions/:sessionId/stop") return prepareStop(fx, params.sessionId);
+  if (pattern === "/sessions/:sessionId/stop-step") return { status: 200, data: { sessionId: params.sessionId, acknowledged: true, idle: fx.stepIdle === true }, writes: [], events: [], apply() { (fx.stepStops ??= []).push(params.sessionId); } };
   if (pattern === "/approvals/:approvalId/answer") return prepareAnswer(fx, params.approvalId, body);
   if (pattern === "/units/:unitId/approval-grants/:grantId") return prepareRevoke(fx, params, body);
   if (pattern === "/tasks/:taskId/status") return prepareTaskStatus(fx, params.taskId, body, principal);

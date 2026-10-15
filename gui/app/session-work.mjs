@@ -112,8 +112,13 @@ export function renderSessionWork(document, view, language, actions = {}, now = 
   if (view.error) root.append(element(document, 'p', { role: 'alert', text: t('unavailable') }),
     element(document, 'button', { class: 'btn', type: 'button', 'data-action': 'retry-work', text: t('retry'), onclick: actions.onRetry }));
   if (view.nextCursor) root.append(element(document, 'button', { class: 'btn', type: 'button', 'data-action': 'older-work', text: t('more', { count: '' }), onclick: actions.onMore }));
+  // Stopping the step shows progress on its button and its outcome here; the session itself stays open.
+  if (view.stopOutcome) root.append(element(document, 'p', { class: 'work-outcome', role: 'status', 'data-stop-outcome': view.stopOutcome.state,
+    text: t(view.stopOutcome.state === 'failed' ? 'stepNotStopped' : view.stopOutcome.state === 'idle' ? 'stepIdle' : 'stepStopped') }));
+  const stopping = view.stopping === true;
   root.append(element(document, 'div', { class: 'work-actions' },
-    element(document, 'button', { class: 'btn ghost', type: 'button', 'data-action': 'stop-step', text: t('stopStep'), onclick: actions.onStop }),
+    element(document, 'button', { class: 'btn ghost', type: 'button', 'data-action': 'stop-step', disabled: stopping ? '' : null, 'aria-busy': stopping ? 'true' : null,
+      onclick: actions.onStop }, stopping ? progressMark(document, t('stoppingStep')) : t('stopStep')),
     element(document, 'small', { text: t('transcriptHint') })));
   return root;
 }

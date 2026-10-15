@@ -84,7 +84,7 @@ import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBou
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
@@ -3595,15 +3595,17 @@ function loadStartReports(app) {
 
 async function readStartReports(app, machine, ticket) {
   try {
-    const [projects, agents, clusters, additions] = await Promise.all([
+    const [projects, agents, clusters, additions, permissions] = await Promise.all([
       request(app.api, 'GET', '/settings/projects', { query: { machine } }),
       request(app.api, 'GET', '/settings/agents', { query: { machine } }),
       collectPages(app.api, '/clusters', { limit: 200 }),
       app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
+      // The agent inspector says whether an agent asks first or works automatically; without this report it shows nothing.
+      request(app.api, 'GET', '/settings/permissions', { query: { machine } }).catch(() => null),
     ]);
     if (app.disposed) return;
     if (ticket !== app.startReportTicket) return app.startReportPending;
-    app.startProjects = projects.data; app.startAgents = agents.data;
+    app.startProjects = projects.data; app.startAgents = agents.data; app.startPermissions = permissions?.data ?? null;
     app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
     app.startError = null;
@@ -3655,7 +3657,7 @@ function openRunsPicker(app, model, onChange, anchor = null) {
     render: () => {
       const view = renderRunsInPicker(app.root.ownerDocument, model, {
         onChoice: choice => { model.choice = choice; onChange?.(); picker.paint(); },
-        onDefault: value => { model.useAsDefault = value; }, onClose: () => picker.dialog.close(),
+        onDefault: value => { model.useAsDefault = value; }, onAutomatic: value => { model.automatic = value; }, onClose: () => picker.dialog.close(),
       });
       if (model.onSave) view.append(mapButton(app, 'save-runs-in', text(app.language, 'save'), () => model.onSave(picker)));
       return view;
@@ -3669,9 +3671,10 @@ async function openStartAgent(app, cluster, overseer = false) {
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
-    cluster, role: 'executor', clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false };
+    cluster, role: 'executor', clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
+    automatic: false };
   const anchor = app.root.querySelector('[data-action="new-agent"]');
-  let flow, retained = null, created = null, defaultOperation = null;
+  let flow, retained = null, created = null, defaultOperation = null, granted = false, grantOperation = null;
   const cancel = () => { if (flow.busy || flow.uncertain) return; if (overseer) rememberOverseerOffer(app); flow.dialog.close(); };
   flow = startDialog(app.root.ownerDocument, { view: overseer ? 'overseer' : 'agent', language: app.language, anchor: overseer ? null : anchor,
     onCancel: cancel, onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderAgentForm(app.root.ownerDocument, model, {
@@ -3689,6 +3692,11 @@ async function openStartAgent(app, cluster, overseer = false) {
             try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
             catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
           }
+          // Work automatically is a grant for this agent, made only after the agent exists.
+          if (model.automatic === true && !granted && supervisedClient(clients.find(client => client.id === result.data.runsIn?.client))) {
+            try { await setAutomaticWork(app, result.data, true, grantOperation); granted = true; }
+            catch (error) { grantOperation = unconfirmedStartOperation(error); throw error; }
+          }
         } catch (error) { if (!created) retained = unconfirmedStartOperation(error); throw error; }
         const unit = result.data;
         if (overseer) rememberOverseerOffer(app);
@@ -3701,15 +3709,35 @@ async function openStartAgent(app, cluster, overseer = false) {
   flow.model = model; app.startDialog = flow;
 }
 
+function automaticGrant(report, unit) {
+  return (report?.agentPermissions ?? []).find(item => item.unitId === unit.id && item.client === unit.runsIn?.client && item.actions?.includes('native.automatic')) ?? null;
+}
+
+// Work automatically is one grant for one agent and its client. It is made, or taken back, through Settings, Permissions.
+async function setAutomaticWork(app, unit, wanted, retained = null) {
+  if (retained) return retained.method === 'DELETE' ? startApi.revokeAutomaticWork(app.api, null, null, retained) : startApi.grantAutomaticWork(app.api, null, retained);
+  const machine = startMachine(app);
+  const report = (await request(app.api, 'GET', '/settings/permissions', { query: { machine } })).data, present = automaticGrant(report, unit);
+  if (wanted && !present) return startApi.grantAutomaticWork(app.api, { machine, unitId: unit.id, client: unit.runsIn.client, expectedRevision: report.revision });
+  if (!wanted && present) return startApi.revokeAutomaticWork(app.api, present.id, { machine, expectedRevision: report.revision });
+  return null;
+}
+
 async function openUnitRunsIn(app, unit) {
-  const report = await request(app.api, 'GET', '/settings/agents', { query: { machine: unit.machine } });
+  const [report, permissions] = await Promise.all([request(app.api, 'GET', '/settings/agents', { query: { machine: unit.machine } }),
+    request(app.api, 'GET', '/settings/permissions', { query: { machine: unit.machine } }).catch(() => null)]);
   if (app.disposed) return;
-  const model = { language: app.language, clients: report.data.connectedClients ?? [], choice: unit.runsIn, useAsDefault: false };
+  const model = { language: app.language, clients: report.data.connectedClients ?? [], choice: unit.runsIn, useAsDefault: false, automatic: Boolean(automaticGrant(permissions?.data, unit)) };
   model.onSave = picker => picker.run('save-runs-in', async () => {
-    try {
-      const result = await startApi.setRunsIn(app.api, unit.id, { machine: unit.machine, runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: unit.revision }, model.operation);
-      picker.dialog.close(); app.store.indexes.units.set(unit.id, result.data); await reloadList(app.unitList); await loadStartReports(app);
-    } catch (error) { model.operation = unconfirmedStartOperation(error); throw error; }
+    let result = model.saved;
+    try { result ??= await startApi.setRunsIn(app.api, unit.id, { machine: unit.machine, runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: unit.revision }, model.operation); }
+    catch (error) { model.operation = unconfirmedStartOperation(error); throw error; }
+    model.saved = result;
+    if (supervisedClient(model.clients.find(client => client.id === result.data.runsIn?.client))) {
+      try { await setAutomaticWork(app, result.data, model.automatic === true, model.grantOperation); model.grantOperation = null; }
+      catch (error) { model.grantOperation = unconfirmedStartOperation(error); throw error; }
+    }
+    picker.dialog.close(); app.store.indexes.units.set(unit.id, result.data); await reloadList(app.unitList); await loadStartReports(app);
   });
   openRunsPicker(app, model, null, app.root.querySelector('[data-action="change-runs-in"]'));
 }
@@ -3872,11 +3900,26 @@ async function selectSessionTab(app, view, tab) {
   if (tab === 'work') app.workClock = setTimeout(tick, 60000);
 }
 
+// Stops only the running step of a session: a plan attempt through its plan control, any other session through its own route.
+// The session, its chat and its task stay. The button shows progress and the Work tab shows the outcome.
 function stopWorkStep(app, view) {
+  if (view.stopping) return;
   const controller = plansForApp(app), run = [...controller.runs.values()].find(run => run.attempts.some(attempt => attempt.sessionId === view.session.id));
   const attempt = run?.attempts.find(attempt => attempt.sessionId === view.session.id);
-  if (run && attempt) controlPlan(controller, run, 'stop_step', { attemptId: attempt.id }).catch(error => noteAction(app, error));
-  else { view.error = { code: 'stop_unavailable' }; renderShell(app); }
+  view.stopping = true; view.stopOutcome = null; renderShell(app);
+  const finish = (state, error = null) => {
+    view.stopping = false; view.stopOutcome = { state, at: new Date(app.api.now()).toISOString() };
+    if (error) noteAction(app, error);
+    if (!app.disposed) renderShell(app);
+  };
+  if (run && attempt) {
+    controlPlan(controller, run, 'stop_step', { attemptId: attempt.id }).then(() => finish('stopped'), error => finish('failed', error));
+    return;
+  }
+  startApi.stopSessionStep(app.api, view.session.id, view.stopOperation).then(async result => {
+    view.stopOperation = null; finish(result.data.idle === true ? 'idle' : 'stopped');
+    await loadSessionView(app.api, view); if (!app.disposed) renderShell(app);
+  }, error => { view.stopOperation = unconfirmedStartOperation(error); finish('failed', error); });
 }
 
 function openAgentMore(app, unit) {
@@ -5777,6 +5820,11 @@ function actionControls(app, t, selected) {
   const caps = app.store.capabilities ?? [];
   if (caps.includes('unit.create') && !(app.unitList?.catalog ?? []).some(unit => unit.id === 'root:overseer')) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
   if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
+  // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
+  if (selected && app.startPermissions && ['claude', 'cursor'].includes(selected.runsIn?.client)) {
+    const automatic = Boolean(automaticGrant(app.startPermissions, selected));
+    row.append(element(document, 'p', { class: 'native-mode', 'data-native-mode': automatic ? 'automatic' : 'supervised', text: startText(app.language, automatic ? 'automaticNotConfined' : 'asksFirst') }));
+  }
   if (selected && caps.includes("session.start")) {
     const machine = (app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null)
       ?? app.store.view?.machines?.find(item => item.id === selected.machine);
