@@ -299,7 +299,7 @@ export async function mount(root, env = globalThis) {
   root.addEventListener?.("pointermove", revealFocusTools);
   root.addEventListener?.("pointerup", revealFocusTools);
   root.addEventListener?.("focusin", revealFocusTools);
-  if (api.token) app.language = knownLanguage(app.startStorage, browserLanguages(env, document));
+  app.language = knownLanguage(app.startStorage, browserLanguages(env, document));
   renderStatus(app, "loading");
   if (!api.token && api.homeKey) {
     try {

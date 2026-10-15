@@ -3544,6 +3544,31 @@ test("startup Retry repeats the failed read with the same authorized API", async
   assert.equal(history.urls.length, 1);
 });
 
+test("phone pairing uses a stored or browser language before a viewer exists", async () => {
+  const { document, root } = createTestDocument(390);
+  const app = await mount(root, {
+    location: { origin: "http://127.0.0.1:43123", pathname: "/", search: "", hash: "" },
+    history: { replaceState() {} },
+    navigator: { languages: ["es-ES", "es"] },
+    fetch: async () => new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+  });
+  assert.equal(root.querySelector("h1").textContent, "Abrir el M1ND");
+  assert.equal(document.documentElement.lang, "es");
+  dispose(app);
+  const storage = new Map([["hivem1nd:language", "en"]]);
+  const english = createTestDocument(390);
+  const stored = await mount(english.root, {
+    location: { origin: "http://127.0.0.1:43123", pathname: "/", search: "", hash: "" },
+    history: { replaceState() {} },
+    storage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    navigator: { languages: ["es-ES"] },
+    fetch: async () => new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+  });
+  assert.equal(english.root.querySelector("h1").textContent, "Open your M1ND");
+  assert.equal(english.document.documentElement.lang, "en");
+  dispose(stored);
+});
+
 test("the opening frame uses a stored or browser language before the read, then the viewer settings", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
