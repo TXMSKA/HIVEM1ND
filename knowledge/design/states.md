@@ -33,6 +33,7 @@ When auditing, the first-use states come first, then empty search and filter res
 - **Loading text and indicators never push content.** A loading message sits in a slot that already exists, or inside the control that started the work; one inserted above a list moves the list on every keystroke.
 - **Every loading case is covered**: the first load, the next page, a refresh.
 - **Determinate progress when the length is known**, and an honest estimate on long operations. Progress is never faked and completion is never delayed for a flourish.
+- **Pace the bar so the wait ends fast.** The end of a wait weighs most in memory (peak-end), and a bar held near 99 percent ruins the whole wait. Where the mapping from work to bar is a choice, let the bar run slower early and faster at the close: the shown value may trail the real fraction but never lead it, never moves back, and reaches 100 percent exactly when the work ends.
 - **Loading text names the real operation**, not a generic "Loading".
 - **One slow component never blocks the whole screen.**
 

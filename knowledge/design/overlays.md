@@ -37,6 +37,7 @@ A modal for a task that needs neither interruption nor protected focus is a defa
 - It grows from the control that opened it and stays anchored to that control on scroll and resize.
 - It mounts outside any ancestor that clips overflow, and flips to the side with room.
 - Escape closes it and returns focus; a click outside closes it without acting.
+- A menu whose items open submenus at the side keeps the open submenu while the pointer travels toward it: between the pointer and the two corners of the submenu's near edge lies a triangle, and inside it a hover on another item does nothing, or waits a short delay; once the pointer leaves the triangle, hover switches at once. Recompute the triangle on every pointer move. Keyboard and touch behave as before.
 - The rules for long option lists and multi-selects are in [forms-and-controls.md](forms-and-controls.md).
 
 ## Toast
