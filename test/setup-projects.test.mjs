@@ -7,8 +7,44 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
+import { discoveryOffer } from '../engine/service/settings.mjs';
+import { servicePaths } from '../engine/service/paths.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
+import { composeCore } from '../engine/service/service.mjs';
+import { createStore } from '../engine/service/store.mjs';
+import { rawClusters } from '../engine/service/clusters.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+test('default setup counts discovered repositories but leaves them for first-open consent', async t => {
+  const fixture = await makeFixture(t);
+  const before = await legacyTreeInventory(fixture.homeDir);
+  const cosmicPath = path.join(fixture.root, 'Cosmic');
+  const session = await createSetupSession({ kitPath: KIT_PATH, ...fixture, cosmicPath, hostname: 'TESTBOX', language: 'en',
+    env: { PATH: '' }, resume: false, aclRunner: stubAclRunner() });
+  await session.answer({}); await session.answer({ mindPath: fixture.mindPath });
+  await session.answer({ confirm: true }); await session.install();
+  const ready = await session.getStep();
+  assert.equal(ready.summary.find(item => item.id === 'projects').repositories, 5);
+  const routes = await readFile(path.join(fixture.mindPath, 'user', 'routes.md'), 'utf8');
+  const machine = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record;
+  for (const name of ['repo1', 'repo2', 'repo3', 'direct-web', 'direct-plain']) {
+    assert.doesNotMatch(routes, new RegExp('- ' + name));
+    assert.equal(machine.paths.some(entry => entry.name === name), false);
+  }
+  const paths = servicePaths({ platform: process.platform, env: {}, home: fixture.homeDir, mindPath: fixture.mindPath, machine: 'TESTBOX', cosmicPath });
+  const store = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: paths.mind, localDirectory: paths.localDirectory });
+  store.aclRunner = stubAclRunner();
+  const core = await composeCore({ store, paths, homeDir: fixture.homeDir, env: { PATH: '' }, probeAgents: async () => ({}) });
+  try {
+    assert.equal((await rawClusters(core.runtime)).length, 0);
+    const offer = await discoveryOffer(core.runtime.settingsOwner);
+    assert.equal(offer.dismissed, false);
+    assert.equal(offer.groups.reduce((total, group) => total + group.repositories.length, 0), 5);
+    assert.deepEqual(await legacyTreeInventory(fixture.homeDir), before);
+  } finally { await core.http.close(); }
+});
 
 // Setup has four steps (docs/3.0/final.md, decision 3): repositories are detected with defaults and
 // changed in Settings. These tests exercise the project selection at the plan boundary of the setup

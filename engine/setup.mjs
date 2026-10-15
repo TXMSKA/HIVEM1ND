@@ -306,7 +306,7 @@ class SetupSession {
     }
     if (id === 'ready') {
       const agents = (this.answers.agents ?? []).filter(agent => agent.selected !== false).map(agent => displayAgent(agent.id, this.adapters));
-      const projects = this.includedProjects();
+      const projects = this.answers.projects ?? [];
       const folders = new Set(projects.map(project => path.dirname(project.path))).size;
       base.summary = [
         { id: 'mind', label: 'M1ND', value: this.mindPath },
@@ -828,6 +828,10 @@ class SetupSession {
   }
 
   async configureDestination() {
+    if (this.checkpoint?.mode === 'migrate') {
+      const { record } = await readMachineRecord(this.mindPath, this.hostname);
+      if (record?.machine === this.hostname) this.machineRecord = record;
+    }
     const plan = await this.buildPlan();
     for (const conflict of plan.conflicts) {
       const choice = this.answers.conflicts[conflict.path];
@@ -999,9 +1003,9 @@ class SetupSession {
     this.answers.included = content.map((item) => item.id);
     const discovered = await discoverHomeProjects(this.homeDir);
     this.answers.projectRoots = [];
-    this.answers.projects = assignProjectsToRoots(discovered, []);
+    this.answers.projects = assignProjectsToRoots(discovered, []).map(project => ({ ...project, included: false }));
     this.answers.projectsScanned = true;
-    this.answers.projectsConfirmed = true;
+    this.answers.projectsConfirmed = false;
     this.answers.updateCheck = 'daily';
   }
 
@@ -1074,11 +1078,8 @@ class SetupSession {
       agents: (this.answers.agents ?? [])
         .filter((agent) => agent.selected !== false)
         .map((agent) => ({ name: agent.id, mode: agent.attach === 'auto' ? 'auto' : 'on-demand' })),
-      // The folder /cleaner moves evidence to is recorded by hand and survives a new setup.
-      paths: [
-        ...buildMachinePaths(this.answers.projectRoots, this.includedProjects()),
-        ...(this.machineRecord?.paths ?? []).filter((entry) => entry.name === 'evidence'),
-      ],
+      paths: [...new Map([...(this.machineRecord?.paths ?? []),
+        ...buildMachinePaths(this.answers.projectRoots, this.includedProjects())].map(entry => [entry.name, entry])).values()],
       excluded: this.excludedItems(),
       keepExistingPreferences: this.answers.keepExistingPreferences,
       draft: {},
@@ -1160,7 +1161,8 @@ class SetupSession {
     const preferences = mergePreferences(existingPreferences ?? '', preferenceLines(this.answers));
     const existingRoutes = await readTextIfPresent(routesPath);
     const otherMinds = await discoverOtherMinds(this.mindPath, { kitPath: this.kitPath });
-    const routes = mergeRoutes(existingRoutes ?? '', this.includedProjects(), otherMinds);
+    const routes = this.checkpoint?.mode === 'migrate' && existingRoutes !== null && this.includedProjects().length === 0
+      ? existingRoutes : mergeRoutes(existingRoutes ?? '', this.includedProjects(), otherMinds);
     const finalRecord = this.buildMachineRecord('done');
     finalRecord.draft = {};
 

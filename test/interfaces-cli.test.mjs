@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { helpText, parseArgs, runCli, runTerminalSetup } from "../cli/index.mjs";
 import { createWindowOptions, parseElectronOptions, secureWebPreferences, startElectronApp } from "../gui/electron.mjs";
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { createSetupSession } from "../engine/setup.mjs";
 import { defaultMind } from "../engine/service/paths.mjs";
 import { stubAclRunner } from "../engine/service/security.mjs";
@@ -320,7 +321,7 @@ test("a descriptor field of type number prompts as text and is sent as a number"
 });
 
 test('terminal setup follows four stages and leaves discovered repositories for explicit import',async context=>{
- const fixture=await makeTerminalProjectsFixture();context.after(()=>rm(fixture.root,{recursive:true,force:true}));const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TERMINALBOX',language:'en',env:{PATH:''},resume:false,aclRunner:stubAclRunner()});const steps=[];const prompts={intro(){},outro(){},note(_message,title){if(title?.startsWith('Step '))steps.push(title);},log:{step(value){steps.push(value);},info(){},warn(){}},isCancel(){return false;},cancel(){},async group(group){const result={};for(const [key,prompt]of Object.entries(group))result[key]=await prompt({results:result});return result;},async text(options){return options.initialValue;},async confirm(){return true;},spinner(){return {start(){},stop(){}};}};const result=await runTerminalSetup(session,prompts);assert.equal(result.completed,true);assert.deepEqual(steps.map(value=>value.match(/Step (\d)\/4/)[1]),['1','2','3']);const ready=await session.getStep();const projects=ready.summary.find(row=>row.id==='projects');assert.equal(projects.repositories,0);assert.equal(projects.folders,0);const routes=await readFile(path.join(fixture.mindPath,'user','routes.md'),'utf8');for(const name of ['repo1','repo2','repo3'])assert.doesNotMatch(routes,new RegExp('- '+name));
+ const fixture=await makeTerminalProjectsFixture();context.after(()=>rm(fixture.root,{recursive:true,force:true}));const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TERMINALBOX',language:'en',env:{PATH:''},resume:false,aclRunner:stubAclRunner()});const steps=[];const prompts={intro(){},outro(){},note(_message,title){if(title?.startsWith('Step '))steps.push(title);},log:{step(value){steps.push(value);},info(){},warn(){}},isCancel(){return false;},cancel(){},async group(group){const result={};for(const [key,prompt]of Object.entries(group))result[key]=await prompt({results:result});return result;},async text(options){return options.initialValue;},async confirm(){return true;},spinner(){return {start(){},stop(){}};}};const result=await runTerminalSetup(session,prompts);assert.equal(result.completed,true);assert.deepEqual(steps.map(value=>value.match(/Step (\d)\/4/)[1]),['1','2','3']);const ready=await session.getStep();const projects=ready.summary.find(row=>row.id==='projects');assert.equal(projects.repositories,3);assert.equal(projects.folders,2);const routes=await readFile(path.join(fixture.mindPath,'user','routes.md'),'utf8');for(const name of ['repo1','repo2','repo3'])assert.doesNotMatch(routes,new RegExp('- '+name));
 });
 
 async function makeTerminalProjectsFixture() {
@@ -330,6 +331,9 @@ async function makeTerminalProjectsFixture() {
   await mkdir(path.join(homeDir, "GitHub", "repo1", ".git"), { recursive: true });
   await mkdir(path.join(homeDir, "GitHub", "repo2", ".git"), { recursive: true });
   await mkdir(path.join(homeDir, "Unity", "repo3", ".git"), { recursive: true });
+  for (const directory of [path.join(homeDir, 'GitHub', 'repo1'), path.join(homeDir, 'GitHub', 'repo2'), path.join(homeDir, 'Unity', 'repo3')]) {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: directory, windowsHide: true, shell: false, timeout: 30000, stdio: 'ignore' });
+  }
   await mkdir(mindPath, { recursive: true });
   return { root, homeDir, mindPath };
 }

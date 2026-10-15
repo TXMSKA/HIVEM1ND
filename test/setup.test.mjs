@@ -780,6 +780,33 @@ test('joining preserves every existing record except the joining machine record'
     item.path === path.join(fixture.sourcePath, 'user', 'machines') || item.path.includes('JOINING.md')));
 });
 
+test('legacy migration and same-machine Join preserve accepted Paths routes and complete project records', async t => {
+  const fixture = await checkpointFixture(t);
+  const paths = [{ name: 'Web', path: path.join(fixture.root, 'outside-home', 'Web') },
+    { name: 'shop', path: path.join(fixture.root, 'outside-home', 'Web', 'shop') },
+    { name: 'evidence', path: path.join(fixture.root, 'evidence') }];
+  await writeMachineRecord(fixture.sourcePath, 'TESTBOX', { machine: 'TESTBOX', mind: fixture.sourcePath, setup: 'done', paths, agents: [], managedFiles: {} });
+  const routes = '## Environments\n- Web: shop\n\n## Projects\n- shop (Web)\n\n## Minds\n';
+  await writeFile(path.join(fixture.sourcePath, 'user', 'routes.md'), routes);
+  const records = ['brief.md', 'product.md', 'state/executor.md', 'tasks/001.md', 'inbox/executor/001.md', 'log/entry.md', 'brainstorm/topic.md'];
+  for (const name of records) {
+    const file = path.join(fixture.sourcePath, 'user', 'projects', 'shop', name);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `Keep ${name}.\n`);
+  }
+  const source = await legacyTreeInventory(fixture.sourcePath);
+  const migrated = await confirmedSetup(fixture.options);
+  assert.equal((await migrated.install()).completed, true);
+  assert.deepEqual((await readMachineRecord(fixture.mindPath, 'TESTBOX')).record.paths, paths);
+  assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'routes.md'), 'utf8'), routes);
+  const joined = await confirmedSetup({ ...fixture.options, legacySourcePath: null, resume: false });
+  assert.equal((await joined.install()).mode, 'join');
+  assert.deepEqual((await readMachineRecord(fixture.mindPath, 'TESTBOX')).record.paths, paths);
+  assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'routes.md'), 'utf8'), routes);
+  for (const name of records) assert.equal(await readFile(path.join(fixture.mindPath, 'user', 'projects', 'shop', name), 'utf8'), `Keep ${name}.\n`);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), source);
+});
+
 test('legacy shutdown finishes before a destination copy', async context => {
   const fixture = await checkpointFixture(context);
   await addLegacySession(fixture);
