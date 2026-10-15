@@ -92,6 +92,21 @@ test('cleanup stays open while a recorded descendant lives and a failed terminat
   assert.deepEqual(await blind.cleanup(), { closed: false, identity: blind.identity }, 'an unreadable tree is never reported closed');
 });
 
+test('a descendant that outlives its root gets the grace period and then the forced signal', async () => {
+  const fake = Object.assign(new EventEmitter(), { pid: 4747, exitCode: null });
+  let living = true; const signals = [];
+  const driver = { creation: async () => 'created', descendants: async () => [{ pid: 9, created: 'a' }], alive: async targets => living ? targets : [],
+    terminate: async () => { signals.push('terminate'); fake.exitCode = 0; fake.emit('exit', 0); }, escalate: async () => { signals.push('escalate'); living = false; } };
+  const handle = await ownChildProcess(fake, { driver, graceMs: 40, settleMs: 200 });
+  assert.deepEqual(await handle.stop(), { acknowledged: true });
+  assert.deepEqual(signals, ['terminate', 'escalate'], 'the forced signal came only after the grace period');
+  assert.deepEqual(await handle.cleanup(), { closed: true, identity: handle.identity });
+  const quick = Object.assign(new EventEmitter(), { pid: 4848, exitCode: null }); const quickSignals = [];
+  const polite = await ownChildProcess(quick, { graceMs: 40, driver: { ...driver, alive: async () => [], terminate: async () => { quickSignals.push('terminate'); quick.exitCode = 0; quick.emit('exit', 0); }, escalate: async () => { quickSignals.push('escalate'); } } });
+  assert.deepEqual(await polite.stop(), { acknowledged: true });
+  assert.deepEqual(quickSignals, ['terminate'], 'a tree that ended needs no forced signal');
+});
+
 test('stopStep reports only an acknowledged interruption', async () => {
   const fake = Object.assign(new EventEmitter(), { pid: 4545, exitCode: null });
   const driver = { creation: async () => 'created', descendants: async () => [], alive: async () => [], terminate: async () => {}, escalate: async () => {} };

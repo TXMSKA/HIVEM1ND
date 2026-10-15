@@ -188,6 +188,13 @@ export async function ownChildProcess(child, { platform = process.platform, driv
             await driver.terminate(pid);
             if (!await waitExit(graceMs)) { await driver.escalate(pid); await waitExit(graceMs); }
           }
+          // The root ending first does not end its descendants: they get the same grace, then the forced signal.
+          if (exited && recorded?.length) {
+            const deadline = Date.now() + graceMs;
+            let remaining = await driver.alive(recorded, pid).catch(() => recorded);
+            while (remaining.length && Date.now() < deadline) { await sleep(POLL_MS); remaining = await driver.alive(recorded, pid).catch(() => recorded); }
+            if (remaining.length) await driver.escalate(pid);
+          }
           return { acknowledged: exited };
         } catch { return { acknowledged: false }; }
       })();
