@@ -269,3 +269,23 @@ test('a legacy numeric task keeps its id and offers undo to the actor or request
   assert.equal((await readFile(file, 'utf8')).includes('id: 001'), true);
   assert.equal((await readDetail(agent, 'tasks', 'project:shop:001')).undoAvailable, false);
 });
+
+test('a task dated in the files.md form with a time becomes reviewable once its lead approves it', async (t) => {
+  const { fixture, context, file } = await world(t);
+  await writeFile(file, (await readFile(file, 'utf8')).replace('date: 2026-10-10', 'date: 2026-10-10 13:40'));
+  const agent = as(context, AGENT), lead = as(context, LEAD), master = as(context, 'root:master');
+  let task = await loadTask(agent, TASK);
+  await changeStatus(agent, TASK, { status: 'review', expectedRevision: task.revision, note: 'Done.' });
+  task = await loadTask(master, TASK);
+  assert.equal(reviewAuthority(task).reviewable, false);
+  assert.equal((await readDetail(context, 'tasks', TASK)).reviewable, false);
+  await changeStatus(lead, TASK, { leadApproval: true, expectedRevision: task.revision });
+  assert.equal((await readFile(file, 'utf8')).includes('Approved for review by overlord-web on 2026-10-10 13:40'), true);
+  task = await loadTask(master, TASK);
+  assert.equal(reviewAuthority(task).reviewable, true);
+  assert.equal((await readDetail(context, 'tasks', TASK)).reviewable, true);
+  assert.equal((await changeStatus(master, TASK, { status: 'done', expectedRevision: task.revision, note: 'Accepted.' })).task.status, 'done');
+  const planted = await loadTask(master, TASK);
+  planted.date = '2026-10-10 13:4'; planted.status = 'review';
+  assert.equal(reviewAuthority(planted).reviewable, false);
+});

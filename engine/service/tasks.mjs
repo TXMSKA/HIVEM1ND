@@ -59,7 +59,7 @@ export function reportSection(body) {
 }
 
 export function leadApproved(body, leadName, date) {
-  if (!leadName || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return false;
+  if (!leadName || !/^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?$/.test(date || '')) return false;
   return reportSection(body).includes(`Approved for review by ${leadName} on ${date}`);
 }
 
