@@ -401,6 +401,14 @@ export function openLyraAdapter(options = {}) {
       if (result && key) session.submissions.add(key);
       return result ? { submitted: true } : { submitted: false };
     },
+    // Ends only the running turn; the local session, its chat and its task stay.
+    async interruptTurn(input) {
+      const session = sessions.get(input?.nativeSessionId);
+      if (!session || session.stopped || input.unitId && input.unitId !== session.unitId) return { acknowledged: false, code: 'stop_unavailable' };
+      if (!session.turn) return { acknowledged: true, idle: true };
+      await closeLyraTurn(session.turn);
+      return { acknowledged: true };
+    },
     async completeTask(input) {
       const session = sessions.get(input.nativeSessionId);
       if (!session || session.unitId !== input.unitId || session.stopped) fail('scope_unavailable', 409);

@@ -922,7 +922,7 @@ test('every contract route has a success result and an authority or boundary fai
       throw new Error('Unexpected Git operation');
     },
     editorLauncher: { reviewed: true, open: async () => ({ requestId: randomUUID() }) },
-    adapters: { codex: {
+    adapters: { claude: createNativeAdapter('claude', { fixture: true, models: ['strong'] }), codex: {
       ...createNativeAdapter('codex', { fixture: true, transcript, models: ['strong'] }),
       prepareContext: async input => {
         assert.equal(input.summary, null);
@@ -1081,6 +1081,35 @@ test('every contract route has a success result and an authority or boundary fai
     token, body: { machine: fixture.machine, runsIn, useAsDefault: false, expectedRevision: led.json.data.revision }, headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(chosen, 200, 'stored runtime'); hit('PATCH', '/units/:unitId/runs-in');
+  // Automatic native work is one grant for one agent and its client, created only by the desktop.
+  const builder = await call(port, 'GET', '/api/v1/units/root:builder', { token });
+  const claudeChoice = { client: 'claude', model: 'strong', effort: 'high', mode: null };
+  expectStatus(await call(port, 'PATCH', '/api/v1/units/root:builder/runs-in', { token, body: { machine: fixture.machine, runsIn: claudeChoice, useAsDefault: false, expectedRevision: builder.json.data.revision },
+    headers: { 'idempotency-key': randomUUID() } }), 200, 'Claude Code runtime');
+  const grantsBefore = (await call(port, 'GET', '/api/v1/settings/permissions', { token })).json.data;
+  const grant = { machine: fixture.machine, unitId: 'root:builder', client: 'claude', action: 'native.automatic', expectedRevision: grantsBefore.revision }, grantKey = randomUUID();
+  for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, 'POST', '/api/v1/settings/permissions', { token: denied, body: grant, headers: { 'idempotency-key': randomUUID() } }), 403, 'grant authority');
+  expectStatus(await call(port, 'POST', '/api/v1/settings/permissions', { token, body: { ...grant, unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'grant unknown body');
+  for (const [override, status, code] of [[{ action: 'git.commit' }, 422, 'invalid_body'], [{ client: 'codex' }, 422, 'invalid_body'], [{ expectedRevision: null }, 422, 'invalid_body'],
+    [{ unitId: 'root:missing' }, 404, 'unit_not_found'], [{ client: 'cursor' }, 409, 'scope_unresolved'], [{ machine: 'OFFLINE' }, 409, 'machine_unavailable'],
+    [{ expectedRevision: 'f'.repeat(64) }, 409, 'revision_conflict']]) {
+    const refused = await call(port, 'POST', '/api/v1/settings/permissions', { token, body: { ...grant, ...override }, headers: { 'idempotency-key': randomUUID() } });
+    expectStatus(refused, status, `grant ${JSON.stringify(override)}`); assert.equal(refused.json.error.code, code);
+  }
+  assert.deepEqual((await call(port, 'GET', '/api/v1/settings/permissions', { token })).json.data.agentPermissions, grantsBefore.agentPermissions, 'a refused grant changes nothing');
+  const granted = await call(port, 'POST', '/api/v1/settings/permissions', { token, body: grant, headers: { 'idempotency-key': grantKey } });
+  expectStatus(granted, 201, 'grant automatic work');
+  assert.equal(routeTable().find(route => route.method === 'POST' && route.template === '/settings/permissions').operation, 'settings.write');
+  assert.deepEqual(granted.json.data.permission.actions, ['native.automatic']);
+  assert.equal(granted.json.data.permission.unitId, 'root:builder'); assert.equal(granted.json.data.permission.client, 'claude');
+  assert.deepEqual((await call(port, 'POST', '/api/v1/settings/permissions', { token, body: grant, headers: { 'idempotency-key': grantKey } })).json.data, granted.json.data);
+  const listedGrants = (await call(port, 'GET', '/api/v1/settings/permissions', { token })).json.data;
+  assert.deepEqual(listedGrants.agentPermissions.map((item) => item.id).sort(), [granted.json.data.permission.id, ...grantsBefore.agentPermissions.map((item) => item.id)].sort());
+  assert.equal(listedGrants.revision, granted.json.data.revision);
+  hit('POST', '/settings/permissions');
+  const revokedGrant = await call(port, 'DELETE', `/api/v1/settings/permissions/${granted.json.data.permission.id}`, { token, body: { machine: fixture.machine, expectedRevision: listedGrants.revision }, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(revokedGrant, 200, 'revoke automatic work');
+  assert.deepEqual((await call(port, 'GET', '/api/v1/settings/permissions', { token })).json.data.agentPermissions, grantsBefore.agentPermissions);
   const overseer = await call(port, 'POST', '/api/v1/overseer', { token, body: { machine: fixture.machine, runsIn, fresh: true, expectedRevision: null }, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(overseer, 201, 'create Overseer'); hit('POST', '/overseer');
   for (const denied of [phoneCredential.token, settingsAgent.token]) {
@@ -1157,6 +1186,22 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(clearedContext.json.data.operation.state, 'applied');
   assert.notEqual(clearedContext.json.data.generationId, sessionContext.json.data.generationId);
   assert.equal(contextReplacements.size, 1);
+  // Stopping the step ends only the running turn; the session stays open. Only the desktop may ask.
+  const stepTarget = `/api/v1/sessions/${sessionId}/stop-step`, stepKey = randomUUID();
+  const stepWrites = fixture.store.writes.length;
+  for (const denied of [phoneCredential.token, settingsAgent.token]) {
+    expectStatus(await call(port, 'POST', stepTarget, { token: denied, body: {}, headers: { 'idempotency-key': randomUUID() } }), 403, 'stop step authority');
+  }
+  expectStatus(await call(port, 'POST', stepTarget, { token, body: { unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'stop step unknown body');
+  expectStatus(await call(port, 'POST', `/api/v1/sessions/${randomUUID()}/stop-step`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 404, 'stop step unknown session');
+  assert.equal(fixture.store.writes.length, stepWrites, 'a refused stop changes nothing');
+  assert.equal(routeTable().find(route => route.method === 'POST' && route.template === '/sessions/:sessionId/stop-step').operation, 'session.stop');
+  const stepStopped = await call(port, 'POST', stepTarget, { token, body: {}, headers: { 'idempotency-key': stepKey } });
+  expectStatus(stepStopped, 200, 'stop step');
+  assert.deepEqual(stepStopped.json.data, { sessionId, acknowledged: true, idle: true });
+  assert.deepEqual((await call(port, 'POST', stepTarget, { token, body: {}, headers: { 'idempotency-key': stepKey } })).json.data, stepStopped.json.data);
+  assert.notEqual((await call(port, 'GET', '/api/v1/sessions', { token })).json.data.items.find((item) => item.id === sessionId).state, 'stopped', 'the session stays after its step stops');
+  hit('POST', '/sessions/:sessionId/stop-step');
   const stopped = await call(port, 'POST', `/api/v1/sessions/${sessionId}/stop`, {
     token,
     body: { confirmed: true },

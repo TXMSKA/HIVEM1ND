@@ -16,7 +16,7 @@ import { openClusterEditor, readClusterChanges, readClusterGit } from './cluster
 import { answerDiscoveryOffer, createClusterLink, removeClusterLink } from './settings.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readSessionActivity, readStartRequest, sanitizeSessionTranscript, stopSession } from './adapters.mjs';
+import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readSessionActivity, readStartRequest, sanitizeSessionTranscript, stopSession, stopSessionStep } from './adapters.mjs';
 import { clearContext, compactContext, dismissContext, readContext } from './context.mjs';
 import { createEventBus } from './events.mjs';
 import { readSessionCheckout } from './session-checkout.mjs';
@@ -81,6 +81,7 @@ const ROUTES = [
   ['GET', '/session-requests/:requestId', 'read', 'DPA', 'detail', 'sessions'],
   ['POST', '/session-requests/:requestId/cancel', 'session.start', 'D', 'cancelStart'],
   ['POST', '/sessions/:sessionId/stop', 'session.stop', 'D', 'stopSession'],
+  ['POST', '/sessions/:sessionId/stop-step', 'session.stop', 'D', 'stopSessionStep'],
   ['GET', '/sessions/:sessionId/context', 'read', 'D', 'readContext'],
   ['GET', '/sessions/:sessionId/checkout', 'read', 'D', 'sessionCheckout'],
   ['POST', '/sessions/:sessionId/context', 'session.start', 'D', 'renewContext'],
@@ -150,6 +151,7 @@ const ROUTES = [
   ['POST', '/settings/agents/:client/preview', 'settings.write', 'D', 'settingsMutation', 'preview'],
   ['POST', '/settings/agents/:client/apply', 'settings.write', 'D', 'settingsMutation', 'apply'],
   ['DELETE', '/settings/agents/:client', 'settings.write', 'D', 'settingsMutation', 'disconnect'],
+  ['POST', '/settings/permissions', 'settings.write', 'D', 'settingsMutation', 'grant'],
   ['DELETE', '/settings/permissions/:permissionId', 'settings.write', 'D', 'settingsMutation', 'revoke'],
   ['POST', '/settings/projects/folders', 'settings.write', 'D', 'settingsMutation', 'folder'],
   ['DELETE', '/settings/projects/:projectId', 'settings.write', 'D', 'settingsMutation', 'removeProject'],
@@ -1142,6 +1144,7 @@ function allowedBody(route) {
     'PATCH /units/:unitId/runs-in': ['machine', 'runsIn', 'useAsDefault', 'expectedRevision'],
     'POST /session-requests/:requestId/cancel': [],
     'POST /sessions/:sessionId/stop': ['confirmed'],
+    'POST /sessions/:sessionId/stop-step': [],
     'POST /sessions/:sessionId/context': ['action', 'expectedRevision'],
     'PATCH /layout': ['nodes', 'groups', 'expectedRevision'],
     'POST /chats': ['members', 'title'],
@@ -1174,6 +1177,7 @@ function allowedBody(route) {
     'POST /settings/agents/:client/preview': ['machine', 'mode', 'target', 'allowGit'],
     'POST /settings/agents/:client/apply': ['machine', 'previewId', 'changeIds', 'expectedRevision'],
     'DELETE /settings/agents/:client': ['machine', 'confirmed', 'expectedRevision'],
+    'POST /settings/permissions': ['machine', 'unitId', 'client', 'action', 'expectedRevision'],
     'DELETE /settings/permissions/:permissionId': ['machine', 'expectedRevision'],
     'POST /settings/projects/folders': ['machine', 'path', 'environment', 'expectedRevision'],
     'DELETE /settings/projects/:projectId': ['machine', 'confirmed', 'expectedRevision'],
@@ -1470,6 +1474,7 @@ async function invoke(route, scope) {
     const stopped = await stopSession(domain, params.sessionId, body ?? {});
     return { status: 202, body: { sessionId: stopped.sessionId, state: 'stopping' } };
   }
+  if (route.handler === 'stopSessionStep') return { status: 200, body: await stopSessionStep(domain, params.sessionId) };
   if (route.handler === 'readContext') return { status: 200, body: await readContext(domain, params.sessionId) };
   if (route.handler === 'sessionCheckout') return { status: 200, body: await readSessionCheckout(domain, params.sessionId) };
   if (route.handler === 'renewContext') {
