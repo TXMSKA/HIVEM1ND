@@ -67,7 +67,7 @@ for (const reason of ['closed', 'replaced', 'expired']) {
       assert.equal(terminal.length, 1);
       assert.equal(terminal[0].data.data.reason, reason);
       assert.deepEqual(terminal[0].data.data.home, {
-        enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0,
+        enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0, phoneCount: 0,
       });
       const serialized = JSON.stringify(endedStream.frames);
       assert.equal(serialized.includes(grant.key), false);
@@ -78,6 +78,32 @@ for (const reason of ['closed', 'replaced', 'expired']) {
     assert.equal((await call(localOrigin, 'GET', '/api/v1/view', phone)).status, 401);
   });
 }
+
+test('actual Settings reports the signed-in phone count through pairing and logout', async t => {
+  const address = eligibleAddresses()[0]; assert.ok(address);
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, interfaces: () => [address] });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  const origin = `http://127.0.0.1:${core.http.port}`;
+  const desktop = (await call(origin, 'POST', '/api/v1/auth/local', core.bootstrap.secret,
+    { embedded: false, hostOrigin: null, look: null, language: null })).json.data.token;
+  const opened = await call(origin, 'POST', '/api/v1/settings/home-network', desktop, { enabled: true });
+  assert.equal(opened.json.data.phoneCount, 0);
+  const grant = opened.json.data, homeOrigin = grant.addresses[0].origin;
+  const first = (await call(homeOrigin, 'POST', '/api/v1/auth/home', null, { key: grant.key })).json.data.token;
+  const second = (await call(homeOrigin, 'POST', '/api/v1/auth/home', null, { code: grant.shortCode })).json.data.token;
+  const settings = async () => {
+    const result = await call(origin, 'GET', '/api/v1/settings', desktop);
+    assert.equal(result.status, 200);
+    for (const secret of [grant.key, grant.shortCode, first, second]) assert.equal(JSON.stringify(result.json).includes(secret), false);
+    return result.json.data.home;
+  };
+  assert.equal((await settings()).phoneCount, 2);
+  assert.equal((await call(homeOrigin, 'POST', '/api/v1/auth/logout', first, {})).status, 204);
+  assert.equal((await settings()).phoneCount, 1);
+  assert.equal((await call(homeOrigin, 'POST', '/api/v1/auth/logout', second, {})).status, 204);
+  assert.equal((await settings()).phoneCount, 0);
+});
 
 test('a restarted service retains no home grant and rejects the former phone credential', async t => {
   const address = eligibleAddresses()[0]; assert.ok(address);
@@ -117,7 +143,7 @@ function call(origin, method, target, token = null, body = undefined) {
       res.on('error', reject);
       res.on('end', () => {
         try {
-          resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+          resolve({ status: res.statusCode, json: res.statusCode === 204 ? null : JSON.parse(Buffer.concat(chunks).toString('utf8')) });
         } catch (error) { reject(error); }
       });
     });

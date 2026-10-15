@@ -51,6 +51,7 @@ export async function openHome(context, input = {}) {
     expiresAt,
     listeners: opened,
     tokens: new Set(),
+    phoneCount: 0,
     addresses: opened.map((listener) => ({ origin: `http://${listener.address}:${listener.port}` })),
     pairing: new Map(),
   };
@@ -119,6 +120,7 @@ export async function exchange(context, input, peer) {
   attempts.failures = 0;
   const issued = context.credentials.issue({ audience: 'phone', expiresAt: grant.expiresAt });
   grant.tokens.add(issued.token);
+  notifyPhoneCount(context);
   return { token: issued.token, audience: 'phone', expiresAt: grant.expiresAt, capabilities: issued.capabilities };
 }
 
@@ -131,9 +133,18 @@ export function status(context) {
   if (grant?.enabled && (context.now() >= Date.parse(grant.expiresAt) || !interfacesMatch(context, grant))) {
     const reason = context.now() >= Date.parse(grant.expiresAt) ? 'expired' : 'closed';
     void closeHome(context, { reason });
-    return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
+    return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0, phoneCount: 0 };
   }
-  if (!grant?.enabled) return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0 };
+  if (!grant?.enabled) return { enabled: false, openedAt: null, expiresAt: null, addresses: [], remainingSeconds: 0, phoneCount: 0 };
+  let phoneCount = 0;
+  for (const token of grant.tokens) {
+    try {
+      if (context.credentials.verify(token).audience === 'phone') phoneCount += 1;
+    } catch (error) {
+      if (error.code !== 'invalid_session') throw error;
+      grant.tokens.delete(token);
+    }
+  }
   const remaining = Math.max(0, Math.ceil((Date.parse(grant.expiresAt) - context.now()) / 1000));
   return {
     enabled: true,
@@ -141,6 +152,7 @@ export function status(context) {
     expiresAt: grant.expiresAt,
     addresses: grant.addresses.map((item) => ({ origin: item.origin })),
     remainingSeconds: remaining,
+    phoneCount,
   };
 }
 
@@ -148,7 +160,16 @@ export async function pollHome(context) {
   const grant = context.grant;
   if (!grant?.enabled) return status(context);
   if (!interfacesMatch(context, grant)) return closeHome(context, { reason: 'closed' });
-  return status(context);
+  return notifyPhoneCount(context);
+}
+
+function notifyPhoneCount(context) {
+  const view = status(context);
+  if (view.enabled && context.grant.phoneCount !== view.phoneCount) {
+    context.grant.phoneCount = view.phoneCount;
+    emit(context, 'phones-changed');
+  }
+  return view;
 }
 
 function interfacesMatch(context, grant) {
