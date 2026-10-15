@@ -197,6 +197,7 @@ export function createNativeAdapter(client, options = {}) {
           await (request.planTranscript ?? request.workTranscript)?.(message);
           observePlanProtocol({ ...request, nativeSessionId: created.nativeSessionId }, message);
         }
+        for (const line of options.observations ?? []) observePlanProtocol({ ...request, nativeSessionId: created.nativeSessionId }, JSON.parse(line));
         const exit = new EventEmitter(), identity = randomUUID(); let ended = false;
         const processHandle = options.planProcessHandle ?? { identity, verify: async () => true,
           onExit: listener => { exit.on('exit', listener); return () => exit.off('exit', listener); },

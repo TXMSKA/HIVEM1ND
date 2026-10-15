@@ -57,7 +57,7 @@ export async function additionFiles(transfer) {
   return { name, files: files.sort((a, b) => a.path.localeCompare(b.path, 'en')) };
 }
 
-export function createAddController(client, { state = {}, schedule = setTimeout, cancel = clearTimeout, onChange = () => {}, onAccepted = async () => {} } = {}) {
+export function createAddController(client, { state = {}, schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), onChange = () => {}, onAccepted = async () => {} } = {}) {
   state.model ??= { language: 'en', stage: 'source', link: '', preview: null, selected: [], scopes: {}, choices: { units: [], groups: [] }, busy: false, errorCode: null };
   const controller = { api: client, state, model: state.model, schedule, cancel, onChange, onAccepted, timer: null, poll: null, dialog: null, disposed: false };
   controller.paint = () => { paintAdd(controller); onChange(); };

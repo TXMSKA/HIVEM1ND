@@ -473,7 +473,8 @@ button, input { font: inherit; color: inherit; }
 .shell[data-layout="phone"] .workspace { padding: 0; gap: 0; min-height: 0; }
 .shell[data-layout="phone"] .panel { border: 0; border-radius: 0; box-shadow: none; }
 .shell[data-layout="phone"] .side { padding: 6px 10px; }
-.shell[data-layout="phone"] .side > h2, .shell[data-layout="phone"] .stage > h2, .shell[data-layout="phone"][data-tab="chats"] .side { display: none; }
+.shell[data-layout="phone"] .side > h2, .shell[data-layout="phone"] .stage > h2 { display: none; }
+.shell[data-layout="phone"][data-tab="chats"]:has(.transcript) .side { display: none; }
 .shell[data-layout="phone"] .stage { padding: 14px; gap: 12px; }
 .shell[data-layout="phone"] .list [data-row="true"] { min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
 .shell[data-layout="phone"] .phone-dock { min-height: 64px; padding: 0 14px calc(12px + env(safe-area-inset-bottom)); }

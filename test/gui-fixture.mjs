@@ -5593,7 +5593,9 @@ export async function createFinalCoreFixture({ language = "en", look = "modern",
     const adapter = createNativeAdapter("codex", nativeOptions), create = adapter.create.bind(adapter);
     adapter.create = async input => {
       launches.push(input);
-      nativeOptions.transcript = [JSON.stringify({ id: 1, result: { thread: { id: uuid() } } })];
+      const threadId = uuid();
+      nativeOptions.transcript = [JSON.stringify({ id: 1, result: { thread: { id: threadId } } })];
+      nativeOptions.observations = typeof fixture.sessionObservations === 'function' ? fixture.sessionObservations(threadId) : [];
       return create(input);
     };
     adapters = { codex: adapter, ...(prepared.adapters ?? {}) };

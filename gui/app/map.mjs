@@ -272,7 +272,10 @@ export function renderMap(document, host, map, labels = {}) {
     connect.addEventListener("click", () => requestConnect(map));
     actions.append(message, connect);
   }
-  const hint = document.createElement('p'); hint.className = 'map-hint'; hint.textContent = labels.drag ?? '';
+  const focused = (map.groups ?? []).find(group => group.id === map.focusedFolder);
+  const insideCount = focused ? (map.groups ?? []).filter(group => group.parentId === focused.id).length : 0;
+  const hint = document.createElement('p'); hint.className = 'map-hint';
+  hint.textContent = focused && labels.inside ? labels.inside(focused.title, insideCount) : (labels.drag ?? '');
   const children = [svg, layer, actions, hint];
   if (map.persistState === "saving" || map.persistState === "error") {
     const status = document.createElement("p");
@@ -592,6 +595,9 @@ export function fitMap(map, rect = hostRect(map.host)) {
 
 export function flyToCluster(map, id, rect = hostRect(map.host)) {
   if ((map.groups ?? []).some(group => group.parentId === id)) map.focusedFolder = id;
+  const focused = (map.groups ?? []).find(group => group.id === map.focusedFolder);
+  const hint = map.host?.querySelector?.('.map-hint');
+  if (focused && hint && map.labels?.inside) hint.textContent = map.labels.inside(focused.title, (map.groups ?? []).filter(group => group.parentId === focused.id).length);
   const frame = personalZones(map).find(item => item.group.id === id);
   if (!frame) return false;
   const ids = new Set([id]);

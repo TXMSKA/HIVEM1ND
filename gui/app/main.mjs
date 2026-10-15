@@ -4172,6 +4172,7 @@ function finishMap(app) {
     fit: text(app.language, 'finalFit'), services: text(app.language, 'services'),
     zoomIn: text(app.language, 'finalZoomIn'), zoomOut: text(app.language, 'finalZoomOut'),
     drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
+    inside: (name, count) => startText(app.language, 'inside', { name, count }),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
   if (['queued', 'starting'].includes(app.sessionRequest?.state)) {
