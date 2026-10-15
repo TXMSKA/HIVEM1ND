@@ -41,10 +41,9 @@ async function observe(context, sessionId) {
   const machine = owned ? owned.registration.machine : plan.machine;
   if (machine && machine !== context.paths.machine) return unknown('other_machine');
   if (owned && owned.registration.launchKind !== 'cli') return unknown('manual');
-  const live = owned ? owned.live : plan.live;
-  const bound = owned ? await readBoundScope(context, sessionId) : plan.scope && { scope: plan.scope, directory: plan.directory };
   const directory = owned ? path.join(context.paths.localDirectory, 'sessions', sessionId) : plan.directory;
-  if (!live) return await lastSeen(context, directory, sessionId) ?? unknown('not_observed');
+  if (!(owned ? owned.live : plan.live)) return await lastSeen(context, directory, sessionId) ?? unknown('not_observed');
+  const bound = owned ? await readBoundScope(context, sessionId) : plan.scope && { scope: plan.scope, directory: plan.directory };
   if (!bound) return unknown('unverified');
   let fact;
   try { fact = await checkout(context, bound); }
