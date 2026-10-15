@@ -42,6 +42,7 @@ export const BROWSER_STATIC_FILES = Object.freeze([
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs',
   'plan-view.mjs', 'session-work.mjs', 'plan-controller.mjs',
+  'add-api.mjs', 'add-view.mjs', 'add-controller.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
   'atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2',

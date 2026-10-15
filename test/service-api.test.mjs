@@ -337,7 +337,7 @@ test('app serves the exact four local Atkinson fonts as WOFF2 and rejects other 
 
 test('the start workflow serves its complete local module graph through the static allowlist', async t => {
   const { core } = await boot(t, { assetDir: path.resolve('gui/app') });
-  for (const name of ['start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs']) {
+  for (const name of ['start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs', 'add-api.mjs', 'add-view.mjs', 'add-controller.mjs']) {
     const response = await call(core.http.port, 'GET', `/app/${name}`);
     assert.equal(response.status, 200); assert.match(response.headers['content-type'], /javascript/);
     assert.equal(response.raw, await readFile(path.join('gui/app', name), 'utf8'));
@@ -1807,7 +1807,8 @@ test('every contract route has a success result and an authority or boundary fai
   const candidate = readyAddition.candidates.find(item => item.kind === 'skill');
   assert.equal(candidate.check.eligible, true);
   const acceptanceBody = { machine: fixture.machine, previewId: readyAddition.id,
-    selections: [{ candidateId: candidate.id, scope: { everyUnit: false, units: ['root:executor'], groups: [] } }],
+    selections: [{ candidateId: candidate.id, scope: { everyUnit: false, units: ['root:executor'], groups: [] } },
+      { candidateId: readyAddition.candidates.find(item => item.kind === 'repository').id, scope: { everyUnit: false, units: [], groups: [] } }],
     expectedContentRevision: readyAddition.contentRevision, expectedProjectRevision: readyAddition.projectRevision, confirmed: true };
   for (const denied of [phone.token, agent.token]) {
     const response = await call(port, 'POST', '/api/v1/additions', { token: denied, body: acceptanceBody, headers: { 'idempotency-key': randomUUID() } });
@@ -1815,11 +1816,11 @@ test('every contract route has a success result and an authority or boundary fai
   }
   const acceptedAddition = await call(port, 'POST', '/api/v1/additions', { token, body: acceptanceBody, headers: { 'idempotency-key': randomUUID() } });
   expectStatus(acceptedAddition, 201, 'accept addition'); hit('POST', '/additions');
-  assert.equal(acceptedAddition.json.data.items.length, 1);
+  assert.equal(acceptedAddition.json.data.items.length, 2);
   const addition = acceptedAddition.json.data.items[0];
   const additionList = await call(port, 'GET', '/api/v1/additions', { token });
   expectStatus(additionList, 200, 'read additions'); hit('GET', '/additions');
-  assert.deepEqual(additionList.json.data.items, [addition]);
+  assert.deepEqual(additionList.json.data.items.map(item => item.id).sort(), acceptedAddition.json.data.items.map(item => item.id).sort());
   const additionTarget = `/api/v1/additions/${addition.id}`;
   const removalInput = { machine: fixture.machine, confirmed: true, expectedRevision: addition.revision };
   for (const denied of [phone.token, agent.token]) {
@@ -1833,7 +1834,19 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(removedAddition.json.data.additionId, addition.id);
   const remainingAdditions = await call(port, 'GET', '/api/v1/additions', { token });
   expectStatus(remainingAdditions, 200, 'read additions after removal');
-  assert.deepEqual(remainingAdditions.json.data.items, []);
+  const repositoryAddition = acceptedAddition.json.data.items.find(item => item.kind === 'repository');
+  assert.deepEqual(remainingAdditions.json.data.items, [repositoryAddition]);
+  const acceptedClusters = await call(port, 'GET', '/api/v1/clusters', { token });
+  const acceptedCluster = acceptedClusters.json.data.items.find(item => item.link.projectId === repositoryAddition.projectId);
+  assert.ok(acceptedCluster); assert.deepEqual(acceptedCluster.members, []);
+  const repositoryRemoval = { machine: fixture.machine, confirmed: true, expectedRevision: repositoryAddition.revision };
+  expectStatus(await call(port, 'DELETE', `/api/v1/additions/${repositoryAddition.id}`, { token: phone.token, body: repositoryRemoval,
+    headers: { 'idempotency-key': randomUUID() } }), 403, 'repository addition authority'); hit('DELETE', '/additions/:additionId');
+  const detachedAddition = await call(port, 'DELETE', `/api/v1/additions/${repositoryAddition.id}`, { token, body: repositoryRemoval, headers: { 'idempotency-key': randomUUID() } });
+  expectStatus(detachedAddition, 200, 'detach accepted repository'); hit('DELETE', '/additions/:additionId');
+  const retainedCluster = await call(port, 'GET', `/api/v1/clusters/${acceptedCluster.id}?machine=${fixture.machine}`, { token });
+  expectStatus(retainedCluster, 200, 'keep accepted cluster'); assert.deepEqual(retainedCluster.json.data.link, { kind: 'none' });
+  assert.deepEqual(retainedCluster.json.data.members, []);
   fixture.clock.now += 60000;
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
   const clusterList = await call(port, 'GET', '/api/v1/clusters', { token });

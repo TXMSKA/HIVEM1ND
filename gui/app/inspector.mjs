@@ -4,6 +4,7 @@ import { formatWhen } from "./i18n.mjs";
 import { unitDisplayName } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
 import { clusterLead } from './clusters.mjs';
+import { addText } from './add-view.mjs';
 
 export function renderAgentHeader(document, unit, session, language, onMore) {
   const t = key => startText(language, key), working = ['busy', 'working', 'active'].includes(session?.activity);
@@ -43,6 +44,13 @@ export function renderCluster(document, model, actions = {}) {
   else facts.append(element(document, 'code', { text: model.link?.localPath ?? t('unavailable') }));
   if (model.error) facts.append(element(document, 'p', { role: 'alert', text: model.error }));
   root.append(facts);
+  if (model.addition) {
+    const item = model.addition;
+    root.append(element(document, 'section', { class: 'cluster-origin', 'data-cluster-origin': item.id },
+      element(document, 'button', { type: 'button', class: 'add-origin', 'aria-label': addText(model.language, 'checkUpdates'),
+        text: addText(model.language, 'projectOrigin', { source: item.source.display }), onclick: () => actions.onUpdate?.(item) }),
+      element(document, 'p', { class: 'start-hint', text: addText(model.language, 'pinned', { kind: addText(model.language, item.pin.kind), pin: item.pin.kind === 'commit' ? item.pin.value.slice(0, 7) : item.pin.value }) })));
+  }
   const lead = clusterLead(cluster, model.units), members = (model.units ?? []).filter(unit => !unit.removed && unit.role !== 'master' && cluster.members.includes(unit.id));
   root.append(element(document, 'div', { class: 'cluster-members', 'data-cluster-lead': lead?.id ?? '' },
     element(document, 'p', { text: !members.length ? t('noAgents') : lead && members.length > 1

@@ -34,6 +34,10 @@ export function repositorySelection(offer) {
   return new Set((offer?.groups ?? []).flatMap(group => group.repositories.map(repo => repo.id)));
 }
 
+export function acceptedRepositoryCluster(clusters, addition) {
+  return clusters.find(cluster => !cluster.deleted && cluster.link?.kind === 'repository' && cluster.link.projectId === addition.projectId) ?? null;
+}
+
 export function filterRepositories(offer, query = '') {
   const needle = query.trim().toLowerCase();
   return (offer?.groups ?? []).map(group => ({ ...group, repositories: group.repositories.filter(repo =>

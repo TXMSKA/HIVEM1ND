@@ -10,6 +10,7 @@ export function createStore() {
     selected: { unitId: null, groupId: null, chatId: null, taskId: null, resourceId: null },
     viewport: { x: 0, y: 0, scale: 1 },
     drafts: new Map(),
+    additions: { model: null, report: null },
     conflicts: new Map(),
     pages: new Map(),
     pending: new Map(),
@@ -123,6 +124,11 @@ export async function applyEvent(store, api, event) {
   }
   if (event.name === "stream.reset") return applyReset(store, api);
   const data = event.envelope?.data ?? {};
+  if (event.name === 'additions.changed') {
+    store.additions.report = null;
+    const response = await request(api, 'GET', '/view'); store.view = response.data; indexView(store, response.data);
+    return { applied: true };
+  }
   if (event.name === 'unit.unread' && data.unitId && Number.isSafeInteger(data.count) && data.count >= 0) {
     const unit = store.indexes.units.get(data.unitId); if (unit) unit.unread = data.count;
     return { applied: true };

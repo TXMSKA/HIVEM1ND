@@ -84,11 +84,14 @@ import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBou
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
-import { clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
 import { controlPlan, createPlanController, loadChatPlans, refreshPlan, renderControlledPlan, runPlan, savePlanDraft } from './plan-controller.mjs';
+import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
+import { addButton, addText } from './add-view.mjs';
+import { getAdditions, removeAddition } from './add-api.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
@@ -497,6 +500,9 @@ function paintShell(app) {
   if (app.startDialog?.model && app.startDialog.model.language !== app.language) {
     app.startDialog.model.language = app.language; app.startDialog.paint();
   }
+  if (app.addController && app.addController.model.language !== app.language) {
+    app.addController.model.language = app.language; app.addController.paint();
+  }
   syncLiveRegions(app);
   paintActivity(app, shell);
   paintServiceBanner(app, shell);
@@ -697,6 +703,7 @@ function trackDisclosure(app, node, key) {
 }
 
 export function dispose(app) {
+  if (app?.addController) disposeAdd(app.addController);
   if (app.mapState) { app.mapState.disposed = true; app.mapState.flight = null; }
   app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
@@ -773,8 +780,9 @@ async function onStream(app, event) {
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
   if (event?.name === "machine.settings.changed" && dataOf(event).machine === app.settingsState?.machine
     || event?.name === "settings.content.changed" && app.settingsState) loadSettingsSections(app);
-  if (app.layout === 'desktop' && (event?.name === 'cluster.changed' || event?.name === 'machine.settings.changed')) {
+  if (app.layout === 'desktop' && ['cluster.changed', 'machine.settings.changed', 'additions.changed', 'stream.reset'].includes(event?.name)) {
     await loadStartReports(app);
+    if (app.settingsState && event?.name === 'additions.changed') await loadSettingsSections(app);
     const cluster = app.store.indexes.groups.get(app.store.selected.groupId);
     if (cluster) await loadClusterFacts(app, cluster);
   }
@@ -1084,6 +1092,9 @@ function renderBar(app, t, counts) {
   });
   const bar = element(document, "header", { class: "bar" }, app.layout === 'phone' ? brand(document).querySelector('.mark') : brand(document), modes);
   if (app.layout === 'phone') bar.append(element(document, 'h2', { 'data-phone-title': 'true', text: viewTitle(app, t) }));
+  if (app.layout !== 'phone' && !app.bootReading && !app.bootFailed && app.store.capabilities.includes('settings.write')) {
+    bar.append(addButton(document, app.language, () => openSharedAdd(app)));
+  }
   if (counts.waiting || (!app.bootReading && !app.bootFailed)) bar.append(waiting);
   if (app.layout !== "phone") {
     bar.append(catalogToggle);
@@ -3516,6 +3527,59 @@ function viewStorage(document) {
 
 function startMachine(app) { return app.store.settings?.service?.machine ?? app.store.view?.mind?.machine; }
 
+async function openSharedAdd(app, update = null) {
+  if (app.layout === 'phone' || app.startDialog || !app.store.capabilities.includes('settings.write')) return;
+  if (update && !update.source) {
+    try {
+      const report = (await getAdditions(app.api, startMachine(app))).data;
+      app.store.additions.report = report;
+      const accepted = report.items.find(item => item.id === update.additionId);
+      if (!accepted) throw new ApiError(404, 'addition_not_found', addText(app.language, 'error_addition_not_found'));
+      update = accepted;
+    } catch (error) { noteAction(app, error); renderShell(app); return; }
+  }
+  app.addController ??= createAddController(app.api, { state: app.store.additions, onAccepted: async result => {
+    await loadStartReports(app);
+    if (app.settingsState) await loadSettingsSections(app);
+    const repository = result.items.find(item => item.kind === 'repository');
+    if (repository) {
+      const cluster = acceptedRepositoryCluster([...app.store.indexes.groups.values()], repository);
+      if (cluster) { navigate(app, 'map'); selectGroup(app, cluster.id); revealAcceptedCluster(app, cluster); }
+    }
+    const item = result.items[0];
+    showMapToast(app, repository ? addText(app.language, 'repoAdded', { project: repository.title }) : addText(app.language, item.unitCount === 1 ? 'addedOne' : 'addedMany', { name: item.title, count: item.unitCount }));
+    renderShell(app);
+  } });
+  openAdd(app.addController, app.root.ownerDocument, { language: app.language, machine: startMachine(app), update });
+}
+
+function revealAcceptedCluster(app, cluster) {
+  const seen = new Set(); let current = cluster;
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id); app.hierarchy.collapsed.delete(`cluster:${current.id}`);
+    const parent = app.store.indexes.groups.get(current.parentId);
+    if (parent) revealGroup(app.hierarchy, `cluster:${parent.id}`, app.store.indexes.groups.size);
+    current = parent;
+  }
+  app.pendingClusterFlight = cluster.id;
+  renderShell(app);
+}
+
+function confirmRemoveAddition(app, item) {
+  let retained = null;
+  showDialog(app.root.ownerDocument, { title: addText(app.language, 'removeTitle', { name: item.title }),
+    body: addText(app.language, 'removeContent'), confirm: addText(app.language, 'remove'), cancel: addText(app.language, 'cancel'), retry: addText(app.language, 'retry'),
+    onConfirm: async () => {
+      try {
+        const result = await removeAddition(app.api, startMachine(app), item.additionId, item.revision, retained);
+        await loadStartReports(app); await loadSettingsSections(app);
+        showMapToast(app, addText(app.language, 'removeTitle', { name: item.title }), async record => {
+          await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); await loadSettingsSections(app);
+        }, result.data.undoUntil); renderShell(app);
+      } catch (error) { retained = error.operation ?? retained; throw error; }
+    } });
+}
+
 function unconfirmedStartOperation(error) { return !error.status || error.status >= 500 ? error.operation ?? null : null; }
 
 async function loadStartReports(app) {
@@ -3523,13 +3587,15 @@ async function loadStartReports(app) {
   const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
   app.startReportTicket = ticket;
   try {
-    const [projects, agents, clusters] = await Promise.all([
+    const [projects, agents, clusters, additions] = await Promise.all([
       request(app.api, 'GET', '/settings/projects', { query: { machine } }),
       request(app.api, 'GET', '/settings/agents', { query: { machine } }),
       collectPages(app.api, '/clusters', { limit: 200 }),
+      app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
     ]);
     if (app.disposed || ticket !== app.startReportTicket) return;
     app.startProjects = projects.data; app.startAgents = agents.data;
+    app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
     app.startError = null;
     if (app.store.selected.groupId && !app.store.indexes.groups.has(app.store.selected.groupId)) app.store.selected.groupId = null;
@@ -3713,7 +3779,9 @@ async function loadClusterFacts(app, cluster) {
 function clusterInspector(app, cluster) {
   const facts = app.clusterFacts?.id === cluster.id ? app.clusterFacts : {};
   return renderCluster(app.root.ownerDocument, { language: app.language, cluster, git: facts.git, error: facts.error?.message,
-    units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id) }, {
+    units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
+    addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) }, {
+    onUpdate: item => openSharedAdd(app, item),
     onNewAgent: () => openStartAgent(app, cluster), onLink: () => openClusterLink(app, cluster),
     onMore: () => removeStartCluster(app, cluster), onChanges: () => showClusterChanges(app, cluster),
     onEditor: () => settle(app, `editor:${cluster.id}`, startText(app.language, 'openEditor'), async record => {
@@ -4189,6 +4257,9 @@ function settingsSurface(app, document, t) {
     onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
     onLinkFolder: () => openClusterLink(app, null, state.machine),
     onRemoveLink: link => removeStartLink(app, link, state.machine),
+    onAdd: () => openSharedAdd(app),
+    onUpdateAddition: item => openSharedAdd(app, item),
+    onRemoveAddition: item => confirmRemoveAddition(app, item),
     onContentItem: (field, id, included) => {
       contentSettingsDraft(state)[field].find(item => item.id === id).included = included;
       state.contentGeneration = (state.contentGeneration ?? 0) + 1;
@@ -4255,6 +4326,10 @@ async function loadSettingsSections(app) {
     for (const id of state.pendingGrants ?? []) if (!state.permissions.unitGrants.some(item => item.grant.id === id)) state.pendingGrants.delete(id);
     state.loaded = true;
     if (!state.contentDirty) state.contentDraft = null;
+    else if (state.contentDraft) for (const field of ['features', 'knowledge']) {
+      const draft = new Map(state.contentDraft[field].map(item => [item.id, item]));
+      state.contentDraft[field] = state.content[field].map(item => ({ ...item, included: draft.get(item.id)?.included ?? item.included }));
+    }
     if (state.info.home) {
       const home = homeState(app);
       applySettingsRead(home, { home: state.info.home });

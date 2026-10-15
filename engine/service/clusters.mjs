@@ -10,6 +10,7 @@ import { readCollection, readProjection } from './projection.mjs';
 import { readUnitStates, stateHeader } from './state.mjs';
 import { parseRoutes } from '../relay/store.mjs';
 import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-git.mjs';
+import { clusterMembers } from './cluster-policy.mjs';
 
 function fail(status, code, message) { throw new CoreError(status, code, message); }
 function bytes(value) { return Buffer.from(`${canonicalJson(value)}\n`); }
@@ -209,8 +210,18 @@ export async function prepareRepositoryClusters(context, projects, { remove = fa
     if (!current && identity) current = records.find(item => links[mappingKey(item.cluster.link)]?.repositoryId === identity.id);
     if (remove) {
       if (current && !current.cluster.deleted) {
-        const prepared = await prepareClusterRemoval(context, current.cluster.id, current.cluster.revision);
-        entries.push(...prepared.entries); events.push(...prepared.events); undoEvents.push(...prepared.undoEvents);
+        if (project.additionId || project.id) {
+          const view = await readProjection(context), members = new Set(clusterMembers(records.map(item => item.cluster), [current.cluster.id], view.units));
+          if (view.sessions.some(session => members.has(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this link.');
+          const after = bytes({ ...current.record, link: { kind: 'none' } });
+          entries.push(clusterEntry(context, current.relative, current.bytes, after));
+          const detached = projectGroup(after, current.cluster.id);
+          events.push(...clusterEvents(detached)); undoEvents.push(...clusterEvents(current.cluster)); clusters.push(detached);
+          delete links[mappingKey(current.cluster.link)];
+        } else {
+          const prepared = await prepareClusterRemoval(context, current.cluster.id, current.cluster.revision);
+          entries.push(...prepared.entries); events.push(...prepared.events); undoEvents.push(...prepared.undoEvents);
+        }
       }
       continue;
     }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { gzipSync } from 'node:zlib';
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
@@ -4604,6 +4605,7 @@ function createTestDocument(width = 390) {
       tagName: tag.startsWith("#") ? "" : String(tag).toUpperCase(),
       namespace,
       children: [],
+      get childNodes() { return this.children; },
       attributes: new Map(),
       listeners: new Map(),
       className: "",
@@ -5970,6 +5972,129 @@ test("T062 pairing has one heading and a skip destination and restores the code 
   assert.equal(phone.document.activeElement, phone.root.querySelector("[data-home-code]"));
   assert.equal(phone.root.querySelector("[id='phone-code-error']").getAttribute("role"), "alert");
   assert.equal(phone.root.querySelectorAll("h1").length, 1);
+});
+
+test('T094 shared Add retains its dialog, check, selection and focus across shell and Content entry points', async t => {
+  const { app, root, document } = await settingsApp(t);
+  for (const language of ['en', 'es']) for (const look of ['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk']) {
+    app.language = language; app.look = look; renderShell(app);
+    const add = root.querySelector('[data-action="add-to-mind"]'); add.focus(); click(add);
+    const dialog = document.querySelector('.add-dialog'); assert.ok(dialog);
+    const bar = root.querySelector('.bar');
+    assert.ok(bar.children.indexOf(add) < bar.children.indexOf(root.querySelector('[data-action="waiting"]')));
+    click(root.querySelector('[data-action="add-to-mind"]'));
+    assert.equal(document.querySelectorAll('.add-dialog').length, 1);
+    click(dialog.querySelector('[data-action="add-cancel"]'));
+    assert.equal(document.activeElement, root.querySelector('[data-action="add-to-mind"]'));
+  }
+  click(root.querySelector('[data-action="settings-tab-content"]'));
+  const contentAdd = root.querySelector('[data-action="add-content"]'); contentAdd.focus(); click(contentAdd);
+  const originalMode = app.mode, originalTab = app.settingsState.tab;
+  const dialog = document.querySelector('.add-dialog'), input = dialog.querySelector('[id="add-link"]');
+  const replace = dialog.replaceChildren.bind(dialog);
+  dialog.replaceChildren = (...nodes) => { if (dialog.contains(document.activeElement)) document.activeElement = document.body; replace(...nodes); };
+  typeInput(input, 'https://github.com/acme/example', 10, 18);
+  for (const handler of input.listeners.get('keydown') ?? []) handler({ key: 'Enter', preventDefault() {} });
+  await waitFor(() => app.addController.model.preview?.state === 'ready', 'The Add preview did not load.');
+  assert.equal(document.activeElement, dialog.querySelector('[id="add-link"]'));
+  assert.equal(document.activeElement.selectionStart, 10); assert.equal(document.activeElement.selectionEnd, 18);
+  const candidate = app.addController.model.preview.candidates.find(item => item.kind === 'skill');
+  changeControl(dialog.querySelector(`[data-candidate-id="${candidate.id}"]`).querySelector('input'), true);
+  click(dialog.querySelector('[data-action="add-continue"]'));
+  await waitFor(() => dialog.getAttribute('data-add-stage') === 'check', 'The Add check did not open.');
+  assert.equal(app.mode, originalMode); assert.equal(app.settingsState.tab, originalTab);
+  const beforeDraft = { value: 'Keep this document draft' }; app.store.drafts.set('retained-document', beforeDraft);
+  click(dialog.querySelector('[data-action="add-back"]')); click(dialog.querySelector('[data-action="add-cancel"]'));
+  click(root.querySelector('[data-action="add-to-mind"]'));
+  await waitFor(() => !app.addController.model.busy, 'The retained preview was not reconciled.');
+  assert.deepEqual(app.addController.model.selected, [candidate.id]);
+  assert.equal(app.store.drafts.get('retained-document'), beforeDraft);
+  assert.equal(app.addController.model.link, 'https://github.com/acme/example');
+  click(document.querySelector('.add-dialog').querySelector('[data-action="add-cancel"]'));
+});
+
+test('T094 actual-core Add selects one repository cluster, creates only an explicitly chosen agent and manages Content and links', async t => {
+  const desktop = await startCoreDesktop(t), { app, root, document, core, fixture, launches } = desktop;
+  await waitFor(() => app.bootSettled && app.startProjects, 'The actual core did not open.');
+  app.startDialog?.dialog.close();
+  const chunks = [];
+  for (const [relative, content] of [['LICENSE', 'MIT License\n'], ['NOTICE', 'Keep this notice\n'], ['package.json', '{"name":"landing-site","license":"MIT"}'], ['skills/pdf/SKILL.md', '---\nname: pdf\nruntime: none\n---\nPDF skill\n'], ['docs/guide.md', '# Guide\n']]) {
+    const data = Buffer.from(content), header = Buffer.alloc(512);
+    header.write(`package/${relative}`, 0, 100); header.write('0000644\0', 100); header.write('0000000\0', 108); header.write('0000000\0', 116);
+    header.write(data.length.toString(8).padStart(11, '0') + '\0', 124); header.write('00000000000\0', 136); header.fill(32, 148, 156); header[156] = 48; header.write('ustar\0', 257);
+    header.write([...header].reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0') + '\0 ', 148);
+    chunks.push(header, data, Buffer.alloc((512 - data.length % 512) % 512));
+  }
+  const archive = gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)])), owner = core.runtime.settingsOwner;
+  let pin = 'a'.repeat(40);
+  owner.additionLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  owner.additionTransport = async url => ({ status: 200, bytes: url.pathname.includes('/commits/')
+    ? Buffer.from(JSON.stringify({ sha: pin, commit: { committer: { date: '2026-10-01T00:00:00.000Z' } } })) : archive });
+  owner.additionRunner = async (_command, _args, _options, input) => Buffer.from(createHash('sha1').update(`blob ${input.length}\0`).update(input).digest('hex') + '\n');
+  const inspect = async () => {
+    click(root.querySelector('[data-action="add-to-mind"]'));
+    const input = document.querySelector('[id="add-link"]'); typeInput(input, 'https://github.com/acme/landing-site', 0, 0);
+    for (const handler of input.listeners.get('keydown') ?? []) handler({ key: 'Enter', preventDefault() {} });
+    await waitFor(() => app.addController.model.preview?.state === 'ready', 'The actual source check did not finish.');
+  };
+  const choose = kind => {
+    const candidate = app.addController.model.preview.candidates.find(item => item.kind === kind);
+    changeControl(document.querySelector(`[data-candidate-id="${candidate.id}"]`).querySelector('input'), true);
+  };
+  const check = async () => { click(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The immutable check did not open.'); };
+  await inspect(); choose('repository'); await check(); click(document.querySelector('[data-action="add-confirm"]'));
+  await waitFor(() => app.store.selected.groupId && !document.querySelector('.add-dialog'), 'The accepted repository was not selected.').catch(() => {
+    throw new Error(`Repository acceptance: ${app.addController.model.errorCode ?? app.addController.model.preview?.state}, reports: ${app.startError?.code ?? 'ready'}`);
+  });
+  const clusterId = app.store.selected.groupId, cluster = app.store.indexes.groups.get(clusterId);
+  assert.equal(cluster.link.projectId, 'landing-site'); assert.deepEqual(cluster.members, []); assert.equal(launches.length, 0);
+  assert.equal(app.store.indexes.groups.size, 1); assert.equal(app.unitList.catalog.length, 0);
+  await waitFor(() => root.querySelector('[data-cluster-origin]'), 'Repository provenance was not displayed.');
+  assert.match(root.querySelector('[data-cluster-origin]').querySelector('p').textContent, /aaaaaaa/);
+  click(root.querySelector('[data-action="new-agent"]'));
+  const agentDialog = document.querySelector('[data-start-dialog="agent"]'); assert.ok(agentDialog);
+  assert.equal(agentDialog.querySelector('[data-action="choose-executor"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(agentDialog.querySelectorAll('[data-action="choose-overlord"]').length, 1);
+  click(agentDialog.querySelector('[data-action="create-agent"]'));
+  await waitFor(() => !app.startDialog && app.unitList.catalog.length === 1, 'The explicit first agent was not created.');
+  assert.equal(launches.length, 0);
+  const draft = { value: 'Retain editor work' }; app.store.drafts.set('document-draft', draft);
+  await inspect(); choose('skill'); choose('docs'); await check();
+  const { scopeAddition } = await import('../gui/app/add-controller.mjs');
+  for (const id of app.addController.model.selected) scopeAddition(app.addController, id, 'group', clusterId, true);
+  click(document.querySelector('[data-action="add-confirm"]'));
+  await waitFor(() => app.store.additions.report?.items.length === 3 && !document.querySelector('.add-dialog'), 'Content was not accepted.');
+  navigate(app, 'settings'); await waitFor(() => app.settingsState?.loaded && !app.settingsState.loading, 'Content reports did not load.');
+  click(root.querySelector('[data-action="settings-tab-content"]'));
+  await waitFor(() => root.querySelectorAll('[data-addition-id]').length === 2, 'Imported Content was not placed beside kit items.');
+  const pdf = app.settingsState.content.features.find(item => item.title === 'pdf');
+  assert.equal(pdf.unitCount, 1); assert.equal(pdf.included, true);
+  typeInput(root.querySelector('[data-preference-instructions]'), 'Retain these preferences', 3, 8);
+  pin = 'b'.repeat(40);
+  click(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('.add-origin'));
+  await waitFor(() => app.addController.model.preview?.state === 'ready', 'Origin did not check for updates.');
+  assert.equal(app.addController.model.preview.pin.value, pin);
+  assert.equal(app.settingsState.content.features.find(item => item.title === 'pdf').pin.value, 'a'.repeat(40));
+  click(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The update check did not open.');
+  click(document.querySelector('[data-action="add-confirm"]'));
+  await waitFor(() => app.settingsState.content.features.find(item => item.title === 'pdf')?.pin.value === pin, 'The explicit update did not replace the pin.');
+  assert.equal(app.settingsState.contentDraft.preferences.additionalInstructions, 'Retain these preferences');
+  assert.equal(app.settingsState.contentDraft.features.find(item => item.title === 'pdf').pin.value, pin);
+  assert.equal(await readFile(join(fixture.paths.mind, 'user/features/pdf/NOTICE'), 'utf8'), 'Keep this notice\n');
+  click(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('[data-action="remove-addition"]'));
+  click(document.querySelector('.dialog').querySelector('.primary'));
+  await waitFor(() => !document.querySelector('.dialog') && !app.settingsState.content.features.some(item => item.title === 'pdf'), 'The confirmed Remove did not remove Content.');
+  click(root.querySelector('[data-action="map-undo"]'));
+  await waitFor(() => app.settingsState.content.features.some(item => item.title === 'pdf'), 'Content Undo did not restore it.');
+  assert.equal(app.store.drafts.get('document-draft'), draft);
+  click(root.querySelector('[data-action="settings-tab-projects"]'));
+  assert.ok(root.querySelector(`[data-cluster-link="${clusterId}"]`));
+  click(root.querySelector(`[data-cluster-link="${clusterId}"]`).querySelector('[data-action="settings-remove-link"]'));
+  click(document.querySelector('.dialog').querySelector('.primary'));
+  await waitFor(() => !document.querySelector('.dialog') && app.store.indexes.groups.get(clusterId)?.link.kind === 'none', 'The canonical link did not detach.');
+  assert.equal(app.store.indexes.groups.get(clusterId).members.length, 1); assert.equal(launches.length, 0);
+  click(root.querySelector('[data-action="map-undo"]'));
+  await waitFor(() => app.store.indexes.groups.get(clusterId)?.link.kind === 'repository', 'Link Undo did not restore its identity.');
 });
 
 test('T093 actual-core lead chat mounts its plan, Work milestones, retained draft, warning and one Waiting pointer', async t => {

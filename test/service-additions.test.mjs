@@ -7,6 +7,7 @@ import test from 'node:test';
 import { applyAdditions, cancelAdditionPreview, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditions, readAdditionPreview, readScopedAdditions, removeAddition, retryAdditionPreview, writeAdditionChunk } from '../engine/service/additions.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { createGroup, patchGroup, removeGroup } from '../engine/service/groups.mjs';
+import { createCluster, patchCluster, rawClusters } from '../engine/service/clusters.mjs';
 import { createStore, recoverTransactions, undoChange, withReceipt } from '../engine/service/store.mjs';
 import { readContent, readPublishedSettings, writeContent } from '../engine/service/settings.mjs';
 import { readProjection } from '../engine/service/projection.mjs';
@@ -313,12 +314,17 @@ test('mixed acceptance places owned support and knowledge with four actual users
 test('repository-only acceptance allows canonical empty scope and no agents, and Remove and Undo preserve all checkout bytes', async t => {
   const { context, ready } = await reviewed(t), input = acceptance(ready, ['repository']);
   const accepted = await applyAdditions(context, input), addition = accepted.items[0];
+  const cluster = (await rawClusters(context)).find(item => item.cluster.link.projectId === addition.projectId).cluster;
+  assert.deepEqual(cluster.members, []); assert.equal(cluster.deleted, false);
   const before = await hashes(path.join(context.paths.localDirectory, 'additions', 'repositories'));
   assert.equal(addition.unitCount, 0); assert.deepEqual((await readProjection(context)).units, []);
   const removed = await removeAddition(context, addition.id, { machine: context.paths.machine, confirmed: true, expectedRevision: addition.revision });
+  const retained = (await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster;
+  assert.equal(retained.deleted, false); assert.deepEqual(retained.link, { kind: 'none' }); assert.equal(retained.chatId, cluster.chatId);
   assert.deepEqual((await readProjection(context)).projects, []); assert.equal(context.projects.length, 0);
   assert.deepEqual(await hashes(path.join(context.paths.localDirectory, 'additions', 'repositories')), before);
   await undoChange(context, removed.changeId); assert.equal(context.projects.length, 1);
+  assert.deepEqual((await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster, cluster);
   assert.equal((await readProjection(context)).projects[0].available, true);
   assert.deepEqual(await hashes(path.join(context.paths.localDirectory, 'additions', 'repositories')), before);
   const record = (await readAdditions(context)).items[0];
@@ -492,4 +498,44 @@ test('the independent GUI protocol returns accepted Content and zero-agent proje
   assert.equal((await request('GET', '/additions')).value.data.items.length, 1);
   assert.equal((await request('POST', `/changes/${removed.value.data.changeId}/undo`, {})).status, 200);
   assert.equal((await request('GET', '/additions')).value.data.items.length, 2);
+});
+
+test('canonical descendant scopes deduplicate direct members and are rechecked at each verified native read', async t => {
+  const { context } = await setup(t); await agents(context);
+  const parent = await createCluster(context, { title: 'Parent', parentId: null, link: { kind: 'none' }, machine: context.paths.machine, confirmed: true });
+  const child = await createCluster(context, { title: 'Child', parentId: parent.id, link: { kind: 'none' }, members: ['root:one', 'root:two'], machine: context.paths.machine, confirmed: true });
+  const { ready } = await reviewed(t, { context });
+  assert.deepEqual(ready.choices.groups.find(item => item.id === parent.id).members, ['root:one', 'root:two']);
+  const result = await applyAdditions(context, acceptance(ready, ['skill'], { everyUnit: false, units: ['root:one'], groups: [parent.id, child.id] }));
+  assert.equal(result.items[0].unitCount, 2);
+  context.adapters = { codex: { capabilities: { scopedContent: true }, confirm: async () => true, runtimeAvailable: async () => true } };
+  const session = await registerNative(context, { unitId: 'root:two', client: 'codex', nativeSessionId: 'verified-two' });
+  const read = () => readScopedAdditions(context, { unitId: 'root:two', client: 'codex', sessionId: session.sessionId, nativeSessionId: session.nativeSessionId });
+  assert.equal((await read()).length, 1);
+  await patchCluster(context, child.id, { members: ['root:one'], expectedRevision: child.revision, machine: context.paths.machine });
+  assert.equal((await read()).length, 0);
+  assert.equal((await readAdditions(context)).items[0].unitCount, 1);
+  assert.deepEqual((await readAdditions(context)).items[0].scope, { everyUnit: false, units: ['root:one'], groups: [child.id, parent.id].sort() });
+});
+
+test('repository removal retains agents and rejects a running session before detaching its link', async t => {
+  const { context, ready } = await reviewed(t), result = await applyAdditions(context, acceptance(ready, ['repository']));
+  const addition = result.items[0], initial = (await rawClusters(context)).find(item => item.cluster.link.projectId === addition.projectId).cluster;
+  await agents(context, ['one']);
+  const cluster = await patchCluster(context, initial.id, { members: ['root:one'], expectedRevision: initial.revision, machine: context.paths.machine });
+  context.adapters = { codex: { confirm: async () => true } };
+  const session = await registerNative(context, { unitId: 'root:one', client: 'codex', nativeSessionId: 'owned-repository' });
+  const remove = () => removeAddition(context, addition.id, { machine: context.paths.machine, confirmed: true, expectedRevision: addition.revision });
+  await assert.rejects(remove(), { code: 'stop_unavailable' });
+  assert.deepEqual((await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster.link, cluster.link);
+  // A persisted stopped session is the canonical boundary used by link removal.
+  const statusDirectory = path.join(context.paths.mind, 'user', 'relay', 'session-status', session.sessionId);
+  await mkdir(statusDirectory, { recursive: true });
+  await writeFile(path.join(statusDirectory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: session.sessionId,
+    machine: context.paths.machine, state: 'stopped', at: new Date(context.now()).toISOString(), reason: 'native-acknowledged' }));
+  const removed = await remove();
+  const retained = (await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster;
+  assert.deepEqual(retained.members, ['root:one']); assert.equal(retained.deleted, false); assert.deepEqual(retained.link, { kind: 'none' });
+  await undoChange(context, removed.changeId);
+  assert.deepEqual((await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster, cluster);
 });

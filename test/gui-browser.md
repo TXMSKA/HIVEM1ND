@@ -520,3 +520,19 @@ The route matrix exercises successful owned regular-session and plan-session Wor
 The exact T093 Proof file set passed: 234 tests, 0 failed, 0 canceled, 0 skipped, exit 0, 82046.8283 ms, under a 240000 ms process-tree limit. A search of test/ for every changed source path and basename selected 61 importing/reading test files; together with the Proof, the final combined run covered 63 files and passed 1087 tests, 0 failed, 0 canceled, 0 skipped, exit 0, 159381.7899 ms, under a 360000 ms process-tree limit.
 
 `npm.cmd run lint` passed with 231 Markdown files and 0 issues. `npm.cmd run build` passed with 390 packaged files and browser assets packaged. The package archive was restored to its pre-build bytes. No staging or commit was performed.
+
+## T094 Add and canonical links, 2026-10-15
+
+Flow 2.19 to 2.22 and 6.8, together with start 1.3, 1.4 and 2.2 to 2.6, have no new browser observations or captures. As instructed, this task used command tests only. Board geometry at 1440x900 and 720x600, all six looks, 200% zoom, reduced motion and native keyboard behavior remain for the Overmind's final visual verification. Historical browser results above are not evidence of this task's screens.
+
+Mounted Node DOM tests observe one retained Add dialog from the shared bar and Content, both languages and six look settings, immediate Enter inspection, Back/Cancel/reopen, retained selection, field focus and caret. The actual HTTP core, temporary M1ND and injected archive transport observe zero-agent repository acceptance selecting its canonical cluster, no automatic agent/session, explicit Executor creation with stored Runs in, skill and knowledge placement, provenance/counts, explicit pinned update, preserved NOTICE and editor/preferences drafts, guarded Content Remove/Undo and Settings link removal/Undo retaining the same cluster and agent.
+
+Controller tests observe 300 ms debounce, ordered 64 KiB chunks, the identical failed-chunk operation, no File.path access, traversal/collision/size rejection, accepted-preview reconciliation after response loss, expiry review and removal of stale scope choices. A polling deadline retains the original preview identity. Service tests observe descendant/direct deduplication, native content access rechecked after cluster edits, running-session rejection before detaching a repository and ten-second Undo with checkout bytes retained. The route matrix records successful repository acceptance/removal and phone rejection with hit(); HTTP tests serve all three Add modules through the static allowlist.
+
+The exact T094 Proof command passed: 258 tests, 0 failed, 0 canceled, 0 skipped, exit 0, 91149.1116 ms, under a 240000 ms process-tree limit. The changed-path and basename search selected 47 importing/reading test files. Their union with the Proof contains 50 files; the final source passed all 957 tests with `node --test --test-concurrency=4`, 0 failed, 0 canceled, 0 skipped, exit 0, 185327.2258 ms, under a 360000 ms process-tree limit. Every test process tree exited normally.
+
+An earlier unrestricted combined run recorded 955 passes and one failure in `every contract route has a success result and an authority or boundary failure`. The named case then passed alone, followed by the successful exact Proof and final 50-file run above. A lint attempt during concurrent tests encountered an ENOENT while a temporary fixture was being removed; lint was repeated after the test processes exited.
+
+`npm.cmd run build` passed on the final source: hivem1nd@3.0.0, 391 packaged files, browser assets packaged. Its archive was restored to its pre-build bytes. No real native session, staging or commit was performed.
+
+`npm.cmd run lint` passed after the tests exited: 231 Markdown files, 0 issues, exit 0. `git diff --check` passed without whitespace errors. The pre-existing integration-plan amendment was preserved.

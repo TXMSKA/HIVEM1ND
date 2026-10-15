@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { clusterLead, connectedChoices, filterRepositories, initialRunsIn, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, validRunsIn } from '../gui/app/clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, connectedChoices, filterRepositories, initialRunsIn, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, validRunsIn } from '../gui/app/clusters.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
 import { buildHierarchy, flattenVisibleHierarchy, revealGroup } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
@@ -16,6 +16,15 @@ const clients = [
 ];
 const cluster = (id, kind = 'none', parentId = null, members = []) => ({ id, title: id, parentId, members, link: kind === 'none' ? { kind } : kind === 'folder' ? { kind, folderId: id } : { kind, projectId: id } });
 const unit = (id, role = 'executor', clusterId = null, leadId = null) => ({ id, unit: id.split(':').at(-1), role, clusterId, leadId, scope: { kind: 'root' }, status: 'idle' });
+
+test('accepted repositories select their existing nested identity and retain the first-agent defaults', () => {
+  const parent = cluster('Web', 'folder'), repo = cluster('shop', 'repository', parent.id);
+  assert.equal(acceptedRepositoryCluster([parent, repo], { projectId: 'shop' }), repo);
+  assert.equal(acceptedRepositoryCluster([{ ...repo, deleted: true }], { projectId: 'shop' }), null);
+  const view = renderAgentForm(document, { language: 'en', kind: 'agent', cluster: repo, clients, role: 'executor', choice: initialRunsIn(clients, { client: 'codex', model: 'observed', effort: 'xhigh', mode: null }) }, {});
+  assert.match(copy(view), /Codex, Observed, xhigh/);
+  assert.equal(nodes(view).find(node => node.attributes?.['data-action'] === 'choose-executor').getAttribute('aria-pressed'), 'true');
+});
 
 test('filtering and parent selection keep 26 canonical repositories; worktrees never increase the count', () => {
   const offer = { groups: [['Web', 19], ['Unity', 6], ['Tools', 1]].map(([title, count]) => ({ id: title, title, path: title,

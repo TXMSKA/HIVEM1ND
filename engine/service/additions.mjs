@@ -531,7 +531,7 @@ export async function applyAdditions(context, input) {
     }
     if (record.preview.state !== 'ready') fail(409, 'preview_changed', 'Wait for a completed source check.');
     const acquisition = await verifiedSource(context, record), scope = await choices(context);
-    if (scope.revision !== record.preview.scopeRevision) fail(409, 'scope_changed', 'The selected agents or groups changed since review.');
+    if (scope.revision !== record.preview.scopeRevision) fail(409, 'scope_changed', 'The selected agents or clusters changed since review.');
     const content = await readContent(context), report = await readPublishedSettings(context, input.machine);
     if (record.projectBindingRevision !== await projectBindingRevision(context)) fail(409, 'revision_conflict', 'The local project mapping changed since review.');
     if (content.revision !== input.expectedContentRevision || content.revision !== record.preview.contentRevision

@@ -4,6 +4,7 @@ import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 import { startText } from './start-copy.mjs';
+import { addButton, renderAddedContent } from './add-view.mjs';
 
 export function updateExpiry(home, nowMs) {
   if (!home?.enabled || !home.expiresAt) return { remainingSeconds: 0, expired: true };
@@ -425,6 +426,19 @@ function renderContent(document, model, t, actions) {
   if (!content) return element(document, "p", { text: t("loadingList") });
   const draft = model.contentDraft ?? content;
   const select = (item, field) => {
+    if (item.additionId) {
+      const row = renderAddedContent(document, item, model.language, {
+        onIncluded: (_item, included) => actions.onContentItem?.(field, item.id, included),
+        onUpdate: actions.onUpdateAddition, onRemove: actions.onRemoveAddition,
+      });
+      for (const input of row.querySelectorAll('input')) {
+        input.disabled = !model.canWrite;
+        input.setAttribute('data-content-item', item.id);
+        input.setAttribute('data-action', `settings-content-${item.id}`);
+      }
+      for (const button of row.querySelectorAll('button')) button.disabled = !model.canWrite;
+      return row;
+    }
     const input = element(document, "input", { type: "checkbox", "data-content-item": item.id, "data-action": `settings-content-${item.id}` });
     input.checked = item.included;
     input.disabled = !model.canWrite;
@@ -459,8 +473,9 @@ function renderContent(document, model, t, actions) {
   }
   preferences.append(settingsButton(document, "settings-save-content", t("save"), actions.onSaveContent, !model.canWrite || !model.contentDirty));
   if (model.contentConflict) preferences.append(settingsButton(document, "settings-reload-content", t("settingsReloadContent"), actions.onReloadContent));
+  const add = addButton(document, model.language, actions.onAdd, true); add.disabled = !model.canWrite;
   return element(document, "div", { class: "settings-columns settings-content-columns" },
-    element(document, "div", { class: "settings-column" }, settingsSection(document, t("settingsFeatures"), features), settingsSection(document, t("settingsKnowledge"), knowledge)),
+    element(document, "div", { class: "settings-column" }, settingsSection(document, t("settingsFeatures"), add, features), settingsSection(document, t("settingsKnowledge"), knowledge)),
     preferences);
 }
 
