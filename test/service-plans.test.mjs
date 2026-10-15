@@ -15,6 +15,7 @@ import { closeRunProcesses } from '../engine/service/run-processes.mjs';
 import { createHttpServer } from '../engine/service/http.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { request } from '../engine/service/client.mjs';
+import { callTool, dispatch, toolSchemas } from '../engine/service/mcp.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 export const runsIn = { client: 'codex', model: 'observed', effort: 'high', mode: null };
@@ -241,4 +242,78 @@ test('after Run the plan tasks cannot be re-addressed and an existing task keeps
   await assert.rejects(resolvePlan(state.context, { ...approved, tasks: [{ id: fresh.id, title: fresh.title, assignment: toMember }] }, approved.id), { code: 'invalid_plan' });
   await resolvePlan(state.context, { ...approved, tasks: [{ id: fresh.id, title: fresh.title, assignment: toLead }] }, approved.id);
   assert.equal(await readFile(freshFile, 'utf8'), bytes); assert.equal((await readDetail(state.context, 'tasks', fresh.id)).toId, lead.id); assert.ok(started.runId);
+});
+
+async function agentSession(state, unit) {
+  const sessionId = randomUUID(), registrationId = randomUUID(), directory = path.join(state.paths.mind, 'user', 'relay', 'sessions');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${registrationId}.json`), JSON.stringify({ kind: 'registration', registrationId, instanceId: `service-${state.machine}`, sessionId,
+    unit: unit.id.split(':').at(-1), unitId: unit.id, scopeId: 'root', nativeSessionId: `native-${sessionId}`, client: 'codex', machine: state.machine,
+    registeredAt: new Date(state.clock.now).toISOString() }));
+  const actor = { audience: 'agent', unitId: unit.id, sessionId, client: 'codex' };
+  return { ...state.context, principal: actor, credential: actor };
+}
+const propose = (clusterId, extra = {}) => ({ clusterId, title: 'Cart plan', tasks: [{ title: 'Build the cart', body: 'Add the page.' }, { title: 'Test the cart' }], requestId: randomUUID(), ...extra });
+
+test('only the lead of a cluster can propose a plan, which waits as an unapproved card with its new tasks assigned to the lead', async t => {
+  const state = await makePlanFixture(t, { count: 2, role: 'overlord', task: false }), [lead, member] = state.units;
+  const chatDirectory = path.join(state.paths.mind, 'user', 'relay', 'chats', state.cluster.chatId), before = await readdir(chatDirectory);
+  const leadSession = await agentSession(state, lead), memberSession = await agentSession(state, member);
+  const input = propose(state.cluster.id), proposed = await callTool(leadSession, 'plan_propose', input);
+  assert.deepEqual(proposed.tasks.map(task => [task.id, task.title]), [['root:001', 'Build the cart'], ['root:002', 'Test the cart']]);
+  assert.equal(proposed.chatId, state.cluster.chatId); assert.equal(proposed.branch, 'plan-cart-plan');
+  const plan = await readPlan(state.context, proposed.planId);
+  assert.equal(plan.approved, false); assert.equal(plan.mode, 'planning'); assert.equal(plan.chatId, state.cluster.chatId);
+  assert.deepEqual(plan.tasks.map(task => [task.actorId, task.state]), [[lead.id, 'todo'], [lead.id, 'todo']]);
+  for (const role of ['coordinator', 'planner', 'builder', 'reviewer']) assert.deepEqual([plan.roles[role].kind, plan.roles[role].unitId], ['unit', lead.id]);
+  assert.deepEqual((await readDetail(state.context, 'chats', state.cluster.chatId)).plans.map(card => card.id), [plan.id]);
+  assert.deepEqual([(await readDetail(state.context, 'tasks', 'root:001')).toId, (await readDetail(state.context, 'tasks', 'root:002')).toId], [lead.id, lead.id]);
+  assert.deepEqual((await readdir(chatDirectory)).filter(name => !before.includes(name)), []);
+  assert.equal(state.launches.length, 0);
+  const replay = await callTool(leadSession, 'plan_propose', input);
+  assert.equal(replay.planId, proposed.planId); assert.equal((await listPlans(state.context)).items.length, 1); assert.deepEqual(await taskNames(state), ['001-build-the-cart.md', '002-test-the-cart.md']);
+  await assert.rejects(callTool(leadSession, 'plan_propose', propose(state.cluster.id, { requestId: input.requestId, title: 'Another title' })), { code: 'idempotency_conflict' });
+  await assert.rejects(callTool(memberSession, 'plan_propose', propose(state.cluster.id)), { code: 'forbidden' });
+  await assert.rejects(callTool(leadSession, 'plan_propose', propose(randomUUID())), { code: 'forbidden' });
+  await assert.rejects(callTool({ ...state.context, principal: { audience: 'desktop', unitId: 'root:master' }, credential: undefined }, 'plan_propose', propose(state.cluster.id)), { code: 'forbidden' });
+  await assert.rejects(callTool({ ...leadSession, principal: { ...leadSession.principal, sessionId: randomUUID() }, credential: { ...leadSession.credential, sessionId: randomUUID() } }, 'plan_propose', propose(state.cluster.id)), { code: 'forbidden' });
+  assert.equal((await listPlans(state.context)).items.length, 1); assert.equal((await taskNames(state)).length, 2);
+  const edited = await editPlan(state.context, plan.id, { expectedRevision: plan.revision, tasks: plan.tasks.map(({ id, title }) => ({ id, title, assignment: { kind: 'unit', unitId: member.id, runsIn } })) });
+  assert.deepEqual(edited.tasks.map(task => task.actorId), [member.id, member.id]);
+  assert.deepEqual([(await readDetail(state.context, 'tasks', 'root:001')).toId, (await readDetail(state.context, 'tasks', 'root:002')).toId], [member.id, member.id]);
+});
+test('a proposal keeps the same limits as a drafted plan and a sole Executor leads its own cluster', async t => {
+  const state = await makePlanFixture(t, { task: false }), session = await agentSession(state, state.units[0]);
+  for (const bad of [propose(state.cluster.id, { tasks: [] }), propose(state.cluster.id, { tasks: [{ title: '' }] }), propose(state.cluster.id, { tasks: [{ title: 'Role', role: 'builder' }] }),
+    propose(state.cluster.id, { tasks: [{ title: 'Body', body: 'x'.repeat(20001) }] }), propose(state.cluster.id, { branch: '../outside' }), propose(state.cluster.id, { title: '' })]) {
+    await assert.rejects(callTool(session, 'plan_propose', bad), { code: 'invalid_plan' });
+  }
+  await assert.rejects(callTool(session, 'plan_propose', { ...propose(state.cluster.id), assignment: {} }), { code: 'invalid_plan' });
+  assert.deepEqual((await listPlans(state.context)).items, []); assert.deepEqual(await taskNames(state), []);
+  const proposed = await callTool(session, 'plan_propose', { clusterId: state.cluster.id, title: 'Solo', branch: 'solo-plan', tasks: [{ title: 'Only task' }] });
+  assert.deepEqual([proposed.branch, proposed.tasks.length], ['solo-plan', 1]); assert.equal(state.launches.length, 0);
+});
+test('plan_propose is listed with a strict schema and reaches only a bound lead session over MCP', async t => {
+  const state = await makePlanFixture(t, { task: false }), credentials = createCredentialStore({ now: state.context.now });
+  const tool = toolSchemas().find(item => item.name === 'plan_propose');
+  assert.deepEqual(tool.inputSchema.required, ['clusterId', 'title', 'tasks']); assert.equal(tool.inputSchema.additionalProperties, false);
+  const session = await agentSession(state, state.units[0]), phone = credentials.issue({ audience: 'phone' }).token;
+  const message = (id, args) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'plan_propose', arguments: args } });
+  const refused = await dispatch(session, message(1, { clusterId: state.cluster.id, title: 'x', tasks: [{ title: 'x' }], extra: true }));
+  assert.equal(refused.error.code, -32602);
+  assert.equal((await dispatch(session, message(2, { clusterId: state.cluster.id, title: 'x' }))).error.code, -32602);
+  const done = await dispatch(session, message(3, { clusterId: state.cluster.id, title: 'Over MCP', tasks: [{ title: 'Task one' }] }));
+  assert.equal(done.result.isError, false); assert.equal(JSON.parse(done.result.content[0].text).data.tasks[0].id, 'root:001');
+  const http = await createHttpServer({ ...state.context, credentials }); t.after(() => http.close());
+  const call = (token, url, body, method = 'POST') => request({ origin: new URL(`http://127.0.0.1:${http.port}`), token },
+    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': randomUUID() }, timeoutMs: 3000 });
+  const agent = credentials.issue({ audience: 'agent', unitId: state.units[0].id, sessionId: session.principal.sessionId }).token;
+  const plans = (await listPlans(state.context)).items;
+  assert.equal(plans.length, 1);
+  for (const token of [phone, agent]) {
+    assert.equal((await call(token, '/plans', { ...state.input, tasks: [newTask('Forbidden', state.input.roles.builder)] })).status, 403);
+    assert.equal((await call(token, `/plans/${plans[0].id}`, { expectedRevision: plans[0].revision, title: 'Forbidden' }, 'PATCH')).status, 403);
+    assert.equal((await call(token, `/plans/${plans[0].id}/run`, { confirmed: true, expectedRevision: plans[0].revision })).status, 403);
+  }
+  assert.equal((await readPlan(state.context, plans[0].id)).title, 'Over MCP'); assert.deepEqual(await taskNames(state), ['001-task-one.md']); assert.equal(state.launches.length, 0);
 });

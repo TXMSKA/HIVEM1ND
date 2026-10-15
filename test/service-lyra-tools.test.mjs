@@ -12,6 +12,8 @@ import { directoryIdentity } from '../engine/service/cluster-git.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { readCollection } from '../engine/service/projection.mjs';
+import { createCluster } from '../engine/service/clusters.mjs';
+import { listPlans, readPlan } from '../engine/service/plans.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function world(t, options = {}) {
@@ -44,8 +46,8 @@ async function world(t, options = {}) {
 function event(name, input, permission = 'ask', id = randomUUID()) { return { type: 'tool_call', id, name, input, permission }; }
 const call = (world, value, signal) => callLocalTool(world.context, world.registration, value, signal);
 
-test('C15 catalog uses the actual strict ToolProperty subset and the thirteen fixed bilingual titles', () => {
-  const tools = lyraToolDefinitions(); assert.equal(tools.length, 13); assert.equal(new Set(tools.map(tool => tool.name)).size, 13);
+test('C15 catalog uses the actual strict ToolProperty subset and the fourteen fixed bilingual titles', () => {
+  const tools = lyraToolDefinitions(); assert.equal(tools.length, 14); assert.equal(new Set(tools.map(tool => tool.name)).size, 14);
   for (const tool of tools) {
     assert.deepEqual(Object.keys(tool).sort(), ['description', 'effect', 'inputSchema', 'name', 'private', 'title']);
     assert.equal(tool.private, true); assert.equal(tool.description, tool.title.en);
@@ -230,4 +232,35 @@ test('M1ND resources and file excerpts remain scoped, valid and bounded even wit
   const result = await call(state, event('file_read', { path: file, start: 0, end: 8000 }, 'allowed'));
   assert.equal(result.output.length <= 8000, true); const excerpt = JSON.parse(result.output);
   assert.equal(excerpt.end, excerpt.text.length); assert.equal(excerpt.end < 8000, true);
+});
+
+test('plan_propose validates a bounded proposal, is offered only to a cluster lead and drafts the card after the person approves', async t => {
+  const proposal = { clusterId: randomUUID(), title: 'Plan', tasks: [{ title: 'One' }, { title: 'Two', body: 'Details.' }] };
+  assert.deepEqual(validateLyraInput('plan_propose', proposal), proposal);
+  assert.deepEqual(validateLyraInput('plan_propose', { ...proposal, branch: 'plan-branch' }).branch, 'plan-branch');
+  for (const input of [{ ...proposal, clusterId: 'foreign' }, { ...proposal, tasks: [] }, { ...proposal, tasks: [{ title: '' }] }, { ...proposal, tasks: [{ title: 'One', role: 'builder' }] },
+    { ...proposal, tasks: [{ title: 'One', body: '' }] }, { ...proposal, tasks: Array.from({ length: 51 }, (_, index) => ({ title: `T${index}` })) }, { ...proposal, requestId: randomUUID() }, { title: 'Plan', tasks: proposal.tasks }]) {
+    assert.throws(() => validateLyraInput('plan_propose', input));
+  }
+  const tool = lyraToolDefinitions().find(item => item.name === 'plan_propose');
+  assert.deepEqual([tool.title.en, tool.title.es, tool.effect], ['Propose a plan', 'Proponer un plan', 'change']);
+  assert.deepEqual(tool.inputSchema.required, ['clusterId', 'title', 'tasks']);
+  const state = await world(t);
+  state.context.adapters.lyra.describe = async () => ({ id: 'lyra', title: 'Lyra', connected: true, scopeEnforced: true, models: [{ id: 'lyra-base', title: 'Lyra base', efforts: [], modes: ['normal'] }] });
+  const owner = { ...state.context, principal: { audience: 'desktop', unitId: 'root:master' }, credential: undefined };
+  const alone = await bindLocalTools(state.context, state.registration);
+  assert.equal(alone.names.includes('plan_propose'), false);
+  await assert.rejects(alone.call(event('plan_propose', proposal)), { code: 'forbidden' });
+  const cluster = await createCluster(owner, { title: 'Local', parentId: null, link: { kind: 'none' }, members: [state.registration.unitId], machine: 'DESKTOP', confirmed: true });
+  const lead = await bindLocalTools(state.context, state.registration);
+  assert.equal(lead.names.includes('plan_propose'), true);
+  state.context.decision = 'deny';
+  assert.deepEqual(await lead.call(event('plan_propose', { ...proposal, clusterId: cluster.id })), { error: 'denied', decision: 'once' });
+  assert.deepEqual((await listPlans(owner)).items, []);
+  state.context.decision = 'approve';
+  const result = await lead.call(event('plan_propose', { ...proposal, clusterId: cluster.id })); assert.equal(result.error, undefined); assert.equal(result.decision, 'once');
+  const proposed = JSON.parse(result.output), plan = await readPlan(owner, proposed.planId);
+  assert.deepEqual([plan.chatId, plan.approved, plan.tasks.map(task => task.actorId)], [cluster.chatId, false, [state.registration.unitId, state.registration.unitId]]);
+  assert.deepEqual((await readCollection(owner, 'tasks', {})).items.map(task => task.toId), [state.registration.unitId, state.registration.unitId]);
+  assert.equal((await lead.call(event('plan_propose', { ...proposal, clusterId: randomUUID() }))).error, 'failed'); assert.equal((await listPlans(owner)).items.length, 1);
 });

@@ -129,6 +129,8 @@ export function lyraToolDefinitions() {
     definition('plan_read', 'Read messages', 'Leer mensajes', 'change', { ...run, messageIds: list(uuid, 200), ...request }),
     definition('plan_extend', 'Request more messages', 'Solicitar más mensajes', 'change', { ...run, count: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, reason: str(8000), expectedRevision: revision, ...request }),
     definition('plan_agree', 'Agree more messages', 'Acordar más mensajes', 'change', { ...run, extensionId: uuid, expectedRevision: revision, ...request }),
+    definition('plan_propose', 'Propose a plan', 'Proponer un plan', 'change', { clusterId: uuid, title: str(240), branch: str(240),
+      tasks: list({ type: 'object', properties: { title: str(200), body: str(8000) }, required: ['title'], additionalProperties: false }, 50) }, ['branch']),
     definition('file_read', 'Read a file', 'Leer un archivo', 'read', { path: str(4096), start: { type: 'integer', minimum: 0 }, end: { type: 'integer', minimum: 0 } }),
     definition('file_write', 'Write a file', 'Escribir un archivo', 'change', { path: str(4096), expectedRevision: revision, text: { type: 'string', maxLength: 8000 } }, ['expectedRevision']),
   ];
@@ -150,6 +152,7 @@ export function validateLyraInput(name, input) {
   if (!tool || !matches(tool.inputSchema, input) || Buffer.byteLength(JSON.stringify(input)) > 8192) fail('invalid_body', 422);
   for (const key of ['runId', 'attemptId', 'extensionId', 'requestId']) if (Object.hasOwn(input, key) && !isUuid(input[key])) fail('invalid_body', 422);
   if (input.messageIds?.some(id => !isUuid(id))) fail('invalid_body', 422);
+  if (Object.hasOwn(input, 'clusterId') && !isUuid(input.clusterId)) fail('invalid_body', 422);
   for (const id of input.recipientIds ?? []) parseUnitId(id);
   if (Object.hasOwn(input, 'expectedRevision') && !/^[a-f0-9]{64}$/.test(input.expectedRevision)) fail('invalid_body', 422);
   if (Object.hasOwn(input, 'taskId')) parseTaskId(input.taskId);

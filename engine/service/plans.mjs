@@ -6,9 +6,9 @@ import { readCluster, rawClusters, clusterOwner } from './clusters.mjs';
 import { readDetail, paginate } from './projection.mjs';
 import { readUnitState } from './state.mjs';
 import { connectedClients } from './settings.mjs';
-import { validateRunsIn } from './runs-in.mjs';
+import { launchChoice, validateRunsIn } from './runs-in.mjs';
 import { loadTask, taskAllocator } from './tasks.mjs';
-import { commitChange, readBytes, revisionOf, withLocalChanges } from './store.mjs';
+import { commitChange, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 
 export const PLAN_ROLES = Object.freeze(['coordinator', 'planner', 'builder', 'reviewer']);
 export const planFile = (context, id) => path.join(context.paths.mind, 'user', 'gui', 'plans', id, 'plan.json');
@@ -160,23 +160,25 @@ export async function createPlan(context, input) {
   requirePlanDesktop(context, 'chat.post');
   exactPlanObject(input, ['clusterId', 'chatId', 'machine', 'title', 'branch', 'mode', 'tasks', 'roles', 'expectedChatRevision']);
   if (!/^[a-f0-9]{64}$/.test(input.expectedChatRevision ?? '')) planError();
-  return withLocalChanges(context.store, async () => {
-    const id = randomUUID(), resolved = await resolvePlan(context, input, id);
-    const record = planRevision({ format: 'hivem1nd-plan-v1', id, clusterId: input.clusterId, chatId: input.chatId, machine: input.machine,
-      title: input.title, branch: input.branch, mode: input.mode, tasks: resolved.tasks, roles: resolved.roles, approved: false });
-    const chatPath = path.join(context.paths.mind, 'user', 'relay', 'chats', record.chatId, 'chat.md');
-    const chatBytes = await readBytes(context.store, chatPath);
-    const attached = JSON.parse(chatBytes.toString().match(/^plans:\s*(.*)$/m)?.[1] ?? '[]');
-    const afterChat = replaceHeader(chatBytes, 'plans', canonicalJson([...attached, id]));
-    const cluster = (await rawClusters(context)).find(item => item.cluster.id === record.clusterId);
-    return commitChange(context, { id: randomUUID(), entries: [
-      { resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: null, afterBytes: planBytes(record) },
-      { resource: `chat:${record.chatId}`, recordPath: chatPath, beforeRevision: resolved.chat.revision, afterBytes: afterChat },
-      { resource: cluster.relative, recordPath: path.join(context.paths.mind, cluster.relative), beforeRevision: revisionOf(cluster.bytes), afterBytes: planBytes({ ...cluster.record, chatRevision: revisionOf(afterChat) }) },
-      ...resolved.created,
-    ], events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: record.revision } },
-      { name: 'chat.changed', chatId: record.chatId, data: { chatId: record.chatId } }, ...createdEvents(resolved, record.revision)], response: { status: 201, body: publicPlan(record) } });
-  });
+  return withLocalChanges(context.store, () => draftPlan(context, input));
+}
+// The owner write of a new draft: the plan, its chat and cluster records and the new task files in one transaction.
+async function draftPlan(context, input) {
+  const id = randomUUID(), resolved = await resolvePlan(context, input, id);
+  const record = planRevision({ format: 'hivem1nd-plan-v1', id, clusterId: input.clusterId, chatId: input.chatId, machine: input.machine,
+    title: input.title, branch: input.branch, mode: input.mode, tasks: resolved.tasks, roles: resolved.roles, approved: false });
+  const chatPath = path.join(context.paths.mind, 'user', 'relay', 'chats', record.chatId, 'chat.md');
+  const chatBytes = await readBytes(context.store, chatPath);
+  const attached = JSON.parse(chatBytes.toString().match(/^plans:\s*(.*)$/m)?.[1] ?? '[]');
+  const afterChat = replaceHeader(chatBytes, 'plans', canonicalJson([...attached, id]));
+  const cluster = (await rawClusters(context)).find(item => item.cluster.id === record.clusterId);
+  return commitChange(context, { id: randomUUID(), entries: [
+    { resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: null, afterBytes: planBytes(record) },
+    { resource: `chat:${record.chatId}`, recordPath: chatPath, beforeRevision: resolved.chat.revision, afterBytes: afterChat },
+    { resource: cluster.relative, recordPath: path.join(context.paths.mind, cluster.relative), beforeRevision: revisionOf(cluster.bytes), afterBytes: planBytes({ ...cluster.record, chatRevision: revisionOf(afterChat) }) },
+    ...resolved.created,
+  ], events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: record.revision } },
+    { name: 'chat.changed', chatId: record.chatId, data: { chatId: record.chatId } }, ...createdEvents(resolved, record.revision)], response: { status: 201, body: publicPlan(record) } });
 }
 export async function editPlan(context, id, input) {
   requirePlanDesktop(context, 'chat.post'); exactPlanObject(input, ['expectedRevision'], ['title', 'branch', 'mode', 'tasks', 'roles']);
@@ -190,6 +192,44 @@ export async function editPlan(context, id, input) {
     return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }, ...resolved.created, ...resolved.rewritten],
       events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: updated.revision } }, ...createdEvents(resolved, updated.revision)], response: { status: 200, body: publicPlan(updated) } });
   });
+}
+const branchFrom = title => `plan-${title.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 40).replace(/-+$/, '') || 'draft'}`;
+const summary = plan => ({ planId: plan.id, revision: plan.revision, chatId: plan.chatId, title: plan.title, branch: plan.branch,
+  tasks: plan.tasks.map(task => ({ id: task.id, title: task.title })) });
+// The clusters whose lead is this unit: the Overlord nobody above it leads, or the only Executor of a cluster without an Overlord.
+export async function leadClusterIds(context, unitId) {
+  const owner = { ...context, principal: { audience: 'desktop', unitId }, credential: null }, ids = [];
+  for (const { cluster } of await rawClusters(owner)) {
+    if (!cluster.deleted && planLeadOf(await membersOf(owner, cluster))?.id === unitId) ids.push(cluster.id);
+  }
+  return ids;
+}
+// A lead's own proposal: the draft a person would create, bound to the cluster chat, with every new task assigned to the lead
+// until the person changes it in the plan card. It posts no message and builds nothing; Run stays the person's confirmation.
+export async function proposePlan(context, input) {
+  const actor = context.principal ?? context.credential;
+  if (actor?.audience !== 'agent' || !actor.unitId) planError('forbidden', 403);
+  exactPlanObject(input, ['clusterId', 'title', 'tasks'], ['branch', 'requestId']);
+  const { requestId, ...proposal } = input;
+  if (!isUuid(proposal.clusterId) || !Array.isArray(proposal.tasks)) planError();
+  const draft = receipt => withLocalChanges(context.store, async () => {
+    const owner = { ...context, principal: { audience: 'desktop', unitId: actor.unitId }, credential: null, ...(receipt ? { receipt } : {}) };
+    const machine = context.paths.machine;
+    const cluster = await readCluster(owner, proposal.clusterId, { machine }).catch(error => { if (error?.code === 'cluster_not_found') planError('forbidden', 403); throw error; });
+    const units = await membersOf(owner, cluster), lead = planLeadOf(units);
+    if (cluster.deleted || lead?.id !== actor.unitId) planError('forbidden', 403);
+    const assignment = { kind: 'unit', unitId: lead.id, runsIn: { ...launchChoice(lead, await connectedClients(owner)) } };
+    for (const task of proposal.tasks) exactPlanObject(task, ['title'], ['body']);
+    const plan = await draftPlan(owner, { clusterId: cluster.id, chatId: cluster.chatId, machine, title: proposal.title,
+      branch: proposal.branch ?? (typeof proposal.title === 'string' ? branchFrom(proposal.title) : undefined),
+      mode: cluster.link?.kind === 'repository' ? 'execution' : 'planning', expectedChatRevision: (await readDetail(owner, 'chats', cluster.chatId)).revision,
+      roles: { coordinator: assignment, planner: assignment, builder: assignment, reviewer: assignment },
+      tasks: proposal.tasks.map(task => ({ ...task, assignment })) });
+    return summary(plan);
+  });
+  if (requestId === undefined) return draft(null);
+  const saved = await withReceipt(context.store, { principal: actor.sessionId ?? actor.unitId, key: requestId, requestId, method: 'POST', path: '/mcp/plan_propose', body: proposal }, draft);
+  return saved?.replayed ? summary(saved.body) : saved;
 }
 export async function startPlan(context, id, input) {
   requirePlanDesktop(context, 'session.start'); exactPlanObject(input, ['confirmed', 'expectedRevision']);

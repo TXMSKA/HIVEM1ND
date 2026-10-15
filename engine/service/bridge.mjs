@@ -29,6 +29,9 @@ export async function bindLocalTools(context, registration) {
     return scope;
   };
   await verify();
+  // Only the lead of a cluster is offered plan_propose; the call itself checks the lead again.
+  bound.localLead = !bound.localPlanBinding && Boolean(actor.unitId)
+    && await import('./plans.mjs').then(({ leadClusterIds }) => leadClusterIds(bound, actor.unitId)).then(ids => ids.length > 0, () => false);
   const state = actor.unitId ? await readUnitState(bound, parseUnitId(actor.unitId)) : null;
   const role = plan?.role ?? state?.bytes.toString('utf8').match(/^role:\s*(\S+)/m)?.[1];
   const names = localToolNames(bound);

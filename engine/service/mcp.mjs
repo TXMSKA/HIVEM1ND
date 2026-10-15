@@ -25,8 +25,9 @@ const PROTOCOL = '2025-03-26';
 const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
 
 export function localToolNames(context) {
-  return lyraToolDefinitions().filter(tool => context.localPlanBinding?.unitId !== null || tool.name.startsWith('plan_') || ['m1nd_read', 'file_read', 'file_write'].includes(tool.name)).filter(tool => !tool.name.startsWith('plan_')
-    || context.localPlanBinding && (tool.name !== 'plan_dispatch' || context.localPlanBinding.lead === true)).map(tool => tool.name);
+  return lyraToolDefinitions().filter(tool => context.localPlanBinding?.unitId !== null || tool.name.startsWith('plan_') || ['m1nd_read', 'file_read', 'file_write'].includes(tool.name)).filter(tool => !tool.name.startsWith('plan_') || tool.name === 'plan_propose'
+    || context.localPlanBinding && (tool.name !== 'plan_dispatch' || context.localPlanBinding.lead === true)).filter(tool => tool.name !== 'plan_propose'
+    || !context.localPlanBinding && context.localLead === true).map(tool => tool.name);
 }
 
 function localText(value) {
@@ -73,7 +74,7 @@ export async function callLocalTool(context, registration, event, signal) {
   if (!isUuid(event?.id) || !localToolNames(context).includes(event.name) || !['allowed', 'ask'].includes(event.permission)) throw new CoreError(403, 'forbidden', 'This tool is unavailable to the local actor.');
   const args = validateLyraInput(event.name, event.input);
   const tool = lyraToolDefinitions().find(item => item.name === event.name);
-  if (event.name.startsWith('plan_')) {
+  if (event.name.startsWith('plan_') && event.name !== 'plan_propose') {
     const binding = context.localPlanBinding;
     if (!binding || args.runId !== binding.runId || args.attemptId && args.attemptId !== binding.attemptId
       || binding.unitId !== registration.unitId || binding.sessionId !== registration.sessionId) throw new CoreError(403, 'forbidden', 'The plan belongs to another actor.');
@@ -161,6 +162,7 @@ async function executeLocalTool(context, registration, name, args, id, signal) {
     }
     return { messages };
   }
+  if (name === 'plan_propose') return (await import('./plans.mjs')).proposePlan(context, args);
   if (name.startsWith('plan_')) return context.localPlanBinding.tools[name](args, { actor: context.principal, signal });
   return readLocalResource(context, registration, args);
 }
@@ -235,6 +237,8 @@ const text = { type: 'string', maxLength: 10000 };
 export function toolSchemas() {
   return [
     ...planToolSchemas(),
+    tool('plan_propose', 'Propose a plan to the person as a draft card in the chat of the cluster this agent leads. Nothing is built or sent; new tasks go to the lead until the person changes them.', { clusterId: resourceId, title: { type: 'string', maxLength: 240 }, branch: { type: 'string', maxLength: 240 },
+      tasks: { type: 'array', maxItems: 50, items: { type: 'object' } }, requestId }, ['clusterId', 'title', 'tasks']),
     tool('native_permission', 'Resolve one exact native file or process permission for this owned actor.', { toolName: label, input: { type: 'object' }, cwd: { type: 'string', maxLength: 4096 }, requestId }, ['toolName', 'input', 'cwd', 'requestId']),
     tool('file_read', 'Read one bounded file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, approvalId: requestId }, ['path']),
     tool('file_write', 'Write one reviewed file through the owned session scope.', { path: { type: 'string', maxLength: 4096 }, text: { type: 'string', maxLength: 1000000 }, expectedRevision: revision, approvalId: requestId, requestId }, ['path', 'text', 'requestId']),
@@ -318,6 +322,10 @@ export async function callTool(context, name, args) {
 }
 
 async function runTool(context, name, args) {
+  if (name === 'plan_propose') {
+    await canonicalRegistration(context);
+    return (await import('./plans.mjs')).proposePlan(context, args);
+  }
   if (name.startsWith('plan_')) return callPlanTool(context, name, args);
   const planBinding = await planBindingForSession(context, context.principal?.sessionId ?? context.credential?.sessionId);
   if (planBinding && ['list_inbox', 'read_inbox', 'history'].includes(name)) {
