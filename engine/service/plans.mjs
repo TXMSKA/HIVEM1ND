@@ -7,7 +7,7 @@ import { readDetail, paginate } from './projection.mjs';
 import { readUnitState } from './state.mjs';
 import { connectedClients } from './settings.mjs';
 import { validateRunsIn } from './runs-in.mjs';
-import { loadTask } from './tasks.mjs';
+import { loadTask, taskAllocator } from './tasks.mjs';
 import { commitChange, readBytes, revisionOf, withLocalChanges } from './store.mjs';
 
 export const PLAN_ROLES = Object.freeze(['coordinator', 'planner', 'builder', 'reviewer']);
@@ -76,6 +76,18 @@ export async function validatePlanAssignment(context, value, units, clients, rol
   return { ...value, runsIn: { ...runsIn } };
 }
 
+// The cluster lead is the one Overlord nobody above it leads, or the only Executor when there is no Overlord.
+export function planLeadOf(units) {
+  const leads = units.filter(unit => unit.role === 'overlord' && !units.some(candidate => candidate.id === unit.leadId));
+  return leads.length === 1 ? leads[0] : units.length === 1 && units[0].role === 'executor' ? units[0] : null;
+}
+export const NEW_TASK_LIMIT = 50;
+function newTaskItem(task) {
+  exactPlanObject(task, ['title', 'assignment'], ['body']);
+  if (typeof task.title !== 'string' || !task.title.trim() || task.title.length > 200 || /[\x00-\x1f\x7f]/.test(task.title)
+    || task.body !== undefined && (typeof task.body !== 'string' || task.body.length > 20000 || /\x00/.test(task.body) || /^## (?:Request|Report)\b/m.test(task.body))) planError();
+}
+
 export async function resolvePlan(context, input, id) {
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 240 || /[\x00-\x1f\x7f]/.test(input.title)
     || typeof input.branch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/.test(input.branch) || /\.\.|\/\/|@\{|\.lock(?:\/|$)|[/.]$/.test(input.branch)
@@ -89,27 +101,39 @@ export async function resolvePlan(context, input, id) {
   exactPlanObject(input.roles, PLAN_ROLES);
   const roles = {};
   for (const role of PLAN_ROLES) roles[role] = await validatePlanAssignment(context, input.roles[role], units, clients, role);
-  const leads = units.filter(unit => unit.role === 'overlord' && !units.some(candidate => candidate.id === unit.leadId));
-  const lead = leads.length === 1 ? leads[0] : units.length === 1 && units[0].role === 'executor' ? units[0] : null;
+  const lead = planLeadOf(units);
   if (lead && (roles.coordinator.kind !== 'unit' || roles.coordinator.unitId !== lead.id)) planError('plan_lead_required', 403);
   if (roles.reviewer.kind === 'client' && roles.reviewer.reuseRole === 'planner'
     && canonicalJson(roles.reviewer.runsIn) !== canonicalJson(roles.planner.runsIn)) planError();
-  if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 10000 || new Set(input.tasks.map(task => task.id)).size !== input.tasks.length) planError();
-  const tasks = [], witnesses = [], unitRevisions = {};
+  if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 10000) planError();
+  const named = input.tasks.filter(task => task && typeof task === 'object' && Object.hasOwn(task, 'id'));
+  if (new Set(named.map(task => task.id)).size !== named.length || input.tasks.length - named.length > NEW_TASK_LIMIT) planError();
+  const tasks = [], witnesses = [], unitRevisions = {}, created = [], prepare = taskAllocator(context);
   for (const task of input.tasks) {
-    exactPlanObject(task, ['id', 'title', 'assignment']); parseTaskId(task.id);
-    if (typeof task.title !== 'string' || !task.title.trim() || task.title.length > 240 || /[\x00-\x1f\x7f]/.test(task.title)) planError();
-    const record = await loadTask(context, task.id);
-    if (!units.some(unit => unit.id === record.toId) || !['open', 'review'].includes(record.status)) planError();
-    const assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
-    if (assignment.kind === 'unit' && assignment.unitId !== record.toId && assignment.unitId !== record.leadId) planError();
+    let record, assignment;
+    if (!task || typeof task !== 'object' || Array.isArray(task) || !Object.hasOwn(task, 'id')) {
+      // A new task: its file is prepared in memory and committed with the plan, never before it.
+      newTaskItem(task);
+      assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
+      const toId = assignment.kind === 'unit' ? assignment.unitId : lead?.id;
+      if (!toId) planError();
+      const made = await prepare({ title: task.title, body: task.body ?? '', toId, clusterId: input.clusterId });
+      created.push(made.entry); record = made.record;
+    } else {
+      exactPlanObject(task, ['id', 'title', 'assignment']); parseTaskId(task.id);
+      if (typeof task.title !== 'string' || !task.title.trim() || task.title.length > 240 || /[\x00-\x1f\x7f]/.test(task.title)) planError();
+      record = await loadTask(context, task.id);
+      if (!units.some(unit => unit.id === record.toId) || !['open', 'review'].includes(record.status)) planError();
+      assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
+      if (assignment.kind === 'unit' && assignment.unitId !== record.toId && assignment.unitId !== record.leadId) planError();
+    }
     const paths = reviewedTaskPaths(record.body);
     witnesses.push({ id: record.id, revision: record.revision, paths, relative: record.relative });
     tasks.push({ id: record.id, title: task.title, actorId: assignment.kind === 'unit' ? assignment.unitId : `plan:${id}:builder`,
       assignment, runsIn: assignment.runsIn, state: 'todo', step: null, stepAt: null });
   }
   for (const unit of units) unitRevisions[unit.id] = revisionOf((await readUnitState(context, parseUnitId(unit.id))).bytes);
-  return { cluster, chat, tasks, roles, witnesses, unitRevisions };
+  return { cluster, chat, tasks, roles, witnesses, unitRevisions, created };
 }
 function reviewedTaskPaths(body) {
   const line = String(body).match(/^(?:files|paths):\s*(.+)$/mi)?.[1];
@@ -120,6 +144,8 @@ function reviewedTaskPaths(body) {
       || file.startsWith('/') || /^[A-Za-z]:/.test(file) || file.split('/').some(part => !part || part === '..' || part === '.git'))) planError();
   return paths;
 }
+
+const createdEvents = (resolved, revision) => resolved.created.length ? [{ name: 'view.changed', data: { revision, collections: ['tasks'] } }] : [];
 
 export async function createPlan(context, input) {
   requirePlanDesktop(context, 'chat.post');
@@ -138,8 +164,9 @@ export async function createPlan(context, input) {
       { resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: null, afterBytes: planBytes(record) },
       { resource: `chat:${record.chatId}`, recordPath: chatPath, beforeRevision: resolved.chat.revision, afterBytes: afterChat },
       { resource: cluster.relative, recordPath: path.join(context.paths.mind, cluster.relative), beforeRevision: revisionOf(cluster.bytes), afterBytes: planBytes({ ...cluster.record, chatRevision: revisionOf(afterChat) }) },
+      ...resolved.created,
     ], events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: record.revision } },
-      { name: 'chat.changed', chatId: record.chatId, data: { chatId: record.chatId } }], response: { status: 201, body: publicPlan(record) } });
+      { name: 'chat.changed', chatId: record.chatId, data: { chatId: record.chatId } }, ...createdEvents(resolved, record.revision)], response: { status: 201, body: publicPlan(record) } });
   });
 }
 export async function editPlan(context, id, input) {
@@ -151,8 +178,8 @@ export async function editPlan(context, id, input) {
     const resolved = await resolvePlan(context, { ...record, ...input, tasks: input.tasks ?? record.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, id);
     const next = planRevision({ ...record, ...input, tasks: resolved.tasks, roles: resolved.roles }); delete next.expectedRevision;
     const updated = planRevision(next);
-    return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }],
-      events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: updated.revision } }], response: { status: 200, body: publicPlan(updated) } });
+    return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }, ...resolved.created],
+      events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: updated.revision } }, ...createdEvents(resolved, updated.revision)], response: { status: 200, body: publicPlan(updated) } });
   });
 }
 export async function startPlan(context, id, input) {

@@ -49,6 +49,39 @@ export async function loadTask(context, taskId) {
   throw new CoreError(404, 'task_not_found', 'The task does not exist.');
 }
 
+// Prepares new task files the way the /task command writes them (files.md): the next three-digit id of the
+// assignee's scope folder, a slug from the first words, status open and the text as the Request section.
+// Nothing is written here: the caller commits each entry inside its own transaction, so a rejected owner
+// operation leaves no task behind. One allocator numbers every task of one operation without collision.
+export function taskAllocator(context) {
+  const counters = new Map();
+  return async function prepare({ title, body = '', toId, clusterId = null }) {
+    const unit = parseUnitId(toId), directory = taskDirectory(unit.scope);
+    if (!counters.has(directory)) {
+      let names = [];
+      try { names = await readdir(absolute(context, directory)); }
+      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      counters.set(directory, names.reduce((high, name) => Math.max(high, Number(name.match(/^(\d+)/)?.[1] ?? 0)), 0) + 1);
+    }
+    const number = counters.get(directory); counters.set(directory, number + 1);
+    const digits = String(number).padStart(3, '0'), id = `${unit.scope.id}:${digits}`, text = String(title).trim();
+    const slug = text.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).slice(0, 6).join('-').slice(0, 48).replace(/-+$/, '') || 'task';
+    const relative = `${directory}/${digits}-${slug}.md`;
+    const headers = [`id: ${digits}`, `task-id: ${id}`, `title: ${text}`, 'status: open', 'from: master', 'from-id: root:master', `to: ${unit.unit}`, `to-id: ${toId}`,
+      `date: ${localStamp(context)}`, ...(clusterId ? [`cluster-id: ${clusterId}`] : [])];
+    const bytes = Buffer.from(`${headers.join('\n')}\n\n## Request\n${String(body).trim() || text}\n\n## Report\n`, 'utf8');
+    const parsed = parseTaskId(id);
+    const record = describe(bytes, relative, parsed.id, await aliasesFor(context));
+    return { record: { ...record, ...(await assigneeLead(context, toId)) },
+      entry: { resource: relative, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: bytes } };
+  };
+}
+
+function localStamp(context) {
+  const date = new Date(context.now()), two = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+
 export function reportSection(body) {
   const text = String(body ?? '');
   const at = text.indexOf('## Report');
