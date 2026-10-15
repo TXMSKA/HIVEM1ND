@@ -390,6 +390,7 @@ test('two machines share an origin and limits pause at the hard window', async (
 
 test('an open stream receives imported chat, unit, and editor events once', async (t) => {
   const { fixture, core, localPath, token, port } = await boot(t);
+  await core.runtime.pulse.close().done;
   const chatId = '55555555-5555-4555-8555-555555555555';
   const messageId = '66666666-6666-4666-8666-666666666666';
   const voidPath = 'docs/note.json';

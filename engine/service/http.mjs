@@ -446,6 +446,8 @@ export async function createHttpServer(options) {
   const compiled = routeTable().map(compile);
   if (options.recoveryHosts) compiled.push(compile({ method: 'GET', template: '/viewer/recovery', operation: 'read', audience: 'D', handler: 'readRecovery', collection: null }));
   const sockets = new Set();
+  const requests = new Set();
+  let closing = false;
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
   homeState.serve = (req, res) => acceptRequest(req, res);
 
@@ -461,7 +463,7 @@ export async function createHttpServer(options) {
     const stopTimer = () => clearTimeout(timer);
     req.on('end', stopTimer);
     res.on('finish', stopTimer);
-    dispatch(req, res).catch((error) => {
+    const request = dispatch(req, res).catch((error) => {
       stopTimer();
       try {
         if (!res.headersSent && !res.writableEnded) {
@@ -503,10 +505,12 @@ export async function createHttpServer(options) {
           req.resume();
         }
       } catch { /* the request is already gone */ }
-    });
+    }).finally(() => requests.delete(request));
+    requests.add(request);
   }
 
   async function dispatch(req, res) {
+    if (closing) throw new CoreError(503, 'service_unavailable', 'The service is stopping.');
     const headerBytes = rawHeaderBytes(req);
     const url = req.url ?? '/';
     if (Buffer.byteLength(url, 'utf8') > 2048) throw new CoreError(414, 'uri_too_long', 'The request target is too long.');
@@ -661,6 +665,14 @@ export async function createHttpServer(options) {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
   });
+  async function drainRequests() {
+    closing = true;
+    await Promise.allSettled([...requests]);
+  }
+  async function drain() {
+    await drainRequests();
+    while (options.store.sessionLaunches?.size) await Promise.allSettled([...options.store.sessionLaunches.values()]);
+  }
   await listen(server, options.host ?? '127.0.0.1', options.port ?? 0);
   return {
     server,
@@ -669,7 +681,11 @@ export async function createHttpServer(options) {
     port: server.address().port,
     security,
     viewers,
+    stopAdmission() { closing = true; },
+    drainRequests,
+    drain,
     async close() {
+      await drain();
       await closeAdditionJobs(domainContext(options, null, bus));
       disposeWatch(watch);
       await closeHome(homeState, { quiet: true }).catch(() => {});

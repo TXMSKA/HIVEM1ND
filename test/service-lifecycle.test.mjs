@@ -18,6 +18,7 @@ import { createRelayWakeController } from '../engine/relay/wake.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
 import { adoptWake, composeCore, guardPortFor, restartService, startService, stopConfiguredService, stopService } from '../engine/service/service.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
+import { decodePack } from '../engine/sync/pack.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function freePort() {
@@ -30,7 +31,11 @@ async function freePort() {
 
 async function optionsFor(t, port) {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  const cleanups = [];
+  t.after(async () => {
+    for (const cleanup of cleanups.reverse()) await cleanup();
+    await dispose(fixture);
+  });
   const origin = path.join(fixture.root, 'origin');
   await mkdir(origin, { recursive: true });
   let listeners = 0;
@@ -40,18 +45,21 @@ async function optionsFor(t, port) {
     now: () => fixture.clock.now,
     userKey: 'lifecycle-user',
     guardPort: port,
+    env: fixture.env,
+    homeDir: fixture.home,
+    clients: [],
     listener: async () => {
       listeners += 1;
       return { close: async () => {} };
     },
   };
-  return { fixture, options, listeners: () => listeners };
+  return { fixture, options, listeners: () => listeners, cleanup: close => cleanups.push(close) };
 }
 
 test('running restart holds the user guard through replacement and revokes every old audience', async t => {
-  const { fixture, options, listeners } = await optionsFor(t, await freePort());
+  const { fixture, options, listeners, cleanup } = await optionsFor(t, await freePort());
   const owner = await startService(options);
-  t.after(() => stopService(owner, { force: true }));
+  cleanup(() => stopService(owner, { force: true }));
   const guard = owner.guard;
   const nonce = owner.nonce;
   const secret = owner.bootstrap.secret;
@@ -66,7 +74,7 @@ test('running restart holds the user guard through replacement and revokes every
   const first = restartService(owner);
   const second = restartService(owner);
   assert.equal(first === second, true);
-  t.after(() => release());
+  cleanup(() => release());
   await started;
   const contender = startService(options);
   assert.equal(guard.listening, true);
@@ -143,9 +151,9 @@ test('a stopped browser or embedded host recovers one owned service with isolate
 });
 
 test('one active host prevents owned runtime shutdown', async t => {
-  const { fixture, options } = await optionsFor(t, await freePort());
+  const { fixture, options, cleanup } = await optionsFor(t, await freePort());
   const started = await startService({ ...options, retainHosts: true });
-  t.after(async () => { if (!started.runtime.closed) await stopService(started, { force: true }); });
+  cleanup(async () => { if (!started.runtime.closed) await stopService(started, { force: true }); });
   const auth = () => jsonCall(started.http.port, 'POST', '/api/v1/auth/local', {
     token: started.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null },
   });
@@ -180,7 +188,7 @@ test('one active host prevents owned runtime shutdown', async t => {
 });
 
 test('owned shutdown closes host admission before awaiting controller cleanup', async t => {
-  const { options } = await optionsFor(t, await freePort());
+  const { options, cleanup } = await optionsFor(t, await freePort());
   const started = await startService({ ...options, retainHosts: true });
   const close = started.adopted.controller.close.bind(started.adopted.controller);
   let release;
@@ -189,7 +197,7 @@ test('owned shutdown closes host admission before awaiting controller cleanup', 
   const gate = new Promise(resolve => { release = resolve; });
   started.adopted.controller.close = async () => { entered(); await gate; await close(); };
   const stopping = stopService(started);
-  t.after(async () => { release(); await stopping; });
+  cleanup(async () => { release(); await stopping; });
   await ready;
   assert.equal(started.stopping, true);
   assert.throws(() => started.credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID() }), { code: 'service_unavailable' });
@@ -589,9 +597,9 @@ test('a comment delivery is submitted once and a failure is not acceptance', asy
 
 test('the HTTP event stream stays up beside the service guard', async (t) => {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
-  t.after(() => core.http.close());
+  let core;
+  t.after(async () => { await core?.http.close(); await dispose(fixture); });
+  core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, env: fixture.env, clients: [] });
   const local = await new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }));
     const req = httpRequest({
@@ -662,7 +670,7 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
     stagingPath: fixture.paths.staging,
     port: 0,
   })}\n`);
-  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner(), assetDir };
+  const input = { mindPath: fixture.paths.mind, env: fixture.env, home: path.join(fixture.root, 'home'), platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner(), assetDir, guardPort: await freePort(), userKey: fixture.root };
   await assert.rejects(startGui({ ...input, mindPath: path.join(fixture.root, 'missing') }), { code: 'mind_not_configured' });
   await assert.rejects(startGui({ ...input, embedded: true, hostOrigin: 'file://local' }), { code: 'invalid_body' });
   const first = await startGui({ ...input, look: 'modern' });
@@ -720,7 +728,12 @@ test('two machines on one origin replicate a change and one ledger stops a flood
   });
   leftService = await startService({ ...serviceOptions(left, origin), now: () => left.clock.now });
   rightService = await startService({ ...serviceOptions(right, origin), now: () => right.clock.now });
-  assert.deepEqual(await packNames(origin), []);
+  for (const name of await packNames(origin)) {
+    const [machine, file] = name.split('/');
+    const packed = decodePack(await readFile(path.join(origin, 'machines', machine, 'packs', file)));
+    assert.equal(packed.changes.length > 0, true);
+    for (const change of packed.changes) assert.deepEqual(change.target, { kind: 'mind', path: `user/machines/${packed.header.machine}/settings.json` });
+  }
   const changes = await stageTransaction(leftService.runtime.sync, [{
     target: { kind: 'mind', path: 'user/notes/hello.txt' },
     bytes: Buffer.from('hello\n'),
@@ -842,6 +855,9 @@ function serviceOptions(fixture, origin) {
     now: () => Date.now(),
     guardPort: 0,
     userKey: fixture.machine,
+    env: fixture.env,
+    homeDir: fixture.home,
+    clients: [],
   };
 }
 

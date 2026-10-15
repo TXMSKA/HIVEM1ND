@@ -695,7 +695,7 @@ async function writeSessions(paths, user, local, now) {
   await mkdir(join(local, "staging"), { recursive: true });
 }
 
-async function writeEditors(paths, tree, user, now) {
+export async function writeEditors(paths, tree, user, now) {
   const boardPath = "docs/flows/boards/cart.json";
   const legacyPath = "docs/flows/boards/legacy-cart.mjs";
   const textPath = "docs/release.json";

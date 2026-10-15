@@ -23,7 +23,8 @@ const LOOPBACK = { kind: 'loopback', address: '127.0.0.1', port: 8765 };
 
 test('phone standing and push answers fail before receipt creation or replay, with no grant or notice changes', async t => {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  const cleanups = [];
+  t.after(async () => { for (const cleanup of cleanups.toReversed()) await cleanup(); await dispose(fixture); });
   const unitId = 'project:shop:executor-shop', sessionId = randomUUID();
   const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
   await mkdir(path.dirname(stateFile), { recursive: true });
@@ -32,7 +33,7 @@ test('phone standing and push answers fail before receipt creation or replay, wi
   const credentials = createCredentialStore({ now: context.now });
   const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
   const http = await createHttpServer({ ...context, credentials });
-  t.after(() => http.close());
+  cleanups.push(() => http.close());
   for (const [action, pattern, decision] of [
     ['process.run', { command: 'npm run build', cwd: 'project:shop' }, 'approve-always'],
     ['git.push', { repository: 'project:shop', args: ['origin', 'main'] }, 'approve'],
@@ -73,14 +74,15 @@ test('phone standing and push answers fail before receipt creation or replay, wi
 });
 
 test('a phone can approve or deny session.open over HTTP once without creating standing authority', async t => {
-  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const fixture = await makeCoreFixture(), cleanups = [];
+  t.after(async () => { for (const cleanup of cleanups.toReversed()) await cleanup(); await dispose(fixture); });
   const unitId = 'project:shop:executor-shop';
   const stateFile = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
   await mkdir(path.dirname(stateFile), { recursive: true });
   await writeFile(stateFile, `unit: executor-shop\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"codex","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
   const parentAdapter = createNativeAdapter('codex', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"parent-thread"}}}'] });
   const childAdapter = createNativeAdapter('cursor', { fixture: true, models: ['strong'], transcript: ['{"jsonrpc":"2.0","id":1,"result":{"sessionId":"child-session"}}'] });
-  t.after(async () => { await parentAdapter.close(); await childAdapter.close(); });
+  cleanups.push(async () => { await parentAdapter.close(); await childAdapter.close(); });
   let creates = 0;
   const create = childAdapter.create.bind(childAdapter);
   childAdapter.create = async input => { creates++; return create(input); };
@@ -96,7 +98,7 @@ test('a phone can approve or deny session.open over HTTP once without creating s
   await writeFile(path.join(path.dirname(stateFile), 'executor-child.md'), `unit: executor-child\nunit-id: ${childId}\nrole: executor\nstate: in\nmachine: DESKTOP\nruns-in: {"client":"cursor","model":"strong","effort":"high","mode":null}\n\nReady.\n`);
   const credentials = createCredentialStore({ now: context.now });
   const phone = credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
-  const http = await createHttpServer({ ...context, credentials }); t.after(() => http.close());
+  const http = await createHttpServer({ ...context, credentials }); cleanups.push(() => http.close());
   for (const decision of ['deny', 'approve']) {
     const ask = await requestApproval(context, { action: 'session.open', pattern: { client: 'cursor', machine: 'DESKTOP', unitId: childId, runMode: 'chat', taskId: null }, display: 'Open another CLI' });
     const options = { token: phone, body: { decision, expectedRevision: ask.approval.revision }, headers: { 'idempotency-key': randomUUID() } };
@@ -228,9 +230,9 @@ test('audiences, peers and limits fail closed without leaking secrets', async (t
 
 test('a phone token is rejected for a desktop write on the real listener', async (t) => {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
-  t.after(() => core.http.close());
+  let core;
+  t.after(async () => { await core?.http.close(); await dispose(fixture); });
+  core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
   const phone = core.credentials.issue({ audience: 'phone', expiresAt: new Date(fixture.clock.now + 60_000).toISOString() });
   const status = await new Promise((resolve, reject) => {
     const payload = Buffer.from('{"language":"es"}');
@@ -269,7 +271,8 @@ test('a phone token is rejected for a desktop write on the real listener', async
 
 test('local login requires the protected bootstrap secret and binds only the viewer fields', async (t) => {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  let started;
+  t.after(async () => { await stopService(started); await dispose(fixture); });
   const port = await new Promise((resolve) => {
     const server = createServer();
     server.listen(0, '127.0.0.1', () => {
@@ -277,14 +280,13 @@ test('local login requires the protected bootstrap secret and binds only the vie
       server.close(() => resolve(assigned));
     });
   });
-  const started = await startService({
+  started = await startService({
     store: fixture.store,
     paths: fixture.paths,
     now: () => fixture.clock.now,
     userKey: 'auth-user',
     guardPort: port,
   });
-  t.after(() => stopService(started));
   const httpPort = started.http.port;
   const secret = started.bootstrap.secret;
   const bootFile = path.join(fixture.paths.localDirectory, 'bootstrap.json');

@@ -3582,10 +3582,16 @@ function confirmRemoveAddition(app, item) {
 
 function unconfirmedStartOperation(error) { return !error.status || error.status >= 500 ? error.operation ?? null : null; }
 
-async function loadStartReports(app) {
-  if (app.layout === 'phone' || app.disposed) return;
+function loadStartReports(app) {
+  if (app.layout === 'phone' || app.disposed) return Promise.resolve();
   const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
   app.startReportTicket = ticket;
+  const pending = readStartReports(app, machine, ticket);
+  app.startReportPending = pending;
+  return pending;
+}
+
+async function readStartReports(app, machine, ticket) {
   try {
     const [projects, agents, clusters, additions] = await Promise.all([
       request(app.api, 'GET', '/settings/projects', { query: { machine } }),
@@ -3593,14 +3599,19 @@ async function loadStartReports(app) {
       collectPages(app.api, '/clusters', { limit: 200 }),
       app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
     ]);
-    if (app.disposed || ticket !== app.startReportTicket) return;
+    if (app.disposed) return;
+    if (ticket !== app.startReportTicket) return app.startReportPending;
     app.startProjects = projects.data; app.startAgents = agents.data;
     app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
     app.startError = null;
     if (app.store.selected.groupId && !app.store.indexes.groups.has(app.store.selected.groupId)) app.store.selected.groupId = null;
     renderShell(app);
-  } catch (error) { if (!app.disposed && ticket === app.startReportTicket) app.startError = error; }
+  } catch (error) {
+    if (app.disposed) return;
+    if (ticket !== app.startReportTicket) return app.startReportPending;
+    app.startError = error;
+  }
 }
 
 function rememberOverseerOffer(app) {
@@ -4308,11 +4319,17 @@ function settingsState(app) {
   return app.settingsState;
 }
 
-async function loadSettingsSections(app) {
+function loadSettingsSections(app) {
   const state = settingsState(app);
   const machine = state.machine;
   const ticket = ++state.ticket;
   state.loading = true; state.error = null;
+  const pending = readSettingsSections(app, state, machine, ticket);
+  state.pending = pending;
+  return pending;
+}
+
+async function readSettingsSections(app, state, machine, ticket) {
   const query = `?machine=${encodeURIComponent(machine)}`;
   try {
     const results = await Promise.all([
@@ -4320,7 +4337,8 @@ async function loadSettingsSections(app) {
         .map(path => request(app.api, "GET", path + (path === "/settings/content" ? "" : query))),
       collectPages(app.api, "/machines", { limit: 50 }).then(page => ({ data: page.items })),
     ]);
-    if (app.disposed || ticket !== state.ticket) return;
+    if (app.disposed) return;
+    if (ticket !== state.ticket) return state.pending;
     [state.info, state.agents, state.permissions, state.projects, state.content] = results.map(result => result.data);
     state.machines = results[5].data;
     for (const id of state.pendingGrants ?? []) if (!state.permissions.unitGrants.some(item => item.grant.id === id)) state.pendingGrants.delete(id);
@@ -4336,7 +4354,9 @@ async function loadSettingsSections(app) {
       if (app.store.settings) app.store.settings.home = home.home;
     }
   } catch (error) {
-    if (!app.disposed && ticket === state.ticket) state.error = error;
+    if (app.disposed) return;
+    if (ticket !== state.ticket) return state.pending;
+    state.error = error;
   } finally {
     if (!app.disposed && ticket === state.ticket) {
       state.loading = false;

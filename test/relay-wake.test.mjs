@@ -746,7 +746,10 @@ test('delivery status shows the state the recipient worker recorded, then the re
   const handle = wake.start(binding);
   assert.equal((await handle.ready).ownsLease, true);
   const sent = await sender.send({ to: binding.unit, subject: 'Ladder', body: 'question', replyRequested: true });
-  await until(async () => (await sender.delivery({ ids: [sent.id] })).deliveries[0].stage === 'woken' || (await sender.delivery({ ids: [sent.id] })).deliveries[0]);
+  await until(async () => {
+    const delivery = (await sender.delivery({ ids: [sent.id] })).deliveries[0];
+    return delivery.stage === 'woken' ? true : delivery;
+  });
   const woken = (await sender.delivery({ ids: [sent.id] })).deliveries[0];
   assert.deepEqual(woken.woken.map(({ client, machine, state }) => ({ client, machine, state })), [{ client: 'claude', machine: 'TESTBOX', state: 'submitted' }]);
   assert.equal(woken.read, false, 'woken means submitted to the client, not read');

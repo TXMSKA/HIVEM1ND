@@ -127,9 +127,9 @@ test('replace and Undo recover the entire multi-text journal and replay one rece
 });
 
 test('HTTP whole replace and Undo bind desktop permission exact bodies bounded matches receipts and the same-origin worker', async (t) => {
-  const { context, fixture } = await shop(t);
+  const { context, fixture, cleanups } = await shop(t);
   const first = await createText(context, { project: 'shop', path: 'docs/http.json', document: release() });
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); t.after(() => core.http.close());
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); cleanups.push(() => core.http.close());
   const auth = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   const token = auth.json.data.token, body = { items: [replaceMatch(first, 'Intro.Welcome', 'en', 3, 10, 'Hello')], expectedCommentsRevisions: { [first.id]: first.commentsRevision } }, key = randomUUID();
   for (const audience of ['phone', 'agent']) {
@@ -314,12 +314,13 @@ function sketch(id = 'cart') {
 
 async function shop(t) {
   const fixture = await makeCoreFixture();
+  const cleanups = [];
   const localPath = path.join(fixture.paths.localDirectory, 'shop');
   await mkdir(localPath, { recursive: true });
   const ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, machine: fixture.paths.machine });
   const context = { store: fixture.store, paths: fixture.paths, projects: [{ name: 'shop', localPath }], now: () => fixture.clock.now, ledger };
-  t.after(() => dispose(fixture));
-  return { fixture, context, localPath };
+  t.after(async () => { for (const cleanup of cleanups.toReversed()) await cleanup(); await dispose(fixture); });
+  return { fixture, context, localPath, cleanups };
 }
 
 async function seedAttachedUnits(context, ids) {
@@ -1317,14 +1318,14 @@ test('edited acceptance recovers text comments and one History entry with the sa
 });
 
 test('HTTP suggestion answers allow only a string accept override and replay one edited acceptance', async (t) => {
-  const { context, fixture } = await shop(t);
+  const { context, fixture, cleanups } = await shop(t);
   const editor = await createText(context, { project: 'shop', path: 'docs/http-suggestion.json', document: release() });
   const comment = await createComment(context, editor.id, { text: 'Improve the greeting', sendToAgent: false,
     expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision,
     anchor: { k: 'Intro.Welcome', lang: 'en', start: 0, end: 7, quote: 'Welcome' } });
   const suggested = await replaceRange(context, editor.id, { k: 'Intro.Welcome', lang: 'en', start: 3, end: 10, expectedText: 'Welcome', replacement: 'Hello',
     expectedRevision: editor.revision, expectedCommentsRevision: comment.commentsRevision, threadId: comment.thread.id, mode: 'propose' });
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); t.after(() => core.http.close());
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); cleanups.push(() => core.http.close());
   const auth = await call(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   const token = auth.json.data.token, url = `/api/v1/void/texts/${editor.id}/proposals/${suggested.proposal.id}/answer`;
   const body = { decision: 'accept', expectedRevision: editor.revision, expectedCommentsRevision: suggested.editor.commentsRevision };

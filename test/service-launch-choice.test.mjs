@@ -151,7 +151,7 @@ test('C13 creation and stored-choice changes enforce owners, exact bodies and id
   const phone = credentials.issue({ audience: 'phone' }).token, agent = credentials.issue({ audience: 'agent', unitId: 'root:foreign', sessionId: randomUUID() }).token;
   const http = await createHttpServer({ ...context, credentials }); t.after(() => http.close());
   const call = (token, path, body, key = randomUUID(), method = 'POST') => request({ origin: new URL(`http://127.0.0.1:${http.port}`), token },
-    { path: `/api/v1${path}`, method, body, timeoutMs: 3000, headers: { 'idempotency-key': key } });
+    { path: `/api/v1${path}`, method, body, headers: { 'idempotency-key': key } });
   const input = { machine: 'DESKTOP', role: 'executor', runsIn: choice('codex'), useAsDefault: false, expectedRevision: cluster.revision }, key = randomUUID();
   for (const token of [phone, agent]) assert.equal((await call(token, `/clusters/${cluster.id}/agents`, input, key)).status, 403);
   const created = await call(desktop, `/clusters/${cluster.id}/agents`, input, key);

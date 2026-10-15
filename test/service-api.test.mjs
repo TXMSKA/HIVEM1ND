@@ -32,8 +32,9 @@ async function boot(t, { assetDir = null, missingAssets = false } = {}) {
     assetDir: missingAssets ? path.join(fixture.root, 'absent-browser-shell') : assetDir,
     projects: [],
   });
+  const cores = [core];
   t.after(async () => {
-    await core.http.close();
+    for (const opened of cores.toReversed()) await opened.http.close();
     await dispose(fixture);
   });
   const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
@@ -43,7 +44,7 @@ async function boot(t, { assetDir = null, missingAssets = false } = {}) {
   assert.equal(local.status, 201);
   assert.equal(local.json.meta.sync, 'local');
   assert.equal(local.json.token, undefined);
-  return { fixture, core, paths, token: local.json.data.token, viewerId: local.json.data.viewerId };
+  return { fixture, core, cores, paths, token: local.json.data.token, viewerId: local.json.data.viewerId };
 }
 
 function call(port, method, target, { token = null, body = undefined, headers = {} } = {}) {
@@ -262,7 +263,7 @@ test('receipts replay the same response and reject a different route', async (t)
 });
 
 test('phone writes are rejected and static absence leaves the API usable', async (t) => {
-  const { fixture, core, token } = await boot(t, { missingAssets: true });
+  const { fixture, core, cores, token } = await boot(t, { missingAssets: true });
   const phone = core.credentials.issue({
     audience: 'phone',
     expiresAt: new Date(fixture.clock.now + 60_000).toISOString(),
@@ -299,7 +300,7 @@ test('phone writes are rejected and static absence leaves the API usable', async
     now: () => fixture.clock.now,
     assetDir,
   });
-  t.after(() => hosted.http.close());
+  cores.push(hosted);
   const page = await call(hosted.http.port, 'GET', '/');
   assert.equal(page.status, 200);
   assert.equal(page.raw.includes('HIVEM1ND'), true);
@@ -1092,11 +1093,8 @@ test('every contract route has a success result and an authority or boundary fai
     headers: { 'idempotency-key': randomUUID() },
   });
   expectStatus(started, 202, 'start session');
-  const launchDeadline = Date.now() + 5000;
-  while (['queued', 'starting'].includes(started.json.data.state) && Date.now() < launchDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    started = await call(port, 'GET', `/api/v1/session-requests/${started.json.data.requestId}`, { token });
-  }
+  await fixture.store.sessionLaunches?.get(started.json.data.requestId);
+  started = await call(port, 'GET', `/api/v1/session-requests/${started.json.data.requestId}`, { token });
   assert.equal(started.json.data.state, 'started');
   assert.equal(started.json.data.request, undefined);
   hit('POST', '/units/:unitId/session');
@@ -1959,8 +1957,9 @@ test('caller listener options cannot relabel the loopback socket', async (t) => 
     bindAddress: '10.0.0.8',
     netmask: '255.255.255.0',
   });
+  const cores = [core];
   t.after(async () => {
-    await core.http.close();
+    for (const opened of cores.toReversed()) await opened.http.close();
     await dispose(fixture);
   });
   const local = await call(core.http.port, 'POST', '/api/v1/auth/local', {
@@ -1988,7 +1987,7 @@ test('caller listener options cannot relabel the loopback socket', async (t) => 
     now: () => fixture.clock.now,
     projects: [],
   });
-  t.after(async () => loop.http.close());
+  cores.push(loop);
   const agent = loop.credentials.issue({ audience: 'agent', unitId: 'root:executor', capabilities: ['read'], expiresAt: '2027-01-01T00:00:00.000Z' });
   const general = await call(loop.http.port, 'GET', '/api/v1/units', { token: agent.token });
   assert.equal(general.status, 403);

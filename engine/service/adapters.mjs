@@ -124,6 +124,7 @@ export function createNativeAdapter(client, options = {}) {
   const children = new Map();
   const sessions = new Map();
   const activityWrites = new Set();
+  let closed = false;
   return {
     client,
     nativeSupport: false,
@@ -157,7 +158,7 @@ export function createNativeAdapter(client, options = {}) {
           pending.then(() => activityWrites.delete(pending), () => activityWrites.delete(pending));
         };
       }
-      if (!this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
+      if (closed || !this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       if (!request.runsIn && request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
       if (request.runsIn && (request.runsIn.client !== client || request.model !== request.runsIn.model || request.effort !== request.runsIn.effort)) {
@@ -180,6 +181,7 @@ export function createNativeAdapter(client, options = {}) {
         const processHandle = options.planProcessHandle ?? { identity, verify: async () => true,
           onExit: listener => { exit.on('exit', listener); return () => exit.off('exit', listener); },
           cleanup: async () => ({ closed: ended, identity }), stop: async () => { ended = true; exit.emit('exit'); return { acknowledged: true }; } };
+        if (closed) throw unavailable();
         sessions.set(created.nativeSessionId, { ...created, unitId: request.unitId, closedTurns: [], planProcessHandle: processHandle, observer: request.planObserver, permissionRequest: request });
         request.planObserver?.({ id: 'native-init', kind: 'start' });
         return { ...created, processHandle };
@@ -194,6 +196,7 @@ export function createNativeAdapter(client, options = {}) {
         const resolved = options.command
           ? { command: options.command, args: options.args ?? launchArgs(client, request) }
           : await resolveLaunch(client, options.env ?? process.env, options.platform ?? process.platform, request);
+        if (closed) throw unavailable();
         if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
         assertNoBypass(resolved.args);
         const spawnOptions = {
@@ -206,6 +209,7 @@ export function createNativeAdapter(client, options = {}) {
         if (request.runsIn && typeof options.enforceScope === 'function') {
           const enforced = await options.enforceScope({ command: resolved.command, args: resolved.args, options: spawnOptions, scope: request.launchScope,
             policy: { gitBrokerOnly: true, indirectWrites: 'confined', outsideWrites: 'exact-once', ...(request.planAuthority ? { plan: request.planAuthority } : {}) } });
+          if (closed) throw unavailable();
           if (enforced?.verified !== true || typeof enforced.spawn !== 'function') throw new CoreError(409, 'scope_unavailable', 'The OS sandbox could not be verified.');
           request.nativeBoundary = { ...enforced, signal: permissionAbort.signal };
           if (request.planObserver && !enforced.processHandle) throw new CoreError(409, 'cleanup_unavailable', 'The native job ownership is unavailable.');
@@ -225,6 +229,7 @@ export function createNativeAdapter(client, options = {}) {
           new Promise((_, reject) => { deadline = setTimeout(() => reject(unavailable()), options.timeoutMs ?? 30000); }),
         ]);
         clearTimeout(deadline);
+        if (closed) throw unavailable();
         this.nativeSupport = true;
         const record = opened.session ?? { turnId: null, closedTurns: [] };
         record.nativeSessionId = opened.nativeSessionId;
@@ -451,6 +456,7 @@ export function createNativeAdapter(client, options = {}) {
       return { acknowledged: exitCode !== null, exitCode };
     },
     async close() {
+      closed = true;
       for (const item of sessions.values()) {
         item.nativeLaunch?.close();
         item.incoming?.close();
@@ -459,6 +465,10 @@ export function createNativeAdapter(client, options = {}) {
       await Promise.all([...children.values()].map((child) => finishChild(child)));
       children.clear();
       await Promise.allSettled([...activityWrites]);
+    },
+    reopen() {
+      if (children.size || sessions.size || activityWrites.size) throw unavailable();
+      closed = false;
     },
   };
 }

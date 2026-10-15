@@ -60,7 +60,7 @@ import {
   startWatch,
   stopWatch,
 } from "../gui/app/editors.mjs";
-import { FIXTURE_HOME_KEY } from "./gui-data.mjs";
+import { DEFAULT_NOW, FIXTURE_HOME_KEY, writeEditors } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
 import { text } from "../gui/app/i18n.mjs";
 import { importLegacyBoard, legacyModuleUrls } from "../gui/app/main.mjs";
@@ -167,17 +167,24 @@ test('Find applies the 10000 cap across pages and retained replacements reuse th
 });
 
 test('the GUI replaces and undoes all matches once through the HTTP fixture while retaining drafts', async (t) => {
-  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const fixture = await createGuiFixture({ scenario: 'first-run' }); t.after(() => fixture.close());
+  const repo = join(fixture.root, 'repositories', 'shop');
+  await writeEditors([], { repo }, join(fixture.root, 'Cosmic', 'hivem1nd', 'user'), DEFAULT_NOW);
+  await fixture.control.refresh();
   const api = apiFrom(fixture.desktopUrl), editors = createEditors();
   await loadCatalog(api, editors, 'void');
   const summary = editors.catalog.find((item) => !item.readOnly), editor = await openEditor(api, editors, summary);
   const page = editor.authoritative.document.pages[0], source = page.en, visible = plainText(source), needle = visible.split(/\s/)[0];
   const matches = findTextMatches(visible, needle).map((match) => ({ ...match, resourceId: editor.resourceId, k: page.k, lang: 'en', source, expectedRevision: editor.revision, commentsRevision: editor.commentsRevision }));
   const original = structuredClone(editor.authoritative.document);
+  const comments = await readFile(join(repo, 'docs/release.comments.json'));
+  const draft = { text: 'Keep work in another editor.' }; editors.drafts.set('retained-draft', draft);
   const saved = await replaceMatches(api, editors, matches, 'Replacement');
   assert.equal(saved.data.matches, matches.length); assert.notDeepEqual(editor.authoritative.document, original);
   await undoReplace(api, editors, saved.data.changeId);
   assert.deepEqual(editor.authoritative.document, original);
+  assert.deepEqual(await readFile(join(repo, 'docs/release.comments.json')), comments);
+  assert.equal(editors.drafts.get('retained-draft'), draft);
   const assets = await fetch(`${fixture.origin}/app/find-worker.mjs`);
   assert.equal(assets.status, 200); assert.match(assets.headers.get('content-security-policy'), /worker-src 'self'/);
 });

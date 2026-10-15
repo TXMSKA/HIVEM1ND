@@ -103,7 +103,7 @@ test('the browser launcher restores a stopped singleton without losing a draft o
   click(desktop.root.querySelector('[data-action="retry-service"]'));
   await waitFor(() => desktop.root.querySelector('[data-service-banner="stopped"]'), 'The owned guard did not confirm the stopped service.');
   assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep this next draft');
-  click(desktop.root.querySelector('[data-action="recover-service"]'));
+  await clickAndWait(desktop.root.querySelector('[data-action="recover-service"]'));
   await waitFor(() => desktop.app.api.token !== oldToken && desktop.app.thread.pendingSends.size === 0, 'Recovery did not reconcile the original operation.');
   assert.equal(sends.length, 2);
   assert.equal(sends[0], sends[1]);
@@ -118,8 +118,9 @@ test('the browser launcher restores a stopped singleton without losing a draft o
   assert.equal(desktop.app.embed ?? null, null);
   const recoveredToken = desktop.app.api.token;
   navigate(desktop.app, 'settings');
+  await desktop.app.settingsState.pending;
   await waitFor(() => desktop.root.querySelector('[data-action="settings-restart"]')?.disabled === false, 'The local service controls did not load.');
-  click(desktop.root.querySelector('[data-action="settings-restart"]'));
+  await clickAndWait(desktop.root.querySelector('[data-action="settings-restart"]'));
   await waitFor(() => desktop.app.api.token !== recoveredToken && !desktop.app.recoveryPending, 'Running restart did not renew the desktop credential.');
   assert.equal(host.service.guard.listening, true);
   assert.equal(desktop.app.store.selected.resourceId, 'open-resource');
@@ -412,6 +413,44 @@ test("Settings ignores a late previous-machine response after another selection"
   click(root.querySelector("[data-settings-tab='projects']"));
   assert.equal(root.querySelectorAll("[data-cluster-link]").length, 1);
   assert.equal(root.querySelector("[data-cluster-link]").querySelector("strong").textContent, "Shop");
+});
+
+test('a superseded Settings refresh waits for the current machine before its continuation runs', async t => {
+  const desktop = await settingsApp(t), { app, root } = desktop;
+  closeStream(app.api.live);
+  let releasePrevious, releaseCurrent;
+  const previous = new Promise(resolve => { releasePrevious = resolve; });
+  const current = new Promise(resolve => { releaseCurrent = resolve; });
+  t.after(() => { releasePrevious(); releaseCurrent(); });
+  const state = app.settingsState;
+  const reports = new Map([
+    ['/api/v1/settings', state.info], ['/api/v1/settings/agents', state.agents],
+    ['/api/v1/settings/permissions', state.permissions], ['/api/v1/settings/projects', state.projects],
+    ['/api/v1/settings/content', state.content], ['/api/v1/machines', { items: state.machines, total: state.machines.length }],
+  ]);
+  app.api.fetch = async input => {
+    const url = new URL(input), machine = state.machine;
+    await (machine === 'OFFLINE' ? previous : current);
+    const data = structuredClone(reports.get(url.pathname));
+    if (url.pathname === '/api/v1/settings') data.selectedMachine = machine;
+    return jsonEnvelope(200, data);
+  };
+  click(root.querySelector('[data-action="settings-machine"]'));
+  click(root.querySelector('[data-machine-choice="OFFLINE"]'));
+  const earlier = state.pending;
+  let continued = false;
+  const continuation = earlier.then(() => { continued = true; });
+  click(root.querySelector('[data-action="settings-machine"]'));
+  click(root.querySelector('[data-machine-choice="DESKTOP"]'));
+  releasePrevious();
+  await delay(0);
+  assert.equal(continued, false);
+  assert.equal(state.loading, true);
+  releaseCurrent();
+  await Promise.all([state.pending, continuation]);
+  assert.equal(continued, true);
+  assert.equal(state.loading, false);
+  assert.equal(state.info.selectedMachine, 'DESKTOP');
 });
 
 test("Settings startup, scan and manual finding target the selected owner with revision checks", async t => {
@@ -3652,8 +3691,9 @@ test('mounted first-open discovery filters canonical selections, imports explici
   assert.equal(dialog.querySelector('[data-action="import-repositories"]').textContent, 'Import 0');
   const restored = dialog.querySelector(`[data-discovery-folder="${offer.groups[0].id}"]`); restored.checked = true;
   for (const run of restored.listeners.get('change') ?? []) run();
-  const confirm = dialog.querySelector('[data-action="import-repositories"]'); click(confirm); click(confirm);
+  const confirm = dialog.querySelector('[data-action="import-repositories"]'); const imported = clickAndWait(confirm); click(confirm);
   assert.equal(confirm.getAttribute('aria-busy'), 'true');
+  await imported;
   await waitFor(() => desktop.document.querySelector('[data-start-dialog="overseer"]'), 'The Overseer was not offered after import.').catch(error => {
     throw new Error(`${error.message} ${JSON.stringify({ code: desktop.document.querySelector('[data-start-error]')?.getAttribute('data-start-error') ?? desktop.app.startError?.code, dismissed: desktop.app.startProjects.discoveryOffer.dismissed, clusters: desktop.app.store.indexes.groups.size, dialogs: desktop.document.querySelectorAll('[data-start-dialog]').map(node => node.getAttribute('data-start-dialog')) })}`);
   });
@@ -3661,6 +3701,39 @@ test('mounted first-open discovery filters canonical selections, imports explici
   assert.equal(await readFile(join(repository, 'retained.txt'), 'utf8'), 'Unchanged repository.'); assert.equal(desktop.launches.length, 0);
   dialog = desktop.document.querySelector('[data-start-dialog="overseer"]'); click(dialog.querySelector('[data-action="cancel-agent"]'));
   assert.equal(desktop.document.querySelector('[data-start-dialog="discovery"]'), null);
+});
+
+test('a superseded start report waits for the winning read before offering the Overseer', async t => {
+  const desktop = await startCoreDesktop(t), { app, root } = desktop;
+  closeStream(app.api.live);
+  app.startDialog?.dialog.close();
+  await app.startReportPending;
+  let releasePrevious, releaseCurrent;
+  const previous = new Promise(resolve => { releasePrevious = resolve; });
+  const current = new Promise(resolve => { releaseCurrent = resolve; });
+  t.after(() => { releasePrevious(); releaseCurrent(); });
+  const reports = new Map([
+    ['/api/v1/settings/projects', app.startProjects], ['/api/v1/settings/agents', app.startAgents],
+    ['/api/v1/clusters', { items: [], total: 0 }], ['/api/v1/additions', { items: [] }],
+  ]);
+  let batch = 0;
+  app.api.fetch = async input => {
+    const url = new URL(input);
+    if (url.pathname === '/api/v1/settings/projects') batch++;
+    await (batch === 1 ? previous : current);
+    return jsonEnvelope(200, structuredClone(reports.get(url.pathname)));
+  };
+  app.overseerOffered = false;
+  app.startError = new ApiError(503, 'service_unavailable', 'Read the reports again.'); renderShell(app);
+  const earlier = clickAndWait(root.querySelector('[data-action="retry-start-reports"]'));
+  const later = clickAndWait(root.querySelector('[data-action="retry-start-reports"]'));
+  releasePrevious();
+  await delay(0);
+  assert.equal(app.startDialog ?? null, null);
+  releaseCurrent();
+  await Promise.all([earlier, later]);
+  assert.ok(desktop.document.querySelector('[data-start-dialog="overseer"]'));
+  assert.equal(app.startError, null);
 });
 
 test('first-open Later persists without a launch and explicit Overseer creation reconciles a lost response once', async t => {
@@ -4420,6 +4493,10 @@ function typeInput(node, value, start, end) {
 
 function click(node) {
   for (const handler of node?.listeners?.get("click") ?? []) handler({ preventDefault() {}, target: node });
+}
+
+function clickAndWait(node) {
+  return Promise.all([...(node?.listeners?.get("click") ?? [])].map(handler => handler({ preventDefault() {}, target: node })));
 }
 
 function clickAction(root, action) {
@@ -5673,12 +5750,12 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   form = desktop.document.querySelector('[data-form="library-move"]');
   changeSelect(form.querySelector('[name="project"]'), "api"); click(form.querySelector('[data-action="confirm-form"]'));
   await waitFor(() => desktop.document.querySelector('[data-library-repository-confirm]'), "The repository confirmation did not reopen.");
-  dialog = desktop.document.querySelector('[data-library-repository-confirm]'); click(dialog.querySelector("button.primary"));
+  dialog = desktop.document.querySelector('[data-library-repository-confirm]'); await clickAndWait(dialog.querySelector("button.primary"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.project === "api" && desktop.root.querySelector('[data-action="library-undo"]'), "The physical move did not commit.");
   await assert.rejects(readFile(join(projects[0].localPath, source.data.path)), (error) => error.code === "ENOENT");
   assert.deepEqual(await readFile(join(projects[1].localPath, source.data.path)), before);
   assert.notEqual(desktop.app.editors.current.resourceId, source.data.id);
-  click(desktop.root.querySelector('[data-action="library-undo"]'));
+  await clickAndWait(desktop.root.querySelector('[data-action="library-undo"]'));
   await waitFor(() => desktop.app.editors.current?.resourceId === source.data.id, "Undo did not restore the original resource identity.");
   assert.deepEqual(await readFile(join(projects[0].localPath, source.data.path)), before);
   await assert.rejects(readFile(join(projects[1].localPath, source.data.path)), (error) => error.code === "ENOENT");
@@ -5695,14 +5772,14 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   form = desktop.document.querySelector('[data-form="library-move"]');
   changeSelect(form.querySelector('[name="project"]'), "api"); click(form.querySelector('[data-action="confirm-form"]'));
   await waitFor(() => desktop.document.querySelector('[data-library-repository-confirm]'), "The text repository confirmation did not open.");
-  click(desktop.document.querySelector('[data-library-repository-confirm]').querySelector("button.primary"));
+  await clickAndWait(desktop.document.querySelector('[data-library-repository-confirm]').querySelector("button.primary"));
   await waitFor(() => desktop.app.editors.current?.authoritative?.project === "api" && desktop.root.querySelector('[data-action="library-undo"]'), "The physical text move did not commit.");
   const movedTextId = desktop.app.editors.current.resourceId;
   assert.equal(desktop.root.querySelector("[data-source]").value, "Unsaved text");
   assert.equal(textDraft(desktop.app.editors.current, movedTextId, "Intro.Welcome", "en"), "Unsaved text");
   assert.equal(desktop.app.store.open.editors.has(textEntry.id), false);
   assert.equal(desktop.app.store.open.editors.has(movedTextId), true);
-  click(desktop.root.querySelector('[data-action="library-undo"]'));
+  await clickAndWait(desktop.root.querySelector('[data-action="library-undo"]'));
   await waitFor(() => desktop.app.editors.current?.resourceId === textEntry.id, "Undo did not restore the text's original identity.");
   assert.equal(textDraft(desktop.app.editors.current, textEntry.id, "Intro.Welcome", "en"), "Unsaved text");
   assert.equal(desktop.root.querySelector("[data-source]").value, "Unsaved text");
@@ -6041,8 +6118,8 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
     const candidate = app.addController.model.preview.candidates.find(item => item.kind === kind);
     changeControl(document.querySelector(`[data-candidate-id="${candidate.id}"]`).querySelector('input'), true);
   };
-  const check = async () => { click(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The immutable check did not open.'); };
-  await inspect(); choose('repository'); await check(); click(document.querySelector('[data-action="add-confirm"]'));
+  const check = async () => { await clickAndWait(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The immutable check did not open.'); };
+  await inspect(); choose('repository'); await check(); await clickAndWait(document.querySelector('[data-action="add-confirm"]'));
   await waitFor(() => app.store.selected.groupId && !document.querySelector('.add-dialog'), 'The accepted repository was not selected.').catch(() => {
     throw new Error(`Repository acceptance: ${app.addController.model.errorCode ?? app.addController.model.preview?.state}, reports: ${app.startError?.code ?? 'ready'}`);
   });
@@ -6055,16 +6132,16 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   const agentDialog = document.querySelector('[data-start-dialog="agent"]'); assert.ok(agentDialog);
   assert.equal(agentDialog.querySelector('[data-action="choose-executor"]').getAttribute('aria-pressed'), 'true');
   assert.equal(agentDialog.querySelectorAll('[data-action="choose-overlord"]').length, 1);
-  click(agentDialog.querySelector('[data-action="create-agent"]'));
+  await clickAndWait(agentDialog.querySelector('[data-action="create-agent"]'));
   await waitFor(() => !app.startDialog && app.unitList.catalog.length === 1, 'The explicit first agent was not created.');
   assert.equal(launches.length, 0);
   const draft = { value: 'Retain editor work' }; app.store.drafts.set('document-draft', draft);
   await inspect(); choose('skill'); choose('docs'); await check();
   const { scopeAddition } = await import('../gui/app/add-controller.mjs');
   for (const id of app.addController.model.selected) scopeAddition(app.addController, id, 'group', clusterId, true);
-  click(document.querySelector('[data-action="add-confirm"]'));
+  await clickAndWait(document.querySelector('[data-action="add-confirm"]'));
   await waitFor(() => app.store.additions.report?.items.length === 3 && !document.querySelector('.add-dialog'), 'Content was not accepted.');
-  navigate(app, 'settings'); await waitFor(() => app.settingsState?.loaded && !app.settingsState.loading, 'Content reports did not load.');
+  navigate(app, 'settings'); await app.settingsState.pending; await waitFor(() => app.settingsState?.loaded && !app.settingsState.loading, 'Content reports did not load.');
   click(root.querySelector('[data-action="settings-tab-content"]'));
   await waitFor(() => root.querySelectorAll('[data-addition-id]').length === 2, 'Imported Content was not placed beside kit items.');
   const pdf = app.settingsState.content.features.find(item => item.title === 'pdf');
@@ -6075,14 +6152,14 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   await waitFor(() => app.addController.model.preview?.state === 'ready', 'Origin did not check for updates.');
   assert.equal(app.addController.model.preview.pin.value, pin);
   assert.equal(app.settingsState.content.features.find(item => item.title === 'pdf').pin.value, 'a'.repeat(40));
-  click(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The update check did not open.');
-  click(document.querySelector('[data-action="add-confirm"]'));
+  await clickAndWait(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The update check did not open.');
+  await clickAndWait(document.querySelector('[data-action="add-confirm"]'));
   await waitFor(() => app.settingsState.content.features.find(item => item.title === 'pdf')?.pin.value === pin, 'The explicit update did not replace the pin.');
   assert.equal(app.settingsState.contentDraft.preferences.additionalInstructions, 'Retain these preferences');
   assert.equal(app.settingsState.contentDraft.features.find(item => item.title === 'pdf').pin.value, pin);
   assert.equal(await readFile(join(fixture.paths.mind, 'user/features/pdf/NOTICE'), 'utf8'), 'Keep this notice\n');
   click(root.querySelector(`[data-addition-id="${pdf.additionId}"]`).querySelector('[data-action="remove-addition"]'));
-  click(document.querySelector('.dialog').querySelector('.primary'));
+  await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
   await waitFor(() => !document.querySelector('.dialog') && !app.settingsState.content.features.some(item => item.title === 'pdf'), 'The confirmed Remove did not remove Content.');
   click(root.querySelector('[data-action="map-undo"]'));
   await waitFor(() => app.settingsState.content.features.some(item => item.title === 'pdf'), 'Content Undo did not restore it.');
@@ -6090,7 +6167,7 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   click(root.querySelector('[data-action="settings-tab-projects"]'));
   assert.ok(root.querySelector(`[data-cluster-link="${clusterId}"]`));
   click(root.querySelector(`[data-cluster-link="${clusterId}"]`).querySelector('[data-action="settings-remove-link"]'));
-  click(document.querySelector('.dialog').querySelector('.primary'));
+  await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
   await waitFor(() => !document.querySelector('.dialog') && app.store.indexes.groups.get(clusterId)?.link.kind === 'none', 'The canonical link did not detach.');
   assert.equal(app.store.indexes.groups.get(clusterId).members.length, 1); assert.equal(launches.length, 0);
   click(root.querySelector('[data-action="map-undo"]'));

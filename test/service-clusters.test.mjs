@@ -17,7 +17,11 @@ import { openLedger } from '../engine/sync/limits.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function world(t) {
-  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const fixture = await makeCoreFixture(), cleanups = [];
+  t.after(async () => {
+    try { for (const cleanup of cleanups.toReversed()) await cleanup(); }
+    finally { await dispose(fixture); }
+  });
   for (const name of ['one', 'two']) {
     await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
     await writeFile(path.join(fixture.paths.mind, 'user', 'state', `${name}.md`), `unit: ${name}\nunit-id: root:${name}\nrole: executor\nstate: out\nlead-id: root:overseer\n\nRetained.\n`);
@@ -31,7 +35,7 @@ async function world(t) {
   };
   const context = createSettingsOwner({ ...fixture, now: () => fixture.clock.now, homeDir: fixture.home, env: { PATH: '' }, projects: [], gitRunner, probeAgents: async () => ({}) });
   context.ledger = openLedger({ store: fixture.store, paths: fixture.paths, now: context.now, machine: fixture.machine });
-  return { fixture, context };
+  return { fixture, context, cleanups };
 }
 function file(context, id) { return path.join(context.paths.mind, 'user', 'gui', 'groups', `${id}.json`); }
 async function legacyGroup(context, title, members) {
@@ -200,8 +204,8 @@ test('cluster agents derive stable names, owner and nearest lead while retaining
 });
 
 test('HTTP clusters enforce exact bodies, explicit owner and replay without exposing phone mutations', async t => {
-  const { fixture, context } = await world(t);
-  const core = await composeCore({ ...context, origin: fixture.paths.origin, projects: [] }); t.after(() => core.http.close());
+  const { fixture, context, cleanups } = await world(t);
+  const core = await composeCore({ ...context, origin: fixture.paths.origin, projects: [] }); cleanups.push(() => core.http.close());
   const origin = `http://127.0.0.1:${core.http.port}`;
   const login = await fetch(`${origin}/api/v1/auth/local`, { method: 'POST', headers: { origin, authorization: `Bearer ${core.bootstrap.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }) });
   const token = (await login.json()).data.token;

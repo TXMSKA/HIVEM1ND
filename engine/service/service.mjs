@@ -69,6 +69,7 @@ export async function startService(options, retained = null) {
     bootstrapState: { valid: false, secret: null, secretBytes: null, file: null, record: null },
     receiptPrincipals: options.receiptPrincipals ?? new Map(),
     recoveryHosts: options.recoveryHosts ?? new Map(),
+    injectedAdapters: retained?.injectedAdapters ?? options.adapters ?? null,
   });
   const credentials = handle.credentials;
   handle.credentials = {
@@ -354,13 +355,14 @@ export function restartService(handle) {
     if (!handle.guard?.listening || lock?.nonce !== handle.nonce || lock.digest !== handle.lock.digest) {
       throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
     }
-    const options = { ...handle.options, port: handle.http.port, credentials: undefined, bus: undefined,
+    const options = { ...handle.options, port: handle.http.port, credentials: undefined, bus: undefined, adapters: handle.injectedAdapters,
       receiptPrincipals: handle.receiptPrincipals, recoveryHosts: handle.recoveryHosts };
     handle.stopping = true;
     handle.bootstrapState.valid = false;
     for (const audience of ['desktop', 'phone', 'agent']) handle.credentials.revokeAudience(audience);
     await unlink(bootstrapPath(options)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await closeOwned(handle);
+    for (const adapter of new Set(Object.values(handle.injectedAdapters ?? {}))) adapter.reopen?.();
     for (const file of [activePath(options), shutdownPath(options)]) await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
     // Keep the user guard and lock throughout replacement so contenders can only attach.
     return startService(options, handle);
@@ -638,7 +640,15 @@ export async function composeCore(options) {
   await recoverRuns(runContext);
   const runSupervisor = await openRunSupervisor(runContext);
   const closeHttp = http.close.bind(http);
-  http.close = async () => { await closeRunSupervisor(runContext); await drainRunLaunches(runContext); await closeRunProcesses(runContext); return closeHttp(); };
+  http.close = async () => {
+    http.stopAdmission();
+    await closeRunSupervisor(runContext);
+    await Promise.allSettled(Object.values(options.adapters ?? {}).map(adapter => adapter.close?.()));
+    await http.drainRequests();
+    await drainRunLaunches(runContext);
+    await closeRunProcesses(runContext);
+    return closeHttp();
+  };
   try {
     await publishBootstrap({ ...options, paths }, http.port, bootstrap);
     await armServiceBeat(runtime);
@@ -793,6 +803,7 @@ function bindRuntime(handle) {
   const closeHttp = handle.http.close.bind(handle.http);
   handle.http.close = async () => {
     try {
+      await handle.http.drain();
       await closeServiceSync(handle.runtime);
     } finally {
       await closeHttp();
@@ -1558,13 +1569,16 @@ async function armServiceBeat(runtime) {
 }
 
 async function closeOwned(handle, { beat = true } = {}) {
+  handle.http?.stopAdmission();
+  let runContext;
   if (handle.options?.store) {
-    const runContext = { ...handle.options, paths: servicePathsFor(handle.options), now: handle.options.now ?? (() => Date.now()) };
+    runContext = { ...handle.options, paths: servicePathsFor(handle.options), now: handle.options.now ?? (() => Date.now()) };
     await closeRunSupervisor(runContext);
-    await drainRunLaunches(runContext); await closeRunProcesses(runContext);
   }
   await handle.adopted?.controller?.close?.();
   if (handle.adapters?.close) await handle.adapters.close().catch(() => {});
+  await handle.http?.drainRequests();
+  if (runContext) { await drainRunLaunches(runContext); await closeRunProcesses(runContext); }
   if (handle.http?.close) await handle.http.close().catch(() => {});
   else if (handle.runtime && !handle.runtime.closed) await closeServiceSync(handle.runtime, { beat }).catch(() => {});
   if (handle.listener?.close) await handle.listener.close().catch(() => {});

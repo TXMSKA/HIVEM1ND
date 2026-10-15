@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { composeCore } from '../engine/service/service.mjs';
 import { createText, readEditor, replaceText } from '../engine/service/editors.mjs';
 import { applyPack } from '../engine/sync/apply.mjs';
+import { openLedger, reservePublication, SYNC_BYTES_MAX } from '../engine/sync/limits.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
 import { listStaged } from '../engine/sync/store.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
@@ -32,6 +33,10 @@ async function boot(t, setup) {
     now: () => fixture.clock.now, principal: { audience: 'desktop', unitId: 'root:master' },
   };
   const extra = await setup?.(context);
+  // These assertions inspect pending changes, including baselines staged during boot.
+  // Keep publication paused before it can acknowledge them on a slow machine.
+  const ledger = openLedger({ ...context, machine: fixture.machine });
+  await reservePublication(ledger, { id: 'hold-local-observations', messages: 0, bytes: SYNC_BYTES_MAX });
   const core = await composeCore({ ...context, clients: [], env: fixture.env, port: 0 });
   Object.assign(context, { pulse: core.runtime.pulse, sync: core.runtime.sync, ledger: core.runtime.ledger, bus: core.bus });
   const cores = [core];

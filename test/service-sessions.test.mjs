@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cancelStart, clientRecords, completeSessionTask, consumeStart, createNativeAdapter, enqueueStart, parseClaudeLine, parseCodexLine, parseCursorLine, probeClients, readStartRequest, recoverStarts, registerNative, sessionGitPermissions, stopSession } from '../engine/service/adapters.mjs';
 import { readDetail } from '../engine/service/projection.mjs';
-import { composeCore, openNativeAdapters } from '../engine/service/service.mjs';
+import { composeCore, openNativeAdapters, restartService, startService, stopService } from '../engine/service/service.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -20,6 +20,8 @@ import { bindManualAdditionContent } from '../engine/relay/local-wake.mjs';
 import { closeBridge, createNativeLaunch, dispatchNative, openBridge } from '../engine/service/bridge.mjs';
 import { createCluster } from '../engine/service/clusters.mjs';
 import { directoryIdentity, readRepositoryIdentity } from '../engine/service/cluster-git.mjs';
+import { createPlan } from '../engine/service/plans.mjs';
+import { readRun } from '../engine/service/runs.mjs';
 
 async function linkRepository(context, directory) {
   await mkdir(directory, { recursive: true });
@@ -30,7 +32,7 @@ async function linkRepository(context, directory) {
   await writeFile(path.join(context.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
     'repository:shop': { machine: 'DESKTOP', localPath: directory, identity: await directoryIdentity(directory), repositoryId: identity.id },
   } }));
-  await createCluster(context, { title: 'Shop', members: [UNIT], machine: 'DESKTOP', parentId: null, link: { kind: 'repository', projectId: 'shop' }, confirmed: true });
+  return createCluster(context, { title: 'Shop', members: [UNIT], machine: 'DESKTOP', parentId: null, link: { kind: 'repository', projectId: 'shop' }, confirmed: true });
 }
 
 async function scopedPackage(context, requirements = []) {
@@ -119,7 +121,12 @@ function state() {
 
 async function world(t, transcript = CODEX) {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  const cleanups = [];
+  t.after(async () => {
+    for (const cleanup of cleanups.reverse()) await cleanup();
+    await Promise.all(Object.values(context.adapters).map(adapter => adapter.close?.()));
+    await dispose(fixture);
+  });
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
   const file = path.join(fixture.paths.mind, 'user', 'state', 'executor-shop.md');
   await writeFile(file, state());
@@ -141,7 +148,7 @@ async function world(t, transcript = CODEX) {
     projects: [{ name: 'shop', localPath: fixture.root }],
     ownedPids: new Set(),
   };
-  return { fixture, context, calls, signaled, file };
+  return { fixture, context, calls, signaled, file, cleanup: close => cleanups.push(close) };
 }
 
 async function start(context, file, extra = {}) {
@@ -595,6 +602,8 @@ test('a failed native start can be retried and an unconsumed request expires ove
     now: () => fixture.clock.now,
     projects,
     adapters: { codex: adapter },
+    env: fixture.env,
+    clients: [],
   });
   t.after(async () => {
     await core.http.close();
@@ -625,12 +634,8 @@ test('a failed native start can be retried and an unconsumed request expires ove
   });
   assert.equal(retried.status, 202);
   assert.equal(retried.json.data.state, 'queued');
-  let reconciled;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    reconciled = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${retried.json.data.requestId}`, { token });
-    if (reconciled.json.data.state === 'started') break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await Promise.all([...fixture.store.sessionLaunches.values()]);
+  const reconciled = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${retried.json.data.requestId}`, { token });
   assert.equal(reconciled.json.data.state, 'started');
   const queued = await enqueueStart({
     store: fixture.store,
@@ -1158,7 +1163,7 @@ test('Cursor and Claude task failures wait for their real terminal result and na
 });
 
 test('HTTP start responds while native creation is pending so its exact request can be canceled', async (t) => {
-  const { fixture, context, file, calls, signaled } = await world(t);
+  const { fixture, context, file, calls, signaled, cleanup } = await world(t);
   await linkRepository(context, fixture.root);
   let entered;
   const ready = new Promise((resolve) => { entered = resolve; });
@@ -1166,8 +1171,9 @@ test('HTTP start responds while native creation is pending so its exact request 
   const gate = new Promise((resolve) => { release = resolve; });
   const create = context.adapters.codex.create.bind(context.adapters.codex);
   context.adapters.codex.create = async (request) => { entered(); await gate; return create(request); };
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects, adapters: context.adapters, ownedPids: context.ownedPids, env: { PATH: process.env.PATH } });
-  t.after(() => core.http.close());
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects, adapters: context.adapters, ownedPids: context.ownedPids, env: fixture.env, clients: [] });
+  cleanup(() => core.http.close());
+  cleanup(() => release());
   const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   const token = local.json.data.token;
   const headers = { 'idempotency-key': randomUUID() };
@@ -1194,6 +1200,113 @@ test('HTTP start responds while native creation is pending so its exact request 
   assert.equal(signaled.length, 1);
   const reread = await jsonCall(core.http.port, 'GET', `/api/v1/session-requests/${requestId}`, { token });
   assert.equal(reread.json.data.state, 'canceled');
+});
+
+test('HTTP shutdown drains a pending start before closing sync and prevents a late native creation', async t => {
+  const { fixture, context, file, cleanup } = await world(t);
+  await linkRepository(context, fixture.root);
+  const adapter = context.adapters.codex;
+  const create = adapter.create.bind(adapter);
+  const close = adapter.close.bind(adapter);
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  const adapterClosed = Promise.withResolvers();
+  adapter.create = async request => { entered.resolve(); await released.promise; return create(request); };
+  adapter.close = async () => { await close(); adapterClosed.resolve(); };
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects,
+    adapters: context.adapters, ownedPids: context.ownedPids, env: fixture.env, clients: [] });
+  cleanup(() => core.http.close());
+  cleanup(() => released.resolve());
+  const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const token = local.json.data.token;
+  const started = await jsonCall(core.http.port, 'POST', `/api/v1/units/${UNIT}/session`, { token,
+    headers: { 'idempotency-key': randomUUID() }, body: { runMode: 'chat', expectedRevision: hashBytes(await readFile(file)) } });
+  assert.equal(started.status, 202);
+  await entered.promise;
+  const closing = core.http.close();
+  await adapterClosed.promise;
+  assert.equal(core.runtime.closed, false);
+  assert.equal((await jsonCall(core.http.port, 'GET', '/api/v1/viewer', { token })).status, 503);
+  released.resolve();
+  await closing;
+  assert.equal(fixture.store.sessionLaunches.size, 0);
+  assert.equal(core.runtime.closed, true);
+  const request = await readStartRequest(context, started.json.data.requestId, { readOnly: true });
+  assert.equal(request.result.state, 'failed');
+  assert.equal(request.result.error.code, 'client_unavailable');
+  await assert.rejects(adapter.create({}), { code: 'client_unavailable' });
+  const writes = fixture.store.writes.length;
+  await tick();
+  assert.equal(fixture.store.writes.length, writes);
+});
+
+test('a running restart reopens a drained injected adapter and terminal shutdown keeps it closed', async t => {
+  const { fixture, context, file, calls, cleanup } = await world(t);
+  await linkRepository(context, fixture.root);
+  const adapter = context.adapters.codex;
+  const initial = await adapter.create({ unitId: UNIT });
+  const service = await startService({ ...context, env: fixture.env, clients: [], guardPort: 0, userKey: fixture.root });
+  cleanup(() => stopService(service, { force: true }));
+  assert.equal(await adapter.confirm({ client: 'codex', unitId: UNIT, nativeSessionId: initial.nativeSessionId }), true);
+  await restartService(service);
+  assert.equal(service.adapters.adapters.codex, adapter);
+  assert.equal(await adapter.confirm({ client: 'codex', unitId: UNIT, nativeSessionId: initial.nativeSessionId }), false);
+  const restarted = await start(context, file, { runMode: 'chat' });
+  assert.equal(restarted.result.state, 'started');
+  assert.equal(calls.create, 2);
+  await stopService(service, { force: true });
+  await assert.rejects(adapter.create({ unitId: UNIT }), { code: 'client_unavailable' });
+});
+
+test('shutdown drains a plan start admitted before its body completes before closing sync', async t => {
+  const { fixture, context, cleanup } = await world(t);
+  const cluster = await linkRepository(context, fixture.root);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'tasks'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'user', 'tasks', '001.md'), `id: root:001\ntitle: Plan task\nstatus: open\nfrom-id: root:master\nto-id: ${UNIT}\n\n## Request\nFinish the task.\n`);
+  const assignment = { kind: 'unit', unitId: UNIT, runsIn: { client: 'codex', model: 'strong', effort: 'high', mode: null } };
+  const plan = await createPlan(context, { clusterId: cluster.id, chatId: cluster.chatId, machine: fixture.machine, title: 'Closing plan',
+    branch: 'closing-plan', mode: 'planning', tasks: [{ id: 'root:001', title: 'Plan task', assignment }],
+    roles: { coordinator: assignment, planner: assignment, builder: assignment, reviewer: assignment },
+    expectedChatRevision: (await readDetail(context, 'chats', cluster.chatId)).revision });
+  const adapter = context.adapters.codex, create = adapter.create.bind(adapter), close = adapter.close.bind(adapter);
+  const entered = Promise.withResolvers(), released = Promise.withResolvers(), adapterClosed = Promise.withResolvers();
+  adapter.create = async request => { entered.resolve(); await released.promise; return create(request); };
+  adapter.close = async () => { await close(); adapterClosed.resolve(); };
+  const core = await composeCore({ ...context, env: fixture.env, clients: [] });
+  cleanup(() => core.http.close());
+  cleanup(() => released.resolve());
+  const local = await jsonCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null } });
+  const body = Buffer.from(JSON.stringify({ confirmed: true, expectedRevision: plan.revision }));
+  const admitted = Promise.withResolvers();
+  core.http.server.once('request', admitted.resolve);
+  let pending;
+  const result = new Promise((resolve, reject) => {
+    pending = httpRequest({ host: '127.0.0.1', port: core.http.port, method: 'POST', path: `/api/v1/plans/${plan.id}/run`,
+      headers: { host: `127.0.0.1:${core.http.port}`, origin: `http://127.0.0.1:${core.http.port}`, authorization: `Bearer ${local.json.data.token}`,
+        'content-type': 'application/json', 'content-length': body.length, 'idempotency-key': randomUUID() } }, response => {
+      const chunks = []; response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve({ status: response.statusCode, json: JSON.parse(Buffer.concat(chunks)) }));
+    });
+    pending.on('error', reject); pending.write(body.subarray(0, 1));
+  });
+  cleanup(() => pending.destroy());
+  await admitted.promise;
+  const closing = core.http.close();
+  await adapterClosed.promise;
+  pending.end(body.subarray(1));
+  const started = await result;
+  assert.equal(started.status, 202);
+  await entered.promise;
+  await tick();
+  assert.equal(core.runtime.closed, false);
+  released.resolve();
+  await closing;
+  assert.equal(fixture.store.planLaunches.size, 0);
+  assert.equal(core.runtime.closed, true);
+  const run = await readRun(context, started.json.data.runId);
+  assert.equal(run.alerts.some(alert => alert.kind === 'cleanup'), true);
 });
 
 function jsonCall(port, method, target, { token = null, body = undefined, headers = {} } = {}) {

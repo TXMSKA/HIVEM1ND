@@ -17,7 +17,8 @@ function state(unit, id, role) {
 
 async function world(t) {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  const cleanups = [];
+  t.after(async () => { for (const cleanup of cleanups.toReversed()) await cleanup(); await dispose(fixture); });
   const root = fixture.paths.mind;
   await mkdir(path.join(root, 'user', 'state'), { recursive: true });
   await writeFile(path.join(root, 'user', 'state', 'executor-shop.md'), state('executor-shop', 'project:shop:executor-shop', 'executor'));
@@ -30,7 +31,7 @@ async function world(t) {
     ledger,
     principal: { stableId: 'desktop', audience: 'desktop', unitId: 'root:master' },
   };
-  return { fixture, context };
+  return { fixture, context, cleanups };
 }
 
 test('direct chats are reused, groups stay bounded, and history survives unlist', async (t) => {
@@ -354,13 +355,13 @@ test('mailbox delivery uses recipient submission and only the recipient can prod
 });
 
 for (const failure of ['response loss', 'partial transaction']) test(`a chat ${failure} replays one durable message and one recipient notice`, async (t) => {
-  const { fixture } = await world(t);
+  const { fixture, cleanups } = await world(t);
   const origin = path.join(fixture.root, 'origin');
   await mkdir(origin, { recursive: true });
   const notices = [];
   const core = await composeCore({ store: fixture.store, paths: { ...fixture.paths, origin }, now: () => fixture.clock.now,
     wake: { notify: async (notice) => { notices.push(notice.key); return { state: 'submitted' }; } } });
-  t.after(() => core.http.close());
+  cleanups.push(() => core.http.close());
   const local = await httpCall(core.http.port, 'POST', '/api/v1/auth/local', { token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } });
   assert.equal(local.status, 201);
   const token = local.json.data.token;

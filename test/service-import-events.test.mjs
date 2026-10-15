@@ -39,7 +39,12 @@ test('two cores project imported tasks, encoded notices and editor sidecars once
   }
   const options = fixture => ({ store: fixture.store, paths: { ...fixture.paths, origin }, projects: [{ name: 'shop', localPath: fixture.project }], now: Date.now, clients: [] });
   async function start(fixture, bus = createEventBus({ machine: fixture.machine, mind: fixture.paths.mind })) {
-    return { ...await startService({ ...options(fixture), bus, env: fixture.env, guardPort: 0, userKey: fixture.machine }), bus };
+    const service = await startService({ ...options(fixture), bus, env: fixture.env, guardPort: 0, userKey: fixture.machine });
+    // Every publication in this scenario has an explicit flush; do not let an
+    // automatic flush capture an earlier batch while the next mutation is staged.
+    await service.runtime.pulse.close().done;
+    await service.runtime.reconciling;
+    return { ...service, bus };
   }
   a = await start(left);
   b = await start(right);
@@ -70,6 +75,7 @@ test('two cores project imported tasks, encoded notices and editor sidecars once
   await replyComment(context, text.id, comment.thread.id, { text: 'Checked', expectedCommentsRevision: comment.commentsRevision });
   await a.runtime.pulse.flush();
   await waitFor(() => frames.some(frame => frame.name === 'comment.changed' && frame.data.data.thread.messages.length === 2));
+  await b.runtime.reconciling;
   assert.ok(frames.some(frame => frame.name === 'editor.attachments.changed' && frame.data.data.revision === attachment.revision));
   assert.equal(b.runtime.lastError, null);
   const count = frames.length;
@@ -77,7 +83,7 @@ test('two cores project imported tasks, encoded notices and editor sidecars once
   const pack = await readOriginPack(a.runtime.origin, 'ALPHA', head.sequence);
   const replay = await applyPack(b.runtime.sync, pack, { projects: b.runtime.sync.projects });
   assert.equal(replay.replayed, true);
-  await new Promise(resolve => setTimeout(resolve, 150));
+  await b.runtime.reconciling;
   assert.equal(frames.length, count);
   b.bus.release(subscriber);
   await stopService(b);
@@ -85,7 +91,7 @@ test('two cores project imported tasks, encoded notices and editor sidecars once
   const bus = createEventBus({ machine: 'BRAVO', mind: right.paths.mind });
   bus.subscribe({ ...principal, stableId: randomUUID() }, {}, frame => restartedEvents.push(frame));
   b = await start(right, bus);
-  await new Promise(resolve => setTimeout(resolve, 250));
+  await b.runtime.reconciling;
   assert.equal(restartedEvents.filter(frame => frame.data.source.kind === 'sync').length, 0);
   assert.equal(b.runtime.lastError, null);
   assert.match(await readFile(path.join(right.paths.mind, 'user/projects/shop/tasks/001-release.md'), 'utf8'), /status: review/);

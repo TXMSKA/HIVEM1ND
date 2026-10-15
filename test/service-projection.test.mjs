@@ -420,9 +420,9 @@ test('unit, lead, layout, and settings writes are validated before any file chan
 
 test('a loopback projection read returns the same list shape', async (t) => {
   const fixture = await makeCoreFixture({ now: NOW });
-  t.after(() => dispose(fixture));
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
-  t.after(() => core.http.close());
+  let core;
+  t.after(async () => { await core?.http.close(); await dispose(fixture); });
+  core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now });
   const token = await new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }));
     const req = httpRequest({

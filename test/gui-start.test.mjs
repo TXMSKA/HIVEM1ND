@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -13,27 +13,33 @@ import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function world(t, repositories = true) {
   const fixture = await makeCoreFixture(), origin = path.join(fixture.root, 'origin');
+  let core, api, adapter;
+  t.after(async () => {
+    if (api) disposeApi(api);
+    try { await core?.http.close(); await adapter?.close(); }
+    finally { await dispose(fixture); }
+  });
   await mkdir(origin, { recursive: true });
   const directory = path.join(fixture.home, 'Web', 'shop');
   if (repositories) {
     await mkdir(directory, { recursive: true });
-    const git = (...args) => execFileSync('git', args, { cwd: directory, shell: false, windowsHide: true, timeout: 10000, stdio: 'ignore', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL', GIT_TERMINAL_PROMPT: '0' } });
-    git('init', '-b', 'main'); await writeFile(path.join(directory, 'source.txt'), 'Retained source.\n');
-    git('add', 'source.txt'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Fixture');
-    git('worktree', 'add', '-b', 'review', path.join(fixture.home, 'Web', 'shop-work'));
+    const git = (...args) => new Promise((resolve, reject) => execFile('git', args, { cwd: directory, shell: false, windowsHide: true, signal: t.signal,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL', GIT_TERMINAL_PROMPT: '0' } }, error => error ? reject(error) : resolve()));
+    await git('init', '-b', 'main'); await writeFile(path.join(directory, 'source.txt'), 'Retained source.\n');
+    await git('add', 'source.txt'); await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Fixture');
+    await git('worktree', 'add', '-b', 'review', path.join(fixture.home, 'Web', 'shop-work'));
   }
-  const adapter = createNativeAdapter('codex', { fixture: true, models: ['observed'], transcript: ['{"id":1,"result":{"thread":{"id":"owned"}}}'] });
+  adapter = createNativeAdapter('codex', { fixture: true, models: ['observed'], transcript: ['{"id":1,"result":{"thread":{"id":"owned"}}}'] });
   const launches = [], nativeCreate = adapter.create.bind(adapter);
   adapter.create = async input => { launches.push(input); return nativeCreate(input); };
   const options = { store: fixture.store, paths: { ...fixture.paths, origin }, now: () => fixture.clock.now, homeDir: fixture.home,
     env: fixture.env, projects: [], adapters: { codex: adapter }, ownedPids: new Set(), probeAgents: async () => ({}) };
-  const core = await composeCore(options);
+  core = await composeCore(options);
   const address = `http://127.0.0.1:${core.http.port}`;
   const response = await fetch(`${address}/api/v1/auth/local`, { method: 'POST', headers: { origin: address, authorization: `Bearer ${core.bootstrap.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }) });
   assert.equal(response.status, 201);
   const token = (await response.json()).data.token;
-  const api = createApi({ location: { origin: address, hash: '' }, fetch }); api.token = token;
-  t.after(async () => { disposeApi(api); await core.http.close(); await adapter.close(); await dispose(fixture); });
+  api = createApi({ location: { origin: address, hash: '' }, fetch }); api.token = token;
   return { fixture, core, options, api, directory, launches };
 }
 

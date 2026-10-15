@@ -81,16 +81,17 @@ for (const reason of ['closed', 'replaced', 'expired']) {
 
 test('a restarted service retains no home grant and rejects the former phone credential', async t => {
   const address = eligibleAddresses()[0]; assert.ok(address);
-  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const fixture = await makeCoreFixture(), cores = [];
+  t.after(async () => { for (const core of cores.toReversed()) await core.http.close(); await dispose(fixture); });
   const options = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, interfaces: () => [address] };
-  const first = await composeCore(options); t.after(() => first.http.close());
+  const first = await composeCore(options); cores.push(first);
   const origin = `http://127.0.0.1:${first.http.port}`;
   const local = await call(origin, 'POST', '/api/v1/auth/local', first.bootstrap.secret, { embedded: false, hostOrigin: null, look: null, language: null });
   const grant = (await call(origin, 'POST', '/api/v1/settings/home-network', local.json.data.token, { enabled: true })).json.data;
   const phone = (await call(grant.addresses[0].origin, 'POST', '/api/v1/auth/home', null, { key: grant.key })).json.data.token;
   await first.http.close();
   assert.throws(() => first.credentials.verify(phone), { code: 'invalid_session' });
-  const next = await composeCore(options); t.after(() => next.http.close());
+  const next = await composeCore(options); cores.push(next);
   const nextOrigin = `http://127.0.0.1:${next.http.port}`;
   assert.equal((await call(nextOrigin, 'GET', '/api/v1/view', phone)).status, 401);
   const desktop = (await call(nextOrigin, 'POST', '/api/v1/auth/local', next.bootstrap.secret, { embedded: false, hostOrigin: null, look: null, language: null })).json.data.token;
