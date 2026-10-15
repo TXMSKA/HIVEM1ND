@@ -3683,7 +3683,16 @@ function rememberOverseerOffer(app) {
   try { app.startStorage?.setItem(`hivem1nd:overseer:${app.selectedFolder}`, 'dismissed'); } catch { /* Storage can be unavailable in a private viewer. */ }
 }
 
-function maybeStartDiscovery(app) {
+function overseerListed(units) {
+  return Array.isArray(units) && units.some(unit => unit && unit.removed !== true && (unit.id === 'root:overseer' || unit.role === 'overseer'));
+}
+
+function overseerExists(app) {
+  const view = app.store.view;
+  return overseerListed(view?.units) || overseerListed(view?.allUnits) || overseerListed(app.unitList?.catalog) || overseerListed([...(app.store.indexes?.units?.values?.() ?? [])]);
+}
+
+export function maybeStartDiscovery(app) {
   if (app.disposed || app.startDialog || app.layout !== 'desktop' || !app.store.capabilities.includes('unit.create') || app.startError) return;
   const offer = app.startProjects?.discoveryOffer;
   if (offer && !offer.dismissed && !app.answeredOffers?.has(offer.id) && repositorySelection(offer).size) {
@@ -3705,7 +3714,7 @@ function maybeStartDiscovery(app) {
       }) });
     flow.model = model; app.startDialog = flow; return;
   }
-  const exists = (app.unitList?.catalog ?? [...app.store.indexes.units.values()]).some(unit => unit.id === 'root:overseer');
+  const exists = overseerExists(app);
   let dismissed = app.overseerOffered;
   try { dismissed ||= app.startStorage?.getItem(`hivem1nd:overseer:${app.selectedFolder}`) === 'dismissed'; } catch { /* In-memory dismissal still applies. */ }
   if (!exists && !dismissed) openStartAgent(app, null, true);
@@ -5882,7 +5891,7 @@ function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes('unit.create') && !(app.unitList?.catalog ?? []).some(unit => unit.id === 'root:overseer')) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
+  if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
   if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
   if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);

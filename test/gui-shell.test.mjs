@@ -21,7 +21,7 @@ import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
 import { checkoutFacts, renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
-import { dispose, knownLanguage, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
+import { dispose, knownLanguage, maybeStartDiscovery, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
@@ -3882,6 +3882,27 @@ test('a superseded start report waits for the winning read before offering the O
   assert.equal(app.startError, null);
 });
 
+function discoveryApp(units) {
+  const { document, root } = createTestDocument(1440);
+  const app = {
+    root, layout: 'desktop', language: 'en', selectedFolder: 'mind', overseerOffered: false, startDialog: null, startError: null,
+    startProjects: {}, startAgents: { connectedClients: [{ id: 'codex', connected: true, title: 'Codex', scopeEnforced: true, models: [{ id: 'observed', title: 'Observed', efforts: ['high'] }] }], defaultRunsIn: null },
+    startStorage: { getItem: () => null, setItem() {} },
+    unitList: { catalog: [] },
+    store: { capabilities: ['unit.create'], view: { units, mind: { machine: 'DESKTOP' } }, indexes: { units: new Map(), groups: new Map() }, selected: {}, settings: null },
+  };
+  return { app, document };
+}
+
+test('an existing Overseer is not offered when the unit list is still empty', () => {
+  const offered = discoveryApp([{ id: 'root:overseer', role: 'overseer', unit: 'overseer', removed: false }]);
+  maybeStartDiscovery(offered.app);
+  assert.equal(offered.document.querySelector('[data-start-dialog="overseer"]') == null, true);
+  const first = discoveryApp([]);
+  maybeStartDiscovery(first.app);
+  assert.ok(first.document.querySelector('[data-start-dialog="overseer"]'));
+});
+
 test('first-open Later persists without a launch and explicit Overseer creation reconciles a lost response once', async t => {
   const storage = new Map(), writes = []; let drop = true;
   const desktop = await startCoreDesktop(t, { storage: { getItem: key => storage.get(key), setItem: (key,value) => storage.set(key,value) }, afterFetch: async (input, init, response) => {
@@ -3893,7 +3914,10 @@ test('first-open Later persists without a launch and explicit Overseer creation 
   } });
   let dialog = desktop.document.querySelector("[data-start-dialog='overseer']"); assert.ok(dialog);
   assert.equal(desktop.root.querySelector("[data-unit-id='root:master']"), null); assert.equal(desktop.launches.length, 0);
-  click(dialog.querySelector("[data-action='cancel-agent']")); assert.equal(storage.size, 1);
+  const beforeDismissal = storage.size;
+  click(dialog.querySelector("[data-action='cancel-agent']"));
+  assert.equal(storage.size, beforeDismissal + 1);
+  assert.equal(storage.get(`hivem1nd:overseer:${desktop.app.selectedFolder}`), 'dismissed');
   renderShell(desktop.app); assert.equal(desktop.document.querySelector("[data-start-dialog='overseer']"), null);
   click(desktop.root.querySelector("[data-action='create-overseer']"));
   await waitFor(() => desktop.document.querySelector("[data-start-dialog='overseer']"), 'The Overseer choice did not reopen.');
