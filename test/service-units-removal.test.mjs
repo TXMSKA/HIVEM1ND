@@ -5,7 +5,9 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { createNativeAdapter, enqueueStart, registerNative } from '../engine/service/adapters.mjs';
-import { createChat, postMailbox } from '../engine/service/chats.mjs';
+import { createChat, postChat, postMailbox } from '../engine/service/chats.mjs';
+import { createCluster } from '../engine/service/clusters.mjs';
+import { directoryIdentity } from '../engine/service/cluster-git.mjs';
 import { createGroup, patchGroup } from '../engine/service/groups.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { readCollection, readDetail, readProjection } from '../engine/service/projection.mjs';
@@ -83,6 +85,36 @@ test('offline removal archives visibility, retains bytes and IDs, and Undo resto
   assert.equal((await readCollection(context, 'mailboxes')).items[0].unitId, UNIT);
   assert.deepEqual((await readCollection(context, 'groups')).items[0].members, group.members);
   assert.equal((await readCollection(context, 'chats')).items.some((item) => item.id === chat.id), true);
+  assert.equal(signaled.length, 0);
+});
+
+test('removing a linked cluster sole agent preserves its empty cluster, chat and link and Undo restores them', async (t) => {
+  const { fixture, context, file, input, signaled } = await world(t);
+  const directory = path.join(fixture.root, 'linked-folder'), folderId = randomUUID();
+  await mkdir(directory);
+  const linksFile = path.join(context.paths.localDirectory, 'cluster-links.json');
+  await writeFile(linksFile, JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: fixture.machine,
+    links: { [`folder:${folderId}`]: { localPath: directory, machine: fixture.machine, identity: await directoryIdentity(directory) } } }));
+  const cluster = await createCluster(context, { title: 'Linked', parentId: null, link: { kind: 'folder', folderId },
+    members: [UNIT], machine: fixture.machine, confirmed: true });
+  const posted = await postChat(context, cluster.chatId, { body: 'Keep the cluster conversation.' });
+  const clusterFile = path.join(context.paths.mind, 'user', 'gui', 'groups', `${cluster.id}.json`);
+  const chatFile = path.join(context.paths.mind, 'user', 'relay', 'chats', cluster.chatId, 'chat.md');
+  const [stateBefore, clusterBefore, chatBefore, linksBefore] = await Promise.all([file, clusterFile, chatFile, linksFile].map(target => readFile(target)));
+  const removed = await removeUnit(context, UNIT, input);
+  const remaining = (await readCollection(context, 'groups')).items.find(item => item.id === cluster.id);
+  assert.deepEqual(remaining.members, []);
+  assert.deepEqual(remaining.link, cluster.link);
+  assert.equal(remaining.deleted, false);
+  const chat = await readDetail(context, 'chats', cluster.chatId);
+  assert.equal(chat.archived, false);
+  assert.equal(chat.listed, true);
+  assert.deepEqual(chat.members, ['root:master']);
+  assert.equal((await readCollection(context, 'messages', { chatId: cluster.chatId })).items[0].id, posted.message.id);
+  assert.deepEqual(await readFile(linksFile), linksBefore);
+  assert.equal(signaled.length, 0);
+  await undoChange(context, removed.changeId);
+  assert.deepEqual(await Promise.all([file, clusterFile, chatFile, linksFile].map(target => readFile(target))), [stateBefore, clusterBefore, chatBefore, linksBefore]);
   assert.equal(signaled.length, 0);
 });
 
@@ -195,8 +227,11 @@ test('confirmation, revision, master, reports, groups and desktop authority are 
   await assert.rejects(removeUnit(context, UNIT, input), { code: 'unit_has_reports' });
   await writeFile(report, 'unit: report\nunit-id: root:report\nrole: executor\nstate: out\n\n');
   const group = await createGroup(context, { title: 'Single', members: [UNIT] });
+  const groupFile = path.join(context.paths.mind, 'user', 'gui', 'groups', `${group.id}.json`);
+  const legacy = { ...JSON.parse(await readFile(groupFile)), format: 'hivem1nd-group-v1' };
+  await writeFile(groupFile, JSON.stringify(legacy));
   await assert.rejects(removeUnit(context, UNIT, input), { code: 'invalid_members' });
-  await patchGroup(context, group.id, { members: [UNIT, 'root:two'], expectedRevision: group.revision });
+  await patchGroup(context, group.id, { members: [UNIT, 'root:two'], expectedRevision: hashBytes(await readFile(groupFile)) });
   assert.equal(signaled.length, 0);
 });
 

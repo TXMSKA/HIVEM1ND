@@ -42,7 +42,7 @@ export async function prepareUnitMembershipRemoval(context, unitId) {
     if (!group.members.includes(unitId)) continue;
     const current = await loadGroup(context, group.id);
     const members = current.record.members.filter((id) => id !== unitId);
-    if (!members.length) throw new CoreError(422, 'invalid_members', 'Remove the one-member group before removing its last unit.');
+    if (!members.length && current.record.format !== 'hivem1nd-cluster-v1') throw new CoreError(422, 'invalid_members', 'Remove the one-member group before removing its last unit.');
     const chatBytes = editChatMetadata(current.chatBytes, { members: ['root:master', ...members].sort() });
     const bytes = groupBytes({ ...current.record, members,
       formerMembers: [...new Set([...(current.record.formerMembers ?? []), unitId])], chatRevision: revisionOf(chatBytes) });
