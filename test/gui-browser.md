@@ -536,3 +536,19 @@ An earlier unrestricted combined run recorded 955 passes and one failure in `eve
 `npm.cmd run build` passed on the final source: hivem1nd@3.0.0, 391 packaged files, browser assets packaged. Its archive was restored to its pre-build bytes. No real native session, staging or commit was performed.
 
 `npm.cmd run lint` passed after the tests exited: 231 Markdown files, 0 issues, exit 0. `git diff --check` passed without whitespace errors. The pre-existing integration-plan amendment was preserved.
+
+## T063 automated-gate evidence, 2026-10-15
+
+Commands ran separately at the repository root through `npm.cmd` on 15 October 2026. No production file was changed. `npm.cmd test` enumerated every `test/*.test.mjs` file, 133 files. `npm.cmd run test:core` enumerated the 115 of those files whose names do not start with `gui-`.
+
+The first `npm.cmd test` exited 1. The reporter printed 1609 tests, 2 suites, 1607 passed, 1 failed, 0 cancelled, 1 skipped, 0 todo, and 267236.1279 ms. The failure was `T094 actual-core Add selects one repository cluster, creates only an explicitly chosen agent and manages Content and links` at `test/gui-shell.test.mjs:6093`, error `Content Undo did not restore it.` That test then passed alone: exit 0, 1 passed, 0 failed, 0 cancelled, 0 skipped, 7827.439 ms. The full suite was run again. The second run is the npm test result below.
+
+`npm.cmd test`: exit 0. The reporter printed 1609 tests, 2 suites, 1608 passed, 0 failed, 0 cancelled, 1 skipped, 0 todo, and 273674.7413 ms. No failing test names. The skipped test is `the home scan tolerates a directory it cannot list`, reason: `This platform does not enforce directory permissions for the current process.` The second run passed the T094 test named above.
+
+`npm.cmd run test:core`: exit 0. The reporter printed 1290 tests, 2 suites, 1289 passed, 0 failed, 0 cancelled, 1 skipped, 0 todo, and 241698.4488 ms. No failing test names. The skipped test is again `the home scan tolerates a directory it cannot list`, with the same platform reason.
+
+`npm.cmd run lint`: exit 0. markdownlint-cli2 v0.23.3 inspected 231 Markdown files and reported 0 issues.
+
+`npm.cmd run build`: exit 0. It printed `Built hivem1nd@3.0.0: dist/hivem1nd-3.0.0.tgz (391 files, 6 roles, 10 commands, 15 features). browser assets packaged.`
+
+`git diff --check`: exit 0. Its standard output was empty. Its standard error printed `warning: in the working copy of 'docs/3.0/integration.md', LF will be replaced by CRLF the next time Git touches it`. That amendment stays unstaged.
