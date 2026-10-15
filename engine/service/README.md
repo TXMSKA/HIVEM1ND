@@ -49,6 +49,15 @@ initialize its default consent window; retry, attach, and expiry do not renew an
 existing window. Supported hooks use the shared controller and retain the native
 prompt whenever a verified approval cannot be obtained.
 
+Claude Code and Cursor cannot be confined on Windows, so they start as they
+are, supervised: each native file change and command asks the person first,
+unless that agent was granted automatic work in Settings, Permissions. Even
+then native Git, `.git` folders and the M1ND folders stay denied. Every plan
+launch and every supervised launch is owned by a process handle
+(`process-handle.mjs`) that ends the whole process tree and proves it closed.
+Stop the step interrupts only the running turn, through each client's own
+protocol.
+
 Native protocol fixtures prove protocol handling and local service integration.
 They do not prove signed-in submission to Claude, Codex, or Cursor. Full release
 acceptance also requires an isolated real Windows registration and logon test.

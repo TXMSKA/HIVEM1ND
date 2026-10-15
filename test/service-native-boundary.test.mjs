@@ -333,6 +333,8 @@ test('a supervised Cursor launch asks through the ACP permission request and a p
   w.decide('deny');
   assert.equal(await request('edit', { locations: [{ path: target }] }), 'no');
   assert.equal(await request('execute', { rawInput: { command: 'git commit -m "Applied"' } }), 'no');
+  assert.equal(await request('read', { locations: [{ path: target }] }), 'no', 'a read is not a change or a command');
+  assert.equal(await request('fetch', { rawInput: { url: 'https://example.invalid' } }), 'no');
   assert.equal(w.asked.length, 2);
 });
 

@@ -1999,7 +1999,8 @@ export async function nativePermissionReply(message, request = {}) {
   if (message.method === 'item/permissions/requestApproval') return reply({ permissions: {}, scope: 'turn' });
   if (message.method === 'session/request_permission') {
     const call = params.toolCall ?? {}, input = call.rawInput ?? {};
-    const allow = await permission({ kind: call.kind === 'execute' ? 'process' : 'write', command: input.command,
+    // As for Claude Code, only a command or a file change can be approved; a read, a search, a fetch or any other tool stays denied.
+    const allow = ['execute', 'edit', 'delete', 'move'].includes(call.kind) && await permission({ kind: call.kind === 'execute' ? 'process' : 'write', command: input.command,
       cwd: request.cwd, paths: (call.locations ?? []).map(location => location.path) });
     const selected = params.options?.find(option => option.kind === (allow ? 'allow_once' : 'reject_once') && typeof option.optionId === 'string' && option.optionId.length > 0);
     return reply({ outcome: selected ? { outcome: 'selected', optionId: selected.optionId } : { outcome: 'cancelled' } });
