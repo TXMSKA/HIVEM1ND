@@ -68,7 +68,10 @@ test('the browser launcher restores a stopped singleton without losing a draft o
   const fixture = await makeCoreFixture();
   let host;
   let desktop;
-  t.after(async () => { if (desktop) dispose(desktop.app); await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
+  let holdMessageReads = false;
+  let releaseMessageReads;
+  const messageReads = new Promise(resolve => { releaseMessageReads = resolve; });
+  t.after(async () => { releaseMessageReads(); if (desktop) dispose(desktop.app); await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
   await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind,
     machine: fixture.machine, origin: { kind: 'folder', path: join(fixture.root, 'origin') }, stagingPath: fixture.paths.staging, port: 0 }));
   host = await startGui({ mindPath: fixture.paths.mind, env: fixture.env, home: fixture.home, platform: fixture.platform,
@@ -82,13 +85,18 @@ test('the browser launcher restores a stopped singleton without losing a draft o
     if (init.method === 'POST' && new URL(input).pathname.endsWith('/messages')) {
       sends.push(init.headers['Idempotency-Key']);
       if (sends.length === 1) { await response.arrayBuffer(); throw new Error('The reply was lost after commit.'); }
+      releaseMessageReads();
     }
+    if (init.method === 'GET' && new URL(input).pathname.endsWith('/messages') && holdMessageReads) await messageReads;
     return response;
   });
   await waitFor(() => desktop.app.recovery && desktop.app.chatList?.catalog?.length, 'The browser bridge did not load.');
   navigate(desktop.app, 'chats');
   desktop.app.activeHandlers.onActivate({ id: chat.id, kind: 'chat' }, 'double');
   await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The chat did not open.');
+  await desktop.app.activity.get(`chat-load:${chat.id}`).localWork;
+  // This case proves replay; a late authoritative read must not confirm the send before that replay.
+  holdMessageReads = true;
   closeStream(desktop.app.api.live);
   typeInput(desktop.root.querySelector('[data-composer]'), 'Send exactly once', 0, 17);
   click(desktop.root.querySelector('[data-action="send"]'));

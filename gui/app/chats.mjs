@@ -48,7 +48,11 @@ export async function loadMessages(api, thread, older = false) {
     thread.anchorId = thread.messages[0]?.id ?? null;
     thread.messages = [...fresh, ...thread.messages];
   } else {
-    for (const message of incoming) incomingMessage(thread, message, true);
+    for (const message of incoming) {
+      const pending = thread.pendingSends.get(message.operationId);
+      incomingMessage(thread, message, true);
+      if (pending && !thread.pendingSends.has(pending.operation.id)) api.uncertain.delete(pending.operation.id);
+    }
   }
   thread.nextCursor = result.data.nextCursor ?? null;
   thread.total = result.data.total ?? thread.messages.length;
