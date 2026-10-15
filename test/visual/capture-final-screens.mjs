@@ -67,7 +67,7 @@ async function runTask(task, { browser, spec, outDir }) {
     const work = (async () => {
       if (spec.boot !== null) world = await bootWorld({ language: task.language, look: task.look, ...(spec.boot ?? {}) });
       page = await browser.newPage();
-      await page.setViewport(task.viewport[0], task.viewport[1], { mobile: task.viewport[0] < 500 });
+      await page.setViewport(task.viewport[0], task.viewport[1], { mobile: task.viewport[0] < 500, language: task.language });
       ctx = makeContext({ task, world, page, browser, spec });
       await spec.seed?.(ctx);
       if (spec.entry !== 'none') await ctx.open();

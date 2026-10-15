@@ -45,13 +45,12 @@ async function installSettled(ctx, message) {
     && !document.querySelector('#continue-button')?.disabled, { timeout: 120000, message });
 }
 
-// The opening and failure frames render before the viewer's language is read (gui/app/main.mjs:259 starts at "en"; it is set only
-// at :1000 after GET /settings and GET /viewer). A Spanish viewer therefore sees them in English, which is not the Spanish state
-// the board lists, so the Spanish capture is refused with that reason instead of storing English text as Spanish evidence.
+// The opening frames choose a language before the read, from the stored viewer language or the browser languages.
+// The capture presents that choice before the page scripts run.
 async function requireLocalized(ctx, selector, [english, spanish]) {
   const wanted = ctx.es ? spanish : english;
   const shown = await ctx.page.eval(sel => document.querySelector(sel)?.textContent?.trim() ?? '', selector);
-  if (shown !== wanted) throw new Error(`The state is shown as "${shown}", not "${wanted}": the app has not read the viewer language yet (gui/app/main.mjs:259 and :1000), so the Spanish copy of this state never appears.`);
+  if (shown !== wanted) throw new Error(`The state is shown as "${shown}", not "${wanted}".`);
 }
 
 export const cases = {
@@ -158,8 +157,8 @@ export const cases = {
 
   '1.8': {
     // The initial read is delayed: the shell keeps the skeleton frame, the spinner and "Reading the M1ND" while the first reads
-    // (GET /view and GET /settings) are held. The last-known counts line (gui/app/main.mjs:1265) needs a snapshot at render time;
-    // none exists on a first open and the opening frame is not rendered again when one arrives, so the frame shows without it.
+    // (GET /view and GET /settings) are held. A first open has no stored last-known view, and this capture holds the read,
+    // so the counts line stays absent.
     entry: 'none',
     async reach(ctx) {
       const hold = makeGate();

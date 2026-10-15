@@ -142,10 +142,14 @@ export class Page {
     this.on('Fetch.requestPaused', event => this.paused(event));
     this.on('Page.javascriptDialogOpening', () => { this.send('Page.handleJavaScriptDialog', { accept: false }).catch(() => undefined); });
   }
-  async setViewport(width, height, { mobile = false } = {}) {
+  async setViewport(width, height, { mobile = false, language = 'en' } = {}) {
     this.viewport = [width, height];
+    const choice = language === 'es' ? 'es' : 'en';
+    const languages = choice === 'es' ? ['es-ES', 'es'] : ['en-US', 'en'];
     await this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile, screenWidth: width, screenHeight: height });
-    await this.send('Emulation.setUserAgentOverride', { userAgent: mobile ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36' : '', acceptLanguage: 'en-US' }).catch(() => undefined);
+    await this.send('Emulation.setUserAgentOverride', { userAgent: mobile ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36' : '', acceptLanguage: choice === 'es' ? 'es-ES,es;q=0.9' : 'en-US' }).catch(() => undefined);
+    // The opening and pairing frames choose a language before any viewer exists: the stored choice, else navigator.languages.
+    await this.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const choice = ${JSON.stringify(choice)}; const languages = ${JSON.stringify(languages)}; try { localStorage.setItem('hivem1nd:language', choice); } catch (error) {} const define = (name, value) => { try { Object.defineProperty(Navigator.prototype, name, { configurable: true, get() { return value; } }); } catch (error) {} }; define('languages', languages); define('language', languages[0]); })();` });
   }
   async setMedia(features) { await this.send('Emulation.setEmulatedMedia', { features }); }
   async navigate(url) {

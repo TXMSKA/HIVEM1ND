@@ -8,12 +8,12 @@ function maskCode(ctx) {
   ctx.mask('[data-home-code]', '.phone-code-cell');
 }
 
-// The pairing screen is drawn before any viewer settings are read, so a Spanish capture that still shows the
-// English heading is not the Spanish state. Signed-in screens read the language set on the shared Settings.
+// Pairing is drawn before a viewer exists. The capture presents the stored language, else the browser languages,
+// before the page scripts run. Signed-in screens still read the language set on the shared Settings.
 async function requirePairingLanguage(ctx) {
   const wanted = ctx.es ? PAIRING.es : PAIRING.en;
   const shown = await ctx.page.eval(() => document.querySelector('.phone-gate h1')?.textContent?.trim() ?? '');
-  if (shown !== wanted) throw new Error(`The pairing screen is shown as "${shown}", not "${wanted}": the phone has no viewer settings until the code is accepted, so this Spanish state never appears.`);
+  if (shown !== wanted) throw new Error(`The pairing screen is shown as "${shown}", not "${wanted}".`);
 }
 
 async function prepare(ctx, options = {}) {
