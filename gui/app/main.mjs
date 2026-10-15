@@ -1012,7 +1012,8 @@ async function loadPresentation(app, options = {}) {
   app.selectedFolder = settings.data.locations?.mind ?? app.selectedFolder;
   app.readAt = settings.meta.readAt;
   app.sync = settings.meta.sync;
-  if (app.store.capabilities.includes("viewer.write")) {
+  const viewerReadable = app.store.capabilities.includes("viewer.write");
+  if (viewerReadable) {
     const viewer = await request(app.api, "GET", "/viewer");
     if (app.disposed || ticket !== app.presentationTicket) return;
     app.store.viewer = viewer.data;
@@ -1020,7 +1021,9 @@ async function loadPresentation(app, options = {}) {
     app.sync = viewer.meta.sync;
   }
   if (ticket !== app.presentationTicket) return;
-  applyChoice(app, presentation(app.store.viewer, app.store.settings?.settings));
+  // The viewer's language wins, and it is unknown until the snapshot says this session can read it.
+  // Settings alone must not replace the language chosen before the read.
+  if (viewerReadable || app.store.capabilities.length) applyChoice(app, presentation(app.store.viewer, app.store.settings?.settings));
   app.layout = shellLayout(app.store.capabilities, app.store.audience);
   app.store.audience ??= app.layout;
   const home = homeState(app);

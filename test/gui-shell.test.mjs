@@ -3641,6 +3641,35 @@ test("the opening frame uses a stored or browser language before the read, then 
   assert.equal(stored.get("hivem1nd:language"), "en");
 });
 
+test("settings do not replace the opening language before the viewer can be read", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  let settled = 0;
+  const storage = new Map([["hivem1nd:language", "es"]]);
+  const { root } = createTestDocument(1440);
+  const pending = mount(root, {
+    location: new URL(fixture.desktopUrl), history: { replaceState() {} },
+    storage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    navigator: { languages: ["en-US"] },
+    fetch: async (input, init) => {
+      const path = new URL(input).pathname;
+      if (path === "/api/v1/view") await gate;
+      const response = await fetch(input, init);
+      if (path === "/api/v1/settings") Promise.resolve().then(() => { settled = 1; }).then(() => { settled = 2; });
+      return response;
+    },
+  });
+  await patient(() => settled === 2, "The settings read did not finish.");
+  assert.equal(root.querySelector("h2").textContent, "Leyendo el M1ND");
+  assert.equal(storage.get("hivem1nd:language"), "es");
+  release();
+  const app = await pending;
+  t.after(() => dispose(app));
+});
+
 test("the opening frame shows a stored view and renders again when the read arrives", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
