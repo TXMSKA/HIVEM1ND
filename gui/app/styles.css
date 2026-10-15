@@ -1381,6 +1381,8 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .private-transcript { max-height: 65dvh; overflow: auto; }
 .private-transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px var(--mono); }
 .plan-draft input, .plan-draft select { width: 100%; min-width: 0; min-height: 32px; }
+.plan-void-list { display: grid; gap: 6px; max-height: 50dvh; overflow-y: auto; margin: 10px 0; }
+.plan-void-list .btn { text-align: start; }
 .session-tab:focus-visible, .started-with summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .session-work *, .session-context * { animation: none; transition: none; scroll-behavior: auto; } }
 .plan-action { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 7px 12px; border: 0; border-radius: 10px; background: var(--card2); color: var(--text); font: 600 12.5px var(--font); }

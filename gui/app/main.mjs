@@ -88,7 +88,7 @@ import { acceptedRepositoryCluster, clusterLead, initialRunsIn, repositorySelect
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
-import { controlPlan, createPlanController, loadChatPlans, refreshPlan, renderControlledPlan, runPlan, savePlanDraft } from './plan-controller.mjs';
+import { PLAN_TASK_LIMIT, controlPlan, createPlanController, loadChatPlans, planBranch, refreshPlan, renderControlledPlan, runPlan, savePlanDraft, tasksFromVoidText } from './plan-controller.mjs';
 import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
 import { addButton, addText } from './add-view.mjs';
 import { getAdditions, removeAddition } from './add-api.mjs';
@@ -3928,23 +3928,51 @@ async function openPlanDraft(app, cluster) {
   const response = await collectPages(app.api, '/tasks', { query: { status: 'open,review' }, limit: 100 });
   const units = (app.unitList?.catalog ?? []).filter(unit => cluster.members.includes(unit.id));
   const tasks = response.items.filter(task => units.some(unit => unit.id === task.toId));
-  if (!tasks.length) { noteAction(app, { code: 'invalid_plan' }); return; }
+  if (!units.length) { noteAction(app, { code: 'invalid_plan' }); return; }
+  const empty = !tasks.length;
   const clients = app.startAgents?.connectedClients ?? [], lead = clusterLead(cluster, units);
   const assignment = unit => ({ kind: 'unit', unitId: unit.id, runsIn: unit.runsIn ?? initialRunsIn(clients) });
   const roles = Object.fromEntries(['coordinator', 'planner', 'builder', 'reviewer'].map(role => [role,
     lead ? assignment(lead) : ['coordinator', 'planner'].includes(role) ? { kind: 'unit', unitId: '', runsIn: null } : assignment(units[0])]));
-  app.planDraft = { previous: null, draft: { clusterId: cluster.id, chatId: cluster.chatId, machine: startMachine(app), title: tasks[0].title,
-    branch: `plan-${tasks[0].number}`, mode: cluster.link?.kind === 'repository' ? 'execution' : 'planning', expectedChatRevision: app.thread.chat.revision, roles,
-    tasks: tasks.map(task => ({ id: task.id, title: task.title, assignment: assignment(units.find(unit => unit.id === task.toId)) })) } };
+  // A cluster without any open task starts an empty draft: new tasks are written here and created by the service with the plan.
+  const fallback = assignment(lead ?? units[0]);
+  app.planDraft = { previous: null, empty, nextKey: 1, defaultAssignment: fallback, draft: { clusterId: cluster.id, chatId: cluster.chatId, machine: startMachine(app),
+    title: empty ? cluster.title : tasks[0].title, branch: empty ? planBranch(cluster.title) : `plan-${tasks[0].number}`,
+    mode: cluster.link?.kind === 'repository' ? 'execution' : 'planning', expectedChatRevision: app.thread.chat.revision, roles,
+    tasks: empty ? [{ key: 'new-1', title: '', body: '', assignment: structuredClone(fallback) }]
+      : tasks.map(task => ({ id: task.id, title: task.title, assignment: assignment(units.find(unit => unit.id === task.toId)) })) } };
   renderShell(app);
 }
 
+async function chooseVoidText(app, state) {
+  const document = app.root.ownerDocument, editors = editorsOf(app);
+  const texts = editors.catalogKind === 'void' && editors.catalog.length ? editors.catalog : (await collectPages(app.api, '/void/texts', { limit: 50 })).items;
+  const dialog = showDialog(document, { title: startText(app.language, 'fromVoid'), body: texts.length ? '' : startText(app.language, 'noVoidTexts'), cancel: startText(app.language, 'cancel') });
+  dialog.setAttribute('data-plan-void', 'true');
+  const list = element(document, 'div', { class: 'plan-void-list' });
+  for (const item of texts) list.append(mapButton(app, 'plan-void-text', item.title || item.path || item.id, async () => {
+    try {
+      const found = tasksFromVoidText((await request(app.api, 'GET', '/void/texts/:resourceId', { params: { resourceId: item.id } })).data.document, app.language);
+      dialog.close();
+      state.voidEmpty = !found.length;
+      if (found.length) {
+        state.draft.tasks = found.slice(0, PLAN_TASK_LIMIT).map(task => ({ key: `new-${state.nextKey += 1}`, ...task, assignment: structuredClone(state.defaultAssignment) }));
+        state.truncated = found.length > PLAN_TASK_LIMIT;
+      }
+      renderShell(app);
+    } catch (error) { noteAction(app, error); }
+  }, { 'data-text-id': item.id }));
+  const actions = dialog.querySelector?.('.dialog-actions');
+  if (actions && typeof dialog.insertBefore === 'function') dialog.insertBefore(list, actions); else dialog.append(list);
+}
+
 function renderPlanDraft(app) {
-  const state = app.planDraft, document = app.root.ownerDocument, draft = state.draft;
+  const state = app.planDraft, document = app.root.ownerDocument, draft = state.draft, empty = state.empty === true;
   const t = key => startText(app.language, key);
+  let sync = () => {};
   const root = element(document, 'section', { class: 'plan-card plan-draft', 'data-plan-draft': draft.id ?? 'new' });
   const field = (label, value, changed) => {
-    const input = element(document, 'input', { class: 'search', 'aria-label': label, oninput: () => changed(input.value) }); input.value = value;
+    const input = element(document, 'input', { class: 'search', 'aria-label': label, oninput: () => { changed(input.value); sync(); } }); input.value = value;
     return element(document, 'label', {}, label, input);
   };
   root.append(field(t('name'), draft.title, value => { draft.title = value; }), field(text(app.language, 'branch'), draft.branch, value => { draft.branch = value; }));
@@ -3967,17 +3995,34 @@ function renderPlanDraft(app) {
   const roleLabels = app.language === 'es' ? { coordinator: 'Coordina', planner: 'Planifica', builder: 'Implementa', reviewer: 'Revisa' }
     : { coordinator: 'Coordinates', planner: 'Plans', builder: 'Builds', reviewer: 'Reviews' };
   for (const role of ['coordinator', 'planner', 'builder', 'reviewer']) root.append(assignmentRow(roleLabels[role], draft.roles[role], value => { draft.roles[role] = value; }));
-  for (const task of draft.tasks) root.append(element(document, 'div', { class: 'plan-task-body', 'data-edit-task': task.id },
-    field(t('name'), task.title, value => { task.title = value; }), assignmentRow(task.id, task.assignment, value => { task.assignment = value; })));
+  if (empty && (state.voidEmpty || draft.tasks.every(task => !task.title.trim()))) root.append(element(document, 'p', { 'data-plan-empty': 'true', text: t('noTasksYet') }));
+  draft.tasks.forEach((task, index) => {
+    const row = element(document, 'div', { class: 'plan-task-body', 'data-edit-task': task.id ?? task.key },
+      field(t('name'), task.title, value => { task.title = value; }), assignmentRow(task.id ?? String(index + 1), task.assignment, value => { task.assignment = value; }));
+    if (empty && draft.tasks.length > 1) row.append(mapButton(app, 'remove-plan-task', text(app.language, 'removeFromList'), () => { draft.tasks.splice(index, 1); renderShell(app); }));
+    root.append(row);
+  });
+  if (empty) {
+    const add = mapButton(app, 'add-plan-task', t('addTask'), () => {
+      draft.tasks.push({ key: `new-${state.nextKey += 1}`, title: '', body: '', assignment: structuredClone(state.defaultAssignment) }); renderShell(app);
+    });
+    add.disabled = draft.tasks.length >= PLAN_TASK_LIMIT;
+    root.append(add, mapButton(app, 'plan-from-void', t('fromVoid'), () => chooseVoidText(app, state).catch(error => noteAction(app, error))));
+    if (state.truncated) root.append(element(document, 'p', { role: 'status', text: t('tasksTruncated') }));
+  }
   const save = mapButton(app, 'save-plan', text(app.language, 'save'), async () => {
     if (state.busy) return; state.busy = true; renderShell(app);
     try {
-      const saved = await savePlanDraft(plansForApp(app), state.previous ? draft : { ...draft, tasks: draft.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, state.previous);
+      const saved = await savePlanDraft(plansForApp(app), draft, state.previous);
       app.planDraft = null; await refreshPlan(plansForApp(app), saved.id);
       if (app.thread?.error?.code === 'plan_lead_required') app.thread.error = null;
     } catch (error) { state.error = error; state.locked = Boolean(error.operation && (!error.status || error.status >= 500)); }
     finally { state.busy = false; if (!app.disposed) renderShell(app); }
   });
+  // An empty draft is saved only when the plan and every task it names have a title and the plan has a branch.
+  const complete = () => !empty || draft.tasks.length > 0 && draft.tasks.length <= PLAN_TASK_LIMIT && draft.title.trim() !== '' && draft.branch.trim() !== '' && draft.tasks.every(task => task.title.trim() !== '');
+  sync = () => { if (!state.busy) save.disabled = !complete(); };
+  sync();
   if (state.busy) { save.disabled = true; save.setAttribute('aria-busy', 'true'); save.replaceChildren(progressMark(document, t('working'))); }
   root.append(save, mapButton(app, 'cancel-plan', t('cancel'), () => { if (!state.busy) { app.planDraft = null; renderShell(app); } }));
   if (state.error) root.append(element(document, 'p', { role: 'alert', text: t('unavailable') }));

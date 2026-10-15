@@ -67,6 +67,9 @@ export const START_COPY=Object.freeze({
   lyraPending:['Allow HIVEM1ND in Lyra before using the local model.','Autorizar HIVEM1ND en Lyra antes de utilizar el modelo local.'],
   lyraMissing:['Lyra is not running on this machine.','Lyra no se está ejecutando en esta máquina.'],
   scopeUnavailable:['This connection cannot enforce the selected write scope.','Esta conexión no puede aplicar el ámbito de escritura seleccionado.'],
+  addTask:['Add task','Agregar tarea'],fromVoid:['From a Void text','Desde un texto de Void'],proposePlan:['Propose a plan','Proponer un plan'],
+  noTasksYet:['No tasks yet: write the first one, or take them from a Void text.','Todavía no hay tareas: escribir la primera o tomarlas de un texto de Void.'],
+  noVoidTexts:['There are no Void texts yet.','Todavía no hay textos de Void.'],tasksTruncated:['Only the first 50 items were taken.','Solo se tomaron los primeros 50 elementos.'],
 });
 export function startText(language,key,values={}){
   const pair=START_COPY[key];if(!pair)throw new Error('Unknown start copy key: '+key);

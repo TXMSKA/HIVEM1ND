@@ -33,6 +33,7 @@ import * as startApi from '../gui/app/start-api.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
 import { makePlanFixture } from './service-plans.test.mjs';
 import { createPlan, startPlan } from '../engine/service/plans.mjs';
+import { createText } from '../engine/service/editors.mjs';
 import { callPlanTool, drainRunLaunches, readRun } from '../engine/service/runs.mjs';
 import { checkRuns } from '../engine/service/run-supervision.mjs';
 import { createHttpServer } from '../engine/service/http.mjs';
@@ -6280,4 +6281,112 @@ test('T093 actual-core Overseer context uses live telemetry and Compact, Clear a
     assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep next draft');
     assert.equal(desktop.app.thread.messages.some(message => message.body === 'Keep authored history.'), true);
   }
+});
+
+async function startEmptyClusterDesktop(t, { texts = [] } = {}) {
+  const state = await makePlanFixture(t, { task: false });
+  state.context.ledger = openLedger({ store: state.store, paths: state.context.paths, now: state.context.now, machine: state.machine });
+  const localPath = join(state.paths.localDirectory, 'shop'); await mkdir(localPath, { recursive: true });
+  state.context.projects = [{ name: 'shop', localPath }];
+  for (const [file, document] of texts) await createText(state.context, { project: 'shop', path: file, document });
+  const credentials = createCredentialStore({ now: state.context.now });
+  state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
+  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const calls = [];
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, (input, init) => {
+    calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null });
+    return fetch(input, init);
+  }, { clock: state.context.now });
+  // The project watchers must stop before the fixture folder is removed, so the test closes them itself and the hook only covers a failure.
+  let closed = false;
+  const close = async () => { if (closed) return; closed = true; dispose(desktop.app); await server.close(); };
+  t.after(close);
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers, 'The actual core tree did not load.');
+  desktop.app.startDialog?.dialog.close();
+  desktop.app.activeHandlers.onActivate({ kind: 'cluster', groupId: state.cluster.id }, 'single');
+  await waitFor(() => desktop.root.querySelector('[data-action="start-plan"]'), 'The cluster chat did not open.');
+  click(desktop.root.querySelector('[data-action="start-plan"]'));
+  await waitFor(() => desktop.root.querySelector('[data-plan-draft]'), 'The empty plan draft did not open.');
+  return { ...desktop, state, calls, close };
+}
+const draftRows = root => [...root.querySelectorAll('[data-edit-task]')];
+const rowTitle = row => row.querySelector('input');
+
+test('a cluster without any task opens an empty draft whose added rows become the new tasks of the plan, then Run confirms them', async t => {
+  const { root, app, document, state, calls, close } = await startEmptyClusterDesktop(t);
+  const save = () => root.querySelector('[data-action="save-plan"]');
+  assert.ok(root.querySelector('[data-plan-empty]')); assert.equal(root.querySelector('[data-plan-empty]').textContent, 'No tasks yet: write the first one, or take them from a Void text.');
+  assert.equal(draftRows(root).length, 1); assert.equal(save().disabled, true);
+  assert.ok(root.querySelector('[data-action="plan-from-void"]')); assert.equal(root.querySelector('[data-action="remove-plan-task"]'), null);
+  assert.equal(draftRows(root)[0].querySelector('select').value, state.units[0].id);
+  typeInput(rowTitle(draftRows(root)[0]), 'Build the cart', 14, 14);
+  click(root.querySelector('[data-action="add-plan-task"]'));
+  await waitFor(() => draftRows(root).length === 2, 'The added row did not appear.');
+  assert.equal(rowTitle(draftRows(root)[0]).value, 'Build the cart'); assert.equal(save().disabled, true);
+  typeInput(rowTitle(draftRows(root)[1]), 'Test the cart', 13, 13);
+  assert.equal(save().disabled, false);
+  assert.equal(root.querySelectorAll('[data-action="remove-plan-task"]').length, 2);
+  click(save());
+  await waitFor(() => !app.planDraft && root.querySelector('[data-action="run-plan"]'), 'The saved plan card did not appear.');
+  const created = calls.find(call => call.method === 'POST' && call.path === '/api/v1/plans');
+  assert.deepEqual(created.body.tasks.map(task => Object.keys(task).sort()), [['assignment', 'title'], ['assignment', 'title']]);
+  assert.deepEqual(created.body.tasks.map(task => task.title), ['Build the cart', 'Test the cart']);
+  assert.deepEqual(created.body.tasks.map(task => task.assignment.unitId), [state.units[0].id, state.units[0].id]);
+  assert.deepEqual((await readdir(join(state.paths.mind, 'user', 'tasks'))).sort(), ['001-build-the-cart.md', '002-test-the-cart.md']);
+  assert.equal(state.launches.length, 0);
+  click(root.querySelector('[data-action="run-plan"]'));
+  await waitFor(() => document.querySelector('.dialog'), 'The Run confirmation did not open.');
+  assert.equal(calls.some(call => call.path.endsWith('/run')), false);
+  await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
+  await waitFor(() => calls.some(call => call.method === 'POST' && call.path.endsWith('/run')), 'Run was not sent.');
+  await drainRunLaunches(state.context);
+  assert.deepEqual(JSON.parse(state.launches[0].bootstrap).plan.tasks.map(task => task.id), ['root:001', 'root:002']);
+  await close();
+});
+
+test('choosing a Void text fills the empty draft from its top-level list items and level-two headings', async t => {
+  const document = { title: 'Cart', rev: 0, pages: [
+    { k: 'Intro', en: '# Cart\n\nIgnored preface.\n\n- Build the cart page\n\n  Show the lines and the totals.\n\n  Keep the layout.\n- [ ] Test the cart\n  - nested stays in the body', es: 'Texto' },
+    { k: 'Pay', en: '## Take payment\n\nCard payment only.\n\n```\n- not a task\n## nor this\n```\n\n### Details stay in the body\n\n1. Send the receipt' }] };
+  const { root, app, document: dom, state, calls, close } = await startEmptyClusterDesktop(t, { texts: [['docs/cart.json', document]] });
+  click(root.querySelector('[data-action="plan-from-void"]'));
+  await waitFor(() => dom.querySelector('[data-action="plan-void-text"]'), 'The Void texts were not listed.');
+  assert.equal(dom.querySelectorAll('[data-action="plan-void-text"]').length, 1);
+  assert.equal(dom.querySelector('[data-action="plan-void-text"]').textContent, 'Cart');
+  click(dom.querySelector('[data-action="plan-void-text"]'));
+  await waitFor(() => draftRows(root).length === 4, 'The rows were not filled from the text.');
+  assert.deepEqual(draftRows(root).map(row => rowTitle(row).value), ['Build the cart page', 'Test the cart', 'Take payment', 'Send the receipt']);
+  assert.equal(root.querySelector('[data-plan-empty]'), null); assert.equal(root.querySelector('[data-action="save-plan"]').disabled, false);
+  assert.deepEqual(app.planDraft.draft.tasks.map(task => task.body), ['Show the lines and the totals.\n\nKeep the layout.', '- nested stays in the body',
+    'Card payment only.\n\n```\n- not a task\n## nor this\n```\n\n### Details stay in the body', '']);
+  click(draftRows(root)[1].querySelector('[data-action="remove-plan-task"]'));
+  await waitFor(() => draftRows(root).length === 3, 'A row was not removed.');
+  click(root.querySelector('[data-action="save-plan"]'));
+  await waitFor(() => !app.planDraft && root.querySelector('[data-action="run-plan"]'), 'The saved plan card did not appear.');
+  const created = calls.find(call => call.method === 'POST' && call.path === '/api/v1/plans');
+  assert.deepEqual(created.body.tasks.map(task => task.title), ['Build the cart page', 'Take payment', 'Send the receipt']);
+  assert.deepEqual(created.body.tasks.map(task => 'body' in task), [true, true, false]);
+  assert.deepEqual((await readdir(join(state.paths.mind, 'user', 'tasks'))).sort(), ['001-build-the-cart-page.md', '002-take-payment.md', '003-send-the-receipt.md']);
+  assert.equal(state.launches.length, 0);
+  await close();
+});
+
+test('a cluster with open tasks keeps the draft built from them, without the empty-draft controls', async t => {
+  const state = await makePlanFixture(t);
+  const credentials = createCredentialStore({ now: state.context.now });
+  state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
+  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, fetch, { clock: state.context.now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers, 'The actual core tree did not load.');
+  desktop.app.startDialog?.dialog.close();
+  desktop.app.activeHandlers.onActivate({ kind: 'cluster', groupId: state.cluster.id }, 'single');
+  await waitFor(() => desktop.root.querySelector('[data-action="start-plan"]'), 'The cluster chat did not open.');
+  click(desktop.root.querySelector('[data-action="start-plan"]'));
+  await waitFor(() => desktop.root.querySelector('[data-plan-draft]'), 'The draft did not open.');
+  assert.deepEqual(draftRows(desktop.root).map(row => row.getAttribute('data-edit-task')), [state.taskId]);
+  assert.equal(desktop.root.querySelector('[data-plan-empty]'), null); assert.equal(desktop.root.querySelector('[data-action="add-plan-task"]'), null);
+  assert.equal(desktop.root.querySelector('[data-action="plan-from-void"]'), null); assert.equal(desktop.root.querySelector('[data-action="save-plan"]').disabled, false);
 });

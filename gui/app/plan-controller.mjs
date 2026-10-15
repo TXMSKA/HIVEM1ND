@@ -25,8 +25,49 @@ export async function loadChatPlans(controller, clusterId) {
   return result.items;
 }
 
+// A task that exists is sent by its id; a new one by title and body, and the service creates its file with the plan.
+export function planTaskItem(task) {
+  const { title, assignment } = task;
+  return task.id ? { id: task.id, title, assignment } : { title, ...(task.body ? { body: task.body } : {}), assignment };
+}
+
+export const PLAN_TASK_LIMIT = 50;
+export function planBranch(title) {
+  const slug = String(title).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 40).replace(/-+$/, '');
+  return `plan-${slug || 'draft'}`;
+}
+
+// Each top-level list item and each level-two heading of a Void text becomes a task title; the paragraphs that follow it are its body.
+export function tasksFromVoidText(document, language = 'en') {
+  const other = language === 'es' ? 'en' : 'es';
+  const source = (Array.isArray(document?.pages) ? document.pages : []).map(page => [language, other, ...Object.keys(page ?? {})]
+    .map(key => key !== 'k' && typeof page?.[key] === 'string' ? page[key] : '').find(value => value) ?? '').join('\n\n');
+  const tasks = []; let current = null, paragraph = [], fence = false;
+  const flush = () => { if (current && paragraph.length) current.paragraphs.push(paragraph.join('\n').trim()); paragraph = []; };
+  const start = raw => {
+    const title = raw.replace(/^\[[ xX]\]\s+/, '').replace(/\s+/g, ' ').trim();
+    flush(); current = title ? { title, paragraphs: [] } : null;
+    if (current) tasks.push(current);
+  };
+  for (const raw of source.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    if (/^ {0,3}(?:```|~~~)/.test(line)) { fence = !fence; if (current) paragraph.push(line); continue; }
+    if (fence) { if (current) paragraph.push(line); continue; }
+    const heading = /^ {0,3}##(?!#)\s+(.+?)(?:\s+#+)?$/.exec(line), item = /^(?:[-*+]|\d{1,9}[.)])\s+(.+)$/.exec(line);
+    if (heading) start(heading[1]);
+    else if (item) start(item[1]);
+    else if (!line.trim()) flush();
+    else if (current) paragraph.push(line);
+  }
+  flush();
+  return tasks.map(({ title, paragraphs }) => {
+    const long = title.length > 200, body = [...(long ? [title] : []), ...paragraphs].join('\n\n');
+    return { title: long ? title.slice(0, 200).trimEnd() : title, body: body.slice(0, 20000) };
+  });
+}
+
 export async function savePlanDraft(controller, draft, previous = null) {
-  const body = previous ? { title: draft.title, branch: draft.branch, tasks: draft.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })), roles: draft.roles, expectedRevision: previous.revision } : draft;
+  const body = previous ? { title: draft.title, branch: draft.branch, tasks: draft.tasks.map(planTaskItem), roles: draft.roles, expectedRevision: previous.revision } : { ...draft, tasks: draft.tasks.map(planTaskItem) };
   const key = previous ? `edit:${previous.id}:${previous.revision}` : `create:${draft.chatId}:${draft.expectedChatRevision}`;
   const result = await retainedPlanAction(controller, key, { method: previous ? 'PATCH' : 'POST', path: previous ? '/plans/:planId' : '/plans',
     ...(previous ? { params: { planId: previous.id } } : {}), body });
