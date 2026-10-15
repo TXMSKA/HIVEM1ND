@@ -40,6 +40,7 @@ export const EMBEDDED_BROWSER_FILES = Object.freeze({
 export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
+  'start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
   'atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2',

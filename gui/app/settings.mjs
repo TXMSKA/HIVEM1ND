@@ -3,6 +3,7 @@ import { element, icon, labelDialog, labeledField } from "./components.mjs";
 import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
+import { startText } from './start-copy.mjs';
 
 export function updateExpiry(home, nowMs) {
   if (!home?.enabled || !home.expiresAt) return { remainingSeconds: 0, expired: true };
@@ -219,7 +220,7 @@ export function renderSettings(document, model, t, actions) {
   if (tab === "general") page.append(renderGeneral(document, model, t, actions));
   if (tab === "agents") page.append(renderAgents(document, model, t, actions));
   if (tab === "permissions") page.append(renderPermissions(document, model, t, actions));
-  if (tab === "projects") page.append(renderProjects(document, model, t));
+  if (tab === "projects") page.append(renderProjects(document, model, t, actions));
   if (tab === "content") page.append(renderContent(document, model, t, actions));
   panel.append(page);
   return panel;
@@ -373,6 +374,10 @@ function renderAgents(document, model, t, actions) {
       if (agent.cli?.state === "connected" || agent.app?.state === "connected") row.append(settingsButton(document, `settings-disconnect-${agent.id}`, t("settingsDisconnect"), () => actions.onDisconnect?.(agent), reviewDisabled));
     }
     section.append(row);
+    const capability = model.agents?.connectedClients?.find(item => item.id === agent.id);
+    if (capability) row.append(element(document, 'small', { class: 'settings-client-capability', text:
+      capability.models.map(item => item.title).join(', ') + ' · ' + (capability.id === 'lyra' ? startText(model.language, 'localQuota')
+        : capability.quota?.known ? startText(model.language, 'quota', { label: capability.quota.period ?? capability.title, percent: capability.quota.remainingPercent }) : startText(model.language, 'quotaUnknown')) }));
   }
   if (!model.agents?.items?.length) section.append(element(document, "p", { text: t("settingsNoAgents") }));
   if (model.machine !== model.localMachine && !model.readOnly) section.append(element(document, "p", { class: "settings-hint", text: t("settingsReviewOwner", { machine: model.machine }) }));
@@ -400,12 +405,18 @@ function renderPermissions(document, model, t, actions) {
   return element(document, "div", { class: "settings-column" }, standing, agents);
 }
 
-function renderProjects(document, model, t) {
+function renderProjects(document, model, t, actions) {
   const section = settingsSection(document, t("settingsClusterLinks"));
-  const projects = (model.projects?.folders ?? []).flatMap(folder => folder.repositories ?? []).filter(item => item.registered);
-  for (const project of projects) section.append(element(document, "div", { class: "settings-link", "data-settings-project": project.id },
-    element(document, "strong", { text: project.title }), element(document, "code", { text: project.path })));
-  if (!projects.length) section.append(element(document, "p", { text: t("settingsNoLinks") }));
+  const links = model.projects?.clusterLinks ?? [];
+  for (const link of links) {
+    const remove = settingsButton(document, 'settings-remove-link', startText(model.language, 'removeLink'), () => actions.onRemoveLink?.(link), !model.canWrite || model.readOnly);
+    remove.setAttribute('aria-label', startText(model.language, 'removeLink') + ': ' + link.title);
+    section.append(element(document, 'div', { class: 'settings-link', 'data-cluster-link': link.clusterId },
+      element(document, 'strong', { text: link.title }), element(document, 'span', { class: 'cluster-link-kind', text: startText(model.language, link.kind === 'none' ? 'noLink' : link.kind) }),
+      element(document, 'code', { text: link.localPath ?? (link.available ? '' : startText(model.language, 'unavailable')) }), link.kind === 'none' ? null : remove));
+  }
+  if (!links.length) section.append(element(document, "p", { text: t("settingsNoLinks") }));
+  section.append(settingsButton(document, 'settings-link-folder', startText(model.language, 'linkFolder'), actions.onLinkFolder, !model.canWrite || model.readOnly));
   return section;
 }
 

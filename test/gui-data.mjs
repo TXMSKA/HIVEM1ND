@@ -210,6 +210,7 @@ function stateDocument(record) {
     "lead-id": record.leadId,
     job: record.job,
     model: record.model,
+    'runs-in': record.role === 'master' ? undefined : { client: 'codex', model: 'strong', effort: 'high', mode: null },
     date: record.date,
     approvals: record.approvals,
   }, record.body);
@@ -349,6 +350,7 @@ async function writeSettingsReports(paths, tree, local, now) {
       service: { machine, state: localReport ? "running" : "stopped", version: "3.0.0", startedAt: now, startWithWindows: false, revision: null },
       agents: { revision: null, items }, permissions: { revision: null, unitGrants: [], agentPermissions: [] },
       projects: { revision: null, folders: [{ id: deterministicUuid(["settings-folder", machine]), path: dirname(project.path), environment: null, repositories: [project] }] },
+      clusterLinks: [{ clusterId: deterministicUuid(['settings-cluster', machine]), title: project.title, kind: 'repository', projectId: project.id, localPath: project.path, available: true }],
     }));
   }
   for (const [name, category] of [["plan", "planning"], ["brainstorm", "planning"], ["task", "planning"], ["qa", "quality"], ["tribunal", "quality"], ["cyberattack", "quality"], ["relay", "continuity"], ["catchup", "continuity"], ["docs", "continuity"]]) {

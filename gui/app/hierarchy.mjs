@@ -1,119 +1,67 @@
 export function buildHierarchy(units, issues = [], groups = []) {
-  const list = Array.isArray(units) ? units : [];
-  const byId = new Map(list.map((unit) => [unit.id, unit]));
-  const canonical = list.find((unit) => unit.role === "overseer" && unit.unit === "overseer" && unit.scope?.kind === "root") ?? null;
-  const hidden = list.filter((unit) => unit.role === "overseer" && unit.id !== canonical?.id);
-  const hiddenIds = new Set(hidden.map((unit) => unit.id));
-  const services = list.filter((unit) => unit.role === "genesis" || unit.role === "incubator");
-  const serviceIds = new Set(services.map((unit) => unit.id));
-  const beside = list.filter((unit) => unit.role === "adjutant" || unit.role === "executive");
-  const besideIds = new Set(beside.map((unit) => unit.id));
-  const masters = list.filter((unit) => unit.role === "master");
-  const masterIds = new Set(masters.map((unit) => unit.id));
-  const cycles = new Set();
-  const overlordOrder = [];
-  const membersOf = new Map();
-
-  function ancestorOverlord(unit) {
-    if (unit.role === "overlord") return unit;
-    const seen = new Set();
-    let current = unit;
-    while (current?.leadId) {
-      if (seen.has(current.id)) {
-        cycles.add(current.id);
-        return null;
-      }
-      seen.add(current.id);
-      const lead = byId.get(current.leadId);
-      if (!lead) return null;
-      if (seen.has(lead.id)) {
-        cycles.add(lead.id);
-        cycles.add(current.id);
-        return null;
-      }
-      if (lead.role === "overlord") return lead;
-      current = lead;
-    }
-    return null;
-  }
-
-  function ensureOverlord(unit) {
-    if (!membersOf.has(unit.id)) {
-      membersOf.set(unit.id, []);
-      overlordOrder.push(unit);
+  const list = (Array.isArray(units) ? units : []).filter(unit => !unit.removed && unit.role !== 'master');
+  const canonical = list.find(unit => unit.role === 'overseer' && unit.unit === 'overseer' && unit.scope?.kind === 'root');
+  const hidden = list.filter(unit => unit.role === 'overseer' && unit.id !== canonical?.id).map(unit => unit.id);
+  const visible = list.filter(unit => !hidden.includes(unit.id));
+  const services = visible.filter(unit => ['genesis', 'incubator'].includes(unit.role));
+  const clusters = groups.filter(group => !group.deleted).map(group => ({ ...group, link: group.link ?? { kind: 'none' },
+    units: visible.filter(unit => unit.clusterId === group.id || !unit.clusterId && group.members.includes(unit.id)) }));
+  const assigned = new Set(clusters.flatMap(cluster => cluster.units.map(unit => unit.id)));
+  const byId = new Map(list.map(unit => [unit.id, unit])), cycles = new Set();
+  for (const unit of visible) {
+    const seen = new Set([unit.id]); let lead = unit.leadId;
+    while (lead && byId.has(lead)) {
+      if (seen.has(lead)) { cycles.add(lead); break; }
+      seen.add(lead); lead = byId.get(lead).leadId;
     }
   }
-
-  const loose = new Map();
-  for (const unit of list) {
-    if (hiddenIds.has(unit.id) || serviceIds.has(unit.id) || besideIds.has(unit.id) || masterIds.has(unit.id) || unit.id === canonical?.id) continue;
-    const overlord = ancestorOverlord(unit);
-    if (overlord && !hiddenIds.has(overlord.id)) {
-      ensureOverlord(overlord);
-      if (unit.id !== overlord.id) membersOf.get(overlord.id).push(unit);
-      continue;
-    }
-    const key = scopeKey(unit);
-    if (!loose.has(key)) loose.set(key, []);
-    loose.get(key).push(unit);
-  }
-
-  return {
-    groups: groups.filter((group) => !group.deleted).map((group) => ({ ...group, units: group.members.map((id) => byId.get(id)).filter(Boolean) })),
-    command: [...masters, ...(canonical ? [canonical] : []), ...beside],
-    overlords: overlordOrder.map((unit) => ({ unit, members: membersOf.get(unit.id) ?? [] })),
-    loose,
-    services,
-    hidden: hidden.map((unit) => unit.id),
-    cycles: [...cycles],
-    issues,
-  };
+  return { clusters, groups: clusters, command: visible.filter(unit => unit.id === canonical?.id || !assigned.has(unit.id) && !services.includes(unit)),
+    services, hidden, cycles: [...cycles], issues };
 }
 
-export function flattenVisibleHierarchy(tree, state, query = "") {
-  const rows = [];
-  const fold = state ?? { shown: new Map(), collapsed: new Set() };
-  rows.push(heading("section:personal", "myGroups"));
-  for (const group of tree.groups ?? []) {
-    if (query && !group.title.toLowerCase().includes(query.toLowerCase()) && !group.units.some((unit) => matches(unit, query))) continue;
-    const key = `personal:${group.id}`;
-    rows.push({ id: key, kind: "personal", groupId: group.id, group, label: group.title, count: group.members.length, depth: 0, expanded: !fold.collapsed.has(key) });
-    if (!fold.collapsed.has(key) || query) {
-      for (const unit of group.units) rows.push({ ...unitRow(unit, 1), id: `${key}:${unit.id}`, personalMember: true });
-    }
-  }
-  if (tree.command.length || tree.overlords.length) {
-    rows.push(heading("section:command", "command"));
-    for (const unit of tree.command) rows.push(unitRow(unit, unit.role === "master" || unit.role === "overseer" ? 0 : 1));
-    for (const group of tree.overlords) {
-      rows.push(unitRow(group.unit, 1));
-      pushMembers(rows, group.members, `lead:${group.unit.id}`, fold, query, 2);
-    }
-  }
-  if (tree.loose.size) {
-    rows.push(heading("section:loose", "withoutOverlord"));
-    for (const [key, members] of tree.loose) {
-      rows.push({
-        id: `group:${key}`,
-        kind: "group",
-        groupId: key,
-        label: key === "root" ? "" : key.split(":").slice(1).join(":"),
-        labelKey: key === "root" ? "scopeRoot" : "",
-        depth: 0,
-        count: members.length,
-      });
-      pushMembers(rows, members, key, fold, query, 1);
-    }
-  }
+export function flattenVisibleHierarchy(tree, state, query = '') {
+  const rows = [], fold = state ?? { shown: new Map(), collapsed: new Set() };
+  const matches = unit => !query || [unit.unit, unit.alias, unit.job, unit.context].some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()));
+  const pushUnits = (units, depth) => {
+    const visited = new Set();
+    const append = (unit, level) => {
+      if (visited.has(unit.id)) return;
+      visited.add(unit.id); rows.push(unitRow(unit, level));
+      for (const child of units.filter(item => item.leadId === unit.id)) append(child, level + 1);
+    };
+    for (const unit of units.filter(unit => !units.some(other => other.id === unit.leadId))) append(unit, depth);
+    for (const unit of units) append(unit, depth);
+  };
+  pushUnits(tree.command.filter(matches), 0);
+  rows.push({ id: 'section:clusters', kind: 'heading', labelKey: 'clusters', depth: 0 });
+  const all = tree.clusters ?? [], emitted = new Set();
+  const contains = (cluster, seen = new Set()) => {
+    if (seen.has(cluster.id)) return false;
+    seen.add(cluster.id);
+    return !query || cluster.title.toLowerCase().includes(query.toLowerCase()) || cluster.units.some(matches)
+      || (cluster.worktrees ?? []).some(worktree => [worktree.path, worktree.branch].some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase())))
+      || all.some(child => child.parentId === cluster.id && contains(child, seen));
+  };
+  const appendCluster = (cluster, depth) => {
+    if (emitted.has(cluster.id) || !contains(cluster)) return;
+    emitted.add(cluster.id);
+    const key = `cluster:${cluster.id}`, children = all.filter(item => item.parentId === cluster.id && contains(item));
+    const expanded = !fold.collapsed.has(key) || Boolean(query);
+    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: cluster.title, depth, count: children.length || cluster.units.length, expanded });
+    if (!expanded) return;
+    pushUnits(cluster.units.filter(matches), depth + 1);
+    for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: worktree.path ?? worktree.branch ?? '', depth: depth + 1 });
+    const shown = query ? children.length : fold.shown.get(key) ?? 6;
+    for (const child of children.slice(0, shown)) appendCluster(child, depth + 1);
+    if (children.length > shown) rows.push({ id: `more:${key}`, kind: 'more', groupId: key, count: children.length - shown, depth: depth + 1, labelKey: 'more' });
+  };
+  for (const cluster of all.filter(item => !all.some(parent => parent.id === item.parentId))) appendCluster(cluster, 0);
   if (tree.services.length) {
-    rows.push(heading("section:services", "services"));
-    for (const unit of tree.services) rows.push(unitRow(unit, 0));
+    rows.push({ id: 'section:services', kind: 'heading', labelKey: 'services', depth: 0 });
+    pushUnits(tree.services.filter(matches), 0);
   }
-  if (tree.cycles.length) rows.push({ id: "issue:cycle", kind: "issue", labelKey: "cycleIssue", depth: 0 });
-  rows.forEach((row, index) => {
-    row.pos = index + 1;
-    row.setsize = rows.length;
-  });
+  if (tree.cycles.length) rows.push({ id: 'issue:cycle', kind: 'issue', labelKey: 'cycleIssue', depth: 0 });
+  rows.forEach((row, index) => { row.pos = index + 1; row.setsize = rows.length; });
   return rows;
 }
 
@@ -123,101 +71,31 @@ export function toggleGroup(state, groupId) {
 }
 
 export function revealGroup(state, groupId, count) {
-  const shown = state.shown.get(groupId) ?? 8;
-  state.shown.set(groupId, shown + count);
+  state.shown.set(groupId, (state.shown.get(groupId) ?? 6) + count);
   state.collapsed.delete(groupId);
 }
 
 export function activateUnit(app, unit, kind) {
-  if (!unit?.id) return;
+  if (!unit?.id || unit.role === 'master') return;
   app.store.selected.unitId = unit.id;
   app.store.selected.groupId = null;
-  if (app.mapState) {
-    app.mapState.selectedGroupId = null;
-    app.mapState.selection = new Set([unit.id]);
-  }
+  if (app.mapState) { app.mapState.selectedGroupId = null; app.mapState.selection = new Set([unit.id]); }
   app.activated = { id: unit.id, kind };
-  if (kind === "double") {
-    app.pendingCenter = unit.id;
-    app.pendingChat = app.layout === "phone"
-      ? { unitId: unit.id, create: false }
-      : { unitId: unit.id, create: true };
-  }
+  if (kind === 'double') { app.pendingCenter = unit.id; app.pendingChat = { unitId: unit.id, create: app.layout !== 'phone' }; }
 }
 
 export function unitsForTree(matches, catalog) {
   const source = catalog?.length ? catalog : matches;
   if (!matches || matches === source) return source;
-  const byId = new Map(source.map((unit) => [unit.id, unit]));
-  const wanted = new Set();
+  const byId = new Map(source.map(unit => [unit.id, unit])), wanted = new Set();
   for (const unit of matches) {
-    wanted.add(unit.id);
-    const seen = new Set([unit.id]);
-    let leadId = unit.leadId;
-    while (leadId && !seen.has(leadId)) {
-      seen.add(leadId);
-      wanted.add(leadId);
-      leadId = byId.get(leadId)?.leadId ?? null;
-    }
+    wanted.add(unit.id); const seen = new Set([unit.id]); let lead = unit.leadId;
+    while (lead && !seen.has(lead)) { seen.add(lead); wanted.add(lead); lead = byId.get(lead)?.leadId; }
   }
-  const ordered = source.filter((unit) => wanted.has(unit.id));
-  for (const unit of matches) if (!ordered.some((item) => item.id === unit.id)) ordered.push(unit);
-  return ordered;
+  return [...source.filter(unit => wanted.has(unit.id)), ...matches.filter(unit => !byId.has(unit.id))];
 }
 
-function pushMembers(rows, members, groupId, state, query, depth) {
-  const visible = takeVisible(members, groupId, state, query);
-  for (const unit of visible.members) rows.push(unitRow(unit, depth));
-  if (visible.hidden > 0) {
-    rows.push({
-      id: `more:${groupId}`,
-      kind: "more",
-      groupId,
-      count: visible.hidden,
-      depth,
-      labelKey: "showMore",
-    });
-  }
-}
-
-function takeVisible(members, groupId, state, query) {
-  const collapsed = state.collapsed.has(groupId);
-  const shown = state.shown.get(groupId) ?? 8;
-  const limit = members.length > 8 ? shown : members.length;
-  const opened = collapsed ? [] : members.slice(0, limit);
-  const visible = [];
-  const seen = new Set();
-  for (const unit of opened) {
-    seen.add(unit.id);
-    visible.push(unit);
-  }
-  if (query) {
-    for (const unit of members) {
-      if (seen.has(unit.id)) continue;
-      if (matches(unit, query)) visible.push(unit);
-    }
-  }
-  return { members: visible, hidden: Math.max(0, members.length - visible.length) };
-}
-
-function matches(unit, query) {
-  const needle = String(query).toLowerCase();
-  return [unit.unit, unit.alias, unit.job, unit.context].some((value) => String(value ?? "").toLowerCase().includes(needle));
-}
-
-function scopeKey(unit) {
-  if (unit.scope?.kind === "project") return `project:${unit.scope.name}`;
-  if (unit.scope?.kind === "environment") return `env:${unit.scope.name}`;
-  return "root";
-}
-
-function heading(id, labelKey) {
-  return { id, kind: "heading", labelKey, depth: 0 };
-}
-
-function unitRow(unit, depth) {
-  return { id: unit.id, kind: "unit", unit, depth, label: unitDisplayName(unit) };
-}
+function unitRow(unit, depth) { return { id: unit.id, kind: 'unit', unit, depth, label: unitDisplayName(unit) }; }
 
 export function unitDisplayName(unit) {
   const id = String(unit?.unit ?? unit?.id ?? '');

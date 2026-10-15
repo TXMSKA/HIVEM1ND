@@ -89,8 +89,32 @@ export function initialPositions(units, saved, groupOrigins) {
   return positions;
 }
 
-export function placeUnits(units, saved) {
+export function placeUnits(units, saved, clusters = []) {
   const layout = saved.layout ?? saved ?? {};
+  if (clusters.length) {
+    const frames = clusterFrames(clusters, layout);
+    const positions = structuredClone(layout.nodes ?? {});
+    delete positions['root:master'];
+    const origins = Object.fromEntries(frames.map(frame => [`cluster:${frame.group.id}`, { x: frame.bounds.x, y: frame.bounds.y }]));
+    const placed = new Set();
+    for (const frame of frames) {
+      const members = units.filter(unit => unit.role !== 'master' && !placed.has(unit.id) && (unit.clusterId === frame.group.id || !unit.clusterId && frame.group.members.includes(unit.id)));
+      members.sort((a, b) => (b.role === 'overlord') - (a.role === 'overlord') || byId(a, b));
+      let executorIndex = 0;
+      members.forEach((unit, index) => {
+        placed.add(unit.id);
+        if (positions[unit.id]) return;
+        const lead = unit.role === 'overlord';
+        const slot = lead ? index : executorIndex++;
+        positions[unit.id] = { x: frame.bounds.x + (lead ? frame.bounds.w / 2 : 70 + (slot % 2) * 150),
+          y: frame.bounds.y + (lead ? 75 + index * 84 : 160 + Math.floor(slot / 2) * 84) };
+      });
+    }
+    for (const [index, unit] of units.filter(unit => unit.role !== 'master' && !placed.has(unit.id)).entries()) {
+      positions[unit.id] ??= unit.role === 'overseer' ? { x: 380, y: 409 } : { x: 380 + (index % 4) * 84, y: 810 + Math.floor(index / 4) * 84 };
+    }
+    return { origins, positions };
+  }
   const origins = groupOriginsFor(units, layout);
   return { origins, positions: initialPositions(units, layout, origins) };
 }
@@ -145,7 +169,7 @@ export function fitBounds(points, rect, padding = 48) {
   }
   const width = Math.max(1, maxX - minX);
   const height = Math.max(1, maxY - minY);
-  const zoom = Math.min(2.5, Math.max(0.25, Math.min((rect.width - padding * 2) / width, (rect.height - padding * 2) / height)));
+  const zoom = Math.min(2.5, Math.min((rect.width - padding * 2) / width, (rect.height - padding * 2) / height));
   return {
     x: (rect.width - width * zoom) / 2 - minX * zoom,
     y: (rect.height - height * zoom) / 2 - minY * zoom,
@@ -181,7 +205,7 @@ function pinLine(units, positions) {
   const overseer = units.find((unit) => unit.role === "overseer" && unit.unit === "overseer" && unit.scope?.kind === "root");
   const beside = units.filter((unit) => unit.role === "adjutant" || unit.role === "executive").sort(byId);
   if (master && !positions[master.id]) positions[master.id] = { x: 380, y: 56 };
-  if (overseer && !positions[overseer.id]) positions[overseer.id] = { x: 380, y: 160 };
+  if (overseer && !positions[overseer.id]) positions[overseer.id] = { x: 380, y: 409 };
   beside.forEach((unit, index) => {
     if (!positions[unit.id]) positions[unit.id] = { x: 380 + (index % 2 === 0 ? -140 : 140), y: 160 };
   });
@@ -255,4 +279,49 @@ export function personalGroupBounds(memberIds, nodes, padding = 24) {
   const bottom = Math.max(...selected.map((node) => node.y + node.radius + 24));
   return { x: left - padding, y: top - padding,
     w: right - left + padding * 2, h: bottom - top + padding * 2 };
+}
+
+export function clusterFrames(clusters, saved = {}, focusedId = null) {
+  const active = clusters.filter(cluster => !cluster.deleted), frames = [], visited = new Set();
+  const defaults = [[40, 470, 290, 230], [500, 480, 220, 170], [500, 150, 220, 160], [40, 150, 220, 160]];
+  const append = (group, index, parent = null) => {
+    if (visited.has(group.id)) return;
+    visited.add(group.id);
+    const children = active.filter(item => item.parentId === group.id);
+    const stored = saved.groups?.[`cluster:${group.id}`];
+    const linked = group.link?.kind ?? 'none';
+    const compact = Boolean(parent && !children.length && !group.members.length && !stored);
+    let fallback;
+    if (parent) {
+      const focused = parent.group.id === focusedId;
+      const columns = focused ? 4 : Math.max(1, Math.floor((parent.bounds.w - 24) / 72));
+      fallback = focused ? [parent.bounds.x + 24 + (index % 4) * 172, parent.bounds.y + 28 + Math.floor(index / 4) * 92, compact ? 156 : 290, compact ? 62 : 230]
+        : [parent.bounds.x + 14 + (index % columns) * 72, parent.bounds.y + 20 + Math.floor(index / columns) * 30, compact ? 66 : 290, compact ? 24 : 230];
+    } else if (children.length) {
+      const width = index === 0 ? 318 : 300, columns = Math.floor((width - 24) / 72);
+      fallback = [index === 0 ? 8 : 444 + Math.floor((index - 1) / 3) * 340, index === 0 ? 320 : 260 + ((index - 1) % 3) * 210,
+        width, Math.max(60, 36 + Math.ceil(children.length / columns) * 30)];
+    } else fallback = linked === 'none' ? [290 + Math.floor(index / 4) * 240, 720 + (index % 4) * 110, 180, 70]
+      : defaults[index] ?? [40 + (index % 3) * 330, 850 + Math.floor(index / 3) * 300, 290, 230];
+    if (group.id === focusedId) fallback = [20, 48, 720, Math.max(690, 56 + Math.ceil(children.length / 4) * 92)];
+    const [x, y, w, h] = fallback;
+    const bounds = { x: stored?.x ?? x, y: stored?.y ?? y, w: stored?.width ?? stored?.w ?? (group.members.length ? Math.max(290, w) : w),
+      h: stored?.height ?? stored?.h ?? (group.members.length ? Math.max(230, h, 202 + Math.max(0, Math.ceil((group.members.length - 1) / 2) - 1) * 84) : h) };
+    const frame = { group, bounds, compact, folder: children.length > 0 || linked === 'folder', count: children.length };
+    frames.push(frame);
+    children.forEach((child, childIndex) => append(child, childIndex, frame));
+  };
+  active.filter(group => !active.some(parent => parent.id === group.parentId)).forEach((group, index) => append(group, index));
+  for (const group of active) if (!visited.has(group.id)) append(group, frames.length);
+  // A parent always contains all descendant frames, including persisted full-size repository frames.
+  for (const frame of [...frames].reverse()) {
+    for (const child of frames.filter(item => item.group.parentId === frame.group.id)) {
+      const right = Math.max(frame.bounds.x + frame.bounds.w, child.bounds.x + child.bounds.w + 14);
+      const bottom = Math.max(frame.bounds.y + frame.bounds.h, child.bounds.y + child.bounds.h + 14);
+      frame.bounds.x = Math.min(frame.bounds.x, child.bounds.x - 14);
+      frame.bounds.y = Math.min(frame.bounds.y, child.bounds.y - 20);
+      frame.bounds.w = right - frame.bounds.x; frame.bounds.h = bottom - frame.bounds.y;
+    }
+  }
+  return frames;
 }

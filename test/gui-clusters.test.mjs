@@ -1,0 +1,120 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import { clusterLead, connectedChoices, filterRepositories, initialRunsIn, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, validRunsIn } from '../gui/app/clusters.mjs';
+import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
+import { buildHierarchy, flattenVisibleHierarchy, revealGroup } from '../gui/app/hierarchy.mjs';
+import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
+import { renderCluster } from '../gui/app/inspector.mjs';
+import { applyEvent, createStore } from '../gui/app/state.mjs';
+import { document, nodes, copy } from './add-dom-fixture.mjs';
+
+const clients = [
+  { id: 'codex', title: 'Codex', connected: true, scopeEnforced: true, models: [{ id: 'observed', title: 'Observed', efforts: ['high', 'xhigh'], modes: [] }], quota: { known: false, remainingPercent: null } },
+  { id: 'lyra', title: 'Lyra', connected: true, scopeEnforced: true, models: [{ id: 'small', title: 'Installed small', efforts: [], modes: ['fast', 'normal'] }, { id: 'large', title: 'Installed large', efforts: [], modes: ['normal', 'thinking'] }] },
+  { id: 'cursor', connected: false, models: [] },
+];
+const cluster = (id, kind = 'none', parentId = null, members = []) => ({ id, title: id, parentId, members, link: kind === 'none' ? { kind } : kind === 'folder' ? { kind, folderId: id } : { kind, projectId: id } });
+const unit = (id, role = 'executor', clusterId = null, leadId = null) => ({ id, unit: id.split(':').at(-1), role, clusterId, leadId, scope: { kind: 'root' }, status: 'idle' });
+
+test('filtering and parent selection keep 26 canonical repositories; worktrees never increase the count', () => {
+  const offer = { groups: [['Web', 19], ['Unity', 6], ['Tools', 1]].map(([title, count]) => ({ id: title, title, path: title,
+    repositories: Array.from({ length: count }, (_, index) => ({ id: `${title}-${index}`, name: `${title}-${index}`, worktrees: [{ path: `${title}/${index}`, branch: 'main' }, { path: `${title}/${index}-work`, branch: 'review' }] })) })) };
+  const selected = repositorySelection(offer);
+  assert.equal(selected.size, 26); assert.equal(filterRepositories(offer, 'Web-18')[0].repositories.length, 1); assert.equal(selected.size, 26);
+  for (const repo of offer.groups[0].repositories) selected.delete(repo.id);
+  assert.equal(selected.size, 7); assert.equal(filterRepositories(offer, 'review').flatMap(group => group.repositories).length, 26);
+  const view = renderRepositoryOffer(document, { language: 'en', offer, selected, expanded: new Set(), query: '' }, {});
+  assert.match(copy(view), /Import 7/); assert.match(copy(view), /26 repositories/);
+});
+
+test('Runs in shows only connected capabilities, unknown quota and explicitly disabled Lyra pairs', () => {
+  assert.equal(connectedChoices(clients).length, 2);
+  const choice = initialRunsIn(clients); assert.equal(choice.model, 'observed');
+  assert.equal(validRunsIn({ ...choice, effort: 'invented' }, clients), false);
+  let selected;
+  const external = renderRunsInPicker(document, { language: 'en', clients, choice, useAsDefault: false }, { onChoice: value => { selected = value; } });
+  assert.match(copy(external), /Quota unavailable/); assert.doesNotMatch(copy(external), /Cursor|100%/);
+  assert.equal(nodes(external).find(node => node.attributes?.['data-use-default']).checked, false);
+  const localChoice = { client: 'lyra', model: 'small', effort: null, mode: 'normal' };
+  const local = renderRunsInPicker(document, { language: 'es', clients, choice: localChoice }, {});
+  assert.match(copy(local), /sin cuota/);
+  assert.equal(nodes(local).find(node => node.attributes?.['data-action'] === 'runs-mode-thinking').disabled, true);
+  nodes(external).find(node => node.attributes?.['data-action'] === 'runs-effort-xhigh').listeners.click();
+  assert.equal(selected.effort, 'xhigh'); assert.equal(validRunsIn(selected, clients), true);
+});
+
+test('Overseer and New agent forms contain only their choices, fresh is checked and no callback runs on render', () => {
+  let created = 0;
+  for (const language of ['en', 'es']) {
+    const model = { language, kind: 'agent', cluster: cluster('Ideas'), clients, role: 'executor', choice: initialRunsIn(clients), fresh: true };
+    const view = renderAgentForm(document, model, { onCreate: () => created++ });
+    assert.doesNotMatch(copy(view), /Builder|lead-id|machine/);
+    assert.equal(nodes(view).filter(node => node.attributes?.['data-action']?.startsWith('choose-')).length, 2);
+    const overseer = renderAgentForm(document, { ...model, kind: 'overseer', agentKind: 'external' }, {});
+    assert.equal(nodes(overseer).find(node => node.attributes?.['data-start-fresh']).checked, true);
+  }
+  assert.equal(created, 0);
+});
+
+test('canonical nested clusters keep aliases and exact lead links without a root person or legacy sections', () => {
+  const clusters = [cluster('Web', 'folder'), ...Array.from({ length: 19 }, (_, i) => cluster(`repo-${i}`, 'repository', 'Web', i === 0 ? ['root:lead', 'root:executor'] : []))];
+  const units = [unit('root:master', 'master'), unit('root:overseer', 'overseer'), unit('root:lead', 'overlord', 'repo-0'), { ...unit('root:executor', 'executor', 'repo-0', 'root:lead'), alias: 'Cart' }];
+  const state = { shown: new Map(), collapsed: new Set() }, tree = buildHierarchy(units, [], clusters);
+  const rows = flattenVisibleHierarchy(tree, state);
+  assert.equal(rows.some(row => row.unit?.role === 'master'), false); assert.equal(rows.filter(row => row.kind === 'cluster').length, 7);
+  assert.equal(rows.find(row => row.unit?.id === 'root:executor').label, 'Cart (executor)');
+  assert.equal(rows.find(row => row.kind === 'more').count, 13);
+  revealGroup(state, 'cluster:Web', 13); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 20);
+  assert.ok(flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set(['cluster:Web']) }, 'repo-18').some(row => row.groupId === 'repo-18'));
+  assert.equal(clusterLead(clusters[1], units).id, 'root:lead');
+});
+
+test('saved cluster frames, empty and nested folders remain in Fit beyond the former zoom floor', () => {
+  const groups = [cluster('Web', 'folder'), ...Array.from({ length: 100 }, (_, i) => cluster(`repo-${i}`, 'repository', 'Web')), cluster('Ideas')];
+  const saved = { nodes: {}, groups: { 'cluster:Ideas': { x: 50000, y: -50000, width: 180, height: 70 } } };
+  const frames = clusterFrames(groups, saved); assert.equal(frames.length, 102);
+  assert.deepEqual(frames.find(frame => frame.group.id === 'Ideas').bounds, { x: 50000, y: -50000, w: 180, h: 70 });
+  const map = createMap({ groups, saved, units: [unit('root:master', 'master'), unit('root:overseer', 'overseer')] });
+  assert.equal(paintNodes(map).some(node => node.role === 'master'), false);
+  const viewport = { width: 736, height: 818, left: 0, top: 0 }, camera = fitMap(map, viewport);
+  assert.ok(camera.zoom < 0.25);
+  for (const b of graphBounds(map)) {
+    assert.ok(b.x * camera.zoom + camera.x >= 47.9); assert.ok((b.x + b.width) * camera.zoom + camera.x <= viewport.width - 47.9);
+    assert.ok(b.y * camera.zoom + camera.y >= 47.9); assert.ok((b.y + b.height) * camera.zoom + camera.y <= viewport.height - 47.9);
+  }
+  map.reducedMotion = true; assert.equal(flyToCluster(map, 'Web', viewport), true);
+  assert.ok(map.view.zoom > camera.zoom);
+  const before = map.view.zoom; wheelZoom(map, { clientX: 200, clientY: 200, deltaY: 1 }, viewport); assert.ok(map.view.zoom < before);
+  const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups); assert.deepEqual(placement.positions['root:overseer'], { x: 380, y: 409 });
+});
+
+test('empty drag pans, Shift-drag selects agents and camera changes never persist writes', () => {
+  const map = createMap({ units: [unit('root:a')], saved: { nodes: { 'root:a': { x: 100, y: 100 } }, groups: {} } });
+  const rect = { left: 0, top: 0, width: 736, height: 818 };
+  const point = (x, y, shiftKey = false) => ({ clientX: x, clientY: y, pointerId: 1, shiftKey, rect });
+  pointerDown(map, point(400, 400)); pointerMove(map, point(430, 450)); pointerUp(map, point(430, 450));
+  assert.deepEqual(map.view, { x: 30, y: 50, zoom: 1 });
+  map.view = { x: 0, y: 0, zoom: 1 }; pointerDown(map, point(50, 50, true)); pointerMove(map, point(160, 160, true)); pointerUp(map, point(160, 160, true));
+  assert.deepEqual([...map.selection], ['root:a']); assert.equal(map.pending.size, 0);
+});
+
+test('cluster refresh replaces facts while keeping chat/editor drafts and selection identities', async () => {
+  const store = createStore(), draft = { value: 'Retained text' }; store.drafts.set('editor', draft); store.selected.groupId = 'Ideas';
+  await applyEvent(store, { token: 'fixture', location: { origin: 'http://127.0.0.1:9' }, controllers: new Set(), now: Date.now,
+    fetch: async () => new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: { items: [cluster('Ideas')], nextCursor: null }, meta: { requestId: 'fixture', readAt: '2026-10-14T00:00:00.000Z', eventCursor: '', sync: 'local' } }), { status: 200 }) },
+  { name: 'cluster.changed', envelope: { data: { clusterId: 'Ideas' } } });
+  assert.equal(store.indexes.groups.size, 1); assert.equal(store.drafts.get('editor'), draft); assert.equal(store.selected.groupId, 'Ideas');
+});
+
+test('inspector uses safe Git facts and an unlinked scope; six looks share bounded responsive control geometry', async () => {
+  for (const language of ['en', 'es']) {
+    const view = renderCluster(document, { language, cluster: cluster('Ideas'), units: [] }, {});
+    assert.match(copy(view), language === 'en' ? /cannot write|nowhere to write/ : /escribir/);
+  }
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /--side:\s*290px/); assert.match(css, /--inspector:\s*366px/);
+  assert.match(css, /\.start-dialog button[^}]*min-height:\s*32px/s);
+  assert.match(css, /max-width:\s*calc\(100vw - 32px\)/);
+  for (const look of ['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk']) assert.ok(css.includes(`[data-look="${look}"]`));
+});

@@ -53,7 +53,7 @@ test("saved coordinates stay put and missing units fall into repeatable rings", 
   assert.deepEqual(first, second);
   assert.deepEqual(first.positions["root:master"], { x: 380, y: 56 });
   assert.deepEqual(first.positions["project:shop:executor-shop"], { x: 84, y: 246 });
-  assert.deepEqual(first.positions["root:overseer"], { x: 380, y: 160 });
+  assert.deepEqual(first.positions["root:overseer"], { x: 380, y: 409 });
   assert.deepEqual(first.positions["root:adjutant"], { x: 240, y: 160 });
   assert.equal(first.positions["root:overseer-old"], undefined);
   assert.deepEqual(first.origins["project:shop"], { x: 214, y: 664 });
@@ -146,7 +146,7 @@ test("map gestures move a group once, cancel, marquee, zoom, and ignore the API"
   assert.deepEqual(map.positions.a, { x: 0, y: 0 });
   assert.deepEqual(map.positions.b, { x: 10, y: 0 });
 
-  pointerDown(map, point(80, 80, { rect }));
+  pointerDown(map, point(80, 80, { rect, shiftKey: true }));
   pointerMove(map, point(40, 40, { rect }));
   pointerUp(map, point(-10, -10, { rect }));
   assert.deepEqual([...map.selection], ["a", "b", "c"]);
@@ -303,8 +303,8 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.equal(web.className.includes("is-lead"), true);
   assert.equal(web.querySelector("[data-role-icon='hierarchy']") != null, true);
   assert.equal(host.querySelector("[data-unit-id='child']").querySelector("[data-status='working']").getAttribute("aria-label"), "Trabajando");
-  assert.equal(host.querySelector("[data-unit-id='master']").getAttribute("data-ring"), "person");
-  assert.equal(host.querySelector("[data-unit-id='master']").querySelector("[data-role-icon='person']") != null, true);
+  assert.equal(host.querySelector("[data-unit-id='master']"), null);
+
   map.selection = new Set(["lead"]);
   renderMap(host.ownerDocument, host, map, labels);
   assert.equal(host.querySelector("[data-unit-id='lead']").getAttribute("data-selected"), "true");
@@ -323,46 +323,23 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.match(css, /\.map-node\s*\{[^}]*border-radius:\s*var\(--radius-circle\)/);
 });
 
-test("personal zones follow every member and circles take priority over stable overlapping zones", () => {
-  const units = [unit("a", "executor-a", "executor", "root"), { ...unit("b", "executor-b", "executor", "root"), alias: "Blog" }];
-  const groups = [{ id: "large", title: "Large", members: ["a", "b"] }, { id: "small", title: "Small", members: ["a"] }, { id: "archived", title: "Archived", members: ["b"], deleted: true }];
-  const map = createMap({ units, groups, saved: { nodes: { a: { x: 100, y: 100 }, b: { x: 250, y: 300 } }, groups: {} } });
-  const host = createHost();
-  renderMap(host.ownerDocument, host, map);
-  assert.equal(host.querySelector("[data-group-zone='archived']"), null);
-  assert.equal(hitPersonalGroup(map, { x: 60, y: 60 }).id, "small");
-  const picked = [];
-  map.onPersonalGroup = (id) => picked.push(id);
-  map.onSelect = (id) => picked.push(id);
+test('saved cluster frames remain fixed while agents move and circles take priority', () => {
+  const units = [unit('a', 'executor-a', 'executor', 'root'), { ...unit('b', 'executor-b', 'executor', 'root'), alias: 'Blog' }];
+  const groups = [{ id: 'large', title: 'Large', members: ['a', 'b'], link: { kind: 'none' } }, { id: 'small', title: 'Small', members: ['a'], link: { kind: 'none' } }];
+  const map = createMap({ units, groups, saved: { nodes: { a: { x: 100, y: 100 }, b: { x: 250, y: 300 } }, groups: { 'cluster:large': { x: 0, y: 0, width: 400, height: 400 }, 'cluster:small': { x: 20, y: 20, width: 180, height: 70 } } } });
+  const host = createHost(); renderMap(host.ownerDocument, host, map);
+  assert.equal(hitPersonalGroup(map, { x: 60, y: 60 }).id, 'small');
+  const picked = []; map.onPersonalGroup = id => picked.push(id); map.onSelect = id => picked.push(id);
   const rect = { left: 0, top: 0, width: 760, height: 700 };
-  pointerDown(map, point(140, 140, { rect, unitId: "a" }));
-  pointerUp(map, point(140, 140, { rect, unitId: "a" }));
-  assert.equal(picked.at(-1), "a");
-  pointerDown(map, point(100, 100, { rect }));
-  pointerUp(map, point(100, 100, { rect }));
-  assert.equal(picked.at(-1), "small");
-  assert.equal(map.selectedGroupId, "small");
-  assert.equal(map.selection.size, 0);
-  const label = host.querySelector("[data-group-id='large']");
-  for (const listener of label.listeners.get("click")) listener();
-  assert.equal(picked.at(-1), "large");
-  for (const id of ["a", "b"]) {
-    map.positions[id] = { x: -200 + (id === "b" ? 450 : 0), y: 600 };
-    for (const zone of personalZones(map)) {
-      for (const member of zone.group.members) {
-        const at = map.positions[member];
-        assert.ok(zone.bounds.x <= at.x - 23);
-        assert.ok(zone.bounds.x + zone.bounds.w >= at.x + 23);
-        assert.ok(zone.bounds.y + zone.bounds.h >= at.y + 23 + 24);
-      }
-    }
-  }
-  assert.deepEqual(units.map((unit) => unit.leadId), [null, null]);
+  pointerDown(map, point(100, 100, { rect, unitId: 'a' })); pointerUp(map, point(100, 100, { rect, unitId: 'a' }));
+  assert.equal(picked.at(-1), 'a');
+  pointerDown(map, point(60, 60, { rect })); pointerUp(map, point(60, 60, { rect }));
+  assert.equal(picked.at(-1), 'small'); assert.equal(map.selection.size, 0);
+  const before = personalZones(map); map.positions.a = { x: 700, y: 900 };
+  assert.deepEqual(personalZones(map), before);
+  assert.deepEqual(units.map(item => item.leadId), [null, null]);
   renderMap(host.ownerDocument, host, map);
-  const blog = host.querySelector("[data-unit-id='b']");
-  assert.equal(blog.getAttribute("aria-label"), "Blog (executor-b)");
-  assert.equal(blog.children.at(-1).children[0].textContent, "Blog");
-  assert.equal(blog.children.at(-1).children[1].textContent, "executor-b");
+  assert.equal(host.querySelector("[data-unit-id='b']").getAttribute('aria-label'), 'Blog (executor-b)');
 });
 
 function unit(id, name, role, kind, scopeName = null, leadId = null) {
@@ -380,7 +357,7 @@ function point(x, y, extra) {
     clientX: x,
     clientY: y,
     pointerId: 1,
-    shiftKey: false,
+    shiftKey: extra.shiftKey === true,
     rect: extra.rect,
     target: extra.unitId ? { dataset: { unitId: extra.unitId, handle: extra.handle ?? "" }, getAttribute: (name) => name === "data-unit-id" ? extra.unitId : extra.handle ?? null } : { getAttribute: () => null },
     currentTarget: { setPointerCapture() {} },

@@ -335,6 +335,16 @@ test('app serves the exact four local Atkinson fonts as WOFF2 and rejects other 
   assert.equal((await call(unpackaged.http.port, 'GET', '/app/atkinson-400.woff2')).status, 503);
 });
 
+test('the start workflow serves its complete local module graph through the static allowlist', async t => {
+  const { core } = await boot(t, { assetDir: path.resolve('gui/app') });
+  for (const name of ['start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs']) {
+    const response = await call(core.http.port, 'GET', `/app/${name}`);
+    assert.equal(response.status, 200); assert.match(response.headers['content-type'], /javascript/);
+    assert.equal(response.raw, await readFile(path.join('gui/app', name), 'utf8'));
+  }
+  assert.equal((await call(core.http.port, 'GET', '/app/cluster-links.json')).status, 404);
+});
+
 test('event streams replay from a cursor without leaking credentials', async (t) => {
   const { core, token } = await boot(t);
   const opened = await new Promise((resolve, reject) => {

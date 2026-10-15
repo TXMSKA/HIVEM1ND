@@ -121,6 +121,16 @@ export async function applyEvent(store, api, event) {
     return { ready: true };
   }
   if (event.name === "stream.reset") return applyReset(store, api);
+  if (event.name === 'cluster.changed') {
+    const clusters = [];
+    let cursor = null;
+    do {
+      const response = await request(api, 'GET', '/clusters', { query: { limit: 200, ...(cursor ? { cursor } : {}) } });
+      clusters.push(...response.data.items); cursor = response.data.nextCursor;
+    } while (cursor);
+    store.indexes.groups = new Map(clusters.map(cluster => [cluster.id, cluster]));
+    return { applied: true };
+  }
   const resource = resourceOf(event);
   if (!resource) return { ignored: true };
   const current = currentRevision(store, resource);
@@ -232,7 +242,7 @@ function indexView(store, data) {
   store.indexes.chats.clear();
   store.indexes.tasks.clear();
   store.indexes.groups.clear();
-  for (const group of data?.groups ?? []) store.indexes.groups.set(group.id, group);
+  for (const group of data?.clusters ?? data?.groups ?? []) store.indexes.groups.set(group.id, group);
   for (const unit of data?.units ?? []) store.indexes.units.set(unit.id, unit);
   for (const chat of data?.chats ?? []) store.indexes.chats.set(chat.id, chat);
   for (const task of data?.tasks ?? []) store.indexes.tasks.set(task.id, task);

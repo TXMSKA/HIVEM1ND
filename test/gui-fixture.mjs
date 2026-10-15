@@ -31,7 +31,7 @@ const HOME_MS = 12 * 3600_000;
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
-const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs"];
+const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs"];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 class HttpError extends Error {
@@ -622,7 +622,7 @@ async function loadGroups(fx, issues) {
     try {
       const bytes = await readFile(join(directory, entry.name));
       const record = JSON.parse(bytes);
-      if (record.format !== "hivem1nd-group-v1" || `${record.id}.json` !== entry.name || record.chatId !== record.id) throw new Error("format");
+      if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || `${record.id}.json` !== entry.name || record.chatId !== record.id) throw new Error("format");
       groups.push(publicGroup(record, sha256(bytes)));
     } catch {
       issues.push({ path: relMind(fx.tree.mind, join(directory, entry.name)), code: "corrupt_resource", message: "The group could not be read." });
@@ -632,7 +632,8 @@ async function loadGroups(fx, issues) {
 }
 
 function publicGroup(record, revision) {
-  return { id: record.id, title: record.title, members: record.members, chatId: record.chatId, createdAt: record.createdAt, deleted: record.deleted, revision };
+  return { id: record.id, title: record.title, members: record.members, chatId: record.chatId, createdAt: record.createdAt, deleted: record.deleted, revision,
+    parentId: record.parentId ?? null, link: record.link ?? { kind: 'none' } };
 }
 
 function messageOrder(left, right) {
@@ -1982,6 +1983,8 @@ async function prepareFixtureAddition(fx, pattern, params, body, principal) {
 
 function routeTable() {
   return [
+    { pattern: '/clusters', GET: { query: ['q', 'limit', 'cursor', 'machine'] }, POST: { capability: 'unit.create', validate: body => { requireObject(body, ['title', 'parentId', 'link', 'machine', 'confirmed']); groupTitle(body.title); if (body.confirmed !== true || body.machine !== LOCAL_MACHINE || body.link?.kind !== 'none') throw new HttpError(422, 'invalid_cluster', 'The cluster is not valid.'); } } },
+    { pattern: '/clusters/:clusterId', GET: { query: ['machine'] }, DELETE: { capability: 'chat.manage', validate: body => { requireObject(body, ['machine', 'confirmed', 'expectedRevision']); if (body.confirmed !== true) throw new HttpError(422, 'confirmation_required', 'Confirm removal.'); } } },
     { pattern: '/additions', GET: { capability: 'settings.write', query: ['machine'] }, POST: { capability: 'settings.write', validate: fixtureAdditionValidator('apply') } },
     { pattern: '/additions/uploads', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('upload'), runtime: true } },
     { pattern: '/additions/uploads/:uploadId/chunks', PUT: { capability: 'settings.write', validate: fixtureAdditionValidator('chunk'), runtime: true } },
@@ -2430,7 +2433,12 @@ async function readData(fx, snap, spec, params, query) {
     items = [...items].sort((left, right) => Number(right.pinned) - Number(left.pinned) || String(right.lastMessage?.timestamp ?? "").localeCompare(String(left.lastMessage?.timestamp ?? "")) || left.id.localeCompare(right.id, "en"));
     return page(items.map(publicChat), query, spec.GET.query, (chat, q) => includes(chat.title, q) || chat.members.some((id) => includes(id, q)), []);
   }
-  if (pattern === "/groups") return page(snap.groups.filter((group) => !group.deleted), query, spec.GET.query, (group, q) => includes(group.title, q), []);
+  if (pattern === "/groups" || pattern === '/clusters') return page(snap.groups.filter((group) => !group.deleted), query, spec.GET.query, (group, q) => includes(group.title, q), []);
+  if (pattern === '/clusters/:clusterId') {
+    const cluster = snap.groups.find(group => group.id === params.clusterId && !group.deleted);
+    if (!cluster) throw new HttpError(404, 'cluster_not_found', 'The cluster was not found.');
+    return cluster;
+  }
   if (pattern === "/chats/:chatId") {
     noneQuery(query);
     const chat = snap.chats.find((item) => item.id === params.chatId);
@@ -2528,13 +2536,14 @@ async function readData(fx, snap, spec, params, query) {
     const agents = reported?.agents ?? { revision: null, items: (selected?.clients ?? []).map(client => ({ id: client.id, name: client.id, version: null, found: client.installed === true, mode: "on-demand", cli: { state: client.enabled ? "connected" : "missing", changes: 0 }, app: { name: null, state: "missing" } })) };
     if (pattern === "/settings/agents") {
       const reviewed = machine === LOCAL_MACHINE ? await fixtureClientState(fx) : null;
-      return { ...common, ...agents, revision: reviewed?.hash ?? agents.revision, items: agents.items.map(item => {
+      return { ...common, ...agents, connectedClients: (selected?.clients ?? []).filter(client => client.installed && client.enabled).map(client => ({ id: client.id, title: client.id, connected: true, scopeEnforced: true, models: [{ id: 'strong', title: 'Strong', efforts: ['high'], modes: [] }], quota: { known: false, remainingPercent: null, period: null } })), revision: reviewed?.hash ?? agents.revision, items: agents.items.map(item => {
         const saved = reviewed?.value.clients[item.id];
         return saved ? { ...item, mode: saved.mode, cli: { state: saved.connected ? "connected" : "changes-needed", changes: saved.connected ? 0 : 1 }, app: { ...item.app, state: saved.appConnected ? "connected" : item.app.state } } : item;
       }) };
     }
     if (pattern === "/settings/permissions") return { ...common, ...(machine === LOCAL_MACHINE ? await fixturePermissions(fx, snap) : reported?.permissions ?? { revision: null, unitGrants: [], agentPermissions: [] }) };
-    if (pattern === "/settings/projects") return { ...common, ...await fixtureAdditionProjects(fx, machine, reported?.projects ?? { revision: null, folders: [] }) };
+    if (pattern === "/settings/projects") return { ...common, ...await fixtureAdditionProjects(fx, machine, reported?.projects ?? { revision: null, folders: [] }), discoveryOffer: null,
+      clusterLinks: reported?.clusterLinks ?? snap.groups.filter(group => !group.deleted).map(group => ({ clusterId: group.id, title: group.title, kind: group.link.kind, projectId: group.link.projectId ?? null, localPath: null, available: true })) };
     const config = machine === LOCAL_MACHINE ? await readJsonFile(join(fx.local, "config.json")) : null;
     return { settings: snap.settings.settings, revision: snap.settings.revision, selectedMachine: machine, readOnly, reportedAt: common.reportedAt,
       service: machine === LOCAL_MACHINE ? { machine, state: selected?.state ?? "unknown", version: selected?.version ?? null, startedAt: reported?.service.startedAt ?? null, startWithWindows: config?.value.startWithWindows === true, revision: config?.hash ?? null } : reported?.service ?? { machine, state: "unknown", version: null, startedAt: null, startWithWindows: false, revision: null },
@@ -3430,7 +3439,7 @@ async function prepareGroup(fx, groupId, body) {
     record = { format: "hivem1nd-group-v1", id, chatId: id, createdAt: clock(fx).toISOString(), deleted: false };
     prepared = writeNewChat(fx, { id, title, members: ["root:master", ...members].sort(), kind: "group", pinned: false, listed: true });
   }
-  const next = { ...record, title, members, deleted: body.confirmed === true, chatRevision: prepared.data.revision };
+  const next = { ...record, ...(body.link ? { format: 'hivem1nd-cluster-v1', link: body.link, parentId: body.parentId ?? null } : {}), title, members, deleted: body.confirmed === true, chatRevision: prepared.data.revision };
   const bytes = Buffer.from(stableJson(next));
   const group = publicGroup(next, sha256(bytes));
   prepared.writes.unshift(fixtureWrite(file, groupBefore, bytes));
@@ -5164,6 +5173,8 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/editors/:resourceId/move") return prepareFixtureEditorLibrary(fx, "move", params.resourceId, body);
   if (pattern === "/editors/:resourceId") return prepareFixtureEditorLibrary(fx, "delete", params.resourceId, body);
   if (pattern === "/units/:unitId") return prepareUnitRemoval(fx, params.unitId, body);
+  if (pattern === '/clusters') return prepareGroup(fx, null, { title: body.title, parentId: body.parentId, link: body.link, members: [] });
+  if (pattern === '/clusters/:clusterId') return prepareGroup(fx, params.clusterId, body);
   if (pattern === "/groups") return prepareGroup(fx, null, body);
   if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);
   if (pattern === "/changes/:changeId/undo") return prepareChangeUndo(fx, params.changeId);

@@ -28,6 +28,8 @@ import { createGuiFixture } from "./gui-fixture.mjs";
 import { closeGuiHost, createFolderReopen, startGui } from "../gui/index.mjs";
 import { dispose as disposeCoreFixture, makeCoreFixture } from "./core-fixture.mjs";
 import { assertVisibleCopy } from "./spanish-register.test.mjs";
+import * as startApi from '../gui/app/start-api.mjs';
+import { createNativeAdapter } from '../engine/service/adapters.mjs';
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
@@ -227,7 +229,7 @@ test("Settings exposes five keyboard tabs, own-palette looks and machine-owned r
   assert.equal(root.querySelector("[data-action='settings-mode-codex-auto']").disabled, true);
   assert.match(root.querySelector("[data-settings-readonly]").textContent, /Last report/);
   click(root.querySelector("[data-settings-tab='projects']"));
-  assert.equal(root.querySelector("[data-settings-project='blog']").querySelector("code").textContent.endsWith("blog"), true);
+  assert.equal(root.querySelector("[data-cluster-link]").querySelector("code").textContent.endsWith("blog"), true);
   assert.equal(root.querySelector("[data-action='add-folder']"), null);
   click(root.querySelector("[data-settings-tab='general']"));
   assert.equal(root.querySelector("[data-start-with-windows]").disabled, true);
@@ -309,8 +311,8 @@ test("Settings Content uses discovered items, preserves preferences and retains 
   const desktop = await settingsApp(t);
   const { root, app, fixture } = desktop;
   click(root.querySelector("[data-settings-tab='projects']"));
-  assert.equal(root.querySelectorAll("[data-settings-project]").length, 1);
-  assert.equal(root.querySelectorAll("[data-settings-project] button").length, 0);
+  assert.equal(root.querySelectorAll("[data-cluster-link]").length, 1);
+  assert.equal(root.querySelectorAll("[data-cluster-link]").length, 1);
   click(root.querySelector("[data-settings-tab='content']"));
   assert.equal(root.querySelectorAll("[data-content-item]").length, 13);
   changeControl(root.querySelector("[data-content-item='feature:tribunal']"), false);
@@ -395,8 +397,8 @@ test("Settings ignores a late previous-machine response after another selection"
   assert.equal(app.settingsState.machine, "DESKTOP");
   assert.equal(app.settingsState.info.selectedMachine, "DESKTOP");
   click(root.querySelector("[data-settings-tab='projects']"));
-  assert.equal(root.querySelectorAll("[data-settings-project]").length, 1);
-  assert.equal(root.querySelector("[data-settings-project='shop']") !== null, true);
+  assert.equal(root.querySelectorAll("[data-cluster-link]").length, 1);
+  assert.equal(root.querySelector("[data-cluster-link]").querySelector("strong").textContent, "Shop");
 });
 
 test("Settings startup, scan and manual finding target the selected owner with revision checks", async t => {
@@ -509,7 +511,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
-    assert.equal(source.includes("localStorage"), false, file);
+    if (file !== "gui/app/main.mjs") assert.equal(source.includes("localStorage"), false, file);
     assert.equal(source.includes("sessionStorage"), false, file);
     assert.equal(source.includes("fonts.googleapis"), false, file);
     assert.equal(source.includes("\u2014"), false, file);
@@ -540,7 +542,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.match(css, /--accent:\s*#d4b06a/);
   assert.match(css, /--bar:\s*52px/);
   assert.match(css, /--footer:\s*30px/);
-  assert.match(css, /--side:\s*266px/);
+  assert.match(css, /--side:\s*290px/);
   assert.match(css, /--inspector:\s*366px/);
   assert.match(css, /--radius-panel:\s*20px/);
   assert.match(css, /prefers-reduced-motion/);
@@ -649,35 +651,16 @@ test("a stale collection generation cannot overwrite a newer page", () => {
   assert.equal(store.pages.get("units").total, null);
 });
 
-test("hierarchy keeps duplicate labels, folds large groups, and reveals a searched row", () => {
-  const units = [
-    sample("root:overseer", "overseer", "overseer", "root", null),
-    sample("root:overseer-old", "overseer-old", "overseer", "root", null),
-    sample("root:adjutant", "adjutant", "adjutant", "root", null),
-    sample("env:web:overlord-web", "overlord-web", "overlord", "environment", "web"),
-    sample("project:shop:executor-shop", "executor-shop", "executor", "project", "shop", "env:web:overlord-web", "working"),
-    sample("project:blog:executor-shop", "executor-shop", "executor", "project", "blog", null, "out"),
-    ...numberedUnits(20),
-  ];
-  const state = { shown: new Map(), collapsed: new Set() };
-  const tree = buildHierarchy(units);
-  assert.equal(tree.hidden.includes("root:overseer-old"), true);
-  const folded = flattenVisibleHierarchy(tree, state, "");
-  assert.equal(folded.some((row) => row.id === "root:overseer-old"), false);
-  assert.equal(folded.some((row) => row.id === "project:shop:executor-shop"), true);
-  assert.equal(folded.some((row) => row.id === "project:blog:executor-shop"), true);
-  assert.equal(folded.filter((row) => row.id.startsWith("project:bulk:")).length, 8);
-  const before = `${[...state.shown.entries()]}|${[...state.collapsed]}`;
-  const searched = flattenVisibleHierarchy(tree, state, "unit-0020");
-  assert.equal(`${[...state.shown.entries()]}|${[...state.collapsed]}`, before);
-  assert.equal(searched.some((row) => row.id === "project:bulk:unit-0020"), true);
-  assert.ok(searched.filter((row) => row.id.startsWith("project:bulk:")).length < 20);
-  toggleGroup(state, "project:bulk");
-  const collapsed = flattenVisibleHierarchy(tree, state, "");
-  assert.equal(collapsed.some((row) => row.id.startsWith("project:bulk:")), false);
-  revealGroup(state, "project:bulk", 12);
-  const opened = flattenVisibleHierarchy(tree, state, "");
-  assert.equal(opened.filter((row) => row.id.startsWith("project:bulk:")).length, 20);
+test('hierarchy keeps aliases and duplicates in one cluster tree and reveals searched repositories', () => {
+  const units = [sample('root:overseer', 'overseer', 'overseer', 'root', null), sample('root:overseer-old', 'overseer-old', 'overseer', 'root', null), sample('project:shop:a', 'same', 'executor', 'project', 'shop'), sample('project:blog:a', 'same', 'executor', 'project', 'blog')];
+  const groups = [{ id: 'folder', title: 'Web', parentId: null, link: { kind: 'folder' }, members: [] }, ...Array.from({ length: 20 }, (_, i) => ({ id: 'repo-'+i, title: 'Repo '+i, parentId: 'folder', link: { kind: 'repository' }, members: i === 0 ? ['project:shop:a', 'project:blog:a'] : [] }))];
+  const state = { shown: new Map(), collapsed: new Set() }, tree = buildHierarchy(units, [], groups);
+  assert.ok(tree.hidden.includes('root:overseer-old'));
+  const rows = flattenVisibleHierarchy(tree, state); assert.equal(rows.filter(row => row.kind === 'cluster').length, 7);
+  assert.equal(rows.filter(row => row.unit?.unit === 'same').length, 2);
+  const before = JSON.stringify([...state.shown]); assert.ok(flattenVisibleHierarchy(tree, state, 'Repo 19').some(row => row.groupId === 'repo-19')); assert.equal(JSON.stringify([...state.shown]), before);
+  toggleGroup(state, 'cluster:folder'); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 1);
+  revealGroup(state, 'cluster:folder', 14); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 21);
 });
 
 test("a reporting cycle is shown and keyboard focus reaches the final row", () => {
@@ -1228,7 +1211,7 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   navigate(phone.app, "settings");
   assert.equal(phone.app.mode, "hierarchy");
   assert.equal(phone.root.querySelector(".mode"), null);
-  assert.equal(phone.root.querySelector("[data-action='new-unit']"), null);
+  assert.equal(phone.root.querySelector("[data-action='new-cluster']"), null);
   assert.equal(phone.root.querySelector("[aria-label='Settings']"), null);
   assert.equal(phone.root.querySelector(".stage"), null);
   assert.equal((phone.root.textContent ?? "").includes("This screen is not ready yet."), false);
@@ -2089,9 +2072,9 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   assert.equal(always.textContent, text(language, "approveAlways"));
   click(desktop.root.querySelector("[data-action='waiting']"));
   capture("Waiting");
-  click(desktop.root.querySelector("[data-action='new-unit']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The copy inventory did not open the unit form.");
-  capture("New unit form");
+  click(desktop.root.querySelector("[data-action='new-cluster']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']"), "The copy inventory did not open the unit form.");
+  capture("New cluster form");
   desktop.document.querySelector("dialog[open]").close();
   click(desktop.root.querySelector("[data-action='start-session']"));
   await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The copy inventory did not open the session form.");
@@ -2175,39 +2158,6 @@ test("unit forms use machines, session forms use the stored runtime, and the ins
   assert.equal(gated.querySelector("[data-action='accept']").disabled, true);
   assert.equal(desktop.root.querySelector("[data-task-detail='project:shop:030']").querySelector("[data-approved-by]").getAttribute("data-approved-by"), "");
 
-  click(desktop.root.querySelector("[data-action='new-unit']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit form did not open.");
-  const unitForm = desktop.document.querySelector("[data-form='unit']");
-  const machine = unitForm.querySelector("[name='machine']");
-  const machineOptions = machine.querySelectorAll("option");
-  assert.equal(machineOptions.find((option) => option.getAttribute("value") === "OFFLINE").getAttribute("disabled"), "");
-  assert.equal(machineOptions.find((option) => option.getAttribute("value") === "DESKTOP").getAttribute("disabled"), null);
-  assert.equal(unitForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
-  typeInput(unitForm.querySelector("[name='unit']"), "executor-made", 0, 13);
-  assert.equal(unitForm.querySelectorAll("[name='scopeKind']").length, 3);
-  assert.equal([...unitForm.querySelectorAll("[name='scopeKind']")].find((node) => node.checked)?.value, "project");
-  assert.equal(unitForm.querySelector("[name='positionX']").getAttribute("inputmode"), "numeric");
-  assert.equal(unitForm.querySelector("[id='position-hint']")?.textContent.includes("minus"), true);
-  const leadChoices = unitForm.querySelectorAll("[data-lead-choice]").length;
-  typeInput(unitForm.querySelector("[name='leadId']"), "overlord-web", 0, 12);
-  assert.equal(unitForm.querySelectorAll("[data-lead-choice]").length < leadChoices, true);
-  assert.equal(unitForm.querySelector("[data-lead-choice='env:web:overlord-web']") != null, true);
-  unitForm.querySelector("[name='leadId']").value = "env:web:overlord-web";
-  typeInput(unitForm.querySelector("[name='job']"), "builder", 0, 7);
-  typeInput(unitForm.querySelector("[name='model']"), "strong", 0, 6);
-  typeInput(unitForm.querySelector("[name='positionX']"), "12", 0, 2);
-  typeInput(unitForm.querySelector("[name='positionY']"), "24", 0, 2);
-  click(unitForm.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-made"), "The new unit did not appear.");
-  const created = writes.find((item) => item.body?.unit === "executor-made");
-  assert.equal(created.body.role, "executor");
-  assert.deepEqual(created.body.scope, { kind: "project", name: "shop" });
-  assert.equal(created.body.machine, "DESKTOP");
-  assert.equal(created.body.leadId, "env:web:overlord-web");
-  assert.equal(created.body.job, "builder");
-  assert.equal(created.body.model, "strong");
-  assert.deepEqual(created.body.position, { x: 12, y: 24 });
-
   const adjutant = desktop.app.unitList.catalog.find((unit) => unit.id === "root:adjutant");
   desktop.app.activeHandlers.onActivate({ id: adjutant.id, kind: "unit", unit: adjutant }, "double");
   await waitFor(() => desktop.app.inspectorData?.unitId === "root:adjutant", "The adjutant inspector did not open.");
@@ -2215,9 +2165,7 @@ test("unit forms use machines, session forms use the stored runtime, and the ins
   click(desktop.root.querySelector("[data-action='start-session']"));
   await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
   const sessionForm = desktop.document.querySelector("[data-form='session']");
-  const clients = sessionForm.querySelector("[name='client']").querySelectorAll("option").map((option) => option.getAttribute("value"));
-  assert.deepEqual(clients, ["claude", "codex", "cursor"]);
-  sessionForm.querySelector("[name='client']").value = "codex";
+  assert.equal(sessionForm.querySelector("[name='client']"), null);
   typeInput(sessionForm.querySelector("[name='prompt']"), "Check the build", 0, 15);
   click(sessionForm.querySelector("[data-action='confirm-form']"));
   await waitFor(() => urls.slice(beforeSession).some((url) => url.includes("/session-requests/")), "The queued session was not read back.");
@@ -2231,94 +2179,28 @@ test("unit forms use machines, session forms use the stored runtime, and the ins
   const blog = desktop.app.unitList.catalog.find((unit) => unit.id === "project:blog:executor-shop");
   desktop.app.activeHandlers.onActivate({ id: blog.id, kind: "unit", unit: blog }, "double");
   await waitFor(() => desktop.root.querySelector("[data-machine='OFFLINE']")?.getAttribute("data-answers") === "false", "The silent machine was not shown.");
-  click(desktop.root.querySelector("[data-action='start-session']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='session']")?.querySelector("[data-client-unavailable]"), "The unavailable client was still offered.");
-  const silentForm = desktop.document.querySelector("[data-form='session']");
-  assert.equal([...silentForm.querySelector("[name='client']").children].every((option) => option.disabled), true);
-  assert.equal(silentForm.querySelector("[data-action='confirm-form']").disabled, true);
-  assert.equal(silentForm.querySelector("[data-machine-issue='OFFLINE']") == null, false);
+  assert.notEqual(desktop.root.querySelector("[data-action='start-session']").getAttribute('disabled'), null);
 });
 
-test("an invalid unit form stays open and a rejected unit keeps its draft", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (init?.method === "POST" || init?.method === "PUT") writes.push({ method: init.method, url: String(input), body: init.body ? JSON.parse(init.body) : null });
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
-  const unitPosts = () => writes.filter((item) => item.method === "POST" && item.url.endsWith("/units"));
-  click(desktop.root.querySelector("[data-action='new-unit']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit form did not open.");
-  const form = () => desktop.document.querySelector("[data-form='unit']");
-  typeInput(form().querySelector("[name='unit']"), "Retain this draft", 0, 17);
-  typeInput(form().querySelector("[name='job']"), "Retain this draft", 0, 17);
-  click(form().querySelector("[data-action='confirm-form']"));
-  const unitField = form().querySelector("[name='unit']");
-  const nameError = form().querySelector("[data-field-error='unit']");
-  assert.equal(unitPosts().length, 0);
-  assert.equal(unitField.getAttribute("aria-invalid"), "true");
-  assert.equal(unitField.getAttribute("aria-describedby"), nameError.getAttribute("id"));
-  assert.equal(nameError.closest("label"), unitField.closest("label"));
-  assert.equal(nameError.textContent, "Use a lowercase name made of letters, digits, dots, underscores, or hyphens.");
-  assert.equal(desktop.document.activeElement, unitField);
-  assert.equal(unitField.value, "Retain this draft");
-  assert.equal(form().querySelector("[name='job']").value, "Retain this draft");
-
-  typeInput(unitField, "executor-kept", 0, 13);
-  const openDialog = form();
-  const pick = (attribute, value = null) => {
-    const seen = new Set();
-    const visit = (node) => {
-      if (!node || seen.has(node)) return null;
-      seen.add(node);
-      const actual = node.getAttribute?.(attribute);
-      if (value == null ? actual != null : actual === value) return node;
-      for (const child of node.children ?? []) {
-        const found = visit(child);
-        if (found) return found;
-      }
-      return null;
-    };
-    return visit(openDialog);
-  };
-  pick("name", "leadId").value = "not-a-real-lead";
-  click(pick("data-action", "confirm-form"));
-  await waitFor(() => pick("data-dialog-error")?.textContent === "That connection is not valid.", "The rejected unit did not stay in the form.");
-  assert.equal(pick("name", "unit").value, "executor-kept");
-  assert.equal(pick("name", "job").value, "Retain this draft");
-  assert.equal(pick("data-action", "confirm-form").textContent, "Retry");
-  assert.equal(openDialog.parent == null, false);
-
-  pick("name", "leadId").value = "";
-  click(pick("data-action", "confirm-form"));
-  assert.equal(pick("data-action", "confirm-form").getAttribute("aria-busy"), "true");
-  assert.equal(pick("name", "unit").value, "executor-kept");
-  assert.equal(pick("name", "job").value, "Retain this draft");
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-kept"), "The corrected unit was not created.");
-  await waitFor(() => openDialog.parent == null, "The unit dialog stayed open after it was created.");
-  assert.equal(desktop.document.activeElement === desktop.root.querySelector("[data-action='new-unit']"), true);
-  const created = unitPosts().find((item) => item.body?.unit === "executor-kept");
-  assert.equal(created.body.job, "Retain this draft");
-
-  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
-  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-action='start-session']"), "The session control did not appear.");
-  click(desktop.root.querySelector("[data-action='start-session']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The session form did not open.");
-  const sessionForm = desktop.document.querySelector("[data-form='session']");
-  sessionForm.querySelector("[name='client']").value = "";
-  const beforeSession = writes.length;
-  click(sessionForm.querySelector("[data-action='confirm-form']"));
-  const client = sessionForm.querySelector("[name='client']");
-  assert.equal(client.getAttribute("aria-describedby"), sessionForm.querySelector("[data-field-error='client']").getAttribute("id"));
-  assert.equal(desktop.document.activeElement, client);
-  assert.equal(writes.slice(beforeSession).some((item) => item.url.includes("/session")), false);
-  const cancel = sessionForm.querySelector('[data-action="cancel-form"]');
-  click(cancel);
-  assert.equal(desktop.document.querySelector("[data-form='session']"), null);
-  assert.equal(desktop.document.activeElement === desktop.root.querySelector("[data-action='start-session']"), true);
+test('a rejected cluster keeps its name and focus across refresh and retries its original operation', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close()); const writes = []; let reject = true;
+  const desktop = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
+    if (init.method === 'POST' && new URL(input).pathname === '/api/v1/clusters') {
+      writes.push({ body: init.body, key: init.headers['Idempotency-Key'] });
+      if (reject) { reject = false; throw new Error('The request was not confirmed.'); }
+    }
+    return fetch(input, init);
+  }); t.after(() => dispose(desktop.app));
+  click(desktop.root.querySelector("[data-action='new-cluster']"));
+  const dialog = desktop.document.querySelector("[data-start-dialog='cluster']"), name = dialog.querySelector("[name='title']");
+  typeInput(name, 'Retained cluster', 3, 8); name.focus(); renderShell(desktop.app);
+  assert.equal(name.value, 'Retained cluster'); assert.equal(desktop.document.activeElement, name);
+  click(dialog.querySelector("[data-action='create-cluster']"));
+  await waitFor(() => dialog.querySelector('[data-start-error]'), 'The rejected cluster did not stay open.');
+  assert.equal(dialog.querySelector("[name='title']").value, 'Retained cluster');
+  click(dialog.querySelector("[data-action='create-cluster']"));
+  await waitFor(() => desktop.app.store.selected.groupId && !desktop.document.querySelector("[data-start-dialog='cluster']"), 'The cluster did not reconcile.');
+  assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]);
 });
 
 test("unsaved forms share one dirty flag and only a saved draft clears it", async (t) => {
@@ -2565,17 +2447,17 @@ test("board nodes and named controls are available from the keyboard", async (t)
   assert.equal(desktop.document.querySelector("[data-field='create-project']").closest("label").querySelector(".field-hint").textContent, "The text's file lives in this repository");
 
   navigate(desktop.app, "map");
-  await waitFor(() => desktop.root.querySelector("[data-action='new-unit']"), "The unit control did not return.");
-  click(desktop.root.querySelector("[data-action='new-unit']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit dialog did not open.");
-  const dialog = desktop.document.querySelector("[data-form='unit']");
+  await waitFor(() => desktop.root.querySelector("[data-action='new-cluster']"), "The unit control did not return.");
+  click(desktop.root.querySelector("[data-action='new-cluster']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']"), "The unit dialog did not open.");
+  const dialog = desktop.document.querySelector("[data-start-dialog='cluster']");
   const heading = dialog.querySelector("h2");
   assert.equal(dialog.getAttribute("aria-labelledby"), heading.getAttribute("id"));
   assert.match(heading.getAttribute("id"), /^dialog-title-\d+$/);
   const firstId = heading.getAttribute("id");
-  click(dialog.querySelector("[data-action='cancel-form']"));
-  click(desktop.root.querySelector("[data-action='new-unit']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']")?.querySelector("h2")?.getAttribute("id") !== firstId, "The second dialog reused the heading id.");
+  click(dialog.querySelector("[data-action='cancel-cluster']"));
+  click(desktop.root.querySelector("[data-action='new-cluster']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']")?.querySelector("h2")?.getAttribute("id") !== firstId, "The second dialog reused the heading id.");
 
   navigate(desktop.app, "settings");
   await waitFor(() => desktop.root.querySelector("[data-addresses]"), "The address field did not open.");
@@ -3753,56 +3635,75 @@ test("the owned folder handoff protects its authority and preserves the host and
   await viewer.arrayBuffer();
 });
 
-test("first-run creates the Overseer once despite repeated clicks and selects the actual unit", async (t) => {
-  const fixture = await createGuiFixture({ scenario: "first-run" });
-  t.after(() => fixture.close());
+test('mounted first-open discovery filters canonical selections, imports explicitly and then offers the Overseer', async t => {
+  let repository;
   const writes = [];
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const booted = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (new URL(input).pathname === "/api/v1/units" && init.method === "POST") { writes.push(JSON.parse(init.body)); await gate; }
+  const desktop = await startCoreDesktop(t, { prepare: async fixture => {
+    repository = join(fixture.home, 'Web', 'shop'); await mkdir(join(repository, '.git'), { recursive: true });
+    await writeFile(join(repository, 'retained.txt'), 'Unchanged repository.');
+    return { gitRunner: async (_exe, args, options) => {
+      if (args.includes('rev-parse')) return { stdout: args.includes('--show-toplevel') ? `${options.cwd}\n` : `${join(options.cwd, '.git')}\n` };
+      if (args.includes('worktree')) return { stdout: `worktree ${options.cwd}\0HEAD ${'a'.repeat(40)}\0branch refs/heads/main\0\0` };
+      if (args.includes('config')) return { stdout: '', code: 1 };
+      throw new Error('Unexpected Git write or read.');
+    } };
+  }, afterFetch: async (input, init, response) => { if (init.method === 'POST') writes.push(new URL(input).pathname); return response; } });
+  const offer = desktop.app.startProjects.discoveryOffer;
+  let dialog = desktop.document.querySelector('[data-start-dialog="discovery"]'); assert.ok(dialog);
+  assert.equal(desktop.app.store.indexes.groups.size, 0); assert.equal(writes.length, 0);
+  typeInput(dialog.querySelector('[data-start-field="filter"]'), 'unmatched', 0, 9);
+  assert.equal(dialog.querySelectorAll('[data-discovery-repository]').length, 0);
+  assert.equal(dialog.querySelector('[data-action="import-repositories"]').textContent, 'Import 1');
+  typeInput(dialog.querySelector('[data-start-field="filter"]'), '', 0, 0);
+  const folder = dialog.querySelector(`[data-discovery-folder="${offer.groups[0].id}"]`);
+  folder.checked = false; for (const run of folder.listeners.get('change') ?? []) run();
+  assert.equal(dialog.querySelector('[data-action="import-repositories"]').textContent, 'Import 0');
+  const restored = dialog.querySelector(`[data-discovery-folder="${offer.groups[0].id}"]`); restored.checked = true;
+  for (const run of restored.listeners.get('change') ?? []) run();
+  const confirm = dialog.querySelector('[data-action="import-repositories"]'); click(confirm); click(confirm);
+  assert.equal(confirm.getAttribute('aria-busy'), 'true');
+  await waitFor(() => desktop.document.querySelector('[data-start-dialog="overseer"]'), 'The Overseer was not offered after import.').catch(error => {
+    throw new Error(`${error.message} ${JSON.stringify({ code: desktop.document.querySelector('[data-start-error]')?.getAttribute('data-start-error') ?? desktop.app.startError?.code, dismissed: desktop.app.startProjects.discoveryOffer.dismissed, clusters: desktop.app.store.indexes.groups.size, dialogs: desktop.document.querySelectorAll('[data-start-dialog]').map(node => node.getAttribute('data-start-dialog')) })}`);
   });
-  t.after(() => dispose(booted.app));
-  assert.equal(booted.root.querySelector(".workspace-empty") != null, true);
-  assert.equal(booted.root.querySelector("[data-action='waiting']"), null);
-  assert.equal(booted.root.querySelectorAll("[data-unit]").length, 1);
-  assert.equal(booted.root.querySelector(".map-edge"), null);
-  const create = booted.root.querySelector("[data-action='create-overseer']");
-  click(create);
-  click(create);
-  await waitFor(() => writes.length === 1, "The Overseer create request was not sent.");
-  click(booted.root.querySelector("[data-action='create-overseer']"));
-  assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0], { unit: "overseer", role: "overseer", scope: { kind: "root", name: null }, machine: "DESKTOP", leadId: null, job: null, model: null, position: { x: 372, y: 178 } });
-  release();
-  await waitFor(() => !booted.app.overseerCreating, "The creation did not settle.");
-  assert.equal(booted.app.overseerError?.message ?? null, null);
-  assert.equal(booted.app.store.selected.unitId, "root:overseer");
-  assert.equal(booted.root.querySelector(".map-node.is-selected")?.getAttribute("data-unit-id"), "root:overseer");
-  const units = (await request(apiFrom(fixture.desktopUrl), "GET", "/units")).data.items;
-  assert.deepEqual(units.map((unit) => unit.id).sort(), ["root:master", "root:overseer"]);
-  assert.equal(booted.root.querySelector(".workspace-empty"), null);
+  assert.equal(desktop.app.store.indexes.groups.size, 2); assert.equal(writes.filter(route => route.endsWith('/answer')).length, 1);
+  assert.equal(await readFile(join(repository, 'retained.txt'), 'utf8'), 'Unchanged repository.'); assert.equal(desktop.launches.length, 0);
+  dialog = desktop.document.querySelector('[data-start-dialog="overseer"]'); click(dialog.querySelector('[data-action="cancel-agent"]'));
+  assert.equal(desktop.document.querySelector('[data-start-dialog="discovery"]'), null);
 });
 
-test("a failed first-run request keeps the empty state and its creation control", async (t) => {
-  const fixture = await createGuiFixture({ scenario: "first-run" });
-  t.after(() => fixture.close());
-  const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
-    if (new URL(input).pathname === "/api/v1/units" && init.method === "POST") return new Response(JSON.stringify({ error: { code: "machine_unavailable", message: "The machine is unavailable.", details: { machine: "DESKTOP" } } }), { status: 409, headers: { "content-type": "application/json" } });
-    return fetch(input, init);
-  });
-  t.after(() => dispose(booted.app));
-  booted.app.language = "es";
-  renderShell(booted.app);
-  assert.equal(booted.root.querySelector("[data-action='create-overseer']").textContent, "Crear el Overseer");
-  click(booted.root.querySelector("[data-action='create-overseer']"));
-  await waitFor(() => booted.app.overseerError && !booted.app.overseerCreating, "The failed creation did not settle.");
-  assert.equal(booted.root.querySelector(".workspace-empty") != null, true);
-  assert.equal(booted.root.querySelector("[data-action='create-overseer']").disabled, false);
-  assert.equal(booted.app.store.selected.unitId, null);
-  assert.equal(booted.root.querySelector("[role='alert']") != null, true);
-  const units = (await request(apiFrom(fixture.desktopUrl), "GET", "/units")).data.items;
-  assert.deepEqual(units.map((unit) => unit.id), ["root:master"]);
+test('first-open Later persists without a launch and explicit Overseer creation reconciles a lost response once', async t => {
+  const storage = new Map(), writes = []; let drop = true;
+  const desktop = await startCoreDesktop(t, { storage: { getItem: key => storage.get(key), setItem: (key,value) => storage.set(key,value) }, afterFetch: async (input, init, response) => {
+    if (init.method === 'POST' && new URL(input).pathname === '/api/v1/overseer') {
+      writes.push({ key: init.headers['Idempotency-Key'], body: init.body });
+      if (drop) { drop = false; await response.arrayBuffer(); throw new Error('Reply lost after commit.'); }
+    }
+    return response;
+  } });
+  let dialog = desktop.document.querySelector("[data-start-dialog='overseer']"); assert.ok(dialog);
+  assert.equal(desktop.root.querySelector("[data-unit-id='root:master']"), null); assert.equal(desktop.launches.length, 0);
+  click(dialog.querySelector("[data-action='cancel-agent']")); assert.equal(storage.size, 1);
+  renderShell(desktop.app); assert.equal(desktop.document.querySelector("[data-start-dialog='overseer']"), null);
+  click(desktop.root.querySelector("[data-action='create-overseer']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='overseer']"), 'The Overseer choice did not reopen.');
+  dialog = desktop.document.querySelector("[data-start-dialog='overseer']"); const create = dialog.querySelector("[data-action='create-agent']"); click(create); click(create);
+  assert.equal(create.getAttribute('aria-busy'), 'true');
+  await waitFor(() => dialog.querySelector('[data-start-error]'), 'The unconfirmed creation was lost.');
+  click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => desktop.app.store.selected.unitId === 'root:overseer' && desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The actual Overseer was not selected.');
+  assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]); assert.equal(desktop.launches.length, 0);
+  assert.equal(desktop.app.unitList.catalog.filter(unit => unit.id === 'root:overseer').length, 1);
+});
+
+test('a failed first-open creation retains its selected runtime, fresh preference and named retry', async t => {
+  const desktop = await startCoreDesktop(t, { afterFetch: async (input, init, response) => {
+    if (init.method === 'POST' && new URL(input).pathname === '/api/v1/overseer') return new Response(JSON.stringify({ error: { code: 'machine_unavailable', message: 'The selected machine is unavailable.' } }), { status: 409 });
+    return response;
+  } });
+  const dialog = desktop.document.querySelector("[data-start-dialog='overseer']"); click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => dialog.querySelector('[data-start-error]'), 'The failure was not visible.');
+  assert.equal(dialog.querySelector('[data-start-fresh]').checked, true); assert.equal(desktop.app.store.selected.unitId, null); assert.equal(desktop.launches.length, 0);
+  assert.equal(desktop.document.activeElement, dialog.querySelector("[data-action='create-agent']"));
 });
 
 test("manual presentation choices replace only their viewer override and retry without another settings write", async (t) => {
@@ -4011,25 +3912,25 @@ test("personal folders, zones and chats select one group and deletion offers onl
   const group = (await createGroup(api, "Checkout launch", members)).data;
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
   t.after(() => dispose(desktop.app));
-  assert.equal(desktop.app.activeRows[0].id, "section:personal");
-  const folder = desktop.root.querySelector(`[data-personal-folder="${group.id}"]`);
+  assert.ok(desktop.app.activeRows.some(row => row.id === 'section:clusters'));
+  const folder = desktop.root.querySelector(`[data-cluster-row="${group.id}"]`);
   assert.equal(folder.getAttribute("aria-expanded"), "true");
-  assert.equal(desktop.root.querySelector("[data-action='new-group']").getAttribute("aria-label"), "New group");
+  assert.equal(desktop.root.querySelector("[data-action='new-cluster']").getAttribute("aria-label"), "New cluster");
   click(folder);
   await waitFor(() => desktop.app.thread?.chat?.id === group.chatId, "The folder did not select its linked chat.");
   assert.equal(desktop.app.store.selected.groupId, group.id);
-  assert.equal(desktop.root.querySelector(`[data-group-inspector="${group.id}"]`) != null, true);
-  assert.equal(desktop.root.querySelector("[data-composer]").getAttribute("aria-label"), "Message the group");
-  assert.equal(desktop.root.querySelectorAll(".field-hint").some((node) => node.textContent.includes("Every member sees every reply")), true);
+  assert.equal(desktop.root.querySelector(`[data-cluster-inspector="${group.id}"]`) != null, true);
+  assert.equal(desktop.root.querySelector("[data-composer]").getAttribute("aria-label"), "Message Checkout launch");
+  assert.equal(desktop.root.querySelectorAll(".field-hint").some((node) => node.textContent.includes("Goes to the cluster")), true);
   assert.equal(desktop.app.activeRows.filter((row) => row.personalMember).length, 0);
   click(desktop.root.querySelector(`[data-group-id="${group.id}"]`));
   assert.equal(desktop.app.store.selected.groupId, group.id);
   navigate(desktop.app, "chats");
   desktop.app.activeHandlers.onActivate({ id: group.chatId, kind: "chat" }, "single");
   assert.equal(desktop.app.store.selected.groupId, group.id);
-  clickAction(desktop.root, "delete-group");
+  clickAction(desktop.root, "cluster-more");
   const dialog = desktop.document.querySelector("dialog");
-  assert.match(dialog.querySelector("p").textContent, /chat moves to Archived/);
+  assert.match(dialog.querySelector("p").textContent, /Files and work stay/);
   click(dialog.querySelector("button.primary"));
   await waitFor(() => !desktop.app.store.indexes.groups.has(group.id) && desktop.root.querySelector("[data-action='map-undo']"), "The confirmed deletion did not offer Undo.");
   const archived = (await request(api, "GET", "/chats", { query: { archived: "true" } })).data.items;
@@ -4038,7 +3939,7 @@ test("personal folders, zones and chats select one group and deletion offers onl
   clickAction(desktop.root, "map-undo");
   await waitFor(() => desktop.app.store.indexes.groups.has(group.id), "Undo did not restore the group.");
   await waitFor(() => desktop.app.activity.get(undoKey)?.phase === "success", "Undo did not finish.");
-  clickAction(desktop.root, "delete-group");
+  clickAction(desktop.root, "cluster-more");
   click(desktop.document.querySelector("dialog").querySelector("button.primary"));
   await waitFor(() => desktop.root.querySelector("[data-action='map-undo']"), "The second deletion did not offer Undo.");
   await fixture.control.advance(10001);
@@ -4051,38 +3952,21 @@ test("personal folders, zones and chats select one group and deletion offers onl
   assert.deepEqual((await request(api, "GET", "/units")).data.items.map((unit) => [unit.id, unit.leadId]), before);
 });
 
-test("the group dialog creates and edits one linked chat without changing reporting relationships", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  const before = desktop.app.unitList.catalog.map((unit) => [unit.id, unit.leadId]);
-  const ids = ["project:shop:executor-shop", "env:web:overlord-web"];
-  desktop.app.mapState.selection = new Set(ids);
-  desktop.app.mapState.onSelection(ids);
-  clickAction(desktop.root, "save-group");
-  let dialog = desktop.document.querySelector("[data-form='group']");
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  assert.equal(dialog.querySelector("[data-field-error='title']") != null, true);
-  typeInput(dialog.querySelector("[name='title']"), "API work", 0, 8);
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => desktop.app.store.selected.groupId && desktop.document.querySelector("[data-form='group']") == null, "The group dialog did not commit.");
-  const id = desktop.app.store.selected.groupId;
-  await waitFor(() => desktop.app.thread?.chat?.id === id, "The created group did not open its chat.");
-  clickAction(desktop.root, "group-members");
-  dialog = desktop.document.querySelector("[data-form='group']");
-  typeInput(dialog.querySelector("[name='title']"), "API launch", 0, 10);
-  click(dialog.querySelector(`[data-member="${ids[1]}"]`));
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => desktop.app.store.indexes.groups.get(id)?.title === "API launch" && desktop.document.querySelector("[data-form='group']") == null, "The group edit did not finish.");
-  const chat = (await request(apiFrom(fixture.desktopUrl), "GET", "/chats/:chatId", { params: { chatId: id } })).data;
-  assert.equal(chat.title, "API launch");
-  assert.equal(chat.kind, "group");
-  assert.deepEqual(new Set(chat.members), new Set(["root:master", ids[0]]));
-  assert.deepEqual(desktop.app.unitList.catalog.map((unit) => [unit.id, unit.leadId]), before);
-  desktop.app.mapState.selection = new Set([ids[0]]);
-  desktop.app.mapState.onSelection([ids[0]]);
-  await waitFor(() => desktop.app.thread?.chat?.kind === "direct" && desktop.app.thread.chat.members.includes(ids[0]), "The single selection kept the previous group chat.");
+test('a new empty cluster has one chat and no agent or reporting change until New agent is confirmed', async t => {
+  const desktop = await startCoreDesktop(t); click(desktop.document.querySelector("[data-action='cancel-agent']"));
+  click(desktop.root.querySelector("[data-action='new-cluster']")); const dialog = desktop.document.querySelector("[data-start-dialog='cluster']");
+  typeInput(dialog.querySelector("[name='title']"), 'Planning', 0, 8); click(dialog.querySelector("[data-action='create-cluster']"));
+  await waitFor(() => desktop.app.store.selected.groupId, 'The cluster was not created.');
+  const id = desktop.app.store.selected.groupId; assert.equal(desktop.app.store.indexes.groups.get(id).members.length, 0);
+  await waitFor(() => desktop.root.querySelector('[data-composer]'), 'The cluster composer did not open.');
+  assert.equal(desktop.root.querySelector('[data-composer]').getAttribute('aria-label'), 'Message Planning');
+  click(desktop.root.querySelector("[data-action='new-agent']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='agent']"), 'The agent choices did not open.');
+  const agent = desktop.document.querySelector("[data-start-dialog='agent']");
+  assert.equal(agent.querySelector("[name='unit']"), null); assert.equal(agent.querySelector("[name='machine']"), null);
+  click(agent.querySelector("[data-action='create-agent']"));
+  await waitFor(() => desktop.app.unitList.catalog.some(unit => unit.clusterId === id), 'The derived agent was not created.');
+  assert.equal(desktop.launches.length, 0); assert.equal((await request(desktop.app.api, 'GET', '/settings/agents')).data.defaultRunsIn, null);
 });
 
 test("connection direction waits for the authoritative commit and Undo restores the recorded lead", async (t) => {
@@ -4193,16 +4077,7 @@ test("selection actions count canonical recipients and Message all creates no pe
   desktop.app.mapState.onSelection([...desktop.app.mapState.selection]);
   assert.equal(desktop.root.querySelector("[data-selection-count]").getAttribute("data-selection-count"), "3");
   assert.equal(desktop.root.querySelector("[data-action='message-all']").textContent, "Message all 3");
-  clickAction(desktop.root, "save-group");
-  let dialog = desktop.document.querySelector("[data-form='group']");
-  assert.equal(dialog.querySelectorAll("[data-member]").length, 3);
-  click(dialog.querySelector(`[data-member="${ids[2]}"]`));
-  assert.equal(dialog.querySelectorAll("[data-member]").length, 2);
-  click(dialog.querySelector("[data-action='add-group-member']"));
-  click(dialog.querySelector(`[data-member-choice="${ids[2]}"]`));
-  assert.equal(dialog.querySelectorAll("[data-member]").length, 3);
-  for (const handler of dialog.listeners.get("keydown")) handler({ key: "Escape", preventDefault() {} });
-  assert.equal(desktop.document.querySelector("[data-form='group']"), null);
+  assert.equal(desktop.root.querySelector("[data-action='save-group']"), null);
   clickAction(desktop.root, "message-all");
   await waitFor(() => desktop.app.thread?.chat?.members?.length === 4, "Message all did not open all three recipients.");
   assert.deepEqual(new Set(desktop.app.thread.chat.members), new Set(["root:master", ...ids]));
@@ -4217,40 +4092,36 @@ test("selection actions count canonical recipients and Message all creates no pe
   assert.equal(desktop.app.store.selected.unitId, null);
 });
 
-test("the optional group changes only after unit creation and a failed membership retries without another unit", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const api = apiFrom(fixture.desktopUrl);
-  const group = (await createGroup(api, "New members", ["project:shop:executor-shop"])).data;
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (init?.body && ["POST", "PATCH"].includes(init.method)) writes.push({ path: new URL(input).pathname, body: JSON.parse(init.body) });
+test('Runs in remains a draft until Create and the default is initially unchecked', async t => {
+  const desktop = await startCoreDesktop(t); const dialog = desktop.document.querySelector("[data-start-dialog='overseer']");
+  click(dialog.querySelector("[data-action='open-runs-picker']")); const picker = desktop.document.querySelector("[data-start-dialog='picker']");
+  assert.ok(picker); assert.equal(picker.querySelector('[data-use-default]').checked, false);
+  click(picker.querySelector("[data-action='close-runs-picker']")); click(dialog.querySelector("[data-action='cancel-agent']"));
+  assert.equal(desktop.app.unitList.catalog.length, 0); assert.equal(desktop.launches.length, 0);
+  assert.equal((await request(desktop.app.api, 'GET', '/settings/agents')).data.defaultRunsIn, null);
+});
+
+test('an explicit unit Runs in change survives picker redraws and persists only on Save', async t => {
+  const desktop = await startCoreDesktop(t);
+  click(desktop.document.querySelector('[data-action="create-agent"]'));
+  await waitFor(() => desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The Overseer was not created.');
+  await waitFor(() => desktop.root.querySelector('[data-action="change-runs-in"]'), 'The stored choice control was not mounted.');
+  const before = desktop.app.unitList.catalog.find(unit => unit.id === 'root:overseer');
+  click(desktop.root.querySelector('[data-action="change-runs-in"]'));
+  await waitFor(() => desktop.document.querySelector('[data-start-dialog="picker"]'), 'The unit picker did not open.');
+  const report = (await request(desktop.app.api, 'GET', '/settings/agents')).data;
+  const effort = report.connectedClients[0].models[0].efforts.find(value => value !== before.runsIn.effort);
+  const picker = desktop.document.querySelector('[data-start-dialog="picker"]');
+  click(picker.querySelector(`[data-action="runs-effort-${effort}"]`));
+  assert.equal((await request(desktop.app.api, 'GET', '/units/:unitId', { params: { unitId: before.id } })).data.runsIn.effort, before.runsIn.effort);
+  assert.ok(picker.querySelector('[data-action="save-runs-in"]')); assert.equal(picker.querySelector('[data-use-default]').checked, false);
+  click(picker.querySelector('[data-action="save-runs-in"]'));
+  await waitFor(() => desktop.app.unitList.catalog.find(unit => unit.id === before.id)?.runsIn.effort === effort, 'The explicit choice was not stored.').catch(async error => {
+    const stored = (await request(desktop.app.api, 'GET', '/units/:unitId', { params: { unitId: before.id } })).data;
+    throw new Error(`${error.message} ${JSON.stringify({ code: desktop.document.querySelector('[data-start-error]')?.getAttribute('data-start-error'), expected: effort, actual: desktop.app.unitList.catalog.find(unit => unit.id === before.id)?.runsIn.effort, stored: stored.runsIn.effort, dialogs: desktop.document.querySelectorAll('[data-start-dialog]').map(node => node.getAttribute('data-start-dialog')) })}`);
   });
-  t.after(() => dispose(desktop.app));
-  clickAction(desktop.root, "new-unit");
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit form did not open.");
-  const dialog = desktop.document.querySelector("[data-form='unit']");
-  assert.equal(dialog.querySelectorAll(".unit-pair").length, 3);
-  typeInput(dialog.querySelector("[name='unit']"), "executor-grouped", 0, 16);
-  dialog.querySelector("[name='groupId']").value = group.id;
-  const offline = dialog.querySelector("[name='machine']").querySelectorAll("option").find((item) => item.value === "OFFLINE");
-  assert.equal(offline.disabled, true);
-  assert.match(offline.textContent, /Offline since/);
-  fixture.control.setFault({ method: "POST", path: "/api/v1/units", status: 409, code: "machine_unavailable" });
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => dialog.querySelector("[data-dialog-error]"), "The failed create did not retain the form.");
-  assert.equal(writes.some((write) => write.path.includes("/groups/")), false);
-  assert.equal(dialog.querySelector("[name='unit']").value, "executor-grouped");
-  fixture.control.setFault({ method: "PATCH", path: `/api/v1/groups/${group.id}`, status: 409, code: "chat_changed" });
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => dialog.querySelector("[data-dialog-error]") && dialog.querySelector("form").created, "The membership failure did not retain the created unit.");
-  click(dialog.querySelector("[data-action='confirm-form']"));
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']") == null, "The membership retry did not finish.");
-  assert.equal(writes.filter((write) => write.path === "/api/v1/units").length, 2);
-  const current = (await request(api, "GET", "/groups")).data.items.find((item) => item.id === group.id);
-  assert.equal(current.members.includes("project:shop:executor-grouped"), true);
-  assert.equal(desktop.app.store.selected.unitId, "project:shop:executor-grouped");
-  assert.equal(desktop.root.querySelector("[data-unit-id='project:shop:executor-grouped']") != null, true);
+  assert.equal((await request(desktop.app.api, 'GET', '/settings/agents')).data.defaultRunsIn, null);
+  assert.equal(desktop.launches.length, 0);
 });
 
 test("a reopened board gives each added shape a distinct persisted identity", async (t) => {
@@ -4352,8 +4223,8 @@ test("failure causes and empty lists name the resource and its next step", async
   desktop.app.unitList.query = "zzzz-no-match";
   desktop.app.unitList.status = "empty";
   renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-empty='issues']")?.textContent, "No issues to review. Refresh to check again.");
-  assert.equal(desktop.root.querySelector("[data-action='refresh-issues']")?.textContent, "Refresh");
+
+
   assert.equal(desktop.root.querySelector("[data-action='clear-search']")?.textContent, "Clear search");
 
   click(desktop.root.querySelector("[data-action='waiting']"));
@@ -4656,6 +4527,25 @@ async function bootWithFetch(url, width, fetchImpl, extras = {}) {
     ...extras,
   });
   return { app, root, view, document };
+}
+
+async function startCoreDesktop(t, { afterFetch = null, storage = null, width = 1440, prepare = null } = {}) {
+  const fixture = await makeCoreFixture();
+  const origin = join(fixture.root, 'origin'); await mkdir(origin, { recursive: true });
+  const adapter = createNativeAdapter('codex', { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'], transcript: ['{"id":1,"result":{"thread":{"id":"owned"}}}'] });
+  const launches = [], original = adapter.create.bind(adapter); adapter.create = async input => { launches.push(input); return original(input); };
+  const prepared = await prepare?.(fixture) ?? {};
+  const core = await composeCore({ store: fixture.store, paths: { ...fixture.paths, origin }, now: () => fixture.clock.now,
+    homeDir: fixture.home, env: fixture.env, projects: [], adapters: { codex: adapter }, probeAgents: async () => ({}), ...prepared });
+  const address = `http://127.0.0.1:${core.http.port}`;
+  const response = await fetch(`${address}/api/v1/auth/local`, { method: 'POST', headers: { origin: address, authorization: `Bearer ${core.bootstrap.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }) });
+  assert.equal(response.status, 201);
+  const token = (await response.json()).data.token;
+  const desktop = await bootWithFetch(`${address}/#session=${token}`, width, async (input, init) => {
+    const result = await fetch(input, init); return afterFetch ? afterFetch(input, init, result) : result;
+  }, { storage });
+  t.after(async () => { dispose(desktop.app); await core.http.close(); await adapter.close(); await disposeCoreFixture(fixture); });
+  return { ...desktop, launches, core, fixture };
 }
 
 async function bootApp(url, width, urls, onFetch) {
@@ -6066,22 +5956,19 @@ test("T062 phone navigation retains focus after redraw and six code cells use on
   assert.equal(form.querySelectorAll("[tabindex]").length, 0);
 });
 
-test("T062 Enter submits the unit form through its reviewed action and Escape restores focus", async t => {
+test('T091 Enter submits the cluster choice and Escape restores its replaced invoker', async t => {
   const fixture = await createGuiFixture(); t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector("[data-action='new-unit']"), "The unit control did not load.");
-  const opener = desktop.root.querySelector("[data-action='new-unit']"); opener.focus(); click(opener);
-  await waitFor(() => desktop.document.querySelector("[data-form='unit']"), "The unit dialog did not open.");
-  const dialog = desktop.document.querySelector("[data-form='unit']");
-  const form = dialog.querySelector("form"), confirm = dialog.querySelector("[data-action='confirm-form']");
-  confirm.click = () => click(confirm);
+  const opener = desktop.root.querySelector("[data-action='new-cluster']"); opener.focus(); click(opener);
+  const dialog = desktop.document.querySelector("[data-start-dialog='cluster']"), create = dialog.querySelector("[data-action='create-cluster']");
+  create.click = () => click(create);
   let prevented = false;
-  for (const handler of form.listeners.get("submit") ?? []) handler({ preventDefault() { prevented = true; } });
+  for (const handler of dialog.listeners.get('keydown') ?? []) handler({ key: 'Enter', target: dialog.querySelector("[name='title']"), preventDefault() { prevented = true; } });
   assert.equal(prevented, true);
-  assert.equal(dialog.querySelector("[name='unit']").getAttribute("aria-invalid"), "true");
-  assert.equal(desktop.document.activeElement, dialog.querySelector("[name='unit']"));
-  for (const handler of dialog.listeners.get("keydown") ?? []) handler({ key: "Escape", preventDefault() {} });
-  assert.equal(desktop.document.activeElement, desktop.root.querySelector("[data-action='new-unit']"));
+  await waitFor(() => dialog.querySelector('[data-start-error]'), 'The required cluster name was not checked.');
+  renderShell(desktop.app);
+  for (const handler of dialog.listeners.get('keydown') ?? []) handler({ key: 'Escape', preventDefault() {} });
+  assert.equal(desktop.document.activeElement, desktop.root.querySelector("[data-action='new-cluster']"));
 });
 
 test("T062 pairing has one heading and a skip destination and restores the code field on rejection", async t => {

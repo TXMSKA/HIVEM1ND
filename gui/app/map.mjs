@@ -3,17 +3,17 @@ import { icon } from "./components.mjs";
 import { unitDisplayName } from "./hierarchy.mjs";
 import {
   edgeEndpoints,
+  clusterFrames,
   groupKeyForUnit,
-  groupOutline,
   hitNode,
   marqueeIds,
   placeUnits,
-  personalGroupBounds,
   scopeCollapsed,
   toScreen,
   toWorld,
 } from "./map-geometry.mjs";
 import { isAfterCursor } from "./state.mjs";
+import { clusterCamera, interpolateCamera } from './cluster-geometry.mjs';
 
 export const NODE_RADIUS = 28;
 
@@ -25,7 +25,7 @@ function layoutRecord(saved) {
 export function createMap({ units = [], groups = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
   const wrapped = layoutRecord(saved);
   const layout = wrapped.layout ?? { nodes: {}, groups: {} };
-  const placed = placeUnits(units, layout);
+  const placed = placeUnits(units.filter(unit => unit.role !== 'master' && !unit.removed), layout, groups);
   return {
     api,
     units,
@@ -35,7 +35,7 @@ export function createMap({ units = [], groups = [], saved = { nodes: {}, groups
     saved: layout,
     positions: placed.positions,
     origins: placed.origins,
-    view: { x: 40, y: 40, zoom: 1 },
+    view: { x: 0, y: 0, zoom: 1 },
     selection: new Set(),
     focusId: null,
     gesture: null,
@@ -70,7 +70,7 @@ export function adoptInitialLayout(map, saved) {
   const wrapped = layoutRecord(saved);
   if (wrapped.revision == null) return false;
   const layout = wrapped.layout ?? { nodes: {}, groups: {} };
-  const placed = placeUnits(map.units, layout);
+  const placed = placeUnits(map.units.filter(unit => unit.role !== 'master' && !unit.removed), layout, map.groups);
   map.saved = layout;
   map.positions = placed.positions;
   map.origins = placed.origins;
@@ -99,7 +99,7 @@ export function renderMap(document, host, map, labels = {}) {
     const screen = toScreen(zone.bounds, rect, map.view);
     const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: zone.bounds.w * map.view.zoom, height: zone.bounds.h * map.view.zoom })) box.setAttribute(key, String(value));
-    box.setAttribute("class", `map-personal-zone${map.selectedGroupId === zone.group.id ? " is-selected" : ""}`);
+    box.setAttribute("class", `map-personal-zone map-cluster-frame${zone.compact ? ' is-mini' : ''}${zone.folder ? ' is-folder' : ''}${map.selectedGroupId === zone.group.id ? " is-selected" : ""}`);
     box.setAttribute("data-group-zone", zone.group.id);
     svg.append(box);
   }
@@ -141,10 +141,10 @@ export function renderMap(document, host, map, labels = {}) {
   const layer = document.createElement("div");
   layer.className = "map-nodes";
   for (const zone of zones) {
-    const screen = toScreen({ x: zone.bounds.x + 14, y: zone.bounds.y - 11 }, rect, map.view);
+    const screen = toScreen({ x: zone.bounds.x + (zone.compact ? 6 : 14), y: zone.bounds.y + (zone.compact ? 2 : -11) }, rect, map.view);
     const label = document.createElement("button");
     label.type = "button";
-    label.className = "map-group-label";
+    label.className = `map-group-label${zone.compact ? ' is-mini' : ''}${zone.compact && zone.bounds.w >= 100 ? ' is-wide' : ''}`;
     label.setAttribute("data-group-id", zone.group.id);
     label.setAttribute("aria-pressed", String(map.selectedGroupId === zone.group.id));
     label.style.left = `${screen.x - rect.left}px`;
@@ -157,13 +157,19 @@ export function renderMap(document, host, map, labels = {}) {
     path.setAttribute("d", "M3 7V4h7l2 3h9v13H3z");
     folder.append(path);
     const title = document.createElement("span");
-    title.textContent = zone.group.title;
+    title.textContent = zone.group.title + (zone.count ? `, ${zone.count}` : '');
     const caption = document.createElement("span");
     caption.className = "map-group-caption";
     caption.append(folder, title);
     label.append(caption);
     label.setAttribute("aria-label", zone.group.title);
-    label.addEventListener("click", () => selectPersonalGroup(map, zone.group.id));
+    label.addEventListener('click', () => {
+      const now = Date.now(), double = map.lastClusterClick?.id === zone.group.id && now - map.lastClusterClick.at < 500;
+      map.lastClusterClick = double ? null : { id: zone.group.id, at: now };
+      selectPersonalGroup(map, zone.group.id);
+      if (double) flyToCluster(map, zone.group.id);
+    });
+    label.addEventListener('dblclick', event => { event?.stopPropagation?.(); flyToCluster(map, zone.group.id); });
     layer.append(label);
   }
   for (const node of nodes) {
@@ -203,6 +209,11 @@ export function renderMap(document, host, map, labels = {}) {
       name.append(alias, original);
     } else name.textContent = node.label;
     button.append(mark, marker, name);
+    const unread = map.units.find(unit => unit.id === node.id)?.unread;
+    if (unread > 0) {
+      const badge = document.createElement('span'); badge.className = 'map-unread';
+      badge.textContent = String(unread); badge.setAttribute('aria-label', map.labels?.unread?.(unread) ?? String(unread)); button.append(badge);
+    }
     layer.append(button);
     const handle = document.createElement("button");
     handle.type = "button";
@@ -230,6 +241,20 @@ export function renderMap(document, host, map, labels = {}) {
     refresh(map);
   });
   actions.append(pan);
+  for (const [action, label, choose] of [
+    ['fit-map', labels.fit ?? 'Fit', () => fitMap(map, rect)],
+    ['zoom-out', labels.zoomOut ?? 'Zoom out', () => { wheelZoom(map, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, deltaY: 1 }, rect); refresh(map); }],
+    ['zoom-in', labels.zoomIn ?? 'Zoom in', () => { wheelZoom(map, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, deltaY: -1 }, rect); refresh(map); }],
+  ]) {
+    const control = document.createElement('button'); control.type = 'button'; control.className = 'map-action';
+    control.setAttribute('data-action', action); control.setAttribute('aria-label', label); control.textContent = label;
+    control.addEventListener('click', choose); actions.append(control);
+  }
+  if (map.onServices) {
+    const services = document.createElement('button'); services.type = 'button'; services.className = 'map-action';
+    services.setAttribute('data-action', 'map-services'); services.textContent = labels.services ?? 'Services';
+    services.addEventListener('click', () => map.onServices()); actions.append(services);
+  }
   if (map.selection.size > 1) {
     const message = document.createElement("button");
     message.type = "button";
@@ -247,7 +272,8 @@ export function renderMap(document, host, map, labels = {}) {
     connect.addEventListener("click", () => requestConnect(map));
     actions.append(message, connect);
   }
-  const children = [svg, layer, actions];
+  const hint = document.createElement('p'); hint.className = 'map-hint'; hint.textContent = labels.drag ?? '';
+  const children = [svg, layer, actions, hint];
   if (map.persistState === "saving" || map.persistState === "error") {
     const status = document.createElement("p");
     status.className = "map-save";
@@ -276,7 +302,7 @@ export function renderMap(document, host, map, labels = {}) {
     const screen = toScreen(zone.bounds, rect, map.view);
     for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: zone.bounds.w * map.view.zoom, height: zone.bounds.h * map.view.zoom })) box?.setAttribute(key, String(value));
     const label = layer.querySelector(`[data-group-id="${zone.group.id}"]`);
-    if (label) { label.style.left = `${screen.x - rect.left + 14 * map.view.zoom}px`; label.style.top = `${screen.y - rect.top - 11 * map.view.zoom}px`; }
+    if (label) { label.style.left = `${screen.x - rect.left + (zone.compact ? 6 : 14) * map.view.zoom}px`; label.style.top = `${screen.y - rect.top + (zone.compact ? 2 : -11) * map.view.zoom}px`; }
   }
   bindMap(host, map);
   return nodes.map((node) => node.id);
@@ -299,6 +325,7 @@ function focusedUnitId(event) {
 }
 
 export function pointerDown(map, event) {
+  map.flight = null;
   if (event.target?.closest?.("[data-action], [data-group-id]") || event.target?.closest?.("input")) return;
   const rect = event.rect ?? hostRect(map.host);
   const target = readTarget(event);
@@ -321,8 +348,9 @@ export function pointerDown(map, event) {
   }
   const node = target.unitId ? nodeById(map, target.unitId) : hitNode(world, paintNodes(map), map.view.zoom);
   if (!node) {
-    if (map.panning) {
+    if (!event.shiftKey) {
       map.gesture = panGesture(map, event, rect);
+      map.gesture.groupId = hitPersonalGroup(map, world)?.id ?? null;
       return;
     }
     map.gesture = {
@@ -391,6 +419,8 @@ export function pointerUp(map, event) {
   const gesture = map.gesture;
   if (!gesture) return;
   if (gesture.kind === "pan") {
+    if (!gesture.dragging && gesture.groupId) selectPersonalGroup(map, gesture.groupId);
+    else if (!gesture.dragging) { map.selection.clear(); map.selectedGroupId = null; map.onSelection?.([]); }
     map.gesture = null;
     refresh(map);
     return;
@@ -475,6 +505,9 @@ export function keyDown(map, event) {
     map.onRename?.(id);
     return;
   }
+  const clusterId = event.target?.closest?.('[data-group-id]')?.getAttribute('data-group-id');
+  if (clusterId && event.key === 'Enter') { event.preventDefault?.(); selectPersonalGroup(map, clusterId); flyToCluster(map, clusterId); return; }
+  if (event.key === 'Home' || event.key.toLowerCase() === 'f') { event.preventDefault?.(); fitMap(map); return; }
   if (event.key === "Enter" && id) {
     map.inspectorId = id;
     map.selection = new Set([id]);
@@ -515,10 +548,11 @@ export function keyDown(map, event) {
 }
 
 export function wheelZoom(map, event, rect) {
+  map.flight = null;
   const client = { x: event.clientX, y: event.clientY };
   const world = toWorld(client, rect, map.view);
   const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
-  map.view.zoom = Math.min(2.5, Math.max(0.25, map.view.zoom * factor));
+  map.view.zoom = Math.min(2.5, Math.max(Number.MIN_VALUE, map.view.zoom * factor));
   map.view.x = client.x - rect.left - world.x * map.view.zoom;
   map.view.y = client.y - rect.top - world.y * map.view.zoom;
   event.preventDefault?.();
@@ -540,24 +574,46 @@ export function paintNodes(map) {
 }
 
 export function personalZones(map) {
-  const nodes = paintNodes(map);
-  return (map.groups ?? []).filter((group) => !group.deleted).flatMap((group) => {
-    const bounds = personalGroupBounds(group.members, nodes);
-    if (bounds) {
-      let right = bounds.x + bounds.w;
-      let bottom = bounds.y + bounds.h;
-      for (const node of nodes.filter((node) => group.members.includes(node.id))) {
-        const label = map.labelSizes.get(node.id);
-        if (!label) continue;
-        bounds.x = Math.min(bounds.x, node.x - label.width / (2 * map.view.zoom) - 24);
-        right = Math.max(right, node.x + label.width / (2 * map.view.zoom) + 24);
-        bottom = Math.max(bottom, node.y + (node.radius + 6 + label.height) / map.view.zoom + 24);
-      }
-      bounds.w = right - bounds.x;
-      bounds.h = bottom - bounds.y;
-    }
-    return bounds ? [{ group, bounds }] : [];
-  });
+  return clusterFrames(map.groups ?? [], map.saved, map.focusedFolder);
+}
+
+export function graphBounds(map) {
+  return [...personalZones(map).map(({ bounds: b }) => ({ x: b.x, y: b.y - 16, width: b.w, height: b.h + 16 })),
+    ...paintNodes(map).map(node => ({ x: node.x - node.radius, y: node.y - node.radius, width: node.radius * 2, height: node.radius * 2 + 28 }))];
+}
+
+export function fitMap(map, rect = hostRect(map.host)) {
+  map.flight = null;
+  map.focusedFolder = null;
+  map.view = clusterCamera(graphBounds(map), rect);
+  refresh(map);
+  return map.view;
+}
+
+export function flyToCluster(map, id, rect = hostRect(map.host)) {
+  if ((map.groups ?? []).some(group => group.parentId === id)) map.focusedFolder = id;
+  const frame = personalZones(map).find(item => item.group.id === id);
+  if (!frame) return false;
+  const ids = new Set([id]);
+  for (let size = 0; size !== ids.size;) { size = ids.size; for (const cluster of map.groups) if (ids.has(cluster.parentId)) ids.add(cluster.id); }
+  const frames = personalZones(map).filter(item => ids.has(item.group.id));
+  const members = new Set(frames.flatMap(item => item.group.members));
+  const bounds = [...frames.map(({ bounds: b }) => ({ x: b.x, y: b.y - 16, width: b.w, height: b.h + 16 })),
+    ...paintNodes(map).filter(node => members.has(node.id)).map(node => ({ x: node.x - node.radius, y: node.y - node.radius, width: node.radius * 2, height: node.radius * 2 + 28 }))];
+  const to = clusterCamera(bounds, rect), from = { ...map.view }, view = map.document?.defaultView;
+  const flight = {}; map.flight = flight;
+  if (map.reducedMotion || view?.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !view?.requestAnimationFrame) { map.view = to; refresh(map); return true; }
+  let started;
+  const step = now => {
+    if (map.flight !== flight || map.disposed) return;
+    started ??= now;
+    map.view = interpolateCamera(from, to, (now - started) / 220);
+    refresh(map);
+    if (now - started < 220) view.requestAnimationFrame(step);
+    else map.flight = null;
+  };
+  view.requestAnimationFrame(step);
+  return true;
 }
 
 export function hitPersonalGroup(map, point) {
@@ -582,15 +638,17 @@ function visibleNodes(map) {
     if (unit.role === "overlord") leads.add(unit.id);
   }
   return [...map.units].sort(byId).flatMap((unit) => {
+    if (unit.role === 'master' || unit.removed) return [];
     const key = groupKeyForUnit(unit, indexed);
-    if (key && scopeCollapsed(map.saved, key)) return [];
+    const clustered = unit.clusterId || (map.groups ?? []).some(group => !group.deleted && group.members.includes(unit.id));
+    if (!clustered && key && scopeCollapsed(map.saved, key)) return [];
     if (!map.positions[unit.id]) return [];
     if (unit.role === "overseer" && !(unit.unit === "overseer" && unit.scope?.kind === "root")) return [];
     return [{
       id: unit.id,
       x: map.positions[unit.id].x,
       y: map.positions[unit.id].y,
-      radius: unit.role === "master" ? 20 : unit.role === "overseer" ? 32 : unit.role === "overlord" ? 28 : 23,
+      radius: unit.role === "overseer" ? 30 : unit.role === "overlord" ? 25 : 21,
       label: unitDisplayName(unit),
       original: unit.unit,
       alias: unit.alias,
@@ -625,18 +683,7 @@ function markerLabel(labels, status) {
   return names[status] || labels.statusUnknown || "Unknown";
 }
 
-function outlines(map, nodes) {
-  const indexed = new Map(map.units.map((unit) => [unit.id, unit]));
-  const groups = new Map();
-  for (const node of nodes) {
-    const unit = indexed.get(node.id);
-    const key = groupKeyForUnit(unit, indexed);
-    if (!key || key === "services" || key === "root") continue;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(node);
-  }
-  return [...groups.values()].map((points) => groupOutline(points)).filter(Boolean);
-}
+function outlines() { return []; }
 
 function edges(map, nodes) {
   const byNode = new Map(nodes.map((node) => [node.id, node]));
@@ -665,6 +712,11 @@ function bindMap(host, map) {
   host.addEventListener("dblclick", (event) => {
     const id = focusedUnitId(event);
     if (id) { centerUnit(map, id, hostRect(host)); map.onSelect?.(id); refresh(map); }
+    else {
+      const world = toWorld({ x: event.clientX, y: event.clientY }, hostRect(host), map.view);
+      const group = hitPersonalGroup(map, world);
+      if (group) { selectPersonalGroup(map, group.id); flyToCluster(map, group.id); }
+    }
   });
   host.addEventListener("keydown", (event) => {
     keyDown(map, event);

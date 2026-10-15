@@ -1,7 +1,51 @@
 import { canAccept, canSendBack } from "./actions.mjs";
-import { element, labeledField, progressMark } from "./components.mjs";
+import { element, icon, labeledField, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
 import { unitDisplayName } from './hierarchy.mjs';
+import { startText } from './start-copy.mjs';
+import { clusterLead } from './clusters.mjs';
+
+export function renderCluster(document, model, actions = {}) {
+  const t = (key, values) => startText(model.language, key, values);
+  const cluster = model.cluster, kind = cluster.link?.kind ?? 'none';
+  const root = element(document, 'section', { class: 'cluster-inspector', 'data-cluster-inspector': cluster.id });
+  const action = (key, id, run, glyph = null) => element(document, 'button', { type: 'button', class: glyph ? 'icon-button' : 'btn',
+    'data-action': id, 'aria-label': t(key), title: t(key), onclick: run }, glyph ? icon(document, glyph) : t(key));
+  const glyph = path => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'icon'); svg.setAttribute('aria-hidden', 'true');
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path'); shape.setAttribute('d', path); svg.append(shape); return svg;
+  };
+  const add = action('newAgent', 'new-agent', actions.onNewAgent, 'executor'); add.replaceChildren(glyph('M12 5v14M5 12h14'));
+  const more = action('moreMenu', 'cluster-more', actions.onMore, 'settings'); more.replaceChildren(glyph('M5 12h.1M12 12h.1M19 12h.1'));
+  root.append(element(document, 'header', { class: 'cluster-heading' }, element(document, 'span', { class: 'cluster-avatar', 'aria-hidden': 'true' }, glyph('M3 7V4h7l2 3h9v13H3z')),
+    element(document, 'div', {}, element(document, 'h2', { text: cluster.title }), element(document, 'p', { text: t(kind === 'repository' ? 'repoCluster' : kind === 'folder' ? 'folder' : 'unlinkedCluster') })),
+    add, more));
+  const facts = element(document, 'section', { class: 'cluster-git', 'data-cluster-git': cluster.id });
+  if (model.git) {
+    const git = model.git;
+    facts.append(element(document, 'div', { class: 'cluster-git-identity' }, element(document, 'code', { text: git.remote ?? '' }),
+      element(document, 'code', { class: 'cluster-branch', text: git.branch ?? 'HEAD' })),
+      element(document, 'p', { class: 'cluster-dirty', text: t(git.dirtyCount === 1 ? 'changedOne' : 'changedMany', { count: git.dirtyCount }) }));
+    if (git.lastCommit) facts.append(element(document, 'p', { class: 'start-hint', text: [git.lastCommit.subject, formatWhen(model.language, git.lastCommit.at)].join(' · ') }));
+    facts.append(element(document, 'div', { class: 'action-row' }, action('changes', 'cluster-changes', actions.onChanges), action('openEditor', 'cluster-open-editor', actions.onEditor)));
+  } else if (kind === 'none') facts.append(element(document, 'p', { class: 'start-hint', text: t('noLinkBody') }), action('linkFolder', 'link-folder', actions.onLink));
+  else facts.append(element(document, 'code', { text: model.link?.localPath ?? t('unavailable') }));
+  if (model.error) facts.append(element(document, 'p', { role: 'alert', text: model.error }));
+  root.append(facts);
+  const lead = clusterLead(cluster, model.units), members = (model.units ?? []).filter(unit => !unit.removed && unit.role !== 'master' && cluster.members.includes(unit.id));
+  root.append(element(document, 'div', { class: 'cluster-members', 'data-cluster-lead': lead?.id ?? '' },
+    element(document, 'p', { text: !members.length ? t('noAgents') : lead && members.length > 1
+      ? t('leads', { lead: unitDisplayName(lead), members: members.filter(unit => unit.id !== lead.id).map(unitDisplayName).join(', ') })
+      : members.map(unitDisplayName).join(', ') })));
+  return root;
+}
+
+export function renderClusterChanges(document, changes) {
+  return element(document, 'div', { class: 'cluster-changes' }, (changes ?? []).map(change => element(document, 'article', {},
+    element(document, 'code', { text: [change.status, change.path].filter(Boolean).join(' ') }),
+    change.patch ? element(document, 'pre', { text: change.patch }) : null)));
+}
 
 export function renderUnit(document, unit, t, language = "en") {
   const card = element(document, "section", { class: "unit-card" });

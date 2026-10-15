@@ -4,10 +4,6 @@ import {
   canSendBack,
   changeTaskStatus,
   connectUnits,
-  createUnit,
-  createGroup,
-  patchGroup,
-  removeGroup,
   removeUnit,
   setUnitAlias,
   undoChange,
@@ -85,6 +81,11 @@ import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
+import * as startApi from './start-api.mjs';
+import { startText } from './start-copy.mjs';
+import { initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
+import { renderCluster, renderClusterChanges } from './inspector.mjs';
+import { fitMap, flyToCluster } from './map.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
@@ -252,6 +253,7 @@ export async function mount(root, env = globalThis) {
     bootReading: Boolean(api.token),
     selectedFolder: env.mindPath ?? new URLSearchParams(api.location.search ?? "").get("mind") ?? "",
     chooseFolder: env.chooseFolder ?? null,
+    startStorage: env.storage ?? viewStorage(document),
     recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null),
   };
   const view = root.ownerDocument.defaultView;
@@ -332,6 +334,7 @@ async function runBoot(app) {
     await loadPresentation(app);
     if (app.disposed || app.bootFailed) return app;
     await loadLists(app);
+    if (app.layout === 'desktop') { await loadStartReports(app); maybeStartDiscovery(app); }
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
@@ -484,6 +487,9 @@ function paintShell(app) {
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   clearPhoneDialog(app);
   app.root.replaceChildren(shell);
+  if (app.startDialog?.model && app.startDialog.model.language !== app.language) {
+    app.startDialog.model.language = app.language; app.startDialog.paint();
+  }
   syncLiveRegions(app);
   paintActivity(app, shell);
   paintServiceBanner(app, shell);
@@ -684,6 +690,8 @@ function trackDisclosure(app, node, key) {
 }
 
 export function dispose(app) {
+  if (app.mapState) { app.mapState.disposed = true; app.mapState.flight = null; }
+  app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
   app.disposed = true;
   clearTimeout(app.readyTimer);
@@ -739,6 +747,11 @@ async function onStream(app, event) {
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
   if (event?.name === "machine.settings.changed" && dataOf(event).machine === app.settingsState?.machine
     || event?.name === "settings.content.changed" && app.settingsState) loadSettingsSections(app);
+  if (app.layout === 'desktop' && (event?.name === 'cluster.changed' || event?.name === 'machine.settings.changed')) {
+    await loadStartReports(app);
+    const cluster = app.store.indexes.groups.get(app.store.selected.groupId);
+    if (cluster) await loadClusterFacts(app, cluster);
+  }
   if (event?.name === "viewer.changed") {
     await loadPresentation(app, { keepShell: true });
     result?.consume?.();
@@ -1042,7 +1055,7 @@ function renderBar(app, t, counts) {
   });
   const bar = element(document, "header", { class: "bar" }, app.layout === 'phone' ? brand(document).querySelector('.mark') : brand(document), modes);
   if (app.layout === 'phone') bar.append(element(document, 'h2', { 'data-phone-title': 'true', text: viewTitle(app, t) }));
-  if (counts.waiting || (!app.bootReading && !app.bootFailed && !emptyMind(app))) bar.append(waiting);
+  if (counts.waiting || (!app.bootReading && !app.bootFailed)) bar.append(waiting);
   if (app.layout !== "phone") {
     bar.append(catalogToggle);
     if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
@@ -1053,7 +1066,6 @@ function renderBar(app, t, counts) {
 
 function renderWorkspace(app, t, view, counts) {
   if (app.layout !== "phone" && (app.bootReading || app.bootFailed)) return openingWorkspace(app, t);
-  if (emptyMind(app) && app.mode === "map" && !app.waitingOpen) return emptyWorkspace(app, t);
   if (app.mode === "focus") return renderFocusWorkspace(app, t);
   if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
@@ -1068,14 +1080,6 @@ function renderWorkspace(app, t, view, counts) {
       onclick: () => navigate(app, tab),
     }, icon(document, tab), t(tab)));
   }
-  const summary = element(document, "section", { class: "summary" },
-    element(document, "h2", { text: t("summaryTitle") }),
-    element(document, "div", { class: "counts" },
-      element(document, "span", { text: cardinal(app.language, "unitCount", app.unitList?.catalog?.length || counts.units || 0) }),
-      element(document, "span", { text: t("unreadCount", { count: formatNumber(app.language, counts.unread ?? 0) }) }),
-      element(document, "span", { text: cardinal(app.language, "issueCount", counts.issues ?? 0) }),
-    ),
-  );
   const issueItems = view?.issues ?? app.unitList?.issues ?? [];
   const collection = renderCollection(app, t);
   const phoneTitle = app.mode === "waiting"
@@ -1098,7 +1102,7 @@ function renderWorkspace(app, t, view, counts) {
     const issues = element(document, "section", { class: "summary" }, element(document, "h2", { text: t("issuesTitle") }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
     if (!issueItems.length) issues.append(emptyIssues(app, document, t));
-    side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, summary, issues, collection);
+    side = element(document, "aside", { class: `panel side${app.catalogOpen ? " is-open" : ""}` }, tabs, collection);
   }
   const selected = app.store.indexes.units.get(app.store.selected.unitId)
     ?? app.unitList?.catalog?.find((unit) => unit.id === app.store.selected.unitId)
@@ -1160,7 +1164,7 @@ function renderWorkspace(app, t, view, counts) {
     }));
   }
   if (app.layout !== "phone" && group && !group.deleted) {
-    inspectorBody.append(groupInspector(app, t, group), chatPanel(app, t));
+    inspectorBody.append(clusterInspector(app, group), clusterChatPanel(app, group));
   } else if (app.layout !== "phone" && selection.length > 1) {
     inspectorBody.append(selectionInspector(app, t, selection));
   } else {
@@ -1173,6 +1177,8 @@ function renderWorkspace(app, t, view, counts) {
     }
   }
   if (app.mapToast) inspectorBody.append(mapToast(app, t));
+  if (app.startError) inspectorBody.append(element(document, 'p', { role: 'alert', text: startText(app.language, 'unavailable') }),
+    mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); }));
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
@@ -1267,30 +1273,6 @@ function emptyMind(app) {
   if (app.layout !== "desktop" || !app.store.snapshotReady || !app.store.capabilities.includes("unit.create")) return false;
   const units = app.unitList?.catalog ?? [...app.store.indexes.units.values()];
   return units.length === 1 && units[0].id === "root:master";
-}
-
-function emptyWorkspace(app, t) {
-  const document = app.root.ownerDocument;
-  const tabs = element(document, "div", { class: "tabs" });
-  for (const tab of ["hierarchy", "chats"]) tabs.append(element(document, "button", { type: "button", class: "tab", "aria-pressed": String(app.tab === tab), onclick: () => navigate(app, tab) }, icon(document, tab), t(tab)));
-  const search = element(document, "input", { type: "search", class: "search", "aria-label": t("search"), placeholder: t("search") });
-  const side = element(document, "aside", { class: "panel side" }, tabs, search,
-    element(document, "div", { class: "empty-side" }, element(document, "h2", { text: openingText(app, "noUnits") }), element(document, "p", { text: openingText(app, "first") })),
-  );
-  const master = element(document, "div", { class: "empty-master", "data-unit": "root:master" }, icon(document, "person"), element(document, "span", { class: "map-label", text: t("person") }));
-  const stage = element(document, "section", { class: "panel stage empty-stage" }, master,
-    element(document, "div", { class: "empty-overseer", "aria-hidden": "true" }),
-    element(document, "p", { class: "empty-placeholder", text: openingText(app, "goesHere") }),
-  );
-  const create = element(document, "button", { type: "button", class: "btn primary", "data-action": "create-overseer", text: openingText(app, "create"), onclick: () => openUnitForm(app, true) });
-  create.disabled = Boolean(app.overseerCreating);
-  if (app.overseerCreating) create.replaceChildren(progressMark(document, openingText(app, "create")));
-  const inspector = element(document, "aside", { class: "panel inspector empty-inspector" }, icon(document, "crown"),
-    element(document, "h2", { text: openingText(app, "empty") }),
-    element(document, "p", { text: openingText(app, "coordinates") }), create,
-  );
-  if (app.overseerError) inspector.append(element(document, "p", { role: "alert", text: actionText(app.language, app.overseerError.code, { machine: app.overseerError.details?.machine ?? app.store.settings?.service?.machine ?? "" }) }));
-  return element(document, "div", { class: "workspace workspace-empty" }, side, stage, inspector);
 }
 
 async function loadLists(app) {
@@ -1486,11 +1468,17 @@ function renderCollection(app, t) {
   const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
   const rows = collectionRows(app, t, list);
   const handlers = {
-    selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `personal:${app.store.selected.groupId}` : app.store.selected.unitId,
+    selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId,
     onActivate: (row, kind) => {
-      if (row.kind === "personal") {
+      if (row.kind === "cluster") {
+        if (kind === 'single' && app.lastClusterClick?.id === row.groupId && app.api.now() - app.lastClusterClick.at < 500) kind = 'double';
+        app.lastClusterClick = kind === 'single' ? { id: row.groupId, at: app.api.now() } : null;
         selectGroup(app, row.groupId);
-        if (kind !== "double") toggleGroup(app.hierarchy, row.id);
+        if (kind === 'double') app.pendingClusterFlight = row.groupId;
+        else toggleGroup(app.hierarchy, row.id);
+      } else if (row.kind === 'worktree') {
+        selectGroup(app, row.groupId);
+        if (kind === 'double') app.pendingClusterFlight = row.groupId;
       } else if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
         app.activated = { id: row.id, kind };
@@ -1523,6 +1511,7 @@ function renderCollection(app, t) {
   app.activeRows = rows;
   app.activeHandlers = handlers;
   block.append(search, total, host);
+  if (app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)) block.append(element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }));
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
       app.archivedChats = !app.archivedChats;
@@ -3475,14 +3464,261 @@ function saveBoardStructure(app, editor, edit, onSaved) {
 }
 
 
+function viewStorage(document) {
+  try { return document.defaultView?.localStorage ?? null; } catch { return null; }
+}
+
+function startMachine(app) { return app.store.settings?.service?.machine ?? app.store.view?.mind?.machine; }
+
+function unconfirmedStartOperation(error) { return !error.status || error.status >= 500 ? error.operation ?? null : null; }
+
+async function loadStartReports(app) {
+  if (app.layout === 'phone' || app.disposed) return;
+  const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
+  app.startReportTicket = ticket;
+  try {
+    const [projects, agents, clusters] = await Promise.all([
+      request(app.api, 'GET', '/settings/projects', { query: { machine } }),
+      request(app.api, 'GET', '/settings/agents', { query: { machine } }),
+      collectPages(app.api, '/clusters', { limit: 200 }),
+    ]);
+    if (app.disposed || ticket !== app.startReportTicket) return;
+    app.startProjects = projects.data; app.startAgents = agents.data;
+    app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
+    app.startError = null;
+    if (app.store.selected.groupId && !app.store.indexes.groups.has(app.store.selected.groupId)) app.store.selected.groupId = null;
+    renderShell(app);
+  } catch (error) { if (!app.disposed && ticket === app.startReportTicket) app.startError = error; }
+}
+
+function rememberOverseerOffer(app) {
+  app.overseerOffered = true;
+  try { app.startStorage?.setItem(`hivem1nd:overseer:${app.selectedFolder}`, 'dismissed'); } catch { /* Storage can be unavailable in a private viewer. */ }
+}
+
+function maybeStartDiscovery(app) {
+  if (app.disposed || app.startDialog || app.layout !== 'desktop' || !app.store.capabilities.includes('unit.create') || app.startError) return;
+  const offer = app.startProjects?.discoveryOffer;
+  if (offer && !offer.dismissed && !app.answeredOffers?.has(offer.id) && repositorySelection(offer).size) {
+    const model = { language: app.language, offer, query: '', selected: repositorySelection(offer), expanded: new Set(offer.groups.slice(0, 1).map(group => group.id)) };
+    let retained = null, flow;
+    const answer = confirmed => flow.run(confirmed ? 'import-repositories' : 'dismiss-discovery', async () => {
+      try {
+        await startApi.answerRepositoryOffer(app.api, offer.id, { machine: startMachine(app), repositoryIds: confirmed ? [...model.selected] : [], confirmed, expectedRevision: offer.revision }, retained);
+      } catch (error) { retained = unconfirmedStartOperation(error); throw error; }
+      app.answeredOffers ??= new Set(); app.answeredOffers.add(offer.id);
+      flow.dialog.close(); await loadStartReports(app); maybeStartDiscovery(app);
+    });
+    flow = startDialog(app.root.ownerDocument, { view: 'discovery', language: app.language, onCancel: () => answer(false),
+      onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderRepositoryOffer(app.root.ownerDocument, model, {
+        onFilter: query => { model.query = query; flow.paint(); }, onExpand: id => { toggleGroup({ collapsed: model.expanded }, id); flow.paint(); },
+        onRepository: (id, value) => { if (value) model.selected.add(id); else model.selected.delete(id); flow.paint(); },
+        onFolder: (id, value) => { for (const repo of offer.groups.find(group => group.id === id).repositories) { if (value) model.selected.add(repo.id); else model.selected.delete(repo.id); } flow.paint(); },
+        onDismiss: () => answer(false), onImport: () => answer(true),
+      }) });
+    flow.model = model; app.startDialog = flow; return;
+  }
+  const exists = (app.unitList?.catalog ?? [...app.store.indexes.units.values()]).some(unit => unit.id === 'root:overseer');
+  let dismissed = app.overseerOffered;
+  try { dismissed ||= app.startStorage?.getItem(`hivem1nd:overseer:${app.selectedFolder}`) === 'dismissed'; } catch { /* In-memory dismissal still applies. */ }
+  if (!exists && !dismissed) openStartAgent(app, null, true);
+}
+
+function openRunsPicker(app, model, onChange, anchor = null) {
+  let picker;
+  picker = startDialog(app.root.ownerDocument, { view: 'picker', language: app.language, anchor,
+    render: () => {
+      const view = renderRunsInPicker(app.root.ownerDocument, model, {
+        onChoice: choice => { model.choice = choice; onChange?.(); picker.paint(); },
+        onDefault: value => { model.useAsDefault = value; }, onClose: () => picker.dialog.close(),
+      });
+      if (model.onSave) view.append(mapButton(app, 'save-runs-in', text(app.language, 'save'), () => model.onSave(picker)));
+      return view;
+    } });
+  return picker;
+}
+
+async function openStartAgent(app, cluster, overseer = false) {
+  if (app.startDialog || app.layout === 'phone') return;
+  if (!app.startAgents) await loadStartReports(app);
+  if (app.disposed || app.startDialog) return;
+  const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
+  const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
+    cluster, role: 'executor', clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false };
+  const anchor = app.root.querySelector('[data-action="new-agent"]');
+  let flow, retained = null, created = null, defaultOperation = null;
+  const cancel = () => { if (flow.busy || flow.uncertain) return; if (overseer) rememberOverseerOffer(app); flow.dialog.close(); };
+  flow = startDialog(app.root.ownerDocument, { view: overseer ? 'overseer' : 'agent', language: app.language, anchor: overseer ? null : anchor,
+    onCancel: cancel, onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderAgentForm(app.root.ownerDocument, model, {
+      onKind: kind => { model.agentKind = kind; model.choice = initialRunsIn(clients, null, kind); flow.paint(); },
+      onRole: role => { model.role = role; flow.paint(); }, onFresh: value => { model.fresh = value; },
+      onPicker: () => openRunsPicker(app, model, () => { model.agentKind = model.choice?.client === 'lyra' ? 'local' : 'external'; flow.paint(); }, flow.dialog.querySelector('[data-action="open-runs-picker"]')),
+      onCancel: cancel,
+      onCreate: () => flow.run('create-agent', async () => {
+        let result;
+        try {
+          result = created ?? (overseer ? await startApi.createOverseer(app.api, { machine: startMachine(app), runsIn: model.choice, fresh: model.fresh, expectedRevision: null }, retained)
+            : await startApi.createClusterAgent(app.api, cluster.id, { machine: startMachine(app), role: model.role, runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: cluster.revision }, retained));
+          created = result;
+          if (overseer && model.useAsDefault) {
+            try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
+            catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
+          }
+        } catch (error) { if (!created) retained = unconfirmedStartOperation(error); throw error; }
+        const unit = result.data;
+        if (overseer) rememberOverseerOffer(app);
+        flow.dialog.close(); app.store.indexes.units.set(unit.id, unit); app.store.selected.unitId = unit.id; app.store.selected.groupId = null;
+        if (app.unitList) await reloadList(app.unitList);
+        await loadStartReports(app); ensureMap(app).selection = new Set([unit.id]); app.pendingCenter = unit.id;
+        await loadInspector(app, unit.id); renderShell(app);
+      }),
+    }) });
+  flow.model = model; app.startDialog = flow;
+}
+
+async function openUnitRunsIn(app, unit) {
+  const report = await request(app.api, 'GET', '/settings/agents', { query: { machine: unit.machine } });
+  if (app.disposed) return;
+  const model = { language: app.language, clients: report.data.connectedClients ?? [], choice: unit.runsIn, useAsDefault: false };
+  model.onSave = picker => picker.run('save-runs-in', async () => {
+    try {
+      const result = await startApi.setRunsIn(app.api, unit.id, { machine: unit.machine, runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: unit.revision }, model.operation);
+      picker.dialog.close(); app.store.indexes.units.set(unit.id, result.data); await reloadList(app.unitList); await loadStartReports(app);
+    } catch (error) { model.operation = unconfirmedStartOperation(error); throw error; }
+  });
+  openRunsPicker(app, model, null, app.root.querySelector('[data-action="change-runs-in"]'));
+}
+
+function openStartCluster(app) {
+  if (app.startDialog || app.layout === 'phone') return;
+  const model = { language: app.language, title: '', path: '', linkKind: 'none' };
+  let flow, linkOperation = null, operation = null, verifiedLink = null;
+  flow = startDialog(app.root.ownerDocument, { view: 'cluster', language: app.language,
+    onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderClusterForm(app.root.ownerDocument, model, {
+      onName: value => { model.title = value; }, onPath: value => { if (model.path !== value) verifiedLink = null; model.path = value; },
+      onLinkKind: kind => { if (model.linkKind !== kind) verifiedLink = null; model.linkKind = kind; flow.paint(); }, onCancel: () => { if (!flow.busy) flow.dialog.close(); },
+      onCreate: () => flow.run('create-cluster', async () => {
+        const machine = startMachine(app);
+        try {
+          if (!model.title.trim()) throw new ApiError(422, 'invalid_title', startText(app.language, 'name'));
+          if (model.linkKind !== 'none' && !verifiedLink) {
+            const report = (await request(app.api, 'GET', '/settings/projects', { query: { machine } })).data;
+            const result = await startApi.createClusterLink(app.api, { machine, kind: model.linkKind, path: model.path, expectedReportRevision: report.revision }, linkOperation);
+            verifiedLink = result.data.link;
+          }
+          const result = await startApi.createCluster(app.api, { title: model.title.trim(), parentId: null, link: verifiedLink ?? { kind: 'none' }, machine }, operation);
+          flow.dialog.close(); await loadStartReports(app); selectGroup(app, result.data.id);
+          showMapToast(app, startText(app.language, 'clusterCreated', { name: result.data.title })); renderShell(app);
+        } catch (error) { if (error.operation?.path === '/cluster-links') linkOperation = unconfirmedStartOperation(error); else operation = unconfirmedStartOperation(error); throw error; }
+      }),
+    }) });
+  flow.model = model; app.startDialog = flow;
+}
+
+function openClusterLink(app, cluster, machine = startMachine(app)) {
+  let operation = null, mapping = null, mapOperation = null;
+  openChoiceForm(app, 'cluster-link', startText(app.language, 'linkFolder'), form => {
+    appendInput(form.ownerDocument, form, 'path', startText(app.language, 'folder'), '');
+  }, async form => {
+    try {
+      if (!mapping) {
+        const report = (await request(app.api, 'GET', '/settings/projects', { query: { machine } })).data;
+        mapping = (await startApi.createClusterLink(app.api, { machine, kind: 'folder', path: fieldValue(form, 'path'), expectedReportRevision: report.revision }, mapOperation)).data.link;
+      }
+      const input = cluster ? { machine, link: mapping, expectedRevision: cluster.revision }
+        : { title: fieldValue(form, 'path').split(/[\\/]/).filter(Boolean).at(-1), parentId: null, link: mapping, machine, confirmed: true };
+      operation ??= createOperation({ method: cluster ? 'PATCH' : 'POST', path: cluster ? '/clusters/:clusterId' : '/clusters', params: cluster ? { clusterId: cluster.id } : undefined, body: input });
+      const result = await request(app.api, operation.method, operation.path, { operation });
+      await loadStartReports(app); await loadSettingsSections(app); selectGroup(app, result.data.id); return true;
+    } catch (error) { if (error.operation?.path === '/cluster-links') mapOperation = unconfirmedStartOperation(error); throw error; }
+  }, 'link-folder');
+}
+
+function removeStartLink(app, link, machine) {
+  const cluster = app.store.indexes.groups.get(link.clusterId);
+  if (!cluster) return;
+  let retained = null;
+  showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + link.title,
+    body: startText(app.language, 'removeHint'), confirm: startText(app.language, 'removeLink'), cancel: startText(app.language, 'cancel'), retry: startText(app.language, 'retry'),
+    onConfirm: async () => {
+      try {
+        const result = await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained);
+        await loadStartReports(app); await loadSettingsSections(app);
+        showMapToast(app, startText(app.language, 'removeLink'), async record => {
+          await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); await loadSettingsSections(app);
+        }, result.data.undoUntil); renderShell(app);
+      } catch (error) { retained = error.operation ?? retained; throw error; }
+    } });
+}
+
+async function loadClusterFacts(app, cluster) {
+  const ticket = (app.clusterFactsTicket ?? 0) + 1; app.clusterFactsTicket = ticket;
+  app.clusterFacts = { id: cluster.id, loading: true };
+  try {
+    const git = cluster.link?.kind === 'repository' ? (await startApi.getClusterGit(app.api, cluster.id, startMachine(app))).data : null;
+    if (ticket === app.clusterFactsTicket) {
+      app.clusterFacts = { id: cluster.id, git };
+      app.clusterGit ??= new Map(); app.clusterGit.set(cluster.id, { revision: cluster.revision, git });
+    }
+  } catch (error) { if (ticket === app.clusterFactsTicket) app.clusterFacts = { id: cluster.id, error }; }
+  if (!app.disposed) renderShell(app);
+}
+
+function clusterInspector(app, cluster) {
+  const facts = app.clusterFacts?.id === cluster.id ? app.clusterFacts : {};
+  return renderCluster(app.root.ownerDocument, { language: app.language, cluster, git: facts.git, error: facts.error?.message,
+    units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id) }, {
+    onNewAgent: () => openStartAgent(app, cluster), onLink: () => openClusterLink(app, cluster),
+    onMore: () => removeStartCluster(app, cluster), onChanges: () => showClusterChanges(app, cluster),
+    onEditor: () => settle(app, `editor:${cluster.id}`, startText(app.language, 'openEditor'), async record => {
+      const result = await startApi.openClusterEditor(app.api, cluster.id, startMachine(app), record.operation); return result;
+    }),
+  });
+}
+
+function removeStartCluster(app, cluster) {
+  let operation = null;
+  showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + cluster.title,
+    body: startText(app.language, 'removeHint'), confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
+    onConfirm: async () => {
+      operation ??= createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { machine: startMachine(app), confirmed: true, expectedRevision: cluster.revision } });
+      const result = await request(app.api, 'DELETE', operation.path, { operation });
+      await loadStartReports(app); app.store.selected.groupId = null;
+      showMapToast(app, cluster.title, async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
+      renderShell(app);
+    } });
+}
+
+function showClusterChanges(app, cluster) {
+  settle(app, `changes:${cluster.id}`, startText(app.language, 'changes'), async () => {
+    const changes = await collectPages(app.api, `/clusters/${encodeURIComponent(cluster.id)}/changes`, { query: { machine: startMachine(app) }, limit: 100 });
+    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'changes') + ': ' + cluster.title, cancel: startText(app.language, 'close') });
+    dialog.append(renderClusterChanges(app.root.ownerDocument, changes.items));
+  });
+}
+
+function clusterChatPanel(app, cluster) {
+  const t = (key, values) => text(app.language, key, values);
+  const panel = chatPanel(app, t);
+  const composer = panel.querySelector('[data-composer]');
+  if (composer) {
+    composer.setAttribute('aria-label', startText(app.language, 'messageCluster', { name: cluster.title }));
+    composer.setAttribute('placeholder', startText(app.language, 'messageCluster', { name: cluster.title }));
+    const hint = panel.querySelector('.field-hint'); if (hint) hint.textContent = startText(app.language, 'goesToLead');
+  }
+  return panel;
+}
+
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
   const saved = app.store.layout ?? { layout: { nodes: {}, groups: {} }, revision: null };
-  if (!app.mapState) app.mapState = createMap({ units, saved, api: app.api });
+  const groups = [...app.store.indexes.groups.values()];
+  if (!app.mapState) app.mapState = createMap({ units, groups, saved, api: app.api });
   else {
+    if (!app.mapState.groups.length && groups.length) app.mapState.fitted = false;
     app.mapState.units = units;
     adoptInitialLayout(app.mapState, saved);
-    const placed = createMap({ units, saved: { nodes: app.mapState.positions, groups: app.mapState.saved.groups } });
+    const placed = createMap({ units, groups, saved: { nodes: app.mapState.positions, groups: app.mapState.saved.groups } });
     for (const unit of units) if (!app.mapState.positions[unit.id]) app.mapState.positions[unit.id] = placed.positions[unit.id];
   }
   app.mapState.api = app.api;
@@ -3508,6 +3744,7 @@ function ensureMap(app) {
     renderShell(app);
   };
   app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
+  app.mapState.onServices = () => { navigate(app, 'settings'); };
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
   app.mapState.onGroupConnect = () => chooseSelectionLead(app);
@@ -3528,6 +3765,8 @@ function finishMap(app) {
   const host = app.root.querySelector?.(".map");
   if (!host || !app.mapState) return;
   const rect = host.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 760, height: 700 };
+  if (!app.mapState.fitted && rect.width > 96 && rect.height > 96) { app.mapState.view = fitMap(app.mapState, rect); app.mapState.fitted = true; }
+  if (app.pendingClusterFlight) { flyToCluster(app.mapState, app.pendingClusterFlight, rect); app.pendingClusterFlight = null; }
   app.mapState.onPersist = () => {
     if (!app.disposed) renderShell(app);
   };
@@ -3549,6 +3788,9 @@ function finishMap(app) {
     savingLayout: text(app.language, "savingLayout"),
     layoutError: text(app.language, "layoutError"),
     retry: text(app.language, "retry"),
+    fit: text(app.language, 'finalFit'), services: text(app.language, 'services'),
+    zoomIn: text(app.language, 'finalZoomIn'), zoomOut: text(app.language, 'finalZoomOut'),
+    drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
   if (['queued', 'starting'].includes(app.sessionRequest?.state)) {
@@ -3571,6 +3813,7 @@ function finishList(app) {
   if (!host || !app.activeList) return;
   renderWindow(app.root.ownerDocument, host, app.activeList, app.activeRows ?? [], app.activeHandlers ?? {});
   decorateHierarchy(app, host);
+  if (app.layout === 'desktop' && app.tab === 'hierarchy') loadVisibleClusterGit(app, host);
   const view = app.root.ownerDocument.defaultView;
   if (!host.clientHeight && view?.requestAnimationFrame) {
     view.requestAnimationFrame(() => {
@@ -3580,6 +3823,20 @@ function finishList(app) {
     });
   }
   if (app.restoreSearch) app.root.querySelector?.(".search")?.focus?.();
+}
+
+function loadVisibleClusterGit(app, host) {
+  app.clusterGit ??= new Map(); app.clusterGitPending ??= new Set();
+  const visible = new Set([...host.querySelectorAll('[data-cluster-row]')].map(node => node.getAttribute('data-cluster-row')));
+  const work = (app.activeRows ?? []).filter(row => row.kind === 'cluster' && row.group.link.kind === 'repository' && visible.has(row.groupId)
+    && app.clusterGit.get(row.groupId)?.revision !== row.group.revision && !app.clusterGitPending.has(row.groupId));
+  if (!work.length) return;
+  for (const row of work) app.clusterGitPending.add(row.groupId);
+  Promise.allSettled(work.map(async row => {
+    let git = null;
+    try { git = (await startApi.getClusterGit(app.api, row.groupId, startMachine(app))).data; }
+    finally { app.clusterGit.set(row.groupId, { revision: row.group.revision, git }); app.clusterGitPending.delete(row.groupId); }
+  })).then(() => { if (!app.disposed) renderShell(app); });
 }
 
 function collectionRows(app, t, list) {
@@ -3619,6 +3876,11 @@ function collectionRows(app, t, list) {
   }
   const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
   const tree = buildHierarchy(app.store.audience === 'phone' ? source.filter(unit => unit.role !== 'master') : source, list.issues, [...app.store.indexes.groups.values()]);
+  if (app.layout === 'desktop') for (const cluster of tree.clusters) {
+    const link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
+    const offered = app.startProjects?.discoveryOffer?.groups.flatMap(group => group.repositories).find(repo => repo.worktrees.some(worktree => worktree.path && worktree.path === link?.localPath));
+    cluster.worktrees = offered?.worktrees ?? [];
+  }
   const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
@@ -3627,7 +3889,8 @@ function collectionRows(app, t, list) {
       const scope = row.unit.scope?.name;
       const name = labels.get(row.label) > 1 && scope ? `${row.label} · ${scope}` : row.label;
       row.text = `${name} ${t(statusKey(row.unit.status))}`;
-    } else if (row.labelKey === "showMore") row.text = t("showMore", { count: formatNumber(app.language, row.count) });
+    } else if (row.labelKey === 'clusters' || row.labelKey === 'more') row.text = startText(app.language, row.labelKey, { count: row.count });
+    else if (row.labelKey === "showMore") row.text = t("showMore", { count: formatNumber(app.language, row.count) });
     else if (row.labelKey) row.text = t(row.labelKey);
     else row.text = row.label ?? "";
   }
@@ -3725,6 +3988,8 @@ function settingsSurface(app, document, t) {
     onDisconnect: (agent) => disconnectSettingsAgent(app, agent),
     onRevokeGrant: (item) => revokeSettingsGrant(app, item),
     onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
+    onLinkFolder: () => openClusterLink(app, null, state.machine),
+    onRemoveLink: link => removeStartLink(app, link, state.machine),
     onContentItem: (field, id, included) => {
       contentSettingsDraft(state)[field].find(item => item.id === id).included = included;
       state.contentGeneration = (state.contentGeneration ?? 0) + 1;
@@ -3761,6 +4026,7 @@ function settingsSurface(app, document, t) {
   if (outcomeVisible(app) && app.actionScope === "settings") panel.append(element(document, "p", {
     class: "settings-toast", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
   }));
+  if (app.mapToast) panel.append(mapToast(app, t));
   return panel;
 }
 
@@ -5168,11 +5434,11 @@ function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes("unit.create")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "new-unit", text: t("newUnit"), onclick: () => openUnitForm(app) }));
-  }
+  if (caps.includes('unit.create') && !(app.unitList?.catalog ?? []).some(unit => unit.id === 'root:overseer')) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
+  if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
   if (selected && caps.includes("session.start")) {
-    const machine = app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null;
+    const machine = (app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null)
+      ?? app.store.view?.machines?.find(item => item.id === selected.machine);
     const offline = machine?.answers === false;
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), disabled: offline ? "" : null, "aria-describedby": offline ? "reason-session-machine" : null, onclick: () => openSessionForm(app, selected) }));
     if (offline) row.append(element(document, "p", { class: "field-hint", id: "reason-session-machine", "data-disabled-reason": "machine", text: t("finalNeedsOnline", { machine: selected.machine }) }));
@@ -5220,8 +5486,9 @@ function decorateHierarchy(app, host) {
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
-        node.style.paddingLeft = app.store.audience === 'phone' ? `${row.depth > 1 ? 42 : row.depth ? 24 : 10}px` : `${8 + (row.personalMember ? 24 : row.depth * 14)}px`;
+        node.style.paddingLeft = `${row.depth > 1 ? 42 : row.depth ? 24 : 8}px`;
         node.replaceChildren(unitNameNode(document, row.unit), element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) }));
+        if (row.unit.unread > 0) node.append(element(document, 'span', { class: 'hierarchy-unread', 'aria-label': startText(app.language, 'unread', { count: row.unit.unread }), text: row.unit.unread }));
         if (app.aliasEdit?.rowId === row.id) {
           const editor = aliasField(app, row.unit);
           if (host.insertBefore) host.insertBefore(editor, node);
@@ -5232,14 +5499,20 @@ function decorateHierarchy(app, host) {
           }
           node.remove();
         }
-      } else if (row.kind === "personal") {
-        node.setAttribute("data-personal-folder", row.groupId);
+      } else if (row.kind === "cluster") {
+        node.style.paddingLeft = `${row.depth ? 30 : 8}px`;
+        node.setAttribute("data-cluster-row", row.groupId);
         node.setAttribute("aria-expanded", String(row.expanded));
         node.replaceChildren(element(document, "span", { "aria-hidden": "true", text: row.expanded ? "⌄" : "›" }), folderIcon(document), element(document, "span", { class: "group-title", text: row.label }), element(document, "span", { class: "group-count", text: row.count }));
-      } else if (row.id === "section:personal") {
-        const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: t("myGroups") }));
+        const branch = app.clusterGit?.get(row.groupId)?.git?.branch;
+        if (branch) node.append(element(document, 'code', { class: 'hierarchy-branch', text: branch }));
+      } else if (row.kind === 'worktree') {
+        node.setAttribute('data-cluster-worktree', row.worktree.id);
+        node.replaceChildren(element(document, 'code', { class: 'hierarchy-worktree', text: row.worktree.path ?? '' }), element(document, 'code', { class: 'hierarchy-branch', text: row.worktree.branch ?? '' }));
+      } else if (row.id === "section:clusters") {
+        const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: startText(app.language, "clusters") }));
         if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
-          const add = mapButton(app, "new-group", t("newGroup"), () => openGroupForm(app), { class: "icon-button", "aria-label": t("newGroup"), title: t("newGroup") });
+          const add = mapButton(app, 'new-cluster', startText(app.language, 'newCluster'), () => openStartCluster(app), { class: 'icon-button', 'aria-label': startText(app.language, 'newCluster'), title: startText(app.language, 'newCluster') });
           add.replaceChildren(folderIcon(document, true));
           heading.append(add);
         }
@@ -5255,7 +5528,7 @@ function decorateHierarchy(app, host) {
   host.addEventListener("keydown", (event) => {
     decorate();
     const row = app.activeRows?.find((item) => item.id === app.activeList.focusId);
-    if (row?.kind === "personal" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+    if (row?.kind === "cluster" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
       if (event.key === "ArrowLeft") app.hierarchy.collapsed.add(row.id);
       else app.hierarchy.collapsed.delete(row.id);
       event.preventDefault?.();
@@ -5424,7 +5697,7 @@ function selectionInspector(app, t, units) {
   panel.append(element(document, "header", { class: "selection-heading" }, element(document, "span", { class: "selection-avatar" }, icon(document, "hierarchy")), element(document, "h2", { text: t("finalSelection", { count: units.length }) }), element(document, "p", { class: "field-hint", text: t("finalSelectionHint") })));
   for (const unit of units) panel.append(element(document, "div", { class: "selection-member" }, unitNameNode(document, unit), element(document, "span", { text: t(statusKey(unit.status)) })));
   const actions = element(document, "div", { class: "selection-actions" });
-  if (app.store.capabilities.includes("chat.manage")) actions.append(mapButton(app, "save-group", t("saveAsGroup"), () => openGroupForm(app, null, units.map((unit) => unit.id)), { class: "btn primary" }), mapButton(app, "message-all", t("messageAll", { count: units.length }), () => app.mapState.onGroupMessage(units.map((unit) => unit.id))));
+  if (app.store.capabilities.includes("chat.manage")) actions.append(mapButton(app, "message-all", t("messageAll", { count: units.length }), () => app.mapState.onGroupMessage(units.map((unit) => unit.id))));
   if (app.store.capabilities.includes("unit.connect")) actions.append(mapButton(app, "connect-lead", t("connectToLead"), () => chooseSelectionLead(app)));
   actions.append(mapButton(app, "clear-selection", t("clearSelection"), () => { app.mapState.selection.clear(); app.store.selected.unitId = null; app.thread = null; renderShell(app); }));
   panel.append(actions, element(document, "p", { class: "field-hint", text: t("finalGroupHint") }));
@@ -5442,9 +5715,10 @@ function chooseSelectionLead(app) {
 }
 
 function emptySelection(app, t) {
-  const document = app.root.ownerDocument;
-  const counts = { ...app.store.view?.counts, working: [...app.store.indexes.units.values()].filter((unit) => unit.status === "working").length };
-  return element(document, "section", { class: "empty-selection" }, icon(document, "map"), element(document, "p", { text: t("selectionHelp") }), ...["working", "waiting", "unread", "groups"].map((key) => element(document, "p", { text: t("mapSummary", { label: t(key === "working" ? "statusWorking" : key === "groups" ? "myGroups" : key), count: key === "groups" ? [...app.store.indexes.groups.values()].filter((group) => !group.deleted).length : counts[key] ?? 0 }) })));
+  const empty = !app.store.indexes.groups.size && !(app.unitList?.catalog ?? []).some(unit => unit.role !== 'master');
+  return element(app.root.ownerDocument, 'section', { class: 'empty-selection' }, icon(app.root.ownerDocument, 'map'),
+    element(app.root.ownerDocument, 'h2', { text: startText(app.language, empty ? 'nothingHere' : 'nothingSelected') }),
+    element(app.root.ownerDocument, 'p', { text: startText(app.language, empty ? 'emptyHint' : 'selectHint') }));
 }
 
 function selectGroup(app, id) {
@@ -5456,6 +5730,7 @@ function selectGroup(app, id) {
   const map = ensureMap(app);
   map.selectedGroupId = id;
   map.selection.clear();
+  loadClusterFacts(app, group);
   const chat = app.store.indexes.chats.get(group.chatId) ?? app.chatList?.catalog?.find((item) => item.id === group.chatId);
   if (chat && app.thread?.chat?.id !== chat.id) showChat(app, chat);
   else if (!chat) settle(app, `group-chat:${id}`, text(app.language, "loadingConversation"), async () => {
@@ -5465,108 +5740,11 @@ function selectGroup(app, id) {
   renderShell(app);
 }
 
-function groupInspector(app, t, group) {
-  const document = app.root.ownerDocument;
-  const panel = element(document, "section", { class: "group-inspector", "data-group-inspector": group.id });
-  const avatars = element(document, "div", { class: "group-avatars" });
-  for (const id of group.members.slice(0, 3)) avatars.append(element(document, "span", { class: "group-avatar", title: unitDisplayName(unitById(app, id)) }, icon(document, unitById(app, id)?.role === "overlord" ? "hierarchy" : "executor")));
-  panel.append(element(document, "header", { class: "group-heading" }, folderIcon(document), element(document, "h2", { text: group.title }), avatars), element(document, "p", { text: t("finalGroupSummary", { count: group.members.length }) }));
-  if (app.store.capabilities.includes("chat.manage")) {
-    const menu = trackDisclosure(app, element(document, "details", { class: "map-menu" }, element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: t("finalMore") })), keepId("group-menu", group.id));
-    menu.append(mapButton(app, "rename-group", t("rename"), () => openGroupForm(app, group)), mapButton(app, "group-members", t("members"), () => openGroupForm(app, group)), mapButton(app, "delete-group", t("deleteGroup"), () => deletePersonalGroup(app, group)));
-    panel.append(menu);
-  }
-  panel.append(element(document, "p", { text: `${t("members")}: ${group.members.map((id) => unitDisplayName(unitById(app, id))).join(", ")}` }), element(document, "p", { text: `${t("created")}: ${formatWhen(app.language, group.createdAt)}` }));
-  return panel;
-}
-
 async function refreshGroups(app) {
   const result = await collectPages(app.api, "/groups");
   app.store.indexes.groups = new Map(result.items.map((group) => [group.id, group]));
   if (app.store.view) app.store.view.groups = result.items;
   if (app.chatList) await reloadList(app.chatList);
-}
-
-function openGroupForm(app, group = null, ids = []) {
-  if (app.root.ownerDocument.querySelector("[data-form='group']")) return;
-  const members = new Set(group?.members ?? ids);
-  let operation = null;
-  openChoiceForm(app, "group", text(app.language, group ? "rename" : "newGroup"), (form, confirm) => {
-    const document = form.ownerDocument;
-    confirm.textContent = text(app.language, group ? "save" : "createGroup");
-    form.append(element(document, "p", { class: "field-hint", text: text(app.language, "finalNewGroupHint") }));
-    appendInput(document, form, "title", text(app.language, "name"), group?.title ?? "");
-    const chips = element(document, "div", { class: "group-chips", "data-group-chips": "true" });
-    const choices = element(document, "div", { class: "group-choices", "data-member-choices": "true" });
-    const paint = () => {
-      chips.replaceChildren(...[...members].map((id) => {
-        const chip = mapButton(app, "remove-member", unitDisplayName(unitById(app, id)), () => { members.delete(id); paint(); (chips.querySelector("button") ?? form.querySelector("[data-action='add-group-member']"))?.focus?.(); }, { class: "member-chip", "data-member": id, "aria-label": text(app.language, "removeMember", { unit: unitDisplayName(unitById(app, id)) }) });
-        chip.replaceChildren(icon(document, "executor"), element(document, "span", { text: unitDisplayName(unitById(app, id)) }), icon(document, "close"));
-        return chip;
-      }));
-      choices.replaceChildren(...leadChoices(app).filter((unit) => unit.role !== "master" && !members.has(unit.id)).map((unit) => mapButton(app, "add-member", unitDisplayName(unit), () => { members.add(unit.id); paint(); chips.querySelector(`[data-member="${unit.id}"]`)?.focus?.(); }, { "data-member-choice": unit.id })));
-    };
-    choices.hidden = true;
-    form.append(element(document, "h3", { text: text(app.language, "members") }), chips, mapButton(app, "add-group-member", text(app.language, "add"), () => { choices.hidden = !choices.hidden; }), choices);
-    paint();
-    form.problems = () => {
-      const problems = [];
-      const title = fieldValue(form, "title");
-      if (!title.trim() || title.trim().length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) problems.push({ name: "title", message: text(app.language, "groupNameRequired") });
-      if (!members.size || members.size > 255) problems.push({ name: "title", message: text(app.language, "groupMembersRequired") });
-      return problems;
-    };
-  }, async (form) => {
-    try {
-      const result = group ? await patchGroup(app.api, group, { title: fieldValue(form, "title").trim(), members: [...members] }, operation) : await createGroup(app.api, fieldValue(form, "title").trim(), [...members], operation);
-      operation = null;
-      app.store.indexes.groups.set(result.data.id, result.data);
-      await refreshGroups(app);
-      app.hierarchy.collapsed.delete(`personal:${result.data.id}`);
-      selectGroup(app, result.data.id);
-      showMapToast(app, text(app.language, group ? "saved" : "groupCreated", { title: result.data.title }), group ? null : async (record) => {
-        const current = app.store.indexes.groups.get(result.data.id);
-        await removeGroup(app.api, current, record.operation);
-        app.store.selected.groupId = null;
-        app.thread = null;
-        await refreshGroups(app);
-      });
-      return true;
-    } catch (error) {
-      operation = error.operation ?? operation;
-      if (group && error.code === "revision_conflict") {
-        await refreshGroups(app);
-        group = app.store.indexes.groups.get(group.id) ?? group;
-        operation = null;
-      }
-      throw error;
-    }
-  }, group ? "group-members" : "new-group");
-}
-
-function deletePersonalGroup(app, group) {
-  let operation = null;
-  const dialog = showDialog(app.root.ownerDocument, {
-    title: text(app.language, "finalDeleteGroupTitle", { title: group.title }),
-    body: text(app.language, "finalDeleteGroupScope", { count: group.members.length }),
-    confirm: text(app.language, "deleteGroup"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
-    onConfirm: async () => {
-      try {
-        const result = await removeGroup(app.api, group, operation);
-        operation = null;
-        app.store.selected.groupId = null;
-        if (app.thread?.chat?.id === group.chatId) app.thread = null;
-        await refreshGroups(app);
-        showMapToast(app, text(app.language, "groupDeleted", { title: group.title }), async (record) => {
-          await undoChange(app.api, result.data.changeId, record.operation);
-          await refreshGroups(app);
-          selectGroup(app, group.id);
-        }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
-        renderShell(app);
-      } catch (error) { operation = error.operation ?? operation; throw error; }
-    },
-  });
-  dialog.className += " connection-dialog";
 }
 
 function showMapToast(app, label, undo, until = null) {
@@ -5663,31 +5841,6 @@ function connectCause(app, target, result) {
   return actionText(app.language, result.error?.code, { unit });
 }
 
-const UNIT_ROLES = ["adjutant", "executive", "executor", "genesis", "incubator", "master", "overlord", "overseer"];
-const SCOPE_KINDS = [
-  ["root", "scopeRoot"],
-  ["environment", "scopeEnvironment"],
-  ["project", "scopeProject"],
-];
-
-const RESERVED_BASENAMES = new Set([
-  "con", "prn", "aux", "nul",
-  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-]);
-
-function validResourceName(value, max = 80) {
-  const name = String(value ?? "").trim();
-  if (!name || name.length > max || name !== name.toLowerCase()) return false;
-  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name) || name.endsWith(".")) return false;
-  return !RESERVED_BASENAMES.has(name.split(".")[0]);
-}
-
-function retainedOperation(operation, method, path, body) {
-  if (!operation || operation.method !== method || operation.path !== path) return null;
-  return JSON.stringify(operation.body) === JSON.stringify(body) ? operation : null;
-}
-
 function clearChoiceErrors(form) {
   for (const note of [...(form.querySelectorAll?.("[data-field-error]") ?? [])]) note.remove?.();
   for (const field of [...(form.querySelectorAll?.("[aria-invalid='true']") ?? [])]) {
@@ -5724,239 +5877,41 @@ function restoreInvoker(app, opener) {
   if (!opener || app.disposed) return;
   const live = app.root.querySelector?.(`[data-action="${opener}"]`);
   if (live) live.focus?.();
-  else if (app.store.selected.groupId) app.root.querySelector(`[data-personal-folder="${app.store.selected.groupId}"]`)?.focus?.();
+  else if (app.store.selected.groupId) app.root.querySelector(`[data-cluster-row="${app.store.selected.groupId}"]`)?.focus?.();
   else if (app.store.selected.unitId) focusUnitRow(app, app.store.selected.unitId);
 }
 
-function openUnitForm(app, firstRun = false) {
-  if (firstRun) return createOverseer(app);
-  settle(app, "unit-form", text(app.language, "loadingClients"), async () => {
-    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
-    if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='unit']")) return;
-    const leads = leadChoices(app);
-  openChoiceForm(app, "unit", text(app.language, "newUnit"), (form, confirm) => {
-    const document = form.ownerDocument;
-    appendInput(document, form, "unit", text(app.language, "unitName"), "");
-    appendSelect(document, form, "role", text(app.language, "role"), UNIT_ROLES.map((role) => ({ value: role, label: role })), "executor");
-    appendScope(document, form, text(app.language, "scopeKind"), "project");
-    appendInput(document, form, "scopeName", text(app.language, "scopeProject"), "shop");
-    appendSelect(document, form, "machine", text(app.language, "machine"), machines.map((machine) => ({
-      value: machine.id,
-      label: `${machine.id}: ${machine.answers ? text(app.language, "machineAnswers") : text(app.language, "finalMachineOffline", { time: formatWhen(app.language, machine.heartbeatAt) || text(app.language, "unknown") })}`,
-      disabled: !machine.answers,
-    })), machines.find((machine) => machine.answers)?.id ?? "");
-    for (const machine of machines) {
-      for (const issue of machine.issues ?? []) {
-        form.append(element(document, "p", {
-          "data-machine-issue": machine.id,
-          text: issue.message || text(app.language, "machineUnavailable", { machine: machine.id }),
-        }));
-      }
-    }
-    appendLeadSearch(document, form, text(app.language, "finalReportsTo"), leads);
-    appendSelect(document, form, "groupId", text(app.language, "group"), [{ value: "", label: text(app.language, "none") }, ...[...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ value: group.id, label: group.title }))], "");
-    appendInput(document, form, "job", text(app.language, "job"), "");
-    appendInput(document, form, "model", text(app.language, "model"), "");
-    appendInput(document, form, "positionX", text(app.language, "positionX"), "", { inputMode: "numeric", describedBy: "position-hint" });
-    appendInput(document, form, "positionY", text(app.language, "positionY"), "", { inputMode: "numeric", describedBy: "position-hint" });
-    form.append(element(document, "p", { id: "position-hint", class: "field-hint", text: text(app.language, "positionHint") }));
-    if (!machines.some((machine) => machine.answers)) confirm.disabled = true;
-    form.problems = () => unitProblems(app, form);
-  }, async (form) => {
-    const machineId = fieldValue(form, "machine");
-    const machine = machines.find((item) => item.id === machineId);
-    if (!machine?.answers) {
-      showOutcome(app, text(app.language, "machineUnavailable", { machine: machineId }), "machine_unavailable");
-      if (!app.disposed) renderShell(app);
-      return false;
-    }
-    const kind = fieldValue(form, "scopeKind");
-    const name = fieldValue(form, "scopeName").trim();
-    const leadId = fieldValue(form, "leadId");
-    const input = {
-      unit: fieldValue(form, "unit").trim(),
-      role: fieldValue(form, "role"),
-      scope: { kind, name: kind === "root" ? null : name },
-      machine: machineId,
-      leadId: leadId || null,
-      job: fieldValue(form, "job").trim() || null,
-      model: fieldValue(form, "model").trim() || null,
-      position: readPosition(form),
-    };
-    const body = {
-      unit: input.unit,
-      role: input.role,
-      scope: input.scope,
-      machine: input.machine,
-      leadId: input.leadId,
-      job: input.job,
-      model: input.model,
-      ...(input.position ? { position: input.position } : {}),
-    };
-    try {
-      const created = form.created ?? await createUnit(app.api, input, retainedOperation(app.unitOperation, "POST", "/units", body));
-      form.created = created;
-      app.unitOperation = null;
-      const createdUnit = created.data?.unit?.id ? created.data.unit : created.data;
-      const groupId = fieldValue(form, "groupId");
-      if (groupId) {
-        const group = app.store.indexes.groups.get(groupId);
-        if (!group || group.deleted) throw new ApiError(404, "group_not_found", text(app.language, "missingRecord"));
-        if (!group.members.includes(createdUnit.id)) {
-          const retained = form.groupOperation?.path === `/groups/${group.id}` ? form.groupOperation : null;
-          const result = await patchGroup(app.api, group, { members: [...group.members, createdUnit.id] }, retained);
-          app.store.indexes.groups.set(groupId, result.data);
-          form.groupOperation = null;
-        }
-      }
-      const unit = createdUnit.unit ?? fieldValue(form, "unit").trim();
-      app.store.indexes.units.set(createdUnit.id, createdUnit);
-      app.store.selected.unitId = createdUnit.id;
-      app.store.selected.groupId = null;
-      showOutcome(app, text(app.language, "unitCreated", { unit }));
-      if (app.unitList) await reloadList(app.unitList);
-      const map = ensureMap(app);
-      map.selection = new Set([createdUnit.id]);
-      app.pendingChat = { unitId: createdUnit.id, create: true };
-      await loadInspector(app, createdUnit.id);
-      if (!app.disposed) renderShell(app);
-      return true;
-    } catch (error) {
-      if (error?.operation?.path === "/groups/:groupId") form.groupOperation = error.operation;
-      else app.unitOperation = error?.operation ?? app.unitOperation ?? null;
-      showOutcome(app, error?.code === "machine_unavailable"
-        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? machineId })
-        : actionText(app.language, error?.code), error?.code ?? null);
-      if (!app.disposed) renderShell(app);
-      throw error;
-    }
-  }, "new-unit");
-  });
-}
-
-async function createOverseer(app) {
-  if (app.overseerCreating || !emptyMind(app)) return;
-  app.overseerCreating = true;
-  app.overseerError = null;
-  renderShell(app);
-  try {
-    const machineId = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine;
-    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
-    if (!machines.some((machine) => machine.id === machineId && machine.answers)) throw new ApiError(409, "machine_unavailable", text(app.language, "machineUnavailable", { machine: machineId }));
-    const input = { unit: "overseer", role: "overseer", scope: { kind: "root", name: null }, machine: machineId, position: { x: 372, y: 178 } };
-    const created = await createUnit(app.api, input, app.overseerOperation);
-    app.overseerOperation = null;
-    const unit = created.data.unit?.id ? created.data.unit : created.data;
-    app.store.indexes.units.set(unit.id, unit);
-    app.store.selected.unitId = unit.id;
-    if (app.unitList) await reloadList(app.unitList);
-    const map = ensureMap(app);
-    map.selection = new Set([unit.id]);
-    map.focusId = unit.id;
-    if (!app.disposed) await loadInspector(app, unit.id);
-  } catch (error) {
-    app.overseerOperation = error.operation ?? app.overseerOperation ?? null;
-    app.overseerError = error;
-  } finally {
-    app.overseerCreating = false;
-    if (!app.disposed) renderShell(app);
-  }
-}
+function createOverseer(app) { return openStartAgent(app, null, true); }
 
 function openSessionForm(app, unit) {
-  settle(app, `session-form:${unit.id}`, text(app.language, "loadingClients"), async () => {
-    const machines = (await collectPages(app.api, "/machines", { limit: 50 })).items;
-    if (app.disposed || app.root.ownerDocument.querySelector?.("[data-form='session']")) return;
-    const machine = machines.find((item) => item.id === unit.machine) ?? null;
-  const clients = machine?.clients ?? [];
-  const available = (item) => machine?.answers !== false && item.enabled === true && item.installed === true && item.supported !== false && ['claude', 'codex', 'cursor'].includes(item.id);
-  openChoiceForm(app, "session", text(app.language, "startSession"), (form, confirm) => {
-    const document = form.ownerDocument;
-    if (machine) form.append(renderMachine(document, machine, (key, values) => text(app.language, key, values)));
-    if (!clients.some(available)) {
-      form.append(element(document, "p", { "data-client-unavailable": "true", text: text(app.language, "clientUnavailable") }));
-      confirm.disabled = true;
-    }
-    const choices = appendSelect(document, form, "client", text(app.language, "client"), clients.map((item) => ({ value: item.id, label: item.id })), clients.find(available)?.id ?? '');
-    for (const option of choices.children) {
-      if (!available(clients.find((item) => item.id === option.value) ?? {})) { option.disabled = true; option.textContent += `: ${text(app.language, machine?.answers === false ? 'offline' : 'clientUnavailable')}`; }
-    }
-    choices.hidden = true;
-    const clientRows = element(document, 'div', { role: 'radiogroup', 'aria-label': text(app.language, 'client'), style: 'display:flex;flex-direction:column;gap:14px' });
-    const buttons = clients.map((item) => element(document, 'button', { type: 'button', role: 'radio', class: 'btn', 'data-client-choice': item.id, 'aria-checked': String(choices.value === item.id), disabled: available(item) ? null : '', style: 'padding:10px 14px;border-radius:16px;text-align:left', text: `${item.id}${available(item) ? '' : ': ' + text(app.language, machine?.answers === false ? 'offline' : 'clientUnavailable')}`, onclick: () => {
-      choices.value = item.id;
-      for (const button of buttons) {
-        const selected = button.getAttribute('data-client-choice') === item.id;
-        button.setAttribute('aria-checked', String(selected));
-        button.style.background = selected ? 'var(--card2)' : 'var(--card)';
-      }
-    } }));
-    for (const button of buttons) {
-      button.style.background = button.getAttribute('aria-checked') === 'true' ? 'var(--card2)' : 'var(--card)';
-      button.addEventListener('keydown', (event) => {
-        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
-        event.preventDefault?.();
-        const enabled = buttons.filter((item) => !item.disabled);
-        const direction = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
-        const next = enabled[(enabled.indexOf(button) + direction + enabled.length) % enabled.length];
-        next?.click?.(); next?.focus?.();
-      });
-      clientRows.append(button);
-    }
-    form.append(clientRows);
-    const segment = element(document, 'fieldset', { class: 'segmented', style: 'padding:4px;gap:4px;border-radius:12px;background:var(--card)', 'data-runs-as': 'true' });
-    segment.append(element(document, 'legend', { text: text(app.language, 'runsAs') }));
+  openChoiceForm(app, 'session', text(app.language, 'startSession'), (form, confirm) => {
+    form.append(element(form.ownerDocument, 'p', { class: 'start-hint', text: startText(app.language, 'runsIn') + ': ' + runsInLabel(unit.runsIn, app.startAgents?.connectedClients) }));
+    if (!unit.runsIn) { confirm.disabled = true; form.append(element(form.ownerDocument, 'p', { text: startText(app.language, 'unavailable') })); }
+    const segment = element(form.ownerDocument, 'fieldset', { class: 'start-segment' }, element(form.ownerDocument, 'legend', { text: text(app.language, 'runsAs') }));
     for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
-      const input = element(document, 'input', { type: 'radio', name: 'runMode', value });
-      input.value = value;
-      input.setAttribute('style', 'position:absolute;opacity:0;pointer-events:none');
-      input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
-      const cell = element(document, 'label', { class: 'segment', style: 'padding:8px 12px;border-radius:9px;font-size:13.5px;font-weight:600' }, input, text(app.language, key));
-      cell.style.background = input.checked ? 'var(--card2)' : 'var(--card)';
-      input.addEventListener('change', () => {
-        for (const node of segment.querySelectorAll('label')) node.style.background = node.querySelector('input')?.checked ? 'var(--card2)' : 'var(--card)';
-      });
-      segment.append(cell);
+      const input = element(form.ownerDocument, 'input', { type: 'radio', name: 'runMode', value });
+      input.value = value; input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
+      segment.append(element(form.ownerDocument, 'label', { class: 'segment' }, input, text(app.language, key)));
     }
-    form.append(segment, element(document, 'p', { class: 'field-hint', text: text(app.language, 'sessionModeHint') }));
-    appendInput(document, form, "prompt", text(app.language, "taskOrMessage"), "");
-    form.problems = () => {
-      const client = fieldValue(form, "client");
-      const problems = clients.some((item) => item.id === client && available(item)) ? [] : [{ name: "client", message: text(app.language, "clientInvalid") }];
-      if (fieldValue(form, 'runMode') === 'task' && !fieldValue(form, 'prompt').trim()) problems.push({ name: 'prompt', message: text(app.language, 'taskRequired') });
-      return problems;
-    };
-  }, async (form) => {
-    const client = fieldValue(form, "client");
-    if (!clients.some((item) => item.id === client && available(item))) {
-      showOutcome(app, text(app.language, "clientUnavailable"), "client_unavailable");
-      if (!app.disposed) renderShell(app);
-      return false;
-    }
-    const prompt = fieldValue(form, "prompt").trim() || null;
-    const mode = { runMode: fieldValue(form, 'runMode'), taskId: null };
-    const body = { client, prompt, ...mode, expectedRevision: unit.revision };
-    try {
-      const operation = app.sessionOperations?.get(unit.id) ?? createOperation({ method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id }, body });
-      const started = await startSession(app.api, unit, client, prompt, operation, mode);
-      app.sessionOperations?.delete(unit.id);
-      app.sessionRequestId = started.data.requestId;
-      app.sessionRequest = { ...started.data, unitId: unit.id };
-      showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? "actionFailed"), started.data.state ?? null);
-      if (started.data.state === "queued" || started.data.state === "starting") await recheckTracked(app);
-      if (!app.disposed) renderShell(app);
-      return true;
-    } catch (error) {
-      app.sessionOperations ??= new Map();
-      if (error?.operation) app.sessionOperations.set(unit.id, error.operation);
-      showOutcome(app, error?.code === "machine_unavailable"
-        ? text(app.language, "machineUnavailable", { machine: error.details?.machine ?? unit.machine })
-        : actionText(app.language, error?.code), error?.code ?? null);
-      if (!app.disposed) renderShell(app);
-      throw error;
-    }
-  }, "start-session");
-  });
+    form.append(segment);
+    appendInput(form.ownerDocument, form, 'prompt', text(app.language, 'taskOrMessage'), '');
+    form.problems = () => fieldValue(form, 'runMode') === 'task' && !fieldValue(form, 'prompt').trim() ? [{ name: 'prompt', message: text(app.language, 'taskRequired') }] : [];
+  }, async form => {
+    const prompt = fieldValue(form, 'prompt').trim() || null, mode = { runMode: fieldValue(form, 'runMode'), taskId: null };
+    const body = { prompt, ...mode, expectedRevision: unit.revision };
+    app.sessionOperations ??= new Map();
+    const operation = app.sessionOperations.get(unit.id) ?? createOperation({ method: 'POST', path: '/units/:unitId/session', params: { unitId: unit.id }, body });
+    app.sessionOperations.set(unit.id, operation);
+    let started;
+    try { started = await startSession(app.api, unit, null, prompt, operation, mode); }
+    catch (error) { showOutcome(app, actionText(app.language, error.code), error.code); if (!app.disposed) renderShell(app); throw error; }
+    app.sessionOperations.delete(unit.id);
+    app.sessionRequestId = started.data.requestId; app.sessionRequest = { ...started.data, unitId: unit.id };
+    showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? 'actionFailed'), started.data.state ?? null);
+    if (['queued', 'starting'].includes(started.data.state)) await recheckTracked(app);
+    if (!app.disposed) renderShell(app);
+    return true;
+  }, 'start-session');
 }
 
 function confirmStop(app, sessionId) {
@@ -5982,20 +5937,6 @@ function confirmStop(app, sessionId) {
   });
 }
 
-function unitProblems(app, form) {
-  const problems = [];
-  if (!validResourceName(fieldValue(form, "unit"))) problems.push({ name: "unit", message: text(app.language, "nameInvalid") });
-  if (fieldValue(form, "scopeKind") !== "root" && !validResourceName(fieldValue(form, "scopeName"))) {
-    problems.push({ name: "scopeName", message: text(app.language, "nameInvalid") });
-  }
-  const x = fieldValue(form, "positionX").trim();
-  const y = fieldValue(form, "positionY").trim();
-  if ((x !== "" || y !== "") && (!/^-?\d+$/.test(x) || !/^-?\d+$/.test(y))) {
-    problems.push({ name: /^-?\d+$/.test(x) ? "positionY" : "positionX", message: text(app.language, "positionInvalid") });
-  }
-  return problems;
-}
-
 function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const document = app.root.ownerDocument;
   const dialog = document.createElement("dialog");
@@ -6009,26 +5950,6 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   form.append(heading);
   const confirm = element(document, "button", { type: "button", class: "btn primary", "data-action": "confirm-form", text: title });
   build(form, confirm);
-  if (kind === "unit") {
-    confirm.textContent = text(app.language, "createUnit");
-    const pairs = [["unit", "role"], ["scopeName", "machine"], ["leadId", "groupId"]];
-    const fields = new Set(pairs.flat());
-    const extra = element(document, "details", { class: "unit-options" }, element(document, "summary", { text: text(app.language, "details") }));
-    for (const child of [...form.children].slice(1)) {
-      if ([...child.querySelectorAll("input, select")].some((node) => fields.has(node.getAttribute("name")))) continue;
-      child.remove();
-      extra.append(child);
-    }
-    for (const pair of pairs) {
-      const row = element(document, "div", { class: "unit-pair" });
-      for (const name of pair) {
-        const field = form.querySelector(`[name="${name}"]`)?.closest("label");
-        if (field) { field.remove(); row.append(field); }
-      }
-      form.append(row);
-    }
-    form.append(extra);
-  }
   const actions = element(document, "div", { class: "dialog-actions" });
   const cancel = element(document, "button", { type: "button", class: "btn", "data-action": "cancel-form", text: text(app.language, "cancel") });
   let sending = false;
@@ -6124,70 +6045,6 @@ function appendInput(document, form, name, label, value, options = {}) {
   return input;
 }
 
-function appendScope(document, form, label, selected) {
-  const group = element(document, "fieldset", { class: "segmented", "data-scope": "true" });
-  group.append(element(document, "legend", { text: label }));
-  for (const [value, key] of SCOPE_KINDS) {
-    const input = document.createElement("input");
-    input.setAttribute("type", "radio");
-    input.setAttribute("name", "scopeKind");
-    input.setAttribute("value", value);
-    input.value = value;
-    input.checked = value === selected;
-    const choice = element(document, "label", { class: "segment" });
-    choice.append(input, document.createTextNode(textFrom(document, key)));
-    group.append(choice);
-  }
-  form.append(group);
-  return group;
-}
-
-function textFrom(document, key) {
-  const language = document.documentElement?.lang === "es" ? "es" : "en";
-  return text(language, key);
-}
-
-function appendLeadSearch(document, form, label, leads) {
-  const input = document.createElement("input");
-  input.setAttribute("type", "search");
-  input.setAttribute("name", "leadId");
-  input.setAttribute("role", "combobox");
-  input.setAttribute("aria-label", label);
-  input.setAttribute("aria-expanded", "false");
-  const list = element(document, "div", { class: "lead-choices", role: "listbox", "data-lead-list": "true" });
-  const paint = () => {
-    const query = input.value.trim().toLowerCase();
-    const matches = leads.filter((unit) => {
-      const name = String(unit.unit ?? "").toLowerCase();
-      return !query || name.includes(query) || String(unit.id).toLowerCase().includes(query);
-    }).slice(0, 40);
-    input.setAttribute("aria-expanded", matches.length ? "true" : "false");
-    list.replaceChildren(...matches.map((unit) => element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-lead-choice": unit.id,
-      text: `${unit.unit} · ${unit.id}`,
-      onclick: () => {
-        input.value = unit.id;
-        input.focus?.();
-        input.setAttribute("aria-expanded", "false");
-        list.hidden = true;
-      },
-    })));
-  };
-  input.addEventListener("input", () => { list.hidden = false; paint(); });
-  input.addEventListener("focus", () => { list.hidden = false; paint(); });
-  paint();
-  list.hidden = true;
-  input.setAttribute("aria-expanded", "false");
-  const field = element(document, "label", { class: "field lead-field", text: label }, input, list);
-  field.addEventListener("focusout", () => queueMicrotask(() => {
-    if (!field.contains(document.activeElement)) { list.hidden = true; input.setAttribute("aria-expanded", "false"); }
-  }));
-  form.append(field);
-  return input;
-}
-
 function appendSelect(document, form, name, label, choices, value) {
   const select = document.createElement("select");
   select.setAttribute("name", name);
@@ -6211,14 +6068,6 @@ function fieldValue(form, name) {
   const nodes = [...(form.querySelectorAll?.(`[name="${name}"]`) ?? [])];
   const picked = nodes.find((node) => node.checked);
   return (picked ?? nodes[0])?.value ?? "";
-}
-
-function readPosition(form) {
-  const x = fieldValue(form, "positionX").trim();
-  const y = fieldValue(form, "positionY").trim();
-  if (x === "" && y === "") return undefined;
-  if (!/^-?\d+$/.test(x) || !/^-?\d+$/.test(y)) return undefined;
-  return { x: Number(x), y: Number(y) };
 }
 
 function leadChoices(app) {
