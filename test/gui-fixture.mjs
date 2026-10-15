@@ -11,6 +11,7 @@ import {
   canonical,
   createFixtureTree,
   deterministicUuid,
+  seedFinalRepositories,
   seedRecords,
   sha256,
   stableJson,
@@ -5500,6 +5501,80 @@ async function boot(fx, { seedHome = false } = {}) {
     embedded, hostOrigin: embedded ? "https://embed.example" : null, look: null, language: null, audience: "desktop",
   });
   fx.primary = viewer;
+}
+
+// Final acceptance uses production HTTP/persistence; the older transport fixture stays isolated.
+export async function createFinalCoreFixture({ language = "en", look = "modern", prepare = null }, { makeCoreFixture, dispose, composeCore, createStore, createNativeAdapter }) {
+  const fixture = await makeCoreFixture();
+  let core, token, closed = false, adapters;
+  const launches = [];
+  let repositories, prepared;
+  const api = {
+    fixture, launches,
+    get core() { return core; },
+    get adapters() { return adapters; },
+    get repositories() { return repositories; },
+    get root() { return fixture.root; },
+    get origin() { return `http://127.0.0.1:${core.http.port}`; },
+    get headers() { return { Origin: api.origin, Authorization: `Bearer ${token}` }; },
+    async request(method, target, { body, key = uuid(), credential = token } = {}) {
+      const response = await fetch(`${api.origin}/api/v1${target}`, {
+        method, signal: AbortSignal.timeout(10000),
+        headers: { origin: api.origin, authorization: `Bearer ${credential}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(method === "GET" ? {} : { "idempotency-key": key }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, json: response.status === 204 ? null : await response.json() };
+    },
+    control: {
+      async restart() {
+        await core.http.close();
+        const prior = fixture.store;
+        fixture.store = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind,
+          localDirectory: fixture.paths.localDirectory, now: () => fixture.clock.now, events: [] });
+        fixture.store.aclRunner = prior.aclRunner;
+        await bootCore();
+      },
+      advance(ms) { fixture.clock.now += ms; },
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      try { await core?.http.close(); }
+      finally { await dispose(fixture); }
+    },
+  };
+  async function bootCore() {
+    const nativeOptions = { fixture: true, models: ["observed", "alternate"], efforts: ["high", "xhigh"], transcript: [] };
+    const adapter = createNativeAdapter("codex", nativeOptions), create = adapter.create.bind(adapter);
+    adapter.create = async input => {
+      launches.push(input);
+      nativeOptions.transcript = [JSON.stringify({ id: 1, result: { thread: { id: uuid() } } })];
+      return create(input);
+    };
+    adapters = { codex: adapter, ...(prepared.adapters ?? {}) };
+    core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now,
+      homeDir: fixture.home, env: fixture.env, probeAgents: async () => ({}),
+      gitRunner: repositories.gitRunner, ...prepared, adapters });
+    const response = await api.request("POST", "/auth/local", {
+      credential: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look, language },
+    });
+    if (response.status !== 201) throw new Error("The final actual-core viewer did not authenticate.");
+    token = response.json.data.token;
+  }
+  try {
+    fixture.paths.origin = join(fixture.root, "origin");
+    await mkdir(fixture.paths.origin, { recursive: true });
+    await writeFile(join(fixture.paths.mind, "rules.md"), "Final isolated M1ND rules.\n");
+    repositories = await seedFinalRepositories(fixture);
+    prepared = await prepare?.(fixture) ?? {};
+    await bootCore();
+    return api;
+  } catch (error) {
+    await api.close();
+    throw error;
+  }
 }
 
 export async function createGuiFixture(options = {}) {

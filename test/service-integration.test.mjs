@@ -2,8 +2,9 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { PassThrough } from 'node:stream';
+import { gzipSync } from 'node:zlib';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addScreen, newSketch } from '../features/blueprint/review/sketch-format.mjs';
@@ -23,6 +24,10 @@ import { encodePack } from '../engine/sync/pack.mjs';
 import { clearSyncFailure, openSync, recordSyncFailure } from '../engine/sync/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
+import { finalAdditionArchive, finalLookCaptures, finalVerificationCases } from './gui-data.mjs';
+import { createFinalCoreFixture as openFinalCoreFixture } from './gui-fixture.mjs';
+import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
+import { callPlanTool, drainRunLaunches } from '../engine/service/runs.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
 const LATER = '2026-10-10T12:00:05.000Z';
@@ -762,3 +767,274 @@ async function waitForFile(file, runtime, timeout = 5000) {
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test('T064 inventory preserves both boards, all 108 references, 14 replacements and 193 capture destinations', async () => {
+  const cases = finalVerificationCases();
+  const plan = await readFile(new URL('../docs/3.0/integration.md', import.meta.url), 'utf8');
+  const verification = plan.slice(plan.indexOf('##### GUI verification list for T064'), plan.indexOf('## Verified survey corrections'));
+  const entries = [...verification.matchAll(/^- \*\*((?:start )?\d+\.\d+) ([^\n]+)$/gm)];
+  assert.equal(entries.length, 108);
+  assert.deepEqual(cases.map(item => item.reference), entries.map(match => match[1]));
+  assert.equal(new Set(cases.map(item => item.reference)).size, 108);
+  assert.equal(cases.filter(item => !item.replacements.length).length, 94);
+  for (const item of cases) {
+    const line = entries.find(match => match[1] === item.reference)[2];
+    if (line.includes('REPLACED')) {
+      const targets = [...line.slice(0, line.indexOf(';')).matchAll(/start \d+\.\d+/g)].map(match => match[0]);
+      assert.deepEqual(item.replacements, targets, item.reference);
+      assert.equal(item.captures.length, 0);
+      assert.ok(targets.every(reference => cases.some(other => other.reference === reference && !other.replacements.length)));
+    } else {
+      assert.deepEqual(item.replacements, []);
+      assert.deepEqual(item.captures.map(capture => capture.language), ['en', 'es']);
+      assert.deepEqual(item.viewport, item.reference.startsWith('7.') ? [390, 844] : [1440, 900]);
+    }
+  }
+  assert.equal(cases.filter(item => item.replacements.length).length, 14);
+  const captures = [...cases.flatMap(item => item.captures), ...finalLookCaptures()];
+  assert.equal(captures.length, 193);
+  assert.equal(new Set(captures.map(item => item.path)).size, 193);
+  assert.ok(captures.every(item => /^docs\/3\.0\/verification\/(?:start-)?\d+\.\d+-(?:en|es)-(?:modern|high-contrast|nebula|txmska|coffee-cat|ntk)\.png$/.test(item.path)));
+
+  const flow = await readFile(new URL('../docs/flows/boards/hivem1nd-3-flow.mjs', import.meta.url), 'utf8');
+  const desk = flow.slice(flow.indexOf('const DESK ='), flow.indexOf('const PHONE ='));
+  const flowIds = [];
+  let row;
+  for (const line of desk.split('\n')) {
+    const heading = /^  (\w+): \[/.exec(line), entry = /^    \["([^"]+)"/.exec(line);
+    if (heading) row = heading[1];
+    if (entry) flowIds.push(`${row}-${entry[1]}`);
+  }
+  const phone = flow.slice(flow.indexOf('const PHONE ='), flow.indexOf('// Each screen'));
+  flowIds.push(...[...phone.matchAll(/^  \["([^"]+)"/gm)].map(match => `phone-${match[1]}`));
+  assert.deepEqual(cases.filter(item => item.board === 'flow').map(item => item.screenId), flowIds);
+  const start = await readFile(new URL('../docs/flows/boards/hivem1nd-3-start.mjs', import.meta.url), 'utf8');
+  const startRows = start.slice(start.indexOf('const ROWS ='), start.indexOf('const STEP_X'));
+  const startIds = [];
+  for (const line of startRows.split('\n')) {
+    const heading = /^  \["([^"]+)"/.exec(line), entry = /^    \["([^"]+)"/.exec(line);
+    if (heading) row = heading[1];
+    if (entry) startIds.push(`${row}-${entry[1]}`);
+  }
+  assert.deepEqual(cases.filter(item => item.board === 'start').map(item => item.screenId), startIds);
+});
+
+async function finalCall(fx, method, target, body, options = {}, expected = 200) {
+  const result = await fx.request(method, target, { ...options, ...(body === undefined ? {} : { body }) });
+  assert.equal(result.status, expected, `${method} ${target}: ${result.json?.error?.code ?? 'unexpected status'}`);
+  return result.json?.data;
+}
+
+function createFinalCoreFixture(options = {}) {
+  return openFinalCoreFixture(options, { makeCoreFixture, dispose, composeCore, createStore, createNativeAdapter });
+}
+
+async function finalCluster(fx, title = 'ideas') {
+  return finalCall(fx, 'POST', '/clusters', { title, parentId: null, link: { kind: 'none' }, machine: 'DESKTOP', confirmed: true }, {}, 201);
+}
+
+const finalChoice = { client: 'codex', model: 'observed', effort: 'high', mode: null };
+async function finalAgent(fx, clusterId, role = 'executor') {
+  const cluster = await finalCall(fx, 'GET', `/clusters/${clusterId}?machine=DESKTOP`);
+  return finalCall(fx, 'POST', `/clusters/${clusterId}/agents`, { machine: 'DESKTOP', role, runsIn: finalChoice, useAsDefault: false, expectedRevision: cluster.revision }, {}, 201);
+}
+
+for (const language of ['en', 'es']) test(`T064 ${language} discovery imports 26 canonical repositories only after consent and survives a cold store restart`, async t => {
+  const fx = await createFinalCoreFixture({ language });
+  t.after(() => fx.close());
+  const before = await legacyTreeInventory(fx.fixture.home);
+  const view = await finalCall(fx, 'GET', '/view');
+  assert.deepEqual(view.groups, []);
+  assert.equal(view.units.filter(unit => unit.role !== 'master').length, 0);
+  const report = await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP');
+  const offer = report.discoveryOffer;
+  assert.deepEqual(offer.groups.map(group => [group.title, group.repositories.length]).sort(), [['Tools', 1], ['Unity', 6], ['Web', 19]]);
+  const repositories = offer.groups.flatMap(group => group.repositories);
+  assert.equal(repositories.length, 26);
+  assert.equal(repositories.find(item => item.name === 'shop').worktrees.length, 2);
+  assert.deepEqual(await legacyTreeInventory(fx.fixture.home), before);
+  const input = { machine: 'DESKTOP', repositoryIds: repositories.map(item => item.id), confirmed: true, expectedRevision: offer.revision };
+  const operation = randomUUID(), target = `/discovery/offers/${offer.id}/answer`;
+  const accepted = await finalCall(fx, 'POST', target, input, { key: operation });
+  assert.equal(accepted.clusters.filter(cluster => cluster.link.kind === 'repository').length, 26);
+  const phone = fx.core.credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  await finalCall(fx, 'POST', target, input, { key: operation, credential: phone }, 403);
+  const shop = accepted.clusters.find(cluster => cluster.title === 'shop');
+  const git = await finalCall(fx, 'GET', `/clusters/${shop.id}/git?machine=DESKTOP`);
+  assert.equal(git.branch, 'main'); assert.equal(git.dirtyCount, 2);
+  assert.equal(git.remote, 'https://example.test/acme/shop.git');
+  const changes = await finalCall(fx, 'GET', `/clusters/${shop.id}/changes?machine=DESKTOP`);
+  assert.deepEqual(changes.items.map(item => item.path), ['source.txt', 'new.txt']);
+  const first = await finalCall(fx, 'GET', '/view');
+  assert.equal(first.groups.length, 29);
+  assert.ok(first.groups.every(cluster => cluster.members.length === 0));
+  const oldStore = fx.fixture.store;
+  await fx.control.restart();
+  assert.notEqual(fx.fixture.store, oldStore);
+  const reopened = await finalCall(fx, 'GET', '/view');
+  assert.deepEqual(reopened.groups.map(cluster => cluster.id).sort(), first.groups.map(cluster => cluster.id).sort());
+  assert.equal(reopened.units.filter(unit => unit.role !== 'master').length, 0);
+  assert.equal((await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer.dismissed, true);
+  assert.deepEqual(await legacyTreeInventory(fx.fixture.home), before);
+  assert.equal(fx.launches.length, 0);
+});
+
+test('T064 Later and Not now remain empty after restart; canonical agents, aliases and recipient reads retain their identities', async t => {
+  const fx = await createFinalCoreFixture(); t.after(() => fx.close());
+  const offer = (await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer;
+  await finalCall(fx, 'POST', `/discovery/offers/${offer.id}/answer`, { machine: 'DESKTOP', repositoryIds: [], confirmed: false, expectedRevision: offer.revision });
+  await fx.control.restart();
+  assert.deepEqual((await finalCall(fx, 'GET', '/view')).groups, []);
+  assert.equal((await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer.dismissed, true);
+  const cluster = await finalCluster(fx), lead = await finalAgent(fx, cluster.id, 'overlord');
+  const one = await finalAgent(fx, cluster.id), two = await finalAgent(fx, cluster.id);
+  assert.equal(one.leadId, lead.id); assert.equal(two.leadId, lead.id); assert.notEqual(one.id, two.id);
+  assert.deepEqual(two.runsIn, finalChoice); assert.equal(fx.launches.length, 0);
+  const renamed = await finalCall(fx, 'PATCH', `/units/${one.id}/alias`, { alias: 'Blog', expectedRevision: one.revision });
+  assert.equal(renamed.id, one.id); assert.equal(renamed.alias, 'Blog');
+  const chat = await finalCall(fx, 'POST', '/chats', { members: [one.id, two.id], title: 'Authored messages' }, {}, 201);
+  const messageKey = randomUUID(), target = `/chats/${chat.id}/messages`;
+  const first = await finalCall(fx, 'POST', target, { body: 'Keep the illustration.' }, { key: messageKey }, 201);
+  const replay = await finalCall(fx, 'POST', target, { body: 'Keep the illustration.' }, { key: messageKey }, 201);
+  assert.equal(replay.message.id, first.message.id);
+  await finalCall(fx, 'POST', target, { body: 'Keep the second decision.' }, {}, 201);
+  const unread = async () => (await finalCall(fx, 'GET', '/view')).units.find(unit => unit.id === two.id).unread;
+  assert.equal(await unread(), 2);
+  const messages = (await finalCall(fx, 'GET', target)).items;
+  await finalCall(fx, 'POST', `/chats/${chat.id}/read`, { messageIds: messages.map(message => message.id) });
+  assert.equal(await unread(), 2);
+  const recipient = fx.core.credentials.issue({ audience: 'agent', unitId: two.id, sessionId: randomUUID() }).token;
+  await finalCall(fx, 'POST', `/chats/${chat.id}/read`, { messageIds: messages.map(message => message.id) }, { credential: recipient });
+  assert.equal(await unread(), 0);
+  assert.equal((await finalCall(fx, 'GET', '/view')).units.find(unit => unit.id === one.id).unread, 2);
+  await fx.control.restart();
+  assert.equal(await unread(), 0);
+  assert.equal((await finalCall(fx, 'GET', `/units/${one.id}`)).alias, 'Blog');
+  assert.deepEqual((await finalCall(fx, 'GET', target)).items.map(message => message.id), messages.map(message => message.id));
+});
+
+test('T064 an approved lead plan keeps authored chat and verified Work through service restart without opening a second run', async t => {
+  const fx = await createFinalCoreFixture(); t.after(() => fx.close());
+  const cluster = await finalCluster(fx, 'shop'), unit = await finalAgent(fx, cluster.id);
+  await finalCall(fx, 'POST', `/chats/${cluster.chatId}/messages`, { body: 'Plan the cart empty state.' }, {}, 201);
+  const taskId = 'root:064', taskFile = path.join(fx.fixture.paths.mind, 'user', 'tasks', '064.md');
+  await mkdir(path.dirname(taskFile), { recursive: true });
+  await writeFile(taskFile, `id: ${taskId}\ntitle: Cart empty state\nstatus: open\nfrom-id: root:master\nto-id: ${unit.id}\nfiles: ["cart.txt"]\n\n## Request\nPlan the cart.\n`);
+  const chat = await finalCall(fx, 'GET', `/chats/${cluster.chatId}`);
+  const assignment = { kind: 'unit', unitId: unit.id, runsIn: finalChoice };
+  const plan = await finalCall(fx, 'POST', '/plans', { clusterId: cluster.id, chatId: cluster.chatId, machine: 'DESKTOP', title: 'Cart empty state', branch: 'cart-empty', mode: 'planning',
+    tasks: [{ id: taskId, title: 'Cart empty state', assignment }], roles: { coordinator: assignment, planner: assignment, builder: assignment, reviewer: assignment }, expectedChatRevision: chat.revision }, {}, 201);
+  assert.equal(fx.launches.length, 0);
+  const runKey = randomUUID(), runTarget = `/plans/${plan.id}/run`, input = { confirmed: true, expectedRevision: plan.revision };
+  const started = await finalCall(fx, 'POST', runTarget, input, { key: runKey }, 202);
+  assert.equal((await finalCall(fx, 'POST', runTarget, input, { key: runKey }, 202)).runId, started.runId);
+  const context = fx.core.runtime.settingsOwner;
+  await drainRunLaunches(context);
+  const run = await finalCall(fx, 'GET', `/runs/${started.runId}`), attempt = run.attempts[0];
+  assert.equal(fx.launches.length, 1); assert.deepEqual(fx.launches[0].runsIn, finalChoice);
+  assert.deepEqual(fx.launches[0].launchScope.writeRoots, []);
+  await callPlanTool({ ...context, principal: { audience: 'agent', unitId: unit.id, sessionId: attempt.sessionId } }, 'plan_step', {
+    runId: run.id, attemptId: attempt.id, eventId: 'read-board', step: 'plan', state: 'started', requestId: randomUUID(),
+  });
+  const work = await finalCall(fx, 'GET', `/sessions/${attempt.sessionId}/work`);
+  assert.ok(work.items.length > 0);
+  const messages = (await finalCall(fx, 'GET', `/chats/${cluster.chatId}/messages`)).items;
+  assert.deepEqual(messages.map(message => message.body), ['Plan the cart empty state.']);
+  const phone = fx.core.credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  for (const resource of ['work', 'transcript', 'context']) await finalCall(fx, 'GET', `/sessions/${attempt.sessionId}/${resource}`, undefined, { credential: phone }, 403);
+  await fx.control.restart();
+  const persisted = await finalCall(fx, 'GET', `/runs/${run.id}`);
+  assert.equal(persisted.id, run.id); assert.equal(persisted.planId, plan.id);
+  assert.equal(fx.launches.length, 1);
+  const reopenedWork = (await finalCall(fx, 'GET', `/sessions/${attempt.sessionId}/work`)).items;
+  assert.deepEqual(reopenedWork.slice(0, work.items.length), work.items);
+  assert.deepEqual(reopenedWork.slice(work.items.length).map(item => item.kind), ['exit', 'cleanup']);
+  assert.equal(persisted.state, 'open', 'exit and cleanup alone cannot replace the agent report');
+  assert.deepEqual((await finalCall(fx, 'GET', `/chats/${cluster.chatId}/messages`)).items.map(message => message.id), messages.map(message => message.id));
+});
+
+test('T064 cross-project Blueprint and bilingual Void bundles survive restart and guarded Undo restores their original bytes', async t => {
+  const fx = await createFinalCoreFixture(); t.after(() => fx.close());
+  const offer = (await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer;
+  const repositories = offer.groups.flatMap(group => group.repositories).filter(item => ['shop', 'blog'].includes(item.name));
+  await finalCall(fx, 'POST', `/discovery/offers/${offer.id}/answer`, { machine: 'DESKTOP', repositoryIds: repositories.map(item => item.id), confirmed: true, expectedRevision: offer.revision });
+  const sketch = newSketch('cart', 'Cart'); addScreen(sketch, { title: 'Empty cart', x: 0, y: 0 }); sketch.retained = { unknown: ['board'] };
+  const text = { title: 'Release', rev: 0, retained: { unknown: ['text'] }, pages: [{ k: 'intro', en: '# Cart\n**Empty** 😀', es: '# Carrito\n**Vacío** 😀' }] };
+  const editors = [], moves = [];
+  for (const [kind, document] of [['blueprint', sketch], ['void', text]]) {
+    const editor = await finalCall(fx, 'POST', kind === 'blueprint' ? '/blueprint/boards' : '/void/texts', { project: 'shop', document, ...(kind === 'void' ? { path: 'docs/release.json' } : {}) }, {}, 201);
+    editors.push({ kind, editor });
+  }
+  for (const { kind, editor } of editors) {
+    const source = await readFile(path.join(fx.repositories.shop, editor.path));
+    const current = await finalCall(fx, 'GET', `/${kind === 'blueprint' ? 'blueprint/boards' : 'void/texts'}/${editor.id}`);
+    const input = { project: 'blog', path: `docs/${kind}-moved.json`, folderId: null, confirmedRepositoryChange: true,
+      expectedRevision: current.revision, expectedCommentsRevision: current.commentsRevision,
+      expectedAttachmentRevision: current.attachmentRevision, expectedLibraryRevision: current.libraryRevision };
+    await finalCall(fx, 'POST', `/editors/${editor.id}/move`, { ...input, confirmedRepositoryChange: false }, {}, 422);
+    const moved = await finalCall(fx, 'POST', `/editors/${editor.id}/move`, input);
+    assert.notEqual(moved.editor.id, editor.id);
+    await assert.rejects(readFile(path.join(fx.repositories.shop, editor.path)), { code: 'ENOENT' });
+    assert.deepEqual(await readFile(path.join(fx.fixture.home, 'Web', 'blog', moved.editor.path)), source);
+    moves.push({ kind, editor, moved, source });
+  }
+  await fx.control.restart();
+  for (const { kind, editor, moved, source } of moves.toReversed()) {
+    const restored = await finalCall(fx, 'GET', `/${kind === 'blueprint' ? 'blueprint/boards' : 'void/texts'}/${moved.editor.id}`);
+    assert.deepEqual(restored.document.retained, editor.document.retained);
+    const history = await finalCall(fx, 'GET', `/editors/${moved.editor.id}/history`);
+    assert.ok(history.items.length > 0);
+    await finalCall(fx, 'POST', `/changes/${moved.changeId}/undo`, {});
+    assert.deepEqual(await readFile(path.join(fx.repositories.shop, editor.path)), source);
+    await assert.rejects(readFile(path.join(fx.fixture.home, 'Web', 'blog', moved.editor.path)), { code: 'ENOENT' });
+  }
+});
+
+test('T064 checked Content pins, selected scope, repository acceptance and Remove/Undo persist across actual-core restarts', async t => {
+  const fx = await createFinalCoreFixture(); t.after(() => fx.close());
+  const cluster = await finalCluster(fx, 'Checkout launch'), agent = await finalAgent(fx, cluster.id);
+  const archive = gzipSync(finalAdditionArchive()), owner = fx.core.runtime.settingsOwner;
+  let pin = 'a'.repeat(40);
+  owner.additionLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  owner.additionTransport = async url => ({ status: 200, bytes: url.pathname.includes('/commits/')
+    ? Buffer.from(JSON.stringify({ sha: pin, commit: { committer: { date: '2026-10-01T00:00:00.000Z' } } })) : archive });
+  owner.additionRunner = async (_command, args, options, input) => {
+    assert.ok(args.includes('hash-object')); assert.equal(options.shell, false);
+    return Buffer.from(createHash('sha1').update(`blob ${input.length}\0`).update(input).digest('hex') + '\n');
+  };
+  const before = await legacyTreeInventory(fx.fixture.home);
+  const preview = await finalCall(fx, 'POST', '/additions/previews', { machine: 'DESKTOP', source: { kind: 'git', url: 'https://github.com/acme/final-source' }, updateOf: null }, {}, 202);
+  await owner.additionJobs.get(preview.id)?.promise;
+  const ready = await finalCall(fx, 'GET', `/additions/previews/${preview.id}`);
+  assert.equal(ready.state, 'ready'); assert.equal(ready.candidates.filter(item => item.kind === 'skill').length, 2);
+  assert.deepEqual(await legacyTreeInventory(fx.fixture.home), before);
+  const scope = { everyUnit: false, units: [agent.id], groups: [cluster.id] };
+  const acceptance = { machine: 'DESKTOP', previewId: ready.id, selections: ready.candidates.filter(item => item.name === 'pdf' || ['docs', 'repository'].includes(item.kind))
+    .map(item => ({ candidateId: item.id, scope: item.kind === 'repository' ? { everyUnit: false, units: [], groups: [] } : scope })),
+    expectedContentRevision: ready.contentRevision, expectedProjectRevision: ready.projectRevision, confirmed: true };
+  const accepted = await finalCall(fx, 'POST', '/additions', acceptance, {}, 201);
+  assert.deepEqual(accepted.items.map(item => [item.kind, item.unitCount]), [['skill', 1], ['docs', 1], ['repository', 0]]);
+  const pdf = accepted.items.find(item => item.kind === 'skill');
+  assert.equal(await readFile(path.join(fx.fixture.paths.mind, 'user', 'features', 'pdf', 'NOTICE'), 'utf8'), 'Retain this notice\n');
+  pin = 'b'.repeat(40);
+  const update = await finalCall(fx, 'POST', '/additions/previews', { machine: 'DESKTOP', source: { kind: 'git', url: 'https://github.com/acme/final-source' }, updateOf: pdf.id }, {}, 202);
+  await owner.additionJobs.get(update.id)?.promise;
+  assert.equal((await finalCall(fx, 'GET', `/additions/previews/${update.id}`)).pin.value, pin);
+  assert.equal((await finalCall(fx, 'GET', '/additions?machine=DESKTOP')).items.find(item => item.id === pdf.id).pin.value, 'a'.repeat(40));
+  await fx.control.restart();
+  const persisted = await finalCall(fx, 'GET', '/additions?machine=DESKTOP');
+  assert.equal(persisted.items.length, 3);
+  const content = (await finalCall(fx, 'GET', '/settings/content')).features.find(item => item.additionId === pdf.id);
+  assert.equal(content.unitCount, 1); assert.equal(content.pin.value, 'a'.repeat(40));
+  const repository = accepted.items.find(item => item.kind === 'repository');
+  const view = await finalCall(fx, 'GET', '/view');
+  const repositoryCluster = view.groups.find(item => item.link.projectId === repository.projectId);
+  assert.ok(repositoryCluster); assert.deepEqual(repositoryCluster.members, []); assert.equal(fx.launches.length, 0);
+  const removed = await finalCall(fx, 'DELETE', `/additions/${pdf.id}`, { machine: 'DESKTOP', confirmed: true, expectedRevision: persisted.items.find(item => item.id === pdf.id).revision });
+  await fx.control.restart();
+  assert.equal((await finalCall(fx, 'GET', '/additions?machine=DESKTOP')).items.some(item => item.id === pdf.id), false);
+  await finalCall(fx, 'POST', `/changes/${removed.changeId}/undo`, {});
+  assert.equal((await finalCall(fx, 'GET', '/additions?machine=DESKTOP')).items.some(item => item.id === pdf.id), true);
+  assert.equal(await readFile(path.join(fx.fixture.paths.mind, 'user', 'features', 'pdf', 'NOTICE'), 'utf8'), 'Retain this notice\n');
+  assert.deepEqual(await legacyTreeInventory(fx.fixture.home), before);
+});

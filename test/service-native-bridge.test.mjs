@@ -13,10 +13,12 @@ import { createNativeLaunch, dispatchNative, handleNativeHook, initializeNativeE
 import { closeAttachedServices, connectNativeService, nativeHook, openRelayOperations, relayPolicy, request, subscribe } from '../engine/service/client.mjs';
 import { createPersonRelay } from '../engine/relay/person.mjs';
 import { runCli } from '../cli/index.mjs';
-import { createText, readEditor, writeAttachments } from '../engine/service/editors.mjs';
+import { createText, moveEditor, readEditor, writeAttachments } from '../engine/service/editors.mjs';
+import { prepareRepositoryClusters } from '../engine/service/clusters.mjs';
 import { consumeStart, createNativeAdapter, enqueueStart, registerNative } from '../engine/service/adapters.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
-import { runConfiguredService, startService, stopService } from '../engine/service/service.mjs';
+import { composeCore, runConfiguredService, startService, stopService } from '../engine/service/service.mjs';
+import { commitChange, createStore } from '../engine/service/store.mjs';
 import { machineRecordPath, serializeMachineRecord } from '../engine/records.mjs';
 import { runRelayHook } from '../engine/relay/hooks.mjs';
 import { createRelayWakeController } from '../engine/relay/wake.mjs';
@@ -212,6 +214,47 @@ test('configured project paths preserve an explicit empty override and leave mis
   await unlink(machineRecordPath(fixture.paths.mind, fixture.machine));
   service = await runConfiguredService(options);
   assert.equal(service.options.projects.every(project => project.eligible === false && project.localPath === null), true);
+});
+
+for (const entry of ['composeCore', 'startService']) test(`${entry} loads accepted cluster links before cold recovery of committed and interrupted editor moves`, async t => {
+  for (const fault of [null, { afterPrepared: true }, { afterRenames: 1 }, { beforeReceipt: true }]) await t.test(JSON.stringify(fault), async sub => {
+    const fixture = await makeCoreFixture();
+    let service;
+    sub.after(async () => {
+      if (entry === 'startService') await stopService(service, { force: true });
+      else await service?.http.close();
+      await dispose(fixture);
+    });
+    const projects = ['shop', 'blog'].map(name => ({ name, localPath: path.join(fixture.root, name) }));
+    for (const project of projects) await mkdir(project.localPath);
+    const context = { store: fixture.store, paths: fixture.paths, projects, now: () => fixture.clock.now,
+      principal: { audience: 'desktop', unitId: 'root:master' },
+      gitRunner: async () => { throw Object.assign(new Error('Git is not installed in this fixture.'), { code: 'git_unavailable' }); } };
+    const prepared = await prepareRepositoryClusters(context, projects);
+    await commitChange(context, { id: randomUUID(), entries: prepared.entries, events: prepared.events });
+    const text = await createText(context, { project: 'shop', path: 'docs/note.json', document: { title: 'Retained', pages: [{ k: 'body', en: 'Original', es: 'Original' }] } });
+    const source = await readFile(path.join(projects[0].localPath, text.path));
+    const input = { project: 'blog', path: 'docs/moved.json', folderId: null, confirmedRepositoryChange: true,
+      expectedRevision: text.revision, expectedCommentsRevision: text.commentsRevision,
+      expectedAttachmentRevision: text.attachmentRevision, expectedLibraryRevision: text.libraryRevision };
+    fixture.store.fault = fault;
+    if (fault) await assert.rejects(() => moveEditor(context, text.id, input), { code: 'injected_crash' });
+    else await moveEditor(context, text.id, input);
+    const store = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind,
+      localDirectory: fixture.paths.localDirectory, now: context.now });
+    store.aclRunner = fixture.store.aclRunner;
+    assert.deepEqual(store.projects, []);
+    const options = { store, paths: fixture.paths, now: context.now, env: fixture.env, clients: [],
+      gitRunner: context.gitRunner, probeAgents: async () => ({}), guardPort: 0, userKey: fixture.root };
+    service = await (entry === 'startService' ? startService(options) : composeCore(options));
+    assert.deepEqual(store.projects.map(project => project.name).sort(), ['blog', 'shop']);
+    await assert.rejects(readFile(path.join(projects[0].localPath, text.path)), { code: 'ENOENT' });
+    assert.deepEqual(await readFile(path.join(projects[1].localPath, input.path)), source);
+    const journalDirectory = path.join(fixture.paths.localDirectory, 'transactions');
+    const journals = await Promise.all((await readdir(journalDirectory)).map(async name => JSON.parse(await readFile(path.join(journalDirectory, name)))));
+    assert.ok(journals.every(journal => journal.phase === 'committed'));
+    assert.equal(service.runtime.lastError, null);
+  });
 });
 
 test('configured project paths reject ambiguous identities, relative mappings, and linked repository ancestors', async (t) => {

@@ -8,6 +8,124 @@ export const FIXTURE_HOME_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 export const FIXTURE_HOME_CODE = "234567";
 export const LOCAL_MACHINE = "DESKTOP";
 
+const FINAL_FLOW_ROWS = [
+  ["setup", "welcome mind join close-2x service failed done loading load-failed empty"],
+  ["map", "idle selected rename renamed connect connect-saving selection new-group group delete-group new-unit creating created start-session starting start-failed stop remove-unit add add-check add-skill add-repo"],
+  ["chat", "chat sending working open-cli reply failed mailbox waiting approval-sent send-back accepted group-chat start-run run-progress run-problem"],
+  ["blueprint", "board library new-board search move delete edit sketch attach comment comment-sent watch conflict history"],
+  ["void", "document library delete edit not-saved find source suggestion stale focus focus-tools"],
+  ["settings", "settings agents connect machine permissions projects remove-repo content home reconnecting service-down slow"],
+  ["phone", "pair pair-error locked hierarchy chat waiting closed"],
+];
+const FINAL_START_ROWS = [
+  ["first", "repos-found overseer overview inside"],
+  ["clusters", "new-cluster no-link new-agent runs-in runs-in-lyra team plan running stuck"],
+  ["overseer", "chat full"],
+  ["messages", "chat work"],
+];
+const FINAL_REPLACEMENTS = {
+  "2.7": ["start 1.3", "start 2.1", "start 2.6"],
+  "2.8": ["start 2.1"],
+  "2.9": ["start 2.6", "start 2.7"],
+  "2.10": ["start 2.2"],
+  "2.11": ["start 2.3"],
+  "2.12": ["start 2.3"],
+  "2.13": ["start 2.6"],
+  "2.14": ["start 2.4", "start 2.5"],
+  "3.12": ["start 2.6", "start 2.7"],
+  "3.13": ["start 2.7"],
+  "3.14": ["start 2.8", "start 4.2"],
+  "3.15": ["start 2.9"],
+  "6.6": ["start 2.1", "start 2.2"],
+  "6.7": ["start 2.2"],
+};
+
+// Capture destinations are a handoff manifest, never a claim that an image exists.
+export function finalVerificationCases() {
+  return [["flow", FINAL_FLOW_ROWS], ["start", FINAL_START_ROWS]].flatMap(([board, rows]) =>
+    rows.flatMap(([row, names], rowIndex) => names.split(" ").map((name, index) => {
+      const number = `${rowIndex + 1}.${index + 1}`;
+      const reference = board === "start" ? `start ${number}` : number;
+      const replacements = board === "flow" ? FINAL_REPLACEMENTS[reference] ?? [] : [];
+      const stem = `${board === "start" ? "start-" : ""}${number}`;
+      return {
+        reference, board, screenId: `${row}-${name}`, replacements: [...replacements],
+        viewport: board === "flow" && row === "phone" ? [390, 844] : [1440, 900],
+        captures: replacements.length ? [] : ["en", "es"].map(language => ({
+          language, look: "modern", path: `docs/3.0/verification/${stem}-${language}-modern.png`,
+        })),
+      };
+    })));
+}
+
+export function finalLookCaptures() {
+  return ["high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].map(look => ({
+    language: "en", look, path: `docs/3.0/verification/6.1-en-${look}.png`,
+  }));
+}
+
+export function finalAdditionArchive() {
+  const chunks = [];
+  for (const [relative, content] of [
+    ["LICENSE", "MIT License\n"], ["NOTICE", "Retain this notice\n"],
+    ["package.json", '{"name":"final-source","license":"MIT"}'],
+    ["skills/pdf/SKILL.md", "---\nname: pdf\nruntime: none\n---\nPDF instructions\n"],
+    ["skills/docx/SKILL.md", "---\nname: docx\nruntime: none\n---\nDocument instructions\n"],
+    ["docs/guide.md", "# Guide\nRetained knowledge.\n"],
+  ]) {
+    const data = Buffer.from(content), header = Buffer.alloc(512);
+    header.write(`package/${relative}`, 0, 100); header.write("0000644\0", 100);
+    header.write("0000000\0", 108); header.write("0000000\0", 116);
+    header.write(data.length.toString(8).padStart(11, "0") + "\0", 124); header.write("00000000000\0", 136);
+    header.fill(32, 148, 156); header[156] = 48; header.write("ustar\0", 257);
+    header.write([...header].reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, "0") + "\0 ", 148);
+    chunks.push(header, data, Buffer.alloc((512 - data.length % 512) % 512));
+  }
+  return Buffer.concat([...chunks, Buffer.alloc(1024)]);
+}
+
+export async function seedFinalRepositories(fixture) {
+  const repositories = new Map();
+  const folders = [
+    ["Web", ["shop", "blog", "api-gateway", "nova", ...Array.from({ length: 15 }, (_, index) => `web-${index + 5}`)]],
+    ["Unity", Array.from({ length: 6 }, (_, index) => `game-${index + 1}`)],
+    ["Tools", ["tools"]],
+  ];
+  for (const [folder, names] of folders) for (const name of names) {
+    const directory = join(fixture.home, folder, name);
+    await mkdir(join(directory, ".git"), { recursive: true });
+    await writeFile(join(directory, "source.txt"), `${name}: retained source\n`);
+    await writeFile(join(directory, ".git", "index"), "retained index\n");
+    repositories.set(directory, { main: directory, common: join(directory, ".git"), trees: [directory] });
+  }
+  const shop = join(fixture.home, "Web", "shop"), worktree = join(fixture.home, "Web", "shop-worktree");
+  await mkdir(worktree, { recursive: true });
+  await writeFile(join(worktree, ".git"), `gitdir: ${join(shop, ".git", "worktrees", "alternate")}\n`);
+  const identity = repositories.get(shop);
+  identity.trees.push(worktree);
+  repositories.set(worktree, identity);
+  const calls = [];
+  const gitRunner = async (_command, args, options) => {
+    if (options.shell !== false || options.windowsHide !== true || options.env.GIT_OPTIONAL_LOCKS !== "0") throw new Error("Unsafe fixture Git invocation.");
+    const repository = repositories.get(options.cwd);
+    if (!repository) throw new Error("Git escaped the final fixture repositories.");
+    calls.push({ cwd: options.cwd, args: [...args] });
+    if (args.includes("--show-toplevel")) return { stdout: `${options.cwd}\n` };
+    if (args.includes("--git-common-dir")) return { stdout: `${repository.common}\n` };
+    if (args.includes("worktree")) return { stdout: repository.trees.map((directory, index) => `worktree ${directory}\0HEAD ${"a".repeat(40)}\0branch refs/heads/${index ? "alternate" : "main"}\0\0`).join("") };
+    if (args.includes("--get-regexp")) return { stdout: "", code: 1 };
+    if (args.includes("status")) return { stdout: " M source.txt\0?? new.txt\0" };
+    if (args.includes("symbolic-ref")) return { stdout: "main\n" };
+    if (args.includes("config") && args.includes("remote.origin.url")) return { stdout: `https://example.test/acme/${repository.main.split(/[\\/]/).at(-1)}.git\n` };
+    if (args.includes("--verify")) return { stdout: `${"a".repeat(40)}\n` };
+    if (args.includes("log")) return { stdout: `${"a".repeat(40)}\0Fixture commit\0${DEFAULT_NOW}\n` };
+    if (args.includes("--numstat")) return { stdout: "1\t1\tsource.txt\0" };
+    if (args.includes("diff")) return { stdout: "diff --git a/source.txt b/source.txt\n-old\n+retained\n" };
+    throw new Error("Unreviewed Git command in the final fixture.");
+  };
+  return { repositories, shop, worktree, calls, gitRunner };
+}
+
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
 
 export function sha256(bytes) {

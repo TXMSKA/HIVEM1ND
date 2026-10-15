@@ -30,7 +30,7 @@ import { resolveActivity } from './watch.mjs';
 import { bytesAt, importedSidecarEvents } from './import-events.mjs';
 import { watchLocalChanges } from './local-watch.mjs';
 import { migrateClusters } from './clusters.mjs';
-import { createSettingsOwner, processSettingsRequests, publishMachineSettings } from './settings.mjs';
+import { createSettingsOwner, processSettingsRequests, publishMachineSettings, refreshClusterProjects } from './settings.mjs';
 import { drainRunLaunches, recoverRuns } from './runs.mjs';
 import { closeRunProcesses } from './run-processes.mjs';
 import { openRunSupervisor, closeRunSupervisor } from './run-supervision.mjs';
@@ -81,13 +81,12 @@ export async function startService(options, retained = null) {
   };
   try {
     await acquireServiceLock(handle);
-    if (options.projects) bindProjects(options.store, options.projects);
-    await recoverTransactions(options.store);
     const paths = servicePathsFor(options);
     const bus = options.bus ?? createEventBus({ now: options.now ?? (() => Date.now()), machine: paths.machine, mind: paths.mind });
     options.projects ??= await configuredProjects(paths);
     bindProjects(options.store, options.projects);
     const migrationOwner = createSettingsOwner({ ...options, paths, bus });
+    await recoverTransactions(options.store, { beforeRecover: () => refreshClusterProjects(migrationOwner) });
     await refreshAdditionProjects(migrationOwner);
     await migrateClusters(migrationOwner);
     handle.credentials.bindWake((record) => wakeBindingLive(paths.mind, record, options.now?.() ?? Date.now()));
@@ -835,10 +834,9 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   runtime.settingsOwner = createSettingsOwner({ ...options, paths, now, sync, pulse, ledger, bus: runtime.bus, startedAt: runtime.startedAt });
-  await recoverTransactions(options.store);
+  await recoverTransactions(options.store, { beforeRecover: () => refreshClusterProjects(runtime.settingsOwner) });
   await refreshAdditionProjects(runtime.settingsOwner);
   if (migrate) await migrateClusters(runtime.settingsOwner);
-  const { refreshClusterProjects } = await import('./settings.mjs');
   await refreshClusterProjects(runtime.settingsOwner);
   try {
     try {

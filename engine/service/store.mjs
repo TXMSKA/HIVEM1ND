@@ -546,8 +546,8 @@ async function commitLocked(store, prepared) {
   }
 }
 
-export async function recoverTransactions(store) {
-  return withLocalChanges(store, () => recoverTransactionsLocked(store));
+export async function recoverTransactions(store, { beforeRecover } = {}) {
+  return withLocalChanges(store, () => recoverTransactionsLocked(store, beforeRecover));
 }
 
 async function applyJournalEntry(store, entry, destination) {
@@ -562,10 +562,12 @@ async function applyJournalEntry(store, entry, destination) {
   }
 }
 
-async function recoverTransactionsLocked(store) {
+async function recoverTransactionsLocked(store, beforeRecover) {
   if (store.recovering) return [];
   store.recovering = true;
   try {
+    // Owner-local project bindings must be readable without recursively replaying journals.
+    await beforeRecover?.();
     const directory = path.join(store.localDirectory, 'transactions');
     let names;
     try {
