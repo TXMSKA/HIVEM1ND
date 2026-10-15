@@ -317,3 +317,16 @@ test('plan_propose is listed with a strict schema and reaches only a bound lead 
   }
   assert.equal((await readPlan(state.context, plans[0].id)).title, 'Over MCP'); assert.deepEqual(await taskNames(state), ['001-task-one.md']); assert.equal(state.launches.length, 0);
 });
+
+test('Run refuses a plan task whose file no longer names its assignee instead of re-addressing it', async t => {
+  const state = await makePlanFixture(t, { count: 2, role: 'overlord', task: false }), [lead, member] = state.units;
+  const toMember = { kind: 'unit', unitId: member.id, runsIn }, toLead = { kind: 'unit', unitId: lead.id, runsIn };
+  const plan = await createPlan(state.context, { ...state.input, tasks: [newTask('Handed over', toLead)] });
+  const edited = await editPlan(state.context, plan.id, { expectedRevision: plan.revision, tasks: [{ id: plan.tasks[0].id, title: 'Handed over', assignment: toMember }] });
+  const file = path.join(state.paths.mind, 'user', 'tasks', '001-handed-over.md'), text = await readFile(file, 'utf8');
+  assert.ok(text.includes(`to-id: ${member.id}`));
+  await writeFile(file, text.replace(`to-id: ${member.id}`, `to-id: ${lead.id}`));
+  await assert.rejects(startPlan(state.context, edited.id, { confirmed: true, expectedRevision: edited.revision }), { code: 'invalid_plan' });
+  assert.equal(state.launches.length, 0); assert.ok((await readFile(file, 'utf8')).includes(`to-id: ${lead.id}`));
+  assert.equal((await readPlan(state.context, edited.id)).approved, false);
+});

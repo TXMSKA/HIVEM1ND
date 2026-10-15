@@ -88,7 +88,7 @@ function newTaskItem(task) {
     || task.body !== undefined && (typeof task.body !== 'string' || task.body.length > 20000 || /\x00/.test(task.body) || /^## (?:Request|Report)\b/m.test(task.body))) planError();
 }
 
-export async function resolvePlan(context, input, id) {
+export async function resolvePlan(context, input, id, options = {}) {
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 240 || /[\x00-\x1f\x7f]/.test(input.title)
     || typeof input.branch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/.test(input.branch) || /\.\.|\/\/|@\{|\.lock(?:\/|$)|[/.]$/.test(input.branch)
     || !['planning', 'execution'].includes(input.mode) || !isUuid(input.clusterId) || !isUuid(input.chatId)) planError();
@@ -125,9 +125,9 @@ export async function resolvePlan(context, input, id) {
       record = await loadTask(context, task.id);
       if (!units.some(unit => unit.id === record.toId) || !['open', 'review'].includes(record.status)) planError();
       assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
-      // A task this plan created, still open before Run, may go to any member and is then re-addressed in the same transaction so the
-      // file always names who does it. Any other task, and every task after Run, only goes to its addressee or the addressee's lead.
-      const owned = record.planId === id && record.status === 'open' && input.approved !== true;
+      // Editing a draft: a task this plan created, still open, may go to any member and is then re-addressed in the same transaction so the
+      // file always names who does it. Any other task, and every task Run or a role replacement resolves, only goes to its addressee or the addressee's lead.
+      const owned = options.readdress === true && record.planId === id && record.status === 'open';
       if (assignment.kind === 'unit' && assignment.unitId !== record.toId && assignment.unitId !== record.leadId && !owned) planError();
       const toId = assignment.kind === 'unit' ? assignment.unitId : lead?.id ?? record.toId;
       if (owned && toId !== record.toId) {
@@ -186,7 +186,7 @@ export async function editPlan(context, id, input) {
   return withLocalChanges(context.store, async () => {
     const { record, bytes } = await readPlanRecord(context, id);
     if (record.revision !== input.expectedRevision || record.approved) planError('plan_changed', 409);
-    const resolved = await resolvePlan(context, { ...record, ...input, tasks: input.tasks ?? record.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, id);
+    const resolved = await resolvePlan(context, { ...record, ...input, tasks: input.tasks ?? record.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, id, { readdress: true });
     const next = planRevision({ ...record, ...input, tasks: resolved.tasks, roles: resolved.roles }); delete next.expectedRevision;
     const updated = planRevision(next);
     return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }, ...resolved.created, ...resolved.rewritten],
