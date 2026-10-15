@@ -6490,3 +6490,23 @@ test('the folder and branch rows cover a detached head, a plain folder, a privat
   assert.equal(text('en', 'worksIn'), 'Works in'); assert.equal(text('es', 'worksIn'), 'Trabaja en');
   assert.equal(text('en', 'lastSeen', { time: 'T' }), 'Last seen T'); assert.equal(text('es', 'lastSeen', { time: 'T' }), 'Visto por última vez T');
 });
+
+test('the folder rows are read again on a session change, not on every work event inside 15 seconds', async t => {
+  const reading = { path: 'C:/Users/dev/Web/shop', kind: 'repository', repositoryId: deterministicUuid(['repository']), branch: 'main', head: 'a'.repeat(40), detached: false, observedAt: '2026-10-10T11:58:00.000Z' };
+  const urls = [], seed = seedCheckout({ reading });
+  let local;
+  const { fixture, desktop, facts } = await openShopExecutor(t, { seed: async context => { local = context.local; await seed(context); } }, urls);
+  const reads = () => urls.filter(url => url.endsWith(`/sessions/${SHOP_SESSION}/checkout`)).length;
+  await waitFor(() => facts().Branch?.text === 'main', 'The first reading did not appear.');
+  assert.equal(reads(), 1);
+  await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading, branch: 'later' }));
+  const cursor = desktop.app.store.cursor;
+  await fixture.control.emit('session.work', { sessionId: SHOP_SESSION, sequence: 1 });
+  await waitFor(() => desktop.app.store.cursor !== cursor, 'The work event was not consumed.');
+  assert.equal(reads(), 1, 'A work event inside the window reads nothing.');
+  assert.equal(facts().Branch.text, 'main');
+  await fixture.control.emit('session.changed', { session: { id: SHOP_SESSION, unitId: 'project:shop:executor-shop', state: 'registered' } });
+  await waitFor(() => facts().Branch?.text === 'later', 'The session change did not refresh the branch.');
+  assert.equal(reads(), 2);
+  assert.ok(desktop.app.checkoutTimer, 'A live session is read again on a timer.');
+});
