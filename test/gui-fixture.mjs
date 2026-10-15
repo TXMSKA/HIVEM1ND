@@ -1442,6 +1442,7 @@ function intentIdPlaceholder() {
 
 function authorize(principal, route) {
   if (/^\/sessions\/:sessionId\/(work|transcript)$/.test(route.pattern) && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Session work is private to the desktop.');
+  if (route.pattern === '/sessions/:sessionId/checkout' && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Session checkouts are private to the desktop.');
   if (route.pattern.startsWith('/additions') && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Only the desktop may inspect additions.');
   if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias", "/units/:unitId"].includes(route.pattern)) {
     throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
@@ -2007,6 +2008,7 @@ function routeTable() {
     { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
     { pattern: '/sessions/:sessionId/work', GET: { query: ['limit', 'cursor'] } },
     { pattern: '/sessions/:sessionId/transcript', GET: { query: ['limit', 'cursor'] } },
+    { pattern: '/sessions/:sessionId/checkout', GET: { query: [] } },
     { pattern: "/leads", GET: { query: ["q", "limit", "cursor", "project"] } },
     { pattern: "/squads", GET: { query: ["q", "limit", "cursor", "project", "leadId"] } },
     { pattern: "/projects", GET: { query: ["q", "limit", "cursor"] } },
@@ -2368,6 +2370,19 @@ async function readData(fx, snap, spec, params, query) {
     const kind = pattern.endsWith('/work') ? 'work' : 'transcript';
     const records = await walkJson(join(fx.local, 'session-work', params.sessionId, kind));
     return page(records.filter(record => record.sequence), query, spec.GET.query, () => true, []);
+  }
+  if (pattern === '/sessions/:sessionId/checkout') {
+    noneQuery(query);
+    const session = snap.sessions.find(item => item.id === params.sessionId);
+    if (!session) throw new HttpError(404, 'session_not_found', 'The session does not exist.');
+    const unknown = reason => ({ sessionId: session.id, known: false, reason });
+    if (session.machine !== LOCAL_MACHINE) return unknown('other_machine');
+    if (session.launchKind !== 'cli') return unknown('manual');
+    // The service keeps the last live reading of each session beside its scope; a test seeds that file.
+    const reading = (await readJsonFile(join(fx.local, 'sessions', session.id, 'checkout.json')).catch(error => { if (error.code === 'ENOENT') return null; throw error; }))?.value;
+    if (!reading) return unknown(session.state === 'stopped' ? 'not_observed' : 'unverified');
+    const { format, ...fact } = reading;
+    return { ...fact, live: session.state !== 'stopped' };
   }
   if (pattern === '/additions') {
     const machine = query.get('machine') ?? LOCAL_MACHINE;
@@ -5580,6 +5595,7 @@ export async function createFinalCoreFixture({ language = "en", look = "modern",
 export async function createGuiFixture(options = {}) {
   const tree = await createFixtureTree();
   const seeded = await seedRecords(tree, options);
+  await options.seed?.({ tree, local: seeded.local });
   for (const record of [...seeded.data.units, ...seeded.data.bulk]) {
     if (!ROLES.has(record.role)) continue;
     const scope = { kind: record.scopeKind, name: record.scopeName };

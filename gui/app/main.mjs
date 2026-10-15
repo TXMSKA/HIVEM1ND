@@ -71,7 +71,7 @@ import {
   stopWatch,
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
-import { openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
+import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
@@ -709,6 +709,7 @@ export function dispose(app) {
   if (!app || app.disposed) return;
   app.disposed = true;
   clearTimeout(app.workClock);
+  clearTimeout(app.checkoutTimer);
   clearTimeout(app.readyTimer);
   clearTimeout(app.phoneExpiryTimer);
   clearTimeout(app.phoneLockTimer);
@@ -823,6 +824,7 @@ async function onStream(app, event) {
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
   if (event?.name === "session.request.changed") noteSessionRequest(app, dataOf(event));
   if (event?.name === "session.changed") noteSession(app, dataOf(event));
+  if (["session.changed", "session.work", "session.context"].includes(event?.name)) refreshCheckout(app, app.store.selected.unitId, event.name === "session.changed");
   if (event?.name === "approval.requested" || event?.name === "approval.answered") await noteApproval(app, dataOf(event));
   if (event?.name === "approval.grant.changed") await noteGrant(app, dataOf(event));
   if (event?.name === "message.read") {
@@ -6976,7 +6978,9 @@ function renderInspector(app, t, selected) {
     const session = data?.unitId === selected.id ? data.sessions?.find((item) => item.state !== "stopped") : app.store.view?.sessions?.find((item) => item.unitId === selected.id && item.state !== "stopped");
     const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: session.client }) : session?.launchKind === "cli" ? t("runsCli", { client: session.client }) : session?.client ?? t("unknown");
     const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
-    for (const [key, value] of [["machine", selected.machine], ["finalRunsIn", runs], ["model", selected.model ?? t("finalDefaultModel")], ["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}` }));
+    const checkout = checkoutSession(app, selected);
+    const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id) });
+    for (const [key, value, title] of [["machine", selected.machine], ["finalRunsIn", runs], ...where, ["model", selected.model ?? t("finalDefaultModel")], ["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}`, ...(title ? { title } : {}) }));
     card.append(facts, extra);
     if (app.connectionSaving?.targets.includes(selected.id)) card.append(progressMark(document, `${t("savingLayout")} ${t("finalReportsTo")}: ${unitDisplayName(unitById(app, app.connectionSaving.leadId))}`));
     const folded = card.querySelector?.("details");
@@ -7051,6 +7055,48 @@ function renderInspector(app, t, selected) {
   return panel;
 }
 
+const CHECKOUT_MS = 15000;
+
+// The session whose folder and branch the inspector names: the live one, else the last one that ran on this machine.
+function checkoutSession(app, unit) {
+  const sessions = app.inspectorData?.unitId === unit.id ? app.inspectorData.sessions ?? [] : (app.store.view?.sessions ?? []).filter((item) => item.unitId === unit.id);
+  const live = sessions.find((item) => item.state !== "stopped");
+  if (live) return live;
+  return sessions.filter((item) => item.machine === startMachine(app)).sort((left, right) => String(right.registeredAt ?? "").localeCompare(String(left.registeredAt ?? "")))[0] ?? null;
+}
+
+// Only the desktop reads where a session runs.
+const checkoutReadable = (app) => !app.disposed && app.layout !== "phone" && app.store.audience !== "phone";
+
+function loadCheckout(app, session, force = false) {
+  if (!checkoutReadable(app) || !session || session.machine !== startMachine(app)) return Promise.resolve();
+  const entry = (app.checkouts ??= new Map()).get(session.id) ?? {};
+  app.checkouts.set(session.id, entry);
+  if (entry.pending) return entry.pending;
+  const stopped = session.state === "stopped";
+  if (!force && (stopped ? entry.data?.live === false || entry.data?.known === false : entry.at != null && app.api.now() - entry.at < CHECKOUT_MS)) return Promise.resolve();
+  entry.pending = startApi.getSessionCheckout(app.api, session.id).then((result) => { entry.data = result.data; entry.error = null; }, (error) => { entry.error = error; }).then(() => {
+    entry.at = app.api.now();
+    entry.pending = null;
+    if (!app.disposed) renderShell(app);
+  });
+  return entry.pending;
+}
+
+// A live session is read again at most every 15 seconds while its agent stays selected, and at once when it changes.
+function refreshCheckout(app, unitId = app.store.selected.unitId, force = false) {
+  const unit = unitId ? unitById(app, unitId) : null;
+  if (!checkoutReadable(app) || !unit) return Promise.resolve();
+  clearTimeout(app.checkoutTimer);
+  const session = checkoutSession(app, unit);
+  const job = loadCheckout(app, session, force);
+  if (session && session.state !== "stopped" && session.machine === startMachine(app)) {
+    app.checkoutTimer = setTimeout(() => { if (app.store.selected.unitId === unitId) refreshCheckout(app, unitId); }, CHECKOUT_MS);
+    app.checkoutTimer.unref?.();
+  }
+  return job;
+}
+
 function loadInspector(app, unitId) {
   const ticket = (app.inspectorTicket ?? 0) + 1;
   app.inspectorTicket = ticket;
@@ -7084,6 +7130,7 @@ function loadInspector(app, unitId) {
       sessions: sessions.items,
     };
     app.store.indexes.units.set(unitId, unit.data);
+    refreshCheckout(app, unitId);
     if (app.layout !== 'phone') {
       const view = sessionViewFor(app, sessions.items.find(session => session.state !== 'stopped') ?? sessions.items[0]);
       if (view && unit.data.role === 'overseer') await loadSessionView(app.api, view, { context: true });

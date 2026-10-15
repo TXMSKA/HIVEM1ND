@@ -13,6 +13,7 @@ export const getClusters=(api,query={})=>request(api,'GET','/clusters',{query});
 export const getClusterGit=(api,clusterId,machine)=>request(api,'GET','/clusters/:clusterId/git',{params:{clusterId},query:{machine}});
 export const getClusterChanges=(api,clusterId,machine,query={})=>request(api,'GET','/clusters/:clusterId/changes',{params:{clusterId},query:{...query,machine}});
 export const getSessionContext=(api,sessionId)=>request(api,'GET','/sessions/:sessionId/context',{params:{sessionId}});
+export const getSessionCheckout=(api,sessionId)=>request(api,'GET','/sessions/:sessionId/checkout',{params:{sessionId}});
 export const getSessionWork=(api,sessionId,query={})=>request(api,'GET','/sessions/:sessionId/work',{params:{sessionId},query});
 export const getSessionTranscript=(api,sessionId,query={})=>request(api,'GET','/sessions/:sessionId/transcript',{params:{sessionId},query});
 export const getRun=(api,runId)=>request(api,'GET','/runs/:runId',{params:{runId}});

@@ -87,6 +87,29 @@ export function renderUnit(document, unit, t, language = "en") {
   return card;
 }
 
+const CHECKOUT_REASONS = {
+  manual: 'checkoutManual', other_machine: 'checkoutOtherMachine', unverified: 'checkoutUnverified',
+  git_unavailable: 'checkoutGit', not_observed: 'checkoutNotSeen',
+};
+
+// The folder and branch rows of an agent's facts: [copy key, value, tooltip]. Nothing is guessed: an unknown
+// answer says so, a stopped session keeps its last reading marked with the time it was last seen.
+export function checkoutFacts(t, language, { session, local, entry }) {
+  if (!session) return [];
+  const stopped = session.state === 'stopped', unknown = reason => [['worksIn', t('notKnown'), t(reason)], ['branch', t('notKnown'), t(reason)]];
+  if (session.machine && session.machine !== local) return stopped ? [] : unknown('checkoutOtherMachine');
+  const data = entry?.data;
+  if (!data) return entry?.error && !stopped ? unknown('checkoutFailed') : [];
+  if (data.known === false) return stopped ? [] : unknown(CHECKOUT_REASONS[data.reason] ?? 'checkoutUnverified');
+  const seen = data.live === false ? ` · ${t('lastSeen', { time: formatWhen(language, data.observedAt) })}` : '';
+  const folder = data.kind === 'private' ? t('checkoutPrivate') : String(data.path).split(/[\\/]+/).filter(Boolean).at(-1) ?? data.path;
+  const rows = [['worksIn', `${folder}${data.kind === 'worktree' ? ` · ${t('worktree')}` : ''}${seen}`, data.path]];
+  if (data.kind === 'repository' || data.kind === 'worktree') {
+    rows.push(['branch', `${data.detached ? t('detachedAt', { head: String(data.head ?? '').slice(0, 7) }) : data.branch ?? t('notKnown')}${seen}`, null]);
+  }
+  return rows;
+}
+
 export function renderMachine(document, machine, t) {
   const block = element(document, "section", {
     class: "machine-facts",

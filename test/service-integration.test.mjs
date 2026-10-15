@@ -1038,3 +1038,40 @@ test('T064 checked Content pins, selected scope, repository acceptance and Remov
   assert.equal(await readFile(path.join(fx.fixture.paths.mind, 'user', 'features', 'pdf', 'NOTICE'), 'utf8'), 'Retain this notice\n');
   assert.deepEqual(await legacyTreeInventory(fx.fixture.home), before);
 });
+
+test('an agent started in a repository cluster reports its folder and live branch, and a plan session in it does too', async t => {
+  const fx = await createFinalCoreFixture(); t.after(() => fx.close());
+  const offer = (await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer;
+  const shop = offer.groups.flatMap(group => group.repositories).find(item => item.name === 'shop');
+  const accepted = await finalCall(fx, 'POST', `/discovery/offers/${offer.id}/answer`, { machine: 'DESKTOP', repositoryIds: [shop.id], confirmed: true, expectedRevision: offer.revision });
+  const cluster = accepted.clusters.find(item => item.link.kind === 'repository'), unit = await finalAgent(fx, cluster.id);
+  const started = await finalCall(fx, 'POST', `/units/${unit.id}/session`, { expectedRevision: unit.revision, prompt: 'Say ok.' }, {}, 202);
+  await fx.fixture.store.sessionLaunches?.get(started.requestId);
+  const request = await finalCall(fx, 'GET', `/session-requests/${started.requestId}`);
+  assert.equal(request.state, 'started');
+  const reading = await finalCall(fx, 'GET', `/sessions/${request.sessionId}/checkout`);
+  assert.deepEqual([reading.path, reading.kind, reading.branch, reading.head, reading.detached, reading.live], [fx.repositories.shop, 'repository', 'main', 'a'.repeat(40), false, true]);
+  assert.match(reading.repositoryId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.ok(fx.repositories.calls.some(call => call.args.includes('--absolute-git-dir')), 'The folder kind comes from Git, not from a guess.');
+  const phone = fx.core.credentials.issue({ audience: 'phone', unitId: 'root:master' }).token;
+  await finalCall(fx, 'GET', `/sessions/${request.sessionId}/checkout`, undefined, { credential: phone }, 403);
+  const stopped = await finalCall(fx, 'POST', `/sessions/${request.sessionId}/stop`, { confirmed: true }, {}, 202);
+  assert.equal(stopped.state, 'stopping');
+  const last = await finalCall(fx, 'GET', `/sessions/${request.sessionId}/checkout`);
+  assert.deepEqual([last.live, last.path, last.branch, last.observedAt], [false, reading.path, 'main', reading.observedAt]);
+  await fx.control.restart();
+  assert.deepEqual(await finalCall(fx, 'GET', `/sessions/${request.sessionId}/checkout`), last, 'The last reading survives a restart.');
+  const lead = await finalAgent(fx, cluster.id, 'overlord');
+  await finalCall(fx, 'POST', `/chats/${cluster.chatId}/messages`, { body: 'Plan the shop.' }, {}, 201);
+  const taskId = 'root:066', taskFile = path.join(fx.fixture.paths.mind, 'user', 'tasks', '066.md');
+  await mkdir(path.dirname(taskFile), { recursive: true });
+  await writeFile(taskFile, `id: ${taskId}\ntitle: Shop plan\nstatus: open\nfrom-id: root:master\nto-id: ${lead.id}\nfiles: ["plan.txt"]\n\n## Request\nPlan the shop.\n`);
+  const chat = await finalCall(fx, 'GET', `/chats/${cluster.chatId}`), assignment = { kind: 'unit', unitId: lead.id, runsIn: finalChoice };
+  const plan = await finalCall(fx, 'POST', '/plans', { clusterId: cluster.id, chatId: cluster.chatId, machine: 'DESKTOP', title: 'Shop plan', branch: 'shop-plan', mode: 'planning',
+    tasks: [{ id: taskId, title: 'Shop plan', assignment }], roles: { coordinator: assignment, planner: assignment, builder: assignment, reviewer: assignment }, expectedChatRevision: chat.revision }, {}, 201);
+  const run = await finalCall(fx, 'POST', `/plans/${plan.id}/run`, { confirmed: true, expectedRevision: plan.revision }, {}, 202);
+  await drainRunLaunches(fx.core.runtime.settingsOwner);
+  const attempt = (await finalCall(fx, 'GET', `/runs/${run.runId}`)).attempts[0];
+  const planned = await finalCall(fx, 'GET', `/sessions/${attempt.sessionId}/checkout`);
+  assert.deepEqual([planned.path, planned.kind, planned.branch, planned.live, planned.repositoryId], [fx.repositories.shop, 'repository', 'main', true, reading.repositoryId]);
+});

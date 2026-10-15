@@ -100,6 +100,7 @@ export async function seedFinalRepositories(fixture) {
   }
   const shop = join(fixture.home, "Web", "shop"), worktree = join(fixture.home, "Web", "shop-worktree");
   await mkdir(worktree, { recursive: true });
+  await mkdir(join(shop, ".git", "worktrees", "alternate"), { recursive: true });
   await writeFile(join(worktree, ".git"), `gitdir: ${join(shop, ".git", "worktrees", "alternate")}\n`);
   const identity = repositories.get(shop);
   identity.trees.push(worktree);
@@ -117,7 +118,9 @@ export async function seedFinalRepositories(fixture) {
     if (args.includes("status")) return { stdout: " M source.txt\0?? new.txt\0" };
     if (args.includes("symbolic-ref")) return { stdout: "main\n" };
     if (args.includes("config") && args.includes("remote.origin.url")) return { stdout: `https://example.test/acme/${repository.main.split(/[\\/]/).at(-1)}.git\n` };
-    if (args.includes("--verify")) return { stdout: `${"a".repeat(40)}\n` };
+    if (args.includes("--absolute-git-dir")) return { stdout: `${options.cwd === repository.main ? repository.common : join(repository.common, "worktrees", "alternate")}\n` };
+    if (args.includes("--abbrev-ref")) return { stdout: `${options.cwd === repository.main ? "main" : "alternate"}\n` };
+    if (args.includes("--verify") || args.includes("rev-parse") && args.includes("HEAD")) return { stdout: `${"a".repeat(40)}\n` };
     if (args.includes("log")) return { stdout: `${"a".repeat(40)}\0Fixture commit\0${DEFAULT_NOW}\n` };
     if (args.includes("--numstat")) return { stdout: "1\t1\tsource.txt\0" };
     if (args.includes("diff")) return { stdout: "diff --git a/source.txt b/source.txt\n-old\n+retained\n" };

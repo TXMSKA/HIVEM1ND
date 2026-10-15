@@ -20,7 +20,7 @@ import { setAttachments, startWatch, libraryState, createResource } from "../gui
 import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
-import { renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
+import { checkoutFacts, renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -6389,4 +6389,104 @@ test('a cluster with open tasks keeps the draft built from them, without the emp
   assert.deepEqual(draftRows(desktop.root).map(row => row.getAttribute('data-edit-task')), [state.taskId]);
   assert.equal(desktop.root.querySelector('[data-plan-empty]'), null); assert.equal(desktop.root.querySelector('[data-action="add-plan-task"]'), null);
   assert.equal(desktop.root.querySelector('[data-action="plan-from-void"]'), null); assert.equal(desktop.root.querySelector('[data-action="save-plan"]').disabled, false);
+});
+
+// The seeded shop executor has one live session on this machine. Registering the same native session as a started
+// (command line) session lets the service report where it runs; a stopped status closes it.
+const SHOP_SESSION = '20c58b80-4d93-88cd-83b3-39d78f1d9d5d';
+function seedCheckout({ reading = null, stopped = false } = {}) {
+  return async ({ tree, local }) => {
+    const directory = join(tree.user, 'relay', 'sessions');
+    for (const name of await readdir(directory)) {
+      const record = JSON.parse(await readFile(join(directory, name), 'utf8'));
+      if (record.sessionId !== SHOP_SESSION) continue;
+      const registrationId = deterministicUuid(['checkout-registration']);
+      await writeFile(join(directory, `${registrationId}.json`), JSON.stringify({ ...record, registrationId, launchKind: 'cli' }));
+    }
+    if (reading) {
+      await mkdir(join(local, 'sessions', SHOP_SESSION), { recursive: true });
+      await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading }));
+    }
+    if (stopped) {
+      await mkdir(join(tree.user, 'relay', 'session-status', SHOP_SESSION), { recursive: true });
+      await writeFile(join(tree.user, 'relay', 'session-status', SHOP_SESSION, 'closed.json'), JSON.stringify({ format: 'hivem1nd-session-status-v1',
+        sessionId: SHOP_SESSION, state: 'stopped', machine: 'DESKTOP', at: '2026-10-10T11:59:00.000Z', reason: 'native-acknowledged' }));
+    }
+  };
+}
+
+async function openShopExecutor(t, options, urls = []) {
+  const fixture = await createGuiFixture(options); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, urls); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some(unit => unit.id === 'project:shop:executor-shop'), 'The unit list did not load.');
+  const executor = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: 'unit', unit: executor }, 'double');
+  await waitFor(() => desktop.root.querySelector('.inspector-details'), 'The inspector details did not appear.');
+  const facts = () => Object.fromEntries(desktop.root.querySelectorAll('[data-unit-facts]')[0].children
+    .map(node => [node.textContent.split(': ')[0], { text: node.textContent.split(': ').slice(1).join(': '), title: node.getAttribute('title') }]));
+  return { fixture, desktop, facts };
+}
+
+test('the agent inspector names the folder and branch a started session works in, marks a worktree and follows the language', async t => {
+  const reading = { path: 'C:/Users/dev/Web/shop-worktree', kind: 'worktree', repositoryId: deterministicUuid(['repository']), branch: 'review', head: 'a'.repeat(40), detached: false, observedAt: '2026-10-10T11:58:00.000Z' };
+  const urls = [];
+  const { desktop, facts } = await openShopExecutor(t, { seed: seedCheckout({ reading }) }, urls);
+  await waitFor(() => facts()['Works in'], 'The folder row did not appear.');
+  assert.deepEqual(facts()['Works in'], { text: 'shop-worktree · Worktree', title: 'C:/Users/dev/Web/shop-worktree' });
+  assert.equal(facts().Branch.text, 'review');
+  assert.equal(Object.keys(facts()).indexOf('Works in'), Object.keys(facts()).indexOf('Runs in') + 1);
+  assert.equal(Object.keys(facts()).indexOf('Branch'), Object.keys(facts()).indexOf('Works in') + 1);
+  assert.equal(urls.filter(url => url.endsWith(`/sessions/${SHOP_SESSION}/checkout`)).length, 1, 'One read serves every render.');
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.equal(facts()['Trabaja en'].text, 'shop-worktree · Worktree');
+  assert.equal(facts().Rama.text, 'review');
+  assertVisibleCopy('es', desktop.root.querySelectorAll('[data-unit-facts]')[0].children.map(node => ['facts', node.textContent.split(': ')[0]]));
+});
+
+test('a manual session and a session that never ran here are not guessed', async t => {
+  const manual = await openShopExecutor(t, {});
+  await waitFor(() => manual.facts()['Works in'], 'The folder row did not appear.');
+  assert.equal(manual.facts()['Works in'].text, 'Not known');
+  assert.equal(manual.facts().Branch.text, 'Not known');
+  assert.equal(manual.facts()['Works in'].title, 'This session was started outside M1ND, so its folder is not recorded.');
+  assert.equal(manual.facts().Branch.title, manual.facts()['Works in'].title);
+  manual.desktop.app.language = 'es'; renderShell(manual.desktop.app);
+  assert.equal(manual.facts()['Trabaja en'].text, 'Sin determinar');
+  assert.equal(manual.facts()['Trabaja en'].title, 'Esta sesión se inició fuera de M1ND, por lo que no se registra su carpeta.');
+  const blog = manual.desktop.app.unitList.catalog.find(unit => unit.id === 'project:blog:executor-shop');
+  manual.desktop.app.activeHandlers.onActivate({ id: blog.id, kind: 'unit', unit: blog }, 'double');
+  await waitFor(() => manual.desktop.app.inspectorData?.unitId === blog.id, 'The second inspector did not load.');
+  assert.equal(manual.facts()['Trabaja en'], undefined, 'A stopped session of another machine shows nothing.');
+});
+
+test('a stopped session keeps its last reading marked with the time it was last seen', async t => {
+  const reading = { path: 'C:/Users/dev/Web/shop', kind: 'repository', repositoryId: deterministicUuid(['repository']), branch: 'main', head: 'c'.repeat(40), detached: false, observedAt: '2026-10-10T11:58:00.000Z' };
+  const { facts } = await openShopExecutor(t, { seed: seedCheckout({ reading, stopped: true }) });
+  await waitFor(() => facts()['Works in'], 'The last reading did not appear.');
+  const seen = formatWhen('en', reading.observedAt);
+  assert.deepEqual(facts()['Works in'], { text: `shop · Last seen ${seen}`, title: reading.path });
+  assert.equal(facts().Branch.text, `main · Last seen ${seen}`);
+});
+
+test('the folder and branch rows cover a detached head, a plain folder, a private folder and a failed read in both languages', () => {
+  const base = { sessionId: 'session', repositoryId: null, branch: null, head: null, detached: false, observedAt: '2026-10-10T11:58:00.000Z', live: true };
+  const session = { id: 'session', machine: 'DESKTOP', state: 'registered' };
+  const rows = (language, entry, extra = {}) => checkoutFacts((key, values) => text(language, key, values), language, { session: { ...session, ...extra }, local: 'DESKTOP', entry });
+  const detached = { ...base, path: 'C:/Web/shop', kind: 'repository', head: 'b'.repeat(40), detached: true };
+  assert.deepEqual(rows('en', { data: detached }), [['worksIn', 'shop', 'C:/Web/shop'], ['branch', 'Detached at bbbbbbb', null]]);
+  assert.deepEqual(rows('es', { data: detached }), [['worksIn', 'shop', 'C:/Web/shop'], ['branch', 'Desacoplada en bbbbbbb', null]]);
+  assert.deepEqual(rows('en', { data: { ...base, path: 'C:/Notes', kind: 'folder' } }), [['worksIn', 'Notes', 'C:/Notes']], 'A folder without Git has no branch to show.');
+  assert.deepEqual(rows('en', { data: { ...base, path: 'C:/Local/sessions/8c2f', kind: 'private' } }), [['worksIn', 'Private folder', 'C:/Local/sessions/8c2f']]);
+  assert.deepEqual(rows('en', { error: new Error('offline') }).map(row => row.slice(0, 2)), [['worksIn', 'Not known'], ['branch', 'Not known']]);
+  assert.deepEqual(rows('en', { error: new Error('offline') }, { state: 'stopped' }), []);
+  assert.deepEqual(rows('en', undefined), [], 'Nothing is shown before the first answer.');
+  assert.deepEqual(checkoutFacts(key => key, 'en', { session: null, local: 'DESKTOP' }), []);
+  assert.equal(rows('en', { data: { sessionId: 'session', known: false, reason: 'other_machine' } })[0][2], 'Another machine runs this session.');
+  assert.equal(rows('es', { data: { sessionId: 'session', known: false, reason: 'git_unavailable' } })[1][2], 'Git no respondió para esta carpeta.');
+  assert.equal(rows('en', undefined, { machine: 'LAPTOP' })[0][2], 'Another machine runs this session.', 'No request is made for another machine.');
+  for (const key of ['worksIn', 'branch', 'worktree', 'detachedAt', 'notKnown', 'lastSeen']) {
+    assert.ok(text('en', key, { head: 'x', time: 'y' }).length > 0 && text('es', key, { head: 'x', time: 'y' }).length > 0);
+  }
+  assert.equal(text('en', 'worksIn'), 'Works in'); assert.equal(text('es', 'worksIn'), 'Trabaja en');
+  assert.equal(text('en', 'lastSeen', { time: 'T' }), 'Last seen T'); assert.equal(text('es', 'lastSeen', { time: 'T' }), 'Visto por última vez T');
 });
