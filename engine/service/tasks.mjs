@@ -55,7 +55,7 @@ export async function loadTask(context, taskId) {
 // operation leaves no task behind. One allocator numbers every task of one operation without collision.
 export function taskAllocator(context) {
   const counters = new Map();
-  return async function prepare({ title, body = '', toId, clusterId = null }) {
+  return async function prepare({ title, body = '', toId, clusterId = null, planId = null }) {
     const unit = parseUnitId(toId), directory = taskDirectory(unit.scope);
     if (!counters.has(directory)) {
       let names = [];
@@ -68,7 +68,7 @@ export function taskAllocator(context) {
     const slug = text.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).slice(0, 6).join('-').slice(0, 48).replace(/-+$/, '') || 'task';
     const relative = `${directory}/${digits}-${slug}.md`;
     const headers = [`id: ${digits}`, `task-id: ${id}`, `title: ${text}`, 'status: open', 'from: master', 'from-id: root:master', `to: ${unit.unit}`, `to-id: ${toId}`,
-      `date: ${localStamp(context)}`, ...(clusterId ? [`cluster-id: ${clusterId}`] : [])];
+      `date: ${localStamp(context)}`, ...(clusterId ? [`cluster-id: ${clusterId}`] : []), ...(planId ? [`plan-id: ${planId}`] : [])];
     const bytes = Buffer.from(`${headers.join('\n')}\n\n## Request\n${String(body).trim() || text}\n\n## Report\n`, 'utf8');
     const parsed = parseTaskId(id);
     const record = describe(bytes, relative, parsed.id, await aliasesFor(context));
@@ -283,6 +283,7 @@ function describe(bytes, relative, expectedId, aliases) {
     toId: headers.get('to-id') || null,
     to: headers.get('to') || '',
     date: headers.get('date') || '',
+    planId: headers.get('plan-id') || null,
     aliases,
     bytes,
     body: bytes.toString('utf8'),

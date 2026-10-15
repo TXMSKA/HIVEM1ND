@@ -108,7 +108,7 @@ export async function resolvePlan(context, input, id) {
   if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 10000) planError();
   const named = input.tasks.filter(task => task && typeof task === 'object' && Object.hasOwn(task, 'id'));
   if (new Set(named.map(task => task.id)).size !== named.length || input.tasks.length - named.length > NEW_TASK_LIMIT) planError();
-  const tasks = [], witnesses = [], unitRevisions = {}, created = [], prepare = taskAllocator(context);
+  const tasks = [], witnesses = [], unitRevisions = {}, created = [], rewritten = [], prepare = taskAllocator(context);
   for (const task of input.tasks) {
     let record, assignment;
     if (!task || typeof task !== 'object' || Array.isArray(task) || !Object.hasOwn(task, 'id')) {
@@ -117,7 +117,7 @@ export async function resolvePlan(context, input, id) {
       assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
       const toId = assignment.kind === 'unit' ? assignment.unitId : lead?.id;
       if (!toId) planError();
-      const made = await prepare({ title: task.title, body: task.body ?? '', toId, clusterId: input.clusterId });
+      const made = await prepare({ title: task.title, body: task.body ?? '', toId, clusterId: input.clusterId, planId: id });
       created.push(made.entry); record = made.record;
     } else {
       exactPlanObject(task, ['id', 'title', 'assignment']); parseTaskId(task.id);
@@ -125,7 +125,16 @@ export async function resolvePlan(context, input, id) {
       record = await loadTask(context, task.id);
       if (!units.some(unit => unit.id === record.toId) || !['open', 'review'].includes(record.status)) planError();
       assignment = await validatePlanAssignment(context, task.assignment, units, clients, 'builder');
-      if (assignment.kind === 'unit' && assignment.unitId !== record.toId && assignment.unitId !== record.leadId) planError();
+      // A task this plan created, still open before Run, may go to any member and is then re-addressed in the same transaction so the
+      // file always names who does it. Any other task, and every task after Run, only goes to its addressee or the addressee's lead.
+      const owned = record.planId === id && record.status === 'open' && input.approved !== true;
+      if (assignment.kind === 'unit' && assignment.unitId !== record.toId && assignment.unitId !== record.leadId && !owned) planError();
+      const toId = assignment.kind === 'unit' ? assignment.unitId : lead?.id ?? record.toId;
+      if (owned && toId !== record.toId) {
+        const bytes = replaceHeader(replaceHeader(record.bytes, 'to', parseUnitId(toId).unit), 'to-id', toId);
+        rewritten.push({ resource: record.relative, recordPath: path.join(context.paths.mind, ...record.relative.split('/')), beforeRevision: record.revision, afterBytes: bytes });
+        record = { ...record, toId, bytes, body: bytes.toString('utf8'), revision: hashBytes(bytes) };
+      }
     }
     const paths = reviewedTaskPaths(record.body);
     witnesses.push({ id: record.id, revision: record.revision, paths, relative: record.relative });
@@ -133,7 +142,7 @@ export async function resolvePlan(context, input, id) {
       assignment, runsIn: assignment.runsIn, state: 'todo', step: null, stepAt: null });
   }
   for (const unit of units) unitRevisions[unit.id] = revisionOf((await readUnitState(context, parseUnitId(unit.id))).bytes);
-  return { cluster, chat, tasks, roles, witnesses, unitRevisions, created };
+  return { cluster, chat, tasks, roles, witnesses, unitRevisions, created, rewritten };
 }
 function reviewedTaskPaths(body) {
   const line = String(body).match(/^(?:files|paths):\s*(.+)$/mi)?.[1];
@@ -145,7 +154,7 @@ function reviewedTaskPaths(body) {
   return paths;
 }
 
-const createdEvents = (resolved, revision) => resolved.created.length ? [{ name: 'view.changed', data: { revision, collections: ['tasks'] } }] : [];
+const createdEvents = (resolved, revision) => resolved.created.length || resolved.rewritten.length ? [{ name: 'view.changed', data: { revision, collections: ['tasks'] } }] : [];
 
 export async function createPlan(context, input) {
   requirePlanDesktop(context, 'chat.post');
@@ -178,7 +187,7 @@ export async function editPlan(context, id, input) {
     const resolved = await resolvePlan(context, { ...record, ...input, tasks: input.tasks ?? record.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, id);
     const next = planRevision({ ...record, ...input, tasks: resolved.tasks, roles: resolved.roles }); delete next.expectedRevision;
     const updated = planRevision(next);
-    return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }, ...resolved.created],
+    return commitChange(context, { id: randomUUID(), entries: [{ resource: `plan:${id}`, recordPath: planFile(context, id), beforeRevision: revisionOf(bytes), afterBytes: planBytes(updated) }, ...resolved.created, ...resolved.rewritten],
       events: [{ name: 'plan.changed', chatId: record.chatId, data: { planId: id, revision: updated.revision } }, ...createdEvents(resolved, updated.revision)], response: { status: 200, body: publicPlan(updated) } });
   });
 }
