@@ -71,10 +71,11 @@ test('on Windows the kill report names every ended descendant and a pid that ano
   const { child, grandchild } = await launchTree();
   const driver = processDriver();
   assert.equal(driver.sweepable(child.pid), false, 'a live pid is not swept');
+  const ended = once(child, 'exit');
   const report = await driver.terminate(child.pid);
   assert.ok(report.killed.some(item => item.pid === grandchild), 'the report lists the grandchild');
   assert.equal(report.killed.some(item => item.pid === child.pid), false, 'the root is not its own descendant');
-  await once(child, 'exit');
+  await ended;
   assert.deepEqual(await driver.terminate(child.pid), { killed: [] }, 'a pid that is gone is not an error');
   assert.equal(alive(grandchild), false);
 });
