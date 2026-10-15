@@ -153,10 +153,18 @@ test('a fresh GUI start enters Relay once before its first stdio editor call, wi
   const started = await enqueueStart(context, { unitId: UNIT, client: 'codex', runMode: 'chat', stateRevision: hashBytes(await readFile(file)) });
   assert.equal(started.result.state, 'started', JSON.stringify(started.result));
   const directory = path.join(fixture.paths.mind, 'user', 'relay', 'wake', 'policies');
-  const names = await readdir(directory);
+  // A wake update stages a temporary file beside the committed policy before its atomic rename.
+  await writeFile(path.join(directory, '.policy.pending.tmp'), 'Pending replacement');
+  const names = (await readdir(directory)).filter(name => name.endsWith('.json'));
   assert.equal(names.length, 1);
+  assert.match(names[0], /^[a-f0-9]{64}\.json$/);
   const policyFile = path.join(directory, names[0]);
   const before = JSON.parse(await readFile(policyFile, 'utf8'));
+  assert.equal(before.kind, 'relay-wake-policy');
+  assert.equal(before.binding.unitId, UNIT);
+  assert.equal(before.binding.nativeSessionId, NATIVE);
+  assert.equal(before.binding.client, 'codex');
+  assert.equal(before.binding.machine, fixture.machine);
   assert.equal(Date.parse(before.deadlineAt) - Date.parse(before.startedAt), 4 * 3600000);
   assert.equal(before.maxHandoffs, 20);
   const lines = await stdio({ ...process.env, ...fixture.env, ...state.launch.env }, fixture.paths.mind, [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'void_open', arguments: { resourceId: editor.id } } }]);

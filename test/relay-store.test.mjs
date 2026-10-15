@@ -225,6 +225,384 @@ test('concurrent sends keep every unique message and concurrent reads archive ex
   }
 });
 
+test('a denied open of a vanished inbox name reconciles the exact archive only through a safe parent', async (context) => {
+  for (const unsafeParent of [false, true]) await context.test(unsafeParent ? 'changed parent stays unsafe' : 'concurrent archive survives NTFS EPERM', async (context) => {
+    const { mind } = await fixture(context);
+    const sender = await bind(mind, 'executor-alpha', 'denied-open-sender');
+    const readerA = await bind(mind, 'executor-beta', 'denied-open-reader-a');
+    const readerB = await bind(mind, 'executor-beta', 'denied-open-reader-b');
+    const sent = await sender.send({ to: 'executor-beta', subject: 'Archive race', body: 'Exact bytes: ñ 雪\n' });
+    const activeDirectory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+    const filename = (await readdir(activeDirectory)).find(name => name.includes(sent.id));
+    const source = path.join(activeDirectory, filename);
+    const archiveDirectory = path.join(mind, 'user', 'relay', 'archive', 'executor-beta');
+    const bytes = await readFile(source);
+    let enter, release, intercepted = false, denied = false;
+    const entered = new Promise(resolve => { enter = resolve; });
+    const paused = new Promise(resolve => { release = resolve; });
+    const restoreStat = await interceptFs('lstat', async (original, args) => {
+      if (unsafeParent && denied && path.resolve(String(args[0])) === path.resolve(activeDirectory)) {
+        return { isSymbolicLink: () => true, isDirectory: () => true };
+      }
+      return original(...args);
+    });
+    const restoreOpen = await interceptFs('open', async (original, args) => {
+      if (!intercepted && path.resolve(String(args[0])) === path.resolve(source) && typeof args[1] === 'number') {
+        intercepted = true; enter(); await paused; denied = true;
+        throw Object.assign(new Error('NTFS no longer exposes the unlinked name.'), { code: 'EPERM' });
+      }
+      return original(...args);
+    });
+    try {
+      const first = readerA.read({ ids: [sent.id] });
+      const checked = unsafeParent ? assert.rejects(first, code('UNSAFE_SYMLINK')) : first;
+      await entered;
+      const second = await readerB.read({ ids: [sent.id] });
+      assert.equal(second.messages[0].body, 'Exact bytes: ñ 雪\n');
+      release();
+      if (unsafeParent) await checked;
+      else {
+        const result = await checked;
+        assert.equal(result.messages[0].id, sent.id);
+        assert.equal(result.messages[0].body, second.messages[0].body);
+        assert.equal(result.messages[0].archive.alreadyArchived, true);
+      }
+      assert.deepEqual(await readFile(path.join(archiveDirectory, filename)), bytes);
+      assert.deepEqual(await readdir(archiveDirectory), [filename]);
+      await assert.rejects(readFile(source), code('ENOENT'));
+    } finally { release(); restoreOpen(); restoreStat(); }
+  });
+});
+
+test('a denied open of a present inbox file remains an error and preserves its unread bytes', async (context) => {
+  const { mind } = await fixture(context);
+  const sender = await bind(mind, 'executor-alpha', 'permission-sender');
+  const recipient = await bind(mind, 'executor-beta', 'permission-reader');
+  const sent = await sender.send({ to: 'executor-beta', subject: 'Permission denied', body: 'Must stay unread.' });
+  const activeDirectory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  const source = path.join(activeDirectory, (await readdir(activeDirectory)).find(name => name.includes(sent.id)));
+  const bytes = await readFile(source), denied = Object.assign(new Error('Actual read permission denial.'), { code: 'EPERM' });
+  const restore = await interceptFs('open', async (original, args) => {
+    if (path.resolve(String(args[0])) === path.resolve(source) && typeof args[1] === 'number') throw denied;
+    return original(...args);
+  });
+  try { await assert.rejects(recipient.read({ ids: [sent.id] }), error => error === denied); }
+  finally { restore(); }
+  assert.deepEqual(await readFile(source), bytes);
+  assert.equal((await recipient.inbox()).unread, 1);
+  await assert.rejects(readdir(path.join(mind, 'user', 'relay', 'archive', 'executor-beta')), code('ENOENT'));
+});
+
+test('a vanished regular wake leaf preserves required-read and allowed-write realpath semantics', async (context) => {
+  for (const errorCode of ['EBADF', 'EPERM']) for (const operation of ['read', 'write']) await context.test(`${errorCode} ${operation}`, async (context) => {
+    const { mind } = await fixture(context);
+    const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'a'.repeat(64);
+    const file = path.join(mind, 'user', 'relay', 'wake', 'policies', `${key}.json`);
+    await relay.wakePersistence.write('policies', key, { sequence: 1 });
+    let intercepted = false;
+    const restore = await interceptFs('realpath', async (original, args) => {
+      if (!intercepted && path.resolve(String(args[0])) === path.resolve(file)) {
+        intercepted = true; await fsPromises.unlink(file);
+        throw Object.assign(new Error('The regular leaf disappeared during realpath.'), { code: errorCode });
+      }
+      return original(...args);
+    });
+    try {
+      if (operation === 'read') assert.equal(await relay.wakePersistence.read('policies', key), null);
+      else {
+        await relay.wakePersistence.write('policies', key, { sequence: 2 });
+        assert.deepEqual(await relay.wakePersistence.read('policies', key), { sequence: 2 });
+      }
+      assert.equal(intercepted, true);
+    } finally { restore(); }
+  });
+});
+
+test('realpath denial of a present leaf, directory or unsafe parent never becomes a missing candidate', async (context) => {
+  for (const errorCode of ['EBADF', 'EPERM']) for (const failure of ['present', 'directory', 'unsafe-parent']) await context.test(`${errorCode} ${failure}`, async (context) => {
+    const { mind } = await fixture(context);
+    const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'b'.repeat(64);
+    const directory = path.join(mind, 'user', 'relay', 'wake', 'policies'), file = path.join(directory, `${key}.json`);
+    await relay.wakePersistence.write('policies', key, { sequence: 1 });
+    const bytes = await readFile(file), denied = Object.assign(new Error('A real path remains unavailable.'), { code: errorCode });
+    let intercepted = false;
+    const restoreStat = await interceptFs('lstat', async (original, args) => {
+      if (failure === 'unsafe-parent' && intercepted && path.resolve(String(args[0])) === path.resolve(directory)) {
+        return { isDirectory: () => true, isSymbolicLink: () => true };
+      }
+      return original(...args);
+    });
+    const restoreRealpath = await interceptFs('realpath', async (original, args) => {
+      if (path.resolve(String(args[0])) === path.resolve(failure === 'directory' ? directory : file)) {
+        intercepted = true;
+        if (failure === 'unsafe-parent') await fsPromises.unlink(file);
+        throw denied;
+      }
+      return original(...args);
+    });
+    try {
+      await assert.rejects(relay.wakePersistence.read('policies', key), failure === 'unsafe-parent' ? code('UNSAFE_SYMLINK') : error => error === denied);
+      assert.equal(intercepted, true);
+    } finally { restoreRealpath(); restoreStat(); }
+    if (failure !== 'unsafe-parent') assert.deepEqual(await readFile(file), bytes);
+  });
+});
+
+test('exclusive wake lock creation reconciles a denied name only after its real owner releases it', async (context) => {
+  const { mind } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'denied-exclusive-open';
+  const file = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks', `${createHash('sha256').update(key).digest('hex')}.json`);
+  let ownerEntered, releaseOwner, openEntered, releaseOpen, intercepted = false;
+  const ownerStarted = new Promise(resolve => { ownerEntered = resolve; }), ownerGate = new Promise(resolve => { releaseOwner = resolve; });
+  const openStarted = new Promise(resolve => { openEntered = resolve; }), openGate = new Promise(resolve => { releaseOpen = resolve; });
+  const order = [];
+  const owner = relay.wakePersistence.withLock(key, async () => { ownerEntered(); await ownerGate; order.push('owner'); });
+  await ownerStarted;
+  const restore = await interceptFs('open', async (original, args) => {
+    if (!intercepted && path.resolve(String(args[0])) === path.resolve(file) && args[1] === 'wx') {
+      intercepted = true; openEntered(); await openGate;
+      throw Object.assign(new Error('NTFS has released the exclusive name.'), { code: 'EPERM' });
+    }
+    return original(...args);
+  });
+  try {
+    const contender = relay.wakePersistence.withLock(key, async () => { order.push('contender'); });
+    await openStarted;
+    assert.deepEqual(order, []);
+    releaseOwner(); await owner; releaseOpen(); await contender;
+    assert.deepEqual(order, ['owner', 'contender']);
+    await assert.rejects(readFile(file), code('ENOENT'));
+  } finally { releaseOwner(); releaseOpen(); restore(); await owner; }
+});
+
+test('exclusive wake lock denial preserves a present owner and refuses an unsafe parent', async (context) => {
+  for (const unsafeParent of [false, true]) await context.test(unsafeParent ? 'unsafe parent' : 'present owner', async (context) => {
+    const { mind } = await fixture(context);
+    const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'denied-present-open';
+    const directory = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks');
+    const file = path.join(directory, `${createHash('sha256').update(key).digest('hex')}.json`);
+    await relay.wakePersistence.withLock(key, async () => {});
+    const bytes = Buffer.from(JSON.stringify({ kind: 'wake-lock', pid: process.pid, token: 'kept-owner' }));
+    if (!unsafeParent) await writeFile(file, bytes);
+    let denied = false, operations = 0;
+    const failure = Object.assign(new Error('Actual exclusive-open denial.'), { code: 'EPERM' });
+    const restoreStat = await interceptFs('lstat', async (original, args) => {
+      if (unsafeParent && denied && path.resolve(String(args[0])) === path.resolve(directory)) return { isDirectory: () => true, isSymbolicLink: () => true };
+      return original(...args);
+    });
+    const restoreOpen = await interceptFs('open', async (original, args) => {
+      if (path.resolve(String(args[0])) === path.resolve(file) && args[1] === 'wx') { denied = true; throw failure; }
+      return original(...args);
+    });
+    try {
+      await assert.rejects(relay.wakePersistence.withLock(key, async () => { operations++; }), unsafeParent ? code('UNSAFE_SYMLINK') : error => error === failure);
+      assert.equal(operations, 0);
+    } finally { restoreOpen(); restoreStat(); }
+    if (!unsafeParent) assert.deepEqual(await readFile(file), bytes);
+  });
+});
+
+test('wake lock contention ignores a stale leaf resolution but never enters before its owner releases', async (context) => {
+  const { mind, root } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'recreated-lock-name';
+  const file = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks', `${createHash('sha256').update(key).digest('hex')}.json`);
+  let ownerEntered, releaseOwner, checkEntered, intercepted = false;
+  const ownerStarted = new Promise(resolve => { ownerEntered = resolve; }), ownerGate = new Promise(resolve => { releaseOwner = resolve; });
+  const checkStarted = new Promise(resolve => { checkEntered = resolve; }), order = [];
+  const owner = relay.wakePersistence.withLock(key, async () => { ownerEntered(); await ownerGate; order.push('owner'); });
+  await ownerStarted;
+  const restore = await interceptFs('realpath', async (original, args) => {
+    if (!intercepted && path.resolve(String(args[0])) === path.resolve(file)) {
+      intercepted = true; checkEntered(); return path.join(root, '$Deleted', 'old-lock');
+    }
+    return original(...args);
+  });
+  let contender;
+  try {
+    contender = relay.wakePersistence.withLock(key, async () => { order.push('contender'); });
+    const checked = contender.then(value => ({ value }), error => ({ error }));
+    await checkStarted;
+    assert.deepEqual(order, []);
+    releaseOwner(); await owner;
+    const result = await checked;
+    if (result.error) throw result.error;
+    assert.deepEqual(order, ['owner', 'contender']);
+  } finally { releaseOwner(); restore(); await owner; await contender?.catch(() => {}); }
+});
+
+test('exclusive wake locks reject existing junctions, directories and unsafe parents without touching foreign bytes', async (context) => {
+  for (const failure of ['junction', 'directory', 'parent']) await context.test(failure, async (context) => {
+    const { mind, root } = await fixture(context);
+    const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = `foreign-${failure}`;
+    const directory = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks');
+    const file = path.join(directory, `${createHash('sha256').update(key).digest('hex')}.json`);
+    const foreign = path.join(root, 'foreign'); await mkdir(foreign);
+    const bytes = Buffer.from('Foreign contents must stay unchanged.');
+    await writeFile(path.join(foreign, 'kept.txt'), bytes);
+    if (failure === 'parent') {
+      await mkdir(path.dirname(directory), { recursive: true });
+      await symlink(foreign, directory, process.platform === 'win32' ? 'junction' : 'dir');
+    } else {
+      await mkdir(directory, { recursive: true });
+      if (failure === 'junction') await symlink(foreign, file, process.platform === 'win32' ? 'junction' : 'dir');
+      else { await mkdir(file); await writeFile(path.join(file, 'kept.txt'), bytes); }
+    }
+    let operations = 0;
+    await assert.rejects(relay.wakePersistence.withLock(key, async () => { operations++; }), error => ['UNSAFE_PATH', 'UNSAFE_SYMLINK'].includes(error.code));
+    assert.equal(operations, 0);
+    assert.deepEqual(await readFile(path.join(foreign, 'kept.txt')), bytes);
+    if (failure === 'directory') assert.deepEqual(await readFile(path.join(file, 'kept.txt')), bytes);
+    else assert.equal((await fsPromises.lstat(failure === 'parent' ? directory : file)).isSymbolicLink(), true);
+  });
+});
+
+test('wake record canonical-escape retries return only a fully revalidated current leaf', async (context) => {
+  for (const failure of ['once', 'persistent', 'symlink', 'parent']) await context.test(failure, async (context) => {
+    const { mind, root } = await fixture(context);
+    const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'c'.repeat(64);
+    const directory = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks'), file = path.join(directory, `${key}.json`);
+    await relay.wakePersistence.write('locks', key, { kind: 'wake-lock', token: 'same-record', pid: process.pid });
+    const bytes = await readFile(file);
+    let escapes = 0, opened = 0;
+    const restoreStat = await interceptFs('lstat', async (original, args) => {
+      const target = path.resolve(String(args[0]));
+      if (escapes && (failure === 'parent' && target === path.resolve(directory) || failure === 'symlink' && target === path.resolve(file))) {
+        return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => true };
+      }
+      return original(...args);
+    });
+    const restoreOpen = await interceptFs('open', async (original, args) => {
+      if (path.resolve(String(args[0])) === path.resolve(file) && typeof args[1] === 'number') opened++;
+      return original(...args);
+    });
+    const restoreRealpath = await interceptFs('realpath', async (original, args) => {
+      if (path.resolve(String(args[0])) === path.resolve(file) && (failure === 'persistent' || escapes === 0)) {
+        escapes++; return path.join(root, '$Deleted', 'replaced-lock');
+      }
+      return original(...args);
+    });
+    try {
+      if (failure === 'once') {
+        assert.deepEqual(await relay.wakePersistence.read('locks', key), JSON.parse(bytes));
+        assert.equal(opened, 1);
+      } else {
+        await assert.rejects(relay.wakePersistence.read('locks', key), code(failure === 'persistent' ? 'UNSAFE_PATH' : 'UNSAFE_SYMLINK'));
+        assert.equal(opened, 0);
+      }
+      assert.equal(escapes, failure === 'persistent' ? 4 : 1);
+    } finally { restoreRealpath(); restoreOpen(); restoreStat(); }
+    assert.deepEqual(await readFile(file), bytes);
+  });
+});
+
+test('wake lock release retries one stale resolution before checking its own token', async (context) => {
+  const { mind, root } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'release-stale-resolution';
+  const file = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks', `${createHash('sha256').update(key).digest('hex')}.json`);
+  let release = false, escapes = 0, operations = 0;
+  const restore = await interceptFs('realpath', async (original, args) => {
+    if (release && escapes === 0 && path.resolve(String(args[0])) === path.resolve(file)) {
+      escapes++; return path.join(root, '$Deleted', 'released-lock');
+    }
+    return original(...args);
+  });
+  try {
+    assert.equal(await relay.wakePersistence.withLock(key, async () => { operations++; release = true; return 'owned-result'; }), 'owned-result');
+    assert.equal(operations, 1); assert.equal(escapes, 1);
+    await assert.rejects(readFile(file), code('ENOENT'));
+  } finally { restore(); }
+});
+
+test('an exclusive-open denial after a new owner appears waits without replacing that owner', async (context) => {
+  const { mind } = await fixture(context);
+  const relay = await createRelay({ mindPath: mind, hostname: 'TESTBOX' }), key = 'new-owner-during-open';
+  const file = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'locks', `${createHash('sha256').update(key).digest('hex')}.json`);
+  let openEntered, releaseOpen, ownerEntered, releaseOwner, readEntered;
+  const openStarted = new Promise(resolve => { openEntered = resolve; }), openGate = new Promise(resolve => { releaseOpen = resolve; });
+  const ownerStarted = new Promise(resolve => { ownerEntered = resolve; }), ownerGate = new Promise(resolve => { releaseOwner = resolve; });
+  const readStarted = new Promise(resolve => { readEntered = resolve; }), order = [];
+  let intercepted = false, awaitingOwner = false, owner, contender;
+  const restoreOpen = await interceptFs('open', async (original, args) => {
+    if (!intercepted && path.resolve(String(args[0])) === path.resolve(file) && args[1] === 'wx') {
+      intercepted = true; openEntered(); await openGate;
+      throw Object.assign(new Error('A new owner claimed the released NTFS name.'), { code: 'EPERM' });
+    }
+    return original(...args);
+  });
+  const restoreRealpath = await interceptFs('realpath', async (original, args) => {
+    if (awaitingOwner && path.resolve(String(args[0])) === path.resolve(file)) readEntered();
+    return original(...args);
+  });
+  try {
+    contender = relay.wakePersistence.withLock(key, async () => { order.push('contender'); });
+    const checked = contender.then(value => ({ value }), error => ({ error }));
+    await openStarted;
+    owner = relay.wakePersistence.withLock(key, async () => { ownerEntered(); await ownerGate; order.push('owner'); });
+    await ownerStarted;
+    const ownerBytes = await readFile(file);
+    awaitingOwner = true; releaseOpen();
+    await Promise.race([readStarted, checked.then(result => { if (result.error) throw result.error; throw new Error('The contender entered while another owner held the lock.'); })]);
+    assert.deepEqual(order, []);
+    assert.deepEqual(await readFile(file), ownerBytes);
+    releaseOwner(); await owner;
+    const result = await checked; if (result.error) throw result.error;
+    assert.deepEqual(order, ['owner', 'contender']);
+    await assert.rejects(readFile(file), code('ENOENT'));
+  } finally { releaseOpen(); releaseOwner(); restoreRealpath(); restoreOpen(); await Promise.allSettled([owner, contender].filter(Boolean)); }
+});
+
+test('a denied archive unlink succeeds only for an absent source, safe parent and exact retained archive', async (context) => {
+  for (const branch of ['new', 'existing']) for (const outcome of branch === 'new' ? ['moved', 'present', 'unsafe-parent', 'lost-archive'] : ['moved', 'present']) await context.test(`${branch} ${outcome}`, async (context) => {
+    const { mind } = await fixture(context);
+    const sender = await bind(mind, 'executor-alpha', 'unlink-denied-sender');
+    const readerA = await bind(mind, 'executor-beta', 'unlink-denied-reader-a');
+    const readerB = await bind(mind, 'executor-beta', 'unlink-denied-reader-b');
+    const sent = await sender.send({ to: 'executor-beta', subject: 'Denied unlink', body: 'Retain exact bytes: ñ\n' });
+    const directory = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+    const filename = (await readdir(directory)).find(name => name.includes(sent.id)), source = path.join(directory, filename);
+    const archiveDirectory = path.join(mind, 'user', 'relay', 'archive', 'executor-beta'), archive = path.join(archiveDirectory, filename);
+    const bytes = await readFile(source), denied = Object.assign(new Error('The inbox name cannot be unlinked.'), { code: 'EPERM' });
+    let enter, release, intercepted = false, published = false, unsafe = false, checked;
+    const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    const restoreStat = await interceptFs('lstat', async (original, args) => {
+      if (unsafe && path.resolve(String(args[0])) === path.resolve(directory)) return { isDirectory: () => true, isSymbolicLink: () => true };
+      try { return await original(...args); }
+      catch (error) {
+        if (branch === 'existing' && !published && error.code === 'ENOENT' && path.resolve(String(args[0])) === path.resolve(archive)) {
+          published = true; await mkdir(archiveDirectory, { recursive: true }); await writeFile(archive, bytes);
+        }
+        throw error;
+      }
+    });
+    const restoreUnlink = await interceptFs('unlink', async (original, args) => {
+      if (!intercepted && path.resolve(String(args[0])) === path.resolve(source)) {
+        intercepted = true; enter(); await gate; throw denied;
+      }
+      return original(...args);
+    });
+    try {
+      checked = readerA.read({ ids: [sent.id] }).then(value => ({ value }), error => ({ error }));
+      await Promise.race([entered, checked.then(result => { if (result.error) throw result.error; throw new Error('The source unlink was not reached.'); })]);
+      if (outcome !== 'present') {
+        assert.equal((await readerB.read({ ids: [sent.id] })).messages[0].body, 'Retain exact bytes: ñ\n');
+        if (outcome === 'unsafe-parent') unsafe = true;
+        if (outcome === 'lost-archive') await fsPromises.unlink(archive);
+      }
+      release();
+      const result = await checked;
+      if (outcome === 'moved') {
+        assert.equal(result.error, undefined);
+        assert.equal(result.value.messages[0].body, 'Retain exact bytes: ñ\n');
+        assert.deepEqual(await readFile(archive), bytes);
+        assert.deepEqual(await readdir(archiveDirectory), [filename]);
+      } else if (outcome === 'unsafe-parent') assert.equal(result.error?.code, 'UNSAFE_SYMLINK');
+      else assert.equal(result.error, denied);
+      if (outcome === 'present') assert.deepEqual(await readFile(source), bytes);
+      if (branch === 'existing') assert.equal(published, true);
+    } finally { release(); unsafe = false; restoreUnlink(); restoreStat(); await checked; }
+  });
+});
+
 test('history, reminders, and stale listings tolerate another reader archiving a file mid-scan', async (context) => {
   const { mind } = await fixture(context);
   const sender = await bind(mind, 'executor-alpha', 'race-sender');

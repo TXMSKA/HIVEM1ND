@@ -314,6 +314,11 @@ async function readRegularFileSafe(root, filePath) {
   } catch (error) {
     if (isMissingPath(error)) return null;
     if (error?.code === 'ELOOP') throw relayError('UNSAFE_SYMLINK', 'Relay refuses symbolic links in message storage.', error);
+    if (error?.code === 'EPERM') {
+      // NTFS may deny opening a name another reader just unlinked into its archive.
+      await safePath(root, path.dirname(filePath), { missing: false });
+      if (!await lstatOrNull(filePath)) return null;
+    }
     throw error;
   }
   try {
@@ -395,7 +400,19 @@ async function safePath(root, target, { missing = true } = {}) {
     if (state.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses symbolic links and junctions in storage paths.');
     const targetFile = index === segments.length - 1;
     if (!state.isDirectory() && !(targetFile && state.isFile())) throw relayError('UNSAFE_PATH', 'A Relay storage path contains a non-directory component.');
-    const canonical = await realpath(cursor);
+    let canonical;
+    try { canonical = await realpath(cursor); }
+    catch (error) {
+      if (targetFile && state.isFile() && ['EBADF', 'EPERM'].includes(error?.code)) {
+        // NTFS can lose a regular leaf between lstat and realpath while its owner releases it.
+        await safePath(root, path.dirname(cursor), { missing: false });
+        if (!await lstatOrNull(cursor)) {
+          if (missing) return path.resolve(target);
+          throw relayError('NOT_FOUND', 'The requested Relay file does not exist.');
+        }
+      }
+      throw error;
+    }
     try { assertWithin(canonicalRoot, canonical); } catch (cause) { throw relayError('UNSAFE_PATH', 'A Relay storage path escapes its root.', cause); }
   }
   return path.resolve(target);
@@ -435,6 +452,13 @@ async function publishExclusive(root, destination, bytes) {
   }
 }
 
+async function vanishedArchiveSource(root, source, error) {
+  if (error?.code === 'ENOENT') return true;
+  if (error?.code !== 'EPERM') return false;
+  await safePath(root, path.dirname(source), { missing: false });
+  return !await lstatOrNull(source);
+}
+
 async function archiveThroughCommit(root, source, destination, bytes, parsed, commitFile) {
   await safePath(root, destination);
   const existing = await lstatOrNull(destination);
@@ -447,7 +471,7 @@ async function archiveThroughCommit(root, source, destination, bytes, parsed, co
     if (sourceState?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
     await commitFile(destination, bytes);
   }
-  if (await lstatOrNull(source)) await unlink(source).catch((error) => { if (error?.code !== 'ENOENT') throw error; });
+  if (await lstatOrNull(source)) await unlink(source).catch(async (error) => { if (!await vanishedArchiveSource(root, source, error)) throw error; });
   const retained = await readRegularFileSafe(root, destination);
   if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
   parsed.archived = true;
@@ -464,7 +488,7 @@ async function archiveOriginal(root, source, destination, bytes, parsed, commitF
     if (!archivedBytes) throw relayError('NOT_FOUND', 'The archive destination disappeared before the message could be retained.');
     if (!archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
     await unlink(source).catch(async (error) => {
-      if (error?.code !== 'ENOENT') throw error;
+      if (!await vanishedArchiveSource(root, source, error)) throw error;
       const retained = await readRegularFileSafe(root, destination);
       if (!retained || !retained.equals(bytes)) throw error;
     });
@@ -495,7 +519,7 @@ async function archiveOriginal(root, source, destination, bytes, parsed, commitF
   const sourceState = await lstatOrNull(source);
   if (sourceState?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
   if (sourceState) await unlink(source).catch(async (error) => {
-    if (error?.code !== 'ENOENT') throw error;
+    if (!await vanishedArchiveSource(root, source, error)) throw error;
     const retained = await readRegularFileSafe(root, destination);
     if (!retained || !retained.equals(bytes)) throw error;
   });
@@ -821,7 +845,8 @@ export async function createRelay(options = {}) {
       catch (error) {
         const atomicReadRace = error?.code === 'UNSAFE_PATH' && /A Relay message changed while it was being (?:opened|read)\./.test(error.message);
         const windowsShareRace = error?.code === 'EPERM';
-        if ((!atomicReadRace && !windowsShareRace) || attempt === 3) throw error;
+        const replacedLock = bucket === 'locks' && error?.code === 'UNSAFE_PATH' && error.message === 'A Relay storage path escapes its root.';
+        if ((!atomicReadRace && !windowsShareRace && !replacedLock) || attempt === 3) throw error;
         await safePath(root, path.dirname(filePath), { missing: false });
         await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
       }
@@ -916,15 +941,9 @@ export async function createRelay(options = {}) {
     await ensureDirectory(root, path.dirname(lockPath));
     const token = randomUUID();
     for (let attempt = 0; attempt < 80; attempt += 1) {
-      try { await safePath(root, lockPath); }
-      catch (error) {
-        // A live owner can release the lock between lstat and realpath.
-        // Revalidate the parent before retrying only a missing lock path.
-        if (!isMissingPath(error) && error?.code !== 'UNSAFE_PATH') throw error;
-        await safePath(root, path.dirname(lockPath), { missing: false });
-        if (!isMissingPath(error) && await lstatOrNull(lockPath)) throw error;
-        continue;
-      }
+      // Exclusive creation refuses an existing leaf; validate the stable parent before competing for it.
+      await safePath(root, path.dirname(lockPath), { missing: false });
+      const beforeOpen = await lstatOrNull(lockPath);
       let handle;
       try {
         handle = await open(lockPath, 'wx', 0o600);
@@ -932,7 +951,14 @@ export async function createRelay(options = {}) {
         await handle.sync();
       } catch (error) {
         if (handle) await handle.close().catch(() => {});
-        if (error?.code !== 'EEXIST') throw error;
+        let appeared = false;
+        if (!handle && error?.code === 'EPERM') {
+          await safePath(root, path.dirname(lockPath), { missing: false });
+          const current = await lstatOrNull(lockPath);
+          if (!current) continue;
+          appeared = !beforeOpen && current.isFile() && !current.isSymbolicLink();
+        }
+        if (error?.code !== 'EEXIST' && !appeared) throw error;
         const currentState = await lstatOrNull(lockPath);
         if (!currentState) continue;
         if (currentState.isSymbolicLink() || !currentState.isFile()) throw relayError('UNSAFE_PATH', 'A wake lock path is unsafe.');
@@ -962,7 +988,7 @@ export async function createRelay(options = {}) {
       await handle.close();
       try { return await operation(); }
       finally {
-        const current = await readJsonSafe(root, lockPath);
+        const current = await readWakeRecord('locks', lockKey);
         if (current?.token === token) await removeWakeRecord('locks', lockKey).catch(() => {});
       }
     }
