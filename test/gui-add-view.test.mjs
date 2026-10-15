@@ -73,3 +73,17 @@ test('the hint names the three accepted forms and a refused source repeats them 
     for (const form of forms) assert.ok(copy(alert).includes(form), `${language}: ${form}`);
   }
 });
+test('a dropped folder can be inspected but its Add stays off, and a link shows no such line', () => {
+  const folder = { ...pdf, check: { ...check, age: { ok: false, days: null, publishedAt: null }, eligible: false } };
+  const dropped = { ...model, stage: 'check', preview: { ...model.preview, sourceDisplay: 'notes', pin: { kind: 'snapshot', value: 'd'.repeat(64) }, candidates: [folder] } };
+  const view = renderAdd(document, dropped, {});
+  const line = nodes(view).find(node => node.getAttribute('data-dropped-folder') === 'true');
+  assert.equal(line.textContent, 'A dropped folder can be inspected, but it cannot be added: it has no pinned commit or release date. Add it from its repository link instead.');
+  assert.equal(nodes(view).find(node => node.getAttribute('data-action') === 'add-confirm').getAttribute('disabled'), '');
+  assert.equal(nodes(renderAdd(document, { ...dropped, language: 'es' }, {})).find(node => node.getAttribute('data-dropped-folder') === 'true').textContent,
+    'Una carpeta soltada se puede inspeccionar, pero no se puede agregar: no tiene un commit fijado ni una fecha de publicación. Agregarla desde el enlace de su repositorio.');
+  const link = renderAdd(document, { ...model, stage: 'check' }, {});
+  assert.equal(nodes(link).some(node => node.getAttribute('data-dropped-folder') === 'true'), false);
+  assert.equal(nodes(link).find(node => node.getAttribute('data-action') === 'add-confirm').getAttribute('disabled'), null);
+  assert.equal(nodes(renderAdd(document, model, {})).some(node => node.getAttribute('data-dropped-folder') === 'true'), false);
+});

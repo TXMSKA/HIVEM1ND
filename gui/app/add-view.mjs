@@ -3,6 +3,7 @@ export const ADD_COPY = Object.freeze({
   title: ['Add to M1ND', 'Agregar al M1ND'],
   add: ['Add', 'Agregar'],
   linkHint: ['A GitHub or GitLab repository link, an npm package link, or a dropped folder', 'Un enlace a un repositorio de GitHub o GitLab, un enlace a un paquete de npm o una carpeta soltada'],
+  droppedFolder: ['A dropped folder can be inspected, but it cannot be added: it has no pinned commit or release date. Add it from its repository link instead.', 'Una carpeta soltada se puede inspeccionar, pero no se puede agregar: no tiene un commit fijado ni una fecha de publicación. Agregarla desde el enlace de su repositorio.'],
   link: ['Link', 'Enlace'],
   found: ['Found in {source}, {kind} {pin}', 'Detectado en {source}, {kind} {pin}'],
   commit: ['commit', 'commit'], version: ['version', 'versión'], snapshot: ['snapshot', 'copia'],
@@ -142,6 +143,7 @@ export function renderAdd(document, model, actions) {
           requirements: check.runtime.requirements.map(name => name === 'Native executable' ? t('native') : name).join(', '),
         }) : t(check.runtime.verified === false ? 'unknownRuntime' : 'noRuntime'), check.runtime.requirements.length ? t('onlyUnits') : null));
       block.append(checks);
+      if (model.preview?.pin?.kind === 'snapshot') block.append(element(document, 'p', { class: 'add-field-label', 'data-dropped-folder': 'true', text: t('droppedFolder') }));
       if (item.kind === 'repository') { block.append(element(document, 'p', { class: 'add-field-label', text: t('repositoryScope') })); dialog.append(block); continue; }
       block.append(element(document, 'p', { class: 'add-field-label', text: t('who') }));
       const scope = model.scopes[item.id] ?? { everyUnit: false, units: [], groups: [] };
