@@ -85,12 +85,13 @@ export async function postChat(context, chatId, input) {
     destination: 'chat',
     legacyTo: 'chat',
     place: (id) => `user/relay/chats/${chatId}/${id}.md`,
+    recipients: await chatRecipients(context, chat, fromId),
   });
   if (input?.replyTo) {
     const reply = (await chatRecords(context, chatId)).find((item) => item.id === input.replyTo);
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this chat.');
   }
-  const notices = fanoutFor(message, chat.members, fromId);
+  const notices = fanoutFor(message, message.projected.recipientIds, fromId);
   const relative = `user/relay/chats/${chatId}/${message.id}.md`;
   const fanout = `user/relay/fanout/${message.id}.json`;
   const fanoutBytes = Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`);
@@ -125,6 +126,7 @@ export async function postMailbox(context, unitId, input) {
     destination: 'mailbox',
     legacyTo: recipient.unit,
     units: [{ id: unitId, unit: recipient.unit, malformed: false }],
+    recipients: [unitId],
     place: (id) => `${inboxDirectory(recipient)}/${fileStamp(context)}-${context.paths.machine}-${id}.md`,
   });
   const file = message.relative;
@@ -158,9 +160,10 @@ export async function readChat(context, chatId, input) {
     await callPlanTool(context, 'plan_read', { runId: binding.runId, messageIds: ids, requestId: context.receipt?.requestId ?? randomUUID() });
     return { chatId, readIds: ids, unread: await unreadChat(context, chatId, reader) };
   }
-  const records = await chatRecords(context, chatId);
+  const { readDetail } = await import('./projection.mjs');
   for (const id of ids) {
-    if (!records.some((item) => item.id === id)) {
+    const message = await readDetail(context, 'messages', id, { chatId });
+    if (message.channel !== 'message') {
       throw new CoreError(404, 'message_not_found', 'A message in the receipt does not exist.');
     }
   }
@@ -176,6 +179,31 @@ export async function readChat(context, chatId, input) {
     return [{ name: 'message.read', data: { chatId, mailboxId: null, readerId: reader, messageIds: ids, unread, deliveries } }];
   });
   return { chatId, readIds: ids, unread, deliveries };
+}
+
+async function chatRecipients(context, chat, fromId) {
+  const bytes = await readBytes(context.store, absolute(context, `user/gui/groups/${chat.id}.json`));
+  if (!bytes || fromId !== 'root:master') return chat.members.filter(id => id !== fromId);
+  const cluster = JSON.parse(bytes);
+  const units = [];
+  for (const id of cluster.members ?? []) {
+    const state = await readUnitState(context, parseUnitId(id));
+    if (state) units.push({ id, headers: headerMap(state.bytes) });
+  }
+  const leads = units.filter(unit => unit.headers.get('role') === 'overlord' && !units.some(other => other.id === unit.headers.get('lead-id')));
+  let lead = leads.length === 1 ? leads[0] : units.length === 1 ? units[0] : null;
+  if (!lead) {
+    const { readPlanRecord } = await import('./plans.mjs');
+    const metadata = await readBytes(context.store, chatPath(context, chat.id));
+    for (const id of JSON.parse(headerMap(metadata).get('plans') || '[]').reverse()) {
+      const plan = (await readPlanRecord(context, id)).record;
+      if (plan.clusterId === cluster.id && plan.roles.coordinator.kind === 'unit') {
+        lead = units.find(unit => unit.id === plan.roles.coordinator.unitId); if (lead) break;
+      }
+    }
+  }
+  if (!lead) throw new CoreError(409, 'plan_lead_required', 'Choose who plans before dispatching this message.');
+  return [lead.id];
 }
 
 export async function readMailbox(context, unitId, input) {
@@ -410,6 +438,7 @@ async function buildMessage(context, input, target) {
     `reply-requested: ${replyRequested ? 'true' : 'false'}`,
     `attachments: ${canonicalJson(attachments)}`,
     'kind: message',
+    `recipient-ids: ${canonicalJson(target.recipients ?? [target.toId])}`,
     ...(context.receipt ? [`operation-id: ${context.receipt.key}`] : []),
   ];
   const bytes = Buffer.from(`${lines.join('\n')}\n\n${body}`);
@@ -542,7 +571,10 @@ async function unreadChat(context, chatId, reader, extra = []) {
   const read = new Set(extra);
   const receiptRoot = path.join(directory, 'read', Buffer.from(reader).toString('base64url'));
   await collectReceipts(receiptRoot, read);
-  return (await chatRecords(context, chatId)).filter((item) => !read.has(item.id)).length;
+  const { readProjection } = await import('./projection.mjs');
+  const messages = (await readProjection(context)).messages;
+  const ids = new Set(messages.filter(message => message.channel === 'message' && message.chatIds?.includes(chatId) && !read.has(message.id)).map(message => message.id));
+  return ids.size;
 }
 
 async function chatRecords(context, chatId) {

@@ -5,6 +5,16 @@ import { unitDisplayName } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
 import { clusterLead } from './clusters.mjs';
 
+export function renderAgentHeader(document, unit, session, language, onMore) {
+  const t = key => startText(language, key), working = ['busy', 'working', 'active'].includes(session?.activity);
+  return element(document, 'header', { class: 'agent-heading' },
+    element(document, 'span', { class: 'agent-avatar', 'aria-hidden': 'true' }, icon(document, unit.role === 'overseer' ? 'crown' : 'executor')),
+    element(document, 'div', {}, element(document, 'h2', { text: unitDisplayName(unit) }),
+      element(document, 'p', { class: 'agent-status' }, working ? element(document, 'span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
+        unit.role === 'overseer' && unit.fresh !== false ? t('freshStatus') : t(working ? 'busy' : 'pending'))),
+    element(document, 'button', { type: 'button', class: 'icon-button agent-more', 'data-action': 'agent-more', 'aria-label': t('moreMenu'), text: '···', onclick: onMore }));
+}
+
 export function renderCluster(document, model, actions = {}) {
   const t = (key, values) => startText(model.language, key, values);
   const cluster = model.cluster, kind = cluster.link?.kind ?? 'none';

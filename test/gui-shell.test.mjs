@@ -21,7 +21,7 @@ import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
 import { renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
 import { dispose, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
-import { applyReset, createStore, startCollection, writeCollection } from "../gui/app/state.mjs";
+import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
 import { createGuiFixture } from "./gui-fixture.mjs";
@@ -30,6 +30,18 @@ import { dispose as disposeCoreFixture, makeCoreFixture } from "./core-fixture.m
 import { assertVisibleCopy } from "./spanish-register.test.mjs";
 import * as startApi from '../gui/app/start-api.mjs';
 import { createNativeAdapter } from '../engine/service/adapters.mjs';
+import { makePlanFixture } from './service-plans.test.mjs';
+import { createPlan, startPlan } from '../engine/service/plans.mjs';
+import { callPlanTool, drainRunLaunches, readRun } from '../engine/service/runs.mjs';
+import { checkRuns } from '../engine/service/run-supervision.mjs';
+import { createHttpServer } from '../engine/service/http.mjs';
+import { createCredentialStore } from '../engine/service/security.mjs';
+import { openLedger } from '../engine/sync/limits.mjs';
+import { createChat, postChat } from '../engine/service/chats.mjs';
+import { createContext, readContext } from '../engine/service/context.mjs';
+import { registerNative } from '../engine/service/adapters.mjs';
+import { refreshPlan } from '../gui/app/plan-controller.mjs';
+import { createSettingsOwner } from '../engine/service/settings.mjs';
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
@@ -1514,7 +1526,7 @@ test("an incoming render keeps unsent chat text and return notes", async (t) => 
   await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']")?.value === "", "The sent return note remained.");
 });
 
-test("visible chat lines are marked read and mailbox inspection stays closed", async (t) => {
+test("visible sent lines do not acknowledge the recipient and agents have no separate mailbox surface", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const urls = [];
@@ -1527,8 +1539,8 @@ test("visible chat lines are marked read and mailbox inspection stays closed", a
   await waitFor(() => desktop.app.thread?.chat?.id === chat.id && desktop.root.querySelector("[data-composer]"), "The chat did not open.");
   typeInput(desktop.root.querySelector("[data-composer]"), "Visible line", 0, 12);
   click(desktop.root.querySelector("[data-action='send']"));
-  await waitFor(() => [...desktop.root.querySelectorAll("[data-message]")].some((node) => node.textContent === "Visible line" && node.getAttribute("data-read") === "true"), "The visible line was not acknowledged.");
-  assert.equal(urls.some((url) => url.includes(`/chats/${encodeURIComponent(chat.id)}/read`) || url.includes(`/chats/${chat.id}/read`)), true);
+  await waitFor(() => desktop.app.thread.messages.some(message => message.body === 'Visible line' && !message.pending), 'The send did not settle.');
+  assert.equal(desktop.app.thread.messages.find(message => message.body === 'Visible line').read, false);
 
   const transcript = desktop.root.querySelector(".transcript");
   transcript._scrollHeight = transcript.clientHeight + 80;
@@ -1545,30 +1557,9 @@ test("visible chat lines are marked read and mailbox inspection stays closed", a
 
   const mailboxReads = () => urls.filter((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)).length;
   const beforeReads = mailboxReads();
-  click(desktop.root.querySelector("[data-action='mailbox']"));
-  await waitFor(() => desktop.root.querySelector("[data-mailbox-unit]"), "The mailbox list did not open.");
-  const mailboxIds = [...desktop.root.querySelectorAll("[data-mailbox-unit]")].map((node) => node.getAttribute("data-mailbox-unit"));
-  let opened = false;
-  for (const unitId of mailboxIds) {
-    click(desktop.root.querySelector(`[data-mailbox-unit="${unitId}"]`));
-    await waitFor(() => desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`), "The mailbox history did not open.");
-    const message = desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`).querySelector("[data-mailbox-message]");
-    if (!message) continue;
-    click(message);
-    await waitFor(() => desktop.root.querySelector("[data-mailbox-detail]"), "The mailbox message did not open.");
-    opened = true;
-    break;
-  }
-  assert.equal(opened, true);
+  assert.equal(desktop.root.querySelector("[data-action='mailbox']"), null);
+  assert.equal(desktop.root.querySelector('[data-mailbox-view]'), null);
   assert.equal(mailboxReads(), beforeReads);
-  const compose = desktop.root.querySelector("[data-mailbox-compose]");
-  assert.ok(compose);
-  typeInput(compose, "Mailbox note", 0, 12);
-  click(desktop.root.querySelector("[data-action='send-mailbox']"));
-  await waitFor(() => [...desktop.root.querySelectorAll("[data-mailbox-message]")].some((node) => node.textContent === "Mailbox note"), "The mailbox message was not posted.");
-  assert.equal(mailboxReads(), beforeReads);
-  click(desktop.root.querySelector("[data-action='mark-read']"));
-  await waitFor(() => mailboxReads() > beforeReads, "Mark read did not call the mailbox route.");
 
   const phoneUrls = [];
   const phone = await bootApp(fixture.phoneUrl, 390, phoneUrls);
@@ -4250,17 +4241,8 @@ test("failure causes and empty lists name the resource and its next step", async
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("[data-empty='chat']")?.textContent, "No messages yet. Write one below.");
 
-  click(desktop.root.querySelector("[data-action='mailbox']"));
-  await waitFor(() => desktop.root.querySelector("[data-mailbox-unit]"), "The mailbox list did not open.");
-  const unitId = desktop.root.querySelector("[data-mailbox-unit]").getAttribute("data-mailbox-unit");
-  click(desktop.root.querySelector(`[data-mailbox-unit="${unitId}"]`));
-  await waitFor(() => desktop.root.querySelector(`[data-mailbox-history="${unitId}"]`), "The mailbox history did not open.");
-  desktop.app.mailbox.items = [];
-  desktop.app.mailbox.optimistic = null;
-  desktop.app.mailbox.pending = false;
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-empty='mailbox']")?.textContent, "No mailbox messages. Write one below.");
-  assert.equal(desktop.root.querySelector("[data-mailbox-compose]") != null, true);
+  assert.equal(desktop.root.querySelector("[data-action='mailbox']"), null);
+  assert.equal(desktop.root.querySelector('[data-mailbox-view]'), null);
 });
 
 test("the board toolbar is one row on the canvas", async (t) => {
@@ -4917,7 +4899,7 @@ test('the Executor form defaults to one task, rejects an empty task, and cancels
   assert.equal(writes.filter((item) => item.url.endsWith('/session')).length, 1);
 });
 
-test('a working chat offers the confirmed Stop boundary and preserves the thread', async (t) => {
+test('Work keeps Stop apart from authored chat and retains the composer and thread', async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
@@ -4925,14 +4907,19 @@ test('a working chat offers the confirmed Stop boundary and preserves the thread
   await waitFor(() => desktop.app.unitList?.catalog?.length, 'The units did not load.');
   const unit = desktop.app.unitList.catalog.find((item) => item.id === 'project:shop:executor-shop');
   desktop.app.activeHandlers.onActivate({ id: unit.id, kind: 'unit', unit }, 'double');
-  await waitFor(() => desktop.root.querySelector('[data-action="stop-work"]'), 'The working chat had no Stop.');
+  await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The session tabs did not open.');
   const chatId = desktop.app.thread.chat.id;
-  click(desktop.root.querySelector('[data-action="stop-work"]'));
-  const dialog = desktop.document.querySelector('dialog');
-  assert.equal(dialog != null, true);
+  assert.equal(desktop.root.querySelector('[data-action="stop-step"]'), null);
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Keep this draft', 2, 5);
+  click(desktop.root.querySelector('[data-action="session-work"]'));
+  await waitFor(() => desktop.root.querySelector('[data-session-work]'), 'Work did not open.');
+  assert.ok(desktop.root.querySelector('[data-action="stop-step"]'));
+  assert.equal(desktop.root.querySelector('.transcript'), null);
   assert.equal(desktop.app.thread.chat.id, chatId);
-  dialog.close();
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep this draft');
+  click(desktop.root.querySelector('[data-action="session-chat"]'));
   assert.equal(desktop.app.thread.chat.id, chatId);
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep this draft');
 });
 
 test('two optimistic sends leave the composer free and preserve text typed while either settles', async (t) => {
@@ -5983,4 +5970,104 @@ test("T062 pairing has one heading and a skip destination and restores the code 
   assert.equal(phone.document.activeElement, phone.root.querySelector("[data-home-code]"));
   assert.equal(phone.root.querySelector("[id='phone-code-error']").getAttribute("role"), "alert");
   assert.equal(phone.root.querySelectorAll("h1").length, 1);
+});
+
+test('T093 actual-core lead chat mounts its plan, Work milestones, retained draft, warning and one Waiting pointer', async t => {
+  const state = await makePlanFixture(t);
+  state.context.ledger = openLedger({ store: state.store, paths: state.context.paths, now: state.context.now, machine: state.machine });
+  await postChat(state.context, state.cluster.chatId, { body: 'Build the requested cart.' });
+  state.input.expectedChatRevision = (await import('../engine/service/projection.mjs').then(module => module.readDetail(state.context, 'chats', state.cluster.chatId))).revision;
+  const plan = await createPlan(state.context, state.input);
+  const credentials = createCredentialStore({ now: state.context.now });
+  state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
+  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, fetch, { clock: state.context.now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers, 'The actual core tree did not load.').catch(() => { throw new Error(`Core boot: ${desktop.app.bootError?.code ?? desktop.app.store.failure?.code ?? desktop.app.layout}`); });
+  desktop.app.startDialog?.dialog.close();
+  desktop.app.activeHandlers.onActivate({ kind: 'cluster', groupId: state.cluster.id }, 'single');
+  await waitFor(() => desktop.root.querySelector('.plan-card'), 'The plan did not attach to the lead chat.');
+  assert.ok(desktop.root.querySelector('[data-action="run-plan"]'));
+  assert.ok(desktop.root.querySelector('[data-action="edit-assignment"]'));
+  const started = await startPlan(state.context, plan.id, { confirmed: true, expectedRevision: plan.revision }); await drainRunLaunches(state.context);
+  await refreshPlan(desktop.app.planController, plan.id, started.runId);
+  let run = await readRun(state.context, started.runId);
+  const actor = { ...state.context, principal: { audience: 'agent', unitId: state.units[0].id, sessionId: run.attempts[0].sessionId } };
+  await callPlanTool(actor, 'plan_step', { runId: run.id, attemptId: run.attempts[0].id, eventId: 'read-board', step: 'plan', state: 'started', requestId: crypto.randomUUID() });
+  await loadSnapshot(desktop.app.store, desktop.app.api);
+  const unit = desktop.app.store.indexes.units.get(state.units[0].id);
+  desktop.app.activeHandlers.onActivate({ kind: 'unit', id: unit.id, unit }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The actual session tabs did not open.');
+  assert.ok(desktop.root.querySelector('[data-started-with]'));
+  assert.equal(desktop.root.querySelector('[data-started-with]').getAttribute('open'), null);
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Keep the illustration', 2, 8);
+  const messageIds = desktop.app.thread.messages.map(message => message.id);
+  click(desktop.root.querySelector('[data-action="session-work"]'));
+  await waitFor(() => desktop.root.querySelector('[data-work-sequence]'), 'Verified Work milestones were not loaded.');
+  const beforeSteps = desktop.root.querySelectorAll('[data-work-sequence]').length;
+  await callPlanTool(actor, 'plan_step', { runId: run.id, attemptId: run.attempts[0].id, eventId: 'edit-files', step: 'edit', state: 'started', requestId: crypto.randomUUID() });
+  await waitFor(() => desktop.root.querySelectorAll('[data-work-sequence]').length > beforeSteps, 'The live Work cursor did not advance after a verified event.');
+  assert.equal(desktop.root.querySelector('.transcript'), null);
+  assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep the illustration');
+  click(desktop.root.querySelector('[data-action="session-chat"]'));
+  assert.deepEqual(desktop.app.thread.messages.map(message => message.id), messageIds);
+  assert.equal(desktop.root.querySelector('[data-action="mailbox"]'), null);
+  state.clock.now += 30 * 60000;
+  state.context.runDelivery = async () => ({ state: 'submitted' });
+  await checkRuns(state.context);
+  await refreshPlan(desktop.app.planController, plan.id, run.id);
+  await loadSnapshot(desktop.app.store, desktop.app.api);
+  const waiting = desktop.app.store.view.waiting.filter(item => item.runId === run.id);
+  assert.equal(waiting.length, 1); assert.equal(waiting[0].actions[0], 'stop_step');
+  desktop.app.activeHandlers.onActivate({ kind: 'cluster', groupId: state.cluster.id }, 'single');
+  await waitFor(() => desktop.root.querySelector('[data-action="retry-task"]'), 'The actual planning stall did not reach the card.');
+  const problem = desktop.root.querySelector('.plan-problem').textContent;
+  assert.match(problem, /30 minutes/);
+  assert.ok(desktop.root.querySelector('[data-action="stop-step"]'));
+  run = await readRun(state.context, run.id);
+  assert.equal(run.state, 'open');
+});
+
+test('T093 actual-core Overseer context uses live telemetry and Compact, Clear and Close preserve messages and drafts', async t => {
+  const fixture = await makeCoreFixture(); t.after(() => disposeCoreFixture(fixture));
+  const now = () => fixture.clock.now, unitId = 'root:overseer', meter = { used: 180, capacity: 1000, unit: 'tokens' };
+  const context = { ...fixture, now, principal: { audience: 'desktop', unitId: 'root:master' }, ownedPids: new Set([5151]), adapters: {} };
+  await mkdir(join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(join(fixture.paths.mind, 'user', 'state', 'overseer.md'), 'unit: overseer\nunit-id: root:overseer\nrole: overseer\nstate: in\nmachine: DESKTOP\nfresh: true\n\nReady.\n');
+  await writeFile(join(fixture.paths.mind, 'rules.md'), 'Current M1ND rules.');
+  context.adapters.codex = { client: 'codex', capabilities: { create: true, stop: true }, confirm: async () => true,
+    readContext: async () => meter, contextBusy: async () => false, checkpointContext: async () => ({ messages: [{ role: 'user', content: 'Decision' }] }),
+    summarizeContext: async () => 'Keep the decision.', prepareContext: async () => ({ acknowledged: true }), commitContext: async () => { meter.used = 20; return true; } };
+  const session = await registerNative(context, { client: 'codex', unitId, nativeSessionId: 'fixture-context', launchKind: 'cli', runMode: 'chat' });
+  const journal = join(fixture.paths.localDirectory, 'session-starts', 'owned.json'); await mkdir(dirname(journal), { recursive: true });
+  await writeFile(journal, JSON.stringify({ requestId: crypto.randomUUID(), sessionId: session.sessionId, unitId, client: 'codex', pid: 5151, phase: 'registered', createAttempted: true }));
+  context.ledger = openLedger({ store: fixture.store, paths: fixture.paths, now, machine: fixture.machine });
+  const { chat } = await createChat(context, { members: [unitId] }); await postChat(context, chat.id, { body: 'Keep authored history.' });
+  await createContext(context, session, context.adapters.codex);
+  context.settingsOwner = createSettingsOwner({ ...context, probeAgents: async () => ({}) });
+  const credentials = createCredentialStore({ now }), server = await createHttpServer({ ...context, credentials }); context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, fetch, { clock: now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length, 'The actual Overseer did not load.').catch(() => { throw new Error(`Context boot: ${desktop.app.bootError?.code ?? desktop.app.store.failure?.code ?? desktop.app.layout}`); });
+  const unit = desktop.app.unitList.catalog.find(unit => unit.id === unitId);
+  desktop.app.activeHandlers.onActivate({ kind: 'unit', id: unitId, unit }, 'double');
+  await waitFor(() => desktop.root.querySelector('[role="meter"]')?.getAttribute('aria-valuenow') === '18', 'The actual context telemetry did not load.');
+  assert.equal(desktop.root.querySelector('[data-context-notice]'), null);
+  typeInput(desktop.root.querySelector('[data-composer]'), 'Keep next draft', 3, 7);
+  const view = desktop.app.store.sessionViews.get(session.sessionId), generation = view.context.generationId;
+  meter.used = 820; await readContext(context, session.sessionId);
+  await waitFor(() => desktop.root.querySelector('[data-context-notice]'), 'The 80 percent notice did not open.');
+  click(desktop.root.querySelector('[data-action="context-dismiss"]'));
+  await waitFor(() => view.context.dismissed && !view.pending && view.context.operation?.state === 'applied', 'Close did not dismiss the current generation.');
+  assert.equal(view.context.generationId, generation);
+  for (const action of ['compact', 'clear']) {
+    const before = view.context.generationId;
+    await import('../gui/app/session-work.mjs').then(module => module.changeContext(desktop.app.api, view, action, () => renderShell(desktop.app)));
+    await fixture.store.contextJobs?.get(session.sessionId);
+    await waitFor(() => view.context.generationId !== before, 'The actual context generation did not reconcile.');
+    assert.equal(desktop.root.querySelector('[data-composer]').value, 'Keep next draft');
+    assert.equal(desktop.app.thread.messages.some(message => message.body === 'Keep authored history.'), true);
+  }
 });

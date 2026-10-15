@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, queueNotice, readChat, readMailbox, recoverMailboxReads, recoverNotifications } from '../engine/service/chats.mjs';
-import { readDetail } from '../engine/service/projection.mjs';
+import { readCollection, readDetail, readProjection } from '../engine/service/projection.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { recoverTransactions } from '../engine/service/store.mjs';
@@ -325,7 +325,7 @@ test('a saved submission survives a crash before fanout update and an unacknowle
   assert.equal(calls, 2);
 });
 
-test('aggregate receipts follow current group recipients while preserving the author exclusion', async (t) => {
+test('aggregate receipts retain original group recipients through membership changes', async (t) => {
   const { context, fixture } = await world(t);
   const unitId = 'project:shop:executor-shop';
   const { chat } = await createChat(context, { members: [unitId, 'env:web:overlord-web'] });
@@ -335,7 +335,7 @@ test('aggregate receipts follow current group recipients while preserving the au
   const file = path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.id, 'chat.md');
   const bytes = await readFile(file, 'utf8');
   await writeFile(file, bytes.replace(/^members:.*$/m, `members: ${JSON.stringify(['root:master', unitId])}`));
-  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'read');
+  assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'delivered');
   await writeFile(file, bytes);
   assert.equal((await readDetail(context, 'messages', posted.message.id)).delivery.state, 'delivered');
 });
@@ -431,3 +431,49 @@ async function unlinkSafe(file) {
   const { unlink } = await import('node:fs/promises');
   await unlink(file);
 }
+
+test('verified legacy preload is folded outside authored chat without rewriting its historical bytes', async t => {
+  const { context, fixture } = await world(t), unitId = 'project:shop:executor-shop';
+  const { chat } = await createChat(context, { members: [unitId] });
+  const id = randomUUID(), sessionId = randomUUID();
+  const inbox = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop');
+  await mkdir(inbox, { recursive: true });
+  const file = path.join(inbox, 'bootstrap.md');
+  const original = `id: ${id}\nfrom-id: root:master\nto-id: ${unitId}\nrequest-id: ${id}\nkind: message\n\nBootstrap private-input\n`;
+  await writeFile(file, original);
+  const archive = path.join(fixture.paths.mind, 'user', 'relay', 'archive', 'by-unit', Buffer.from(unitId).toString('base64url'), 'bootstrap.md');
+  await mkdir(path.dirname(archive), { recursive: true }); await writeFile(archive, original);
+  for (const [relative, record] of [
+    [`user/relay/preloads/${id}.json`, { requestId: id, messageId: id, sessionId }],
+    [`user/relay/requests/${fixture.machine}/${id}.json`, { format: 'hivem1nd-session-request-v1', id, unitId, taskId: null }],
+    [`user/relay/sessions/${sessionId}.json`, { sessionId, unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native', registeredAt: new Date(fixture.clock.now).toISOString() }],
+  ]) { const target = path.join(fixture.paths.mind, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, JSON.stringify(record)); }
+  const view = await readProjection(context);
+  assert.equal(view.messages.filter(message => message.id === id).every(message => message.channel === 'bootstrap'), true);
+  assert.equal(view.messages.find(message => message.id === id).body, '');
+  assert.equal(view.units.find(unit => unit.id === unitId).unread, 0);
+  assert.equal(view.sessions.find(session => session.id === sessionId).startedWith.role, 'executor');
+  assert.equal((await readCollection(context, 'messages', { chatId: chat.id })).items.length, 0);
+  assert.equal(await readFile(file, 'utf8'), original);
+  const unmarked = await postMailbox(context, unitId, { body: 'Actual authored request', channel: 'bootstrap', recipientIds: ['root:master'] });
+  assert.equal(unmarked.message.channel, 'message'); assert.deepEqual(unmarked.message.recipientIds, [unitId]);
+});
+
+test('canonical unread badges count chat and mailbox copies once and require the recipient receipt', async t => {
+  const { context, fixture } = await world(t), unitId = 'project:shop:executor-shop';
+  const { chat } = await createChat(context, { members: [unitId] });
+  const sent = await postChat(context, chat.id, { body: 'One authored message' });
+  const bytes = await readFile(path.join(fixture.paths.mind, 'user', 'relay', 'chats', chat.id, sent.message.id + '.md'));
+  const inbox = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop');
+  await mkdir(inbox, { recursive: true }); await writeFile(path.join(inbox, 'copy.md'), bytes);
+  const unread = async () => (await readProjection(context)).units.find(unit => unit.id === unitId).unread;
+  assert.equal(await unread(), 1);
+  await readChat(context, chat.id, { messageIds: [sent.message.id] }); assert.equal(await unread(), 1);
+  await readChat({ ...context, principal: { audience: 'agent', unitId } }, chat.id, { messageIds: [sent.message.id] });
+  assert.equal(await unread(), 0);
+  const authored = await postMailbox(context, unitId, { body: 'Available offline' });
+  const closed = await readCollection(context, 'messages', { chatId: chat.id });
+  assert.equal(closed.items.some(message => message.id === authored.message.id), true);
+  await readChat({ ...context, principal: { audience: 'agent', unitId } }, chat.id, { messageIds: [authored.message.id] });
+  assert.equal((await readDetail(context, 'messages', authored.message.id)).delivery.state, 'read');
+});

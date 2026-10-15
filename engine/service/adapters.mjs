@@ -5,12 +5,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
 import { loadTask } from './tasks.mjs';
-import { answersFor, readDetail } from './projection.mjs';
+import { answersFor, paginate, readDetail } from './projection.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { readUnitState, stateRunsIn } from './state.mjs';
 import { cursorAgentCommand } from '../relay/cursor-wake.mjs';
 import { commitTransaction, readBytes, revisionOf } from './store.mjs';
-import { withLocks } from './store.mjs';
+import { withLocalChanges, withLocks } from './store.mjs';
 import { readAgentPermissions } from './settings.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { launchChoice } from './runs-in.mjs';
@@ -123,6 +123,7 @@ export function createNativeAdapter(client, options = {}) {
   const live = options.live === true || Boolean(options.command) || Boolean(options.spawn);
   const children = new Map();
   const sessions = new Map();
+  const activityWrites = new Set();
   return {
     client,
     nativeSupport: false,
@@ -149,6 +150,13 @@ export function createNativeAdapter(client, options = {}) {
       return { client, nativeSupport: this.nativeSupport, installed: this.capabilities.create };
     },
     async create(request) {
+      if (request.workTranscript) {
+        const write = request.workTranscript;
+        request.workTranscript = value => {
+          const pending = Promise.resolve().then(() => write(value)); activityWrites.add(pending);
+          pending.then(() => activityWrites.delete(pending), () => activityWrites.delete(pending));
+        };
+      }
       if (!this.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
       if (!request.runsIn && request.model && !models.includes(request.model)) throw new CoreError(422, 'unsupported_model', 'The requested model is not installed.');
       assertNoBypass(request.argv ?? []);
@@ -163,7 +171,11 @@ export function createNativeAdapter(client, options = {}) {
       if (request.runsIn && !fixture && client !== 'codex' && typeof options.enforceScope !== 'function') throw new CoreError(409, 'scope_unavailable', 'This client has no verified filesystem and process boundary.');
       if (fixture) {
         const created = acceptFixture(client, options.transcript ?? [], request);
-        for (const line of options.transcript ?? []) await request.planTranscript?.(JSON.parse(line));
+        for (const line of options.transcript ?? []) {
+          const message = JSON.parse(line);
+          await (request.planTranscript ?? request.workTranscript)?.(message);
+          observePlanProtocol({ ...request, nativeSessionId: created.nativeSessionId }, message);
+        }
         const exit = new EventEmitter(), identity = randomUUID(); let ended = false;
         const processHandle = options.planProcessHandle ?? { identity, verify: async () => true,
           onExit: listener => { exit.on('exit', listener); return () => exit.off('exit', listener); },
@@ -446,6 +458,7 @@ export function createNativeAdapter(client, options = {}) {
       sessions.clear();
       await Promise.all([...children.values()].map((child) => finishChild(child)));
       children.clear();
+      await Promise.allSettled([...activityWrites]);
     },
   };
 }
@@ -817,6 +830,51 @@ export async function contextSession(context, sessionId) {
   return { registration, adapter };
 }
 
+export function sanitizeSessionTranscript(value) {
+  if (Array.isArray(value)) return value.map(sanitizeSessionTranscript);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/^(?:id|pid|threadId|sessionId|nativeSessionId|executionId|toolCallId|request_id|session_id|environment|env|endpoint|pipe|token|credential|secret|password|authorization)$/i.test(key))
+    .map(([key, child]) => [key, sanitizeSessionTranscript(child)]));
+  return typeof value === 'string' ? value.replace(/\b(?:Bearer|Bootstrap)\s+\S+/gi, '[redacted]')
+    .replace(/((?:token|password|secret|api[_-]?key|session|home)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,}\n]+)/gi, '$1[redacted]') : value;
+}
+
+async function recordSessionActivity(context, sessionId, kind, value) {
+  if (kind === 'work' && (!['step_start', 'step_end'].includes(value?.kind) || !['edit', 'work', 'tests', 'build', 'plan', 'review'].includes(value.step))) return;
+  return withLocalChanges(context.store, async () => {
+    const root = path.join(context.paths.localDirectory, 'session-work', sessionId, kind), counterFile = path.join(root, 'counter.json');
+    const before = await readBytes(context.store, counterFile), counter = before ? JSON.parse(before) : { sequence: 0, bytes: 0, ids: [], truncated: false };
+    if (counter.truncated || kind === 'work' && counter.ids.includes(value.id)) return;
+    const publicValue = kind === 'work' ? { kind: value.kind, step: value.step } : sanitizeSessionTranscript(value);
+    const encoded = Buffer.from(canonicalJson(publicValue));
+    if (encoded.length > 65536 || counter.bytes + encoded.length > 16000000 || counter.sequence >= 10000) counter.truncated = true;
+    else { counter.sequence++; counter.bytes += encoded.length; if (kind === 'work') counter.ids.push(value.id); }
+    const record = { id: randomUUID(), sequence: counter.sequence, at: stamp(context), ...kind === 'work'
+      ? { kind: publicValue.kind, key: publicValue.step, stepKey: hashBytes(Buffer.from(value.id.replace(/:(?:start|end)$/, ''))), state: publicValue.kind === 'step_start' ? 'busy' : 'done', values: { step: publicValue.step } }
+      : { text: canonicalJson(publicValue) } };
+    await commitTransaction(context.store, { id: randomUUID(), entries: [
+      { resource: counterFile, recordPath: counterFile, beforeRevision: revisionOf(before), afterBytes: jsonBytes(counter), private: true },
+      ...counter.truncated ? [] : [{ resource: root, recordPath: path.join(root, `${String(counter.sequence).padStart(12, '0')}.json`), beforeRevision: null, afterBytes: jsonBytes(record), private: true }],
+    ], events: [] });
+    if (kind === 'work') publishDomainEvents(context, [{ name: 'session.work', data: { sessionId, sequence: counter.sequence } }]);
+  });
+}
+
+export async function readSessionActivity(context, sessionId, kind, query = {}) {
+  if (context.principal?.audience !== 'desktop') throw new CoreError(403, 'forbidden', 'Session work is private to the desktop.');
+  const registration = await registrationFor(context, sessionId);
+  if (!registration) throw new CoreError(404, 'session_not_found', 'The session does not exist.');
+  if (registration.machine !== context.paths.machine) throw new CoreError(409, 'machine_unavailable', 'Read session work on its immutable owner.');
+  const journal = (await listJournals(context)).find(item => item.sessionId === sessionId && item.createAttempted && ['registered', 'stopped'].includes(item.phase));
+  if (!journal || !['work', 'transcript'].includes(kind)) throw new CoreError(409, 'context_unavailable', 'The session has no verified work binding.');
+  const root = path.join(context.paths.localDirectory, 'session-work', sessionId, kind);
+  const bytes = await readBytes(context.store, path.join(root, 'counter.json'));
+  const counter = bytes ? JSON.parse(bytes) : { sequence: 0, truncated: false };
+  const page = paginate(Array.from({ length: counter.sequence }, (_, index) => ({ id: String(index + 1).padStart(12, '0') })),
+    { ...query, limit: Math.min(Number(query.limit ?? 50), 100), filters: { sessionId, kind }, snapshot: `${sessionId}:${counter.sequence}` });
+  return { ...page, truncated: counter.truncated, items: await Promise.all(page.items.map(async item => JSON.parse(await readBytes(context.store, path.join(root, `${item.id}.json`))))) };
+}
+
 async function previousContext(context, request) {
   if (request.fresh !== false) return null;
   const journals = (await listJournals(context)).filter(item => item.unitId === request.unitId && item.client === request.client
@@ -882,6 +940,12 @@ async function launch(context, request) {
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'prepared', pid: null, sessionId: null, createAttempted: true, at: stamp(context) });
   if (context.launchFault === 'gap') throw new CoreError(500, 'injected_crash', 'Injected crash during native creation.');
   let created;
+  let activitySessionId = null;
+  const earlyActivity = [];
+  const activity = (kind, value) => {
+    if (!activitySessionId) { if (earlyActivity.length < 100) earlyActivity.push({ kind, value }); return; }
+    return recordSessionActivity(context, activitySessionId, kind, value);
+  };
   try {
     const actorContext = () => {
       if (!created) throw new CoreError(409, 'scope_unavailable', 'The native session is not registered yet.');
@@ -893,6 +957,7 @@ async function launch(context, request) {
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
       store: context.store,
+      workObserver: value => activity('work', value), workTranscript: value => activity('transcript', value),
       agentPermissions: permissions.map(item => ({ ...item, unitId: request.unitId, requestId: request.id, repository })) });
   } catch (error) {
     if (error?.ownedPid) {
@@ -918,6 +983,8 @@ async function launch(context, request) {
   if (scope) await bindLaunchScope(context, scope.scope, registration, pid, created.executionId);
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId,
     contextSequence: Math.max(0, ...journals.map(item => item.contextSequence ?? 0)) + 1, createAttempted: true, ...permissionBinding, at: stamp(context) });
+  activitySessionId = registration.sessionId;
+  for (const item of earlyActivity) await activity(item.kind, item.value);
   const { createContext } = await import('./context.mjs');
   await createContext(context, registration, adapter);
   try {
@@ -938,7 +1005,7 @@ async function launch(context, request) {
     return finish(context, request, 'failed', null, { code: error.code ?? 'native_login_unverified', message: 'The native session could not enter Relay.' });
   }
   if (await readJson(context, `user/relay/request-cancellations/${request.id}.json`)) return { status: 200, request, result: await cancelOwnedStart(context, request) };
-  await preload(context, request);
+  await preload(context, request, registration.sessionId);
   if (request.client === 'lyra') return { status: 202, request, state: 'starting', result: await latestResult(context, request.id), replayed: false };
   return finish(context, request, 'started', registration.sessionId, null);
 }
@@ -967,8 +1034,7 @@ async function writeResult(context, request, state, sessionId, error) {
   return result;
 }
 
-async function preload(context, request) {
-  if (!request.prompt && !request.taskId) return null;
+async function preload(context, request, sessionId) {
   const markerPath = `user/relay/preloads/${request.id}.json`;
   if (await readJson(context, markerPath)) return null;
   const messageId = request.id;
@@ -976,8 +1042,8 @@ async function preload(context, request) {
   const bytes = Buffer.from(`id: ${messageId}\nfrom: master\nfrom-id: root:master\nto-id: ${request.unitId}\nkind: message\nrequest-id: ${request.id}\nrun-mode: ${request.runMode}\ntask-id: ${request.taskId ?? ''}\ntimestamp: ${stamp(context)}\n\n${assignment}\n`);
   const message = `${inboxDirectory(parseUnitId(request.unitId))}/${stamp(context).replace(/[-:]/g, '').replace('.000Z', '').replace('T', '-')}-${context.paths.machine}-${messageId}.md`;
   await commit(context, [
-    { relative: markerPath, bytes: jsonBytes({ requestId: request.id, messageId }) },
-    { relative: message, bytes },
+    { relative: markerPath, bytes: jsonBytes({ requestId: request.id, messageId, sessionId }) },
+    ...(request.prompt || request.taskId ? [{ relative: message, bytes }] : []),
   ]);
   return messageId;
 }
@@ -1384,7 +1450,7 @@ async function pumpClaude(session) {
       break;
     }
     if (message.session_id && message.session_id !== session.nativeSessionId) continue;
-    await session.permissionRequest?.planTranscript?.(message);
+    await (session.permissionRequest?.planTranscript ?? session.permissionRequest?.workTranscript)?.(message);
     observePlanProtocol(session.permissionRequest, message);
     if (message.type === 'control_cancel_request') { permissions.get(message.request_id)?.abort.abort(); continue; }
     if (message.type === 'control_request' && typeof message.request_id === 'string') {
@@ -1412,7 +1478,8 @@ async function pumpClaude(session) {
 
 // Only structured protocol identities become milestones; model prose and command text never do.
 function observePlanProtocol(request, message) {
-  if (!request?.planObserver) return;
+  const observer = request?.planObserver ?? request?.workObserver;
+  if (!observer) return;
   let item, state, id, step;
   if (['item/started', 'item/completed'].includes(message.method) && message.params?.threadId === (request.contextNativeSessionId ?? request.nativeSessionId)) {
     item = message.params.item; state = message.method === 'item/started' ? 'start' : 'end'; id = item?.id;
@@ -1424,11 +1491,11 @@ function observePlanProtocol(request, message) {
   } else if (message.type === 'assistant' && message.session_id === request.nativeSessionId) {
     for (const block of message.message?.content ?? []) if (block.type === 'tool_use' && typeof block.id === 'string') {
       const step = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(block.name) ? 'edit' : block.name === 'Bash' ? 'work' : null;
-      if (step) Promise.resolve(request.planObserver({ id: `${block.id}:start`, kind: 'step_start', step, wireHash: hashBytes(Buffer.from(canonicalJson(block))) })).catch(() => {});
+      if (step) Promise.resolve(observer({ id: `${block.id}:start`, kind: 'step_start', step, wireHash: hashBytes(Buffer.from(canonicalJson(block))) })).catch(() => {});
     }
     return;
   }
-  if (step && state && typeof id === 'string' && id.length <= 100) Promise.resolve(request.planObserver({ id: `${id}:${state}`, kind: `step_${state}`, step, wireHash: hashBytes(Buffer.from(canonicalJson(message))) })).catch(() => {});
+  if (step && state && typeof id === 'string' && id.length <= 100) Promise.resolve(observer({ id: `${id}:${state}`, kind: `step_${state}`, step, wireHash: hashBytes(Buffer.from(canonicalJson(message))) })).catch(() => {});
 }
 
 export async function launchPlanSession(context, host) {
@@ -1576,7 +1643,7 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
         failAll(unavailable());
         break;
       }
-      await request.planTranscript?.(message);
+      await (request.planTranscript ?? request.workTranscript)?.(message);
       if (message?.error != null && loginFailed(JSON.stringify(message.error))) {
         remember(message);
         failAll(unavailable());

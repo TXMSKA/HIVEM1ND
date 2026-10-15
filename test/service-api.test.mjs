@@ -1111,6 +1111,15 @@ test('every contract route has a success result and an authority or boundary fai
   hit('GET', '/session-requests/:requestId');
   const sessions = await call(port, 'GET', '/api/v1/sessions', { token });
   assert.equal(sessions.json.data.items.some((item) => item.id === sessionId), true);
+  for (const suffix of ['work', 'transcript']) {
+    const target = `/api/v1/sessions/${sessionId}/${suffix}`;
+    const page = await call(port, 'GET', target + '?limit=1', { token });
+    expectStatus(page, 200, 'owned regular session ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
+    assert.ok(page.json.data.items.length <= 1);
+    const beforeDenied = fixture.store.writes.length;
+    expectStatus(await call(port, 'GET', target, { token: phoneCredential.token }), 403, 'private session ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
+    assert.equal(fixture.store.writes.length, beforeDenied);
+  }
   const contextTarget = `/api/v1/sessions/${sessionId}/context`;
   const sessionContext = await call(port, 'GET', contextTarget, { token });
   expectStatus(sessionContext, 200, 'session context');
@@ -1889,6 +1898,7 @@ test('every contract route has a success result and an authority or boundary fai
   const planSessionId = running.json.data.attempts[0].sessionId;
   for (const suffix of ['work', 'transcript']) {
     expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/${suffix}`, { token }), 200, suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
+    expectStatus(await call(port, 'GET', `/api/v1/sessions/${planSessionId}/${suffix}`, { token: phone.token }), 403, 'private plan ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
   }
   for (const route of routeTable().filter(route => ['plan', 'run', 'planWork'].includes(route.handler))) {
     const target = route.template.replace(':planId', planId).replace(':runId', runId).replace(':sessionId', planSessionId);

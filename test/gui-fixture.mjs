@@ -31,7 +31,7 @@ const HOME_MS = 12 * 3600_000;
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
-const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs"];
+const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs", "plan-view.mjs", "session-work.mjs", "plan-controller.mjs"];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 class HttpError extends Error {
@@ -1440,6 +1440,7 @@ function intentIdPlaceholder() {
 }
 
 function authorize(principal, route) {
+  if (/^\/sessions\/:sessionId\/(work|transcript)$/.test(route.pattern) && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Session work is private to the desktop.');
   if (route.pattern.startsWith('/additions') && principal.audience !== 'desktop') throw new HttpError(403, 'forbidden', 'Only the desktop may inspect additions.');
   if (principal.audience !== "desktop" && ["/groups", "/groups/:groupId", "/changes/:changeId/undo", "/units/:unitId/alias", "/units/:unitId"].includes(route.pattern)) {
     throw new HttpError(403, principal.audience === "phone" ? "phone_read_only" : "forbidden", "Only the desktop can manage groups and Undo.");
@@ -2003,6 +2004,8 @@ function routeTable() {
     { pattern: "/session-requests/:requestId", GET: { query: [] } },
     { pattern: "/session-requests/:requestId/cancel", POST: { capability: 'session.start', validate: (body) => requireObject(body, []), runtime: true } },
     { pattern: "/sessions/:sessionId/stop", POST: { capability: "session.stop", validate: validateStop, runtime: true } },
+    { pattern: '/sessions/:sessionId/work', GET: { query: ['limit', 'cursor'] } },
+    { pattern: '/sessions/:sessionId/transcript', GET: { query: ['limit', 'cursor'] } },
     { pattern: "/leads", GET: { query: ["q", "limit", "cursor", "project"] } },
     { pattern: "/squads", GET: { query: ["q", "limit", "cursor", "project", "leadId"] } },
     { pattern: "/projects", GET: { query: ["q", "limit", "cursor"] } },
@@ -2359,6 +2362,12 @@ async function handleRead(fx, principal, spec, params, query, requestId) {
 
 async function readData(fx, snap, spec, params, query) {
   const pattern = spec.pattern;
+  if (/^\/sessions\/:sessionId\/(work|transcript)$/.test(pattern)) {
+    if (!snap.sessions.some(session => session.id === params.sessionId)) throw new HttpError(404, 'session_not_found', 'The session does not exist.');
+    const kind = pattern.endsWith('/work') ? 'work' : 'transcript';
+    const records = await walkJson(join(fx.local, 'session-work', params.sessionId, kind));
+    return page(records.filter(record => record.sequence), query, spec.GET.query, () => true, []);
+  }
   if (pattern === '/additions') {
     const machine = query.get('machine') ?? LOCAL_MACHINE;
     return { machine, readOnly: machine !== LOCAL_MACHINE, items: (await fixtureAcceptedAdditions(fx)).filter(item => !item.value.removed && item.value.machine === machine).map(item => ({ ...item.value, revision: item.hash })) };

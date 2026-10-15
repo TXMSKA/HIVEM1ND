@@ -7,6 +7,7 @@ import { projectGroup } from './groups.mjs';
 import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 import { classifyApprovalAction } from './adapters.mjs';
+import { authoredMessages, unreadByAgent } from './conversation-data.mjs';
 
 const VIEW_LIMIT = 16000000;
 const OBSERVATION_MS = 15 * 60 * 1000;
@@ -312,10 +313,34 @@ async function loadMind(context) {
   const approvals = await readPendingApprovals(mind, issues, now);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
   const chats = await readChats(mind, messages, issues);
+  for (const relative of await filesUnder(mind, 'user/relay/preloads')) {
+    if (!relative.endsWith('.json')) continue;
+    const bytes = await readSafe(mind, relative);
+    let marker; try { marker = JSON.parse(bytes); } catch { continue; }
+    if (!isUuid(marker.requestId) || marker.messageId !== marker.requestId || relative !== `user/relay/preloads/${marker.requestId}.json`) continue;
+    const requestFiles = (await filesUnder(mind, 'user/relay/requests')).filter(file => file.endsWith(`/${marker.requestId}.json`));
+    const requestBytes = requestFiles.length === 1 ? await readSafe(mind, requestFiles[0]) : null;
+    let request; try { request = JSON.parse(requestBytes); } catch { continue; }
+    if (request.format !== 'hivem1nd-session-request-v1' || request.id !== marker.requestId) continue;
+    for (const preload of messages.filter(message => message.id === marker.messageId && message.toId === request.unitId && message.requestId === request.id)) {
+      preload.channel = 'bootstrap'; preload.body = ''; preload.subject = '';
+    }
+    const resultFiles = await filesUnder(mind, `user/relay/request-results/${request.id}`);
+    const resultIds = new Set([marker.sessionId]);
+    for (const file of resultFiles.filter(file => file.endsWith('.json'))) {
+      try { const result = JSON.parse(await readSafe(mind, file)); if (result.requestId === request.id) resultIds.add(result.sessionId); } catch { /* Invalid results cannot bind bootstrap. */ }
+    }
+    for (const session of sessions.filter(session => resultIds.has(session.id) && session.unitId === request.unitId)) {
+      const unit = units.find(unit => unit.id === request.unitId);
+      session.startedWith = { role: unit?.role ?? null, unitId: request.unitId, taskId: request.taskId ?? null,
+        references: ['rules.md', ...(unit?.role ? [`roles/${unit.role}.md`] : []), ...(unit?.path ? [unit.path] : [])] };
+    }
+  }
   for (const message of messages) {
     const chatId = chatIdFromPath(message.path);
+    message.chatIds = chats.filter(chat => chat.id === chatId || chat.kind === 'direct'
+      && message.fromId !== message.toId && !message.toId?.startsWith('chat:') && chat.members.includes(message.fromId) && chat.members.includes(message.toId)).map(chat => chat.id);
     const members = chatId ? chats.find((chat) => chat.id === chatId)?.members ?? [] : [message.toId];
-    const recipients = message.recipientIds ?? members.filter((id) => id && id !== message.fromId);
     const relative = `user/relay/fanout/${message.id}.json`;
     let notices = [];
     try {
@@ -324,8 +349,12 @@ async function loadMind(context) {
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The delivery receipt could not be projected.' });
     }
+    const recipients = message.recipientIds ?? (notices.length ? notices.map(notice => notice.unitId) : members.filter(id => id && id !== message.fromId));
+    message.recipientIds = [...new Set(recipients)];
+    message.authorId = message.fromId;
     const submitted = recipients.map((id) => notices.find((notice) => notice.unitId === id && notice.state === 'submitted')?.submittedAt);
-    const read = recipients.map((id) => allReceipts.get(`${chatId ?? 'mailbox'}:${id}`)?.get(message.id));
+    const read = recipients.map((id) => allReceipts.get(`${chatId ?? 'mailbox'}:${id}`)?.get(message.id)
+      ?? message.chatIds.map(chatId => allReceipts.get(`${chatId}:${id}`)?.get(message.id)).find(validReceiptTime));
     const deliveredAt = recipients.length && submitted.every(validReceiptTime) ? submitted.sort().at(-1) : null;
     const readAt = recipients.length && read.every(validReceiptTime) ? read.sort().at(-1) : null;
     message.delivery = { state: readAt ? 'read' : deliveredAt ? 'delivered' : 'stored', deliveredAt, readAt };
@@ -337,6 +366,11 @@ async function loadMind(context) {
     catch { issues.push({ path: relative, code: 'corrupt_resource', message: 'The group could not be projected.' }); }
   }
   groups.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+  const recipientReceipts = [];
+  for (const unit of units) for (const [key, ids] of allReceipts) if (key.endsWith(`:${unit.id}`)) {
+    for (const [messageId, at] of ids) if (validReceiptTime(at)) recipientReceipts.push({ readerId: unit.id, messageId });
+  }
+  const unread = unreadByAgent(messages.filter(message => !chats.some(chat => chat.archived && chat.id === chatIdFromPath(message.path))), recipientReceipts);
   for (const unit of units) {
     const choices = groups.filter(group => !group.deleted && group.members.includes(unit.id)).map(group => group.id).sort();
     unit.clusterChoices = choices;
@@ -357,33 +391,42 @@ async function loadMind(context) {
   const { planIds, readPlanRecord, publicPlan } = await import('./plans.mjs');
   const { runIds, readRunRecord, publicRun } = await import('./runs.mjs');
   const plans = [], runs = [];
-  if (context.store && context.principal?.audience !== 'agent' && context.principal?.audience !== 'phone') {
+  if (context.store && context.principal?.audience !== 'agent') {
     for (const id of await planIds(context)) plans.push(publicPlan((await readPlanRecord(context, id)).record));
     for (const id of await runIds(context)) runs.push(publicRun((await readRunRecord(context, id)).record));
   }
-  for (const chat of chats) { chat.plans = plans.filter(plan => plan.chatId === chat.id); chat.runs = runs.filter(run => chat.plans.some(plan => plan.id === run.planId) && ['open', 'stopping'].includes(run.state)); }
-  for (const run of runs.filter(run => ['open', 'stopping'].includes(run.state))) {
+  for (const chat of chats) { chat.plans = context.principal?.audience === 'phone' ? [] : plans.filter(plan => plan.chatId === chat.id); chat.runs = runs.filter(run => chat.plans.some(plan => plan.id === run.planId) && ['open', 'stopping'].includes(run.state)); }
+  for (const run of runs) {
     const plan = plans.find(plan => plan.id === run.planId);
     if (!plan) continue;
     for (const attempt of run.attempts.filter(attempt => attempt.sessionId)) {
       const assignment = attempt.taskId ? plan.tasks.find(task => task.id === attempt.taskId)?.assignment : plan.roles[attempt.role];
       if (!assignment) continue;
-      const evidenceBytes = run.machine === context.paths.machine ? await readBytes(context.store, path.join(context.paths.localDirectory, 'runs', run.id, 'evidence', `${attempt.id}.json`)) : null;
+      const evidenceBytes = run.machine === context.paths.machine && context.principal?.audience !== 'phone' ? await readBytes(context.store, path.join(context.paths.localDirectory, 'runs', run.id, 'evidence', `${attempt.id}.json`)) : null;
       const evidence = evidenceBytes ? JSON.parse(evidenceBytes) : null;
-      const stopped = attempt.resolved || evidence?.processExited && evidence.cleanupVerified;
+      const stopped = !['open', 'stopping'].includes(run.state) || attempt.resolved || evidence?.processExited && evidence.cleanupVerified;
       sessions.push({ id: attempt.sessionId, unitId: assignment.kind === 'unit' ? assignment.unitId : null, client: assignment.runsIn.client, machine: run.machine,
         runMode: attempt.role === 'coordinator' ? 'chat' : 'task', taskId: attempt.taskId, launchKind: 'plan', runsIn: assignment.runsIn,
         state: stopped ? 'stopped' : 'running', activity: !stopped && attempt.role !== 'coordinator' ? 'busy' : 'idle', registeredAt: attempt.sentAt,
-        activityObservedAt: attempt.confirmedAt, quota: null, quotaObservedAt: null, role: attempt.role, clusterId: run.clusterId, runId: run.id });
+        activityObservedAt: attempt.confirmedAt, quota: null, quotaObservedAt: null, role: attempt.role, clusterId: run.clusterId, runId: run.id,
+        startedWith: { role: units.find(unit => unit.id === assignment.unitId)?.role ?? attempt.role, unitId: assignment.unitId ?? null,
+          taskId: attempt.taskId, references: ['rules.md', `plan:${plan.id}`, ...(attempt.taskId ? [`task:${attempt.taskId}`] : [])] } });
     }
   }
   for (const unit of units) {
     const live = sessions.filter(session => session.unitId === unit.id && session.state !== 'stopped' && session.launchKind === 'plan');
     if (live.length) { unit.state = 'in'; unit.sessionIds = [...new Set([...unit.sessionIds, ...live.map(session => session.id)])]; }
-    unit.unread = messages.filter(message => message.toId === unit.id && !message.read && !message.archived).length
-      + runs.reduce((count, run) => count + run.messages.filter(message => message.recipients.some(r => r.actorId === unit.id && r.readAt === null)).length, 0);
+    unit.unread = unread[unit.id] ?? 0;
   }
-  return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, plans, runs, issues: collectIssues(issues) };
+  const extensions = new Map();
+  if (context.principal?.audience === 'desktop') for (const run of runs.filter(run => run.machine === context.paths.machine)) {
+    for (const alert of run.alerts.filter(alert => !alert.resolved && alert.kind === 'extension')) {
+      const bytes = await readBytes(context.store, path.join(context.paths.localDirectory, 'runs', run.id, 'extensions', `${alert.extensionId}.json`));
+      if (bytes) { const record = JSON.parse(bytes); extensions.set(alert.extensionId, { count: record.count, reason: record.reason,
+        taskId: plans.find(plan => plan.id === run.planId)?.tasks[run.taskIndex]?.id ?? null }); }
+    }
+  }
+  return { units, sessions, messages, tasks, chats, groups, machines, layout, settings, projects, catalog, approvals, plans, runs, extensions, audience: context.principal?.audience, issues: collectIssues(issues) };
 }
 
 function assemble(loaded, query, aliases = [], machine = null, editors = []) {
@@ -401,8 +444,9 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
       const plan = loaded.plans.find(p => p.id === run.planId), alert = run.alerts.find(a => !a.resolved && a.kind === 'extension') ?? run.alerts.find(a => !a.resolved);
       return { id: `run:${run.id}`, kind: 'plan', state: 'pending', runId: run.id, planId: run.planId, unitId: plan?.roles.coordinator.unitId ?? null,
         title: plan?.title ?? '', since: alert.at, chatId: plan?.chatId ?? null, approvalId: alert.approvalId ?? null,
-        taskId: null, messageId: alert.messageId, blocking: true, actions: ['stop_run', alert.kind === 'no_start' ? 'retry_start' : alert.kind === 'unread' ? 'resend' : 'retry_task'],
-        alertId: alert.id, attemptId: alert.attemptId, recipientId: alert.recipientId, expectedRevision: run.revision };
+        taskId: null, messageId: alert.messageId, blocking: true, actions: [alert.kind === 'stalled' ? 'stop_step' : 'stop_run', alert.kind === 'no_start' ? 'retry_start' : alert.kind === 'unread' ? 'resend' : 'retry_task'],
+        alertId: alert.id, attemptId: alert.attemptId, recipientId: alert.recipientId, expectedRevision: run.revision,
+        cause: alert.kind, extension: loaded.extensions.get(alert.extensionId) ?? null };
     }),
   ]);
   const waitingUnits = new Set(waiting.filter((item) => item.state !== 'expired').map((item) => item.unitId).filter(Boolean));
@@ -444,8 +488,8 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     chats: listedChats,
     groups: loaded.groups.filter((group) => !group.deleted),
     clusters: loaded.groups.filter((group) => !group.deleted),
-    plans: loaded.plans,
-    runs: loaded.runs.filter(run => ['open', 'stopping'].includes(run.state)),
+    plans: loaded.audience === 'phone' ? [] : loaded.plans,
+    runs: loaded.audience === 'phone' ? [] : loaded.runs.filter(run => ['open', 'stopping'].includes(run.state)),
     tasks: loaded.tasks,
     waiting,
     counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
@@ -479,7 +523,7 @@ function countsOf(units, leads, squads, loaded, chats, waiting, issues) {
     review: tasks.filter((task) => task.status === 'review').length,
     done: tasks.filter((task) => task.status === 'done').length,
     closed: tasks.filter((task) => task.status === 'closed').length,
-    unread: loaded.messages.filter((message) => message.read === false && !loaded.units.some((unit) => unit.removed && unit.id === message.toId) && !loaded.chats.some((chat) => chat.archived && chatIdFromPath(message.path) === chat.id)).length,
+    unread: authoredMessages(loaded.messages).filter((message) => message.read === false && !loaded.units.some((unit) => unit.removed && unit.id === message.toId) && !loaded.chats.some((chat) => chat.archived && chatIdFromPath(message.path) === chat.id)).length,
     issues: issues.length,
   };
 }
@@ -741,12 +785,16 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
     const fileId = path.basename(relative, '.md');
     const id = headers.get('id') || fileId;
     if (!id) throw new Error('missing id');
-    const planMessage = isUuid(headers.get('plan-id'));
     if (headers.get('kind') === 'run-pointer') return null;
+    const planMessage = isUuid(headers.get('plan-id'));
     return {
       id,
-      fromId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
-      ...(planMessage ? { channel: 'message', authorId: headers.get('from-id'), recipientIds: JSON.parse(headers.get('recipient-ids') || '[]') } : {}),
+      fromId: planMessage ? headers.get('from-id') : personId(headers.get('from-id') || headers.get('from'), units, aliases),
+      channel: 'message',
+      authorId: personId(headers.get('from-id') || headers.get('from'), units, aliases),
+      ...(headers.has('recipient-ids') ? { recipientIds: JSON.parse(headers.get('recipient-ids')) } : {}),
+      requestId: headers.get('request-id') || null,
+      ...(planMessage ? { planId: headers.get('plan-id') } : {}),
       toId: messageToId(headers, relative, units, aliases),
       machine: headers.get('machine') || null,
       timestamp: headers.get('timestamp') || null,
@@ -1073,7 +1121,7 @@ function personQuestions(units, aliases = []) {
 }
 
 function messageInScope(message, scope) {
-  if (scope.chatId && !message.path?.includes(`/chats/${scope.chatId}/`)) return false;
+  if (scope.chatId && !message.chatIds?.includes(scope.chatId) && !message.path?.includes(`/chats/${scope.chatId}/`)) return false;
   if (scope.mailboxId) {
     const encoded = Buffer.from(String(scope.mailboxId)).toString('base64url');
     if (message.toId !== scope.mailboxId && !message.path?.includes(`/archive/by-unit/${encoded}/`)) return false;
@@ -1083,7 +1131,7 @@ function messageInScope(message, scope) {
 
 function selectMessages(messages, query) {
   let items = messages.filter((message) => !message.path?.endsWith('/chat.md'));
-  if (query.chatId) items = items.filter((message) => message.path?.includes(`/chats/${query.chatId}/`));
+  if (query.chatId) items = items.filter((message) => message.chatIds?.includes(query.chatId) || message.path?.includes(`/chats/${query.chatId}/`));
   if (query.mailboxId) {
     const encoded = Buffer.from(String(query.mailboxId)).toString('base64url');
     items = items.filter((message) => message.toId === query.mailboxId || message.path?.includes(`/archive/by-unit/${encoded}/`));
@@ -1092,12 +1140,12 @@ function selectMessages(messages, query) {
     else if (state === 'read') items = items.filter((message) => message.read || message.archived);
     else if (state !== 'all') throw new CoreError(422, 'invalid_query', 'The message state is not valid.');
   }
-  return items;
+  return authoredMessages(items);
 }
 
 function mailboxSummaries(messages) {
   const groups = new Map();
-  for (const message of messages) {
+  for (const message of authoredMessages(messages)) {
     if (!message.toId || message.path?.includes('/chats/')) continue;
     const group = groups.get(message.toId) ?? { id: message.toId, unitId: message.toId, unread: 0, total: 0 };
     group.total += 1;

@@ -41,7 +41,7 @@ export async function loadMessages(api, thread, older = false) {
     query.cursor = thread.nextCursor;
   }
   const result = await request(api, "GET", `/chats/${encodeURIComponent(thread.chat.id)}/messages`, { query });
-  const incoming = result.data.items ?? [];
+  const incoming = authoredMessages(result.data.items ?? []);
   const seen = new Set(thread.messages.map((message) => message.id));
   const fresh = incoming.filter((message) => !seen.has(message.id));
   if (older) {
@@ -56,7 +56,7 @@ export async function loadMessages(api, thread, older = false) {
 }
 
 export function incomingMessage(thread, message, authoritative = false) {
-  if (!message?.id) return thread;
+  if (!message?.id || !authoredMessages([message]).length) return thread;
   const entry = thread.pendingSends.get(message.operationId);
   if (entry) {
     entry.result = { data: { message, notifications: [] } };
@@ -83,7 +83,8 @@ export const MESSAGE_WINDOW = 40;
 export function acknowledgeVisible(thread) {
   return [...thread.visibleIds].filter((id) => {
     const message = thread.messages.find((item) => item.id === id);
-    return message && !message.read;
+    return message && !message.read && message.channel !== 'bootstrap' && message.channel !== 'work'
+      && (message.authorId ?? message.fromId) !== 'root:master';
   }).slice(0, 200);
 }
 
@@ -230,7 +231,7 @@ function markOptimistic(thread, operation, now) {
   const body = operation.body?.body ?? "";
   let row = thread.messages.find((message) => message.operationId === operation.id);
   if (!row) {
-    row = { id: `pending:${operation.id}`, body, fromId: "root:master", timestamp: new Date(now).toISOString(), pending: true, failed: false, operationId: operation.id };
+    row = { id: `pending:${operation.id}`, body, channel: 'message', authorId: 'root:master', fromId: "root:master", timestamp: new Date(now).toISOString(), pending: true, failed: false, operationId: operation.id };
     thread.messages = [...thread.messages, row];
   }
   row.body = body;
@@ -315,4 +316,10 @@ export function sentLineState(message) {
   if (message.delivery?.state === 'read') return { key: 'readReceipt', at: message.delivery.readAt };
   if (message.delivery?.state === 'delivered') return { key: 'deliveredReceipt', at: message.delivery.deliveredAt };
   return { key: 'storedReceipt', at: null };
+}
+
+export function authoredMessages(records) {
+  const byId = new Map();
+  for (const message of records) if ((!message.channel || message.channel === 'message') && !byId.has(message.id)) byId.set(message.id, message);
+  return [...byId.values()];
 }

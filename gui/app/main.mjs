@@ -14,6 +14,7 @@ import {
 } from "./actions.mjs";
 import {
   applyMessageRead,
+  authoredMessages,
   canMarkMailbox,
   createThread,
   incomingMessage,
@@ -83,9 +84,11 @@ import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBou
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
-import { initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
-import { renderCluster, renderClusterChanges } from './inspector.mjs';
+import { clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog } from './clusters.mjs';
+import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
+import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
+import { controlPlan, createPlanController, loadChatPlans, refreshPlan, renderControlledPlan, runPlan, savePlanDraft } from './plan-controller.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const PHONE_MODES = PHONE_NAV;
@@ -487,6 +490,10 @@ function paintShell(app) {
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   clearPhoneDialog(app);
   app.root.replaceChildren(shell);
+  const conversation = app.root.querySelector('.transcript');
+  if (conversation && app.thread) conversation.scrollTop = app.thread.nearBottom ? conversation.scrollHeight ?? 0 : app.thread.scrollTop ?? 0;
+  const work = app.root.querySelector('[data-session-work]');
+  if (work) work.scrollTop = app.store.sessionViews.get(work.getAttribute('data-session-work'))?.scrollTop ?? 0;
   if (app.startDialog?.model && app.startDialog.model.language !== app.language) {
     app.startDialog.model.language = app.language; app.startDialog.paint();
   }
@@ -694,6 +701,7 @@ export function dispose(app) {
   app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
   app.disposed = true;
+  clearTimeout(app.workClock);
   clearTimeout(app.readyTimer);
   clearTimeout(app.phoneExpiryTimer);
   clearTimeout(app.phoneLockTimer);
@@ -732,6 +740,24 @@ async function onStream(app, event) {
   if (app.disposed || app.bootFailed) return;
   const result = await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed || result?.dropped) return;
+  if (app.layout !== 'phone' && ['plan.changed', 'run.changed', 'run.log', 'session.work', 'session.context', 'stream.reset'].includes(event?.name)) {
+    const controller = plansForApp(app);
+    for (const plan of app.store.indexes.plans.values()) controller.plans.set(plan.id, plan);
+    for (const run of app.store.indexes.runs.values()) controller.runs.set(run.id, run);
+    const data = dataOf(event);
+    if (data.planId) await refreshPlan(controller, data.planId).catch(error => noteAction(app, error));
+    if (data.runId) {
+      const run = (await request(app.api, 'GET', `/runs/${encodeURIComponent(data.runId)}`)).data;
+      controller.runs.set(run.id, run); await refreshPlan(controller, run.planId, run.id);
+    }
+    for (const view of app.store.sessionViews.values()) {
+      if (view.workStale && view.tab === 'work') { view.workStale = false; await loadSessionView(app.api, view); }
+      if (view.contextStale) { view.contextStale = false; await loadSessionView(app.api, view, { context: true }); }
+    }
+  }
+  if (['unit.unread', 'message.read', 'message.created'].includes(event?.name) && app.unitList) {
+    for (const unit of app.unitList.catalog ?? []) { const current = app.store.indexes.units.get(unit.id); if (current) unit.unread = current.unread; }
+  }
   if (event?.name === "home.changed") {
     const data = dataOf(event);
     noteHome(app, data);
@@ -803,7 +829,10 @@ async function onStream(app, event) {
     const thread = app.chatThreads?.get(data.chatId) ?? (app.thread?.chat?.id === data.chatId ? app.thread : null);
     const host = app.root.querySelector?.(".transcript");
     if (host && thread === app.thread) updateNearBottom(thread, host);
-    if (thread) incomingMessage(thread, data.message);
+    if (thread) {
+      if (data.message) incomingMessage(thread, data.message);
+      else await loadMessages(app.api, thread);
+    }
     if (data.message?.operationId) app.api.uncertain.delete(data.message.operationId);
   }
   const editors = app.editors;
@@ -1170,7 +1199,11 @@ function renderWorkspace(app, t, view, counts) {
   } else {
     const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
     if (selected) heading.replaceChildren(unitNameNode(document, selected), element(document, "span", { class: "unit-state", text: t(statusKey(selected.status)) }));
-    inspectorBody.append(heading, actionControls(app, t, selected));
+    if (selected && app.layout !== 'phone') {
+      inspectorBody.append(renderAgentHeader(document, selected, sessionForUnit(app, selected.id), app.language, () => openAgentMore(app, selected)));
+      const actions = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, selected)), `agent-controls:${selected.id}`);
+      inspectorBody.append(actions);
+    } else inspectorBody.append(heading, actionControls(app, t, selected));
     if (app.layout !== "phone") {
       if (!selected && !app.thread?.chat) inspectorBody.append(emptySelection(app, t));
       inspectorBody.append(chatPanel(app, t), renderInspector(app, t, selected));
@@ -1355,6 +1388,16 @@ function renderWaitingSurface(app, t) {
 function openWaitingItem(app, item) {
   if (!item) return;
   app.waitingItemId = item.id;
+  if (item.kind === 'plan' && item.planId && app.layout !== 'phone') {
+    const plan = app.store.indexes.plans.get(item.planId);
+    app.waitingOpen = false; app.mode = 'map';
+    if (plan) selectGroup(app, plan.clusterId);
+    if (item.approvalId) settle(app, `waiting:${item.id}`, text(app.language, 'loadingList'), async () => {
+      const result = await request(app.api, 'GET', `/approvals/${encodeURIComponent(item.approvalId)}`);
+      app.waitingRecord = { kind: 'approval', approval: result.data, item };
+    });
+    return;
+  }
   if (item.unitId) app.store.selected.unitId = item.unitId;
   const label = text(app.language, "loadingDetails", { name: item.title || item.id });
   if (item.approvalId) {
@@ -1398,6 +1441,9 @@ function renderWaitingRecord(app, t, record = app.waitingRecord) {
   const document = app.root.ownerDocument;
   const block = element(document, "div", { "data-waiting-record": record?.kind ?? "" });
   if (!record) return block;
+  const extension = record.item?.extension ?? app.waitingList?.items?.find(item => item.approvalId === record.approval?.id)?.extension;
+  if (extension) block.append(element(document, 'p', { 'data-plan-extension': 'true', text: startText(app.language, 'extension', { count: extension.count, task: extension.taskId ?? '' }) }),
+    element(document, 'p', { 'data-extension-reason': 'true', text: extension.reason }));
   const caps = app.store.capabilities ?? [];
   if (record.kind === "approval" && record.approval && caps.includes("approval.answer")) {
     block.append(renderApproval(document, record.approval, t, (item, decision) => answerSelected(app, item, decision), activityPending(app, `approval:${record.approval.id}`), app.store.audience !== 'phone'));
@@ -3709,6 +3755,159 @@ function clusterChatPanel(app, cluster) {
   return panel;
 }
 
+function plansForApp(app) {
+  if (!app.planController) {
+    app.planController = createPlanController(app.api, () => { if (!app.disposed) renderShell(app); });
+    for (const plan of app.store.indexes.plans.values()) app.planController.plans.set(plan.id, plan);
+    for (const run of app.store.indexes.runs.values()) app.planController.runs.set(run.id, run);
+  }
+  return app.planController;
+}
+
+function sessionForUnit(app, unitId) {
+  return (app.inspectorData?.unitId === unitId ? app.inspectorData.sessions : null)?.find(session => session.state !== 'stopped')
+    ?? app.store.view?.sessions?.find(session => session.unitId === unitId && session.state !== 'stopped')
+    ?? app.inspectorData?.sessions?.find(session => session.unitId === unitId)
+    ?? app.store.view?.sessions?.find(session => session.unitId === unitId);
+}
+
+function sessionViewFor(app, session) {
+  if (!session || app.layout === 'phone') return null;
+  let view = app.store.sessionViews.get(session.id);
+  if (!view) { view = createSessionView(session); app.store.sessionViews.set(session.id, view); }
+  view.session = session; return view;
+}
+
+async function selectSessionTab(app, view, tab) {
+  captureInputs(app); view.tab = tab;
+  renderShell(app);
+  app.root.querySelector(`[data-action="session-${tab}"]`)?.focus?.();
+  if (tab === 'work' && (!view.workLoaded || view.workStale)) {
+    await loadSessionView(app.api, view); view.workStale = false;
+    if (!app.disposed) renderShell(app);
+  }
+  clearTimeout(app.workClock);
+  const tick = () => { if (app.disposed || view.tab !== 'work') return; renderShell(app); app.workClock = setTimeout(tick, 60000); };
+  if (tab === 'work') app.workClock = setTimeout(tick, 60000);
+}
+
+function stopWorkStep(app, view) {
+  const controller = plansForApp(app), run = [...controller.runs.values()].find(run => run.attempts.some(attempt => attempt.sessionId === view.session.id));
+  const attempt = run?.attempts.find(attempt => attempt.sessionId === view.session.id);
+  if (run && attempt) controlPlan(controller, run, 'stop_step', { attemptId: attempt.id }).catch(error => noteAction(app, error));
+  else { view.error = { code: 'stop_unavailable' }; renderShell(app); }
+}
+
+function openAgentMore(app, unit) {
+  const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id);
+  const dialog = showDialog(document, { title: startText(app.language, 'moreMenu'), cancel: startText(app.language, 'close') });
+  if (session) dialog.append(mapButton(app, 'full-transcript', startText(app.language, 'transcript'), () => { dialog.close(); openSessionTranscript(app, session); }));
+  if (app.store.capabilities.includes('unit.create')) dialog.append(mapButton(app, 'agent-rename', text(app.language, 'rename'), () => { dialog.close(); beginAlias(app, unit.id); }));
+}
+
+function openSessionTranscript(app, session) {
+  if (app.layout === 'phone') return;
+  const document = app.root.ownerDocument, dialog = showDialog(document, { title: startText(app.language, 'transcript'), cancel: startText(app.language, 'close') });
+  dialog.setAttribute('data-full-transcript', session.id);
+  let cursor = null, busy = false;
+  const body = element(document, 'div', { class: 'private-transcript' });
+  const more = element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'transcript-page', text: text(app.language, 'loadOlder'), onclick: () => load() });
+  const load = async () => {
+    if (busy) return; busy = true; more.disabled = true; more.setAttribute('aria-busy', 'true');
+    try {
+      const page = await loadTranscriptPage(app.api, session.id, cursor); body.replaceChildren();
+      for (const row of page.items) body.append(element(document, 'pre', { text: row.text }));
+      cursor = page.nextCursor; more.hidden = !cursor;
+    } catch { body.replaceChildren(element(document, 'p', { role: 'alert', text: startText(app.language, 'unavailable') })); more.textContent = startText(app.language, 'retry'); }
+    finally { busy = false; more.disabled = false; more.removeAttribute('aria-busy'); }
+  };
+  dialog.append(body, more); load();
+}
+
+function planCards(app, chat) {
+  if (app.layout === 'phone') return [];
+  const controller = plansForApp(app), document = app.root.ownerDocument;
+  const plans = [...controller.plans.values()].filter(plan => plan.chatId === chat.id);
+  return plans.map(plan => renderControlledPlan(document, controller, plan, { language: app.language,
+    clients: app.startAgents?.connectedClients ?? [], now: app.api.now(), onRun: () => confirmPlanRun(app, plan),
+    onEdit: () => { app.planDraft = { previous: plan, draft: structuredClone(plan) }; renderShell(app); },
+    onAssignment: taskId => { app.planDraft = { previous: plan, draft: structuredClone(plan), taskId }; renderShell(app); },
+    onError: error => noteAction(app, error) }));
+}
+
+function confirmPlanRun(app, plan) {
+  const snapshot = structuredClone(plan);
+  const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'run'),
+    body: `${snapshot.branch}. ${startText(app.language, 'commitsHint', { branch: snapshot.branch })} ${snapshot.tasks.map(task => task.title + ': ' + (task.assignment.unitId ?? task.assignment.client) + ', ' + runsInLabel(task.runsIn)).join('; ')}`,
+    confirm: startText(app.language, 'run'), cancel: startText(app.language, 'cancel'),
+    onConfirm: () => runPlan(plansForApp(app), snapshot) });
+  dialog.setAttribute('data-confirm-plan', plan.id);
+}
+
+async function openPlanDraft(app, cluster) {
+  if (app.layout === 'phone') return;
+  const response = await collectPages(app.api, '/tasks', { query: { status: 'open,review' }, limit: 100 });
+  const units = (app.unitList?.catalog ?? []).filter(unit => cluster.members.includes(unit.id));
+  const tasks = response.items.filter(task => units.some(unit => unit.id === task.toId));
+  if (!tasks.length) { noteAction(app, { code: 'invalid_plan' }); return; }
+  const clients = app.startAgents?.connectedClients ?? [], lead = clusterLead(cluster, units);
+  const assignment = unit => ({ kind: 'unit', unitId: unit.id, runsIn: unit.runsIn ?? initialRunsIn(clients) });
+  const roles = Object.fromEntries(['coordinator', 'planner', 'builder', 'reviewer'].map(role => [role,
+    lead ? assignment(lead) : ['coordinator', 'planner'].includes(role) ? { kind: 'unit', unitId: '', runsIn: null } : assignment(units[0])]));
+  app.planDraft = { previous: null, draft: { clusterId: cluster.id, chatId: cluster.chatId, machine: startMachine(app), title: tasks[0].title,
+    branch: `plan-${tasks[0].number}`, mode: cluster.link?.kind === 'repository' ? 'execution' : 'planning', expectedChatRevision: app.thread.chat.revision, roles,
+    tasks: tasks.map(task => ({ id: task.id, title: task.title, assignment: assignment(units.find(unit => unit.id === task.toId)) })) } };
+  renderShell(app);
+}
+
+function renderPlanDraft(app) {
+  const state = app.planDraft, document = app.root.ownerDocument, draft = state.draft;
+  const t = key => startText(app.language, key);
+  const root = element(document, 'section', { class: 'plan-card plan-draft', 'data-plan-draft': draft.id ?? 'new' });
+  const field = (label, value, changed) => {
+    const input = element(document, 'input', { class: 'search', 'aria-label': label, oninput: () => changed(input.value) }); input.value = value;
+    return element(document, 'label', {}, label, input);
+  };
+  root.append(field(t('name'), draft.title, value => { draft.title = value; }), field(text(app.language, 'branch'), draft.branch, value => { draft.branch = value; }));
+  const cluster = app.store.indexes.groups.get(draft.clusterId), units = (app.unitList?.catalog ?? []).filter(unit => cluster?.members.includes(unit.id));
+  const clients = app.startAgents?.connectedClients ?? [];
+  const assignmentRow = (label, assignment, changed) => {
+    const select = element(document, 'select', { 'aria-label': label });
+    const choices = [...units.map(unit => ({ id: unit.id, label: unitDisplayName(unit), value: { kind: 'unit', unitId: unit.id, runsIn: unit.runsIn ?? initialRunsIn(clients) } })),
+      ...clients.filter(client => client.connected).map(client => ({ id: client.id, label: client.title, value: { kind: 'client', client: client.id, runsIn: initialRunsIn([client]), reuseRole: null } }))];
+    if (!assignment.unitId && !assignment.client) select.append(element(document, 'option', { value: '', text: t('choosePlanner') }));
+    for (const choice of choices) select.append(element(document, 'option', { value: choice.id, text: choice.label }));
+    select.value = assignment.unitId ?? assignment.client;
+    select.addEventListener('change', () => { changed(structuredClone(choices.find(choice => choice.id === select.value).value)); renderShell(app); });
+    const picker = mapButton(app, 'plan-runs-in', runsInLabel(assignment.runsIn, clients) || t('runsIn'), () => {
+      const model = { language: app.language, clients, choice: assignment.runsIn, useAsDefault: false };
+      openRunsPicker(app, model, () => { assignment.runsIn = model.choice; renderShell(app); }, picker);
+    });
+    return element(document, 'label', {}, label, select, picker);
+  };
+  const roleLabels = app.language === 'es' ? { coordinator: 'Coordina', planner: 'Planifica', builder: 'Implementa', reviewer: 'Revisa' }
+    : { coordinator: 'Coordinates', planner: 'Plans', builder: 'Builds', reviewer: 'Reviews' };
+  for (const role of ['coordinator', 'planner', 'builder', 'reviewer']) root.append(assignmentRow(roleLabels[role], draft.roles[role], value => { draft.roles[role] = value; }));
+  for (const task of draft.tasks) root.append(element(document, 'div', { class: 'plan-task-body', 'data-edit-task': task.id },
+    field(t('name'), task.title, value => { task.title = value; }), assignmentRow(task.id, task.assignment, value => { task.assignment = value; })));
+  const save = mapButton(app, 'save-plan', text(app.language, 'save'), async () => {
+    if (state.busy) return; state.busy = true; renderShell(app);
+    try {
+      const saved = await savePlanDraft(plansForApp(app), state.previous ? draft : { ...draft, tasks: draft.tasks.map(({ id, title, assignment }) => ({ id, title, assignment })) }, state.previous);
+      app.planDraft = null; await refreshPlan(plansForApp(app), saved.id);
+      if (app.thread?.error?.code === 'plan_lead_required') app.thread.error = null;
+    } catch (error) { state.error = error; state.locked = Boolean(error.operation && (!error.status || error.status >= 500)); }
+    finally { state.busy = false; if (!app.disposed) renderShell(app); }
+  });
+  if (state.busy) { save.disabled = true; save.setAttribute('aria-busy', 'true'); save.replaceChildren(progressMark(document, t('working'))); }
+  root.append(save, mapButton(app, 'cancel-plan', t('cancel'), () => { if (!state.busy) { app.planDraft = null; renderShell(app); } }));
+  if (state.error) root.append(element(document, 'p', { role: 'alert', text: t('unavailable') }));
+  if (state.busy || state.locked) for (const control of root.querySelectorAll('input, select, button')) {
+    if (control !== save || state.busy) control.disabled = true;
+  }
+  return root;
+}
+
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
   const saved = app.store.layout ?? { layout: { nodes: {}, groups: {} }, revision: null };
@@ -5730,7 +5929,8 @@ function selectGroup(app, id) {
   const map = ensureMap(app);
   map.selectedGroupId = id;
   map.selection.clear();
-  loadClusterFacts(app, group);
+  if (app.layout !== 'phone') loadClusterFacts(app, group);
+  if (app.layout !== 'phone') loadChatPlans(plansForApp(app), group.id).then(() => { if (!app.disposed) renderShell(app); }).catch(() => {});
   const chat = app.store.indexes.chats.get(group.chatId) ?? app.chatList?.catalog?.find((item) => item.id === group.chatId);
   if (chat && app.thread?.chat?.id !== chat.id) showChat(app, chat);
   else if (!chat) settle(app, `group-chat:${id}`, text(app.language, "loadingConversation"), async () => {
@@ -6120,20 +6320,23 @@ function chatPanel(app, t) {
   );
   const group = app.store.indexes.groups.get(thread.chat.id);
   const directUnit = thread.chat.kind === "direct" ? unitById(app, members.find((id) => id !== "root:master")) : null;
+  const sessionView = directUnit ? sessionViewFor(app, sessionForUnit(app, directUnit.id)) : null;
+  let contextNotice = null;
   if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
     const names = members.map((id) => unitById(app, id) ? unitDisplayName(unitById(app, id)) : id).join(", ");
     heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
   }
   panel.append(heading);
-  const live = app.store.view?.sessions?.find((session) => members.includes(session.unitId) && session.state !== 'stopped' && ['busy', 'active', 'working'].includes(session.activity));
-  if (live) {
-    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(live.registeredAt)) / 1000));
-    const work = element(document, 'div', { 'data-chat-work': live.id, style: 'display:flex;align-items:center;gap:4px;padding:10px 14px;border-radius:18px;background:var(--card)' });
-    for (let index = 0; index < 3; index += 1) work.append(element(document, 'span', { 'aria-hidden': 'true', style: 'width:7px;height:7px;border-radius:50%;background:var(--mute)' }));
-    work.append(element(document, 'span', { style: 'font-size:12px;color:var(--mute)', text: `${Number.isFinite(elapsed) ? elapsed : 0} s` }));
-    if (app.store.capabilities.includes('session.stop')) work.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'stop-work', 'data-session': live.id, text: t('stopWork'), onclick: () => confirmStop(app, live.id) }));
-    panel.append(work);
+  if (sessionView) {
+    panel.className += ' agent-conversation';
+    panel.append(renderSessionTabs(document, sessionView, app.language, tab => selectSessionTab(app, sessionView, tab)));
+    if (directUnit.role === 'overseer') {
+      const context = renderContext(document, sessionView, app.language,
+        action => sessionView.context ? changeContext(app.api, sessionView, action, () => { if (!app.disposed) renderShell(app); }).catch(() => {})
+          : loadSessionView(app.api, sessionView, { context: true }).then(() => { if (!app.disposed) renderShell(app); }));
+      contextNotice = context.querySelector('.context-notice'); contextNotice?.remove(); panel.append(context);
+    }
   }
   const transcript = element(document, "div", {
     class: "transcript",
@@ -6142,13 +6345,21 @@ function chatPanel(app, t) {
     "data-total": String(thread.total ?? thread.messages.length),
     "data-pinned": String(Boolean(thread.chat.pinned)),
     "data-listed": String(thread.chat.listed !== false),
+    ...(sessionView ? { id: `session-${sessionView.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${sessionView.session.id}-chat` } : {}),
   });
-  const windowed = messageWindow(thread.messages, {
+  const windowed = messageWindow(authoredMessages(thread.messages), {
     nearBottom: thread.nearBottom !== false,
     anchorId: thread.nearBottom === false ? thread.anchorId : null,
     start: thread.windowStart ?? 0,
   });
   thread.windowStart = windowed.start;
+  if (sessionView?.session.startedWith) {
+    const descriptor = sessionView.session.startedWith;
+    transcript.append(renderStartedWith(document, descriptor, app.language, { open: sessionView.startedOpen,
+      onToggle: open => { sessionView.startedOpen = open; }, cluster: app.store.indexes.groups.get(directUnit.clusterId)?.title ?? directUnit.scope?.name ?? '',
+      task: app.store.indexes.tasks.get(descriptor.taskId)?.title ?? '' }));
+  }
+  const cards = planCards(app, thread.chat); let plansMounted = false;
   if (!windowed.items.length) {
     const canPost = (app.store.capabilities ?? []).includes("chat.post");
     transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
@@ -6203,9 +6414,19 @@ function chatPanel(app, t) {
       }));
     }
     transcript.append(article);
+    if (own && !plansMounted) { transcript.append(...cards); plansMounted = true; }
+  }
+  if (!plansMounted) transcript.append(...cards);
+  if (contextNotice) transcript.append(contextNotice);
+  if (app.planDraft?.draft.chatId === thread.chat.id && app.layout !== 'phone') transcript.append(renderPlanDraft(app));
+  if (group && app.layout !== 'phone') {
+    const lead = clusterLead(group, app.unitList?.catalog ?? []);
+    transcript.append(mapButton(app, 'start-plan', startText(app.language, lead ? 'startPlan' : 'choosePlanner'), () => openPlanDraft(app, group).catch(error => noteAction(app, error))));
+    if (app.waitingRecord?.item?.planId && app.waitingRecord.item.chatId === thread.chat.id) transcript.append(renderWaitingRecord(app, t));
   }
   if (thread.unseen) transcript.append(element(document, "p", { "data-new-messages": "true", text: t("newMessages") }));
   transcript.addEventListener("scroll", () => {
+    thread.scrollTop = transcript.scrollTop;
     const before = thread.nearBottom;
     thread.readPause = false;
     updateNearBottom(thread, transcript);
@@ -6241,10 +6462,15 @@ function chatPanel(app, t) {
     if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
   row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
-  if (app.store.audience !== 'phone' && (caps.includes("mailbox.read") || caps.includes("master.read"))) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "mailbox", text: t("mailbox"), onclick: () => inspectMailbox(app) }));
-  }
-  panel.append(transcript, row);
+  if (sessionView?.tab === 'work') {
+    const work = renderSessionWork(document, sessionView, app.language, {
+      onRetry: async () => { await loadSessionView(app.api, sessionView); if (!app.disposed) renderShell(app); },
+      onMore: async () => { await loadSessionView(app.api, sessionView, { older: true }); if (!app.disposed) renderShell(app); },
+      onStop: () => stopWorkStep(app, sessionView),
+    }, app.api.now());
+    work.scrollTop = sessionView.scrollTop; work.addEventListener('scroll', () => { sessionView.scrollTop = work.scrollTop; });
+    panel.append(work);
+  } else panel.append(transcript, row);
   if (caps.includes("chat.post")) {
     const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-chat": thread.chat.id, "data-keep": keepId("chat", thread.chat.id), "aria-label": t("send") });
     const savedChat = inputDrafts(app).chats.get(thread.chat.id);
@@ -6263,7 +6489,7 @@ function chatPanel(app, t) {
       onclick: () => submitComposer(app, composer),
     }, t("send"));
     const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
-    const hint = group ? t("everyReply") : directUnit && !directUnit.sessionIds?.length ? t("finalComposerWait") : t("composerHint");
+    const hint = group ? startText(app.language, 'goesToLead') : directUnit ? startText(app.language, 'readsNext') : t("composerHint");
     composer.setAttribute("aria-label", name);
     panel.append(labeledField(document, name, hint, composer), send);
   }
@@ -6717,6 +6943,11 @@ function loadInspector(app, unitId) {
       machines: machines.items,
       sessions: sessions.items,
     };
+    app.store.indexes.units.set(unitId, unit.data);
+    if (app.layout !== 'phone') {
+      const view = sessionViewFor(app, sessions.items.find(session => session.state !== 'stopped') ?? sessions.items[0]);
+      if (view && unit.data.role === 'overseer') await loadSessionView(app.api, view, { context: true });
+    }
     if (!app.disposed) renderShell(app);
     if (app.sessionRequestId || (app.answerId && app.answerApprovalId) || app.revocationRequestId) recheckTracked(app);
   });

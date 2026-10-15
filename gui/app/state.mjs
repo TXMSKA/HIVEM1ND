@@ -4,7 +4,8 @@ const CURSOR = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):
 
 export function createStore() {
   return {
-    indexes: { units: new Map(), groups: new Map(), chats: new Map(), tasks: new Map(), editors: new Map() },
+    indexes: { units: new Map(), groups: new Map(), chats: new Map(), tasks: new Map(), editors: new Map(), plans: new Map(), runs: new Map() },
+    sessionViews: new Map(),
     messages: new Map(),
     selected: { unitId: null, groupId: null, chatId: null, taskId: null, resourceId: null },
     viewport: { x: 0, y: 0, scale: 1 },
@@ -121,6 +122,24 @@ export async function applyEvent(store, api, event) {
     return { ready: true };
   }
   if (event.name === "stream.reset") return applyReset(store, api);
+  const data = event.envelope?.data ?? {};
+  if (event.name === 'unit.unread' && data.unitId && Number.isSafeInteger(data.count) && data.count >= 0) {
+    const unit = store.indexes.units.get(data.unitId); if (unit) unit.unread = data.count;
+    return { applied: true };
+  }
+  if (['plan.changed', 'run.changed', 'run.log', 'message.read', 'message.created'].includes(event.name)) {
+    if (data.runId) for (const view of store.sessionViews.values()) {
+      if (view.session.runId === data.runId) view.workStale = true;
+    }
+    if (event.name === 'message.created' && data.message?.id) store.messages.set(data.message.id, data.message);
+    const response = await request(api, 'GET', '/view'); store.view = response.data; indexView(store, response.data);
+    return { applied: true };
+  }
+  if (['session.work', 'session.context'].includes(event.name)) {
+    const view = store.sessionViews.get(data.sessionId);
+    if (view) view[event.name === 'session.work' ? 'workStale' : 'contextStale'] = true;
+    return { applied: true };
+  }
   if (event.name === 'cluster.changed') {
     const clusters = [];
     let cursor = null;
@@ -167,6 +186,7 @@ export async function acceptStreamEvent(store, api, event) {
 
 export async function applyReset(store, api) {
   store.paused = true;
+  for (const view of store.sessionViews.values()) { view.workStale = true; view.contextStale = Boolean(view.context); }
   store.pages.clear();
   store.pending.clear();
   store.cursor = null;
@@ -242,6 +262,9 @@ function indexView(store, data) {
   store.indexes.chats.clear();
   store.indexes.tasks.clear();
   store.indexes.groups.clear();
+  store.indexes.plans.clear(); store.indexes.runs.clear();
+  for (const plan of data?.plans ?? []) store.indexes.plans.set(plan.id, plan);
+  for (const run of data?.runs ?? []) store.indexes.runs.set(run.id, run);
   for (const group of data?.clusters ?? data?.groups ?? []) store.indexes.groups.set(group.id, group);
   for (const unit of data?.units ?? []) store.indexes.units.set(unit.id, unit);
   for (const chat of data?.chats ?? []) store.indexes.chats.set(chat.id, chat);

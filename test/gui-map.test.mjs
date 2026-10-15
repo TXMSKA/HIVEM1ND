@@ -26,6 +26,22 @@ import {
   requestConnect,
   wheelZoom,
 } from "../gui/app/map.mjs";
+import { buildHierarchy, flattenVisibleHierarchy } from '../gui/app/hierarchy.mjs';
+
+test('canonical unread counts stay on the same aliased agent in Hierarchy and Map without selection acknowledgments', () => {
+  const agent = { ...unit('root:worker', 'worker', 'executor', 'root'), alias: 'Cart', unread: 2 };
+  const clusters = [{ id: 'shop', title: 'Shop', members: [agent.id], link: { kind: 'none' } }];
+  const rows = flattenVisibleHierarchy(buildHierarchy([agent], [], clusters), { shown: new Map(), collapsed: new Set() });
+  assert.equal(rows.find(row => row.id === agent.id).unit.unread, 2);
+  const map = createMap({ units: [agent], groups: clusters }), host = createHost();
+  renderMap(host.ownerDocument, host, map);
+  const node = host.querySelector("[data-unit-id='root:worker']");
+  assert.equal(node.children.find(child => child.className === 'map-unread').textContent, '2');
+  map.focusId = agent.id; keyDown(map, { key: 'Enter', preventDefault() {} });
+  assert.equal(agent.unread, 2);
+  agent.unread = 1; renderMap(host.ownerDocument, host, map);
+  assert.equal(host.querySelector("[data-unit-id='root:worker']").children.find(child => child.className === 'map-unread').textContent, '1');
+});
 
 test("saved coordinates stay put and missing units fall into repeatable rings", () => {
   const units = [

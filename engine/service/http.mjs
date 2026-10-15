@@ -16,7 +16,7 @@ import { openClusterEditor, readClusterChanges, readClusterGit } from './cluster
 import { answerDiscoveryOffer, createClusterLink, removeClusterLink } from './settings.mjs';
 import { answerApproval, listApprovals, listGrants, readAnswerResult, readApproval, readRevocation, requestApproval, revokeGrant } from './approvals.mjs';
 import { changeStatus, loadTask, reviewAuthority, undoStatus } from './tasks.mjs';
-import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readStartRequest, stopSession } from './adapters.mjs';
+import { cancelStart, consumeStart, contextSession, enqueueStart, projectSessionRequest, readSessionActivity, readStartRequest, sanitizeSessionTranscript, stopSession } from './adapters.mjs';
 import { clearContext, compactContext, dismissContext, readContext } from './context.mjs';
 import { createEventBus } from './events.mjs';
 import { createPlan, editPlan, listPlans, readPlan, startPlan } from './plans.mjs';
@@ -41,6 +41,7 @@ export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'inspector.mjs', 'actions.mjs',
   'start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs',
+  'plan-view.mjs', 'session-work.mjs', 'plan-controller.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
   'atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2',
@@ -1341,7 +1342,15 @@ async function invoke(route, scope) {
   }
   if (route.handler === 'run') return { status: route.collection === 'control' ? 202 : 200, body: await (route.collection === 'read'
     ? readRun(domain, params.runId) : route.collection === 'log' ? readRunLog(domain, params.runId, numbers(query)) : controlRun(domain, params.runId, body)) };
-  if (route.handler === 'planWork') return { status: 200, body: await (route.template.endsWith('/transcript') ? readSessionTranscript(domain, params.sessionId, numbers(query)) : readSessionWork(domain, params.sessionId, numbers(query))) };
+  if (route.handler === 'planWork') {
+    const transcript = route.template.endsWith('/transcript');
+    const page = { ...numbers(query), limit: Math.min(Number(query.limit ?? 50), 100) };
+    let body;
+    try { body = await (transcript ? readSessionTranscript(domain, params.sessionId, page) : readSessionWork(domain, params.sessionId, page)); }
+    catch (error) { if (error.code !== 'session_not_found') throw error; body = await readSessionActivity(domain, params.sessionId, transcript ? 'transcript' : 'work', page); }
+    if (transcript) body.items = body.items.map(row => ({ ...row, text: canonicalJson(sanitizeSessionTranscript(JSON.parse(row.text))) }));
+    return { status: 200, body };
+  }
   if (route.handler === 'cluster') {
     const calls = { list: () => listClusters(domain, numbers(query)), read: () => readCluster(domain, params.clusterId, query),
       create: () => createCluster(domain, body), patch: () => patchCluster(domain, params.clusterId, body),
