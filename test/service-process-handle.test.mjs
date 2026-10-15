@@ -50,7 +50,7 @@ test('verify is false for a mismatched creation time and the exit comes from the
   const { child } = await launchTree();
   const real = processDriver();
   let lie = false;
-  const handle = await ownChildProcess(child, { driver: { ...real, creation: async pid => lie ? '1999-01-01T00:00:00.0000000Z' : real.creation(pid) } });
+  const handle = await ownChildProcess(child, { driver: { ...real, creation: async (pid, context) => lie ? '1999-01-01T00:00:00.0000000Z' : real.creation(pid, context) } });
   assert.equal(await handle.verify(), true);
   lie = true;
   assert.equal(await handle.verify(), false, 'another creation time is another process');
@@ -65,6 +65,45 @@ test('verify is false for a mismatched creation time and the exit comes from the
   await settled(() => exited);
   assert.equal(exited, true);
   assert.equal((await handle.cleanup()).closed, true);
+});
+
+test('on Windows the kill report names every ended descendant and a pid that another process holds is never swept', { skip: process.platform !== 'win32' }, async () => {
+  const { child, grandchild } = await launchTree();
+  const driver = processDriver();
+  assert.equal(driver.sweepable(child.pid), false, 'a live pid is not swept');
+  const report = await driver.terminate(child.pid);
+  assert.ok(report.killed.some(item => item.pid === grandchild), 'the report lists the grandchild');
+  assert.equal(report.killed.some(item => item.pid === child.pid), false, 'the root is not its own descendant');
+  await once(child, 'exit');
+  assert.deepEqual(await driver.terminate(child.pid), { killed: [] }, 'a pid that is gone is not an error');
+  assert.equal(alive(grandchild), false);
+});
+
+test('a root that exits by itself is swept once, only while no other process holds its pid, and what the sweep reports is proved gone', async () => {
+  const make = (sweepable, live) => {
+    const fake = Object.assign(new EventEmitter(), { pid: 5151, exitCode: null }); const calls = [];
+    const driver = { creation: async () => 'created', descendants: async () => [], sweepable: () => sweepable, alive: async targets => targets.filter(target => live.has(target.pid)),
+      terminate: async () => { calls.push('sweep'); return { killed: [{ pid: 7, created: null }] }; }, escalate: async () => {} };
+    return { fake, calls, driver };
+  };
+  const live = new Set([7]);
+  const one = make(true, live);
+  const handle = await ownChildProcess(one.fake, { driver: one.driver, settleMs: 400 });
+  one.fake.exitCode = 0; one.fake.emit('exit', 0);
+  setTimeout(() => live.delete(7), 120);
+  assert.deepEqual(await handle.cleanup(), { closed: true, identity: handle.identity });
+  assert.deepEqual(one.calls, ['sweep']);
+  await handle.cleanup();
+  assert.deepEqual(one.calls, ['sweep'], 'the sweep runs once');
+  const held = make(false, new Set());
+  const other = await ownChildProcess(held.fake, { driver: held.driver, settleMs: 100 });
+  held.fake.exitCode = 0; held.fake.emit('exit', 0);
+  assert.deepEqual(await other.cleanup(), { closed: true, identity: other.identity });
+  assert.deepEqual(held.calls, [], 'a pid held by another process is never swept');
+  const stuck = make(true, new Set([7]));
+  const never = await ownChildProcess(stuck.fake, { driver: stuck.driver, settleMs: 80 });
+  stuck.fake.exitCode = 0; stuck.fake.emit('exit', 0);
+  assert.deepEqual(await never.cleanup(), { closed: false, identity: never.identity }, 'a reported descendant that lives keeps the tree open');
 });
 
 test('a process that is already gone, or has no identity, cannot be adopted', async () => {

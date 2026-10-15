@@ -247,12 +247,13 @@ export function createNativeAdapter(client, options = {}) {
         nativeLaunch?.close();
         throw error;
       }
+      const spawnedAt = Date.now();
       // The handle is read from the live child before anything else can happen to it.
       let processHandle = request.nativeBoundary?.processHandle ?? null;
       const turnOwner = { nativeSessionId: null };
       if (ownsTree) {
         try {
-          processHandle = await options.ownProcess(child, { platform, stopStep: () => interruptTurn({ nativeSessionId: turnOwner.nativeSessionId }) });
+          processHandle = await options.ownProcess(child, { platform, spawnedAt, stopStep: () => interruptTurn({ nativeSessionId: turnOwner.nativeSessionId }) });
           if (closed) throw unavailable();
         } catch (error) {
           try { child.kill?.(); } catch { /* The child is already gone. */ }

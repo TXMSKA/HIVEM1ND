@@ -18,9 +18,9 @@ export function ownedSpawnOptions(platform = process.platform) {
   return platform === 'win32' ? {} : { detached: true };
 }
 
-function run(file, args, { timeout = 20000 } = {}) {
+function run(file, args, { timeout = 20000, encoding = 'utf8' } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { windowsHide: true, shell: false, timeout, maxBuffer: 8_000_000, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(file, args, { windowsHide: true, shell: false, timeout, maxBuffer: 8_000_000, encoding }, (error, stdout, stderr) => {
       if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); } else resolve(stdout);
     });
   });
@@ -30,49 +30,40 @@ function systemTool(...parts) {
   return path.join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', ...parts);
 }
 
-// Windows: Win32_Process through powershell.exe. Descendants are found by ParentProcessId, which Windows never rewrites,
-// and by a creation time not earlier than the parent's, so they stay findable after the parent exits.
+// Windows. The kit never starts PowerShell, and Windows prints no process creation time or parent id without it or WMIC.
+// So the identity's creation time is the instant the service recorded when it spawned the child, and the live check is the
+// ChildProcess handle itself: while the service holds it, Windows cannot give the pid to another process. Descendants are
+// the pids that taskkill /T reports it ended, in any language, since each report line names the ended pid first.
 function windowsDriver() {
-  const powershell = (script) => run(systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script]);
-  const table = async () => {
-    const out = await powershell("Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().ToString('o') }");
-    const rows = new Map();
-    for (const line of out.split(/\r?\n/)) {
-      const match = /^(\d+) (\d+) (\S+)$/.exec(line.trim());
-      if (match) rows.set(Number(match[1]), { pid: Number(match[1]), parent: Number(match[2]), created: match[3] });
-    }
-    if (!rows.size) throw unavailable();
-    return rows;
-  };
+  const exists = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
   return {
-    async creation(pid) {
-      const out = await powershell(`$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p -and $p.CreationDate) { $p.CreationDate.ToUniversalTime().ToString('o') }`);
-      return /^\d{4}-\d{2}-\d{2}T\S+Z$/.test(out.trim()) ? out.trim() : null;
+    async creation(pid, context = {}) {
+      const { child, recorded, spawnedAt } = context;
+      if (!child || child.exitCode != null || child.signalCode != null || !exists(pid)) return null;
+      return recorded ?? new Date(spawnedAt ?? Date.now()).toISOString();
     },
-    async descendants(pid, created) {
-      const rows = [...(await table()).values()], found = [], queue = [{ pid, created }];
-      while (queue.length) {
-        const parent = queue.shift();
-        for (const row of rows) {
-          if (row.parent === parent.pid && row.created >= parent.created && row.pid !== pid && !found.some(item => item.pid === row.pid)) {
-            found.push({ pid: row.pid, created: row.created }); queue.push(row);
-          }
-        }
-      }
-      return found;
-    },
-    async alive(targets) {
-      const rows = await table();
-      return targets.filter(target => rows.get(target.pid)?.created === target.created);
-    },
+    // Nothing can be listed before the kill; what is ended is read from the kill report.
+    async descendants() { return []; },
+    async alive(targets) { return targets.filter(target => exists(target.pid)); },
     async terminate(pid) {
-      try { await run(systemTool('taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { timeout: 15000 }); }
+      let output = '';
+      try { output = await run(systemTool('taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { timeout: 15000, encoding: 'latin1' }); }
       catch (error) {
-        // 128 means the process is already gone, which is the state being asked for.
-        if (error.code !== 128) throw error;
+        // 128 means the process is already gone, which is the state being asked for. A failure to start the tool is not.
+        if (typeof error.code !== 'number') throw error;
+        output = error.stdout ?? '';
       }
+      const killed = [];
+      for (const line of String(output).split(/\r?\n/)) {
+        const first = /\d+/.exec(line);
+        const found = first ? Number(first[0]) : 0;
+        if (found > 0 && found !== pid && !killed.some(item => item.pid === found)) killed.push({ pid: found, created: null });
+      }
+      return { killed };
     },
     async escalate() {},
+    // After a root that ended by itself the pid is only swept while no other process holds it, so an unrelated tree is never touched.
+    sweepable(pid) { return !exists(pid); },
   };
 }
 
@@ -147,14 +138,14 @@ export function processDriver(platform = process.platform) {
 // Adopts a freshly spawned child. Everything it needs is read from the live ChildProcess and the operating system,
 // never from a persisted pid, so a handle exists only for a process this service started.
 export async function ownChildProcess(child, { platform = process.platform, driver = processDriver(platform), stopStep = null,
-  graceMs = STOP_GRACE_MS, settleMs = SETTLE_MS } = {}) {
+  graceMs = STOP_GRACE_MS, settleMs = SETTLE_MS, spawnedAt = Date.now() } = {}) {
   const pid = child?.pid;
   if (!Number.isSafeInteger(pid) || pid <= 0 || typeof child.once !== 'function') throw unavailable('The native process has no verifiable identity.');
   let exited = child.exitCode != null || child.signalCode != null;
   const listeners = new Set();
   child.once('exit', () => { exited = true; for (const listener of [...listeners]) { try { listener(); } catch { /* A listener cannot stop the others. */ } } });
   let created = null;
-  try { created = await driver.creation(pid); } catch { created = null; }
+  try { created = await driver.creation(pid, { child, spawnedAt }); } catch { created = null; }
   if (typeof created !== 'string' || !created || exited) throw unavailable('The native process has no verifiable identity.');
   const identity = `${pid}:${created}`;
   const waitExit = ms => new Promise(resolve => {
@@ -165,12 +156,14 @@ export async function ownChildProcess(child, { platform = process.platform, driv
     timer.unref?.();
     listeners.add(listener);
   });
-  let recorded = null, stopping = null;
+  // What is known to have been inside the tree. An unreadable tree is never reported closed.
+  let recorded = null, unreadable = false, stopping = null, swept = false;
+  const note = report => { for (const item of report?.killed ?? []) { recorded ??= []; if (!recorded.some(known => known.pid === item.pid)) recorded.push(item); } };
   const handle = {
     identity,
     async verify() {
       if (exited || child.exitCode != null || child.signalCode != null) return false;
-      try { return await driver.creation(pid) === created; } catch { return false; }
+      try { return await driver.creation(pid, { child, recorded: created }) === created; } catch { return false; }
     },
     onExit(listener) {
       if (typeof listener !== 'function') throw unavailable();
@@ -183,9 +176,9 @@ export async function ownChildProcess(child, { platform = process.platform, driv
       if (stopping) return stopping;
       const work = (async () => {
         try {
-          if (!exited) { try { recorded = await driver.descendants(pid, created, child); } catch { recorded = null; } }
+          if (!exited) { try { recorded = await driver.descendants(pid, created, child); } catch { recorded = null; unreadable = true; } }
           if (!exited) {
-            await driver.terminate(pid);
+            note(await driver.terminate(pid));
             if (!await waitExit(graceMs)) { await driver.escalate(pid); await waitExit(graceMs); }
           }
           // The root ending first does not end its descendants: they get the same grace, then the forced signal.
@@ -203,9 +196,16 @@ export async function ownChildProcess(child, { platform = process.platform, driv
       work.then(release, release);
       return work;
     },
-    // After the exit: no recorded descendant may still be alive with its creation identity.
+    // After the exit: no recorded descendant may still be alive.
+    // Remaining weakness: when the root ends by itself nothing was recorded at stop time. Windows lists no tree without PowerShell or WMIC,
+    // so the single sweep below (taskkill /T on the root pid, only while no other process holds that pid) finds nothing once the root is gone,
+    // and orphans of a root that exited alone are not proved closed. A Linux client is covered by its process group instead.
     async cleanup() {
-      if (!exited) return { closed: false, identity };
+      if (!exited || unreadable) return { closed: false, identity };
+      if (!swept && recorded === null && typeof driver.sweepable === 'function' && driver.sweepable(pid)) {
+        swept = true;
+        try { note(await driver.terminate(pid)); } catch { /* Nothing to sweep, or the tool is unavailable: the recorded list stays as it is. */ }
+      }
       let targets = recorded;
       if (targets === null) { try { targets = await driver.descendants(pid, created, child); } catch { return { closed: false, identity }; } }
       const deadline = Date.now() + settleMs;
