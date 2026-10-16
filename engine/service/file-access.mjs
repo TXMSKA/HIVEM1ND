@@ -145,7 +145,9 @@ export async function verifiedSessionScope(context) {
   if (scope.clusterId) {
     const choice = await clusterChoices(context, scope.unitId);
     const cluster = choice.clusterId === scope.clusterId && await readCluster(context, scope.clusterId, { machine: scope.machine });
-    if (!cluster || choice.ambiguous || cluster.revision !== scope.clusterRevision) fail('scope_unavailable', 'The approved cluster changed.');
+    // Write authority follows the agent's cluster and its link, checked below; a new member or a rename changes the
+    // cluster's revision without changing what this session may write, so the revision alone does not revoke it.
+    if (!cluster || choice.ambiguous) fail('scope_unavailable', 'The approved cluster changed.');
     const mapping = cluster.link.kind !== 'none' && await resolveClusterLink(context, cluster.link, scope.machine).catch(() => fail('scope_unavailable', 'The cluster link changed.'));
     if (scope.writeRoots.length && (!mapping || !scope.writeRoots.some(root => pathKey(root.realPath) === pathKey(mapping.localPath)))) fail('scope_unavailable', 'The cluster link changed.');
   }

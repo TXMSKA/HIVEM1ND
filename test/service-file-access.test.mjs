@@ -87,3 +87,15 @@ test('outside-cluster consent is bound to one exact operation, revision, actor a
   actor.ownedPids.clear();
   await assert.rejects(verifiedSessionScope(actor), { code: 'scope_unavailable' });
 });
+
+test('a renamed or regrouped cluster keeps the write scope of a running session; a changed link still revokes it', async t => {
+  const { context, actor, root, cluster } = await world(t);
+  const { patchCluster, readCluster } = await import('../engine/service/clusters.mjs');
+  const current = await readCluster(context, cluster.id ?? cluster.cluster?.id ?? cluster.data?.id, { machine: 'DESKTOP' });
+  await patchCluster(context, current.id, { title: 'Work, renamed', machine: 'DESKTOP', expectedRevision: current.revision });
+  const created = await writeScopedFile(actor, { path: path.join(root, 'after-rename.txt'), text: 'still allowed', expectedRevision: null });
+  assert.equal(created.revision, hashBytes(Buffer.from('still allowed')));
+  const renamed = await readCluster(context, current.id, { machine: 'DESKTOP' });
+  await patchCluster(context, current.id, { link: { kind: 'none' }, machine: 'DESKTOP', expectedRevision: renamed.revision });
+  await assert.rejects(writeScopedFile(actor, { path: path.join(root, 'after-unlink.txt'), text: 'not allowed', expectedRevision: null }), { code: 'scope_unavailable' });
+});
