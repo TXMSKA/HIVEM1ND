@@ -4862,11 +4862,7 @@ function columnIndex(column, node) {
 }
 
 async function waitFor(check, label) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (check()) return;
-    await delay(25);
-  }
-  throw new Error(label);
+  await patient(check, label);
 }
 
 // The ceiling is patient because the whole suite shares a loaded machine; every wait still ends on its condition.
@@ -4876,11 +4872,7 @@ async function patient(check, label, limit = 30000) {
 }
 
 async function until(check) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (check()) return;
-    await delay(20);
-  }
-  throw new Error("The phone shell did not reach the expected state.");
+  await patient(check, "The phone shell did not reach the expected state.");
 }
 
 function sseFrame(name, id, data) {
@@ -7025,12 +7017,13 @@ test('a slow chat load shows one notice above the composer', async (t) => {
     const keys = [...(desktop.app.activity?.keys() ?? [])];
     return keys.some(key => key.startsWith('chat-load:')) && keys.some(key => key.startsWith('open-chat:') || key.startsWith('direct:'));
   };
-  for (let attempt = 0; attempt < 80 && !ready(); attempt += 1) await delay(25);
-  if (!ready()) throw new Error(JSON.stringify({
-    keys: [...(desktop.app.activity?.keys() ?? [])],
-    pending: desktop.app.pendingChat, opening: desktop.app.chatOpening,
-    selected: desktop.app.store.selected.unitId, thread: desktop.app.thread?.chat?.kind ?? null,
-  }));
+  await patient(ready, "The slow chat notice did not appear.").catch(() => {
+    throw new Error(JSON.stringify({
+      keys: [...(desktop.app.activity?.keys() ?? [])],
+      pending: desktop.app.pendingChat, opening: desktop.app.chatOpening,
+      selected: desktop.app.store.selected.unitId, thread: desktop.app.thread?.chat?.kind ?? null,
+    }));
+  });
   const region = desktop.root.querySelector('[data-activity-region]');
   const keys = [...region.children].map(node => node.getAttribute('data-activity')).filter(Boolean);
   assert.equal(keys.some(key => key.startsWith('open-chat:') || key.startsWith('direct:')), false);
