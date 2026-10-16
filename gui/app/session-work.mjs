@@ -70,9 +70,16 @@ export function renderStartedWith(document, descriptor, language, { open = false
   const t = (key, values) => startText(language, key, values);
   const root = element(document, 'details', { class: 'started-with', 'data-started-with': 'true', ...(open ? { open: '' } : {}),
     ontoggle: () => onToggle?.(root.open) });
+  const role = descriptor.role ?? '';
+  const clusterName = cluster || (role === 'overseer' ? t('everyCluster') : '');
+  const taskName = task || '';
+  const summary = clusterName && taskName ? t('startedSummary', { role, cluster: clusterName, task: taskName })
+    : clusterName ? t('startedNoTask', { role, cluster: clusterName })
+    : taskName ? t('startedNoCluster', { role, task: taskName })
+    : t('startedBare', { role });
   root.append(element(document, 'summary', {}, icon(document, 'document'), element(document, 'span', {},
     element(document, 'strong', { text: t('startedWith') }),
-    element(document, 'span', { text: t('startedSummary', { role: descriptor.role ?? '', cluster, task: task || descriptor.taskId || '' }) }))));
+    element(document, 'span', { text: summary }))));
   const references = element(document, 'ul');
   for (const reference of descriptor.references ?? []) references.append(element(document, 'li', {}, element(document, 'code', { text: reference })));
   root.append(references); return root;

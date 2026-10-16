@@ -13,6 +13,11 @@ test('Started with is one folded descriptor with actual safe references and has 
   assert.match(copy(folded), /roles\/executor.md/);
   assert.equal(nodes(folded).some(node => node.getAttribute('data-message')), false);
   assert.equal(renderStartedWith(document, descriptor, 'es', { open: true }).getAttribute('open'), '');
+  const overseer = renderStartedWith(document, { role: 'overseer', references: ['rules.md'] }, 'en');
+  assert.match(copy(overseer), /overseer of every cluster and the M1ND/);
+  assert.doesNotMatch(copy(overseer), /of ,/);
+  const spanish = renderStartedWith(document, { role: 'overseer', references: ['rules.md'] }, 'es');
+  assert.match(copy(spanish), /overseer de todos los clústeres y el M1ND/);
 });
 
 test('Chat and Work have keyboard tabs and ordered authoritative milestones with elapsed display only', () => {

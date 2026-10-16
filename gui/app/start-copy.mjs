@@ -50,6 +50,8 @@ export const START_COPY=Object.freeze({
   compact:['Compact','Compactar'],clear:['Clear','Limpiar'],close:['Close','Cerrar'],freshStatus:['Starts fresh every session','Iniciar cada sesión desde cero'],
   messageOverseer:['Message the Overseer','Enviar un mensaje al Overseer'],across:['Across every cluster','En todos los clústeres'],
   chat:['Chat','Chat'],work:['Work','Trabajo'],startedWith:['Started with','Contexto inicial'],startedSummary:['{role} of {cluster}, the M1ND, and the task {task}','{role} de {cluster}, el M1ND y la tarea {task}'],
+  everyCluster:['every cluster','todos los clústeres'],startedNoTask:['{role} of {cluster} and the M1ND','{role} de {cluster} y el M1ND'],
+  startedNoCluster:['{role}, the M1ND, and the task {task}','{role}, el M1ND y la tarea {task}'],startedBare:['{role} and the M1ND','{role} y el M1ND'],
   workHint:['What the session is doing, step by step. Nothing here is a message.','Actividad de la sesión, paso a paso. Estos registros no son mensajes.'],
   transcript:['Full transcript','Transcripción completa'],transcriptHint:['The full transcript opens from More','La transcripción completa se abre desde Más'],moreMenu:['More','Más'],
   readsNext:['It reads your message at its next step','El mensaje se lee en el siguiente paso'],unread:['{count} unread','{count} sin leer'],minutes:['{count} min','{count} min'],
