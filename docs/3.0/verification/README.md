@@ -6,8 +6,8 @@ The saved files come from three source revisions:
 
 | Source commit | Saved PNGs | Destinations |
 | --- | --- | --- |
-| 22451d187dd240390b51eacfeff4165ee9e61272 | 177 | Every destination except the ones below, recaptured after the Overmind's own visual fixes (Map controls, status line, inspector, composer, notices, cluster glyphs, copy, Void spacing, empty start). |
-| d4afbac939cfbc5ba9f8c7448a8be7d0be44251b | 12 | 1.7, 2.1, 3.8, 4.9, 6.10 and 6.12, each in English and Spanish, recaptured once the capture cases knew the new zoom group and the first-message composer. |
+| 1fc19904d3582ee36e9ea915e61ff3a999214073 | 183 | Every destination except the ones below, recaptured after the second re-review fixes (inspector layout, asks in the conversation, Waiting). |
+| 5edc2ba8046e4f51199b5c452208d578aa04b282 | 6 | 2.18, start 2.4 and start 4.1, each in English and Spanish, recaptured once the More menu showed again inside Details. |
 | 09585c5e14563f97aec5a6a2574b00d315ac0dbd | 2 | 7.7 in English and Spanish, kept from the first run. |
 
 Chrome: Chrome/155.0.8059.80
