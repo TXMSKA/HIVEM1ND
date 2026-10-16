@@ -27,7 +27,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 
 | Category | Protocols and steps | Topic sections |
 | --- | --- | --- |
-| foundations | colour-and-theming 1 to 7; light-theme 1 to 8 when a light theme is built or derived; hierarchy-and-type 1, 2, 6; composition-and-layout 4; design-specificity; theme-direction only for a restyle | tokens: Rules, Type roles, Spacing bands, Themes, or whole for a build; light-themes whole for a light theme; direction: Read the request first, Name the mode; defaults: In a refine, Searches |
+| foundations | colour-and-theming 1 to 7; light-theme 1 to 8 when a light theme is built or derived; hierarchy-and-type 1, 2, 6; composition-and-layout 4; design-specificity; theme-direction only for a restyle | tokens: Rules, Type roles, Spacing bands, Themes, or whole for a build; light-themes whole for a light theme; direction: Read the request first, Name the mode, Named directions when the brief names one; defaults: In a refine, Searches |
 | text-and-content | hierarchy-and-type 1 to 7; responsive-behaviour 4 | tokens: Type roles; pages-and-sections: Sections; defaults: Template chrome; site-polish: Build first |
 | inputs-and-controls | forms-and-inputs 1 to 4, 8; accessibility 4 | forms-and-controls: Fields, Choosing the control, Menus and selects, Dates, Search |
 | forms | forms-and-inputs 1, 2, 5 to 7, 9; interface-states 3 to 6 | forms-and-controls: Validation and submission, Layout and flow, Honest choices; states: Error, Success, Disabled |

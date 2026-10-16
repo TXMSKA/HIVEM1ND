@@ -99,6 +99,7 @@ Options:
 - **Refine** inside the current identity: type, spacing and colour recalibration only.
 - **Restyle by theme**: new primitives and faces, semantic roles and components untouched.
 - **Replace the look**: a new direction contract and three variants on named axes.
+- **A named direction** from [direction.md](../direction.md), Named directions, only when the brief asks for that look.
 
 Build: Write the direction in one sentence and the contract in [direction.md](../direction.md), list the files the pass may move, change only primitives, faces and assets, and recompute contrast in each theme.
 

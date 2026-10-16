@@ -60,6 +60,19 @@ A contract that reads like a mood board means the direction is not decided.
 
 When a direction is open, show three variants of equal weight, each diverging on a named axis: layout, density, type system, colour strategy, motion vocabulary or interaction model. Two variants that differ only in colour or copy are one variant. Each works with real content and real interactions, is shown one at a time at full size in realistic surroundings, and is described by the axis it takes, when it wins and what it costs. The category-standard version is always one quiet option, built at full craft if chosen.
 
+## Named directions
+
+Looks worked out whole and kept by name. None is a default: each is built only when the brief asks for that look, or as one of the variants under Offer real alternatives, and the brief wins over all of them. A named direction is applied through the primitive layer as in Restyle by theme, the floors in [essentials.md](essentials.md#floors) hold in it, and the uppercase and tracking hits of the searches in [defaults.md](defaults.md) carry the brief sentence that asks for it.
+
+- **Notch Diner.** A bold, retro product landing for the Persuade mode: flat colour, heavy condensed lettering and cut-corner containers. It suits a product that can be shown as cards and is wrong for Operate and Read surfaces.
+  - **Palette.** Four roles: a deep primary for the ground and large regions, a cream for panels and for text on the primary, a warm accent for the main action and the stickers, and an ink for text and lines. Every pair is measured like any other palette.
+  - **Type.** A condensed heavy display face in uppercase over a plain text face, with one headline split in two colours. Buttons are wide, geometric, uppercase and tracked out.
+  - **Notch container.** A panel with cut corners that holds the logo, the actions and a mini product card, used for the header and for one or two feature blocks. Actions come in pairs: a pill with a label beside a circular icon button.
+  - **Sticker.** A tilted label that carries one claim or one price.
+  - **Blocks.** A looping ticker strip, a 50/50 split block, product cards with a circular plus button and a price pill, a testimonial with hand-drawn marks as authored images rather than icons, and a footer with a giant wordmark.
+  - **Surface.** No shadows: layers separate by colour and by the cut corners. Radii on three steps: 24 for containers, 12 to 16 for cards and inputs, full for pills and circular buttons.
+  - **Build.** Wireframe in greys first, then the four roles, the display face and the blocks. The ticker follows [animation.md](animation.md): one per page, a pause control, still under reduced motion.
+
 ## Restyle by theme
 
 A requested look such as a period, a genre or a material world is applied through the primitive layer only, as in [theme-direction](protocols/theme-direction.md): colour ramps, faces, type scale, radius, shadow and texture move; semantic roles and components stay. The display face is sourced and self-hosted to match the world; the nearest installed face is not a fallback. Textures come from the subject's own world, and a CSS gradient standing in for paper, cloth or metal is a costume.
