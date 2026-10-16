@@ -243,6 +243,10 @@ button, input { font: inherit; color: inherit; }
   gap: 7px;
   font-weight: 600;
 }
+.btn, .btn.secondary { background: var(--card); border-color: var(--line); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.ghost { background: transparent; border-color: var(--line); }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--body); }
 
 .mode[aria-pressed="true"], .tab[aria-pressed="true"] {
   background: var(--card2);

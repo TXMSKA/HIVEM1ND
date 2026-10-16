@@ -6036,7 +6036,7 @@ function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app)));
+  if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app), { class: 'btn primary' }));
   if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
   if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);
@@ -6081,8 +6081,8 @@ function folderIcon(document, plus = false) {
   return svg;
 }
 
-function mapButton(app, action, label, onClick, attributes = {}) {
-  return element(app.root.ownerDocument, "button", { type: "button", class: "btn", "data-action": action, text: label, onclick: onClick, ...attributes });
+export function mapButton(app, action, label, onClick, attributes = {}) {
+  return element(app.root.ownerDocument, "button", { type: "button", class: "btn secondary", "data-action": action, text: label, onclick: onClick, ...attributes });
 }
 
 function decorateHierarchy(app, host) {
@@ -6349,9 +6349,10 @@ function chooseSelectionLead(app) {
 
 function emptySelection(app, t) {
   const empty = !app.store.indexes.groups.size && !(app.unitList?.catalog ?? []).some(unit => unit.role !== 'master');
-  return element(app.root.ownerDocument, 'section', { class: 'empty-selection' }, icon(app.root.ownerDocument, 'map'),
-    element(app.root.ownerDocument, 'h2', { text: startText(app.language, empty ? 'nothingHere' : 'nothingSelected') }),
-    element(app.root.ownerDocument, 'p', { text: startText(app.language, empty ? 'emptyHint' : 'selectHint') }));
+  const section = element(app.root.ownerDocument, 'section', { class: 'empty-selection' }, icon(app.root.ownerDocument, 'map'));
+  if (empty) section.append(element(app.root.ownerDocument, 'h2', { text: startText(app.language, 'nothingHere') }));
+  section.append(element(app.root.ownerDocument, 'p', { text: startText(app.language, empty ? 'emptyHint' : 'selectHint') }));
+  return section;
 }
 
 function openCluster(app, id) {

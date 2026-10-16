@@ -26,7 +26,7 @@ export function element(document, tag, attributes = {}, ...children) {
   for (const [key, value] of Object.entries(attributes)) {
     if (value == null) continue;
     if (key === "text") node.textContent = String(value);
-    else if (key === "class") node.className = String(value);
+    else if (key === "class") node.className = tag === "button" && value === "btn" ? "btn secondary" : String(value);
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
     else node.setAttribute(key, String(value));
   }

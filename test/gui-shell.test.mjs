@@ -21,7 +21,7 @@ import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
 import { checkoutFacts, renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
-import { dispose, knownLanguage, maybeStartDiscovery, mount, navigate, presentation, renderShell, shellLayout } from "../gui/app/main.mjs";
+import { dispose, knownLanguage, mapButton, maybeStartDiscovery, mount, navigate, presentation, renderBar, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
 import { FIXTURE_HOME_CODE, FIXTURE_HOME_KEY, deterministicUuid } from "./gui-data.mjs";
@@ -43,6 +43,34 @@ import { createChat, postChat } from '../engine/service/chats.mjs';
 import { createContext, readContext } from '../engine/service/context.mjs';
 import { registerNative } from '../engine/service/adapters.mjs';
 import { refreshPlan } from '../gui/app/plan-controller.mjs';
+import { element } from '../gui/app/components.mjs';
+
+test('R057 bar modes, waiting copy, destinations and shared buttons match the final controls', () => {
+  const { document, root } = createTestDocument(1440);
+  const app = { root, layout: 'desktop', mode: 'map', waitingOpen: false, inspectorOpen: true,
+    bootReading: true, bootFailed: false, store: { capabilities: [] } };
+  const bar = renderBar(app, (key, values) => text('en', key, values), { waiting: 0 });
+  const action = name => bar.querySelector(`[data-action="${name}"]`);
+  const modes = ['mode-map', 'mode-blueprint', 'mode-document'].map(actionName => action(actionName));
+  assert.deepEqual(modes.map(button => button.getAttribute('data-action')), ['mode-map', 'mode-blueprint', 'mode-document']);
+  assert.deepEqual(modes.map(button => button.children.at(-1).textContent), ['Map', 'Blueprint', 'Void']);
+  assert.equal(action('waiting'), null);
+  assert.ok(action('open-phone'));
+  assert.notEqual(action('open-notifications')?.getAttribute('disabled'), null);
+  assert.notEqual(action('toggle-inspector').children[0].children[0].getAttribute('d'), 'M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4a1.5 1.5 0 0 1 3 0v8M14 12V6.5a1.5 1.5 0 0 1 3 0V15c0 4-2.5 6-6 6');
+  assert.equal(text('en', 'voidMode'), 'Void');
+  assert.equal(text('en', 'waitingOnYouOther', { count: 2 }), '2 waiting on you');
+  assert.equal(text('es', 'waitingOnYouOther', { count: 2 }), '2 pendientes de respuesta');
+
+  const withWaiting = renderBar({ ...app, root: createTestDocument(1440).root, language: 'es' }, (key, values) => text('es', key, values), { waiting: 2 });
+  assert.equal(withWaiting.querySelector('[data-action="waiting"]').children.at(-1).textContent, '2 pendientes de respuesta');
+  const button = mapButton(app, 'edit', 'Edit', () => {});
+  const primary = mapButton(app, 'create', 'Create', () => {}, { class: 'btn primary' });
+  const sharedButton = element(document, 'button', { class: 'btn', text: 'Secondary action' });
+  assert.equal(button.className, 'btn secondary');
+  assert.equal(primary.className, 'btn primary');
+  assert.equal(sharedButton.className, 'btn secondary');
+});
 import { createSettingsOwner } from '../engine/service/settings.mjs';
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
