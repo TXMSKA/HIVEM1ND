@@ -80,6 +80,8 @@ async function runTask(task, { browser, spec, outDir }) {
     await Promise.race([work, limit]);
   } catch (error) {
     record.reason = redact(String(error?.message ?? error).split('\n')[0]).slice(0, 400);
+    // HIVEM1ND_CAPTURE_FAILED=1 keeps a picture of the page where the case stopped, beside the out folder's captures.
+    if (process.env.HIVEM1ND_CAPTURE_FAILED === '1' && page) await page.screenshot(file.replace(/\.png$/, '-failed.png'), task.viewport).catch(() => undefined);
   } finally {
     clearTimeout(timer);
     await ctx?.cleanup().catch(() => undefined);

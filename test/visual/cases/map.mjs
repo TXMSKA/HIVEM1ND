@@ -23,7 +23,7 @@ export const cases = {
     async reach(ctx) {
       await openMap(ctx, 5);
       await ctx.visible('.map-nodes .map-node[data-role="overseer"]');
-      await ctx.visible('.map-actions [data-action="fit-map"]');
+      await ctx.visible('.map-zoom [data-action="fit-map"]');
     },
   },
   '2.2': {
