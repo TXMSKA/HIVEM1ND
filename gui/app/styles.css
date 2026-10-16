@@ -366,6 +366,7 @@ button, input { font: inherit; color: inherit; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .transcript { max-height: 240px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
+.chat-panel.has-plans .transcript { max-height: none; overflow: visible; }
 .transcript p { margin: 0; }
 
 .phone-nav {
@@ -1469,6 +1470,8 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .context-notice header > .icon { width: 15px; height: 15px; color: var(--waiting); }
 .context-notice strong { flex: 1; font-size: 13.5px; font-weight: 700; }
 .context-notice p { margin: 0; font-size: 12.5px; color: var(--body); }
+.context-notice .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.context-notice .action-row .btn { min-width: 0; flex: 1 1 96px; }
 .context-notice [data-action="context-dismiss"] { min-width: 36px; min-height: 36px; }
 .private-transcript { max-height: 65dvh; overflow: auto; }
 .private-transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px var(--mono); }

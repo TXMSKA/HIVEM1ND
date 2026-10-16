@@ -6855,6 +6855,7 @@ function chatPanel(app, t) {
       task: app.store.indexes.tasks.get(descriptor.taskId)?.title ?? '' }));
   }
   const cards = planCards(app, thread.chat); let plansMounted = false;
+  if (cards.length) panel.className += ' has-plans';
   if (!windowed.items.length) {
     const canPost = (app.store.capabilities ?? []).includes("chat.post");
     transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
