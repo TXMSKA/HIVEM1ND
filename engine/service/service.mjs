@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { repositoryCheckoutPath } from './addition-parts.mjs';
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
@@ -291,7 +292,7 @@ async function configuredProjects(paths) {
     if (provenance?.removed) continue;
     if (provenance?.additionId) {
       if (!isUuid(provenance.additionId) || !/^[a-f0-9]{64}$/.test(provenance.pin?.digest ?? '')) throw new CoreError(409, 'destination_changed', 'The accepted repository ownership changed.');
-      const expected = path.join(paths.localDirectory, 'additions', 'repositories', provenance.additionId, provenance.pin.digest);
+      const expected = repositoryCheckoutPath(path.join(paths.localDirectory, 'additions'), provenance.additionId, provenance.pin.digest);
       if (path.resolve(localPath) !== path.resolve(expected)) throw new CoreError(409, 'destination_changed', 'The owned checkout mapping changed.');
       const recoveryPath = path.join(paths.localDirectory, 'additions', 'repository-recovery', `${provenance.additionId}-${provenance.pin.digest}.json`);
       await assertNoLinks(recoveryPath, { root: paths.localDirectory });

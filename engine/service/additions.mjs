@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { acquireAdditionSource, additionSourceIdentity, additionStagingRoot, disposeAdditionSource, receiveAdditionChunk, validateAdditionSource, writeAdditionLocal } from './addition-source.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, parseUnitId, uuidV8, validateMachineName, validateName } from './identity.mjs';
-import { additionPath } from './addition-parts.mjs';
+import { additionPath, repositoryCheckoutPath } from './addition-parts.mjs';
 import { checkAddition, resolveAdditionScope } from './addition-check.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { readCollection } from './projection.mjs';
@@ -411,12 +411,14 @@ export async function readAdditionContent(context) {
     item.record.kind === 'repository' ? 0 : allowedUnits(item.record.scope, snapshot).size));
 }
 
-async function treeInventory(root) {
+// A repository checkout carries its own .git at the root; its inventory is the source tree only.
+async function treeInventory(root, { repository = false } = {}) {
   const files = [];
   async function visit(directory, prefix) {
     await assertNoLinks(directory, { root });
     const entries = await readdir(directory, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
     for (const entry of entries) {
+      if (repository && !prefix && entry.name === '.git') continue;
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name; additionPath(relative);
       const absolute = path.join(root, ...relative.split('/')), info = await lstat(absolute);
       if (info.isSymbolicLink() || info.nlink > 1 && info.isFile() || !info.isFile() && !info.isDirectory()) fail(409, 'destination_changed', 'An owned content path changed.');
@@ -432,9 +434,9 @@ async function verifyOwned(context, record) {
     await assertNoLinks(recoveryFile, { root: local });
     const bytes = await readBytes(context.store, recoveryFile);
     if (!bytes) fail(409, 'destination_changed', 'The checkout ownership record is unavailable.');
-    const recovery = JSON.parse(bytes), root = path.join(local, 'repositories', record.id, record.pin.digest);
+    const recovery = JSON.parse(bytes), root = repositoryCheckoutPath(local, record.id, record.pin.digest);
     if (recovery.id !== record.id || recovery.ownerHash !== binding(context).ownerHash || canonicalJson(recovery.pin) !== canonicalJson(record.pin)
-      || canonicalJson(await treeInventory(root)) !== canonicalJson([...recovery.files].sort((a, b) => a.path.localeCompare(b.path, 'en')))) fail(409, 'destination_changed', 'The registered checkout has foreign changes.');
+      || canonicalJson(await treeInventory(root, { repository: true })) !== canonicalJson([...recovery.files].sort((a, b) => a.path.localeCompare(b.path, 'en')))) fail(409, 'destination_changed', 'The registered checkout has foreign changes.');
     return;
   }
   const root = path.join(context.paths.mind, ...contentRoot(record).split('/'));
@@ -499,9 +501,29 @@ async function candidateFiles(context, acquisition, candidate) {
   }
   return result;
 }
+// A repository addition is a working Git repository: its cluster shows remote, branch and changes, and its agents
+// commit on it. The checkout starts as one commit of the pinned tree, with the source as its origin. Without Git on the
+// machine the files stay as they are and the cluster says Git is unavailable.
+async function ensureCheckoutRepository(directory, acquisition) {
+  const present = await lstat(path.join(directory, '.git')).then(() => true, () => false);
+  if (present) return;
+  const { gitRead } = await import('./cluster-git.mjs');
+  // The owner-local folder sits deep under LOCALAPPDATA: long paths on, and no hook templates to copy.
+  const identity = ['-c', 'core.longpaths=true', '-c', 'user.name=HIVEM1ND', '-c', 'user.email=hivem1nd@localhost', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main'];
+  try {
+    await gitRead(directory, ['init', '--quiet', '--template='], { filterConfig: identity });
+    const origin = acquisition.url ?? acquisition.source?.url;
+    if (origin) await gitRead(directory, ['remote', 'add', 'origin', origin], { filterConfig: identity });
+    await gitRead(directory, ['add', '--all'], { filterConfig: identity });
+    await gitRead(directory, ['commit', '--quiet', '--no-verify', '-m', `Pinned ${acquisition.pin?.value ?? 'source'}`], { filterConfig: identity });
+  } catch (error) {
+    if (error?.code !== 'git_unavailable') throw error;
+  }
+}
+
 async function publishCheckout(context, id, acquisition, files) {
   const local = await additionStagingRoot(acquisitionContext(context));
-  const directory = path.join(local, 'repositories', id, acquisition.pin.digest);
+  const directory = repositoryCheckoutPath(local, id, acquisition.pin.digest);
   const recoveryPath = path.join(local, 'repository-recovery', `${id}-${acquisition.pin.digest}.json`);
   const inventory = files.map(({ data, ...file }) => file);
   const recovery = { format: 'hivem1nd-addition-checkout-v1', id, ...binding(context), pin: acquisition.pin, files: inventory };
@@ -516,7 +538,8 @@ async function publishCheckout(context, id, acquisition, files) {
     if (!prior) await writeAdditionLocal(acquisitionContext(context), target, file.data);
     if (owner(context).additionFault === `checkout:${index + 1}`) { owner(context).additionFault = null; fail(500, 'injected_crash', 'Checkout publication was interrupted.'); }
   }
-  if (canonicalJson(await treeInventory(directory)) !== canonicalJson([...inventory].sort((a, b) => a.path.localeCompare(b.path, 'en')))) fail(409, 'destination_changed', 'The owned checkout failed byte verification.');
+  if (canonicalJson(await treeInventory(directory, { repository: true })) !== canonicalJson([...inventory].sort((a, b) => a.path.localeCompare(b.path, 'en')))) fail(409, 'destination_changed', 'The owned checkout failed byte verification.');
+  await ensureCheckoutRepository(directory, acquisition);
   return directory;
 }
 

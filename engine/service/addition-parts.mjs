@@ -112,3 +112,9 @@ export function recognizeAdditionParts(entries, { repository = false, name = 're
   if (repository) add('repository', '.', name, 'Git repository');
   return result;
 }
+
+// The checkout folder names the pin by a short digest prefix: the owner-local root already sits deep under
+// LOCALAPPDATA, and Git paths inside the checkout must stay within the Windows path limit.
+export function repositoryCheckoutPath(local, id, digest) {
+  return path.join(local, 'repositories', id, String(digest).slice(0, 16));
+}

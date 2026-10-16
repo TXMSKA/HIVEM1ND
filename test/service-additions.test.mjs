@@ -316,6 +316,12 @@ test('repository-only acceptance allows canonical empty scope and no agents, and
   const accepted = await applyAdditions(context, input), addition = accepted.items[0];
   const cluster = (await rawClusters(context)).find(item => item.cluster.link.projectId === addition.projectId).cluster;
   assert.deepEqual(cluster.members, []); assert.equal(cluster.deleted, false);
+  // The checkout is a working Git repository of the pinned tree, so its cluster can show Git.
+  const { readRepositoryIdentity } = await import('../engine/service/cluster-git.mjs');
+  const checkout = path.join(context.paths.localDirectory, 'additions', 'repositories', addition.id);
+  const [digest] = await readdir(checkout);
+  const repository = await readRepositoryIdentity(path.join(checkout, digest));
+  assert.ok(repository.id, 'the accepted repository has a Git identity');
   const before = await hashes(path.join(context.paths.localDirectory, 'additions', 'repositories'));
   assert.equal(addition.unitCount, 0); assert.deepEqual((await readProjection(context)).units, []);
   const removed = await removeAddition(context, addition.id, { machine: context.paths.machine, confirmed: true, expectedRevision: addition.revision });
