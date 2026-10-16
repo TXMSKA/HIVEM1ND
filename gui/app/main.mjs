@@ -4421,7 +4421,7 @@ function collectionRows(app, t, list) {
       for (const chat of chats) {
         const last = chat.lastMessage;
         const snippet = last?.body || last?.subject || "";
-        const when = formatWhen(app.language, last?.timestamp || last?.date || "");
+        const when = formatShortTime(app.language, last?.timestamp || last?.date || "");
         const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: formatNumber(app.language, chat.unread) }) : "";
         rows.push({
           id: chat.id,
@@ -6895,7 +6895,7 @@ function chatPanel(app, t) {
   for (const message of windowed.items) {
     const own = message.fromId === "root:master" || unitById(app, message.fromId)?.role === "master";
     const article = element(document, "article", { class: own ? "bubble own" : "bubble", "data-from": message.fromId ?? "", "data-own": own ? "true" : "false" });
-    const when = formatWhen(app.language, message.timestamp || message.date || "");
+    const when = formatShortTime(app.language, message.timestamp || message.date || "");
     article.append(element(document, "p", {
       class: "bubble-meta",
       text: `${messageSender(app, message)}${when ? ` ${when}` : ""}`,

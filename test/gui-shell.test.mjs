@@ -9,7 +9,7 @@ import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
-import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
+import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatShortTime, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
@@ -3412,6 +3412,10 @@ test("counts, clocks, and session facts follow the active language", () => {
   assert.equal(clock.includes("12:00"), true);
   assert.equal(clock.includes(stamp), false);
   assert.equal(formatWhen("en", stamp).includes(stamp), false);
+  assert.equal(/\d:\d{2}:\d{2}/.test(formatWhen("en", stamp)), false);
+  assert.equal(/\d:\d{2}:\d{2}/.test(formatWhen("es", stamp)), false);
+  assert.equal(formatShortTime("en", stamp).includes(":00:"), false);
+  assert.match(formatShortTime("en", stamp), /12:00/);
   assert.equal(formatWhen("en", "not-a-date"), "not-a-date");
   assert.equal(limitsUsage("en", { used: 0, max: 0 }, { used: 0, max: 0 }), "0 of 0 messages and 0 of 0 sync bytes.");
   assert.equal(limitsUsage("en", { used: 1, max: 1 }, { used: 1, max: 1 }), "1 of 1 message and 1 of 1 sync byte.");
