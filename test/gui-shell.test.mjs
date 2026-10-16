@@ -6539,6 +6539,7 @@ test('T093 actual-core lead chat mounts its plan, Work milestones, retained draf
   const unit = desktop.app.store.indexes.units.get(state.units[0].id);
   desktop.app.activeHandlers.onActivate({ kind: 'unit', id: unit.id, unit }, 'double');
   await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The actual session tabs did not open.');
+  await waitFor(() => desktop.app.thread?.chat?.kind === 'direct' && desktop.app.thread.chat.members.includes(unit.id), 'The agent chat did not open.');
   assert.ok(desktop.root.querySelector('[data-started-with]'));
   assert.equal(desktop.root.querySelector('[data-started-with]').getAttribute('open'), null);
   typeInput(desktop.root.querySelector('[data-composer]'), 'Keep the illustration', 2, 8);
@@ -6940,4 +6941,60 @@ test('Stop the step on a plan attempt keeps the plan control and never calls the
   assert.equal(control.length, 1); assert.equal(control[0].body.action, 'stop_step'); assert.equal(control[0].body.attemptId, run.attempts[0].id);
   assert.equal(stepStops, 1, 'the plan handle was asked to stop the step');
   assert.equal(calls.some(call => call.path.endsWith('/stop-step')), false, 'a plan attempt never uses the session route');
+});
+
+function documentOrder(root) {
+  const list = [];
+  const visit = node => { list.push(node); for (const child of node.children ?? []) visit(child); };
+  visit(root);
+  return list;
+}
+
+test('every agent inspector keeps the header, tabs, facts, and composer in separate blocks', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.chatList?.catalog?.length, 'The unit list did not load.');
+  const sessionUnits = new Set((desktop.app.store.view?.sessions ?? []).map(session => session.unitId));
+  const idle = desktop.app.unitList.catalog.find(unit => unit.role !== 'master' && !unit.removed && !sessionUnits.has(unit.id));
+  assert.ok(idle, 'An executor that has not started is required.');
+  desktop.app.activeHandlers.onActivate({ id: idle.id, kind: 'unit', unit: idle }, 'double');
+  await waitFor(() => desktop.root.querySelector('[data-unit-facts]') && desktop.root.querySelector('[data-action="session-chat"]') && desktop.root.querySelector('[data-action="session-work"]'), 'The idle agent inspector did not gain tabs and facts.');
+  const body = desktop.root.querySelector('.agent-inspector');
+  assert.ok(body);
+  const heading = body.querySelector('.agent-heading');
+  const facts = body.querySelector('[data-unit-facts]');
+  const tabs = body.querySelector('.session-tabs');
+  assert.equal(facts.className.includes('agent-facts'), true);
+  assert.equal(facts.closest('.transcript'), null);
+  assert.equal(body.querySelector(':scope > h2, h2')?.textContent === 'Nothing selected', false);
+  const order = documentOrder(body);
+  assert.ok(order.indexOf(heading) < order.indexOf(facts) && order.indexOf(facts) < order.indexOf(tabs));
+  click(desktop.root.querySelector('[data-action="session-work"]'));
+  await waitFor(() => desktop.root.querySelector('[data-unit-work]'), 'Work did not open for an agent that has not started.');
+  assert.equal([...desktop.root.querySelector('[data-unit-work]').children].some(node => node.textContent === 'Not started'), true);
+  assert.equal(desktop.root.querySelector('.transcript'), null);
+  click(desktop.root.querySelector('[data-action="session-chat"]'));
+  const direct = desktop.app.chatList.catalog.find(chat => chat.kind === 'direct');
+  assert.ok(direct);
+  desktop.app.store.selected.unitId = null;
+  desktop.app.mapState?.selection?.clear();
+  navigate(desktop.app, 'chats');
+  desktop.app.activeHandlers.onActivate({ id: direct.id, kind: 'chat' }, 'double');
+  await waitFor(() => desktop.root.querySelector('.agent-heading') && desktop.root.querySelector('[data-composer]'), 'Opening a direct chat did not show the agent.');
+  assert.equal([...desktop.root.querySelectorAll('h2')].some(node => node.textContent === 'Nothing selected'), false);
+  const column = desktop.root.querySelector('.agent-conversation');
+  const transcript = column.querySelector('.transcript');
+  const composer = column.querySelector('[data-composer]');
+  const chatFacts = desktop.root.querySelector('[data-unit-facts]');
+  assert.equal(transcript.contains(composer), false);
+  assert.equal(transcript.contains(chatFacts), false);
+  assert.equal(column.contains(chatFacts), false);
+  const chatOrder = documentOrder(column);
+  assert.ok(chatOrder.indexOf(transcript) < chatOrder.indexOf(composer));
+  const started = transcript.querySelector('[data-started-with]');
+  if (started) assert.equal(transcript.children[0], started);
+  const css = await readFile(new URL('../gui/app/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.inspector-body\.agent-inspector > \.chat-panel\.agent-conversation \{[^}]*overflow:\s*hidden/);
 });

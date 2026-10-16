@@ -1236,16 +1236,40 @@ function renderWorkspace(app, t, view, counts) {
   } else if (app.layout !== "phone" && selection.length > 1) {
     inspectorBody.append(selectionInspector(app, t, selection));
   } else {
-    const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
-    if (selected) heading.replaceChildren(unitNameNode(document, selected), element(document, "span", { class: "unit-state", text: t(statusKey(selected.status)) }));
-    if (selected && app.layout !== 'phone') {
-      inspectorBody.append(renderAgentHeader(document, selected, sessionForUnit(app, selected.id), app.language, () => openAgentMore(app, selected)));
-      const actions = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, selected)), `agent-controls:${selected.id}`);
-      inspectorBody.append(actions);
-    } else inspectorBody.append(heading, actionControls(app, t, selected));
-    if (app.layout !== "phone") {
-      if (!selected && !app.thread?.chat) inspectorBody.append(emptySelection(app, t));
-      inspectorBody.append(chatPanel(app, t), renderInspector(app, t, selected));
+    const agent = inspectorAgent(app);
+    if (agent) {
+      inspectorBody.className += ' agent-inspector';
+      inspectorBody.append(renderAgentHeader(document, agent, sessionForUnit(app, agent.id), app.language, () => openAgentMore(app, agent)));
+      inspectorBody.append(trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, agent)), `agent-controls:${agent.id}`));
+      const review = renderInspector(app, t, agent);
+      const facts = review.querySelector('[data-unit-facts]');
+      if (facts) {
+        facts.remove();
+        facts.className += ' agent-facts';
+        inspectorBody.append(facts);
+      }
+      const progress = review.querySelector('[data-session-progress]');
+      if (progress) {
+        progress.remove();
+        inspectorBody.append(progress);
+      }
+      const panel = chatPanel(app, t);
+      const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
+      if (scroll) keepFirst(scroll, '[data-started-with]', [...review.children]);
+      else if ([...review.children].length) panel.append(review);
+      inspectorBody.append(panel);
+    } else {
+      const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
+      if (selected) heading.replaceChildren(unitNameNode(document, selected), element(document, "span", { class: "unit-state", text: t(statusKey(selected.status)) }));
+      if (selected && app.layout !== 'phone') {
+        inspectorBody.append(renderAgentHeader(document, selected, sessionForUnit(app, selected.id), app.language, () => openAgentMore(app, selected)));
+        const actions = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, selected)), `agent-controls:${selected.id}`);
+        inspectorBody.append(actions);
+      } else inspectorBody.append(heading, actionControls(app, t, selected));
+      if (app.layout !== "phone") {
+        if (!selected && !app.thread?.chat) inspectorBody.append(emptySelection(app, t));
+        inspectorBody.append(chatPanel(app, t), renderInspector(app, t, selected));
+      }
     }
   }
   if (app.mapToast) inspectorBody.append(mapToast(app, t));
@@ -3964,10 +3988,55 @@ function sessionViewFor(app, session) {
   view.session = session; return view;
 }
 
+function inspectorAgent(app) {
+  if (app.layout === 'phone') return null;
+  const selected = app.store.indexes.units.get(app.store.selected.unitId)
+    ?? app.unitList?.catalog?.find(unit => unit.id === app.store.selected.unitId)
+    ?? null;
+  if (selected && selected.role !== 'master' && !selected.removed) return selected;
+  if (selected) return null;
+  const chat = app.thread?.chat;
+  if (chat?.kind !== 'direct') return null;
+  const unit = unitById(app, (chat.members ?? []).find(id => id !== 'root:master'));
+  return unit && unit.role !== 'master' && !unit.removed ? unit : null;
+}
+
+function unitConversation(app, unitId) {
+  app.unitTabs ??= new Map();
+  let view = app.unitTabs.get(unitId);
+  if (!view) {
+    view = { session: { id: unitId }, tab: 'chat', work: [], workLoaded: true, scrollTop: 0, startedOpen: false, unitOnly: true };
+    app.unitTabs.set(unitId, view);
+  }
+  return view;
+}
+
+function keepFirst(scroll, selector, nodes) {
+  const first = scroll.querySelector(selector);
+  if (first?.parent === scroll || first?.parentNode === scroll) first.remove();
+  for (const node of nodes) scroll.append(node);
+  if (!first) return;
+  const rest = [...scroll.children];
+  for (const node of rest) node.remove();
+  scroll.append(first, ...rest);
+}
+
+function unitWork(document, view, language, t) {
+  return element(document, 'section', {
+    class: 'session-work',
+    'data-unit-work': view.session.id,
+    id: `session-${view.session.id}-panel`,
+    role: 'tabpanel',
+    'aria-labelledby': `session-${view.session.id}-work`,
+  }, element(document, 'p', { class: 'work-hint', text: startText(language, 'workHint') }),
+    element(document, 'p', { text: t('finalNotStarted') }));
+}
+
 async function selectSessionTab(app, view, tab) {
   captureInputs(app); view.tab = tab;
   renderShell(app);
   app.root.querySelector(`[data-action="session-${tab}"]`)?.focus?.();
+  if (view.unitOnly) return;
   if (tab === 'work' && (!view.workLoaded || view.workStale)) {
     await loadSessionView(app.api, view); view.workStale = false;
     if (!app.disposed) renderShell(app);
@@ -6576,18 +6645,44 @@ function messageSender(app, message) {
   return unit ? unitDisplayName(unit) : message.fromId;
 }
 
+function frameAgentTabs(app, panel, subject) {
+  const document = app.root.ownerDocument;
+  const sessionView = sessionViewFor(app, sessionForUnit(app, subject.id));
+  const agentTabs = sessionView ?? unitConversation(app, subject.id);
+  panel.className += ' agent-conversation';
+  panel.setAttribute('data-agent-tab', agentTabs.tab);
+  panel.append(renderSessionTabs(document, agentTabs, app.language, tab => selectSessionTab(app, agentTabs, tab)));
+  return { sessionView, agentTabs };
+}
+
 function chatPanel(app, t) {
   const document = app.root.ownerDocument;
   const thread = app.thread;
   const panel = element(document, "section", { class: "chat-panel" });
-  if (!thread?.chat) return panel;
+  if (!thread?.chat) {
+    const subject = inspectorAgent(app);
+    if (!subject) return panel;
+    const { sessionView, agentTabs } = frameAgentTabs(app, panel, subject);
+    if (agentTabs.unitOnly && agentTabs.tab === 'work') panel.append(unitWork(document, agentTabs, app.language, t));
+    else if (sessionView?.tab === 'work') panel.append(renderSessionWork(document, sessionView, app.language, {
+      onRetry: async () => { await loadSessionView(app.api, sessionView); if (!app.disposed) renderShell(app); },
+      onMore: async () => { await loadSessionView(app.api, sessionView, { older: true }); if (!app.disposed) renderShell(app); },
+      onStop: () => stopWorkStep(app, sessionView),
+    }, app.api.now()));
+    else panel.append(element(document, 'div', {
+      class: 'transcript', id: `session-${agentTabs.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${agentTabs.session.id}-chat`,
+    }));
+    return panel;
+  }
   const members = thread.chat.members ?? [];
   const heading = element(document, "header", { class: "chat-heading" },
     element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
   );
   const group = app.store.indexes.groups.get(thread.chat.id);
   const directUnit = thread.chat.kind === "direct" ? unitById(app, members.find((id) => id !== "root:master")) : null;
-  const sessionView = directUnit ? sessionViewFor(app, sessionForUnit(app, directUnit.id)) : null;
+  const subject = inspectorAgent(app) ?? (directUnit && app.layout !== 'phone' ? directUnit : null);
+  const sessionView = subject ? sessionViewFor(app, sessionForUnit(app, subject.id)) : null;
+  const agentTabs = subject ? (sessionView ?? unitConversation(app, subject.id)) : null;
   let contextNotice = null;
   if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
@@ -6595,10 +6690,11 @@ function chatPanel(app, t) {
     heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
   }
   panel.append(heading);
-  if (sessionView) {
+  if (agentTabs) {
     panel.className += ' agent-conversation';
-    panel.append(renderSessionTabs(document, sessionView, app.language, tab => selectSessionTab(app, sessionView, tab)));
-    if (directUnit.role === 'overseer') {
+    panel.setAttribute('data-agent-tab', agentTabs.tab);
+    panel.append(renderSessionTabs(document, agentTabs, app.language, tab => selectSessionTab(app, agentTabs, tab)));
+    if (sessionView && directUnit?.role === 'overseer') {
       const context = renderContext(document, sessionView, app.language,
         action => sessionView.context ? changeContext(app.api, sessionView, action, () => { if (!app.disposed) renderShell(app); }).catch(() => {})
           : loadSessionView(app.api, sessionView, { context: true }).then(() => { if (!app.disposed) renderShell(app); }));
@@ -6612,7 +6708,7 @@ function chatPanel(app, t) {
     "data-total": String(thread.total ?? thread.messages.length),
     "data-pinned": String(Boolean(thread.chat.pinned)),
     "data-listed": String(thread.chat.listed !== false),
-    ...(sessionView ? { id: `session-${sessionView.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${sessionView.session.id}-chat` } : {}),
+    ...(agentTabs ? { id: `session-${agentTabs.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${agentTabs.session.id}-chat` } : {}),
   });
   const windowed = messageWindow(authoredMessages(thread.messages), {
     nearBottom: thread.nearBottom !== false,
@@ -6623,7 +6719,7 @@ function chatPanel(app, t) {
   if (sessionView?.session.startedWith) {
     const descriptor = sessionView.session.startedWith;
     transcript.append(renderStartedWith(document, descriptor, app.language, { open: sessionView.startedOpen,
-      onToggle: open => { sessionView.startedOpen = open; }, cluster: app.store.indexes.groups.get(directUnit.clusterId)?.title ?? directUnit.scope?.name ?? '',
+      onToggle: open => { sessionView.startedOpen = open; }, cluster: app.store.indexes.groups.get(subject.clusterId)?.title ?? subject.scope?.name ?? '',
       task: app.store.indexes.tasks.get(descriptor.taskId)?.title ?? '' }));
   }
   const cards = planCards(app, thread.chat); let plansMounted = false;
@@ -6729,7 +6825,8 @@ function chatPanel(app, t) {
     if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
   row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
-  if (sessionView?.tab === 'work') {
+  if (agentTabs?.unitOnly && agentTabs.tab === 'work') panel.append(unitWork(document, agentTabs, app.language, t));
+  else if (sessionView?.tab === 'work') {
     const work = renderSessionWork(document, sessionView, app.language, {
       onRetry: async () => { await loadSessionView(app.api, sessionView); if (!app.disposed) renderShell(app); },
       onMore: async () => { await loadSessionView(app.api, sessionView, { older: true }); if (!app.disposed) renderShell(app); },
@@ -6928,18 +7025,19 @@ function openExistingDirect(app, unitId) {
 
 function showChat(app, chat) {
   captureInputs(app);
-  if (app.store.audience === 'phone') {
-    const unitId = chat.kind === 'direct' ? chat.members?.find(id => id !== 'root:master') : null;
-    app.store.selected.unitId = unitId;
-    if (unitId && app.inspectorData?.unitId !== unitId && !activityPending(app, `inspector:${unitId}`)) loadInspector(app, unitId);
-  }
+  const directId = chat.kind === 'direct' ? chat.members?.find(id => id !== 'root:master') : null;
   const group = app.store.indexes.groups.get(chat.id);
   app.store.selected.chatId = chat.id;
   app.store.selected.groupId = group && !group.deleted ? group.id : null;
   if (group) app.store.selected.unitId = null;
+  else if (directId && (app.store.audience === 'phone' || app.layout !== 'phone')) {
+    app.store.selected.unitId = directId;
+    if (app.inspectorData?.unitId !== directId && !activityPending(app, `inspector:${directId}`)) loadInspector(app, directId);
+  } else if (app.store.audience === 'phone') app.store.selected.unitId = null;
   if (app.mapState) {
     app.mapState.selectedGroupId = app.store.selected.groupId;
     if (group) app.mapState.selection.clear();
+    else if (app.store.selected.unitId && app.layout !== 'phone') app.mapState.selection = new Set([app.store.selected.unitId]);
   }
   app.chatThreads ??= new Map();
   app.thread = app.chatThreads.get(chat.id) ?? createThread(chat);
