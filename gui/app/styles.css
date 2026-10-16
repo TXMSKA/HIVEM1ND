@@ -1460,6 +1460,7 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .agent-inspector > .agent-facts { padding: 10px 12px; border-radius: 12px; background: var(--card); }
 .agent-inspector .agent-conversation .transcript,
 .agent-inspector .agent-conversation .session-work { flex: 1; min-height: 0; max-height: none; overflow: auto; }
+.agent-inspector .agent-conversation > .action-cards { flex: none; margin: 8px 16px; max-height: 42%; overflow: auto; }
 .agent-inspector .agent-conversation > .field,
 .agent-inspector .agent-conversation > .action-row { margin-left: 16px; margin-right: 16px; }
 .agent-inspector .agent-conversation > .btn { margin: 0 16px 16px; }

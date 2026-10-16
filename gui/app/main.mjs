@@ -1263,9 +1263,15 @@ function renderWorkspace(app, t, view, counts) {
         inspectorBody.append(progress);
       }
       const panel = chatPanel(app, t);
+      const cards = review.querySelector('[data-action-cards]');
+      if (cards) cards.remove();
       const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
       if (scroll) keepFirst(scroll, '[data-started-with]', [...review.children]);
       else if ([...review.children].length) panel.append(review);
+      if (cards) {
+        const field = panel.querySelector('.field');
+        if (!(field && placeBefore(field, cards))) panel.append(cards);
+      }
       inspectorBody.append(panel);
     } else {
       const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });

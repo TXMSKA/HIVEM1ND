@@ -5879,6 +5879,29 @@ test('R13 session progress names the failed client and offers Retry only after f
   assert.equal(progress.querySelector('[data-action="cancel-start"]'), null);
 });
 
+test('ask cards sit above the composer outside the conversation scroll', async t => {
+  const desktop = await openedBoardDesktop(t);
+  const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  desktop.app.store.selected.unitId = selected.id;
+  desktop.app.inspectorData = { unitId: selected.id, approvals: [{ id: 'approval-ask', state: 'pending', action: 'git.commit', display: 'Commit the cart', alwaysAllowed: true }], tasks: [], sessions: [], grants: [], waiting: [] };
+  renderShell(desktop.app);
+  const card = desktop.root.querySelector('[data-approval="approval-ask"]');
+  assert.ok(card);
+  const transcript = desktop.root.querySelector('.transcript');
+  let parent = card;
+  while (parent) {
+    assert.notEqual(parent, transcript);
+    parent = parent.parentNode ?? parent.parent ?? null;
+  }
+  const panel = desktop.root.querySelector('.chat-panel');
+  const kids = [...panel.children];
+  const host = kids.includes(card) ? card : kids.find(node => node.contains?.(card) || [...(node.querySelectorAll?.('[data-approval]') ?? [])].includes(card));
+  const field = panel.querySelector('.field');
+  if (field) assert.ok(kids.indexOf(host) < kids.indexOf(field));
+});
+
 test('background loads do not announce a slow request', async t => {
   const desktop = await openedBoardDesktop(t);
   desktop.app.mode = 'map';
