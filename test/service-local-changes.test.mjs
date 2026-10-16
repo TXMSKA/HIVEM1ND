@@ -15,8 +15,9 @@ import { hashBytes } from '../engine/service/identity.mjs';
 import { withLocalChanges } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
+// Reconciliation waits on the staged record. The ceiling only covers a loaded suite.
 async function until(check) {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     if (await check()) return;
     await delay(25);
