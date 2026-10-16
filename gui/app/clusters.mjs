@@ -44,6 +44,11 @@ function readable(value) {
   return String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
+// A catalog that only knows the id shows a readable name instead of the raw id.
+function displayName(title, id, named = readable) {
+  return !title || title === id ? named(id) : title;
+}
+
 export function clientLabel(id, language = 'en') {
   const key = CLIENT_KEYS[typeof id === 'string' ? id : ''];
   return key ? startText(language, key) : readable(id);
@@ -160,20 +165,21 @@ export function renderRunsInPicker(document, model, actions) {
     const node = button(document, '', id, () => { if (!node.disabled) choose(); });
     node.className = 'runs-in-option'; node.disabled = disabled;
     node.setAttribute('aria-pressed', String(selected));
-    node.append(element(document, 'span', {}, element(document, 'strong', { text: title }), note ? element(document, 'small', { text: note }) : null),
-      selected ? element(document, 'span', { 'aria-hidden': 'true', text: '✓' }) : null);
+    // DOM append writes a null child as the text "null", so only real children are passed.
+    node.append(...[element(document, 'span', {}, element(document, 'strong', { text: title }), note ? element(document, 'small', { text: note }) : null),
+      selected ? element(document, 'span', { 'aria-hidden': 'true', text: '✓' }) : null].filter(Boolean));
     return node;
   };
   columns.append(column(t('agent'), clients.map(client => {
     const quota = client.id === 'lyra' ? t('localQuota') : client.quota?.known && Number.isFinite(client.quota.remainingPercent)
       ? t('quota', { label: client.quota.period ?? client.title, percent: client.quota.remainingPercent }) : t('quotaUnknown');
-    return option(`runs-client-${client.id}`, client.title, launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
+    return option(`runs-client-${client.id}`, displayName(client.title, client.id, id => clientLabel(id, model.language)), launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
       () => actions.onChoice(initialRunsIn([client])), !launchable(client) || !initialRunsIn([client]));
   })));
   columns.append(column(t('model'), (current?.models ?? []).map(item => {
     const choice = { ...model.choice, model: item.id };
     // A model change keeps the selected mode/effort. An incompatible pair needs an explicit new choice.
-    return option(`runs-model-${item.id}`, item.title, validRunsIn(choice, clients) ? '' : t('unavailable'), selectedModel?.id === item.id,
+    return option(`runs-model-${item.id}`, displayName(item.title, item.id), validRunsIn(choice, clients) ? '' : t('unavailable'), selectedModel?.id === item.id,
       () => actions.onChoice(choice));
   })));
   const local = current?.id === 'lyra';

@@ -296,3 +296,13 @@ test('an approval card shows the whole exact command wrapped, and Stop the step 
   }
   assert.notEqual(startText('en', 'stepStopped'), startText('es', 'stepStopped'));
 });
+
+test('the Runs in picker shows readable names for catalog ids and never prints null', () => {
+  const catalog = [{ id: 'codex', title: 'codex', connected: true, scopeEnforced: true, boundary: 'confined', quota: { known: false },
+    models: [{ id: 'observed', title: 'observed', efforts: ['high'], modes: [] }, { id: 'alternate', title: 'alternate', efforts: ['xhigh'], modes: [] }] }];
+  const picker = renderRunsInPicker(document, { language: 'en', clients: catalog, choice: { client: 'codex', model: 'observed', effort: 'high', mode: null } }, { onChoice() {}, onClose() {} });
+  const text = copy(picker);
+  assert.equal(/null/.test(text), false, text);
+  assert.match(text, /Codex/); assert.match(text, /Observed/); assert.match(text, /Alternate/);
+  assert.doesNotMatch(text, /observed/);
+});
